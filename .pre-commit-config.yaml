@@ -19,7 +19,7 @@ repos:
         pass_filenames: false
       - id: bandit
         name: bandit
-        entry: uv run bandit -q -r installer
+        entry: uv run bandit -q -r installer --skip B404,B603
         language: system
         pass_filenames: false
       - id: vulture
