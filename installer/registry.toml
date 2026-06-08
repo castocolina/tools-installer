@@ -1,0 +1,69 @@
+# tools-installer registry — single declarative source of truth.
+# Each [[tool]] declares one or more [[tool.method]] entries. The resolver
+# (installer/resolve.py) filters them to the platform and orders them by the
+# priority ladder: script -> userspace download -> native pkg manager -> brew.
+
+[[tool]]
+id = "uv"
+name = "uv"
+category = "pkg-mgr"
+cmd = "uv"
+priority = "P0"
+audience = "both"
+desc = "Fast Python package and venv manager"
+[[tool.method]]
+kind = "script"
+url = "https://astral.sh/uv/install.sh"
+shell = "sh"
+bin_dir = "~/.local/bin"
+[[tool.method]]
+kind = "brew"
+formula = "uv"
+
+[[tool]]
+id = "rg"
+name = "ripgrep"
+category = "search"
+cmd = "rg"
+priority = "P0"
+audience = "ai"
+desc = "Fast recursive search; respects .gitignore"
+[[tool.method]]
+kind = "github_release"
+repo = "BurntSushi/ripgrep"
+asset = "ripgrep-{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
+member = "rg"
+bin_dir = "~/.local/bin"
+[[tool.method]]
+kind = "dnf"
+package = "ripgrep"
+[[tool.method]]
+kind = "apt"
+package = "ripgrep"
+[[tool.method]]
+kind = "pacman"
+package = "ripgrep"
+[[tool.method]]
+kind = "brew"
+formula = "ripgrep"
+
+[[tool]]
+id = "jq"
+name = "jq"
+category = "data"
+cmd = "jq"
+priority = "P0"
+audience = "ai"
+desc = "Surgical queries and edits on JSON"
+[[tool.method]]
+kind = "dnf"
+package = "jq"
+[[tool.method]]
+kind = "apt"
+package = "jq"
+[[tool.method]]
+kind = "pacman"
+package = "jq"
+[[tool.method]]
+kind = "brew"
+formula = "jq"
