@@ -70,6 +70,7 @@ def configure_path(
     tools: list[Tool],
     console: Console,
     *,
+    platform: Platform,
     default_bin_dir: Path,
     myshellrc_path: Path,
     rc_paths: list[Path],
@@ -79,7 +80,7 @@ def configure_path(
     Each rc file is wired idempotently; an absent rc file is created so the PATH
     block is sourced even on a fresh machine with no shell rc yet.
     """
-    bin_dirs = collect_bin_dirs(tools, default_bin_dir)
+    bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir)
     write_myshellrc(bin_dirs, myshellrc_path)
     for rc_path in rc_paths:
         ensure_source(rc_path, myshellrc_path)
@@ -90,6 +91,7 @@ def run_doctor(
     tools: list[Tool],
     console: Console,
     *,
+    platform: Platform,
     default_bin_dir: Path,
     path_value: str,
     exists: Callable[[Path], bool],
@@ -98,13 +100,14 @@ def run_doctor(
     fix: bool,
 ) -> DoctorReport:
     """Audit the PATH, render the report, and (if fix) write the managed config."""
-    bin_dirs = collect_bin_dirs(tools, default_bin_dir)
+    bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir)
     report = audit_path(bin_dirs, path_value, exists)
     render_doctor(report, console)
     if fix:
         configure_path(
             tools,
             console,
+            platform=platform,
             default_bin_dir=default_bin_dir,
             myshellrc_path=myshellrc_path,
             rc_paths=rc_paths,

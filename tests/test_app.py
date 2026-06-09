@@ -192,6 +192,7 @@ def test_configure_path_writes_myshellrc_and_wires_all_rcs(tmp_path: Path):
     configure_path(
         [_tool("rg", "search")],
         console,
+        platform=_platform(),
         default_bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=myshellrc,
         rc_paths=[zshrc, bashrc],
@@ -222,6 +223,7 @@ def test_run_doctor_reports_and_fixes(tmp_path: Path):
     report = run_doctor(
         [_tool("rg", "search")],
         console,
+        platform=_platform(),
         default_bin_dir=bin_dir,
         path_value="/usr/bin",
         exists=exists,
@@ -250,6 +252,7 @@ def test_run_doctor_without_fix_does_not_write(tmp_path: Path):
     run_doctor(
         [_tool("rg", "search")],
         console,
+        platform=_platform(),
         default_bin_dir=tmp_path / "bin",
         path_value="/usr/bin",
         exists=exists,

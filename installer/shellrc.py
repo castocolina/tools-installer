@@ -7,6 +7,8 @@ preserved, and entries are never duplicated across runs.
 from pathlib import Path
 
 from installer.model import Tool
+from installer.platform import Platform
+from installer.resolve import resolve_methods
 
 _PATH_BEGIN = "# >>> tools-installer path >>>"
 _PATH_END = "# <<< tools-installer path <<<"
@@ -14,8 +16,8 @@ _SOURCE_BEGIN = "# >>> tools-installer source >>>"
 _SOURCE_END = "# <<< tools-installer source <<<"
 
 
-def collect_bin_dirs(tools: list[Tool], default: Path) -> list[Path]:
-    """The default bin dir plus every method-declared bin_dir, expanded and deduped in order."""
+def collect_bin_dirs(tools: list[Tool], platform: Platform, default: Path) -> list[Path]:
+    """The default bin dir plus each platform-applicable method's bin_dir, deduped in order."""
     dirs: list[Path] = []
     seen: set[Path] = set()
 
@@ -27,7 +29,7 @@ def collect_bin_dirs(tools: list[Tool], default: Path) -> list[Path]:
 
     add(default)
     for tool in tools:
-        for method in tool.methods:
+        for method in resolve_methods(tool, platform):
             raw = method.params.get("bin_dir")
             if isinstance(raw, str) and raw:
                 add(Path(raw))

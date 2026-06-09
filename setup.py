@@ -48,6 +48,7 @@ def _run_doctor(console: Console) -> int:
     run_doctor(
         load_tools(_REGISTRY),
         console,
+        platform=detect(),
         default_bin_dir=_DEFAULT_BIN_DIR,
         path_value=os.environ.get("PATH", ""),
         exists=Path.is_dir,
@@ -71,14 +72,16 @@ def main(argv: list[str]) -> int:
         )
         return 2
     tools = load_tools(_REGISTRY)
+    platform = detect()
     prompter = CallbackPrompter(ask_checkbox=_ask_checkbox, ask_confirm=_ask_confirm)
-    summary = run_wizard(tools, detect(), prompter, console, options)
+    summary = run_wizard(tools, platform, prompter, console, options)
     if summary is None:
         console.print("Aborted.")
         return 0
     configure_path(
         tools,
         console,
+        platform=platform,
         default_bin_dir=_DEFAULT_BIN_DIR,
         myshellrc_path=_MYSHELLRC,
         rc_paths=_RC_PATHS,

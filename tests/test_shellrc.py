@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from installer.model import Method, Tool
+from installer.platform import Platform
 from installer.shellrc import (
     apply_block,
     collect_bin_dirs,
@@ -8,6 +9,10 @@ from installer.shellrc import (
     managed_block,
     write_myshellrc,
 )
+
+# has_brew=True so the brew-method tools in these tests still resolve (and thus
+# still contribute their bin dirs) under platform-aware collect_bin_dirs.
+_PLATFORM = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
 
 
 def _tool(tool_id: str, bin_dir: str | None) -> Tool:
@@ -31,7 +36,7 @@ def test_collect_bin_dirs_defaults_first_then_declared_deduped():
         _tool("fd", "/home/u/tools/bin"),
         _tool("jq", None),  # brew, no bin_dir
     ]
-    assert collect_bin_dirs(tools, default) == [
+    assert collect_bin_dirs(tools, _PLATFORM, default) == [
         Path("/home/u/.local/bin"),
         Path("/home/u/tools/bin"),
     ]
@@ -40,7 +45,7 @@ def test_collect_bin_dirs_defaults_first_then_declared_deduped():
 def test_collect_bin_dirs_expands_user():
     default = Path("/d")
     tools = [_tool("rg", "~/x/bin")]
-    result = collect_bin_dirs(tools, default)
+    result = collect_bin_dirs(tools, _PLATFORM, default)
     assert result[0] == Path("/d")
     assert result[1] == Path.home() / "x" / "bin"
 
@@ -126,3 +131,21 @@ def test_ensure_source_creates_file_when_missing(tmp_path: Path):
     ensure_source(rc, myshellrc)
     assert rc.exists()
     assert f'. "{myshellrc}"' in rc.read_text()
+
+
+def test_collect_bin_dirs_only_includes_platform_applicable_methods() -> None:
+    mac = Method(
+        kind="script",
+        params={"url": "u", "bin_dir": "/opt/homebrew/bin"},
+        os=("macos",),
+    )
+    linux = Method(
+        kind="script",
+        params={"url": "u", "bin_dir": "/home/linuxbrew/.linuxbrew/bin"},
+        os=("debian", "arch", "fedora"),
+    )
+    tool = Tool(id="brew", name="Homebrew", category="pkg-mgr", cmd="brew", methods=(mac, linux))
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
+    dirs = collect_bin_dirs([tool], macos, Path("~/.local/bin"))
+    assert Path("/opt/homebrew/bin") in dirs
+    assert Path("/home/linuxbrew/.linuxbrew/bin") not in dirs
