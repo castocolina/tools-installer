@@ -29,9 +29,10 @@ Every workflow has a target so humans and CI run the same thing:
 | ---------------- | -------------------------------------------------------------- |
 | `make install`   | `uv sync` (creates `.venv`, installs runtime + dev deps)        |
 | `make build`     | build the distributable                                         |
-| `make run`       | `uv run setup.py` (launch the wizard)                           |
+| `make setup`     | `uv run setup.py` (launch the wizard; `make run` is an alias)   |
+| `make doctor`    | audit & fix `PATH` (`uv run setup.py --doctor`)                 |
 | `make uninstall` | remove installed artifacts / symlinks                          |
-| `make validate`  | run pre-commit hooks: `ruff check`, `ruff format --check`, `pyright`, `bandit`, `vulture` |
+| `make validate`  | run pre-commit hooks: `ruff check`, `ruff format --check`, `pyright`, `bandit`, `vulture`, `shellcheck` |
 | `make test`      | `uv run pytest` with coverage (`--cov`, `--cov-fail-under`)     |
 
 - Keep targets thin: a target wraps a uv/tool command, it does not reimplement logic.

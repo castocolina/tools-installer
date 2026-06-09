@@ -146,17 +146,26 @@ skipped tests, lowered coverage floors). The full contributor rules live in
 ## Project layout
 
 ```
-install.sh                 # curl|bash bootstrap: detect OS/arch, ensure uv, run wizard
-setup.py                   # wizard entrypoint (inline deps: rich, questionary)
+install.sh                 # curl|sh bootstrap: detect OS/arch, ensure uv, clone, run wizard
+setup.py                   # wizard entrypoint / composition root (rich, questionary)
 installer/
-  registry.toml            # the catalog — single source of truth
-  model.py                 # Tool model + tomllib loader
-  platform.py              # OS/arch + immutable detection
-  strategies.py            # one install strategy per kind, driven by the priority ladder
-  paths.py                 # PATH management + the doctor
-  ui.py                    # questionary TUI (categories + spacebar multi-select)
+  registry.toml            # the tool catalog — single source of truth
+  model.py                 # Tool/Method model + tomllib loader
+  platform.py              # OS/arch + immutability detection
+  resolve.py               # which methods apply, ordered by the priority ladder
+  engine.py                # install a tool by walking its resolved ladder
+  executors.py             # native package-manager executors (argv → runner)
+  download.py              # github_release / tarball binary executors
+  versions.py, assets.py   # GitHub release version + asset-name resolution
+  app.py, cli.py           # wizard flow + non-interactive flag parsing
+  selection.py, audit.py   # catalog → choices; installed/missing status
+  prompt.py, render.py     # injected TUI callbacks + rich output
+  session.py               # orchestrate installs, bucket the outcomes
+  shellrc.py, doctor.py    # ~/.myshellrc management + PATH audit/fix
+  locations.py, status.py, run.py, links.py   # seams: paths, is-installed, runner, URLs
 tests/                     # pytest suite (offline, deterministic)
-Makefile                   # task interface: install, build, run, validate, test, uninstall
+.github/workflows/ci.yml   # CI: make validate + make test on Ubuntu + macOS
+Makefile                   # task interface: install, setup, doctor, build, validate, test
 pyproject.toml             # deps + tool config (ruff, pyright, pytest, coverage, …)
 CLAUDE.md, .claude/        # contributor rules (tooling, testing, git, dev env)
 docs/prds/                 # product requirements
