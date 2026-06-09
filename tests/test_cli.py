@@ -33,3 +33,11 @@ def test_yes_flag():
 def test_unknown_flag_exits():
     with pytest.raises(SystemExit):
         parse_args(["--nope"])
+
+
+def test_doctor_defaults_false():
+    assert parse_args([]).doctor is False
+
+
+def test_doctor_flag():
+    assert parse_args(["--doctor"]).doctor is True

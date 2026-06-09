@@ -9,6 +9,7 @@ class Options:
     all: bool
     categories: tuple[str, ...]
     yes: bool
+    doctor: bool = False
 
 
 def parse_args(argv: list[str]) -> Options:
@@ -30,6 +31,7 @@ def parse_args(argv: list[str]) -> Options:
         help="install only these categories (comma-separated; repeatable)",
     )
     parser.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    parser.add_argument("--doctor", action="store_true", help="audit and fix the PATH, then exit")
     ns = parser.parse_args(argv)
 
     categories: list[str] = []
@@ -39,4 +41,4 @@ def parse_args(argv: list[str]) -> Options:
             trimmed = name.strip()
             if trimmed:
                 categories.append(trimmed)
-    return Options(all=ns.all, categories=tuple(categories), yes=ns.yes)
+    return Options(all=ns.all, categories=tuple(categories), yes=ns.yes, doctor=ns.doctor)
