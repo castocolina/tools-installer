@@ -18,8 +18,10 @@ uninstall:  ## Remove installed artifacts (implemented in a later plan)
 	@echo "uninstall: not yet implemented"
 
 validate:  ## Lint, format-check, type-check, security, dead-code
-	uv run ruff check installer tests
-	uv run ruff format --check installer tests
+	# setup.py (composition root) is lint/format-gated but stays out of pyright/coverage:
+	# it imports the untyped, TTY-only questionary, which is isolated there by design.
+	uv run ruff check installer tests setup.py
+	uv run ruff format --check installer tests setup.py
 	uv run pyright
 	# B404/B603 (subprocess) and B310 (urlopen) are inherent to this installer; all
 	# args/URLs come from the trusted registry, never external input. Skipped deliberately.
