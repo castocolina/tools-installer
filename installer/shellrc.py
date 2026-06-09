@@ -35,7 +35,12 @@ def collect_bin_dirs(tools: list[Tool], default: Path) -> list[Path]:
 
 
 def managed_block(bin_dirs: list[Path]) -> str:
-    """Marker-delimited block exporting each bin dir onto PATH."""
+    """Marker-delimited block exporting each bin dir onto PATH.
+
+    Paths are double-quoted but not otherwise escaped: they come only from the
+    trusted registry and Path.home(), never from user input. Do not feed
+    user-supplied paths here without shell-quoting first.
+    """
     lines = [_PATH_BEGIN]
     lines.extend(f'export PATH="{directory}:$PATH"' for directory in bin_dirs)
     lines.append(_PATH_END)
