@@ -18,6 +18,14 @@ def test_resolve_without_v_prefix():
     assert resolve_github_version("a/b", fetch) == "1.2.3"
 
 
+def test_resolve_strips_only_a_single_leading_v_prefix():
+    # removeprefix strips one "v"; lstrip would wrongly strip both.
+    def fetch(url: str) -> bytes:
+        return b'{"tag_name": "vv1.0"}'
+
+    assert resolve_github_version("a/b", fetch) == "v1.0"
+
+
 def test_resolve_missing_tag_raises():
     def fetch(url: str) -> bytes:
         return b"{}"

@@ -31,4 +31,4 @@ def resolve_github_version(repo: str, fetch: Fetch = urlopen_fetch) -> str:
     tag = str(data.get("tag_name", ""))
     if not tag:
         raise VersionError(f"no release tag for {repo}")
-    return tag.lstrip("v")
+    return tag.removeprefix("v")
