@@ -21,9 +21,9 @@ validate:  ## Lint, format-check, type-check, security, dead-code
 	uv run ruff check installer tests
 	uv run ruff format --check installer tests
 	uv run pyright
-	# B404/B603 (subprocess import/use) are inherent to this installer; argv comes
-	# from the trusted registry, never external input. Reviewed and skipped deliberately.
-	uv run bandit -q -r installer --skip B404,B603
+	# B404/B603 (subprocess) and B310 (urlopen) are inherent to this installer; all
+	# args/URLs come from the trusted registry, never external input. Skipped deliberately.
+	uv run bandit -q -r installer --skip B404,B603,B310
 	uv run vulture
 
 test:  ## Run tests with coverage
