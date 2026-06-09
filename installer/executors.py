@@ -15,7 +15,7 @@ class ExecutorError(RuntimeError):
     """A method could not be turned into a runnable command."""
 
 
-def _require(method: Method, key: str) -> str:
+def require_str(method: Method, key: str) -> str:
     value = method.params.get(key)
     if not isinstance(value, str) or not value:
         raise ExecutorError(f"method '{method.kind}' is missing or empty required param '{key}'")
@@ -23,26 +23,26 @@ def _require(method: Method, key: str) -> str:
 
 
 def _script(method: Method, runner: Runner) -> None:
-    url = _require(method, "url")
+    url = require_str(method, "url")
     shell = method.params.get("shell")
     shell = shell if isinstance(shell, str) and shell else "sh"
     runner(["sh", "-c", f"curl -fsSL -- {shlex.quote(url)} | {shlex.quote(shell)}"])
 
 
 def _dnf(method: Method, runner: Runner) -> None:
-    runner(["sudo", "dnf", "install", "-y", _require(method, "package")])
+    runner(["sudo", "dnf", "install", "-y", require_str(method, "package")])
 
 
 def _apt(method: Method, runner: Runner) -> None:
-    runner(["sudo", "apt-get", "install", "-y", _require(method, "package")])
+    runner(["sudo", "apt-get", "install", "-y", require_str(method, "package")])
 
 
 def _pacman(method: Method, runner: Runner) -> None:
-    runner(["sudo", "pacman", "-S", "--noconfirm", "--needed", _require(method, "package")])
+    runner(["sudo", "pacman", "-S", "--noconfirm", "--needed", require_str(method, "package")])
 
 
 def _brew(method: Method, runner: Runner) -> None:
-    runner(["brew", "install", _require(method, "formula")])
+    runner(["brew", "install", require_str(method, "formula")])
 
 
 EXECUTORS: dict[str, Callable[[Method, Runner], None]] = {
