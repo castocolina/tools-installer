@@ -67,3 +67,28 @@ package = "jq"
 [[tool.method]]
 kind = "brew"
 formula = "jq"
+
+[[tool]]
+id = "brew"
+name = "Homebrew"
+category = "pkg-mgr"
+cmd = "brew"
+priority = "P1"
+audience = "both"
+desc = "The missing package manager (optional; some tools only live here)"
+# bin_dir assumes Apple Silicon (/opt/homebrew/bin). Intel Macs use /usr/local/bin;
+# arch-aware wiring is a deferred refinement, so PATH may be wrong on Intel.
+[[tool.method]]
+kind = "script"
+os = ["macos"]
+url = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
+shell = "bash"
+env = { NONINTERACTIVE = "1" }
+bin_dir = "/opt/homebrew/bin"
+[[tool.method]]
+kind = "script"
+os = ["debian", "arch", "fedora"]
+url = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
+shell = "bash"
+env = { NONINTERACTIVE = "1" }
+bin_dir = "/home/linuxbrew/.linuxbrew/bin"
