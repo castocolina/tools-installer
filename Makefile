@@ -32,6 +32,8 @@ validate:  ## Lint, format-check, type-check, security, dead-code
 	# args/URLs come from the trusted registry, never external input. Skipped deliberately.
 	uv run bandit -q -r installer --skip B404,B603,B310
 	uv run vulture
+	# install.sh is the curl|bash bootstrap; lint it as part of the gate.
+	uv run shellcheck install.sh
 
 test:  ## Run tests with coverage
 	uv run pytest --cov
