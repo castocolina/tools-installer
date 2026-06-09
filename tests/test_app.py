@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 
 from rich.console import Console
 
@@ -177,3 +178,83 @@ def test_declining_confirmation_installs_nothing():
     assert installed == []
     assert summary is None  # None signals an aborted run, distinct from an empty Summary
     assert prompter.confirmed == 1
+
+
+def test_configure_path_writes_myshellrc_and_wires_all_rcs(tmp_path: Path):
+    from installer.app import configure_path
+
+    myshellrc = tmp_path / ".myshellrc"
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text("# zsh\n")
+    bashrc = tmp_path / ".bashrc"  # absent -> MUST be created and wired
+    console, _buf = _console()
+
+    configure_path(
+        [_tool("rg", "search")],
+        console,
+        default_bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=myshellrc,
+        rc_paths=[zshrc, bashrc],
+    )
+
+    assert myshellrc.exists()
+    assert "# >>> tools-installer path >>>" in myshellrc.read_text()
+    assert zshrc.exists() and "tools-installer source" in zshrc.read_text()
+    # Both rc files are always wired; an absent one is created.
+    assert bashrc.exists() and "tools-installer source" in bashrc.read_text()
+    assert "# zsh" in zshrc.read_text()  # existing content preserved
+
+
+def test_run_doctor_reports_and_fixes(tmp_path: Path):
+    from pathlib import Path as _P
+
+    from installer.app import run_doctor
+
+    myshellrc = tmp_path / ".myshellrc"
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text("# zsh\n")
+    bin_dir = tmp_path / ".local" / "bin"
+    console, buf = _console()
+
+    def exists(path: _P) -> bool:
+        return False  # nothing on disk -> broken + missing
+
+    report = run_doctor(
+        [_tool("rg", "search")],
+        console,
+        default_bin_dir=bin_dir,
+        path_value="/usr/bin",
+        exists=exists,
+        myshellrc_path=myshellrc,
+        rc_paths=[zshrc],
+        fix=True,
+    )
+
+    assert bin_dir in report.missing
+    assert "github.com/castocolina/tools-installer" in buf.getvalue()
+    assert myshellrc.exists()  # fix=True wrote the managed block
+    assert "tools-installer source" in zshrc.read_text()
+
+
+def test_run_doctor_without_fix_does_not_write(tmp_path: Path):
+    from pathlib import Path as _P
+
+    from installer.app import run_doctor
+
+    myshellrc = tmp_path / ".myshellrc"
+    console, _buf = _console()
+
+    def exists(path: _P) -> bool:
+        return True
+
+    run_doctor(
+        [_tool("rg", "search")],
+        console,
+        default_bin_dir=tmp_path / "bin",
+        path_value="/usr/bin",
+        exists=exists,
+        myshellrc_path=myshellrc,
+        rc_paths=[],
+        fix=False,
+    )
+    assert not myshellrc.exists()  # fix=False is read-only

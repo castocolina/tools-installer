@@ -1,19 +1,22 @@
 """The interactive wizard flow: select -> audit -> confirm -> install -> summarize."""
 
 from collections.abc import Callable
+from pathlib import Path
 
 from rich.console import Console
 
 from installer.audit import audit
 from installer.cli import Options
+from installer.doctor import DoctorReport, audit_path
 from installer.engine import install_tool
 from installer.model import Tool
 from installer.platform import Platform
 from installer.prompt import Prompter
-from installer.render import render_audit, render_summary
+from installer.render import render_audit, render_doctor, render_summary
 from installer.run import Runner, run_command
 from installer.selection import category_choices, select_tools, tool_choices
 from installer.session import Install, Summary, order_for_install, run_installs, summarize
+from installer.shellrc import collect_bin_dirs, ensure_source, write_myshellrc
 from installer.status import is_installed
 from installer.versions import VersionResolver, resolve_github_version
 
@@ -61,3 +64,49 @@ def run_wizard(
     summary = summarize(outcomes)
     render_summary(summary, console)
     return summary
+
+
+def configure_path(
+    tools: list[Tool],
+    console: Console,
+    *,
+    default_bin_dir: Path,
+    myshellrc_path: Path,
+    rc_paths: list[Path],
+) -> None:
+    """Write the managed PATH block and wire `source` into every rc path.
+
+    Each rc file is wired idempotently; an absent rc file is created so the PATH
+    block is sourced even on a fresh machine with no shell rc yet.
+    """
+    bin_dirs = collect_bin_dirs(tools, default_bin_dir)
+    write_myshellrc(bin_dirs, myshellrc_path)
+    for rc_path in rc_paths:
+        ensure_source(rc_path, myshellrc_path)
+    console.print(f"PATH configured in {myshellrc_path} (restart your shell or source it).")
+
+
+def run_doctor(
+    tools: list[Tool],
+    console: Console,
+    *,
+    default_bin_dir: Path,
+    path_value: str,
+    exists: Callable[[Path], bool],
+    myshellrc_path: Path,
+    rc_paths: list[Path],
+    fix: bool,
+) -> DoctorReport:
+    """Audit the PATH, render the report, and (if fix) write the managed config."""
+    bin_dirs = collect_bin_dirs(tools, default_bin_dir)
+    report = audit_path(bin_dirs, path_value, exists)
+    render_doctor(report, console)
+    if fix:
+        configure_path(
+            tools,
+            console,
+            default_bin_dir=default_bin_dir,
+            myshellrc_path=myshellrc_path,
+            rc_paths=rc_paths,
+        )
+    return report
