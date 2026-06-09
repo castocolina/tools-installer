@@ -1,7 +1,7 @@
 """Per-method-kind executors: build an argv and hand it to the injected runner.
 
 Only command-based kinds live here (script, native package managers, brew).
-Download-based kinds (github_release, tarball) are implemented in a later plan.
+Download-based kinds (github_release, tarball) live in `installer.download`.
 """
 
 import shlex
