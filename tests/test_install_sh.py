@@ -147,3 +147,29 @@ def test_ensure_uv_installs_via_curl_when_missing(harness: Harness) -> None:
     assert "curl" in log
     assert "astral.sh" in log
     assert (harness.fakebin / "uv").exists()
+
+
+def test_fetch_repo_clones_when_absent(harness: Harness) -> None:
+    result = harness.source("fetch_repo")
+    assert result.returncode == 0
+    log = harness.log_text()
+    assert "clone" in log
+    assert str(harness.repo_dir) in log
+    assert harness.repo_dir.exists()  # proves $TI_DIR was passed to git clone
+
+
+def test_fetch_repo_pulls_when_present(harness: Harness) -> None:
+    (harness.repo_dir / ".git").mkdir(parents=True)
+    result = harness.source("fetch_repo")
+    assert result.returncode == 0
+    log = harness.log_text()
+    assert "pull" in log
+    assert "git clone" not in log
+
+
+def test_fetch_repo_requires_git(harness: Harness) -> None:
+    # Drop git and restrict PATH to the fake bin so no system git is found.
+    (harness.fakebin / "git").unlink()
+    result = harness.source("fetch_repo", PATH=str(harness.fakebin))
+    assert result.returncode != 0
+    assert "git is required" in result.stderr

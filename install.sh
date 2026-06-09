@@ -51,10 +51,24 @@ ensure_uv() {
     command -v uv >/dev/null 2>&1 || die "uv installation failed"
 }
 
+fetch_repo() {
+    command -v git >/dev/null 2>&1 || die "git is required to fetch tools-installer"
+    # A partial clone (TI_DIR exists but has no .git) makes `git clone` fail with
+    # "directory not empty"; recovery (removing TI_DIR) is left to the user for now.
+    if [ -d "$TI_DIR/.git" ]; then
+        printf 'tools-installer: updating %s\n' "$TI_DIR"
+        git -C "$TI_DIR" pull --ff-only
+    else
+        printf 'tools-installer: cloning into %s\n' "$TI_DIR"
+        git clone --depth 1 --branch "$TI_REF" "$TI_REPO_URL" "$TI_DIR"
+    fi
+}
+
 main() {
     os="$(detect_os)"
     printf 'tools-installer: platform %s\n' "$os"
     ensure_uv
+    fetch_repo
 }
 
 if [ -z "${TI_SOURCED:-}" ]; then
