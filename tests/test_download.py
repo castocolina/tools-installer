@@ -161,3 +161,20 @@ def test_github_release_unsupported_arch_raises_executor_error(tmp_path: Path):
     with pytest.raises(ExecutorError, match="asset"):
         install_download(method, ctx)
     assert calls == []
+
+
+def test_bin_dir_creation_failure_raises_executor_error(tmp_path: Path):
+    calls, runner = _record()
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    method = Method(
+        kind="tarball",
+        params={
+            "url": "https://example.com/tool.tar.gz",
+            "member": "tool",
+            "bin_dir": str(blocker / "bin"),  # parent is a file -> mkdir fails
+        },
+    )
+    with pytest.raises(ExecutorError, match="bin dir"):
+        install_download(method, _ctx(runner))
+    assert calls == []

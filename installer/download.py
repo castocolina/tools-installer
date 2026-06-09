@@ -47,7 +47,10 @@ def install_download(method: Method, ctx: ExecContext) -> None:
         raise ExecutorError(f"no download executor for kind '{method.kind}'")
 
     member = require_str(method, "member")
-    dest = ensure_dir(bin_dir(_opt_str(method, "bin_dir")))
+    try:
+        dest = ensure_dir(bin_dir(_opt_str(method, "bin_dir")))
+    except OSError as exc:
+        raise ExecutorError(f"cannot create bin dir: {exc}") from exc
     target = dest / member
     quoted_url = shlex.quote(url)
     quoted_target = shlex.quote(str(target))
