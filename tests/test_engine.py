@@ -1,11 +1,13 @@
+from pathlib import Path
+
 import pytest
 
 import installer.engine as engine
 from installer.engine import install_tool
-from installer.executors import ExecutorError
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.run import CommandError
+from installer.versions import VersionError
 
 
 def _platform() -> Platform:
@@ -111,16 +113,103 @@ def test_all_methods_fail_returns_failed(monkeypatch: pytest.MonkeyPatch):
     assert len(outcome.errors) == 1
 
 
-def test_executor_error_is_caught_as_failure(monkeypatch: pytest.MonkeyPatch):
+def test_github_release_routes_to_download(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     def fake_not_installed(tool: Tool) -> bool:
         return False
 
     monkeypatch.setattr(engine, "is_installed", fake_not_installed)
-    platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
+    calls: list[list[str]] = []
+    bin_dir = tmp_path / "bin"
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "BurntSushi/ripgrep",
+            "asset": "rg-{ver}-{arch.machine}.tar.gz",
+            "member": "rg",
+            "bin_dir": str(bin_dir),
+        },
+    )
+
+    def resolve_version(repo: str) -> str:
+        return "1.2.3"
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+
     outcome = install_tool(
-        _tool(Method(kind="github_release", params={"repo": "BurntSushi/ripgrep"})),
-        platform,
-        runner=lambda cmd: None,
+        _tool(method),
+        Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        runner=runner,
+        resolve_version=resolve_version,
+    )
+    assert outcome.status == "installed"
+    assert outcome.method_kind == "github_release"
+    assert calls[0][0] == "sh" and "rg-1.2.3-x86_64.tar.gz" in calls[0][2]
+    assert calls[1] == ["chmod", "+x", str(bin_dir / "rg")]
+
+
+def test_download_failure_is_caught_as_failed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+
+    def runner(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1)
+
+    def resolve_version(repo: str) -> str:
+        return "1.2.3"
+
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "x/y",
+            "asset": "x-{ver}.tar.gz",
+            "member": "x",
+            "bin_dir": str(tmp_path / "bin"),
+        },
+    )
+    outcome = install_tool(
+        _tool(method),
+        Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        runner=runner,
+        resolve_version=resolve_version,
     )
     assert outcome.status == "failed"
-    assert isinstance(outcome.errors[0], ExecutorError)
+    assert len(outcome.errors) == 1
+
+
+def test_version_resolution_failure_is_caught_as_failed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+
+    def resolve_version(repo: str) -> str:
+        raise VersionError("network down")
+
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "x/y",
+            "asset": "x-{ver}.tar.gz",
+            "member": "x",
+            "bin_dir": str(tmp_path / "bin"),
+        },
+    )
+    outcome = install_tool(
+        _tool(method),
+        Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        runner=runner,
+        resolve_version=resolve_version,
+    )
+    assert outcome.status == "failed"
+    assert len(outcome.errors) == 1
+    assert isinstance(outcome.errors[0], VersionError)
+    assert calls == []  # resolution fails before any command runs

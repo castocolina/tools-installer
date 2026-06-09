@@ -120,3 +120,44 @@ def test_missing_required_param_raises(tmp_path: Path):
     with pytest.raises(ExecutorError, match="member"):
         install_download(method, _ctx(runner))
     assert calls == []
+
+
+def test_github_release_bad_asset_template_raises_executor_error(tmp_path: Path):
+    calls, runner = _record()
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "a/b",
+            "asset": "tool-{nope}.tar.gz",
+            "member": "tool",
+            "bin_dir": str(tmp_path / "bin"),
+        },
+    )
+    with pytest.raises(ExecutorError, match="asset"):
+        install_download(method, _ctx(runner))
+    assert calls == []
+
+
+def test_github_release_unsupported_arch_raises_executor_error(tmp_path: Path):
+    calls, runner = _record()
+
+    def resolve_version(repo: str) -> str:
+        return "1.0.0"
+
+    ctx = ExecContext(
+        runner=runner,
+        platform=Platform(os="fedora", arch="riscv64", immutable=False, has_brew=False),
+        resolve_version=resolve_version,
+    )
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "a/b",
+            "asset": "tool-{arch.machine}.tar.gz",
+            "member": "tool",
+            "bin_dir": str(tmp_path / "bin"),
+        },
+    )
+    with pytest.raises(ExecutorError, match="asset"):
+        install_download(method, ctx)
+    assert calls == []

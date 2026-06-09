@@ -30,7 +30,10 @@ def _github_release_url(method: Method, ctx: ExecContext) -> str:
     repo = require_str(method, "repo")
     template = require_str(method, "asset")
     ver = ctx.resolve_version(repo)
-    asset = render_asset(template, ver, arch_tokens(ctx.platform.arch))
+    try:
+        asset = render_asset(template, ver, arch_tokens(ctx.platform.arch))
+    except ValueError as exc:
+        raise ExecutorError(f"cannot build asset name for '{repo}': {exc}") from exc
     return f"https://github.com/{repo}/releases/download/v{ver}/{asset}"
 
 
