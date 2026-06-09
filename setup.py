@@ -32,11 +32,16 @@ def _ask_checkbox(message: str, choices: list[Choice]) -> list[str]:
         message,
         choices=[questionary.Choice(title=c.label, value=c.id, checked=c.checked) for c in choices],
     ).ask()
-    return list(answer) if answer else []
+    if answer is None:  # questionary returns None on Ctrl+C / Ctrl+D at the prompt
+        raise KeyboardInterrupt
+    return list(answer)
 
 
 def _ask_confirm(message: str) -> bool:
-    return bool(questionary.confirm(message, default=True).ask())
+    answer = questionary.confirm(message, default=True).ask()
+    if answer is None:  # questionary returns None on Ctrl+C / Ctrl+D at the prompt
+        raise KeyboardInterrupt
+    return bool(answer)
 
 
 def _run_doctor(console: Console) -> int:
@@ -85,4 +90,10 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    try:
+        raise SystemExit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        # Ctrl+C anywhere — at a prompt or mid-install — exits cleanly, no traceback.
+        # 130 = 128 + SIGINT(2), the conventional shell code for interrupted programs.
+        print("\nAborted.", file=sys.stderr)
+        raise SystemExit(130) from None
