@@ -1,4 +1,4 @@
-"""Entry point for the tools-installer wizard. Run via `make run` (uv run setup.py).
+"""Entry point for the tools-installer wizard. Run via `make setup` (uv run setup.py).
 
 This is the composition root: it performs the real terminal IO (questionary) and
 the real home-path wiring, and composes the pure, fully-tested installer package.

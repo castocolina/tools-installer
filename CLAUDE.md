@@ -9,7 +9,9 @@ Python, managed with **uv**. See [PRD](docs/prds/ai-dev-tools-installer-v1.0-prd
   Never use `pip`, `poetry`, `conda`, or a hand-rolled venv.
 - `make install`   — create `.venv` (uv), install runtime + dev dependencies
 - `make build`     — build the distributable
-- `make run`       — launch the wizard (`uv run setup.py`)
+- `make setup`     — launch the wizard (`uv run setup.py`; pass flags via `ARGS="…"`)
+- `make doctor`    — audit PATH and wire `~/.myshellrc` + shell rc files
+- `make run`       — alias for `make setup`
 - `make uninstall` — remove installed artifacts
 - `make validate`  — run pre-commit hooks (lint, format check, types, security, dead code)
 - `make test`      — `pytest` with coverage

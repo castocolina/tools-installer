@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install build run uninstall validate test
+.PHONY: help install build setup run doctor uninstall validate test
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -11,8 +11,13 @@ install:  ## Create .venv and install runtime + dev deps (uv)
 build:  ## Build the wheel + sdist
 	uv build
 
-run:  ## Launch the wizard (available once setup.py ships)
-	uv run setup.py
+setup:  ## Launch the setup wizard (pass flags via ARGS, e.g. ARGS="--all --yes")
+	uv run setup.py $(ARGS)
+
+run: setup  ## Alias for `setup`
+
+doctor:  ## Audit PATH and wire ~/.myshellrc + shell rc files
+	uv run setup.py --doctor
 
 uninstall:  ## Remove installed artifacts (implemented in a later plan)
 	@echo "uninstall: not yet implemented"
