@@ -96,6 +96,30 @@ def test_all_flag_installs_every_tool_without_prompting():
     assert prompter.confirmed == 0
 
 
+def test_failed_install_surfaces_in_summary_without_crashing():
+    def install(
+        tool: Tool, platform: Platform, runner: object, resolve_version: object
+    ) -> InstallOutcome:
+        return InstallOutcome(tool.id, "failed")
+
+    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    console, _buf = _console()
+    summary = run_wizard(
+        [_tool("rg", "search")],
+        _platform(),
+        prompter,
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_version=_resolve,
+        install=install,
+        installed=_never_installed,
+    )
+    assert summary is not None
+    assert summary.failed == ("rg",)
+    assert summary.installed == ()
+
+
 def test_categories_flag_filters_tools():
     installed, install = _recording_install()
     prompter = FakePrompter(categories=[], tools=[], confirm=True)
