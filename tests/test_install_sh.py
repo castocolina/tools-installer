@@ -173,3 +173,18 @@ def test_fetch_repo_requires_git(harness: Harness) -> None:
     result = harness.source("fetch_repo", PATH=str(harness.fakebin))
     assert result.returncode != 0
     assert "git is required" in result.stderr
+
+
+def test_run_installs_without_launching_when_no_run_set(harness: Harness) -> None:
+    harness.stub("uv", 'printf "uv %s\\n" "$*" >> "$TI_LOG"')
+    result = harness.run(TI_NO_RUN="1", TI_OS="Darwin")
+    assert result.returncode == 0
+    assert "skipping wizard" in result.stdout
+    assert "setup.py" not in harness.log_text()
+
+
+def test_run_launches_wizard_with_passthrough_args(harness: Harness) -> None:
+    harness.stub("uv", 'printf "uv %s\\n" "$*" >> "$TI_LOG"')
+    result = harness.run("--all", "--yes", TI_OS="Linux")
+    assert result.returncode == 0
+    assert "uv run setup.py --all --yes" in harness.log_text()

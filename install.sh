@@ -69,6 +69,12 @@ main() {
     printf 'tools-installer: platform %s\n' "$os"
     ensure_uv
     fetch_repo
+    if [ -n "${TI_NO_RUN:-}" ]; then
+        printf 'tools-installer: installed at %s (TI_NO_RUN set; skipping wizard)\n' "$TI_DIR"
+        return 0
+    fi
+    cd "$TI_DIR"
+    exec uv run setup.py "$@"
 }
 
 if [ -z "${TI_SOURCED:-}" ]; then
