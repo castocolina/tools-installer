@@ -5,7 +5,7 @@ environment — pick what you want from an interactive wizard, install it withou
 sudo where possible, and end up with a clean, de-duplicated `PATH`.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/castocolina/tools-installer/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/castocolina/tools-installer/main/install.sh | sh
 ```
 
 > **Status: in development (v1 / MVP).** The design is locked in
@@ -34,11 +34,22 @@ curl -fsSL https://raw.githubusercontent.com/castocolina/tools-installer/main/in
 
 ## Quick start
 
-### From the network (target experience)
+Install the AI dev environment with one command:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/castocolina/tools-installer/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/castocolina/tools-installer/main/install.sh | sh
 ```
+
+Pass wizard flags through `sh -s --`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/castocolina/tools-installer/main/install.sh | sh -s -- --all --yes
+```
+
+The bootstrap detects your platform, installs [uv](https://docs.astral.sh/uv/)
+if it is missing, clones the repo to `~/.local/share/tools-installer`, and
+launches the wizard. Override defaults with `TI_REPO_URL`, `TI_REF`, `TI_DIR`,
+or `TI_UV_INSTALL_URL`, or set `TI_NO_RUN=1` to install without launching.
 
 ### From a clone
 
@@ -46,15 +57,15 @@ curl -fsSL https://raw.githubusercontent.com/castocolina/tools-installer/main/in
 git clone https://github.com/castocolina/tools-installer.git
 cd tools-installer
 make install                 # uv creates .venv + installs deps
-make run                     # launch the wizard
+make setup                   # launch the wizard (make run is an alias)
 ```
 
 ### Non-interactive (CI / scripting)
 
 ```sh
-uv run setup.py --all                       # install everything
-uv run setup.py --categories search,git     # only some categories
-uv run setup.py --doctor                     # just audit & fix PATH
+make setup ARGS="--all"                      # install everything
+make setup ARGS="--categories search,data"   # only some categories
+make doctor                                  # just audit & fix PATH
 ```
 
 ## Supported platforms
@@ -99,7 +110,7 @@ The `doctor` flow keeps your shell PATH correct:
   (directory gone), or **duplicated**, and offers to fix them.
 
 ```sh
-uv run setup.py --doctor
+make doctor
 ```
 
 ## What's NOT in v1
@@ -117,8 +128,9 @@ workflow has a `make` target so local runs and CI are identical:
 | Command          | Does                                                            |
 | ---------------- | -------------------------------------------------------------- |
 | `make install`   | `uv sync` — create `.venv`, install runtime + dev deps          |
-| `make run`       | launch the wizard (`uv run setup.py`)                           |
-| `make validate`  | pre-commit gates: `ruff check`, `ruff format --check`, `pyright`, `bandit`, `vulture` |
+| `make setup`     | launch the wizard (`uv run setup.py`; flags via `ARGS`; `make run` is an alias) |
+| `make doctor`    | audit & fix `PATH` (`~/.myshellrc` + shell rc files)            |
+| `make validate`  | pre-commit gates: `ruff check`, `ruff format --check`, `pyright`, `bandit`, `vulture`, `shellcheck` |
 | `make test`      | `pytest` with coverage                                          |
 | `make build`     | build the distributable                                         |
 | `make uninstall` | remove installed artifacts                                      |
