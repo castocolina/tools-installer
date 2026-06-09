@@ -25,6 +25,8 @@ dev = [
     "vulture>=2.11",
     "pre-commit>=3.8",
     "shellcheck-py>=0.11.0.1",
+    "pyyaml>=6.0.3",
+    "types-pyyaml>=6.0.12.20260518",
 ]
 
 [tool.ruff]
