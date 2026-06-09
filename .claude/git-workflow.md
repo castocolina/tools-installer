@@ -14,6 +14,8 @@ review conversation. These rules apply to every commit and to the review cycle.
   `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`), and a body explaining
   *why* when it isn't obvious.
 - Don't bundle unrelated changes; split them into separate commits.
+- Co-authorship trailer: end the message with `Co-Authored-By: Claude <noreply@anthropic.com>`.
+  Do **not** pin a model name or version — it drifts and adds no value.
 
 ### The review cycle — do NOT stack fix commits
 - When the user reviews and requests changes, **amend or fixup** the relevant commit so
