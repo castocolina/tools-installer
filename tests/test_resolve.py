@@ -53,3 +53,23 @@ def test_immutable_no_brew_native_only_returns_empty():
     platform = Platform(os="fedora", arch="amd64", immutable=True, has_brew=False)
     tool = _tool("dnf", "brew")
     assert resolve_methods(tool, platform) == []
+
+
+def test_os_filter_restricts_a_method_to_its_target_os() -> None:
+    mac = Method(kind="script", params={"url": "https://example.test/i.sh"}, os=("macos",))
+    linux = Method(
+        kind="script", params={"url": "https://example.test/i.sh"}, os=("debian", "arch", "fedora")
+    )
+    tool = Tool(id="t", name="t", category="c", cmd="t", methods=(mac, linux))
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
+    debian = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    assert resolve_methods(tool, macos) == [mac]
+    assert resolve_methods(tool, debian) == [linux]
+
+
+def test_method_without_os_applies_on_every_platform() -> None:
+    method = Method(kind="script", params={"url": "https://example.test/i.sh"})
+    tool = Tool(id="t", name="t", category="c", cmd="t", methods=(method,))
+    for os_name in ("macos", "debian", "arch", "fedora"):
+        platform = Platform(os=os_name, arch="amd64", immutable=False, has_brew=False)
+        assert resolve_methods(tool, platform) == [method]
