@@ -6,6 +6,7 @@ Download-based kinds (github_release, tarball) live in `installer.download`.
 
 import shlex
 from collections.abc import Callable
+from typing import cast
 
 from installer.model import Method
 from installer.run import Runner
@@ -22,11 +23,33 @@ def require_str(method: Method, key: str) -> str:
     return value
 
 
+def _env_prefix(method: Method) -> str:
+    """Shell-quoted `KEY=value` assignments for the script shell, sorted by key.
+
+    Keys come only from the trusted registry, so they are not shell-quoted; values
+    are. The prefix attaches to the shell (the right side of the `curl | shell`
+    pipe), not to curl — in POSIX sh a pipeline component's assignments are local
+    to that component, so the installer would otherwise never see them.
+    """
+    raw = method.params.get("env")
+    if not isinstance(raw, dict):
+        return ""
+    env = cast(dict[str, object], raw)
+    parts = [
+        f"{key}={shlex.quote(str(value))}"
+        for key, value in sorted(env.items(), key=lambda item: item[0])
+    ]
+    return " ".join(parts)
+
+
 def _script(method: Method, runner: Runner) -> None:
     url = require_str(method, "url")
     shell = method.params.get("shell")
     shell = shell if isinstance(shell, str) and shell else "sh"
-    runner(["sh", "-c", f"curl -fsSL -- {shlex.quote(url)} | {shlex.quote(shell)}"])
+    prefix = _env_prefix(method)
+    invoke = f"{prefix} {shlex.quote(shell)}" if prefix else shlex.quote(shell)
+    pipeline = f"curl -fsSL -- {shlex.quote(url)} | {invoke}"
+    runner(["sh", "-c", pipeline])
 
 
 def _dnf(method: Method, runner: Runner) -> None:

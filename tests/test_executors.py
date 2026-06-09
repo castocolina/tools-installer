@@ -74,3 +74,28 @@ def test_unsupported_kind_raises():
 
 def test_every_command_kind_has_an_executor():
     assert set(EXECUTORS) == {"script", "dnf", "apt", "pacman", "brew"}
+
+
+def test_script_passes_env_assignments_to_the_shell() -> None:
+    # The env attaches to the shell on the RIGHT of the pipe; a left-of-pipe
+    # assignment would set curl's env, not the installer's.
+    calls, runner = _record()
+    method = Method(
+        kind="script",
+        params={
+            "url": "https://example.test/install.sh",
+            "shell": "bash",
+            "env": {"NONINTERACTIVE": "1"},
+        },
+    )
+    execute(method, runner)
+    assert calls == [
+        ["sh", "-c", "curl -fsSL -- https://example.test/install.sh | NONINTERACTIVE=1 bash"]
+    ]
+
+
+def test_script_without_env_is_unchanged() -> None:
+    calls, runner = _record()
+    method = Method(kind="script", params={"url": "https://example.test/i.sh"})
+    execute(method, runner)
+    assert calls == [["sh", "-c", "curl -fsSL -- https://example.test/i.sh | sh"]]
