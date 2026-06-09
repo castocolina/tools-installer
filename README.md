@@ -1,5 +1,7 @@
 # tools-installer
 
+[![CI](https://github.com/castocolina/tools-installer/actions/workflows/ci.yml/badge.svg)](https://github.com/castocolina/tools-installer/actions/workflows/ci.yml)
+
 One command to provision a fresh **macOS or Linux** machine with a full AI dev
 environment — pick what you want from an interactive wizard, install it without
 sudo where possible, and end up with a clean, de-duplicated `PATH`.
@@ -10,8 +12,8 @@ curl -fsSL https://raw.githubusercontent.com/castocolina/tools-installer/main/in
 
 > **Status: in development (v1 / MVP).** The design is locked in
 > [`docs/prds/ai-dev-tools-installer-v1.0-prd.md`](docs/prds/ai-dev-tools-installer-v1.0-prd.md);
-> the implementation is being built. The command above is the target interface,
-> not a working endpoint yet.
+> the implementation is being built. The install URL resolves once the repo is
+> published — see [Publishing](docs/PUBLISHING.md).
 
 ---
 
