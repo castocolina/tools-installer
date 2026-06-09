@@ -17,7 +17,11 @@ def parse_args(argv: list[str]) -> Options:
         prog="tools-installer",
         description="Interactively install an AI dev environment.",
     )
-    parser.add_argument("--all", action="store_true", help="select every tool, no prompts")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="select every tool without category/tool prompts (add --yes to skip confirmation)",
+    )
     parser.add_argument(
         "--categories",
         action="append",
