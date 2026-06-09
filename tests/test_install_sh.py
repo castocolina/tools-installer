@@ -120,3 +120,30 @@ def test_detect_os_rejects_unsupported(harness: Harness) -> None:
     result = harness.source("detect_os", TI_OS="MINGW64_NT")
     assert result.returncode != 0
     assert "unsupported OS" in result.stderr
+
+
+def test_ensure_uv_skips_when_already_present(harness: Harness) -> None:
+    harness.stub("uv", 'printf "uv %s\\n" "$*" >> "$TI_LOG"')
+    result = harness.source("ensure_uv")
+    assert result.returncode == 0
+    assert "curl" not in harness.log_text()  # no install attempt
+
+
+def test_ensure_uv_installs_via_curl_when_missing(harness: Harness) -> None:
+    # uv is absent from PATH; the curl stub simulates the official installer by
+    # dropping a uv stub into the fake bin (and emits nothing to the `| sh` pipe).
+    harness.stub(
+        "curl",
+        'printf "curl %s\\n" "$*" >> "$TI_LOG"\n'
+        f"cat > \"{harness.fakebin}/uv\" <<'INNER'\n"
+        "#!/bin/sh\n"
+        'printf "uv %s\\n" "$*" >> "$TI_LOG"\n'
+        "INNER\n"
+        f'chmod +x "{harness.fakebin}/uv"',
+    )
+    result = harness.source("ensure_uv")
+    assert result.returncode == 0
+    log = harness.log_text()
+    assert "curl" in log
+    assert "astral.sh" in log
+    assert (harness.fakebin / "uv").exists()

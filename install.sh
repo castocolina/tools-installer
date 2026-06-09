@@ -32,9 +32,29 @@ detect_os() {
     esac
 }
 
+ensure_uv() {
+    if command -v uv >/dev/null 2>&1; then
+        return 0
+    fi
+    command -v curl >/dev/null 2>&1 || die "curl is required to install uv"
+    printf 'tools-installer: installing uv...\n'
+    # -f makes curl fail on an HTTP error instead of piping a server error page
+    # into sh as code; keep it even though there is no pipefail in POSIX sh.
+    curl -LsSf "$TI_UV_INSTALL_URL" | sh
+    # The official installer drops uv in ~/.local/bin; make it visible now.
+    if [ -f "$HOME/.local/bin/env" ]; then
+        # shellcheck disable=SC1091
+        . "$HOME/.local/bin/env"
+    else
+        PATH="$HOME/.local/bin:$PATH"
+    fi
+    command -v uv >/dev/null 2>&1 || die "uv installation failed"
+}
+
 main() {
     os="$(detect_os)"
     printf 'tools-installer: platform %s\n' "$os"
+    ensure_uv
 }
 
 if [ -z "${TI_SOURCED:-}" ]; then
