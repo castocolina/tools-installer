@@ -163,6 +163,27 @@ def test_remove_managed_block_leaves_file_untouched_when_begin_has_no_end(tmp_pa
     assert path.read_text() == content  # unchanged
 
 
+def test_write_managed_path_inlines_block_into_rc(tmp_path: Path) -> None:
+    from installer.shellrc import write_managed_path
+
+    rc = tmp_path / ".zshrc"
+    rc.write_text("# user line\n")
+    write_managed_path(rc, [tmp_path / "bin"])
+    text = rc.read_text()
+    assert "# >>> tools-installer path >>>" in text
+    assert f'export PATH="{tmp_path / "bin"}:$PATH"' in text
+    assert "# user line" in text  # user content preserved
+
+
+def test_write_managed_path_is_idempotent(tmp_path: Path) -> None:
+    from installer.shellrc import write_managed_path
+
+    rc = tmp_path / ".bashrc"
+    write_managed_path(rc, [tmp_path / "bin"])
+    write_managed_path(rc, [tmp_path / "bin"])
+    assert rc.read_text().count("# >>> tools-installer path >>>") == 1
+
+
 def test_collect_bin_dirs_only_includes_platform_applicable_methods() -> None:
     mac = Method(
         kind="script",

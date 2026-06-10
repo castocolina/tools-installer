@@ -94,6 +94,16 @@ def write_myshellrc(bin_dirs: list[Path], path: Path) -> None:
     path.write_text(apply_block(existing, managed_block(bin_dirs)))
 
 
+def write_managed_path(rc_path: Path, bin_dirs: list[Path]) -> None:
+    """Write the managed PATH block directly into an rc file (split-inline mode).
+
+    Idempotent: only the marked block is rewritten, surrounding user content is
+    preserved. Used when the user opts out of the ~/.myshellrc indirection.
+    """
+    existing = rc_path.read_text() if rc_path.exists() else ""
+    rc_path.write_text(apply_block(existing, managed_block(bin_dirs)))
+
+
 def ensure_source(rc_path: Path, myshellrc_path: Path) -> None:
     """Ensure rc_path sources ~/.myshellrc via a marker block, without duplicating it."""
     block = "\n".join(
