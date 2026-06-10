@@ -941,3 +941,110 @@ strip = 0
 [[tool.method]]
 kind = "brew"
 formula = "aichat"
+
+[[tool]]
+id = "deno"
+name = "Deno"
+category = "runtime"
+cmd = "deno"
+priority = "P2"
+audience = "both"
+desc = "Secure runtime for JavaScript and TypeScript"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "denoland/deno"
+asset = "deno-{arch.machine}-unknown-linux-gnu.zip"
+member = "deno"
+archive = "zip"
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "denoland/deno"
+asset = "deno-{arch.machine}-apple-darwin.zip"
+member = "deno"
+archive = "zip"
+[[tool.method]]
+kind = "brew"
+formula = "deno"
+
+[[tool]]
+id = "procs"
+name = "procs"
+category = "sysinfo"
+cmd = "procs"
+priority = "P3"
+audience = "both"
+desc = "A modern replacement for ps written in Rust"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "dalance/procs"
+asset = "procs-v{ver}-{arch.machine}-linux.zip"
+member = "procs"
+archive = "zip"
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "dalance/procs"
+asset = "procs-v{ver}-{arch.machine}-mac.zip"
+member = "procs"
+archive = "zip"
+[[tool.method]]
+kind = "brew"
+formula = "procs"
+
+[[tool]]
+id = "ast-grep"
+name = "ast-grep"
+category = "search"
+cmd = "ast-grep"
+priority = "P3"
+audience = "both"
+desc = "Fast structural search, lint, and rewrite tool for code"
+# The zip bundles both `sg` and `ast-grep`; we install `ast-grep` (the `sg`
+# short alias collides with the system setgroups tool).
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "ast-grep/ast-grep"
+asset = "app-{arch.machine}-unknown-linux-gnu.zip"
+member = "ast-grep"
+archive = "zip"
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "ast-grep/ast-grep"
+asset = "app-{arch.machine}-apple-darwin.zip"
+member = "ast-grep"
+archive = "zip"
+[[tool.method]]
+kind = "brew"
+formula = "ast-grep"
+
+[[tool]]
+id = "jless"
+name = "jless"
+category = "data"
+cmd = "jless"
+priority = "P3"
+audience = "both"
+desc = "A command-line JSON viewer"
+# No aarch64-linux asset upstream; arm64 Linux falls through to brew.
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "PaulJuliusMartinez/jless"
+asset = "jless-v{ver}-{arch.machine}-unknown-linux-gnu.zip"
+member = "jless"
+archive = "zip"
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "PaulJuliusMartinez/jless"
+asset = "jless-v{ver}-{arch.machine}-apple-darwin.zip"
+member = "jless"
+archive = "zip"
+[[tool.method]]
+kind = "brew"
+formula = "jless"

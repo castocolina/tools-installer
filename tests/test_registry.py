@@ -206,11 +206,11 @@ def test_gron_uses_tgz_with_trailing_version() -> None:
     assert method.params["strip"] == 0
 
 
-def test_registry_has_thirty_seven_unique_tools_and_cmds() -> None:
+def test_registry_has_forty_one_unique_tools_and_cmds() -> None:
     tools = load_tools(REGISTRY)
     ids = [t.id for t in tools]
     cmds = [t.cmd for t in tools]
-    assert len(ids) == 37
+    assert len(ids) == 41
     assert len(ids) == len(set(ids))
     assert len(cmds) == len(set(cmds))
 
@@ -238,3 +238,51 @@ def test_hexyl_linux_uses_gnu_and_strips() -> None:
     method = resolve_methods(hexyl, linux)[0]
     assert method.params["asset"] == "hexyl-v{ver}-{arch.machine}-unknown-linux-gnu.tar.gz"
     assert method.params["strip"] == 1
+
+
+def test_zip_runtime_and_tools_resolve_with_archive_zip() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    expected = {
+        "deno": (
+            "deno-{arch.machine}-unknown-linux-gnu.zip",
+            "deno-{arch.machine}-apple-darwin.zip",
+            "deno",
+        ),
+        "procs": (
+            "procs-v{ver}-{arch.machine}-linux.zip",
+            "procs-v{ver}-{arch.machine}-mac.zip",
+            "procs",
+        ),
+        "ast-grep": (
+            "app-{arch.machine}-unknown-linux-gnu.zip",
+            "app-{arch.machine}-apple-darwin.zip",
+            "ast-grep",
+        ),
+        "jless": (
+            "jless-v{ver}-{arch.machine}-unknown-linux-gnu.zip",
+            "jless-v{ver}-{arch.machine}-apple-darwin.zip",
+            "jless",
+        ),
+    }
+    for tool_id, (linux_asset, macos_asset, member) in expected.items():
+        lin = resolve_methods(tools[tool_id], linux)
+        mac = resolve_methods(tools[tool_id], macos)
+        assert [m.kind for m in lin] == ["github_release", "brew"], tool_id
+        assert [m.kind for m in mac] == ["github_release", "brew"], tool_id
+        assert lin[0].params["archive"] == "zip", tool_id
+        assert lin[0].params["asset"] == linux_asset, tool_id
+        assert mac[0].params["asset"] == macos_asset, tool_id
+        assert lin[0].params["member"] == member, tool_id
+        assert "strip" not in lin[0].params, tool_id  # zip ignores strip
+
+
+def test_ast_grep_cmd_is_ast_grep_not_sg() -> None:
+    ast = next(t for t in load_tools(REGISTRY) if t.id == "ast-grep")
+    assert ast.cmd == "ast-grep"  # the bundled `sg` alias collides with the system tool
+
+
+def test_deno_is_the_lone_runtime_category() -> None:
+    runtimes = [t.id for t in load_tools(REGISTRY) if t.category == "runtime"]
+    assert runtimes == ["deno"]
