@@ -505,3 +505,133 @@ strip = 1
 [[tool.method]]
 kind = "brew"
 formula = "hyperfine"
+
+[[tool]]
+id = "bottom"
+name = "bottom"
+category = "sysinfo"
+cmd = "btm"
+priority = "P2"
+audience = "both"
+desc = "A customizable cross-platform graphical process/system monitor"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "ClementTsang/bottom"
+asset = "bottom_{arch.machine}-unknown-linux-musl.tar.gz"
+member = "btm"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "ClementTsang/bottom"
+asset = "bottom_{arch.machine}-apple-darwin.tar.gz"
+member = "btm"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "bottom"
+
+[[tool]]
+id = "gum"
+name = "gum"
+category = "shell"
+cmd = "gum"
+priority = "P2"
+audience = "both"
+desc = "A tool for glamorous shell scripts"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "charmbracelet/gum"
+asset = "gum_{ver}_Linux_{arch.suffix}.tar.gz"
+member = "gum"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "charmbracelet/gum"
+asset = "gum_{ver}_Darwin_{arch.suffix}.tar.gz"
+member = "gum"
+strip = 1
+[[tool.method]]
+kind = "brew"
+formula = "gum"
+
+[[tool]]
+id = "glow"
+name = "glow"
+category = "view"
+cmd = "glow"
+priority = "P2"
+audience = "both"
+desc = "Render markdown on the command line"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "charmbracelet/glow"
+asset = "glow_{ver}_Linux_{arch.suffix}.tar.gz"
+member = "glow"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "charmbracelet/glow"
+asset = "glow_{ver}_Darwin_{arch.suffix}.tar.gz"
+member = "glow"
+strip = 1
+[[tool.method]]
+kind = "brew"
+formula = "glow"
+
+[[tool]]
+id = "xh"
+name = "xh"
+category = "net"
+cmd = "xh"
+priority = "P2"
+audience = "both"
+desc = "A friendly and fast tool for sending HTTP requests"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "ducaale/xh"
+asset = "xh-v{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
+member = "xh"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "ducaale/xh"
+asset = "xh-v{ver}-{arch.machine}-apple-darwin.tar.gz"
+member = "xh"
+strip = 1
+[[tool.method]]
+kind = "brew"
+formula = "xh"
+
+[[tool]]
+id = "difftastic"
+name = "difftastic"
+category = "git"
+cmd = "difft"
+priority = "P2"
+audience = "both"
+desc = "A structural diff that understands syntax"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "Wilfred/difftastic"
+asset = "difft-{arch.machine}-unknown-linux-gnu.tar.gz"
+member = "difft"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "Wilfred/difftastic"
+asset = "difft-{arch.machine}-apple-darwin.tar.gz"
+member = "difft"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "difftastic"

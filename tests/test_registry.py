@@ -149,3 +149,35 @@ def test_every_tool_resolves_at_least_one_method_on_each_platform() -> None:
         platform = Platform(os=platform_os, arch="amd64", immutable=False, has_brew=True)
         stranded = [t.id for t in tools if not resolve_methods(t, platform)]
         assert not stranded, f"no install method on {platform_os}: {stranded}"
+
+
+def test_bottom_and_difftastic_cmd_differs_from_member_binary() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    bottom = tools["bottom"]
+    difft = tools["difftastic"]
+    assert bottom.cmd == "btm"
+    assert difft.cmd == "difft"
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    assert resolve_methods(bottom, linux)[0].params["member"] == "btm"
+    assert resolve_methods(difft, linux)[0].params["member"] == "difft"
+
+
+def test_charm_tools_use_suffix_arch_token_and_strip() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    # arm64 is the harder arch (suffix=arm64, not aarch64); check both OS families
+    # so the Linux_ and Darwin_ asset casing are both pinned.
+    arch_linux = Platform(os="arch", arch="arm64", immutable=False, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    for tool_id in ("gum", "glow"):
+        for platform, os_word in ((arch_linux, "Linux"), (macos, "Darwin")):
+            method = resolve_methods(tools[tool_id], platform)[0]
+            assert method.params["asset"] == f"{tool_id}_{{ver}}_{os_word}_{{arch.suffix}}.tar.gz"
+            assert method.params["strip"] == 1
+
+
+def test_registry_has_twenty_five_unique_tools() -> None:
+    ids = [t.id for t in load_tools(REGISTRY)]
+    assert len(ids) == len(set(ids))
+    assert len(ids) == 25
+    cmds = [t.cmd for t in load_tools(REGISTRY)]
+    assert len(cmds) == len(set(cmds))  # no two tools claim the same command
