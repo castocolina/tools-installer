@@ -175,9 +175,34 @@ def test_charm_tools_use_suffix_arch_token_and_strip() -> None:
             assert method.params["strip"] == 1
 
 
-def test_registry_has_twenty_five_unique_tools() -> None:
+def test_registry_has_thirty_one_unique_tools() -> None:
     ids = [t.id for t in load_tools(REGISTRY)]
     assert len(ids) == len(set(ids))
-    assert len(ids) == 25
+    assert len(ids) == 31
     cmds = [t.cmd for t in load_tools(REGISTRY)]
     assert len(cmds) == len(set(cmds))  # no two tools claim the same command
+
+
+def test_gitui_is_linux_download_and_brew_only_on_macos() -> None:
+    gitui = next(t for t in load_tools(REGISTRY) if t.id == "gitui")
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    assert [m.kind for m in resolve_methods(gitui, linux)] == ["github_release", "brew"]
+    assert [m.kind for m in resolve_methods(gitui, macos)] == ["brew"]
+
+
+def test_miller_cmd_is_mlr_and_strips_nested_member() -> None:
+    miller = next(t for t in load_tools(REGISTRY) if t.id == "miller")
+    assert miller.cmd == "mlr"
+    linux = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+    method = resolve_methods(miller, linux)[0]
+    assert method.params["member"] == "mlr"
+    assert method.params["strip"] == 1
+
+
+def test_hexyl_linux_uses_gnu_and_strips() -> None:
+    hexyl = next(t for t in load_tools(REGISTRY) if t.id == "hexyl")
+    linux = Platform(os="arch", arch="arm64", immutable=False, has_brew=True)
+    method = resolve_methods(hexyl, linux)[0]
+    assert method.params["asset"] == "hexyl-v{ver}-{arch.machine}-unknown-linux-gnu.tar.gz"
+    assert method.params["strip"] == 1

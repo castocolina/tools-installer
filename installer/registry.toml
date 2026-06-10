@@ -635,3 +635,153 @@ strip = 0
 [[tool.method]]
 kind = "brew"
 formula = "difftastic"
+
+[[tool]]
+id = "gitui"
+name = "gitui"
+category = "git"
+cmd = "gitui"
+priority = "P2"
+audience = "both"
+desc = "Blazing-fast terminal UI for git"
+# gitui's macOS assets don't use our arch tokens, so install via brew on a Mac.
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "extrawurst/gitui"
+asset = "gitui-linux-{arch.machine}.tar.gz"
+member = "gitui"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "gitui"
+
+[[tool]]
+id = "lazydocker"
+name = "lazydocker"
+category = "docker"
+cmd = "lazydocker"
+priority = "P2"
+audience = "both"
+desc = "A simple terminal UI for docker and docker-compose"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "jesseduffield/lazydocker"
+asset = "lazydocker_{ver}_Linux_{arch.suffix}.tar.gz"
+member = "lazydocker"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "jesseduffield/lazydocker"
+asset = "lazydocker_{ver}_Darwin_{arch.suffix}.tar.gz"
+member = "lazydocker"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "lazydocker"
+
+[[tool]]
+id = "dive"
+name = "dive"
+category = "docker"
+cmd = "dive"
+priority = "P2"
+audience = "both"
+desc = "A tool for exploring each layer in a docker image"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "wagoodman/dive"
+asset = "dive_{ver}_linux_{arch.deb}.tar.gz"
+member = "dive"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "wagoodman/dive"
+asset = "dive_{ver}_darwin_{arch.deb}.tar.gz"
+member = "dive"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "dive"
+
+[[tool]]
+id = "duf"
+name = "duf"
+category = "sysinfo"
+cmd = "duf"
+priority = "P2"
+audience = "both"
+desc = "Disk Usage/Free utility with a friendly table view"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "muesli/duf"
+asset = "duf_{ver}_linux_{arch.suffix}.tar.gz"
+member = "duf"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "muesli/duf"
+asset = "duf_{ver}_darwin_{arch.suffix}.tar.gz"
+member = "duf"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "duf"
+
+[[tool]]
+id = "hexyl"
+name = "hexyl"
+category = "view"
+cmd = "hexyl"
+priority = "P2"
+audience = "both"
+desc = "A command-line hex viewer"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "sharkdp/hexyl"
+asset = "hexyl-v{ver}-{arch.machine}-unknown-linux-gnu.tar.gz"
+member = "hexyl"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "sharkdp/hexyl"
+asset = "hexyl-v{ver}-{arch.machine}-apple-darwin.tar.gz"
+member = "hexyl"
+strip = 1
+[[tool.method]]
+kind = "brew"
+formula = "hexyl"
+
+[[tool]]
+id = "miller"
+name = "miller"
+category = "data"
+cmd = "mlr"
+priority = "P2"
+audience = "both"
+desc = "Like awk/sed/cut/join/sort for CSV, TSV, and JSON"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "johnkerl/miller"
+asset = "miller-{ver}-linux-{arch.deb}.tar.gz"
+member = "mlr"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "johnkerl/miller"
+asset = "miller-{ver}-darwin-{arch.deb}.tar.gz"
+member = "mlr"
+strip = 1
+[[tool.method]]
+kind = "brew"
+formula = "miller"
