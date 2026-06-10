@@ -349,3 +349,159 @@ raw = true
 [[tool.method]]
 kind = "brew"
 formula = "yq"
+
+[[tool]]
+id = "starship"
+name = "starship"
+category = "shell"
+cmd = "starship"
+priority = "P1"
+audience = "both"
+desc = "The minimal, blazing-fast, customizable prompt for any shell"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "starship/starship"
+asset = "starship-{arch.machine}-unknown-linux-musl.tar.gz"
+member = "starship"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "starship/starship"
+asset = "starship-{arch.machine}-apple-darwin.tar.gz"
+member = "starship"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "starship"
+
+[[tool]]
+id = "direnv"
+name = "direnv"
+category = "shell"
+cmd = "direnv"
+priority = "P1"
+audience = "both"
+desc = "Per-directory environment variables, loaded on cd"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "direnv/direnv"
+asset = "direnv.linux-{arch.deb}"
+member = "direnv"
+raw = true
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "direnv/direnv"
+asset = "direnv.darwin-{arch.deb}"
+member = "direnv"
+raw = true
+[[tool.method]]
+kind = "brew"
+formula = "direnv"
+
+[[tool]]
+id = "just"
+name = "just"
+category = "dev"
+cmd = "just"
+priority = "P1"
+audience = "both"
+desc = "A handy command runner for project-specific tasks"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "casey/just"
+asset = "just-{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
+member = "just"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "casey/just"
+asset = "just-{ver}-{arch.machine}-apple-darwin.tar.gz"
+member = "just"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "just"
+
+[[tool]]
+id = "ruff"
+name = "ruff"
+category = "dev"
+cmd = "ruff"
+priority = "P1"
+audience = "both"
+desc = "An extremely fast Python linter and formatter"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "astral-sh/ruff"
+asset = "ruff-{arch.machine}-unknown-linux-musl.tar.gz"
+member = "ruff"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "astral-sh/ruff"
+asset = "ruff-{arch.machine}-apple-darwin.tar.gz"
+member = "ruff"
+strip = 1
+[[tool.method]]
+kind = "brew"
+formula = "ruff"
+
+[[tool]]
+id = "dust"
+name = "dust"
+category = "sysinfo"
+cmd = "dust"
+priority = "P2"
+audience = "both"
+desc = "A more intuitive version of du (disk usage)"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "bootandy/dust"
+asset = "dust-v{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
+member = "dust"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "bootandy/dust"
+asset = "dust-v{ver}-{arch.machine}-apple-darwin.tar.gz"
+member = "dust"
+strip = 1
+[[tool.method]]
+kind = "brew"
+formula = "dust"
+
+[[tool]]
+id = "hyperfine"
+name = "hyperfine"
+category = "dev"
+cmd = "hyperfine"
+priority = "P2"
+audience = "both"
+desc = "A command-line benchmarking tool"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "sharkdp/hyperfine"
+asset = "hyperfine-v{ver}-{arch.machine}-unknown-linux-gnu.tar.gz"
+member = "hyperfine"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "sharkdp/hyperfine"
+asset = "hyperfine-v{ver}-{arch.machine}-apple-darwin.tar.gz"
+member = "hyperfine"
+strip = 1
+[[tool.method]]
+kind = "brew"
+formula = "hyperfine"

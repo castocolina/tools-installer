@@ -109,6 +109,38 @@ def test_yq_resolves_to_a_raw_download_on_every_os() -> None:
         assert "strip" not in top.params  # raw downloads never unpack
 
 
+def test_direnv_is_raw_per_os_download() -> None:
+    direnv = next(t for t in load_tools(REGISTRY) if t.id == "direnv")
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
+    lin = resolve_methods(direnv, linux)[0]
+    mac = resolve_methods(direnv, macos)[0]
+    assert lin.params == {
+        "repo": "direnv/direnv",
+        "asset": "direnv.linux-{arch.deb}",
+        "member": "direnv",
+        "raw": True,
+    }
+    assert mac.params["asset"] == "direnv.darwin-{arch.deb}"
+    assert "strip" not in lin.params and "strip" not in mac.params
+
+
+def test_hyperfine_linux_uses_gnu_and_strips() -> None:
+    hf = next(t for t in load_tools(REGISTRY) if t.id == "hyperfine")
+    linux = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+    method = resolve_methods(hf, linux)[0]
+    assert method.params["asset"] == "hyperfine-v{ver}-{arch.machine}-unknown-linux-gnu.tar.gz"
+    assert method.params["strip"] == 1
+
+
+def test_download_tools_resolve_github_release_then_brew_on_macos() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    for tool_id in ("starship", "just", "ruff", "dust"):
+        kinds = [m.kind for m in resolve_methods(tools[tool_id], macos)]
+        assert kinds == ["github_release", "brew"], tool_id
+
+
 def test_every_tool_resolves_at_least_one_method_on_each_platform() -> None:
     # A tool that resolves to nothing on a supported platform is silently
     # uninstallable there; this guards against an os/method misconfiguration.
