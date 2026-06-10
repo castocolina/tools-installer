@@ -42,3 +42,20 @@ def test_render_asset_supports_ver_only():
 def test_render_asset_bad_placeholder_raises():
     with pytest.raises(ValueError, match="bad asset template"):
         render_asset("rg-{nope}.tar.gz", "1.0", arch_tokens("amd64"))
+
+
+def test_x64_and_bits_tokens_per_arch():
+    amd64 = arch_tokens("amd64")
+    arm64 = arch_tokens("arm64")
+    assert (amd64.x64, amd64.bits) == ("x64", "64-bit")
+    assert (arm64.x64, arm64.bits) == ("arm64", "arm64")
+
+
+def test_render_uses_x64_and_bits_tokens():
+    amd64 = arch_tokens("amd64")
+    assert render_asset("gitleaks_{ver}_linux_{arch.x64}.tar.gz", "8.30.1", amd64) == (
+        "gitleaks_8.30.1_linux_x64.tar.gz"
+    )
+    assert render_asset("vale_{ver}_Linux_{arch.bits}.tar.gz", "3.14.2", amd64) == (
+        "vale_3.14.2_Linux_64-bit.tar.gz"
+    )

@@ -9,11 +9,17 @@ class ArchTokens:
     deb: str  # amd64 | arm64
     go: str  # amd64 | arm64
     suffix: str  # x86_64 | arm64
+    x64: str  # x64 | arm64  (gitleaks-style)
+    bits: str  # 64-bit | arm64  (vale-style)
 
 
 _TOKENS = {
-    "amd64": ArchTokens(machine="x86_64", deb="amd64", go="amd64", suffix="x86_64"),
-    "arm64": ArchTokens(machine="aarch64", deb="arm64", go="arm64", suffix="arm64"),
+    "amd64": ArchTokens(
+        machine="x86_64", deb="amd64", go="amd64", suffix="x86_64", x64="x64", bits="64-bit"
+    ),
+    "arm64": ArchTokens(
+        machine="aarch64", deb="arm64", go="arm64", suffix="arm64", x64="arm64", bits="arm64"
+    ),
 }
 
 
@@ -26,7 +32,7 @@ def arch_tokens(normalized: str) -> ArchTokens:
 
 
 def render_asset(template: str, ver: str, arch: ArchTokens) -> str:
-    """Render an asset filename: supports {ver} and {arch.machine|deb|go|suffix}."""
+    """Render an asset filename: supports {ver} and {arch.machine|deb|go|suffix|x64|bits}."""
     try:
         return template.format(ver=ver, arch=arch)
     except (KeyError, IndexError, AttributeError) as exc:
