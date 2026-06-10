@@ -1,6 +1,7 @@
 import io
 from pathlib import Path
 
+import pytest
 from rich.console import Console
 
 from installer.app import run_wizard
@@ -261,3 +262,100 @@ def test_run_doctor_without_fix_does_not_write(tmp_path: Path):
         fix=False,
     )
     assert not myshellrc.exists()  # fix=False is read-only
+
+
+def test_run_uninstall_removes_when_confirmed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from installer.app import run_uninstall
+    from installer.shellrc import write_myshellrc
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    opt = tmp_path / ".local" / "opt" / "fd"
+    opt.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (opt / "fd").write_text("bin")
+    (bin_dir / "fd").symlink_to(opt / "fd")
+    myshellrc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], myshellrc)
+    tool = Tool(
+        id="fd",
+        name="fd",
+        category="search",
+        cmd="fd",
+        methods=(
+            Method(kind="github_release", params={"repo": "a/fd", "asset": "x", "member": "fd"}),
+        ),
+    )
+    console, _buf = _console()
+    removed = run_uninstall(
+        [tool],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=myshellrc,
+        confirm=lambda _m: True,
+    )
+    assert set(removed) == {opt, bin_dir / "fd"}
+    assert not opt.exists()
+    assert not (bin_dir / "fd").is_symlink()  # the bin symlink is unlinked on disk
+    assert "tools-installer path" not in myshellrc.read_text()
+
+
+def test_run_uninstall_aborts_when_declined(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from installer.app import run_uninstall
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    opt = tmp_path / ".local" / "opt" / "fd"
+    opt.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "fd").symlink_to(opt)
+    tool = Tool(
+        id="fd",
+        name="fd",
+        category="search",
+        cmd="fd",
+        methods=(
+            Method(kind="github_release", params={"repo": "a/fd", "asset": "x", "member": "fd"}),
+        ),
+    )
+    console, _buf = _console()
+    removed = run_uninstall(
+        [tool],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=tmp_path / ".myshellrc",
+        confirm=lambda _m: False,
+    )
+    assert removed == []
+    assert opt.exists()  # nothing removed
+
+
+def test_run_uninstall_nothing_to_remove_skips_confirm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from installer.app import run_uninstall
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = Tool(
+        id="fd",
+        name="fd",
+        category="search",
+        cmd="fd",
+        methods=(
+            Method(kind="github_release", params={"repo": "a/fd", "asset": "x", "member": "fd"}),
+        ),
+    )
+    console, _buf = _console()
+
+    def fail_confirm(_message: str) -> bool:
+        raise AssertionError("confirm must not be called when there is nothing to remove")
+
+    removed = run_uninstall(
+        [tool],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=tmp_path / ".myshellrc",
+        confirm=fail_confirm,
+    )
+    assert removed == []

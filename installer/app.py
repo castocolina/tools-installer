@@ -12,12 +12,13 @@ from installer.engine import install_tool
 from installer.model import Tool
 from installer.platform import Platform
 from installer.prompt import Prompter
-from installer.render import render_audit, render_doctor, render_summary
+from installer.render import render_audit, render_doctor, render_summary, render_uninstall
 from installer.run import Runner, run_command
 from installer.selection import category_choices, select_tools, tool_choices
 from installer.session import Install, Summary, order_for_install, run_installs, summarize
-from installer.shellrc import collect_bin_dirs, ensure_source, write_myshellrc
+from installer.shellrc import collect_bin_dirs, ensure_source, remove_managed_block, write_myshellrc
 from installer.status import is_installed
+from installer.uninstall import plan_uninstall, remove_paths
 from installer.versions import TagResolver, resolve_github_tag
 
 
@@ -113,3 +114,26 @@ def run_doctor(
             rc_paths=rc_paths,
         )
     return report
+
+
+def run_uninstall(
+    tools: list[Tool],
+    console: Console,
+    *,
+    default_bin_dir: Path,
+    myshellrc_path: Path,
+    confirm: Callable[[str], bool],
+) -> list[Path]:
+    """Preview userspace artifacts, confirm, then remove them and strip the PATH block.
+
+    Returns the removed paths ([] if there was nothing to remove or the user declined).
+    """
+    paths = plan_uninstall(tools, default_bin_dir)
+    render_uninstall(paths, console)
+    if not paths:
+        return []
+    if not confirm("Remove these artifacts?"):
+        return []
+    remove_paths(paths)
+    remove_managed_block(myshellrc_path)
+    return paths

@@ -86,3 +86,21 @@ def test_render_troubleshooting_prints_link() -> None:
     console, buf = _console()
     render_troubleshooting(console)
     assert "github.com/castocolina/tools-installer" in buf.getvalue()
+
+
+def test_render_uninstall_lists_paths() -> None:
+    from installer.render import render_uninstall
+
+    console, buf = _console()
+    render_uninstall([Path("/x/opt/fd"), Path("/x/bin/fd")], console)
+    text = buf.getvalue()
+    assert "/x/opt/fd" in text
+    assert "/x/bin/fd" in text
+
+
+def test_render_uninstall_reports_nothing_to_do() -> None:
+    from installer.render import render_uninstall
+
+    console, buf = _console()
+    render_uninstall([], console)
+    assert "Nothing to uninstall" in buf.getvalue()

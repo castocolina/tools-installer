@@ -1,5 +1,7 @@
 """Render the pre-flight audit and the post-install summary to a Console."""
 
+from pathlib import Path
+
 from rich.console import Console
 from rich.table import Table
 
@@ -42,6 +44,16 @@ def render_summary(summary: Summary, console: Console) -> None:
 def render_troubleshooting(console: Console) -> None:
     """Point the user at the troubleshooting guide."""
     console.print(f"Something went wrong. Troubleshooting: {TROUBLESHOOTING_URL}")
+
+
+def render_uninstall(paths: list[Path], console: Console) -> None:
+    """Preview the artifacts that will be removed (dry run)."""
+    if not paths:
+        console.print("Nothing to uninstall: no tools-installer artifacts found.")
+        return
+    console.print("The following will be removed:")
+    for path in paths:
+        console.print(f"  {path}")
 
 
 def render_doctor(report: DoctorReport, console: Console) -> None:
