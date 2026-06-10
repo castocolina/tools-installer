@@ -13,13 +13,14 @@ from pathlib import Path
 import questionary
 from rich.console import Console
 
-from installer.app import configure_path, run_doctor, run_uninstall, run_wizard
+from installer.app import clean_rc_duplicates, configure_path, run_doctor, run_uninstall, run_wizard
 from installer.cli import parse_args
-from installer.model import load_tools
-from installer.platform import detect
+from installer.model import Tool, load_tools
+from installer.platform import Platform, detect
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.selection import Choice
+from installer.shellrc import collect_bin_dirs
 
 _REGISTRY = Path(__file__).parent / "installer" / "registry.toml"
 _DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
@@ -108,6 +109,25 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
     return 0
 
 
+def _verify_and_clean(
+    console: Console, tools: list[Tool], platform: Platform, *, assume_yes: bool
+) -> None:
+    run_doctor(
+        tools,
+        console,
+        platform=platform,
+        default_bin_dir=_DEFAULT_BIN_DIR,
+        path_value=os.environ.get("PATH", ""),
+        exists=Path.is_dir,
+        myshellrc_path=_MYSHELLRC,
+        rc_paths=_RC_PATHS,
+        fix=False,
+    )
+    managed = set(collect_bin_dirs(tools, platform, _DEFAULT_BIN_DIR))
+    confirm = (lambda _message: True) if assume_yes else _ask_confirm
+    clean_rc_duplicates(_RC_PATHS, managed, os.environ, console, confirm=confirm)
+
+
 def main(argv: list[str]) -> int:
     options = parse_args(argv)
     console = Console()
@@ -139,6 +159,7 @@ def main(argv: list[str]) -> int:
         rc_paths=_rc_paths_for_mode(link_mode),
         link_mode=link_mode,
     )
+    _verify_and_clean(console, tools, platform, assume_yes=options.yes)
     if summary.failed:
         render_troubleshooting(console)
         return 1
