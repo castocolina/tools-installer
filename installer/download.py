@@ -35,16 +35,32 @@ def _opt_int(method: Method, key: str, default: int) -> int:
     return value
 
 
-def _github_release_url(method: Method, ctx: ExecContext) -> str:
-    repo = require_str(method, "repo")
-    template = require_str(method, "asset")
-    tag = ctx.resolve_tag(repo)
-    ver = tag.removeprefix("v")  # asset filenames use the bare number; the path uses the tag
+def _resolve_target(method: Method, ctx: ExecContext) -> tuple[str, str]:
+    """Return (download url, member path), rendering {ver}/{arch.*} where a version is known.
+
+    github_release templates both the asset and the member with the resolved
+    tag's bare version and the platform arch tokens. tarball has no version, so
+    its url and member are used verbatim.
+    """
     try:
-        asset = render_asset(template, ver, arch_tokens(ctx.platform.arch))
+        tokens = arch_tokens(ctx.platform.arch)
     except ValueError as exc:
-        raise ExecutorError(f"cannot build asset name for '{repo}': {exc}") from exc
-    return f"https://github.com/{repo}/releases/download/{tag}/{asset}"
+        raise ExecutorError(f"cannot build asset name: {exc}") from exc
+    raw_member = require_str(method, "member")
+    if method.kind == "github_release":
+        repo = require_str(method, "repo")
+        template = require_str(method, "asset")
+        tag = ctx.resolve_tag(repo)
+        ver = tag.removeprefix("v")  # asset/member use the bare number; the path uses the tag
+        try:
+            asset = render_asset(template, ver, tokens)
+            member = render_asset(raw_member, ver, tokens)
+        except ValueError as exc:
+            raise ExecutorError(f"cannot build asset name for '{repo}': {exc}") from exc
+        return f"https://github.com/{repo}/releases/download/{tag}/{asset}", member
+    if method.kind == "tarball":
+        return require_str(method, "url"), raw_member
+    raise ExecutorError(f"no download executor for kind '{method.kind}'")
 
 
 def install_download(method: Method, ctx: ExecContext) -> None:
@@ -56,14 +72,7 @@ def install_download(method: Method, ctx: ExecContext) -> None:
     opt+symlink location policy, which also handles binaries nested under a
     versioned directory inside the archive.
     """
-    if method.kind == "github_release":
-        url = _github_release_url(method, ctx)
-    elif method.kind == "tarball":
-        url = require_str(method, "url")
-    else:
-        raise ExecutorError(f"no download executor for kind '{method.kind}'")
-
-    member = require_str(method, "member")
+    url, member = _resolve_target(method, ctx)
     binname = PurePosixPath(member).name
     try:
         dest = ensure_dir(bin_dir(_opt_str(method, "bin_dir")))

@@ -170,7 +170,7 @@ def test_github_release_raw_downloads_binary_directly(
 def test_unsupported_kind_raises(tmp_path: Path):
     calls, runner = _record()
     with pytest.raises(ExecutorError, match="brew"):
-        install_download(Method(kind="brew", params={"formula": "x"}), _ctx(runner))
+        install_download(Method(kind="brew", params={"formula": "x", "member": "x"}), _ctx(runner))
     assert calls == []
 
 
@@ -255,6 +255,30 @@ def test_opt_dir_creation_failure_raises_executor_error(
     )
     with pytest.raises(ExecutorError, match="opt dir"):
         install_download(method, _ctx(runner))
+
+
+def test_member_is_rendered_with_ver_and_arch_tokens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    calls, runner = _record()
+    bin_dir = tmp_path / "bin"
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "oven-sh/bun",
+            "asset": "bun-linux-{arch.deb}.zip",
+            "member": "bun-linux-{arch.deb}/bun",  # nested under a templated dir
+            "archive": "zip",
+            "bin_dir": str(bin_dir),
+        },
+    )
+    install_download(method, _ctx(runner, tmp_version="bun-v1.1.38"))
+    opt = tmp_path / ".local" / "opt" / "bun"  # link/opt key is the basename
+    binary = opt / "bun-linux-amd64" / "bun"  # {arch.deb} rendered
+    link = bin_dir / "bun"
+    assert ["chmod", "+x", str(binary)] in calls
+    assert ["ln", "-sf", str(binary), str(link)] in calls
 
 
 def test_github_release_zip_uses_unzip_and_ignores_strip(
