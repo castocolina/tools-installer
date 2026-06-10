@@ -206,11 +206,11 @@ def test_gron_uses_tgz_with_trailing_version() -> None:
     assert method.params["strip"] == 0
 
 
-def test_registry_has_forty_six_unique_tools_and_cmds() -> None:
+def test_registry_has_forty_seven_unique_tools_and_cmds() -> None:
     tools = load_tools(REGISTRY)
     ids = [t.id for t in tools]
     cmds = [t.cmd for t in tools]
-    assert len(ids) == 46
+    assert len(ids) == 47
     assert len(ids) == len(set(ids))
     assert len(cmds) == len(set(cmds))
 
@@ -318,6 +318,19 @@ def test_script_installer_tier_resolves_script_then_brew() -> None:
     assert fnm_linux[0].params["shell"] == "bash"
     assert fnm_linux[0].params["bin_dir"] == "~/.local/share/fnm"
     assert [m.kind for m in resolve_methods(tools["fnm"], macos)] == ["brew"]
+
+
+def test_broot_is_selective_zip_with_nested_member() -> None:
+    broot = next(t for t in load_tools(REGISTRY) if t.id == "broot")
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    lin = resolve_methods(broot, linux)
+    assert [m.kind for m in lin] == ["github_release", "brew"]
+    assert lin[0].params["asset"] == "broot_{ver}.zip"
+    assert lin[0].params["archive"] == "zip"
+    assert lin[0].params["member"] == "{arch.machine}-unknown-linux-gnu/broot"
+    mac = resolve_methods(broot, macos)
+    assert mac[0].params["member"] == "{arch.machine}-apple-darwin/broot"
 
 
 def test_gitleaks_and_vale_use_new_arch_tokens() -> None:

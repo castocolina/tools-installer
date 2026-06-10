@@ -1160,3 +1160,31 @@ strip = 0
 [[tool.method]]
 kind = "brew"
 formula = "vale"
+
+[[tool]]
+id = "broot"
+name = "broot"
+category = "nav"
+cmd = "broot"
+priority = "P3"
+audience = "both"
+desc = "Interactive tree view and fuzzy file navigator"
+# One combined multi-platform zip; we extract only this platform's binary (selective unzip).
+# No x86_64-apple-darwin in the archive -> Intel Macs fall through to brew.
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "Canop/broot"
+asset = "broot_{ver}.zip"
+member = "{arch.machine}-unknown-linux-gnu/broot"
+archive = "zip"
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "Canop/broot"
+asset = "broot_{ver}.zip"
+member = "{arch.machine}-apple-darwin/broot"
+archive = "zip"
+[[tool.method]]
+kind = "brew"
+formula = "broot"
