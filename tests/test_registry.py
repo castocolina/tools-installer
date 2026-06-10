@@ -206,11 +206,11 @@ def test_gron_uses_tgz_with_trailing_version() -> None:
     assert method.params["strip"] == 0
 
 
-def test_registry_has_forty_one_unique_tools_and_cmds() -> None:
+def test_registry_has_forty_four_unique_tools_and_cmds() -> None:
     tools = load_tools(REGISTRY)
     ids = [t.id for t in tools]
     cmds = [t.cmd for t in tools]
-    assert len(ids) == 41
+    assert len(ids) == 44
     assert len(ids) == len(set(ids))
     assert len(cmds) == len(set(cmds))
 
@@ -283,6 +283,38 @@ def test_ast_grep_cmd_is_ast_grep_not_sg() -> None:
     assert ast.cmd == "ast-grep"  # the bundled `sg` alias collides with the system tool
 
 
-def test_deno_is_the_lone_runtime_category() -> None:
-    runtimes = [t.id for t in load_tools(REGISTRY) if t.category == "runtime"]
-    assert runtimes == ["deno"]
+def test_runtime_category_members() -> None:
+    runtimes = sorted(t.id for t in load_tools(REGISTRY) if t.category == "runtime")
+    assert runtimes == ["bun", "deno", "fnm"]
+
+
+def test_script_installer_tier_resolves_script_then_brew() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+
+    # bun: one script method (no os filter) applies on both platforms, then brew.
+    for platform in (linux, macos):
+        bun = resolve_methods(tools["bun"], platform)
+        assert [m.kind for m in bun] == ["script", "brew"]
+        assert bun[0].params["url"] == "https://bun.sh/install"
+        assert bun[0].params["shell"] == "bash"
+        assert bun[0].params["bin_dir"] == "~/.bun/bin"
+
+    # pnpm: per-OS bin_dir (PNPM_HOME differs by platform), then brew.
+    pnpm_linux = resolve_methods(tools["pnpm"], linux)
+    pnpm_macos = resolve_methods(tools["pnpm"], macos)
+    assert [m.kind for m in pnpm_linux] == ["script", "brew"]
+    assert [m.kind for m in pnpm_macos] == ["script", "brew"]
+    assert pnpm_linux[0].params["url"] == "https://get.pnpm.io/install.sh"
+    assert pnpm_linux[0].params["shell"] == "sh"
+    assert pnpm_linux[0].params["bin_dir"] == "~/.local/share/pnpm"
+    assert pnpm_macos[0].params["bin_dir"] == "~/Library/pnpm"
+
+    # fnm: script on Linux, brew-only on macOS (its installer brew-delegates there).
+    fnm_linux = resolve_methods(tools["fnm"], linux)
+    assert [m.kind for m in fnm_linux] == ["script", "brew"]
+    assert fnm_linux[0].params["url"] == "https://fnm.vercel.app/install"
+    assert fnm_linux[0].params["shell"] == "bash"
+    assert fnm_linux[0].params["bin_dir"] == "~/.local/share/fnm"
+    assert [m.kind for m in resolve_methods(tools["fnm"], macos)] == ["brew"]

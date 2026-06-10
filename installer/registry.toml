@@ -1048,3 +1048,63 @@ archive = "zip"
 [[tool.method]]
 kind = "brew"
 formula = "jless"
+
+[[tool]]
+id = "bun"
+name = "Bun"
+category = "runtime"
+cmd = "bun"
+priority = "P2"
+audience = "both"
+desc = "Fast all-in-one JavaScript runtime and toolkit"
+[[tool.method]]
+kind = "script"
+url = "https://bun.sh/install"
+shell = "bash"
+bin_dir = "~/.bun/bin"
+[[tool.method]]
+kind = "brew"
+formula = "bun"
+
+[[tool]]
+id = "pnpm"
+name = "pnpm"
+category = "pkg-mgr"
+cmd = "pnpm"
+priority = "P2"
+audience = "both"
+desc = "Fast, disk-space-efficient Node.js package manager"
+[[tool.method]]
+kind = "script"
+os = ["debian", "arch", "fedora"]
+url = "https://get.pnpm.io/install.sh"
+shell = "sh"
+bin_dir = "~/.local/share/pnpm"
+[[tool.method]]
+kind = "script"
+os = ["macos"]
+url = "https://get.pnpm.io/install.sh"
+shell = "sh"
+bin_dir = "~/Library/pnpm"
+[[tool.method]]
+kind = "brew"
+formula = "pnpm"
+
+[[tool]]
+id = "fnm"
+name = "fnm"
+category = "runtime"
+cmd = "fnm"
+priority = "P2"
+audience = "both"
+desc = "Fast and simple Node.js version manager"
+# macOS: the official installer delegates to Homebrew, so install via brew there.
+[[tool.method]]
+kind = "script"
+os = ["debian", "arch", "fedora"]
+url = "https://fnm.vercel.app/install"
+shell = "bash"
+bin_dir = "~/.local/share/fnm"
+[[tool.method]]
+kind = "brew"
+formula = "fnm"
