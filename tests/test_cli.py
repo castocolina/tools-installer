@@ -41,3 +41,11 @@ def test_doctor_defaults_false():
 
 def test_doctor_flag():
     assert parse_args(["--doctor"]).doctor is True
+
+
+def test_uninstall_flag_defaults_false():
+    assert parse_args([]).uninstall is False
+
+
+def test_uninstall_flag_parses():
+    assert parse_args(["--uninstall"]).uninstall is True

@@ -10,6 +10,7 @@ class Options:
     categories: tuple[str, ...]
     yes: bool
     doctor: bool = False
+    uninstall: bool = False
 
 
 def parse_args(argv: list[str]) -> Options:
@@ -32,6 +33,9 @@ def parse_args(argv: list[str]) -> Options:
     )
     parser.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     parser.add_argument("--doctor", action="store_true", help="audit and fix the PATH, then exit")
+    parser.add_argument(
+        "--uninstall", action="store_true", help="remove installed userspace artifacts, then exit"
+    )
     ns = parser.parse_args(argv)
 
     categories: list[str] = []
@@ -41,4 +45,10 @@ def parse_args(argv: list[str]) -> Options:
             trimmed = name.strip()
             if trimmed:
                 categories.append(trimmed)
-    return Options(all=ns.all, categories=tuple(categories), yes=ns.yes, doctor=ns.doctor)
+    return Options(
+        all=ns.all,
+        categories=tuple(categories),
+        yes=ns.yes,
+        doctor=ns.doctor,
+        uninstall=ns.uninstall,
+    )
