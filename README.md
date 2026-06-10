@@ -41,16 +41,17 @@ The catalog is seeded and growing toward the full set. Today it installs:
 | Category    | Tools                                              |
 | ----------- | -------------------------------------------------- |
 | pkg-mgr     | `uv`, Homebrew (opt-in)                             |
-| search      | `ripgrep` (rg), `fd`, `fzf`                         |
+| search      | `ripgrep` (rg), `fd`, `fzf`, `ast-grep`             |
 | view        | `bat`, `eza`, `glow`, `hexyl`                        |
 | git         | `delta`, `lazygit`, `gh`, `difftastic` (difft), `gitui` |
 | docker      | `lazydocker`, `dive`                                |
-| data        | `jq`, `yq`, `miller` (mlr), `fx`, `dasel`, `gron`   |
+| data        | `jq`, `yq`, `miller` (mlr), `fx`, `dasel`, `gron`, `jless` |
 | text        | `sd`                                                |
 | nav         | `zoxide`                                            |
+| runtime     | `deno`                                              |
 | shell       | `starship`, `direnv`, `gum`                         |
 | dev         | `just`, `ruff`, `hyperfine`, `shfmt`, `tealdeer` (tldr) |
-| sysinfo     | `bottom` (btm), `dust`, `duf`                       |
+| sysinfo     | `bottom` (btm), `dust`, `duf`, `procs`              |
 | net         | `xh`                                                |
 | ai          | `aichat`                                            |
 
