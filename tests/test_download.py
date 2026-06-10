@@ -309,10 +309,39 @@ def test_github_release_zip_uses_unzip_and_ignores_strip(
     extract = (
         "tmp=$(mktemp) && trap 'rm -f \"$tmp\"' EXIT"
         f' && curl -fsSL -o "$tmp" -- {shlex.quote(url)}'
-        f' && unzip -q -o "$tmp" -d {shlex.quote(str(opt))}'
+        f' && unzip -q -o "$tmp" {shlex.quote("deno")} -d {shlex.quote(str(opt))}'
     )
     assert calls == [
         ["sh", "-c", extract],
         ["chmod", "+x", str(binary)],
         ["ln", "-sf", str(binary), str(link)],
     ]
+
+
+def test_zip_extracts_only_the_nested_member(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    calls, runner = _record()
+    bin_dir = tmp_path / "bin"
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "Canop/broot",
+            "asset": "broot_{ver}.zip",
+            "member": "{arch.machine}-unknown-linux-gnu/broot",
+            "archive": "zip",
+            "bin_dir": str(bin_dir),
+        },
+    )
+    install_download(method, _ctx(runner, tmp_version="v1.57.0"))
+    opt = tmp_path / ".local" / "opt" / "broot"
+    member = "x86_64-unknown-linux-gnu/broot"  # {arch.machine} rendered for amd64
+    binary = opt / member
+    url = "https://github.com/Canop/broot/releases/download/v1.57.0/broot_1.57.0.zip"
+    extract = (
+        "tmp=$(mktemp) && trap 'rm -f \"$tmp\"' EXIT"
+        f' && curl -fsSL -o "$tmp" -- {shlex.quote(url)}'
+        f' && unzip -q -o "$tmp" {shlex.quote(member)} -d {shlex.quote(str(opt))}'
+    )
+    assert calls[0] == ["sh", "-c", extract]
+    assert ["chmod", "+x", str(binary)] in calls
+    assert ["ln", "-sf", str(binary), str(bin_dir / "broot")] in calls
