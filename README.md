@@ -47,11 +47,12 @@ The catalog is seeded and growing toward the full set. Today it installs:
 | docker      | `lazydocker`, `dive`                                |
 | data        | `jq`, `yq`, `miller` (mlr), `fx`, `dasel`, `gron`, `jless` |
 | text        | `sd`                                                |
-| nav         | `zoxide`                                            |
+| nav         | `zoxide`, `broot`                                   |
 | runtime     | `deno`, `bun`, `fnm`                                |
 | shell       | `starship`, `direnv`, `gum`                         |
-| dev         | `just`, `ruff`, `hyperfine`, `shfmt`, `tealdeer` (tldr) |
+| dev         | `just`, `ruff`, `hyperfine`, `shfmt`, `tealdeer` (tldr), `vale` |
 | sysinfo     | `bottom` (btm), `dust`, `duf`, `procs`              |
+| security    | `gitleaks`                                          |
 | net         | `xh`                                                |
 | ai          | `aichat`                                            |
 
