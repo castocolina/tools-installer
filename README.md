@@ -34,6 +34,24 @@ curl -fsSL https://raw.githubusercontent.com/castocolina/tools-installer/main/in
   [`installer/registry.toml`](installer/registry.toml). Adding a tool is a data
   change, not code.
 
+## Available tools
+
+The catalog is seeded and growing toward the full set. Today it installs:
+
+| Category    | Tools                                              |
+| ----------- | -------------------------------------------------- |
+| pkg-mgr     | `uv`, Homebrew (opt-in)                             |
+| search      | `ripgrep` (rg), `fd`, `fzf`                         |
+| view        | `bat`, `eza`                                        |
+| git         | `delta`, `lazygit`, `gh`                            |
+| data        | `jq`, `yq`                                          |
+| text        | `sd`                                                |
+| nav         | `zoxide`                                            |
+
+Download-based tools install without sudo: each is unpacked into `~/.local/opt/<tool>/`
+with its binary symlinked into `~/.local/bin`. Where a tool ships no asset for your
+platform (e.g. an Intel-Mac or macOS-only gap), the install falls through to Homebrew.
+
 ## Quick start
 
 Install the AI dev environment with one command:
@@ -89,7 +107,8 @@ ladder** (each tool can override it in the registry):
 
 1. **Official `.sh` installer** from the tool's author, when it genuinely resolves
    (`uv`, `volta`, …).
-2. **tarball / GitHub release** unpacked into `~/.local` (no sudo) + symlink in `~/.local/bin`.
+2. **tarball / GitHub release** unpacked into `~/.local/opt/<tool>/` (no sudo) with the
+   binary symlinked into `~/.local/bin`; single-file release binaries land in `~/.local/bin` directly.
 3. **Native package manager** — `dnf` · `apt` · `pacman` · `rpm-ostree`.
 4. **Homebrew** — last resort.
 
