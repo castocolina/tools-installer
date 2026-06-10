@@ -49,3 +49,18 @@ def test_uninstall_flag_defaults_false():
 
 def test_uninstall_flag_parses():
     assert parse_args(["--uninstall"]).uninstall is True
+
+
+def test_link_mode_defaults_to_none():
+    assert parse_args([]).link_mode is None
+
+
+def test_link_mode_parses_each_choice():
+    assert parse_args(["--link-mode", "centralized"]).link_mode == "centralized"
+    assert parse_args(["--link-mode", "single"]).link_mode == "single"
+    assert parse_args(["--link-mode", "split"]).link_mode == "split"
+
+
+def test_link_mode_rejects_unknown_choice():
+    with pytest.raises(SystemExit):
+        parse_args(["--link-mode", "bogus"])

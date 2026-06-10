@@ -11,6 +11,7 @@ class Options:
     yes: bool
     doctor: bool = False
     uninstall: bool = False
+    link_mode: str | None = None
 
 
 def parse_args(argv: list[str]) -> Options:
@@ -36,6 +37,12 @@ def parse_args(argv: list[str]) -> Options:
     parser.add_argument(
         "--uninstall", action="store_true", help="remove installed userspace artifacts, then exit"
     )
+    parser.add_argument(
+        "--link-mode",
+        choices=["centralized", "single", "split"],
+        default=None,
+        help="how to wire PATH into your shells (default: ask, or centralized)",
+    )
     ns = parser.parse_args(argv)
 
     categories: list[str] = []
@@ -51,4 +58,5 @@ def parse_args(argv: list[str]) -> Options:
         yes=ns.yes,
         doctor=ns.doctor,
         uninstall=ns.uninstall,
+        link_mode=ns.link_mode,
     )
