@@ -205,3 +205,147 @@ strip = 1
 [[tool.method]]
 kind = "brew"
 formula = "git-delta"
+
+[[tool]]
+id = "eza"
+name = "eza"
+category = "view"
+cmd = "eza"
+priority = "P2"
+audience = "both"
+desc = "A modern replacement for ls"
+# eza publishes no macOS asset; mac installs via brew.
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "eza-community/eza"
+asset = "eza_{arch.machine}-unknown-linux-gnu.tar.gz"
+member = "eza"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "eza"
+
+[[tool]]
+id = "zoxide"
+name = "zoxide"
+category = "nav"
+cmd = "zoxide"
+priority = "P2"
+audience = "both"
+desc = "A smarter cd command with frecency-based jumping"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "ajeetdsouza/zoxide"
+asset = "zoxide-{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
+member = "zoxide"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "ajeetdsouza/zoxide"
+asset = "zoxide-{ver}-{arch.machine}-apple-darwin.tar.gz"
+member = "zoxide"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "zoxide"
+
+[[tool]]
+id = "fzf"
+name = "fzf"
+category = "search"
+cmd = "fzf"
+priority = "P1"
+audience = "both"
+desc = "A general-purpose command-line fuzzy finder"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "junegunn/fzf"
+asset = "fzf-{ver}-linux_{arch.go}.tar.gz"
+member = "fzf"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "junegunn/fzf"
+asset = "fzf-{ver}-darwin_{arch.go}.tar.gz"
+member = "fzf"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "fzf"
+
+[[tool]]
+id = "lazygit"
+name = "lazygit"
+category = "git"
+cmd = "lazygit"
+priority = "P2"
+audience = "both"
+desc = "A simple terminal UI for git commands"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "jesseduffield/lazygit"
+asset = "lazygit_{ver}_linux_{arch.suffix}.tar.gz"
+member = "lazygit"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "jesseduffield/lazygit"
+asset = "lazygit_{ver}_darwin_{arch.suffix}.tar.gz"
+member = "lazygit"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "lazygit"
+
+[[tool]]
+id = "gh"
+name = "GitHub CLI"
+category = "git"
+cmd = "gh"
+priority = "P1"
+audience = "both"
+desc = "GitHub on the command line"
+# gh ships macOS only as .zip/.pkg; mac installs via brew.
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "cli/cli"
+asset = "gh_{ver}_linux_{arch.deb}.tar.gz"
+member = "bin/gh"
+strip = 1
+[[tool.method]]
+kind = "brew"
+formula = "gh"
+
+[[tool]]
+id = "yq"
+name = "yq"
+category = "data"
+cmd = "yq"
+priority = "P2"
+audience = "ai"
+desc = "Portable command-line YAML/JSON processor"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "mikefarah/yq"
+asset = "yq_linux_{arch.deb}"
+member = "yq"
+raw = true
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "mikefarah/yq"
+asset = "yq_darwin_{arch.deb}"
+member = "yq"
+raw = true
+[[tool.method]]
+kind = "brew"
+formula = "yq"

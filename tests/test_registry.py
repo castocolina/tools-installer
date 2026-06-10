@@ -76,3 +76,44 @@ def test_ripgrep_github_release_is_os_split_and_strips() -> None:
         frozenset({"macos"}),
     }
     assert all(m.params["strip"] == 1 and m.params["member"] == "rg" for m in gh_methods)
+
+
+def test_eza_resolves_to_download_on_linux_and_brew_only_on_macos() -> None:
+    eza = next(t for t in load_tools(REGISTRY) if t.id == "eza")
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    assert [m.kind for m in resolve_methods(eza, linux)] == ["github_release", "brew"]
+    # eza ships no macOS asset, so only brew is left on a Mac.
+    assert [m.kind for m in resolve_methods(eza, macos)] == ["brew"]
+
+
+def test_gh_uses_nested_member_on_linux_and_brew_only_on_macos() -> None:
+    gh = next(t for t in load_tools(REGISTRY) if t.id == "gh")
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    method = resolve_methods(gh, linux)[0]
+    assert method.kind == "github_release"
+    assert method.params["member"] == "bin/gh"
+    assert method.params["strip"] == 1
+    # gh ships macOS only as zip/pkg, so only brew is left on a Mac.
+    assert [m.kind for m in resolve_methods(gh, macos)] == ["brew"]
+
+
+def test_yq_resolves_to_a_raw_download_on_every_os() -> None:
+    yq = next(t for t in load_tools(REGISTRY) if t.id == "yq")
+    for platform_os in ("debian", "macos"):
+        platform = Platform(os=platform_os, arch="amd64", immutable=False, has_brew=False)
+        top = resolve_methods(yq, platform)[0]
+        assert top.kind == "github_release"
+        assert top.params.get("raw") is True
+        assert "strip" not in top.params  # raw downloads never unpack
+
+
+def test_every_tool_resolves_at_least_one_method_on_each_platform() -> None:
+    # A tool that resolves to nothing on a supported platform is silently
+    # uninstallable there; this guards against an os/method misconfiguration.
+    tools = load_tools(REGISTRY)
+    for platform_os in ("debian", "arch", "fedora", "macos"):
+        platform = Platform(os=platform_os, arch="amd64", immutable=False, has_brew=True)
+        stranded = [t.id for t in tools if not resolve_methods(t, platform)]
+        assert not stranded, f"no install method on {platform_os}: {stranded}"
