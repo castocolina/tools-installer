@@ -56,8 +56,9 @@ def test_github_release_archive_extracts_to_opt_and_symlinks(
         "15.1.0/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz"
     )
     extract = (
-        f"curl -fsSL -- {shlex.quote(url)}"
-        f" | tar -xz -C {shlex.quote(str(opt))} --strip-components=1"
+        "tmp=$(mktemp) && trap 'rm -f \"$tmp\"' EXIT"
+        f' && curl -fsSL -o "$tmp" -- {shlex.quote(url)}'
+        f' && tar -xzf "$tmp" -C {shlex.quote(str(opt))} --strip-components=1'
     )
     assert calls == [
         ["sh", "-c", extract],
@@ -107,8 +108,9 @@ def test_tarball_uses_url_verbatim_and_strip_defaults_to_zero(
     link = bin_dir / "eza"
     # The tarball URL is used verbatim (no resolution), and strip defaults to 0.
     extract = (
-        f"curl -fsSL -- {shlex.quote('https://x/eza.tar.gz')}"
-        f" | tar -xz -C {shlex.quote(str(opt))} --strip-components=0"
+        "tmp=$(mktemp) && trap 'rm -f \"$tmp\"' EXIT"
+        f' && curl -fsSL -o "$tmp" -- {shlex.quote("https://x/eza.tar.gz")}'
+        f' && tar -xzf "$tmp" -C {shlex.quote(str(opt))} --strip-components=0'
     )
     assert calls == [
         ["sh", "-c", extract],
