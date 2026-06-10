@@ -1108,3 +1108,55 @@ bin_dir = "~/.local/share/fnm"
 [[tool.method]]
 kind = "brew"
 formula = "fnm"
+
+[[tool]]
+id = "gitleaks"
+name = "gitleaks"
+category = "security"
+cmd = "gitleaks"
+priority = "P3"
+audience = "both"
+desc = "Detect hardcoded secrets in git repos and files"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "gitleaks/gitleaks"
+asset = "gitleaks_{ver}_linux_{arch.x64}.tar.gz"
+member = "gitleaks"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "gitleaks/gitleaks"
+asset = "gitleaks_{ver}_darwin_{arch.x64}.tar.gz"
+member = "gitleaks"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "gitleaks"
+
+[[tool]]
+id = "vale"
+name = "Vale"
+category = "dev"
+cmd = "vale"
+priority = "P3"
+audience = "both"
+desc = "Syntax-aware linter for prose and documentation"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "errata-ai/vale"
+asset = "vale_{ver}_Linux_{arch.bits}.tar.gz"
+member = "vale"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "errata-ai/vale"
+asset = "vale_{ver}_macOS_{arch.bits}.tar.gz"
+member = "vale"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "vale"

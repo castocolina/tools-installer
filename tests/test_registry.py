@@ -206,11 +206,11 @@ def test_gron_uses_tgz_with_trailing_version() -> None:
     assert method.params["strip"] == 0
 
 
-def test_registry_has_forty_four_unique_tools_and_cmds() -> None:
+def test_registry_has_forty_six_unique_tools_and_cmds() -> None:
     tools = load_tools(REGISTRY)
     ids = [t.id for t in tools]
     cmds = [t.cmd for t in tools]
-    assert len(ids) == 44
+    assert len(ids) == 46
     assert len(ids) == len(set(ids))
     assert len(cmds) == len(set(cmds))
 
@@ -318,3 +318,24 @@ def test_script_installer_tier_resolves_script_then_brew() -> None:
     assert fnm_linux[0].params["shell"] == "bash"
     assert fnm_linux[0].params["bin_dir"] == "~/.local/share/fnm"
     assert [m.kind for m in resolve_methods(tools["fnm"], macos)] == ["brew"]
+
+
+def test_gitleaks_and_vale_use_new_arch_tokens() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+
+    gl_linux = resolve_methods(tools["gitleaks"], linux)
+    assert [m.kind for m in gl_linux] == ["github_release", "brew"]
+    assert gl_linux[0].params["asset"] == "gitleaks_{ver}_linux_{arch.x64}.tar.gz"
+    assert gl_linux[0].params["member"] == "gitleaks"
+    assert resolve_methods(tools["gitleaks"], macos)[0].params["asset"] == (
+        "gitleaks_{ver}_darwin_{arch.x64}.tar.gz"
+    )
+
+    vale_linux = resolve_methods(tools["vale"], linux)
+    assert [m.kind for m in vale_linux] == ["github_release", "brew"]
+    assert vale_linux[0].params["asset"] == "vale_{ver}_Linux_{arch.bits}.tar.gz"
+    assert resolve_methods(tools["vale"], macos)[0].params["asset"] == (
+        "vale_{ver}_macOS_{arch.bits}.tar.gz"
+    )
