@@ -141,6 +141,13 @@ The `doctor` flow keeps your shell PATH correct:
   idempotently (it never adds the `source` line twice).
 - Audits the live PATH and reports bin dirs that are **missing**, **broken**
   (directory gone), or **duplicated**, and offers to fix them.
+- Lets you choose how PATH is wired (`--link-mode`): **centralized** (one
+  `~/.myshellrc` sourced from both rc files), **single** (sourced from your current
+  shell only), or **split** (the PATH block written directly into each rc file).
+- After an install, audits your live PATH and — when a tool's own installer added a
+  duplicate `export PATH` line to `.bashrc`/`.zshrc` for a directory `~/.myshellrc`
+  already covers — previews those lines and offers to remove them. Your own content
+  is never touched, and the removal always asks first.
 
 ```sh
 make doctor
