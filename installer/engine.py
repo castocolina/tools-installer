@@ -10,7 +10,7 @@ from installer.platform import Platform
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner, run_command
 from installer.status import is_installed
-from installer.versions import VersionError, VersionResolver, resolve_github_version
+from installer.versions import TagResolver, VersionError, resolve_github_tag
 
 Status = Literal["already-installed", "installed", "no-method", "failed"]
 
@@ -35,7 +35,7 @@ def install_tool(
     tool: Tool,
     platform: Platform,
     runner: Runner = run_command,
-    resolve_version: VersionResolver = resolve_github_version,
+    resolve_tag: TagResolver = resolve_github_tag,
 ) -> InstallOutcome:
     """Try each applicable method in ladder order; stop at the first success."""
     if is_installed(tool):
@@ -45,7 +45,7 @@ def install_tool(
     if not methods:
         return InstallOutcome(tool.id, "no-method")
 
-    ctx = ExecContext(runner=runner, platform=platform, resolve_version=resolve_version)
+    ctx = ExecContext(runner=runner, platform=platform, resolve_tag=resolve_tag)
     errors: list[Exception] = []
     for method in methods:
         try:

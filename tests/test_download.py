@@ -10,12 +10,12 @@ from installer.platform import Platform
 from installer.run import Runner
 
 
-def _ctx(runner: Runner, tmp_version: str = "14.1.0") -> ExecContext:
-    def resolve_version(repo: str) -> str:
+def _ctx(runner: Runner, tmp_version: str = "v14.1.0") -> ExecContext:
+    def resolve_tag(repo: str) -> str:
         return tmp_version
 
     platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
-    return ExecContext(runner=runner, platform=platform, resolve_version=resolve_version)
+    return ExecContext(runner=runner, platform=platform, resolve_tag=resolve_tag)
 
 
 def _record() -> tuple[list[list[str]], Runner]:
@@ -83,6 +83,35 @@ def test_github_release_raw_downloads_binary_directly(tmp_path: Path):
     ]
 
 
+def test_github_release_bare_tag_no_v_in_path(tmp_path: Path):
+    calls, runner = _record()
+    bin_dir = tmp_path / "bin"
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "BurntSushi/ripgrep",
+            "asset": "ripgrep-{ver}-{arch.machine}-unknown-linux-musl.tar.gz",
+            "member": "rg",
+            "bin_dir": str(bin_dir),
+        },
+    )
+    install_download(method, _ctx(runner, tmp_version="15.1.0"))
+    url = (
+        "https://github.com/BurntSushi/ripgrep/releases/download/"
+        "15.1.0/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz"
+    )
+    target = bin_dir / "rg"
+    cmd = (
+        f"curl -fsSL -- {shlex.quote(url)}"
+        f" | tar -xz -C {shlex.quote(str(bin_dir))}"
+        f" -- {shlex.quote('rg')}"
+    )
+    assert calls == [
+        ["sh", "-c", cmd],
+        ["chmod", "+x", str(target)],
+    ]
+
+
 def test_tarball_uses_direct_url(tmp_path: Path):
     calls, runner = _record()
     bin_dir = tmp_path / "bin"
@@ -141,13 +170,13 @@ def test_github_release_bad_asset_template_raises_executor_error(tmp_path: Path)
 def test_github_release_unsupported_arch_raises_executor_error(tmp_path: Path):
     calls, runner = _record()
 
-    def resolve_version(repo: str) -> str:
+    def resolve_tag(repo: str) -> str:
         return "1.0.0"
 
     ctx = ExecContext(
         runner=runner,
         platform=Platform(os="fedora", arch="riscv64", immutable=False, has_brew=False),
-        resolve_version=resolve_version,
+        resolve_tag=resolve_tag,
     )
     method = Method(
         kind="github_release",

@@ -1,53 +1,44 @@
+import json
+
 import pytest
 
-from installer.versions import VersionError, resolve_github_version
+from installer.versions import VersionError, resolve_github_tag
 
 
-def test_resolve_strips_leading_v():
+def _fetch(tag: str):
     def fetch(url: str) -> bytes:
-        assert url == "https://api.github.com/repos/BurntSushi/ripgrep/releases/latest"
-        return b'{"tag_name": "v14.1.0"}'
+        return json.dumps({"tag_name": tag}).encode()
 
-    assert resolve_github_version("BurntSushi/ripgrep", fetch) == "14.1.0"
-
-
-def test_resolve_without_v_prefix():
-    def fetch(url: str) -> bytes:
-        return b'{"tag_name": "1.2.3"}'
-
-    assert resolve_github_version("a/b", fetch) == "1.2.3"
+    return fetch
 
 
-def test_resolve_strips_only_a_single_leading_v_prefix():
-    # removeprefix strips one "v"; lstrip would wrongly strip both.
-    def fetch(url: str) -> bytes:
-        return b'{"tag_name": "vv1.0"}'
-
-    assert resolve_github_version("a/b", fetch) == "v1.0"
+def test_resolve_returns_tag_verbatim_with_leading_v():
+    assert resolve_github_tag("sharkdp/fd", _fetch("v10.4.2")) == "v10.4.2"
 
 
-def test_resolve_missing_tag_raises():
-    def fetch(url: str) -> bytes:
-        return b"{}"
+def test_resolve_returns_bare_tag_verbatim():
+    assert resolve_github_tag("BurntSushi/ripgrep", _fetch("15.1.0")) == "15.1.0"
 
+
+def test_resolve_raises_when_tag_missing():
     with pytest.raises(VersionError, match="no release tag"):
-        resolve_github_version("a/b", fetch)
+        resolve_github_tag("a/b", _fetch(""))
 
 
-def test_resolve_wraps_network_error():
-    def fetch(url: str) -> bytes:
-        raise OSError("connection refused")
-
-    with pytest.raises(VersionError, match="failed to resolve version"):
-        resolve_github_version("a/b", fetch)
-
-
-def test_resolve_wraps_invalid_json():
+def test_resolve_raises_on_bad_json():
     def fetch(url: str) -> bytes:
         return b"not json"
 
-    with pytest.raises(VersionError, match="failed to resolve version"):
-        resolve_github_version("a/b", fetch)
+    with pytest.raises(VersionError, match="failed to resolve tag"):
+        resolve_github_tag("a/b", fetch)
+
+
+def test_resolve_raises_on_network_error():
+    def fetch(url: str) -> bytes:
+        raise OSError("network down")
+
+    with pytest.raises(VersionError, match="failed to resolve tag"):
+        resolve_github_tag("a/b", fetch)
 
 
 def test_urlopen_fetch_reads_body(monkeypatch: pytest.MonkeyPatch) -> None:

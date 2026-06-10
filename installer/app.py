@@ -18,7 +18,7 @@ from installer.selection import category_choices, select_tools, tool_choices
 from installer.session import Install, Summary, order_for_install, run_installs, summarize
 from installer.shellrc import collect_bin_dirs, ensure_source, write_myshellrc
 from installer.status import is_installed
-from installer.versions import VersionResolver, resolve_github_version
+from installer.versions import TagResolver, resolve_github_tag
 
 
 def _choose_tools(
@@ -46,7 +46,7 @@ def run_wizard(
     console: Console,
     options: Options,
     runner: Runner = run_command,
-    resolve_version: VersionResolver = resolve_github_version,
+    resolve_tag: TagResolver = resolve_github_tag,
     install: Install = install_tool,
     installed: Callable[[Tool], bool] = is_installed,
 ) -> Summary | None:
@@ -60,7 +60,7 @@ def run_wizard(
     if not options.yes and not prompter.confirm("Install the selected tools?"):
         return None
     ordered = order_for_install(selected)
-    outcomes = run_installs(ordered, platform, runner, resolve_version, install)
+    outcomes = run_installs(ordered, platform, runner, resolve_tag, install)
     summary = summarize(outcomes)
     render_summary(summary, console)
     return summary

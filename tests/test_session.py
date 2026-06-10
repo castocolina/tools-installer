@@ -35,7 +35,7 @@ def test_run_installs_calls_install_per_tool_with_injected_deps():
     seen: list[tuple[str, str]] = []
 
     def fake_install(
-        tool: Tool, plat: Platform, runner: object, resolve_version: object
+        tool: Tool, plat: Platform, runner: object, resolve_tag: object
     ) -> InstallOutcome:
         seen.append((tool.id, plat.os))
         return InstallOutcome(tool.id, "installed", method_kind="brew")
@@ -43,10 +43,10 @@ def test_run_installs_calls_install_per_tool_with_injected_deps():
     def runner(cmd: list[str]) -> None:
         return None
 
-    def resolve_version(repo: str) -> str:
+    def resolve_tag(repo: str) -> str:
         return "1.0.0"
 
-    outcomes = run_installs(tools, platform, runner, resolve_version, fake_install)
+    outcomes = run_installs(tools, platform, runner, resolve_tag, fake_install)
     assert seen == [("rg", "fedora"), ("jq", "fedora")]
     assert [o.tool_id for o in outcomes] == ["rg", "jq"]
 

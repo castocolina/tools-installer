@@ -9,7 +9,7 @@ from installer.locations import bin_dir, ensure_dir
 from installer.model import Method
 from installer.platform import Platform
 from installer.run import Runner
-from installer.versions import VersionResolver
+from installer.versions import TagResolver
 
 DOWNLOAD_KINDS = ("github_release", "tarball")
 
@@ -18,7 +18,7 @@ DOWNLOAD_KINDS = ("github_release", "tarball")
 class ExecContext:
     runner: Runner
     platform: Platform
-    resolve_version: VersionResolver
+    resolve_tag: TagResolver
 
 
 def _opt_str(method: Method, key: str) -> str | None:
@@ -29,12 +29,13 @@ def _opt_str(method: Method, key: str) -> str | None:
 def _github_release_url(method: Method, ctx: ExecContext) -> str:
     repo = require_str(method, "repo")
     template = require_str(method, "asset")
-    ver = ctx.resolve_version(repo)
+    tag = ctx.resolve_tag(repo)
+    ver = tag.removeprefix("v")  # asset filenames use the bare number; the path uses the tag
     try:
         asset = render_asset(template, ver, arch_tokens(ctx.platform.arch))
     except ValueError as exc:
         raise ExecutorError(f"cannot build asset name for '{repo}': {exc}") from exc
-    return f"https://github.com/{repo}/releases/download/v{ver}/{asset}"
+    return f"https://github.com/{repo}/releases/download/{tag}/{asset}"
 
 
 def install_download(method: Method, ctx: ExecContext) -> None:

@@ -57,7 +57,7 @@ def _recording_install() -> tuple[list[str], Install]:
     installed: list[str] = []
 
     def install(
-        tool: Tool, platform: Platform, runner: object, resolve_version: object
+        tool: Tool, platform: Platform, runner: object, resolve_tag: object
     ) -> InstallOutcome:
         installed.append(tool.id)
         return InstallOutcome(tool.id, "installed", method_kind="brew")
@@ -73,7 +73,7 @@ def _runner(cmd: list[str]) -> None:
     return None
 
 
-def _resolve(repo: str) -> str:
+def _resolve_tag(repo: str) -> str:
     return "1.0.0"
 
 
@@ -88,7 +88,7 @@ def test_all_flag_installs_every_tool_without_prompting():
         console,
         Options(all=True, categories=(), yes=True),
         runner=_runner,
-        resolve_version=_resolve,
+        resolve_tag=_resolve_tag,
         install=install,
         installed=_never_installed,
     )
@@ -99,7 +99,7 @@ def test_all_flag_installs_every_tool_without_prompting():
 
 def test_failed_install_surfaces_in_summary_without_crashing():
     def install(
-        tool: Tool, platform: Platform, runner: object, resolve_version: object
+        tool: Tool, platform: Platform, runner: object, resolve_tag: object
     ) -> InstallOutcome:
         return InstallOutcome(tool.id, "failed")
 
@@ -112,7 +112,7 @@ def test_failed_install_surfaces_in_summary_without_crashing():
         console,
         Options(all=True, categories=(), yes=True),
         runner=_runner,
-        resolve_version=_resolve,
+        resolve_tag=_resolve_tag,
         install=install,
         installed=_never_installed,
     )
@@ -132,7 +132,7 @@ def test_categories_flag_filters_tools():
         console,
         Options(all=False, categories=("data",), yes=True),
         runner=_runner,
-        resolve_version=_resolve,
+        resolve_tag=_resolve_tag,
         install=install,
         installed=_never_installed,
     )
@@ -150,7 +150,7 @@ def test_interactive_path_selects_then_installs():
         console,
         Options(all=False, categories=(), yes=False),
         runner=_runner,
-        resolve_version=_resolve,
+        resolve_tag=_resolve_tag,
         install=install,
         installed=_never_installed,
     )
@@ -171,7 +171,7 @@ def test_declining_confirmation_installs_nothing():
         console,
         Options(all=False, categories=(), yes=False),
         runner=_runner,
-        resolve_version=_resolve,
+        resolve_tag=_resolve_tag,
         install=install,
         installed=_never_installed,
     )

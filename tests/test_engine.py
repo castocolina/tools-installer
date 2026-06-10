@@ -130,8 +130,8 @@ def test_github_release_routes_to_download(monkeypatch: pytest.MonkeyPatch, tmp_
         },
     )
 
-    def resolve_version(repo: str) -> str:
-        return "1.2.3"
+    def resolve_tag(repo: str) -> str:
+        return "14.1.0"
 
     def runner(cmd: list[str]) -> None:
         calls.append(cmd)
@@ -140,11 +140,11 @@ def test_github_release_routes_to_download(monkeypatch: pytest.MonkeyPatch, tmp_
         _tool(method),
         Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
         runner=runner,
-        resolve_version=resolve_version,
+        resolve_tag=resolve_tag,
     )
     assert outcome.status == "installed"
     assert outcome.method_kind == "github_release"
-    assert calls[0][0] == "sh" and "rg-1.2.3-x86_64.tar.gz" in calls[0][2]
+    assert calls[0][0] == "sh" and "rg-14.1.0-x86_64.tar.gz" in calls[0][2]
     assert calls[1] == ["chmod", "+x", str(bin_dir / "rg")]
 
 
@@ -157,8 +157,8 @@ def test_download_failure_is_caught_as_failed(monkeypatch: pytest.MonkeyPatch, t
     def runner(cmd: list[str]) -> None:
         raise CommandError(cmd, 1)
 
-    def resolve_version(repo: str) -> str:
-        return "1.2.3"
+    def resolve_tag(repo: str) -> str:
+        return "14.1.0"
 
     method = Method(
         kind="github_release",
@@ -173,7 +173,7 @@ def test_download_failure_is_caught_as_failed(monkeypatch: pytest.MonkeyPatch, t
         _tool(method),
         Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
         runner=runner,
-        resolve_version=resolve_version,
+        resolve_tag=resolve_tag,
     )
     assert outcome.status == "failed"
     assert len(outcome.errors) == 1
@@ -191,7 +191,7 @@ def test_version_resolution_failure_is_caught_as_failed(
     def runner(cmd: list[str]) -> None:
         calls.append(cmd)
 
-    def resolve_version(repo: str) -> str:
+    def resolve_tag(repo: str) -> str:
         raise VersionError("network down")
 
     method = Method(
@@ -207,7 +207,7 @@ def test_version_resolution_failure_is_caught_as_failed(
         _tool(method),
         Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
         runner=runner,
-        resolve_version=resolve_version,
+        resolve_tag=resolve_tag,
     )
     assert outcome.status == "failed"
     assert len(outcome.errors) == 1

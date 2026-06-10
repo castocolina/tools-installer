@@ -7,10 +7,10 @@ from installer.engine import InstallOutcome, install_tool
 from installer.model import Tool
 from installer.platform import Platform
 from installer.run import Runner, run_command
-from installer.versions import VersionResolver, resolve_github_version
+from installer.versions import TagResolver, resolve_github_tag
 
-# (tool, platform, runner, resolve_version) -> outcome. Matches engine.install_tool.
-Install = Callable[[Tool, Platform, Runner, VersionResolver], InstallOutcome]
+# (tool, platform, runner, resolve_tag) -> outcome. Matches engine.install_tool.
+Install = Callable[[Tool, Platform, Runner, TagResolver], InstallOutcome]
 
 _PRIORITY_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 
@@ -32,11 +32,11 @@ def run_installs(
     tools: list[Tool],
     platform: Platform,
     runner: Runner = run_command,
-    resolve_version: VersionResolver = resolve_github_version,
+    resolve_tag: TagResolver = resolve_github_tag,
     install: Install = install_tool,
 ) -> list[InstallOutcome]:
     """Install each tool in turn, collecting one outcome per tool."""
-    return [install(tool, platform, runner, resolve_version) for tool in tools]
+    return [install(tool, platform, runner, resolve_tag) for tool in tools]
 
 
 def summarize(outcomes: list[InstallOutcome]) -> Summary:
