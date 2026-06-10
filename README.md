@@ -42,15 +42,17 @@ The catalog is seeded and growing toward the full set. Today it installs:
 | ----------- | -------------------------------------------------- |
 | pkg-mgr     | `uv`, Homebrew (opt-in)                             |
 | search      | `ripgrep` (rg), `fd`, `fzf`                         |
-| view        | `bat`, `eza`, `glow`                                |
-| git         | `delta`, `lazygit`, `gh`, `difftastic` (difft)      |
-| data        | `jq`, `yq`                                          |
+| view        | `bat`, `eza`, `glow`, `hexyl`                        |
+| git         | `delta`, `lazygit`, `gh`, `difftastic` (difft), `gitui` |
+| docker      | `lazydocker`, `dive`                                |
+| data        | `jq`, `yq`, `miller` (mlr), `fx`, `dasel`, `gron`   |
 | text        | `sd`                                                |
 | nav         | `zoxide`                                            |
 | shell       | `starship`, `direnv`, `gum`                         |
-| dev         | `just`, `ruff`, `hyperfine`                         |
-| sysinfo     | `bottom` (btm), `dust`                              |
+| dev         | `just`, `ruff`, `hyperfine`, `shfmt`, `tealdeer` (tldr) |
+| sysinfo     | `bottom` (btm), `dust`, `duf`                       |
 | net         | `xh`                                                |
+| ai          | `aichat`                                            |
 
 Download-based tools install without sudo: each is unpacked into `~/.local/opt/<tool>/`
 with its binary symlinked into `~/.local/bin`. Where a tool ships no asset for your
