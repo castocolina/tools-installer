@@ -7,6 +7,7 @@ from installer.shellrc import (
     collect_bin_dirs,
     ensure_source,
     managed_block,
+    remove_managed_block,
     write_myshellrc,
 )
 
@@ -131,6 +132,35 @@ def test_ensure_source_creates_file_when_missing(tmp_path: Path):
     ensure_source(rc, myshellrc)
     assert rc.exists()
     assert f'. "{myshellrc}"' in rc.read_text()
+
+
+def test_remove_managed_block_strips_only_the_block(tmp_path: Path) -> None:
+    path = tmp_path / ".myshellrc"
+    path.write_text("# user line\n")
+    write_myshellrc([tmp_path / "bin"], path)
+    assert "tools-installer path" in path.read_text()
+    remove_managed_block(path)
+    text = path.read_text()
+    assert "tools-installer path" not in text
+    assert "# user line" in text  # user content preserved
+
+
+def test_remove_managed_block_is_idempotent_and_tolerates_absence(tmp_path: Path) -> None:
+    path = tmp_path / ".myshellrc"
+    remove_managed_block(path)  # missing file -> no error, no file created
+    assert not path.exists()
+    path.write_text("# only user content\n")
+    remove_managed_block(path)  # no block present -> unchanged
+    assert path.read_text() == "# only user content\n"
+
+
+def test_remove_managed_block_leaves_file_untouched_when_begin_has_no_end(tmp_path: Path) -> None:
+    # Orphan begin marker with no matching end -> loop exhausts, file left untouched.
+    path = tmp_path / ".myshellrc"
+    content = "# user\n# >>> tools-installer path >>>\nstray\n"
+    path.write_text(content)
+    remove_managed_block(path)
+    assert path.read_text() == content  # unchanged
 
 
 def test_collect_bin_dirs_only_includes_platform_applicable_methods() -> None:

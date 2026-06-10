@@ -69,6 +69,25 @@ def apply_block(content: str, block: str, begin: str = _PATH_BEGIN, end: str = _
     return f"{block}\n"
 
 
+def remove_managed_block(path: Path) -> None:
+    """Strip the managed PATH block from `path`, preserving the rest. Idempotent.
+
+    Pairs the LAST begin marker with the following end marker (mirroring
+    apply_block). A missing file or a file without the block is left untouched.
+    """
+    if not path.exists():
+        return
+    lines = path.read_text().split("\n")
+    if _PATH_BEGIN not in lines:
+        return
+    start = max(index for index, line in enumerate(lines) if line == _PATH_BEGIN)
+    for stop in range(start, len(lines)):
+        if lines[stop] == _PATH_END:
+            kept = lines[:start] + lines[stop + 1 :]
+            path.write_text("\n".join(kept))
+            return
+
+
 def write_myshellrc(bin_dirs: list[Path], path: Path) -> None:
     """Idempotently write the managed PATH block into ~/.myshellrc, preserving the rest."""
     existing = path.read_text() if path.exists() else ""
