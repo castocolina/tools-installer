@@ -30,10 +30,18 @@ audience = "ai"
 desc = "Fast recursive search; respects .gitignore"
 [[tool.method]]
 kind = "github_release"
+os = ["debian", "arch", "fedora"]
 repo = "BurntSushi/ripgrep"
 asset = "ripgrep-{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
 member = "rg"
-bin_dir = "~/.local/bin"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "BurntSushi/ripgrep"
+asset = "ripgrep-{ver}-{arch.machine}-apple-darwin.tar.gz"
+member = "rg"
+strip = 1
 [[tool.method]]
 kind = "dnf"
 package = "ripgrep"
@@ -92,3 +100,108 @@ url = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
 shell = "bash"
 env = { NONINTERACTIVE = "1" }
 bin_dir = "/home/linuxbrew/.linuxbrew/bin"
+
+[[tool]]
+id = "fd"
+name = "fd"
+category = "search"
+cmd = "fd"
+priority = "P1"
+audience = "both"
+desc = "Fast, user-friendly alternative to find"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "sharkdp/fd"
+asset = "fd-v{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
+member = "fd"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "sharkdp/fd"
+asset = "fd-v{ver}-{arch.machine}-apple-darwin.tar.gz"
+member = "fd"
+strip = 1
+[[tool.method]]
+kind = "brew"
+formula = "fd"
+
+[[tool]]
+id = "bat"
+name = "bat"
+category = "view"
+cmd = "bat"
+priority = "P1"
+audience = "both"
+desc = "A cat clone with syntax highlighting and git integration"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "sharkdp/bat"
+asset = "bat-v{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
+member = "bat"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "sharkdp/bat"
+asset = "bat-v{ver}-{arch.machine}-apple-darwin.tar.gz"
+member = "bat"
+strip = 1
+[[tool.method]]
+kind = "brew"
+formula = "bat"
+
+[[tool]]
+id = "sd"
+name = "sd"
+category = "text"
+cmd = "sd"
+priority = "P2"
+audience = "both"
+desc = "Intuitive find-and-replace (sed alternative)"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "chmln/sd"
+asset = "sd-v{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
+member = "sd"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "chmln/sd"
+asset = "sd-v{ver}-{arch.machine}-apple-darwin.tar.gz"
+member = "sd"
+strip = 1
+[[tool.method]]
+kind = "brew"
+formula = "sd"
+
+[[tool]]
+id = "delta"
+name = "delta"
+category = "git"
+cmd = "delta"
+priority = "P2"
+audience = "both"
+desc = "A syntax-highlighting pager for git, diff, and grep output"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "dandavison/delta"
+# delta publishes no musl build, so gnu is the only Linux binary (unlike fd/bat/sd).
+asset = "delta-{ver}-{arch.machine}-unknown-linux-gnu.tar.gz"
+member = "delta"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "dandavison/delta"
+asset = "delta-{ver}-{arch.machine}-apple-darwin.tar.gz"
+member = "delta"
+strip = 1
+[[tool.method]]
+kind = "brew"
+formula = "git-delta"
