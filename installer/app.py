@@ -16,7 +16,13 @@ from installer.render import render_audit, render_doctor, render_summary, render
 from installer.run import Runner, run_command
 from installer.selection import category_choices, select_tools, tool_choices
 from installer.session import Install, Summary, order_for_install, run_installs, summarize
-from installer.shellrc import collect_bin_dirs, ensure_source, remove_managed_block, write_myshellrc
+from installer.shellrc import (
+    collect_bin_dirs,
+    ensure_source,
+    remove_managed_block,
+    write_managed_path,
+    write_myshellrc,
+)
 from installer.status import is_installed
 from installer.uninstall import plan_uninstall, remove_paths
 from installer.versions import TagResolver, resolve_github_tag
@@ -75,13 +81,21 @@ def configure_path(
     default_bin_dir: Path,
     myshellrc_path: Path,
     rc_paths: list[Path],
+    link_mode: str = "centralized",
 ) -> None:
-    """Write the managed PATH block and wire `source` into every rc path.
+    """Wire the managed PATH into the shells per `link_mode`.
 
-    Each rc file is wired idempotently; an absent rc file is created so the PATH
-    block is sourced even on a fresh machine with no shell rc yet.
+    centralized/single: write ~/.myshellrc and `source` it from each rc path (the
+    caller passes one rc for single, both for centralized). split: write the managed
+    PATH block directly into each rc path, with no ~/.myshellrc indirection.
     """
     bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir)
+    if link_mode == "split":
+        for rc_path in rc_paths:
+            write_managed_path(rc_path, bin_dirs)
+        targets = ", ".join(str(rc_path) for rc_path in rc_paths)
+        console.print(f"PATH written into {targets} (restart your shell).")
+        return
     write_myshellrc(bin_dirs, myshellrc_path)
     for rc_path in rc_paths:
         ensure_source(rc_path, myshellrc_path)
@@ -99,6 +113,7 @@ def run_doctor(
     myshellrc_path: Path,
     rc_paths: list[Path],
     fix: bool,
+    link_mode: str = "centralized",
 ) -> DoctorReport:
     """Audit the PATH, render the report, and (if fix) write the managed config."""
     bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir)
@@ -112,6 +127,7 @@ def run_doctor(
             default_bin_dir=default_bin_dir,
             myshellrc_path=myshellrc_path,
             rc_paths=rc_paths,
+            link_mode=link_mode,
         )
     return report
 

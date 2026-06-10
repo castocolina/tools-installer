@@ -330,6 +330,92 @@ def test_run_uninstall_aborts_when_declined(tmp_path: Path, monkeypatch: pytest.
     assert opt.exists()  # nothing removed
 
 
+def test_configure_path_centralized_writes_myshellrc_and_sources_both(tmp_path: Path):
+    from installer.app import configure_path
+    from installer.platform import Platform
+
+    console, _buf = _console()
+    myshellrc = tmp_path / ".myshellrc"
+    zrc, brc = tmp_path / ".zshrc", tmp_path / ".bashrc"
+    configure_path(
+        [],
+        console,
+        platform=Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        rc_paths=[zrc, brc],
+    )  # default link_mode="centralized"
+    assert "# >>> tools-installer path >>>" in myshellrc.read_text()
+    assert str(myshellrc) in zrc.read_text()
+    assert str(myshellrc) in brc.read_text()
+
+
+def test_configure_path_single_sources_only_the_given_rc(tmp_path: Path):
+    from installer.app import configure_path
+    from installer.platform import Platform
+
+    console, _buf = _console()
+    myshellrc = tmp_path / ".myshellrc"
+    zrc = tmp_path / ".zshrc"
+    configure_path(
+        [],
+        console,
+        platform=Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        rc_paths=[zrc],
+        link_mode="single",
+    )
+    assert myshellrc.exists()
+    assert str(myshellrc) in zrc.read_text()
+
+
+def test_configure_path_split_inlines_block_and_skips_myshellrc(tmp_path: Path):
+    from installer.app import configure_path
+    from installer.platform import Platform
+
+    console, _buf = _console()
+    myshellrc = tmp_path / ".myshellrc"
+    zrc, brc = tmp_path / ".zshrc", tmp_path / ".bashrc"
+    configure_path(
+        [],
+        console,
+        platform=Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        rc_paths=[zrc, brc],
+        link_mode="split",
+    )
+    assert not myshellrc.exists()  # no indirection file in split mode
+    for rc in (zrc, brc):
+        text = rc.read_text()
+        assert "# >>> tools-installer path >>>" in text  # block written inline
+        assert str(myshellrc) not in text  # and no source line
+
+
+def test_run_doctor_forwards_link_mode_split_when_fixing(tmp_path: Path):
+    from installer.app import run_doctor
+    from installer.platform import Platform
+
+    console, _buf = _console()
+    myshellrc = tmp_path / ".myshellrc"
+    zrc = tmp_path / ".zshrc"
+    run_doctor(
+        [],
+        console,
+        platform=Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
+        default_bin_dir=tmp_path / "bin",
+        path_value="",
+        exists=lambda _p: True,
+        myshellrc_path=myshellrc,
+        rc_paths=[zrc],
+        fix=True,
+        link_mode="split",
+    )
+    assert not myshellrc.exists()  # split mode forwarded -> inline, no ~/.myshellrc
+    assert "# >>> tools-installer path >>>" in zrc.read_text()
+
+
 def test_run_uninstall_nothing_to_remove_skips_confirm(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
