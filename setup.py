@@ -44,7 +44,43 @@ def _ask_confirm(message: str) -> bool:
     return bool(answer)
 
 
-def _run_doctor(console: Console) -> int:
+def _ask_select(message: str, choices: list[tuple[str, str]]) -> str:
+    answer = questionary.select(
+        message, choices=[questionary.Choice(title=title, value=value) for title, value in choices]
+    ).ask()
+    if answer is None:  # Ctrl+C / Ctrl+D
+        raise KeyboardInterrupt
+    return str(answer)
+
+
+def _resolve_link_mode(link_mode_option: str | None) -> str:
+    if link_mode_option is not None:
+        return link_mode_option
+    if not sys.stdin.isatty():
+        return "centralized"
+    return _ask_select(
+        "How should PATH be wired into your shells?",
+        [
+            ("Centralized: one ~/.myshellrc, sourced from .zshrc and .bashrc", "centralized"),
+            ("Single shell: source ~/.myshellrc from your current shell only", "single"),
+            ("Split: write PATH directly into each rc file (no ~/.myshellrc)", "split"),
+        ],
+    )
+
+
+def _rc_paths_for_mode(link_mode: str) -> list[Path]:
+    if link_mode != "single":
+        return _RC_PATHS
+    shell = os.environ.get("SHELL", "")
+    if shell.endswith("zsh"):
+        return [Path.home() / ".zshrc"]
+    if shell.endswith("bash"):
+        return [Path.home() / ".bashrc"]
+    return _RC_PATHS  # undetectable shell -> wire both
+
+
+def _run_doctor(console: Console, *, link_mode_option: str | None) -> int:
+    link_mode = _resolve_link_mode(link_mode_option)
     run_doctor(
         load_tools(_REGISTRY),
         console,
@@ -53,8 +89,9 @@ def _run_doctor(console: Console) -> int:
         path_value=os.environ.get("PATH", ""),
         exists=Path.is_dir,
         myshellrc_path=_MYSHELLRC,
-        rc_paths=_RC_PATHS,
+        rc_paths=_rc_paths_for_mode(link_mode),
         fix=True,
+        link_mode=link_mode,
     )
     return 0
 
@@ -75,7 +112,7 @@ def main(argv: list[str]) -> int:
     options = parse_args(argv)
     console = Console()
     if options.doctor:
-        return _run_doctor(console)
+        return _run_doctor(console, link_mode_option=options.link_mode)
     if options.uninstall:
         return _run_uninstall(console, assume_yes=options.yes)
     can_proceed = options.all or bool(options.categories) or sys.stdin.isatty()
@@ -92,13 +129,15 @@ def main(argv: list[str]) -> int:
     if summary is None:
         console.print("Aborted.")
         return 0
+    link_mode = _resolve_link_mode(options.link_mode)
     configure_path(
         tools,
         console,
         platform=platform,
         default_bin_dir=_DEFAULT_BIN_DIR,
         myshellrc_path=_MYSHELLRC,
-        rc_paths=_RC_PATHS,
+        rc_paths=_rc_paths_for_mode(link_mode),
+        link_mode=link_mode,
     )
     if summary.failed:
         render_troubleshooting(console)
