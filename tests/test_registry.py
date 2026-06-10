@@ -175,12 +175,44 @@ def test_charm_tools_use_suffix_arch_token_and_strip() -> None:
             assert method.params["strip"] == 1
 
 
-def test_registry_has_thirty_one_unique_tools() -> None:
-    ids = [t.id for t in load_tools(REGISTRY)]
+def test_raw_tools_have_no_strip_and_resolve_per_os() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    expected_linux_asset = {
+        "shfmt": "shfmt_v{ver}_linux_{arch.deb}",
+        "tealdeer": "tealdeer-linux-{arch.machine}-musl",
+        "fx": "fx_linux_{arch.deb}",
+        "dasel": "dasel_linux_{arch.deb}",
+    }
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    for tool_id, asset in expected_linux_asset.items():
+        method = resolve_methods(tools[tool_id], linux)[0]
+        assert method.params.get("raw") is True
+        assert "strip" not in method.params
+        assert method.params["asset"] == asset
+
+
+def test_tealdeer_cmd_is_tldr_with_per_os_naming() -> None:
+    tealdeer = next(t for t in load_tools(REGISTRY) if t.id == "tealdeer")
+    assert tealdeer.cmd == "tldr"
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
+    assert resolve_methods(tealdeer, macos)[0].params["asset"] == "tealdeer-macos-{arch.machine}"
+
+
+def test_gron_uses_tgz_with_trailing_version() -> None:
+    gron = next(t for t in load_tools(REGISTRY) if t.id == "gron")
+    linux = Platform(os="debian", arch="arm64", immutable=False, has_brew=True)
+    method = resolve_methods(gron, linux)[0]
+    assert method.params["asset"] == "gron-linux-{arch.deb}-{ver}.tgz"
+    assert method.params["strip"] == 0
+
+
+def test_registry_has_thirty_seven_unique_tools_and_cmds() -> None:
+    tools = load_tools(REGISTRY)
+    ids = [t.id for t in tools]
+    cmds = [t.cmd for t in tools]
+    assert len(ids) == 37
     assert len(ids) == len(set(ids))
-    assert len(ids) == 31
-    cmds = [t.cmd for t in load_tools(REGISTRY)]
-    assert len(cmds) == len(set(cmds))  # no two tools claim the same command
+    assert len(cmds) == len(set(cmds))
 
 
 def test_gitui_is_linux_download_and_brew_only_on_macos() -> None:

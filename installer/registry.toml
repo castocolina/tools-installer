@@ -785,3 +785,159 @@ strip = 1
 [[tool.method]]
 kind = "brew"
 formula = "miller"
+
+[[tool]]
+id = "shfmt"
+name = "shfmt"
+category = "dev"
+cmd = "shfmt"
+priority = "P2"
+audience = "both"
+desc = "A shell parser, formatter, and interpreter (sh/bash/mksh)"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "mvdan/sh"
+asset = "shfmt_v{ver}_linux_{arch.deb}"
+member = "shfmt"
+raw = true
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "mvdan/sh"
+asset = "shfmt_v{ver}_darwin_{arch.deb}"
+member = "shfmt"
+raw = true
+[[tool.method]]
+kind = "brew"
+formula = "shfmt"
+
+[[tool]]
+id = "tealdeer"
+name = "tealdeer"
+category = "dev"
+cmd = "tldr"
+priority = "P2"
+audience = "both"
+desc = "A fast tldr client — simplified, community-driven man pages"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "dbrgn/tealdeer"
+asset = "tealdeer-linux-{arch.machine}-musl"
+member = "tldr"
+raw = true
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "dbrgn/tealdeer"
+asset = "tealdeer-macos-{arch.machine}"
+member = "tldr"
+raw = true
+[[tool.method]]
+kind = "brew"
+formula = "tealdeer"
+
+[[tool]]
+id = "fx"
+name = "fx"
+category = "data"
+cmd = "fx"
+priority = "P2"
+audience = "both"
+desc = "A terminal JSON viewer and processor"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "antonmedv/fx"
+asset = "fx_linux_{arch.deb}"
+member = "fx"
+raw = true
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "antonmedv/fx"
+asset = "fx_darwin_{arch.deb}"
+member = "fx"
+raw = true
+[[tool.method]]
+kind = "brew"
+formula = "fx"
+
+[[tool]]
+id = "dasel"
+name = "dasel"
+category = "data"
+cmd = "dasel"
+priority = "P2"
+audience = "both"
+desc = "Query and modify JSON, YAML, TOML, XML, and CSV with one tool"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "TomWright/dasel"
+asset = "dasel_linux_{arch.deb}"
+member = "dasel"
+raw = true
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "TomWright/dasel"
+asset = "dasel_darwin_{arch.deb}"
+member = "dasel"
+raw = true
+[[tool.method]]
+kind = "brew"
+formula = "dasel"
+
+[[tool]]
+id = "gron"
+name = "gron"
+category = "data"
+cmd = "gron"
+priority = "P2"
+audience = "both"
+desc = "Make JSON greppable by flattening it into discrete assignments"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "tomnomnom/gron"
+asset = "gron-linux-{arch.deb}-{ver}.tgz"
+member = "gron"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "tomnomnom/gron"
+asset = "gron-darwin-{arch.deb}-{ver}.tgz"
+member = "gron"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "gron"
+
+[[tool]]
+id = "aichat"
+name = "aichat"
+category = "ai"
+cmd = "aichat"
+priority = "P1"
+audience = "ai"
+desc = "All-in-one LLM CLI tool (chat REPL, shell assistant, RAG)"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "sigoden/aichat"
+asset = "aichat-v{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
+member = "aichat"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "sigoden/aichat"
+asset = "aichat-v{ver}-{arch.machine}-apple-darwin.tar.gz"
+member = "aichat"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "aichat"
