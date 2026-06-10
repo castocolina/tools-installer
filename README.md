@@ -58,6 +58,11 @@ Download-based tools install without sudo: each is unpacked into `~/.local/opt/<
 with its binary symlinked into `~/.local/bin`. Where a tool ships no asset for your
 platform (e.g. an Intel-Mac or macOS-only gap), the install falls through to Homebrew.
 
+Archives may be `.tar.gz` or `.zip` (a method sets `archive = "zip"`); both are
+downloaded to a temp file and extracted into `~/.local/opt/<tool>/`. `make uninstall`
+reverses this — it removes those opt dirs, the matching `~/.local/bin` symlinks, and
+the managed `~/.myshellrc` block, leaving Homebrew/native/uv installs untouched.
+
 ## Quick start
 
 Install the AI dev environment with one command:
@@ -160,7 +165,7 @@ workflow has a `make` target so local runs and CI are identical:
 | `make validate`  | pre-commit gates: `ruff check`, `ruff format --check`, `pyright`, `bandit`, `vulture`, `shellcheck` |
 | `make test`      | `pytest` with coverage                                          |
 | `make build`     | build the distributable                                         |
-| `make uninstall` | remove installed artifacts                                      |
+| `make uninstall` | remove userspace artifacts: `~/.local/opt/*` dirs, `~/.local/bin` symlinks, and the managed `~/.myshellrc` PATH block (previews, then asks to confirm) |
 
 Quality gates are not optional and must not be bypassed (`# noqa`, `# type: ignore`,
 skipped tests, lowered coverage floors). The full contributor rules live in

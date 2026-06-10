@@ -13,7 +13,7 @@ from pathlib import Path
 import questionary
 from rich.console import Console
 
-from installer.app import configure_path, run_doctor, run_wizard
+from installer.app import configure_path, run_doctor, run_uninstall, run_wizard
 from installer.cli import parse_args
 from installer.model import load_tools
 from installer.platform import detect
@@ -59,11 +59,25 @@ def _run_doctor(console: Console) -> int:
     return 0
 
 
+def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
+    confirm = (lambda _message: True) if assume_yes else _ask_confirm
+    run_uninstall(
+        load_tools(_REGISTRY),
+        console,
+        default_bin_dir=_DEFAULT_BIN_DIR,
+        myshellrc_path=_MYSHELLRC,
+        confirm=confirm,
+    )
+    return 0
+
+
 def main(argv: list[str]) -> int:
     options = parse_args(argv)
     console = Console()
     if options.doctor:
         return _run_doctor(console)
+    if options.uninstall:
+        return _run_uninstall(console, assume_yes=options.yes)
     can_proceed = options.all or bool(options.categories) or sys.stdin.isatty()
     if not can_proceed:
         console.print(

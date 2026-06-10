@@ -19,8 +19,8 @@ run: setup  ## Alias for `setup`
 doctor:  ## Audit PATH and wire ~/.myshellrc + shell rc files
 	uv run setup.py --doctor
 
-uninstall:  ## Remove installed artifacts (implemented in a later plan)
-	@echo "uninstall: not yet implemented"
+uninstall:  ## Remove userspace artifacts: ~/.local/opt/* dirs, ~/.local/bin symlinks, and the managed ~/.myshellrc PATH block (previews, then asks to confirm)
+	uv run setup.py --uninstall
 
 validate:  ## Lint, format-check, type-check, security, dead-code
 	# setup.py (composition root) is lint/format-gated but stays out of pyright/coverage:
