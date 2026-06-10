@@ -255,3 +255,40 @@ def test_opt_dir_creation_failure_raises_executor_error(
     )
     with pytest.raises(ExecutorError, match="opt dir"):
         install_download(method, _ctx(runner))
+
+
+def test_github_release_zip_uses_unzip_and_ignores_strip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    calls, runner = _record()
+    bin_dir = tmp_path / "bin"
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "denoland/deno",
+            "asset": "deno-{arch.machine}-unknown-linux-gnu.zip",
+            "member": "deno",
+            "archive": "zip",
+            "strip": 3,  # must be ignored for zip
+            "bin_dir": str(bin_dir),
+        },
+    )
+    install_download(method, _ctx(runner, tmp_version="v2.1.4"))
+    opt = tmp_path / ".local" / "opt" / "deno"
+    binary = opt / "deno"
+    link = bin_dir / "deno"
+    url = (
+        "https://github.com/denoland/deno/releases/download/"
+        "v2.1.4/deno-x86_64-unknown-linux-gnu.zip"
+    )
+    extract = (
+        "tmp=$(mktemp) && trap 'rm -f \"$tmp\"' EXIT"
+        f' && curl -fsSL -o "$tmp" -- {shlex.quote(url)}'
+        f' && unzip -q -o "$tmp" -d {shlex.quote(str(opt))}'
+    )
+    assert calls == [
+        ["sh", "-c", extract],
+        ["chmod", "+x", str(binary)],
+        ["ln", "-sf", str(binary), str(link)],
+    ]

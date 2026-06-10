@@ -85,11 +85,18 @@ def install_download(method: Method, ctx: ExecContext) -> None:
         raise ExecutorError(f"cannot create opt dir: {exc}") from exc
     binary = opt / member
     quoted_opt = shlex.quote(str(opt))
-    extract = (
-        "tmp=$(mktemp) && trap 'rm -f \"$tmp\"' EXIT"
-        f' && curl -fsSL -o "$tmp" -- {quoted_url}'
-        f' && tar -xzf "$tmp" -C {quoted_opt} --strip-components={strip}'
-    )
+    if _opt_str(method, "archive") == "zip":
+        extract = (
+            "tmp=$(mktemp) && trap 'rm -f \"$tmp\"' EXIT"
+            f' && curl -fsSL -o "$tmp" -- {quoted_url}'
+            f' && unzip -q -o "$tmp" -d {quoted_opt}'
+        )
+    else:
+        extract = (
+            "tmp=$(mktemp) && trap 'rm -f \"$tmp\"' EXIT"
+            f' && curl -fsSL -o "$tmp" -- {quoted_url}'
+            f' && tar -xzf "$tmp" -C {quoted_opt} --strip-components={strip}'
+        )
     ctx.runner(["sh", "-c", extract])
     ctx.runner(["chmod", "+x", str(binary)])
     ctx.runner(["ln", "-sf", str(binary), str(link)])
