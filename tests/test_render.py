@@ -104,3 +104,21 @@ def test_render_uninstall_reports_nothing_to_do() -> None:
     console, buf = _console()
     render_uninstall([], console)
     assert "Nothing to uninstall" in buf.getvalue()
+
+
+def test_render_rc_duplicates_lists_files_and_lines():
+    from installer.render import render_rc_duplicates
+
+    console = Console(record=True, width=100)
+    render_rc_duplicates({Path("/h/.zshrc"): ['export PATH="$BUN_INSTALL/bin:$PATH"']}, console)
+    text = console.export_text()
+    assert "/h/.zshrc" in text
+    assert "BUN_INSTALL" in text
+
+
+def test_render_rc_duplicates_says_clean_when_empty():
+    from installer.render import render_rc_duplicates
+
+    console = Console(record=True, width=100)
+    render_rc_duplicates({}, console)
+    assert "No duplicate" in console.export_text()

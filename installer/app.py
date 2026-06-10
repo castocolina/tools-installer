@@ -1,6 +1,6 @@
 """The interactive wizard flow: select -> audit -> confirm -> install -> summarize."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from rich.console import Console
@@ -12,7 +12,14 @@ from installer.engine import install_tool
 from installer.model import Tool
 from installer.platform import Platform
 from installer.prompt import Prompter
-from installer.render import render_audit, render_doctor, render_summary, render_uninstall
+from installer.rcclean import find_duplicate_path_lines, strip_lines
+from installer.render import (
+    render_audit,
+    render_doctor,
+    render_rc_duplicates,
+    render_summary,
+    render_uninstall,
+)
 from installer.run import Runner, run_command
 from installer.selection import category_choices, select_tools, tool_choices
 from installer.session import Install, Summary, order_for_install, run_installs, summarize
@@ -130,6 +137,39 @@ def run_doctor(
             link_mode=link_mode,
         )
     return report
+
+
+def clean_rc_duplicates(
+    rc_paths: list[Path],
+    managed_dirs: set[Path],
+    env: Mapping[str, str],
+    console: Console,
+    *,
+    confirm: Callable[[str], bool],
+) -> dict[Path, list[str]]:
+    """Preview duplicate PATH lines in each rc file, confirm, then strip them.
+
+    Returns the removed lines per file ({} if none found or the user declined).
+    """
+    found: dict[Path, list[str]] = {}
+    indices_by_file: dict[Path, list[int]] = {}
+    for rc_path in rc_paths:
+        if not rc_path.exists():
+            continue
+        text = rc_path.read_text()
+        indices = find_duplicate_path_lines(text, managed_dirs, env)
+        if indices:
+            lines = text.split("\n")
+            found[rc_path] = [lines[index] for index in indices]
+            indices_by_file[rc_path] = indices
+    render_rc_duplicates(found, console)
+    if not found:
+        return {}
+    if not confirm("Remove these duplicate PATH lines?"):
+        return {}
+    for rc_path, indices in indices_by_file.items():
+        rc_path.write_text(strip_lines(rc_path.read_text(), indices))
+    return found
 
 
 def run_uninstall(

@@ -56,6 +56,18 @@ def render_uninstall(paths: list[Path], console: Console) -> None:
         console.print(f"  {path}")
 
 
+def render_rc_duplicates(found: dict[Path, list[str]], console: Console) -> None:
+    """Preview duplicate PATH lines found per rc file (dry run)."""
+    if not found:
+        console.print("No duplicate PATH lines found in your shell rc files.")
+        return
+    console.print("These PATH lines duplicate directories already managed; they can be removed:")
+    for rc_path, lines in found.items():
+        console.print(f"  {rc_path}:")
+        for line in lines:
+            console.print(f"    {line}")
+
+
 def render_doctor(report: DoctorReport, console: Console) -> None:
     """Print the PATH audit; on any problem, also print the troubleshooting link."""
     if not has_problems(report):

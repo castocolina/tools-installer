@@ -416,6 +416,77 @@ def test_run_doctor_forwards_link_mode_split_when_fixing(tmp_path: Path):
     assert "# >>> tools-installer path >>>" in zrc.read_text()
 
 
+def test_clean_rc_duplicates_removes_after_confirm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from installer.app import clean_rc_duplicates
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rc = tmp_path / ".zshrc"
+    rc.write_text(
+        'export BUN_INSTALL="$HOME/.bun"\nexport PATH="$BUN_INSTALL/bin:$PATH"\nalias ll="ls -la"\n'
+    )
+    console, _buf = _console()
+    removed = clean_rc_duplicates(
+        [rc],
+        {tmp_path / ".bun" / "bin"},
+        {"HOME": str(tmp_path)},
+        console,
+        confirm=lambda _m: True,
+    )
+    assert removed == {rc: ['export PATH="$BUN_INSTALL/bin:$PATH"']}
+    text = rc.read_text()
+    assert 'export PATH="$BUN_INSTALL/bin:$PATH"' not in text
+    assert 'export BUN_INSTALL="$HOME/.bun"' in text  # assignment kept
+    assert 'alias ll="ls -la"' in text  # unrelated content kept
+
+
+def test_clean_rc_duplicates_declined_changes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from installer.app import clean_rc_duplicates
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rc = tmp_path / ".zshrc"
+    original = 'export PATH="$HOME/.bun/bin:$PATH"\n'
+    rc.write_text(original)
+    console, _buf = _console()
+    removed = clean_rc_duplicates(
+        [rc],
+        {tmp_path / ".bun" / "bin"},
+        {"HOME": str(tmp_path)},
+        console,
+        confirm=lambda _m: False,
+    )
+    assert removed == {}
+    assert rc.read_text() == original
+
+
+def test_clean_rc_duplicates_nothing_to_do_skips_confirm(tmp_path: Path):
+    from installer.app import clean_rc_duplicates
+
+    rc = tmp_path / ".zshrc"
+    rc.write_text('alias ll="ls -la"\n')
+    console, _buf = _console()
+
+    def fail_confirm(_message: str) -> bool:
+        raise AssertionError("confirm must not be called when there is nothing to remove")
+
+    removed = clean_rc_duplicates(
+        [rc], {tmp_path / ".bun" / "bin"}, {}, console, confirm=fail_confirm
+    )
+    assert removed == {}
+
+
+def test_clean_rc_duplicates_skips_absent_rc_files(tmp_path: Path):
+    from installer.app import clean_rc_duplicates
+
+    missing = tmp_path / ".bashrc"  # never created
+    console, _buf = _console()
+    removed = clean_rc_duplicates(
+        [missing], {tmp_path / ".bun" / "bin"}, {}, console, confirm=lambda _m: True
+    )
+    assert removed == {}
+
+
 def test_run_uninstall_nothing_to_remove_skips_confirm(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
