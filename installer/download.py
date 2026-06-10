@@ -2,10 +2,11 @@
 
 import shlex
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from installer.assets import arch_tokens, render_asset
 from installer.executors import ExecutorError, require_str
-from installer.locations import bin_dir, ensure_dir
+from installer.locations import bin_dir, ensure_dir, opt_dir
 from installer.model import Method
 from installer.platform import Platform
 from installer.run import Runner
@@ -26,6 +27,14 @@ def _opt_str(method: Method, key: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _opt_int(method: Method, key: str, default: int) -> int:
+    value = method.params.get(key)
+    # bool is an int subclass; reject it so `strip = true` can't masquerade as strip=1.
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    return value
+
+
 def _github_release_url(method: Method, ctx: ExecContext) -> str:
     repo = require_str(method, "repo")
     template = require_str(method, "asset")
@@ -39,7 +48,14 @@ def _github_release_url(method: Method, ctx: ExecContext) -> str:
 
 
 def install_download(method: Method, ctx: ExecContext) -> None:
-    """Download a release archive/binary into the bin dir and make it executable."""
+    """Install a release binary into ~/.local/bin (userspace, no sudo).
+
+    Raw single-file assets are written straight into the bin dir. Archives are
+    unpacked into ~/.local/opt/<binary>/ (stripping `strip` leading path
+    components) and the binary is symlinked into the bin dir — the PRD's
+    opt+symlink location policy, which also handles binaries nested under a
+    versioned directory inside the archive.
+    """
     if method.kind == "github_release":
         url = _github_release_url(method, ctx)
     elif method.kind == "tarball":
@@ -48,23 +64,33 @@ def install_download(method: Method, ctx: ExecContext) -> None:
         raise ExecutorError(f"no download executor for kind '{method.kind}'")
 
     member = require_str(method, "member")
+    binname = PurePosixPath(member).name
     try:
         dest = ensure_dir(bin_dir(_opt_str(method, "bin_dir")))
     except OSError as exc:
         raise ExecutorError(f"cannot create bin dir: {exc}") from exc
-    target = dest / member
+    link = dest / binname
     quoted_url = shlex.quote(url)
-    quoted_target = shlex.quote(str(target))
-    quoted_dest = shlex.quote(str(dest))
-    quoted_member = shlex.quote(member)
+
     if method.params.get("raw") is True:
-        ctx.runner(["sh", "-c", f"curl -fsSL -o {quoted_target} -- {quoted_url}"])
-    else:
-        ctx.runner(
-            [
-                "sh",
-                "-c",
-                f"curl -fsSL -- {quoted_url} | tar -xz -C {quoted_dest} -- {quoted_member}",
-            ]
-        )
-    ctx.runner(["chmod", "+x", str(target)])
+        quoted_link = shlex.quote(str(link))
+        ctx.runner(["sh", "-c", f"curl -fsSL -o {quoted_link} -- {quoted_url}"])
+        ctx.runner(["chmod", "+x", str(link)])
+        return
+
+    strip = _opt_int(method, "strip", 0)
+    try:
+        opt = ensure_dir(opt_dir(binname))
+    except OSError as exc:
+        raise ExecutorError(f"cannot create opt dir: {exc}") from exc
+    binary = opt / member
+    quoted_opt = shlex.quote(str(opt))
+    ctx.runner(
+        [
+            "sh",
+            "-c",
+            f"curl -fsSL -- {quoted_url} | tar -xz -C {quoted_opt} --strip-components={strip}",
+        ]
+    )
+    ctx.runner(["chmod", "+x", str(binary)])
+    ctx.runner(["ln", "-sf", str(binary), str(link)])

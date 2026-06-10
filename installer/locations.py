@@ -11,6 +11,11 @@ def bin_dir(declared: str | None) -> Path:
     return Path.home() / ".local" / "bin"
 
 
+def opt_dir(name: str) -> Path:
+    """Resolve the userspace opt dir for an unpacked app: ~/.local/opt/<name>."""
+    return Path.home() / ".local" / "opt" / name
+
+
 def ensure_dir(directory: Path) -> Path:
     """Create the directory (and parents) if missing. Returns it."""
     directory.mkdir(parents=True, exist_ok=True)

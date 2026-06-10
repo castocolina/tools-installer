@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from installer.locations import bin_dir, ensure_dir, prepend_path
+from installer.locations import bin_dir, ensure_dir, opt_dir, prepend_path
 
 
 def test_bin_dir_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
@@ -52,3 +52,7 @@ def test_ensure_dir_idempotent(tmp_path: Path):
     ensure_dir(target)
     assert ensure_dir(target) == target  # second call must not raise
     assert target.is_dir()
+
+
+def test_opt_dir_is_under_local_opt():
+    assert opt_dir("fd") == Path.home() / ".local" / "opt" / "fd"

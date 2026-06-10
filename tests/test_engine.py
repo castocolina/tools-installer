@@ -114,6 +114,8 @@ def test_all_methods_fail_returns_failed(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_github_release_routes_to_download(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
     def fake_not_installed(tool: Tool) -> bool:
         return False
 
@@ -142,10 +144,12 @@ def test_github_release_routes_to_download(monkeypatch: pytest.MonkeyPatch, tmp_
         runner=runner,
         resolve_tag=resolve_tag,
     )
+    opt = tmp_path / ".local" / "opt" / "rg"
     assert outcome.status == "installed"
     assert outcome.method_kind == "github_release"
     assert calls[0][0] == "sh" and "rg-14.1.0-x86_64.tar.gz" in calls[0][2]
-    assert calls[1] == ["chmod", "+x", str(bin_dir / "rg")]
+    assert calls[1] == ["chmod", "+x", str(opt / "rg")]
+    assert calls[2] == ["ln", "-sf", str(opt / "rg"), str(bin_dir / "rg")]
 
 
 def test_download_failure_is_caught_as_failed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
