@@ -33,6 +33,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "BurntSushi/ripgrep"
 asset = "ripgrep-{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
+checksum = "{asset}.sha256"
 member = "rg"
 strip = 1
 [[tool.method]]
@@ -40,6 +41,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "BurntSushi/ripgrep"
 asset = "ripgrep-{ver}-{arch.machine}-apple-darwin.tar.gz"
+checksum = "{asset}.sha256"
 member = "rg"
 strip = 1
 [[tool.method]]
@@ -363,6 +365,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "starship/starship"
 asset = "starship-{arch.machine}-unknown-linux-musl.tar.gz"
+checksum = "{asset}.sha256"
 member = "starship"
 strip = 0
 [[tool.method]]
@@ -370,6 +373,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "starship/starship"
 asset = "starship-{arch.machine}-apple-darwin.tar.gz"
+checksum = "{asset}.sha256"
 member = "starship"
 strip = 0
 [[tool.method]]
@@ -441,6 +445,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "astral-sh/ruff"
 asset = "ruff-{arch.machine}-unknown-linux-musl.tar.gz"
+checksum = "{asset}.sha256"
 member = "ruff"
 strip = 1
 [[tool.method]]
@@ -448,6 +453,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "astral-sh/ruff"
 asset = "ruff-{arch.machine}-apple-darwin.tar.gz"
+checksum = "{asset}.sha256"
 member = "ruff"
 strip = 1
 [[tool.method]]
@@ -825,6 +831,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "dbrgn/tealdeer"
 asset = "tealdeer-linux-{arch.machine}-musl"
+checksum = "{asset}.sha256"
 member = "tldr"
 raw = true
 [[tool.method]]
@@ -832,6 +839,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "dbrgn/tealdeer"
 asset = "tealdeer-macos-{arch.machine}"
+checksum = "{asset}.sha256"
 member = "tldr"
 raw = true
 [[tool.method]]
@@ -955,6 +963,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "denoland/deno"
 asset = "deno-{arch.machine}-unknown-linux-gnu.zip"
+checksum = "{asset}.sha256sum"
 member = "deno"
 archive = "zip"
 [[tool.method]]
@@ -962,6 +971,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "denoland/deno"
 asset = "deno-{arch.machine}-apple-darwin.zip"
+checksum = "{asset}.sha256sum"
 member = "deno"
 archive = "zip"
 [[tool.method]]

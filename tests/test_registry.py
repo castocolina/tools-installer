@@ -340,6 +340,20 @@ def test_checksum_param_only_on_github_release_methods() -> None:
                 assert method.kind == "github_release", tool.id
 
 
+SIDECAR_VERIFIED = {"rg", "starship", "ruff", "deno", "tealdeer"}
+
+
+def test_sidecar_verified_tools_declare_checksums() -> None:
+    for tool in load_tools(REGISTRY):
+        if tool.id not in SIDECAR_VERIFIED:
+            continue
+        gh_methods = [m for m in tool.methods if m.kind == "github_release"]
+        assert gh_methods, tool.id
+        for method in gh_methods:
+            assert "checksum" in method.params, f"{tool.id}: missing checksum param"
+            assert "{asset}" in str(method.params["checksum"]), tool.id
+
+
 def test_gitleaks_and_vale_use_new_arch_tokens() -> None:
     tools = {t.id: t for t in load_tools(REGISTRY)}
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
