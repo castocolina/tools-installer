@@ -13,6 +13,7 @@ METHOD_KINDS = (
     "pacman",
     "rpm_ostree",
     "brew",
+    "cask",
 )
 
 

@@ -1,11 +1,12 @@
 """Per-method-kind executors: build an argv and hand it to the injected runner.
 
-Only command-based kinds live here (script, native package managers, brew).
+Only command-based kinds live here (script, native package managers, brew, cask).
 Download-based kinds (github_release, tarball) live in `installer.download`.
 """
 
 import shlex
 from collections.abc import Callable
+from pathlib import Path
 from typing import cast
 
 from installer.model import Method
@@ -68,12 +69,20 @@ def _brew(method: Method, runner: Runner) -> None:
     runner(["brew", "install", require_str(method, "formula")])
 
 
+def _cask(method: Method, runner: Runner) -> None:
+    # --appdir keeps the bundle in userspace; brew's default appdir is /Applications,
+    # which the PRD forbids (corporate machines without sudo).
+    appdir = Path.home() / "Applications"
+    runner(["brew", "install", "--cask", f"--appdir={appdir}", require_str(method, "cask")])
+
+
 EXECUTORS: dict[str, Callable[[Method, Runner], None]] = {
     "script": _script,
     "dnf": _dnf,
     "apt": _apt,
     "pacman": _pacman,
     "brew": _brew,
+    "cask": _cask,
 }
 
 

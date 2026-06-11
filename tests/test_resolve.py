@@ -104,3 +104,14 @@ def test_os_and_arch_filters_compose() -> None:
     assert resolve_methods(tool, arm_mac) == [method]
     assert resolve_methods(tool, arm_linux) == []
     assert resolve_methods(tool, intel_mac) == []
+
+
+def test_cask_requires_macos_and_brew() -> None:
+    cask = Method(kind="cask", params={"cask": "x"})
+    tool = Tool(id="t", name="t", category="c", cmd="t", methods=(cask,))
+    mac_brew = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    mac_no_brew = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
+    linux_brew = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    assert resolve_methods(tool, mac_brew) == [cask]
+    assert resolve_methods(tool, mac_no_brew) == []
+    assert resolve_methods(tool, linux_brew) == []

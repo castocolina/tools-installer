@@ -4,7 +4,7 @@ from installer.model import Method, Tool
 from installer.platform import Platform
 
 # Lower rank is tried first. The default ladder:
-#   1) official script  2) userspace download  3) native pkg manager  4) brew
+#   1) official script  2) userspace download  3) native pkg manager  4) brew/cask
 _RANK = {
     "script": 10,
     "github_release": 20,
@@ -14,6 +14,7 @@ _RANK = {
     "pacman": 30,
     "rpm_ostree": 35,
     "brew": 40,
+    "cask": 40,
 }
 
 # Which OS each native package manager belongs to.
@@ -34,6 +35,9 @@ def _applies(method: Method, platform: Platform) -> bool:
         return True
     if kind == "brew":
         return platform.has_brew
+    if kind == "cask":
+        # Casks are a macOS-only brew concept; --appdir keeps them in ~/Applications.
+        return platform.os == "macos" and platform.has_brew
     if kind == "rpm_ostree":
         # Native installer for immutable Fedora, but skipped by default: it
         # requires a reboot and breaks atomicity. Userspace/brew are preferred.

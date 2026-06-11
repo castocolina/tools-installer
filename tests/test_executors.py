@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from installer.executors import EXECUTORS, ExecutorError, execute
@@ -73,7 +75,7 @@ def test_unsupported_kind_raises():
 
 
 def test_every_command_kind_has_an_executor():
-    assert set(EXECUTORS) == {"script", "dnf", "apt", "pacman", "brew"}
+    assert set(EXECUTORS) == {"script", "dnf", "apt", "pacman", "brew", "cask"}
 
 
 def test_script_passes_env_assignments_to_the_shell() -> None:
@@ -99,3 +101,21 @@ def test_script_without_env_is_unchanged() -> None:
     method = Method(kind="script", params={"url": "https://example.test/i.sh"})
     execute(method, runner)
     assert calls == [["sh", "-c", "curl -fsSL -- https://example.test/i.sh | sh"]]
+
+
+def test_cask_executor_installs_into_user_applications(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    calls, runner = _record()
+    execute(Method(kind="cask", params={"cask": "sublime-text"}), runner)
+    assert calls == [
+        ["brew", "install", "--cask", f"--appdir={tmp_path / 'Applications'}", "sublime-text"]
+    ]
+
+
+def test_cask_missing_param_raises():
+    calls, runner = _record()
+    with pytest.raises(ExecutorError, match="cask"):
+        execute(Method(kind="cask", params={}), runner)
+    assert calls == []
