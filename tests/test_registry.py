@@ -141,14 +141,35 @@ def test_download_tools_resolve_github_release_then_brew_on_macos() -> None:
         assert kinds == ["github_release", "brew"], tool_id
 
 
+# GUI apps with no Linux install method yet (VS Code tar.gz / Sublime tarball
+# are a future batch). Every other tool must resolve on every platform.
+MACOS_ONLY = {"vscode", "sublime"}
+
+
 def test_every_tool_resolves_at_least_one_method_on_each_platform() -> None:
     # A tool that resolves to nothing on a supported platform is silently
     # uninstallable there; this guards against an os/method misconfiguration.
     tools = load_tools(REGISTRY)
     for platform_os in ("debian", "arch", "fedora", "macos"):
-        platform = Platform(os=platform_os, arch="amd64", immutable=False, has_brew=True)
-        stranded = [t.id for t in tools if not resolve_methods(t, platform)]
-        assert not stranded, f"no install method on {platform_os}: {stranded}"
+        for arch in ("amd64", "arm64"):
+            platform = Platform(os=platform_os, arch=arch, immutable=False, has_brew=True)
+            allowed: set[str] = MACOS_ONLY if platform_os != "macos" else set()
+            stranded = [
+                t.id for t in tools if not resolve_methods(t, platform) and t.id not in allowed
+            ]
+            assert not stranded, f"no install method on {platform_os}/{arch}: {stranded}"
+
+
+def test_macos_only_allowlist_stays_honest() -> None:
+    # If a Linux method is ever added to one of these, it must leave the allowlist.
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    for tool_id in sorted(MACOS_ONLY):
+        assert tool_id in tools, f"MACOS_ONLY entry '{tool_id}' is not in the registry"
+        for platform_os in ("debian", "arch", "fedora"):
+            platform = Platform(os=platform_os, arch="amd64", immutable=False, has_brew=True)
+            assert resolve_methods(tools[tool_id], platform) == [], (
+                f"'{tool_id}' unexpectedly resolves on {platform_os}"
+            )
 
 
 def test_bottom_and_difftastic_cmd_differs_from_member_binary() -> None:
@@ -206,11 +227,11 @@ def test_gron_uses_tgz_with_trailing_version() -> None:
     assert method.params["strip"] == 0
 
 
-def test_registry_has_forty_seven_unique_tools_and_cmds() -> None:
+def test_registry_has_forty_nine_unique_tools_and_cmds() -> None:
     tools = load_tools(REGISTRY)
     ids = [t.id for t in tools]
     cmds = [t.cmd for t in tools]
-    assert len(ids) == 47
+    assert len(ids) == 49
     assert len(ids) == len(set(ids))
     assert len(cmds) == len(set(cmds))
 
@@ -399,3 +420,43 @@ def test_gitleaks_and_vale_use_new_arch_tokens() -> None:
     assert resolve_methods(tools["vale"], macos)[0].params["asset"] == (
         "vale_{ver}_macOS_{arch.bits}.tar.gz"
     )
+
+
+def test_vscode_is_arch_split_app_with_cask_fallback() -> None:
+    vscode = next(t for t in load_tools(REGISTRY) if t.id == "vscode")
+    assert vscode.cmd == "code"
+    assert vscode.category == "editor"
+    arm = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    intel = Platform(os="macos", arch="amd64", immutable=False, has_brew=True)
+    arm_methods = resolve_methods(vscode, arm)
+    assert [m.kind for m in arm_methods] == ["app", "cask"]
+    assert (
+        arm_methods[0].params["url"]
+        == "https://update.code.visualstudio.com/latest/darwin-arm64/stable"
+    )
+    assert arm_methods[0].params["app"] == "Visual Studio Code.app"
+    assert arm_methods[0].params["cli"] == "Contents/Resources/app/bin/code"
+    assert arm_methods[1].params["cask"] == "visual-studio-code"
+    intel_methods = resolve_methods(vscode, intel)
+    assert [m.kind for m in intel_methods] == ["app", "cask"]
+    assert (
+        intel_methods[0].params["url"]
+        == "https://update.code.visualstudio.com/latest/darwin/stable"
+    )
+
+
+def test_sublime_is_single_universal_app_with_cask_fallback() -> None:
+    sublime = next(t for t in load_tools(REGISTRY) if t.id == "sublime")
+    assert sublime.cmd == "subl"
+    assert sublime.category == "editor"
+    for arch in ("arm64", "amd64"):  # one universal zip serves both
+        mac = Platform(os="macos", arch=arch, immutable=False, has_brew=True)
+        methods = resolve_methods(sublime, mac)
+        assert [m.kind for m in methods] == ["app", "cask"]
+        assert (
+            methods[0].params["url"]
+            == "https://download.sublimetext.com/sublime_text_build_4200_mac.zip"
+        )
+        assert methods[0].params["app"] == "Sublime Text.app"
+        assert methods[0].params["cli"] == "Contents/SharedSupport/bin/subl"
+        assert methods[1].params["cask"] == "sublime-text"

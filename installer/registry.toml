@@ -1221,3 +1221,53 @@ archive = "zip"
 [[tool.method]]
 kind = "brew"
 formula = "broot"
+
+[[tool]]
+id = "vscode"
+name = "Visual Studio Code"
+category = "editor"
+cmd = "code"
+priority = "P3"
+audience = "both"
+desc = "Microsoft's extensible code editor"
+# Arch-split `latest` aliases (each 302s to the current build's CDN zip); the
+# universal zip is ~120 MB larger per download and ~2x on disk -> not used.
+[[tool.method]]
+kind = "app"
+os = ["macos"]
+arch = ["arm64"]
+url = "https://update.code.visualstudio.com/latest/darwin-arm64/stable"
+app = "Visual Studio Code.app"
+cli = "Contents/Resources/app/bin/code"
+[[tool.method]]
+kind = "app"
+os = ["macos"]
+arch = ["amd64"]
+url = "https://update.code.visualstudio.com/latest/darwin/stable"
+app = "Visual Studio Code.app"
+cli = "Contents/Resources/app/bin/code"
+[[tool.method]]
+kind = "cask"
+os = ["macos"]
+cask = "visual-studio-code"
+
+[[tool]]
+id = "sublime"
+name = "Sublime Text"
+category = "editor"
+cmd = "subl"
+priority = "P3"
+audience = "both"
+desc = "Fast proprietary text editor"
+# One universal mac zip. The build number is pinned (no `latest` URL exists);
+# the app self-updates after first launch, so the pin only affects first install.
+[[tool.method]]
+kind = "app"
+os = ["macos"]
+url = "https://download.sublimetext.com/sublime_text_build_4200_mac.zip"
+app = "Sublime Text.app"
+cli = "Contents/SharedSupport/bin/subl"
+[[tool.method]]
+kind = "cask"
+os = ["macos"]
+cask = "sublime-text"
