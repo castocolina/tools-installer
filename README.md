@@ -38,23 +38,25 @@ curl -fsSL https://raw.githubusercontent.com/castocolina/tools-installer/main/in
 
 The catalog is seeded and growing toward the full set. Today it installs:
 
-| Category    | Tools                                              |
-| ----------- | -------------------------------------------------- |
-| pkg-mgr     | `uv`, Homebrew (opt-in), `pnpm`                     |
-| search      | `ripgrep` (rg), `fd`, `fzf`, `ast-grep`             |
-| view        | `bat`, `eza`, `glow`, `hexyl`                        |
-| git         | `delta`, `lazygit`, `gh`, `difftastic` (difft), `gitui` |
-| docker      | `lazydocker`, `dive`                                |
-| data        | `jq`, `yq`, `miller` (mlr), `fx`, `dasel`, `gron`, `jless` |
-| text        | `sd`                                                |
-| nav         | `zoxide`, `broot`                                   |
-| runtime     | `deno`, `bun`, `fnm`                                |
-| shell       | `starship`, `direnv`, `gum`                         |
-| dev         | `just`, `ruff`, `hyperfine`, `shfmt`, `tealdeer` (tldr), `vale` |
-| sysinfo     | `bottom` (btm), `dust`, `duf`, `procs`              |
-| security    | `gitleaks`                                          |
-| net         | `xh`                                                |
-| ai          | `aichat`                                            |
+| Category    | Tools                                                                         |
+| ----------- | ----------------------------------------------------------------------------- |
+| pkg-mgr     | `uv`, Homebrew (opt-in), `pnpm`                                               |
+| search      | `ripgrep` (rg) ✓, `fd`, `fzf` ✓, `ast-grep`                                  |
+| view        | `bat`, `eza`, `glow` ✓, `hexyl`                                               |
+| git         | `delta`, `lazygit` ✓, `gh` ✓, `difftastic` (difft), `gitui`                  |
+| docker      | `lazydocker` ✓, `dive` ✓                                                      |
+| data        | `jq`, `yq`, `miller` (mlr) ✓, `fx`, `dasel`, `gron`, `jless`                 |
+| text        | `sd`                                                                          |
+| nav         | `zoxide`, `broot`                                                             |
+| runtime     | `deno` ✓, `bun`, `fnm`                                                        |
+| shell       | `starship` ✓, `direnv`, `gum` ✓                                               |
+| dev         | `just` ✓, `ruff` ✓, `hyperfine`, `shfmt`, `tealdeer` (tldr) ✓, `vale` ✓     |
+| sysinfo     | `bottom` (btm), `dust`, `duf` ✓, `procs`                                     |
+| security    | `gitleaks` ✓                                                                  |
+| net         | `xh`                                                                          |
+| ai          | `aichat`                                                                      |
+
+`✓` = downloads are sha256-verified against the release's published checksums.
 
 Download-based tools install without sudo: each is unpacked into `~/.local/opt/<tool>/`
 with its binary symlinked into `~/.local/bin`. Where a tool ships no asset for your
@@ -122,6 +124,9 @@ ladder** (each tool can override it in the registry):
    (`uv`, `volta`, …).
 2. **tarball / GitHub release** unpacked into `~/.local/opt/<tool>/` (no sudo) with the
    binary symlinked into `~/.local/bin`; single-file release binaries land in `~/.local/bin` directly.
+   Where the release publishes sha256 checksums, the download is verified before
+   extraction; a mismatch stops that tool's install (interactively you may retry,
+   skip, or fall back — under `--yes` it hard-fails).
 3. **Native package manager** — `dnf` · `apt` · `pacman` · `rpm-ostree`.
 4. **Homebrew** — last resort.
 
