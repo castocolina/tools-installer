@@ -354,6 +354,32 @@ def test_sidecar_verified_tools_declare_checksums() -> None:
             assert "{asset}" in str(method.params["checksum"]), tool.id
 
 
+CHECKSUM_FILE_VERIFIED = {
+    "fzf",
+    "lazygit",
+    "gh",
+    "just",
+    "gum",
+    "glow",
+    "lazydocker",
+    "dive",
+    "miller",
+    "gitleaks",
+    "vale",
+    "duf",
+}
+
+
+def test_checksum_file_verified_tools_declare_checksums() -> None:
+    for tool in load_tools(REGISTRY):
+        if tool.id not in CHECKSUM_FILE_VERIFIED:
+            continue
+        gh_methods = [m for m in tool.methods if m.kind == "github_release"]
+        assert gh_methods, tool.id
+        for method in gh_methods:
+            assert "checksum" in method.params, f"{tool.id}: missing checksum param"
+
+
 def test_gitleaks_and_vale_use_new_arch_tokens() -> None:
     tools = {t.id: t for t in load_tools(REGISTRY)}
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)

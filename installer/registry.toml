@@ -267,6 +267,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "junegunn/fzf"
 asset = "fzf-{ver}-linux_{arch.go}.tar.gz"
+checksum = "fzf_{ver}_checksums.txt"
 member = "fzf"
 strip = 0
 [[tool.method]]
@@ -274,6 +275,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "junegunn/fzf"
 asset = "fzf-{ver}-darwin_{arch.go}.tar.gz"
+checksum = "fzf_{ver}_checksums.txt"
 member = "fzf"
 strip = 0
 [[tool.method]]
@@ -293,6 +295,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "jesseduffield/lazygit"
 asset = "lazygit_{ver}_linux_{arch.suffix}.tar.gz"
+checksum = "checksums.txt"
 member = "lazygit"
 strip = 0
 [[tool.method]]
@@ -300,6 +303,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "jesseduffield/lazygit"
 asset = "lazygit_{ver}_darwin_{arch.suffix}.tar.gz"
+checksum = "checksums.txt"
 member = "lazygit"
 strip = 0
 [[tool.method]]
@@ -320,6 +324,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "cli/cli"
 asset = "gh_{ver}_linux_{arch.deb}.tar.gz"
+checksum = "gh_{ver}_checksums.txt"
 member = "bin/gh"
 strip = 1
 [[tool.method]]
@@ -419,6 +424,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "casey/just"
 asset = "just-{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
+checksum = "SHA256SUMS"
 member = "just"
 strip = 0
 [[tool.method]]
@@ -426,6 +432,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "casey/just"
 asset = "just-{ver}-{arch.machine}-apple-darwin.tar.gz"
+checksum = "SHA256SUMS"
 member = "just"
 strip = 0
 [[tool.method]]
@@ -551,6 +558,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "charmbracelet/gum"
 asset = "gum_{ver}_Linux_{arch.suffix}.tar.gz"
+checksum = "checksums.txt"
 member = "gum"
 strip = 1
 [[tool.method]]
@@ -558,6 +566,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "charmbracelet/gum"
 asset = "gum_{ver}_Darwin_{arch.suffix}.tar.gz"
+checksum = "checksums.txt"
 member = "gum"
 strip = 1
 [[tool.method]]
@@ -577,6 +586,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "charmbracelet/glow"
 asset = "glow_{ver}_Linux_{arch.suffix}.tar.gz"
+checksum = "checksums.txt"
 member = "glow"
 strip = 1
 [[tool.method]]
@@ -584,6 +594,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "charmbracelet/glow"
 asset = "glow_{ver}_Darwin_{arch.suffix}.tar.gz"
+checksum = "checksums.txt"
 member = "glow"
 strip = 1
 [[tool.method]]
@@ -675,6 +686,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "jesseduffield/lazydocker"
 asset = "lazydocker_{ver}_Linux_{arch.suffix}.tar.gz"
+checksum = "checksums.txt"
 member = "lazydocker"
 strip = 0
 [[tool.method]]
@@ -682,6 +694,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "jesseduffield/lazydocker"
 asset = "lazydocker_{ver}_Darwin_{arch.suffix}.tar.gz"
+checksum = "checksums.txt"
 member = "lazydocker"
 strip = 0
 [[tool.method]]
@@ -701,6 +714,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "wagoodman/dive"
 asset = "dive_{ver}_linux_{arch.deb}.tar.gz"
+checksum = "dive_{ver}_checksums.txt"
 member = "dive"
 strip = 0
 [[tool.method]]
@@ -708,6 +722,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "wagoodman/dive"
 asset = "dive_{ver}_darwin_{arch.deb}.tar.gz"
+checksum = "dive_{ver}_checksums.txt"
 member = "dive"
 strip = 0
 [[tool.method]]
@@ -727,6 +742,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "muesli/duf"
 asset = "duf_{ver}_linux_{arch.suffix}.tar.gz"
+checksum = "checksums.txt"
 member = "duf"
 strip = 0
 [[tool.method]]
@@ -734,6 +750,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "muesli/duf"
 asset = "duf_{ver}_darwin_{arch.suffix}.tar.gz"
+checksum = "checksums.txt"
 member = "duf"
 strip = 0
 [[tool.method]]
@@ -779,6 +796,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "johnkerl/miller"
 asset = "miller-{ver}-linux-{arch.deb}.tar.gz"
+checksum = "miller-{ver}-checksums.txt"
 member = "mlr"
 strip = 1
 [[tool.method]]
@@ -786,6 +804,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "johnkerl/miller"
 asset = "miller-{ver}-darwin-{arch.deb}.tar.gz"
+checksum = "miller-{ver}-checksums.txt"
 member = "mlr"
 strip = 1
 [[tool.method]]
@@ -1132,6 +1151,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "gitleaks/gitleaks"
 asset = "gitleaks_{ver}_linux_{arch.x64}.tar.gz"
+checksum = "gitleaks_{ver}_checksums.txt"
 member = "gitleaks"
 strip = 0
 [[tool.method]]
@@ -1139,6 +1159,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "gitleaks/gitleaks"
 asset = "gitleaks_{ver}_darwin_{arch.x64}.tar.gz"
+checksum = "gitleaks_{ver}_checksums.txt"
 member = "gitleaks"
 strip = 0
 [[tool.method]]
@@ -1158,6 +1179,7 @@ kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "errata-ai/vale"
 asset = "vale_{ver}_Linux_{arch.bits}.tar.gz"
+checksum = "vale_{ver}_checksums.txt"
 member = "vale"
 strip = 0
 [[tool.method]]
@@ -1165,6 +1187,7 @@ kind = "github_release"
 os = ["macos"]
 repo = "errata-ai/vale"
 asset = "vale_{ver}_macOS_{arch.bits}.tar.gz"
+checksum = "vale_{ver}_checksums.txt"
 member = "vale"
 strip = 0
 [[tool.method]]
