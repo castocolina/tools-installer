@@ -6,9 +6,9 @@ Download-based kinds (github_release, tarball) live in `installer.download`.
 
 import shlex
 from collections.abc import Callable
-from pathlib import Path
 from typing import cast
 
+from installer.locations import applications_dir
 from installer.model import Method
 from installer.run import Runner
 
@@ -72,8 +72,9 @@ def _brew(method: Method, runner: Runner) -> None:
 def _cask(method: Method, runner: Runner) -> None:
     # --appdir keeps the bundle in userspace; brew's default appdir is /Applications,
     # which the PRD forbids (corporate machines without sudo).
-    appdir = Path.home() / "Applications"
-    runner(["brew", "install", "--cask", f"--appdir={appdir}", require_str(method, "cask")])
+    runner(
+        ["brew", "install", "--cask", f"--appdir={applications_dir()}", require_str(method, "cask")]
+    )
 
 
 EXECUTORS: dict[str, Callable[[Method, Runner], None]] = {

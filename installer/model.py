@@ -8,6 +8,7 @@ METHOD_KINDS = (
     "script",
     "github_release",
     "tarball",
+    "app",
     "dnf",
     "apt",
     "pacman",

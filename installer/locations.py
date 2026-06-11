@@ -16,6 +16,11 @@ def opt_dir(name: str) -> Path:
     return Path.home() / ".local" / "opt" / name
 
 
+def applications_dir() -> Path:
+    """The userspace Applications dir for macOS GUI apps: ~/Applications."""
+    return Path.home() / "Applications"
+
+
 def ensure_dir(directory: Path) -> Path:
     """Create the directory (and parents) if missing. Returns it."""
     directory.mkdir(parents=True, exist_ok=True)

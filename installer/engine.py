@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from installer import download, executors
+from installer import apps, download, executors
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.model import Method, Tool
@@ -30,10 +30,14 @@ def _perform(method: Method, ctx: ExecContext) -> bool:
     """Route download kinds to the download executor; everything else to a command executor.
 
     Returns True when the download was sha256-verified (non-download methods
-    are never marked verified — their package managers do their own checks).
+    are never marked verified — their package managers do their own checks;
+    app zips have no published checksums to verify).
     """
     if method.kind in download.DOWNLOAD_KINDS:
         return download.install_download(method, ctx)
+    if method.kind in apps.APP_KINDS:
+        apps.install_app(method, ctx.runner)
+        return False
     executors.execute(method, ctx.runner)
     return False
 

@@ -115,3 +115,11 @@ def test_cask_requires_macos_and_brew() -> None:
     assert resolve_methods(tool, mac_brew) == [cask]
     assert resolve_methods(tool, mac_no_brew) == []
     assert resolve_methods(tool, linux_brew) == []
+
+
+def test_app_ranks_with_userspace_downloads_before_cask() -> None:
+    app = Method(kind="app", params={"url": "u", "app": "A.app"}, os=("macos",))
+    cask = Method(kind="cask", params={"cask": "a"})
+    tool = Tool(id="t", name="t", category="c", cmd="t", methods=(cask, app))
+    mac = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    assert [m.kind for m in resolve_methods(tool, mac)] == ["app", "cask"]

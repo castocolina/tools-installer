@@ -295,3 +295,25 @@ def test_non_download_install_is_not_marked_verified(monkeypatch: pytest.MonkeyP
     )
     assert outcome.status == "installed"
     assert outcome.verified is False
+
+
+def test_app_kind_routes_to_app_executor(monkeypatch: pytest.MonkeyPatch):
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+    seen: list[str] = []
+
+    def fake_install_app(method: Method, runner: object) -> None:
+        seen.append(method.kind)
+
+    monkeypatch.setattr(engine.apps, "install_app", fake_install_app)
+    outcome = install_tool(
+        _tool(Method(kind="app", params={"url": "u", "app": "A.app"})),
+        Platform(os="macos", arch="arm64", immutable=False, has_brew=False),
+        runner=lambda cmd: None,
+    )
+    assert outcome.status == "installed"
+    assert outcome.method_kind == "app"
+    assert outcome.verified is False
+    assert seen == ["app"]
