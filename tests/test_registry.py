@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from installer.model import load_tools
+from installer.model import load_categories, load_tools
 from installer.platform import Platform
 from installer.resolve import resolve_methods
 
@@ -460,3 +460,17 @@ def test_sublime_is_single_universal_app_with_cask_fallback() -> None:
         assert methods[0].params["app"] == "Sublime Text.app"
         assert methods[0].params["cli"] == "Contents/SharedSupport/bin/subl"
         assert methods[1].params["cask"] == "sublime-text"
+
+
+def test_every_used_category_has_a_blurb() -> None:
+    blurbs = load_categories(REGISTRY)
+    used = {t.category for t in load_tools(REGISTRY)}
+    missing = sorted(used - set(blurbs))
+    assert not missing, f"categories without a [[category]] blurb: {missing}"
+
+
+def test_every_category_blurb_is_used_by_a_tool() -> None:
+    blurbs = load_categories(REGISTRY)
+    used = {t.category for t in load_tools(REGISTRY)}
+    orphans = sorted(set(blurbs) - used)
+    assert not orphans, f"[[category]] blurbs with no tools: {orphans}"

@@ -1,4 +1,4 @@
-"""Declarative tool catalog: Tool/Method model and tomllib loader."""
+"""Declarative tool catalog: Tool/Method model, category blurbs, and tomllib loaders."""
 
 import tomllib
 from dataclasses import dataclass, field
@@ -81,3 +81,25 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
             )
         )
     return tools
+
+
+def load_categories(manifest_path: str | Path) -> dict[str, str]:
+    """Parse the registry's [[category]] sections into an ordered id -> desc map.
+
+    Reads the file independently of load_tools. The sections supply hover text
+    only — the wizard's menu order is derived from the tools, not from here.
+    """
+    with open(manifest_path, "rb") as fh:
+        data = tomllib.load(fh)
+    blurbs: dict[str, str] = {}
+    for index, row in enumerate(data.get("category", [])):
+        cat_id = row.get("id")
+        if not isinstance(cat_id, str) or not cat_id:
+            raise ValueError(f"category section #{index} is missing a non-empty 'id'")
+        desc = row.get("desc")
+        if not isinstance(desc, str) or not desc:
+            raise ValueError(f"category '{cat_id}' is missing a non-empty 'desc'")
+        if cat_id in blurbs:
+            raise ValueError(f"duplicate category id '{cat_id}'")
+        blurbs[cat_id] = desc
+    return blurbs

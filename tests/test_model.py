@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from installer.model import Method, Tool, load_tools
+from installer.model import Method, Tool, load_categories, load_tools
 
 
 def _write(tmp_path: Path, content: str) -> Path:
@@ -156,3 +156,96 @@ def test_load_tools_rejects_arch_as_a_string(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="'arch' must be a list"):
         load_tools(manifest)
+
+
+def test_load_categories_reads_ordered_blurbs(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[category]]
+id = "search"
+desc = "Find files and code at speed"
+[[category]]
+id = "data"
+desc = "Query and transform JSON, YAML and CSV"
+[[tool]]
+id = "rg"
+category = "search"
+[[tool.method]]
+kind = "brew"
+formula = "ripgrep"
+""",
+    )
+    assert load_categories(manifest) == {
+        "search": "Find files and code at speed",
+        "data": "Query and transform JSON, YAML and CSV",
+    }
+
+
+def test_load_categories_empty_when_no_sections(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "rg"
+category = "search"
+[[tool.method]]
+kind = "brew"
+formula = "ripgrep"
+""",
+    )
+    assert load_categories(manifest) == {}
+
+
+def test_load_categories_rejects_duplicate_id(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[category]]
+id = "search"
+desc = "one"
+[[category]]
+id = "search"
+desc = "two"
+""",
+    )
+    with pytest.raises(ValueError, match="duplicate category id 'search'"):
+        load_categories(manifest)
+
+
+def test_load_categories_rejects_missing_id(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[category]]
+desc = "no id here"
+""",
+    )
+    with pytest.raises(ValueError, match="section #0 is missing a non-empty 'id'"):
+        load_categories(manifest)
+
+
+def test_load_categories_rejects_empty_id(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[category]]
+id = ""
+desc = "test"
+""",
+    )
+    with pytest.raises(ValueError, match="section #0 is missing a non-empty 'id'"):
+        load_categories(manifest)
+
+
+def test_load_categories_rejects_empty_desc(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[category]]
+id = "search"
+desc = ""
+""",
+    )
+    with pytest.raises(ValueError, match="category 'search' is missing a non-empty 'desc'"):
+        load_categories(manifest)

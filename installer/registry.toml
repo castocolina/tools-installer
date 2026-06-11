@@ -3,6 +3,56 @@
 # (installer/resolve.py) filters them to the platform and orders them by the
 # priority ladder: script -> userspace download -> native pkg manager -> brew.
 
+# Category blurbs shown in the wizard's category menu (hover description).
+[[category]]
+id = "pkg-mgr"
+desc = "Package and environment managers"
+[[category]]
+id = "search"
+desc = "Find files and code at speed"
+[[category]]
+id = "data"
+desc = "Query and transform JSON, YAML and CSV"
+[[category]]
+id = "view"
+desc = "View and render files in the terminal"
+[[category]]
+id = "text"
+desc = "Text find-and-replace"
+[[category]]
+id = "git"
+desc = "Git workflows, diffs and UIs"
+[[category]]
+id = "nav"
+desc = "Jump around the filesystem"
+[[category]]
+id = "shell"
+desc = "Prompt, env and shell ergonomics"
+[[category]]
+id = "dev"
+desc = "Build, lint and docs helpers"
+[[category]]
+id = "sysinfo"
+desc = "System monitors and disk usage"
+[[category]]
+id = "net"
+desc = "HTTP clients"
+[[category]]
+id = "docker"
+desc = "Container inspection and management"
+[[category]]
+id = "ai"
+desc = "AI assistants in the terminal"
+[[category]]
+id = "runtime"
+desc = "Language runtimes and version managers"
+[[category]]
+id = "security"
+desc = "Secret scanning and security checks"
+[[category]]
+id = "editor"
+desc = "GUI editors (macOS app installs)"
+
 [[tool]]
 id = "uv"
 name = "uv"
