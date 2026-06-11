@@ -25,6 +25,7 @@ class Method:
     kind: str
     params: dict[str, object] = field(default_factory=_empty_params)
     os: tuple[str, ...] = ()
+    arch: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -58,8 +59,13 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
                 # tuple("macos") would silently become ('m','a','c','o','s'); a list is required.
                 raise ValueError(f"tool '{row['id']}': method 'os' must be a list of strings")
             os_targets = tuple(raw_os)
-            params = {k: v for k, v in entry.items() if k not in ("kind", "os")}
-            methods.append(Method(kind=kind, params=params, os=os_targets))
+            raw_arch = entry.get("arch", [])
+            if isinstance(raw_arch, str):
+                # tuple("arm64") would silently become ('a','r','m','6','4'); a list is required.
+                raise ValueError(f"tool '{row['id']}': method 'arch' must be a list of strings")
+            arch_targets = tuple(raw_arch)
+            params = {k: v for k, v in entry.items() if k not in ("kind", "os", "arch")}
+            methods.append(Method(kind=kind, params=params, os=os_targets, arch=arch_targets))
         tools.append(
             Tool(
                 id=row["id"],

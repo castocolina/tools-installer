@@ -122,3 +122,37 @@ def test_load_tools_rejects_os_as_a_string(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="must be a list"):
         load_tools(manifest)
+
+
+def test_load_tools_reads_method_arch_targets(tmp_path: Path) -> None:
+    manifest = tmp_path / "registry.toml"
+    manifest.write_text(
+        "[[tool]]\n"
+        'id = "demo"\n'
+        'category = "misc"\n'
+        "[[tool.method]]\n"
+        'kind = "script"\n'
+        'os = ["macos"]\n'
+        'arch = ["arm64"]\n'
+        'url = "https://example.test/i.sh"\n'
+    )
+    method = load_tools(manifest)[0].methods[0]
+    assert method.os == ("macos",)
+    assert method.arch == ("arm64",)
+    assert "arch" not in method.params
+    assert method.params["url"] == "https://example.test/i.sh"
+
+
+def test_load_tools_rejects_arch_as_a_string(tmp_path: Path) -> None:
+    manifest = tmp_path / "registry.toml"
+    manifest.write_text(
+        "[[tool]]\n"
+        'id = "demo"\n'
+        'category = "misc"\n'
+        "[[tool.method]]\n"
+        'kind = "script"\n'
+        'arch = "arm64"\n'  # must be a list, not a string
+        'url = "https://example.test/i.sh"\n'
+    )
+    with pytest.raises(ValueError, match="'arch' must be a list"):
+        load_tools(manifest)

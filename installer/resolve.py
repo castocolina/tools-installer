@@ -27,6 +27,8 @@ _NATIVE_OS = {
 def _applies(method: Method, platform: Platform) -> bool:
     if method.os and platform.os not in method.os:
         return False
+    if method.arch and platform.arch not in method.arch:
+        return False
     kind = method.kind
     if kind in ("script", "github_release", "tarball"):
         return True

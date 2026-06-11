@@ -73,3 +73,34 @@ def test_method_without_os_applies_on_every_platform() -> None:
     for os_name in ("macos", "debian", "arch", "fedora"):
         platform = Platform(os=os_name, arch="amd64", immutable=False, has_brew=False)
         assert resolve_methods(tool, platform) == [method]
+
+
+def test_arch_filter_restricts_a_method_to_its_target_arch() -> None:
+    arm = Method(kind="script", params={"url": "https://example.test/a"}, arch=("arm64",))
+    intel = Method(kind="script", params={"url": "https://example.test/b"}, arch=("amd64",))
+    tool = Tool(id="t", name="t", category="c", cmd="t", methods=(arm, intel))
+    arm_mac = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
+    intel_mac = Platform(os="macos", arch="amd64", immutable=False, has_brew=False)
+    assert resolve_methods(tool, arm_mac) == [arm]
+    assert resolve_methods(tool, intel_mac) == [intel]
+
+
+def test_method_without_arch_applies_on_every_arch() -> None:
+    method = Method(kind="script", params={"url": "https://example.test/i.sh"})
+    tool = Tool(id="t", name="t", category="c", cmd="t", methods=(method,))
+    for arch in ("amd64", "arm64"):
+        platform = Platform(os="debian", arch=arch, immutable=False, has_brew=False)
+        assert resolve_methods(tool, platform) == [method]
+
+
+def test_os_and_arch_filters_compose() -> None:
+    method = Method(
+        kind="script", params={"url": "https://example.test/i.sh"}, os=("macos",), arch=("arm64",)
+    )
+    tool = Tool(id="t", name="t", category="c", cmd="t", methods=(method,))
+    arm_mac = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
+    arm_linux = Platform(os="debian", arch="arm64", immutable=False, has_brew=False)
+    intel_mac = Platform(os="macos", arch="amd64", immutable=False, has_brew=False)
+    assert resolve_methods(tool, arm_mac) == [method]
+    assert resolve_methods(tool, arm_linux) == []
+    assert resolve_methods(tool, intel_mac) == []
