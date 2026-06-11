@@ -4,8 +4,10 @@ from pathlib import Path
 from rich.console import Console
 
 from installer.audit import ToolStatus
+from installer.checksums import ChecksumMismatch
+from installer.engine import InstallOutcome
 from installer.model import Method, Tool
-from installer.render import render_audit, render_summary
+from installer.render import render_audit, render_summary, render_verification
 from installer.session import Summary
 
 
@@ -122,3 +124,49 @@ def test_render_rc_duplicates_says_clean_when_empty():
     console = Console(record=True, width=100)
     render_rc_duplicates({}, console)
     assert "No duplicate" in console.export_text()
+
+
+def test_render_verification_marks_download_outcomes():
+    console = Console(record=True)
+    outcomes = [
+        InstallOutcome("rg", "installed", method_kind="github_release", verified=True),
+        InstallOutcome("fd", "installed", method_kind="github_release", verified=False),
+        InstallOutcome("jq", "installed", method_kind="brew"),
+    ]
+    render_verification(outcomes, console)
+    text = console.export_text()
+    assert "rg: sha256 ✓" in text
+    assert "fd: unverified" in text
+    assert "jq" not in text  # brew does its own integrity checks
+
+
+def test_render_verification_prints_mismatch_error():
+    console = Console(record=True)
+    exc = ChecksumMismatch("a.tar.gz", "12345678" + "a" * 56, "fedcba98" + "b" * 56)
+    outcomes = [
+        InstallOutcome("rg", "checksum-mismatch", method_kind="github_release", errors=(exc,))
+    ]
+    render_verification(outcomes, console)
+    text = console.export_text()
+    assert "rg" in text
+    assert "12345678" in text
+    assert "fedcba98" in text
+
+
+def test_render_summary_includes_mismatch_bucket():
+    console = Console(record=True)
+    summary = Summary(installed=("rg",), already=(), failed=(), no_method=(), mismatched=("fd",))
+    render_summary(summary, console)
+    text = console.export_text()
+    assert "Checksum mismatch: 1" in text
+    assert "checksum mismatch: fd" in text
+
+
+def test_render_verification_ignores_failed_download_outcome():
+    # A download outcome with status "failed" should produce no output.
+    console = Console(record=True)
+    outcomes = [
+        InstallOutcome("rg", "failed", method_kind="github_release"),
+    ]
+    render_verification(outcomes, console)
+    assert console.export_text().strip() == ""

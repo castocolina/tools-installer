@@ -7,6 +7,8 @@ from rich.table import Table
 
 from installer.audit import ToolStatus
 from installer.doctor import DoctorReport, has_problems
+from installer.download import DOWNLOAD_KINDS
+from installer.engine import InstallOutcome
 from installer.links import TROUBLESHOOTING_URL
 from installer.session import Summary
 
@@ -29,12 +31,14 @@ def render_summary(summary: Summary, console: Console) -> None:
         f"Installed: {len(summary.installed)}  "
         f"Already: {len(summary.already)}  "
         f"Failed: {len(summary.failed)}  "
+        f"Checksum mismatch: {len(summary.mismatched)}  "
         f"No method: {len(summary.no_method)}"
     )
     for label, ids in (
         ("installed", summary.installed),
         ("already installed", summary.already),
         ("failed", summary.failed),
+        ("checksum mismatch", summary.mismatched),
         ("no method", summary.no_method),
     ):
         if ids:
@@ -81,3 +85,24 @@ def render_doctor(report: DoctorReport, console: Console) -> None:
         for directory in dirs:
             console.print(f"  {label}: {directory}")
     render_troubleshooting(console)
+
+
+def render_verification(outcomes: list[InstallOutcome], console: Console) -> None:
+    """One line per download-based install: sha256-verified, unverified, or mismatched.
+
+    brew/native/script installs are omitted — those channels run their own
+    integrity checks, so an 'unverified' label there would mislead. Outcomes
+    with other statuses (failed, already-installed) are omitted too: no
+    verification step ran for them.
+    """
+    for outcome in outcomes:
+        if outcome.method_kind not in DOWNLOAD_KINDS:
+            continue
+        if outcome.status == "installed":
+            marker = "sha256 ✓" if outcome.verified else "unverified"
+            console.print(f"  {outcome.tool_id}: {marker}")
+        elif outcome.status == "checksum-mismatch":
+            # The engine always carries the ChecksumMismatch in errors[0] for
+            # this status; a malformed outcome should fail loudly here rather
+            # than print a vague line (same philosophy as session.summarize).
+            console.print(f"  {outcome.tool_id}: {outcome.errors[0]}")
