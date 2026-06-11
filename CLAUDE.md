@@ -10,7 +10,8 @@ Python, managed with **uv**. See [PRD](docs/prds/ai-dev-tools-installer-v1.0-prd
 - `make install`   — create `.venv` (uv), install runtime + dev dependencies
 - `make build`     — build the distributable
 - `make setup`     — launch the wizard (`uv run setup.py`; pass flags via `ARGS="…"`)
-- `make doctor`    — audit PATH and wire `~/.myshellrc` + shell rc files
+- `make doctor`    — audit PATH (read-only report)
+- `make fix`       — wire `~/.myshellrc` + shell rc files into your PATH
 - `make run`       — alias for `make setup`
 - `make uninstall` — remove installed artifacts
 - `make validate`  — run pre-commit hooks (lint, format check, types, security, dead code)

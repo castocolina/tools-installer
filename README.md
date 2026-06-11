@@ -101,7 +101,8 @@ make setup                   # launch the wizard (make run is an alias)
 ```sh
 make setup ARGS="--all"                      # install everything
 make setup ARGS="--categories search,data"   # only some categories
-make doctor                                  # just audit & fix PATH
+make doctor                                  # audit PATH (read-only report)
+make fix                                     # wire PATH into your shell
 ```
 
 ## Supported platforms
@@ -141,26 +142,32 @@ Homebrew is **an optional package you can install from the wizard** (`brew-mac`,
 `brew-linux`), never a prerequisite — some packages only live there, but if the
 author ships an `.sh` that works, that wins.
 
-## PATH doctor
+## PATH doctor & fix
 
-The `doctor` flow keeps your shell PATH correct:
+`make doctor` is a **read-only report**: it audits the live PATH against the bin
+dirs the installer manages and reports any that are **missing** from PATH,
+**broken** (directory gone), or **duplicated** — then points you at `make fix`.
+Only directories that actually exist on disk are managed, so tools you never
+installed are never reported. It changes nothing.
 
-- Writes every required bin dir as `export PATH` into a single managed block in
+`make fix` applies the wiring:
+
+- Writes every managed bin dir as `export PATH` into a single managed block in
   `~/.myshellrc` — **no duplicate entries**.
 - Ensures `source ~/.myshellrc` exists in `~/.zshrc` (if present) and `~/.bashrc`,
   idempotently (it never adds the `source` line twice).
-- Audits the live PATH and reports bin dirs that are **missing**, **broken**
-  (directory gone), or **duplicated**, and offers to fix them.
 - Lets you choose how PATH is wired (`--link-mode`): **centralized** (one
   `~/.myshellrc` sourced from both rc files), **single** (sourced from your current
   shell only), or **split** (the PATH block written directly into each rc file).
-- After an install, audits your live PATH and — when a tool's own installer added a
-  duplicate `export PATH` line to `.bashrc`/`.zshrc` for a directory `~/.myshellrc`
-  already covers — previews those lines and offers to remove them. Your own content
-  is never touched, and the removal always asks first.
+
+After an install, the wizard audits your live PATH and — when a tool's own
+installer added a duplicate `export PATH` line to `.bashrc`/`.zshrc` for a
+directory `~/.myshellrc` already covers — previews those lines and offers to
+remove them. Your own content is never touched, and the removal always asks first.
 
 ```sh
-make doctor
+make doctor   # diagnose
+make fix      # apply
 ```
 
 ## What's NOT in v1
@@ -179,7 +186,8 @@ workflow has a `make` target so local runs and CI are identical:
 | ---------------- | -------------------------------------------------------------- |
 | `make install`   | `uv sync` — create `.venv`, install runtime + dev deps          |
 | `make setup`     | launch the wizard (`uv run setup.py`; flags via `ARGS`; `make run` is an alias) |
-| `make doctor`    | audit & fix `PATH` (`~/.myshellrc` + shell rc files)            |
+| `make doctor`    | audit `PATH` (read-only report)                                 |
+| `make fix`       | wire `PATH` into your shell (`~/.myshellrc` + rc files)         |
 | `make validate`  | pre-commit gates: `ruff check`, `ruff format --check`, `pyright`, `bandit`, `vulture`, `shellcheck` |
 | `make test`      | `pytest` with coverage                                          |
 | `make build`     | build the distributable                                         |
