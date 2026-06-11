@@ -162,3 +162,105 @@ def test_remove_paths_unlinks_symlink_to_dir_without_deleting_target(tmp_path: P
     assert not link.is_symlink()  # the link itself is gone
     assert target_dir.is_dir()  # the target dir survives
     assert (target_dir / "keep").read_text() == "important"  # contents preserved
+
+
+def test_plan_collects_app_bundle_and_cli_link(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    bundle = tmp_path / "Applications" / "Demo App.app"
+    bundle.mkdir(parents=True)
+    (bin_dir / "demo").symlink_to(bundle / "Contents/bin/demo")  # dangling is fine
+    tool = _tool(
+        Method(
+            kind="app",
+            params={
+                "url": "https://example.test/a.zip",
+                "app": "Demo App.app",
+                "cli": "Contents/bin/demo",
+            },
+        )
+    )
+    assert set(plan_uninstall([tool], bin_dir)) == {bundle, bin_dir / "demo"}
+
+
+def test_plan_app_without_cli_plans_bundle_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bundle = tmp_path / "Applications" / "Demo.app"
+    bundle.mkdir(parents=True)
+    tool = _tool(
+        Method(kind="app", params={"url": "https://example.test/a.zip", "app": "Demo.app"})
+    )
+    assert plan_uninstall([tool], bin_dir) == [bundle]
+
+
+def test_plan_app_skips_absent_bundle_and_guards_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    absent = _tool(
+        Method(kind="app", params={"url": "https://example.test/a.zip", "app": "Gone.app"})
+    )
+    traversal = _tool(
+        Method(kind="app", params={"url": "https://example.test/a.zip", "app": ".."}),
+        tool_id="t2",
+        cmd="t2",
+    )
+    nested = _tool(
+        Method(kind="app", params={"url": "https://example.test/a.zip", "app": "x/Demo.app"}),
+        tool_id="t3",
+        cmd="t3",
+    )
+    no_app = _tool(
+        Method(kind="app", params={"url": "https://example.test/a.zip"}),
+        tool_id="t4",
+        cmd="t4",
+    )
+    assert plan_uninstall([absent, traversal, nested, no_app], bin_dir) == []
+
+
+def test_plan_app_guards_cli_traversal_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    bundle = tmp_path / "Applications" / "Demo.app"
+    bundle.mkdir(parents=True)
+    tool = _tool(
+        Method(
+            kind="app",
+            params={"url": "https://example.test/a.zip", "app": "Demo.app", "cli": "Contents/.."},
+        )
+    )
+    # the bundle is planned; the traversal cli name is not
+    assert plan_uninstall([tool], bin_dir) == [bundle]
+
+
+def test_plan_skips_cask_methods(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = _tool(Method(kind="cask", params={"cask": "sublime-text"}))
+    assert plan_uninstall([tool], bin_dir) == []
+
+
+def test_plan_app_skips_cli_install_would_have_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "demo").write_text("someone else's file")
+    bundle = tmp_path / "Applications" / "Demo.app"
+    bundle.mkdir(parents=True)
+    for cli in ("../demo", "/abs/demo"):
+        tool = _tool(
+            Method(
+                kind="app",
+                params={"url": "https://example.test/a.zip", "app": "Demo.app", "cli": cli},
+            )
+        )
+        # install_app rejects these clis, so no symlink was ever created -> plan
+        # must not touch the unrelated bin_dir/demo file.
+        assert plan_uninstall([tool], bin_dir) == [bundle]

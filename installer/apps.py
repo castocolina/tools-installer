@@ -20,8 +20,12 @@ from installer.run import Runner
 APP_KINDS = ("app",)
 
 
-def _cli_spec(method: Method) -> tuple[str, str] | None:
-    """(bundle-relative CLI path, symlink name) for the optional `cli` param."""
+def cli_spec(method: Method) -> tuple[str, str] | None:
+    """(bundle-relative CLI path, symlink name) for the optional `cli` param.
+
+    Single source of truth for the symlink name: install_app creates it and
+    uninstall planning derives the same name (or skips when this raises).
+    """
     cli = method.params.get("cli")
     if cli is None:
         return None
@@ -49,7 +53,7 @@ def install_app(method: Method, runner: Runner) -> None:
     if PurePosixPath(app).name != app or app in (".", ".."):
         # A nested or traversal bundle name would move/symlink outside ~/Applications.
         raise ExecutorError(f"invalid app bundle name '{app}'")
-    spec = _cli_spec(method)  # validate every param before any side effect
+    spec = cli_spec(method)  # validate every param before any side effect
     try:
         apps = ensure_dir(applications_dir())
     except OSError as exc:
