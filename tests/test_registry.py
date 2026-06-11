@@ -333,6 +333,13 @@ def test_broot_is_selective_zip_with_nested_member() -> None:
     assert mac[0].params["member"] == "{arch.machine}-apple-darwin/broot"
 
 
+def test_checksum_param_only_on_github_release_methods() -> None:
+    for tool in load_tools(REGISTRY):
+        for method in tool.methods:
+            if "checksum" in method.params:
+                assert method.kind == "github_release", tool.id
+
+
 def test_gitleaks_and_vale_use_new_arch_tokens() -> None:
     tools = {t.id: t for t in load_tools(REGISTRY)}
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)

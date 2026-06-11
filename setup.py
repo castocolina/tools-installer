@@ -54,6 +54,17 @@ def _ask_select(message: str, choices: list[tuple[str, str]]) -> str:
     return str(answer)
 
 
+def _ask_mismatch(tool_id: str) -> str:
+    return _ask_select(
+        f"Checksum mismatch for {tool_id} — the download may be corrupted or tampered with.",
+        [
+            ("Retry the download", "retry"),
+            ("Skip this tool", "skip"),
+            ("Fall back to another install method (brew/native)", "fallback"),
+        ],
+    )
+
+
 def _resolve_link_mode(link_mode_option: str | None) -> str:
     if link_mode_option is not None:
         return link_mode_option
@@ -145,7 +156,7 @@ def main(argv: list[str]) -> int:
     tools = load_tools(_REGISTRY)
     platform = detect()
     prompter = CallbackPrompter(ask_checkbox=_ask_checkbox, ask_confirm=_ask_confirm)
-    summary = run_wizard(tools, platform, prompter, console, options)
+    summary = run_wizard(tools, platform, prompter, console, options, on_mismatch=_ask_mismatch)
     if summary is None:
         console.print("Aborted.")
         return 0
@@ -160,7 +171,7 @@ def main(argv: list[str]) -> int:
         link_mode=link_mode,
     )
     _verify_and_clean(console, tools, platform, assume_yes=options.yes)
-    if summary.failed:
+    if summary.failed or summary.mismatched:
         render_troubleshooting(console)
         return 1
     return 0
