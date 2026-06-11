@@ -144,6 +144,23 @@ def _run_doctor(console: Console) -> int:
     return 0
 
 
+def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
+    # No re-audit after writing: the process PATH cannot change until the shell
+    # restarts, so a post-fix audit would re-show "missing" and recreate the
+    # confusion the doctor/fix split removes.
+    link_mode = _resolve_link_mode(link_mode_option)
+    configure_path(
+        load_tools(_REGISTRY),
+        console,
+        platform=detect(),
+        default_bin_dir=_DEFAULT_BIN_DIR,
+        myshellrc_path=_MYSHELLRC,
+        rc_paths=_rc_paths_for_mode(link_mode),
+        link_mode=link_mode,
+    )
+    return 0
+
+
 def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
     confirm = (lambda _message: True) if assume_yes else _ask_confirm
     run_uninstall(
@@ -178,6 +195,8 @@ def main(argv: list[str]) -> int:
     console = Console()
     if options.doctor:
         return _run_doctor(console)
+    if options.fix:
+        return _run_fix(console, link_mode_option=options.link_mode)
     if options.uninstall:
         return _run_uninstall(console, assume_yes=options.yes)
     can_proceed = options.all or bool(options.categories) or sys.stdin.isatty()

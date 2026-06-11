@@ -64,3 +64,17 @@ def test_link_mode_parses_each_choice():
 def test_link_mode_rejects_unknown_choice():
     with pytest.raises(SystemExit):
         parse_args(["--link-mode", "bogus"])
+
+
+def test_fix_defaults_false():
+    assert parse_args([]).fix is False
+
+
+def test_fix_flag():
+    assert parse_args(["--fix"]).fix is True
+
+
+def test_doctor_and_fix_both_parse():
+    # Precedence (doctor -> fix -> uninstall) is applied in setup.main.
+    opts = parse_args(["--doctor", "--fix"])
+    assert opts.doctor is True and opts.fix is True

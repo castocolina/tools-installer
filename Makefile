@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install build setup run doctor uninstall validate test
+.PHONY: help install build setup run doctor fix uninstall validate test
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -16,8 +16,11 @@ setup:  ## Launch the setup wizard (pass flags via ARGS, e.g. ARGS="--all --yes"
 
 run: setup  ## Alias for `setup`
 
-doctor:  ## Audit PATH and wire ~/.myshellrc + shell rc files
+doctor:  ## Audit PATH (read-only report; `make fix` applies changes)
 	uv run setup.py --doctor
+
+fix:  ## Wire PATH into your shell (~/.myshellrc + rc files)
+	uv run setup.py --fix
 
 uninstall:  ## Remove userspace artifacts: ~/.local/opt/* dirs, ~/.local/bin symlinks, and the managed ~/.myshellrc PATH block (previews, then asks to confirm)
 	uv run setup.py --uninstall

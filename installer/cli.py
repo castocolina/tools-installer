@@ -10,6 +10,7 @@ class Options:
     categories: tuple[str, ...]
     yes: bool
     doctor: bool = False
+    fix: bool = False
     uninstall: bool = False
     link_mode: str | None = None
 
@@ -33,7 +34,12 @@ def parse_args(argv: list[str]) -> Options:
         help="install only these categories (comma-separated; repeatable)",
     )
     parser.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
-    parser.add_argument("--doctor", action="store_true", help="audit and fix the PATH, then exit")
+    parser.add_argument(
+        "--doctor", action="store_true", help="audit the PATH (read-only report), then exit"
+    )
+    parser.add_argument(
+        "--fix", action="store_true", help="wire PATH into your shell rc files, then exit"
+    )
     parser.add_argument(
         "--uninstall", action="store_true", help="remove installed userspace artifacts, then exit"
     )
@@ -57,6 +63,7 @@ def parse_args(argv: list[str]) -> Options:
         categories=tuple(categories),
         yes=ns.yes,
         doctor=ns.doctor,
+        fix=ns.fix,
         uninstall=ns.uninstall,
         link_mode=ns.link_mode,
     )
