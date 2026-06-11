@@ -2,17 +2,34 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal, Protocol
 
-from installer.engine import InstallOutcome, install_tool
+from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
 from installer.model import Tool
 from installer.platform import Platform
 from installer.run import Runner, run_command
 from installer.versions import TagResolver, resolve_github_tag
 
-# (tool, platform, runner, resolve_tag) -> outcome. Matches engine.install_tool.
-Install = Callable[[Tool, Platform, Runner, TagResolver], InstallOutcome]
+# The user's answer to a checksum mismatch: retry the download, skip the
+# tool, or fall back to the remaining methods (brew/native).
+MismatchChoice = Literal["retry", "skip", "fallback"]
+OnMismatch = Callable[[str], MismatchChoice]
 
 _PRIORITY_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+
+
+class Install(Protocol):
+    """Matches engine.install_tool, including the keyword-only checksum policy."""
+
+    def __call__(
+        self,
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = ...,
+    ) -> InstallOutcome: ...
 
 
 @dataclass(frozen=True)
@@ -21,6 +38,7 @@ class Summary:
     already: tuple[str, ...]
     failed: tuple[str, ...]
     no_method: tuple[str, ...]
+    mismatched: tuple[str, ...] = ()
 
 
 def order_for_install(tools: list[Tool]) -> list[Tool]:
@@ -34,9 +52,26 @@ def run_installs(
     runner: Runner = run_command,
     resolve_tag: TagResolver = resolve_github_tag,
     install: Install = install_tool,
+    on_mismatch: OnMismatch | None = None,
 ) -> list[InstallOutcome]:
-    """Install each tool in turn, collecting one outcome per tool."""
-    return [install(tool, platform, runner, resolve_tag) for tool in tools]
+    """Install each tool in turn, collecting one outcome per tool.
+
+    On a checksum mismatch, consult on_mismatch (when given): retry re-runs
+    the install once, fallback re-runs it letting the ladder continue past
+    the mismatch, skip keeps the mismatch outcome. No callback = unattended
+    mode: the hard-fail outcome stands.
+    """
+    outcomes: list[InstallOutcome] = []
+    for tool in tools:
+        outcome = install(tool, platform, runner, resolve_tag)
+        if outcome.status == "checksum-mismatch" and on_mismatch is not None:
+            choice = on_mismatch(tool.id)
+            if choice == "retry":
+                outcome = install(tool, platform, runner, resolve_tag)
+            elif choice == "fallback":
+                outcome = install(tool, platform, runner, resolve_tag, checksum_policy="continue")
+        outcomes.append(outcome)
+    return outcomes
 
 
 def summarize(outcomes: list[InstallOutcome]) -> Summary:
@@ -51,6 +86,7 @@ def summarize(outcomes: list[InstallOutcome]) -> Summary:
         "already-installed": [],
         "failed": [],
         "no-method": [],
+        "checksum-mismatch": [],
     }
     for outcome in outcomes:
         buckets[outcome.status].append(outcome.tool_id)
@@ -59,4 +95,5 @@ def summarize(outcomes: list[InstallOutcome]) -> Summary:
         already=tuple(buckets["already-installed"]),
         failed=tuple(buckets["failed"]),
         no_method=tuple(buckets["no-method"]),
+        mismatched=tuple(buckets["checksum-mismatch"]),
     )

@@ -6,11 +6,13 @@ from rich.console import Console
 
 from installer.app import run_wizard
 from installer.cli import Options
-from installer.engine import InstallOutcome
+from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.model import Method, Tool
 from installer.platform import Platform
+from installer.run import Runner
 from installer.selection import Choice
 from installer.session import Install, Summary
+from installer.versions import TagResolver
 
 
 def _tool(tool_id: str, category: str) -> Tool:
@@ -58,7 +60,12 @@ def _recording_install() -> tuple[list[str], Install]:
     installed: list[str] = []
 
     def install(
-        tool: Tool, platform: Platform, runner: object, resolve_tag: object
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
     ) -> InstallOutcome:
         installed.append(tool.id)
         return InstallOutcome(tool.id, "installed", method_kind="brew")
@@ -100,7 +107,12 @@ def test_all_flag_installs_every_tool_without_prompting():
 
 def test_failed_install_surfaces_in_summary_without_crashing():
     def install(
-        tool: Tool, platform: Platform, runner: object, resolve_tag: object
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
     ) -> InstallOutcome:
         return InstallOutcome(tool.id, "failed")
 
