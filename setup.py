@@ -15,7 +15,7 @@ from rich.console import Console
 
 from installer.app import clean_rc_duplicates, configure_path, run_doctor, run_uninstall, run_wizard
 from installer.cli import parse_args
-from installer.model import Tool, load_tools
+from installer.model import Tool, load_categories, load_tools
 from installer.platform import Platform, detect
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
@@ -27,11 +27,49 @@ _DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
 _MYSHELLRC = Path.home() / ".myshellrc"
 _RC_PATHS = [Path.home() / ".zshrc", Path.home() / ".bashrc"]
 
+_STYLE = questionary.Style(
+    [
+        ("qmark", "fg:cyan bold"),
+        ("question", "bold"),
+        ("pointer", "fg:cyan bold"),
+        ("highlighted", "bold"),
+        ("selected", "fg:green"),
+        ("instruction", "fg:#858585"),
+        ("description", "fg:#858585 italic"),
+        ("tag-installed", "fg:green"),
+        ("tag-missing", "fg:yellow"),
+        ("tag-dim", "fg:#858585"),
+    ]
+)
+_CHECKBOX_KEYS = "(↑/↓ move, <space> toggle, <a> all, <i> invert, <enter> confirm)"
+
+
+def _tag_class(tag: str) -> str:
+    if tag == "installed":
+        return "tag-installed"
+    if tag == "missing":
+        return "tag-missing"
+    return "tag-dim"
+
+
+def _title(choice: Choice) -> list[tuple[str, str]]:
+    segments = [("class:text", choice.label)]
+    if choice.tag:
+        segments.append((f"class:{_tag_class(choice.tag)}", f"  ({choice.tag})"))
+    return segments
+
 
 def _ask_checkbox(message: str, choices: list[Choice]) -> list[str]:
     answer = questionary.checkbox(
         message,
-        choices=[questionary.Choice(title=c.label, value=c.id, checked=c.checked) for c in choices],
+        choices=[
+            questionary.Choice(
+                title=_title(c), value=c.id, checked=c.checked, description=c.description or None
+            )
+            for c in choices
+        ],
+        instruction=_CHECKBOX_KEYS,
+        style=_STYLE,
     ).ask()
     if answer is None:  # questionary returns None on Ctrl+C / Ctrl+D at the prompt
         raise KeyboardInterrupt
@@ -39,7 +77,7 @@ def _ask_checkbox(message: str, choices: list[Choice]) -> list[str]:
 
 
 def _ask_confirm(message: str) -> bool:
-    answer = questionary.confirm(message, default=True).ask()
+    answer = questionary.confirm(message, default=True, style=_STYLE).ask()
     if answer is None:  # questionary returns None on Ctrl+C / Ctrl+D at the prompt
         raise KeyboardInterrupt
     return bool(answer)
@@ -47,7 +85,9 @@ def _ask_confirm(message: str) -> bool:
 
 def _ask_select(message: str, choices: list[tuple[str, str]]) -> str:
     answer = questionary.select(
-        message, choices=[questionary.Choice(title=title, value=value) for title, value in choices]
+        message,
+        choices=[questionary.Choice(title=title, value=value) for title, value in choices],
+        style=_STYLE,
     ).ask()
     if answer is None:  # Ctrl+C / Ctrl+D
         raise KeyboardInterrupt
@@ -156,7 +196,15 @@ def main(argv: list[str]) -> int:
     tools = load_tools(_REGISTRY)
     platform = detect()
     prompter = CallbackPrompter(ask_checkbox=_ask_checkbox, ask_confirm=_ask_confirm)
-    summary = run_wizard(tools, platform, prompter, console, options, on_mismatch=_ask_mismatch)
+    summary = run_wizard(
+        tools,
+        platform,
+        prompter,
+        console,
+        options,
+        on_mismatch=_ask_mismatch,
+        category_blurbs=load_categories(_REGISTRY),
+    )
     if summary is None:
         console.print("Aborted.")
         return 0
