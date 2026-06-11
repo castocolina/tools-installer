@@ -131,8 +131,7 @@ def _rc_paths_for_mode(link_mode: str) -> list[Path]:
     return _RC_PATHS  # undetectable shell -> wire both
 
 
-def _run_doctor(console: Console, *, link_mode_option: str | None) -> int:
-    link_mode = _resolve_link_mode(link_mode_option)
+def _run_doctor(console: Console) -> int:
     run_doctor(
         load_tools(_REGISTRY),
         console,
@@ -140,10 +139,7 @@ def _run_doctor(console: Console, *, link_mode_option: str | None) -> int:
         default_bin_dir=_DEFAULT_BIN_DIR,
         path_value=os.environ.get("PATH", ""),
         exists=Path.is_dir,
-        myshellrc_path=_MYSHELLRC,
-        rc_paths=_rc_paths_for_mode(link_mode),
-        fix=True,
-        link_mode=link_mode,
+        hint="Run 'make fix' to wire PATH into your shell.",
     )
     return 0
 
@@ -170,9 +166,7 @@ def _verify_and_clean(
         default_bin_dir=_DEFAULT_BIN_DIR,
         path_value=os.environ.get("PATH", ""),
         exists=Path.is_dir,
-        myshellrc_path=_MYSHELLRC,
-        rc_paths=_RC_PATHS,
-        fix=False,
+        hint="Restart your shell (or: source ~/.myshellrc) to apply.",
     )
     managed = set(collect_bin_dirs(tools, platform, _DEFAULT_BIN_DIR))
     confirm = (lambda _message: True) if assume_yes else _ask_confirm
@@ -183,7 +177,7 @@ def main(argv: list[str]) -> int:
     options = parse_args(argv)
     console = Console()
     if options.doctor:
-        return _run_doctor(console, link_mode_option=options.link_mode)
+        return _run_doctor(console)
     if options.uninstall:
         return _run_uninstall(console, assume_yes=options.yes)
     can_proceed = options.all or bool(options.categories) or sys.stdin.isatty()

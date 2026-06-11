@@ -220,19 +220,11 @@ def test_configure_path_writes_myshellrc_and_wires_all_rcs(tmp_path: Path):
     assert "# zsh" in zshrc.read_text()  # existing content preserved
 
 
-def test_run_doctor_reports_and_fixes(tmp_path: Path):
-    from pathlib import Path as _P
-
+def test_run_doctor_reports_problems_with_hint_and_never_writes(tmp_path: Path):
     from installer.app import run_doctor
 
-    myshellrc = tmp_path / ".myshellrc"
-    zshrc = tmp_path / ".zshrc"
-    zshrc.write_text("# zsh\n")
     bin_dir = tmp_path / ".local" / "bin"
     console, buf = _console()
-
-    def exists(path: _P) -> bool:
-        return False  # nothing on disk -> broken + missing
 
     report = run_doctor(
         [_tool("rg", "search")],
@@ -240,41 +232,65 @@ def test_run_doctor_reports_and_fixes(tmp_path: Path):
         platform=_platform(),
         default_bin_dir=bin_dir,
         path_value="/usr/bin",
-        exists=exists,
-        myshellrc_path=myshellrc,
-        rc_paths=[zshrc],
-        fix=True,
+        exists=lambda _p: False,  # default dir absent -> missing + broken
+        hint="Run 'make fix' to wire PATH into your shell.",
     )
 
     assert bin_dir in report.missing
-    assert "github.com/castocolina/tools-installer" in buf.getvalue()
-    assert myshellrc.exists()  # fix=True wrote the managed block
-    assert "tools-installer source" in zshrc.read_text()
+    assert bin_dir in report.broken
+    assert "make fix" in buf.getvalue()
+    assert "github.com" not in buf.getvalue()
+    assert list(tmp_path.iterdir()) == []  # diagnosis only: nothing written
 
 
-def test_run_doctor_without_fix_does_not_write(tmp_path: Path):
-    from pathlib import Path as _P
-
+def test_run_doctor_healthy_reports_no_hint(tmp_path: Path):
     from installer.app import run_doctor
 
-    myshellrc = tmp_path / ".myshellrc"
-    console, _buf = _console()
+    bin_dir = tmp_path / "bin"
+    console, buf = _console()
 
-    def exists(path: _P) -> bool:
-        return True
-
-    run_doctor(
+    report = run_doctor(
         [_tool("rg", "search")],
         console,
         platform=_platform(),
-        default_bin_dir=tmp_path / "bin",
-        path_value="/usr/bin",
-        exists=exists,
+        default_bin_dir=bin_dir,
+        path_value=str(bin_dir),
+        exists=lambda _p: True,
+        hint="HINT",
+    )
+
+    assert report.missing == () and report.broken == () and report.duplicated == ()
+    assert "healthy" in buf.getvalue().lower()
+    assert "HINT" not in buf.getvalue()
+
+
+def test_configure_path_honors_exists_filter(tmp_path: Path):
+    from installer.app import configure_path
+
+    declared = tmp_path / "tools" / "bin"  # never created on disk
+    tool = Tool(
+        id="fd",
+        name="fd",
+        category="search",
+        cmd="fd",
+        methods=(Method(kind="github_release", params={"member": "fd", "bin_dir": str(declared)}),),
+    )
+    myshellrc = tmp_path / ".myshellrc"
+    console, _buf = _console()
+
+    configure_path(
+        [tool],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=myshellrc,
         rc_paths=[],
-        fix=False,
+        exists=lambda _p: False,
     )
-    assert not myshellrc.exists()  # fix=False is read-only
+
+    text = myshellrc.read_text()
+    assert str(declared) not in text  # not on disk -> not managed
+    assert str(tmp_path / ".local" / "bin") in text  # default always managed
 
 
 def test_run_uninstall_removes_when_confirmed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -404,29 +420,6 @@ def test_configure_path_split_inlines_block_and_skips_myshellrc(tmp_path: Path):
         text = rc.read_text()
         assert "# >>> tools-installer path >>>" in text  # block written inline
         assert str(myshellrc) not in text  # and no source line
-
-
-def test_run_doctor_forwards_link_mode_split_when_fixing(tmp_path: Path):
-    from installer.app import run_doctor
-    from installer.platform import Platform
-
-    console, _buf = _console()
-    myshellrc = tmp_path / ".myshellrc"
-    zrc = tmp_path / ".zshrc"
-    run_doctor(
-        [],
-        console,
-        platform=Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
-        default_bin_dir=tmp_path / "bin",
-        path_value="",
-        exists=lambda _p: True,
-        myshellrc_path=myshellrc,
-        rc_paths=[zrc],
-        fix=True,
-        link_mode="split",
-    )
-    assert not myshellrc.exists()  # split mode forwarded -> inline, no ~/.myshellrc
-    assert "# >>> tools-installer path >>>" in zrc.read_text()
 
 
 def test_clean_rc_duplicates_removes_after_confirm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

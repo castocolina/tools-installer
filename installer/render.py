@@ -72,8 +72,8 @@ def render_rc_duplicates(found: dict[Path, list[str]], console: Console) -> None
             console.print(f"    {line}")
 
 
-def render_doctor(report: DoctorReport, console: Console) -> None:
-    """Print the PATH audit; on any problem, also print the troubleshooting link."""
+def render_doctor(report: DoctorReport, console: Console, hint: str) -> None:
+    """Print the PATH audit; on any problem, close with the caller's next-step hint."""
     if not has_problems(report):
         console.print("PATH looks healthy: all bin dirs present, on PATH, and unique.")
         return
@@ -84,7 +84,7 @@ def render_doctor(report: DoctorReport, console: Console) -> None:
     ):
         for directory in dirs:
             console.print(f"  {label}: {directory}")
-    render_troubleshooting(console)
+    console.print(hint)
 
 
 def render_verification(outcomes: list[InstallOutcome], console: Console) -> None:

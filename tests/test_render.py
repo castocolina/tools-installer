@@ -54,7 +54,7 @@ def test_render_summary_handles_empty() -> None:
     assert "Installed: 0" in out
 
 
-def test_render_doctor_reports_problems_and_link() -> None:
+def test_render_doctor_prints_findings_then_hint() -> None:
     from installer.doctor import DoctorReport
     from installer.render import render_doctor
 
@@ -64,22 +64,23 @@ def test_render_doctor_reports_problems_and_link() -> None:
         duplicated=(Path("/b/bin"),),
     )
     console, buf = _console()
-    render_doctor(report, console)
+    render_doctor(report, console, "Run 'make fix' to wire PATH into your shell.")
     out = buf.getvalue()
     assert "/a/bin" in out and "/c/bin" in out and "/b/bin" in out
     assert "missing from PATH" in out
-    assert "github.com/castocolina/tools-installer" in out
+    assert "make fix" in out
+    assert "github.com" not in out  # troubleshooting URL no longer printed here
 
 
-def test_render_doctor_healthy_has_no_link() -> None:
+def test_render_doctor_healthy_prints_no_hint() -> None:
     from installer.doctor import DoctorReport
     from installer.render import render_doctor
 
     console, buf = _console()
-    render_doctor(DoctorReport(missing=(), broken=(), duplicated=()), console)
+    render_doctor(DoctorReport(missing=(), broken=(), duplicated=()), console, "HINT")
     out = buf.getvalue()
     assert "healthy" in out.lower()
-    assert "github.com" not in out
+    assert "HINT" not in out
 
 
 def test_render_troubleshooting_prints_link() -> None:

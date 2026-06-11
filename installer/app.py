@@ -111,14 +111,16 @@ def configure_path(
     myshellrc_path: Path,
     rc_paths: list[Path],
     link_mode: str = "centralized",
+    exists: Callable[[Path], bool] = Path.is_dir,
 ) -> None:
     """Wire the managed PATH into the shells per `link_mode`.
 
     centralized/single: write ~/.myshellrc and `source` it from each rc path (the
     caller passes one rc for single, both for centralized). split: write the managed
     PATH block directly into each rc path, with no ~/.myshellrc indirection.
+    Only bin dirs that pass `exists` are managed (the default always is).
     """
-    bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir)
+    bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir, exists)
     if link_mode == "split":
         for rc_path in rc_paths:
             write_managed_path(rc_path, bin_dirs)
@@ -139,25 +141,16 @@ def run_doctor(
     default_bin_dir: Path,
     path_value: str,
     exists: Callable[[Path], bool],
-    myshellrc_path: Path,
-    rc_paths: list[Path],
-    fix: bool,
-    link_mode: str = "centralized",
+    hint: str,
 ) -> DoctorReport:
-    """Audit the PATH, render the report, and (if fix) write the managed config."""
-    bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir)
+    """Audit the PATH (read-only) and render the report; `hint` is the next-step line.
+
+    Fixing is a separate explicit action (configure_path, reached via --fix):
+    a diagnosis that silently rewrites shell config is what this split removes.
+    """
+    bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir, exists)
     report = audit_path(bin_dirs, path_value, exists)
-    render_doctor(report, console)
-    if fix:
-        configure_path(
-            tools,
-            console,
-            platform=platform,
-            default_bin_dir=default_bin_dir,
-            myshellrc_path=myshellrc_path,
-            rc_paths=rc_paths,
-            link_mode=link_mode,
-        )
+    render_doctor(report, console, hint)
     return report
 
 
