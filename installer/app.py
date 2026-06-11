@@ -48,12 +48,13 @@ def _choose_tools(
     prompter: Prompter,
     options: Options,
     installed: Callable[[Tool], bool],
+    category_blurbs: dict[str, str] | None = None,
 ) -> list[Tool]:
     if options.all:
         return tools
     if options.categories:
         return [tool for tool in tools if tool.category in options.categories]
-    chosen_categories = prompter.select_categories(category_choices(tools))
+    chosen_categories = prompter.select_categories(category_choices(tools, category_blurbs))
     wanted = set(chosen_categories)
     in_categories = [tool for tool in tools if tool.category in wanted]
     statuses = audit(in_categories, installed)
@@ -72,14 +73,16 @@ def run_wizard(
     install: Install = install_tool,
     installed: Callable[[Tool], bool] = is_installed,
     on_mismatch: OnMismatch | None = None,
+    category_blurbs: dict[str, str] | None = None,
 ) -> Summary | None:
     """Drive the full wizard. Returns the install summary, or None if the user declined.
 
     None (aborted) is distinct from an empty Summary (ran, but nothing to install).
     --yes implies unattended: the mismatch prompt is suppressed and a checksum
     mismatch hard-fails that tool.
+    category_blurbs feeds the category menu's hover descriptions.
     """
-    selected = _choose_tools(tools, prompter, options, installed)
+    selected = _choose_tools(tools, prompter, options, installed, category_blurbs)
     statuses = audit(selected, installed)
     render_audit(statuses, console)
     if not options.yes and not prompter.confirm("Install the selected tools?"):

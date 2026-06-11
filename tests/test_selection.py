@@ -37,9 +37,23 @@ def test_tools_in_unknown_category_is_empty() -> None:
 
 def test_category_choices_count_tools_and_start_unchecked() -> None:
     tools = [_tool("rg", "search"), _tool("fd", "search"), _tool("jq", "data")]
+    blurbs = {"search": "Find files and code at speed"}
+    assert category_choices(tools, blurbs) == [
+        Choice(
+            id="search",
+            label="search",
+            checked=False,
+            tag="2 tools",
+            description="Find files and code at speed — rg, fd",
+        ),
+        Choice(id="data", label="data", checked=False, tag="1 tool", description="jq"),
+    ]
+
+
+def test_category_choices_without_blurbs_defaults_to_tool_list() -> None:
+    tools = [_tool("rg", "search")]
     assert category_choices(tools) == [
-        Choice(id="search", label="search (2 tools)", checked=False),
-        Choice(id="data", label="data (1 tool)", checked=False),
+        Choice(id="search", label="search", checked=False, tag="1 tool", description="rg")
     ]
 
 
@@ -50,9 +64,35 @@ def test_tool_choices_precheck_missing_only() -> None:
         ToolStatus(tool=tools[1], installed=False),
     ]
     assert tool_choices(statuses) == [
-        Choice(id="rg", label="rg — fast grep (installed)", checked=False),
-        Choice(id="fd", label="fd (missing)", checked=True),
+        Choice(
+            id="rg", label="rg — fast grep", checked=False, tag="installed", description="fast grep"
+        ),
+        Choice(id="fd", label="fd", checked=True, tag="missing", description=""),
     ]
+
+
+def test_tool_choices_flag_verified_downloads() -> None:
+    verified = Tool(
+        id="rg",
+        name="rg",
+        category="search",
+        cmd="rg",
+        methods=(
+            Method(
+                kind="github_release",
+                params={"repo": "a/rg", "asset": "x", "member": "rg", "checksum": "{asset}.sha256"},
+            ),
+        ),
+        desc="fast grep",
+    )
+    statuses = [ToolStatus(tool=verified, installed=False)]
+    assert tool_choices(statuses)[0].description == "fast grep · sha256-verified download"
+
+
+def test_choice_tag_and_description_default_empty() -> None:
+    choice = Choice(id="x", label="x", checked=False)
+    assert choice.tag == ""
+    assert choice.description == ""
 
 
 def test_select_tools_keeps_catalog_order_and_ignores_unknown_ids() -> None:

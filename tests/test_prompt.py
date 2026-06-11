@@ -21,7 +21,7 @@ def test_select_categories_forwards_choices_and_returns_ids():
         return True
 
     prompter = CallbackPrompter(ask_checkbox=ask_checkbox, ask_confirm=ask_confirm)
-    choices = [Choice(id="search", label="search (2 tools)", checked=False)]
+    choices = [Choice(id="search", label="search", checked=False, tag="2 tools")]
     assert prompter.select_categories(choices) == ["search"]
     assert seen[0][1] == choices
 
@@ -34,7 +34,7 @@ def test_select_tools_forwards_choices():
         return ["rg"]
 
     prompter = CallbackPrompter(ask_checkbox=ask_checkbox, ask_confirm=lambda message: False)
-    choices = [Choice(id="rg", label="rg (missing)", checked=True)]
+    choices = [Choice(id="rg", label="rg", checked=True, tag="missing")]
     assert prompter.select_tools(choices) == ["rg"]
     assert captured[0] == choices
 

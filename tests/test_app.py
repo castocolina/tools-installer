@@ -603,3 +603,33 @@ def test_wizard_suppresses_on_mismatch_under_yes():
     assert summary is not None
     assert summary.mismatched == ("rg",)
     assert attempts == ["fail"]
+
+
+def test_run_wizard_threads_category_blurbs_into_choices() -> None:
+    seen: list[list[Choice]] = []
+
+    class RecordingPrompter:
+        def select_categories(self, choices: list[Choice]) -> list[str]:
+            seen.append(choices)
+            return []
+
+        def select_tools(self, choices: list[Choice]) -> list[str]:
+            return []
+
+        def confirm(self, message: str) -> bool:
+            return True
+
+    console, _buf = _console()
+    run_wizard(
+        [_tool("rg", "search")],
+        _platform(),
+        RecordingPrompter(),
+        console,
+        Options(all=False, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=_recording_install()[1],
+        installed=_never_installed,
+        category_blurbs={"search": "Find files and code at speed"},
+    )
+    assert seen[0][0].description == "Find files and code at speed — rg"
