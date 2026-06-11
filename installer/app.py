@@ -19,10 +19,18 @@ from installer.render import (
     render_rc_duplicates,
     render_summary,
     render_uninstall,
+    render_verification,
 )
 from installer.run import Runner, run_command
 from installer.selection import category_choices, select_tools, tool_choices
-from installer.session import Install, Summary, order_for_install, run_installs, summarize
+from installer.session import (
+    Install,
+    OnMismatch,
+    Summary,
+    order_for_install,
+    run_installs,
+    summarize,
+)
 from installer.shellrc import (
     collect_bin_dirs,
     ensure_source,
@@ -63,10 +71,13 @@ def run_wizard(
     resolve_tag: TagResolver = resolve_github_tag,
     install: Install = install_tool,
     installed: Callable[[Tool], bool] = is_installed,
+    on_mismatch: OnMismatch | None = None,
 ) -> Summary | None:
     """Drive the full wizard. Returns the install summary, or None if the user declined.
 
     None (aborted) is distinct from an empty Summary (ran, but nothing to install).
+    --yes implies unattended: the mismatch prompt is suppressed and a checksum
+    mismatch hard-fails that tool.
     """
     selected = _choose_tools(tools, prompter, options, installed)
     statuses = audit(selected, installed)
@@ -74,9 +85,17 @@ def run_wizard(
     if not options.yes and not prompter.confirm("Install the selected tools?"):
         return None
     ordered = order_for_install(selected)
-    outcomes = run_installs(ordered, platform, runner, resolve_tag, install)
+    outcomes = run_installs(
+        ordered,
+        platform,
+        runner,
+        resolve_tag,
+        install,
+        on_mismatch=None if options.yes else on_mismatch,
+    )
     summary = summarize(outcomes)
     render_summary(summary, console)
+    render_verification(outcomes, console)
     return summary
 
 

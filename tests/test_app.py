@@ -5,13 +5,14 @@ import pytest
 from rich.console import Console
 
 from installer.app import run_wizard
+from installer.checksums import ChecksumMismatch
 from installer.cli import Options
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.run import Runner
 from installer.selection import Choice
-from installer.session import Install, Summary
+from installer.session import Install, MismatchChoice, Summary
 from installer.versions import TagResolver
 
 
@@ -528,3 +529,77 @@ def test_run_uninstall_nothing_to_remove_skips_confirm(
         confirm=fail_confirm,
     )
     assert removed == []
+
+
+def _mismatching_install() -> tuple[list[str], Install]:
+    attempts: list[str] = []
+    exc = ChecksumMismatch("a.tar.gz", "0" * 64, "f" * 64)
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+    ) -> InstallOutcome:
+        attempts.append(checksum_policy)
+        return InstallOutcome(
+            tool.id, "checksum-mismatch", method_kind="github_release", errors=(exc,)
+        )
+
+    return attempts, install
+
+
+def test_wizard_consults_on_mismatch_when_interactive():
+    attempts, install = _mismatching_install()
+    asked: list[str] = []
+
+    def on_mismatch(tool_id: str) -> MismatchChoice:
+        asked.append(tool_id)
+        return "skip"
+
+    console, _buf = _console()
+    summary = run_wizard(
+        [_tool("rg", "search")],
+        _platform(),
+        FakePrompter(categories=[], tools=[], confirm=True),
+        console,
+        Options(all=True, categories=(), yes=False),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        installed=_never_installed,
+        on_mismatch=on_mismatch,
+    )
+    assert asked == ["rg"]
+    assert attempts == ["fail"]  # one install call, default policy
+    assert summary is not None
+    assert summary.mismatched == ("rg",)
+
+
+def test_wizard_suppresses_on_mismatch_under_yes():
+    attempts, install = _mismatching_install()
+    asked: list[str] = []
+
+    def on_mismatch(tool_id: str) -> MismatchChoice:
+        asked.append(tool_id)
+        return "retry"
+
+    console, _buf = _console()
+    summary = run_wizard(
+        [_tool("rg", "search")],
+        _platform(),
+        FakePrompter(categories=[], tools=[], confirm=True),
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        installed=_never_installed,
+        on_mismatch=on_mismatch,
+    )
+    assert asked == []  # unattended: never prompt, hard-fail stands
+    assert summary is not None
+    assert summary.mismatched == ("rg",)
+    assert attempts == ["fail"]
