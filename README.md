@@ -55,6 +55,7 @@ The catalog is seeded and growing toward the full set. Today it installs:
 | security    | `gitleaks` ✓                                                                  |
 | net         | `xh`                                                                          |
 | ai          | `aichat`                                                                      |
+| editor      | `vscode` (code), `sublime` (subl)                                             |
 
 `✓` = downloads are sha256-verified against the release's published checksums.
 
@@ -127,6 +128,9 @@ ladder** (each tool can override it in the registry):
    Where the release publishes sha256 checksums, the download is verified before
    extraction; a mismatch stops that tool's install (interactively you may retry,
    skip, or fall back — under `--yes` it hard-fails).
+   macOS GUI apps (`.app` from a vendor zip) land in `~/Applications` — never
+   `/Applications`, zero sudo — with their CLI symlinked into `~/.local/bin`;
+   their Homebrew-cask fallback also targets `~/Applications` via `--appdir`.
 3. **Native package manager** — `dnf` · `apt` · `pacman` · `rpm-ostree`.
 4. **Homebrew** — last resort.
 
