@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 
 import installer.engine as engine
+from installer.checksums import ChecksumMismatch
+from installer.download import ExecContext
 from installer.engine import install_tool
 from installer.model import Method, Tool
 from installer.platform import Platform
@@ -217,3 +219,79 @@ def test_version_resolution_failure_is_caught_as_failed(
     assert len(outcome.errors) == 1
     assert isinstance(outcome.errors[0], VersionError)
     assert calls == []  # resolution fails before any command runs
+
+
+def _mismatching_download(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_install_download(method: Method, ctx: ExecContext) -> bool:
+        raise ChecksumMismatch("a.tar.gz", "0" * 64, "f" * 64)
+
+    monkeypatch.setattr(engine.download, "install_download", fake_install_download)
+
+
+def _not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+
+
+def _gh_then_brew() -> Tool:
+    return _tool(
+        Method(kind="github_release", params={"repo": "x/y", "asset": "a", "member": "rg"}),
+        Method(kind="brew", params={"formula": "ripgrep"}),
+    )
+
+
+def test_checksum_mismatch_halts_the_ladder_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    _not_installed(monkeypatch)
+    _mismatching_download(monkeypatch)
+    calls: list[list[str]] = []
+    platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+    outcome = install_tool(_gh_then_brew(), platform, runner=lambda cmd: calls.append(cmd))
+    assert outcome.status == "checksum-mismatch"
+    assert outcome.method_kind == "github_release"
+    assert isinstance(outcome.errors[0], ChecksumMismatch)
+    assert calls == []  # brew was never attempted
+
+
+def test_checksum_policy_continue_falls_through_to_brew(monkeypatch: pytest.MonkeyPatch) -> None:
+    _not_installed(monkeypatch)
+    _mismatching_download(monkeypatch)
+    calls: list[list[str]] = []
+    platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+    outcome = install_tool(
+        _gh_then_brew(),
+        platform,
+        runner=lambda cmd: calls.append(cmd),
+        checksum_policy="continue",
+    )
+    assert outcome.status == "installed"
+    assert outcome.method_kind == "brew"
+    assert calls == [["brew", "install", "ripgrep"]]
+
+
+def test_installed_outcome_carries_verified_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    _not_installed(monkeypatch)
+
+    def fake_install_download(method: Method, ctx: ExecContext) -> bool:
+        return True
+
+    monkeypatch.setattr(engine.download, "install_download", fake_install_download)
+    outcome = install_tool(
+        _tool(Method(kind="github_release", params={"repo": "x/y", "asset": "a", "member": "rg"})),
+        _platform(),
+        runner=lambda cmd: None,
+    )
+    assert outcome.status == "installed"
+    assert outcome.verified is True
+
+
+def test_non_download_install_is_not_marked_verified(monkeypatch: pytest.MonkeyPatch) -> None:
+    _not_installed(monkeypatch)
+    outcome = install_tool(
+        _tool(Method(kind="dnf", params={"package": "ripgrep"})),
+        _platform(),
+        runner=lambda cmd: None,
+    )
+    assert outcome.status == "installed"
+    assert outcome.verified is False
