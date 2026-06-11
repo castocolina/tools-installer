@@ -37,7 +37,7 @@ def test_collect_bin_dirs_defaults_first_then_declared_deduped():
         _tool("fd", "/home/u/tools/bin"),
         _tool("jq", None),  # brew, no bin_dir
     ]
-    assert collect_bin_dirs(tools, _PLATFORM, default) == [
+    assert collect_bin_dirs(tools, _PLATFORM, default, exists=lambda _p: True) == [
         Path("/home/u/.local/bin"),
         Path("/home/u/tools/bin"),
     ]
@@ -46,9 +46,25 @@ def test_collect_bin_dirs_defaults_first_then_declared_deduped():
 def test_collect_bin_dirs_expands_user():
     default = Path("/d")
     tools = [_tool("rg", "~/x/bin")]
-    result = collect_bin_dirs(tools, _PLATFORM, default)
+    result = collect_bin_dirs(tools, _PLATFORM, default, exists=lambda _p: True)
     assert result[0] == Path("/d")
     assert result[1] == Path.home() / "x" / "bin"
+
+
+def test_collect_bin_dirs_filters_declared_dirs_missing_on_disk():
+    default = Path("/home/u/.local/bin")
+    on_disk = {Path("/home/u/tools/bin")}
+    tools = [_tool("fd", "/home/u/tools/bin"), _tool("bun", "/home/u/.bun/bin")]
+    result = collect_bin_dirs(tools, _PLATFORM, default, exists=lambda p: p in on_disk)
+    # fd's dir exists -> kept; bun's does not -> filtered out.
+    assert result == [Path("/home/u/.local/bin"), Path("/home/u/tools/bin")]
+
+
+def test_collect_bin_dirs_always_keeps_default_even_when_missing():
+    default = Path("/home/u/.local/bin")
+    tools = [_tool("fd", "/home/u/tools/bin")]
+    result = collect_bin_dirs(tools, _PLATFORM, default, exists=lambda _p: False)
+    assert result == [default]
 
 
 def test_managed_block_exports_each_dir_between_markers():
@@ -197,6 +213,6 @@ def test_collect_bin_dirs_only_includes_platform_applicable_methods() -> None:
     )
     tool = Tool(id="brew", name="Homebrew", category="pkg-mgr", cmd="brew", methods=(mac, linux))
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
-    dirs = collect_bin_dirs([tool], macos, Path("~/.local/bin"))
+    dirs = collect_bin_dirs([tool], macos, Path("~/.local/bin"), exists=lambda _p: True)
     assert Path("/opt/homebrew/bin") in dirs
     assert Path("/home/linuxbrew/.linuxbrew/bin") not in dirs

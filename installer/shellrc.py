@@ -4,6 +4,7 @@ Every write is idempotent: only the marked block is ever rewritten, user content
 preserved, and entries are never duplicated across runs.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 
 from installer.model import Tool
@@ -16,23 +17,36 @@ _SOURCE_BEGIN = "# >>> tools-installer source >>>"
 _SOURCE_END = "# <<< tools-installer source <<<"
 
 
-def collect_bin_dirs(tools: list[Tool], platform: Platform, default: Path) -> list[Path]:
-    """The default bin dir plus each platform-applicable method's bin_dir, deduped in order."""
+def collect_bin_dirs(
+    tools: list[Tool],
+    platform: Platform,
+    default: Path,
+    exists: Callable[[Path], bool] = Path.is_dir,
+) -> list[Path]:
+    """The default bin dir plus each platform-applicable method's existing bin_dir.
+
+    The default is always managed. A declared bin_dir is managed only when the
+    directory exists on disk: a missing dir means the tool was never installed,
+    and wiring it into PATH (or reporting it broken) is noise. Disk presence —
+    not PATH probing — avoids the bootstrap chicken-and-egg: right after
+    installing brew, `brew` is not on PATH yet but /opt/homebrew/bin exists.
+    """
     dirs: list[Path] = []
     seen: set[Path] = set()
 
-    def add(path: Path) -> None:
+    def add(path: Path, *, require_exists: bool) -> None:
         resolved = path.expanduser()
-        if resolved not in seen:
-            seen.add(resolved)
-            dirs.append(resolved)
+        if resolved in seen or (require_exists and not exists(resolved)):
+            return
+        seen.add(resolved)
+        dirs.append(resolved)
 
-    add(default)
+    add(default, require_exists=False)
     for tool in tools:
         for method in resolve_methods(tool, platform):
             raw = method.params.get("bin_dir")
             if isinstance(raw, str) and raw:
-                add(Path(raw))
+                add(Path(raw), require_exists=True)
     return dirs
 
 
