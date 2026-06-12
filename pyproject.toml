@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "rich>=13",
     "questionary>=2",
+    "textual>=8",
 ]
 
 [build-system]
@@ -27,6 +28,7 @@ dev = [
     "shellcheck-py>=0.11.0.1",
     "pyyaml>=6.0.3",
     "types-pyyaml>=6.0.12.20260518",
+    "pytest-asyncio>=1.4.0",
 ]
 
 [tool.ruff]
@@ -44,6 +46,7 @@ pythonVersion = "3.11"
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["installer"]
