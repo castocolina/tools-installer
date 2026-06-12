@@ -7,7 +7,13 @@ unit-tested without a terminal.
 """
 
 from collections.abc import Mapping
-from typing import Literal
+from typing import Any, ClassVar, Literal
+
+from rich.text import Text
+from textual.app import App, ComposeResult
+from textual.binding import Binding, BindingType
+from textual.coordinate import Coordinate
+from textual.widgets import DataTable, Footer, Static, Tab, Tabs
 
 from installer.model import Tool
 
@@ -63,3 +69,211 @@ def group_tools(
     else:  # "table" is routed by the app before grouping; anything else is a bug
         raise ValueError(f"unknown view: {view!r}")
     return [(title, members) for title, members in groups if members]
+
+
+VIEWS: tuple[str, ...] = ("category", "priority", "audience", "status", "table")
+_TAB_LABELS = {
+    "category": "Category",
+    "priority": "Priority",
+    "audience": "Audience",
+    "status": "Status",
+    "table": "Table",
+}
+_PRIORITY_STYLE = {"P0": "bold red", "P1": "bold yellow", "P2": "blue", "P3": "dim"}
+_AUDIENCE_STYLE = {"ai": "bold cyan", "human": "magenta", "both": ""}
+
+# Sortable Table-view columns by column key; absent keys (sel/desc) don't sort.
+_SORT_BY_COLUMN: dict[str | None, TableSortKey] = {
+    "pri": "priority",
+    "tool": "id",
+    "cat": "category",
+    "for": "audience",
+    "inst": "installed",
+}
+
+_COLUMNS = (
+    ("Sel", "sel"),
+    ("Pri", "pri"),
+    ("Tool", "tool"),
+    ("Cat", "cat"),
+    ("For", "for"),
+    ("Inst", "inst"),
+    ("What it does", "desc"),
+)
+
+_LEGEND = (
+    "[bold red]P0[/] essential · [bold yellow]P1[/] recommended · [blue]P2[/] nice-to-have"
+    " · [dim]P3[/] niche  |  for [bold cyan]AI[/] / [magenta]you[/] / both"
+    "  |  [green]✓ installed[/] · [yellow]○ missing[/]"
+)
+
+
+class CatalogApp(App[list[str] | None]):
+    """Single-screen tool picker; ←/→ or clicking the tabs switches the grouping.
+
+    run() returns the selected ids in catalog order, or None when aborted (q).
+    State the tests assert on (view, table_sort, selected, detail_text) is
+    deliberately public.
+    """
+
+    CSS = """
+    Tabs { dock: top; }
+    #detail { dock: bottom; height: 2; padding: 0 1; background: $surface; }
+    #legend { dock: bottom; height: 1; padding: 0 1; }
+    DataTable { height: 1fr; }
+    """
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("left", "prev_view", "prev view", priority=True),
+        Binding("right", "next_view", "next view", priority=True),
+        Binding("space", "toggle_tool", "toggle", priority=True),
+        Binding("a", "select_all", "all"),
+        Binding("i", "invert", "invert"),
+        Binding("enter", "accept", "install selected", priority=True),
+        Binding("q", "abort", "quit"),
+    ]
+
+    def __init__(
+        self,
+        tools: list[Tool],
+        installed: Mapping[str, bool],
+        blurbs: Mapping[str, str],
+    ) -> None:
+        super().__init__()
+        self.tools = list(tools)
+        self.view = VIEWS[0]
+        self.table_sort: TableSortKey = "priority"
+        self.selected: set[str] = set()
+        self.detail_text = ""
+        self._installed = dict(installed)
+        self._blurbs = dict(blurbs)
+        # str | None keys let row-key lookups stay branchless under strict typing
+        # (RowKey.value is str | None; ours are always tool ids).
+        self._by_id: dict[str | None, Tool] = {tool.id: tool for tool in self.tools}
+        # Tab ids are exactly the view names. A dict (str | None keys) instead of
+        # `id if id in VIEWS else ...` keeps the handler branchless: pyright can't
+        # narrow `str | None` through an `in` check, and a branch would be
+        # uncoverable (tabs are built from VIEWS, so misses can't happen).
+        self._view_for: dict[str | None, str] = {view: view for view in VIEWS}
+
+    def compose(self) -> ComposeResult:
+        yield Tabs(*[Tab(_TAB_LABELS[view], id=view) for view in VIEWS])
+        yield DataTable()
+        yield Static(Text.from_markup(_LEGEND), id="legend")
+        yield Static("", id="detail")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable[Any])
+        table.cursor_type = "row"
+        table.focus()
+        self._rebuild()
+
+    # -- rows -----------------------------------------------------------
+    def _row_cells(self, tool: Tool) -> list[Text]:
+        chosen = tool.id in self.selected
+        installed = self._installed[tool.id]
+        return [
+            Text("[x]" if chosen else "[ ]", style="green" if chosen else ""),
+            Text(tool.priority, style=_PRIORITY_STYLE[tool.priority]),
+            Text(tool.id, style="bold"),
+            Text(tool.category),
+            Text(AUDIENCE_LABEL[tool.audience], style=_AUDIENCE_STYLE[tool.audience]),
+            Text("✓", style="green") if installed else Text("○", style="yellow"),
+            Text(tool.desc or tool.name, style="dim"),
+        ]
+
+    def _groups(self) -> list[tuple[str, list[Tool]]]:
+        if self.view == "table":
+            return [("", sort_for_table(self.tools, self._installed, self.table_sort))]
+        return group_tools(self.tools, self._installed, self.view, self._blurbs)
+
+    def _rebuild(self) -> None:
+        table = self.query_one(DataTable[Any])
+        table.clear(columns=True)
+        for label, key in _COLUMNS:
+            table.add_column(label, key=key)
+        for title, members in self._groups():
+            if title:
+                section = Text(f"── {title} ", style="bold")
+                table.add_row(section, "", "", "", "", "", "", key=f"#{title}")
+            for tool in members:
+                table.add_row(*self._row_cells(tool), key=tool.id)
+
+    # -- view switching ---------------------------------------------------
+    def _switch_view(self, step: int) -> None:
+        index = (VIEWS.index(self.view) + step) % len(VIEWS)
+        self.query_one(Tabs).active = VIEWS[index]
+
+    def action_prev_view(self) -> None:
+        self._switch_view(-1)
+
+    def action_next_view(self) -> None:
+        self._switch_view(1)
+
+    def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
+        self.view = self._view_for.get(event.tab.id, self.view)
+        self._rebuild()
+
+    def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
+        if self.view != "table":
+            return
+        key = _SORT_BY_COLUMN.get(event.column_key.value)
+        if key is None:
+            return
+        self.table_sort = key
+        self._rebuild()
+
+    # -- selection ----------------------------------------------------------
+    def _highlighted_tool(self) -> Tool | None:
+        table = self.query_one(DataTable[Any])
+        if table.row_count == 0:
+            return None
+        cell_key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0))
+        return self._by_id.get(cell_key.row_key.value)
+
+    def _mark(self, chosen: bool) -> Text:
+        return Text("[x]" if chosen else "[ ]", style="green" if chosen else "")
+
+    def _refresh_marks(self) -> None:
+        table = self.query_one(DataTable[Any])
+        for tool in self.tools:
+            chosen = tool.id in self.selected
+            table.update_cell(tool.id, "sel", self._mark(chosen))
+
+    def action_toggle_tool(self) -> None:
+        tool = self._highlighted_tool()
+        if tool is None:  # empty catalog or a section row
+            return
+        self.selected.symmetric_difference_update({tool.id})
+        chosen = tool.id in self.selected
+        self.query_one(DataTable[Any]).update_cell(tool.id, "sel", self._mark(chosen))
+
+    def action_select_all(self) -> None:
+        self.selected = {tool.id for tool in self.tools}
+        self._refresh_marks()
+
+    def action_invert(self) -> None:
+        self.selected = {tool.id for tool in self.tools} - self.selected
+        self._refresh_marks()
+
+    def action_accept(self) -> None:
+        self.exit([tool.id for tool in self.tools if tool.id in self.selected])
+
+    def action_abort(self) -> None:
+        self.exit(None)
+
+    # -- detail bar ----------------------------------------------------------
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        tool = self._by_id.get(event.row_key.value)
+        detail = self.query_one("#detail", Static)
+        if tool is None:  # a section row
+            self.detail_text = ""
+            detail.update("")
+            return
+        self.detail_text = (
+            f"[bold]{tool.id}[/] — {tool.desc or tool.name}  |  "
+            f"[{_PRIORITY_STYLE[tool.priority]}]{tool.priority}"
+            f" {PRIORITY_LABEL[tool.priority]}[/]  |  "
+            f"for {AUDIENCE_LABEL[tool.audience]}"
+        )
+        detail.update(Text.from_markup(self.detail_text))
