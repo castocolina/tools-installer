@@ -149,6 +149,39 @@ def test_ensure_uv_installs_via_curl_when_missing(harness: Harness) -> None:
     assert (harness.fakebin / "uv").exists()
 
 
+def _link_real_tools(harness: Harness) -> None:
+    """Symlink the real sh/cat/chmod into the fake bin so PATH can exclude
+    /usr/bin and /bin entirely (the only way to make the real curl invisible)."""
+    for name in ("sh", "cat", "chmod"):
+        (harness.fakebin / name).symlink_to(f"/bin/{name}")
+
+
+def test_ensure_uv_installs_via_wget_when_curl_is_missing(harness: Harness) -> None:
+    _link_real_tools(harness)
+    harness.stub(
+        "wget",
+        'printf "wget %s\\n" "$*" >> "$TI_LOG"\n'
+        f"cat > \"{harness.fakebin}/uv\" <<'INNER'\n"
+        "#!/bin/sh\n"
+        'printf "uv %s\\n" "$*" >> "$TI_LOG"\n'
+        "INNER\n"
+        f'chmod +x "{harness.fakebin}/uv"',
+    )
+    result = harness.source("ensure_uv", PATH=str(harness.fakebin))
+    assert result.returncode == 0
+    log = harness.log_text()
+    assert "wget" in log
+    assert "astral.sh" in log
+    assert (harness.fakebin / "uv").exists()
+
+
+def test_ensure_uv_requires_curl_or_wget(harness: Harness) -> None:
+    _link_real_tools(harness)
+    result = harness.source("ensure_uv", PATH=str(harness.fakebin))
+    assert result.returncode != 0
+    assert "curl or wget is required" in result.stderr
+
+
 def test_fetch_repo_clones_when_absent(harness: Harness) -> None:
     result = harness.source("fetch_repo")
     assert result.returncode == 0

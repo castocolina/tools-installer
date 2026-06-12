@@ -1,8 +1,9 @@
 #!/bin/sh
 # tools-installer bootstrap: detect platform, ensure uv, fetch the repo, run the wizard.
 #
-# Usage (remote):
+# Usage (remote, curl or wget):
 #   curl -fsSL https://raw.githubusercontent.com/castocolina/tools-installer/main/install.sh | sh
+#   wget -qO- https://raw.githubusercontent.com/castocolina/tools-installer/main/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/castocolina/tools-installer/main/install.sh | sh -s -- --all --yes
 #
 # Overridable via environment (defaults shown):
@@ -32,15 +33,25 @@ detect_os() {
     esac
 }
 
+# Stream a URL to stdout with whichever downloader exists (curl preferred).
+fetch_url() {
+    if command -v curl >/dev/null 2>&1; then
+        # -f makes curl fail on an HTTP error instead of piping a server error
+        # page into sh as code; keep it even though POSIX sh has no pipefail.
+        curl -fsSL "$1"
+    else
+        wget -qO- "$1"
+    fi
+}
+
 ensure_uv() {
     if command -v uv >/dev/null 2>&1; then
         return 0
     fi
-    command -v curl >/dev/null 2>&1 || die "curl is required to install uv"
+    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 \
+        || die "curl or wget is required to install uv"
     printf 'tools-installer: installing uv...\n'
-    # -f makes curl fail on an HTTP error instead of piping a server error page
-    # into sh as code; keep it even though there is no pipefail in POSIX sh.
-    curl -LsSf "$TI_UV_INSTALL_URL" | sh
+    fetch_url "$TI_UV_INSTALL_URL" | sh
     # The official installer drops uv in ~/.local/bin; make it visible now.
     if [ -f "$HOME/.local/bin/env" ]; then
         # shellcheck disable=SC1091
