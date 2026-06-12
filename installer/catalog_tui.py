@@ -42,33 +42,39 @@ def group_tools(
     installed: Mapping[str, bool],
     view: str,
     blurbs: Mapping[str, str],
-) -> list[tuple[str, list[Tool]]]:
-    """(section title, members) per grouped view; members priority-then-id; empty groups dropped."""
+) -> list[tuple[str, str, list[Tool]]]:
+    """(short title, detail line, members) per grouped view; empty groups dropped.
+
+    The short title is what the section row shows in the table — it must stay
+    narrow because it lives in the first column and auto-width would otherwise
+    inflate it. The detail line (e.g. the category blurb) goes to the detail
+    bar when the section row is highlighted. Members are priority-then-id.
+    """
     ordered = sorted(tools, key=lambda t: (t.priority, t.id))
     if view == "priority":
         groups = [
-            (f"{p} · {PRIORITY_LABEL[p]}", [t for t in ordered if t.priority == p])
+            (p, f"{p} · {PRIORITY_LABEL[p]}", [t for t in ordered if t.priority == p])
             for p in ("P0", "P1", "P2", "P3")
         ]
     elif view == "audience":
+        titles = {a: f"for {AUDIENCE_LABEL[a]}" for a in ("ai", "both", "human")}
         groups = [
-            (f"for {AUDIENCE_LABEL[a]}", [t for t in ordered if t.audience == a])
-            for a in ("ai", "both", "human")
+            (title, title, [t for t in ordered if t.audience == a]) for a, title in titles.items()
         ]
     elif view == "status":
         groups = [
-            ("missing", [t for t in ordered if not installed[t.id]]),
-            ("installed", [t for t in ordered if installed[t.id]]),
+            ("missing", "missing", [t for t in ordered if not installed[t.id]]),
+            ("installed", "installed", [t for t in ordered if installed[t.id]]),
         ]
     elif view == "category":
         categories = sorted({t.category for t in ordered})
         groups = [
-            (_category_title(c, blurbs), [t for t in ordered if t.category == c])
+            (c, _category_title(c, blurbs), [t for t in ordered if t.category == c])
             for c in categories
         ]
     else:  # "table" is routed by the app before grouping; anything else is a bug
         raise ValueError(f"unknown view: {view!r}")
-    return [(title, members) for title, members in groups if members]
+    return [(title, detail, members) for title, detail, members in groups if members]
 
 
 VIEWS: tuple[str, ...] = ("category", "priority", "audience", "status", "table")
@@ -155,6 +161,9 @@ class CatalogApp(App[list[str] | None]):
         # narrow `str | None` through an `in` check, and a branch would be
         # uncoverable (tabs are built from VIEWS, so misses can't happen).
         self._view_for: dict[str | None, str] = {view: view for view in VIEWS}
+        # Section-row key -> detail-bar line, rebuilt with the table (str | None
+        # keys for the same branchless RowKey lookups as _by_id).
+        self._section_detail: dict[str | None, str] = {}
 
     def compose(self) -> ComposeResult:
         yield Tabs(*[Tab(_TAB_LABELS[view], id=view) for view in VIEWS])
@@ -183,22 +192,29 @@ class CatalogApp(App[list[str] | None]):
             Text(tool.desc or tool.name, style="dim"),
         ]
 
-    def _groups(self) -> list[tuple[str, list[Tool]]]:
+    def _groups(self) -> list[tuple[str, str, list[Tool]]]:
         if self.view == "table":
-            return [("", sort_for_table(self.tools, self._installed, self.table_sort))]
+            return [("", "", sort_for_table(self.tools, self._installed, self.table_sort))]
         return group_tools(self.tools, self._installed, self.view, self._blurbs)
 
     def _rebuild(self) -> None:
         table = self.query_one(DataTable[Any])
         table.clear(columns=True)
+        self._section_detail.clear()
         for label, key in _COLUMNS:
             table.add_column(label, key=key)
-        for title, members in self._groups():
+        for title, detail, members in self._groups():
             if title:
                 section = Text(f"── {title} ", style="bold")
                 table.add_row(section, "", "", "", "", "", "", key=f"#{title}")
+                self._section_detail[f"#{title}"] = detail
             for tool in members:
                 table.add_row(*self._row_cells(tool), key=tool.id)
+        # DataTable keeps serving render caches measured at the previous column
+        # widths after clear(columns=True); a cell mutation arriving in a later
+        # render cycle flushes them (textual 8.2.7), so re-mark every row once
+        # the rebuilt table has painted.
+        table.call_after_refresh(self._refresh_marks)
 
     # -- view switching ---------------------------------------------------
     def _switch_view(self, step: int) -> None:
@@ -267,9 +283,9 @@ class CatalogApp(App[list[str] | None]):
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         tool = self._by_id.get(event.row_key.value)
         detail = self.query_one("#detail", Static)
-        if tool is None:  # a section row
-            self.detail_text = ""
-            detail.update("")
+        if tool is None:  # a section row: show the group's detail line
+            self.detail_text = self._section_detail.get(event.row_key.value, "")
+            detail.update(Text(self.detail_text, style="bold"))
             return
         self.detail_text = (
             f"[bold]{tool.id}[/] — {tool.desc or tool.name}  |  "

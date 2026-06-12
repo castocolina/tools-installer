@@ -113,7 +113,7 @@ The wizard opens a single catalog screen (keyboard and mouse):
 | --- | --- |
 | ←/→ or click a tab | switch grouping: Category · Priority · Audience · Status · Table |
 | click a column header (Table view) | re-sort by that column |
-| ↑/↓ | move; the bottom bar shows the highlighted tool's details |
+| ↑/↓ | move; the bottom bar shows the highlighted tool's (or group's) details |
 | space / a / i | toggle · select all · invert |
 | enter | install the selection (audit + confirm follow) |
 | q | abort |

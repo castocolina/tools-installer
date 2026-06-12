@@ -1,3 +1,4 @@
+import html
 from typing import Any
 
 import pytest
@@ -45,40 +46,42 @@ def _catalog() -> tuple[list[Tool], dict[str, bool]]:
 def test_group_by_priority_orders_tiers_and_drops_empty():
     tools, installed = _catalog()
     groups = group_tools(tools, installed, "priority", _BLURBS)
-    assert [title for title, _ in groups] == [
+    assert [title for title, _, _ in groups] == ["P0", "P1", "P2"]  # no P3 tools -> dropped
+    assert [detail for _, detail, _ in groups] == [
         "P0 · essential",
         "P1 · recommended",
         "P2 · nice-to-have",
-    ]  # no P3 tools -> tier dropped
-    assert [t.id for _, members in groups for t in members] == ["rg", "fd", "lazygit"]
+    ]
+    assert [t.id for _, _, members in groups for t in members] == ["rg", "fd", "lazygit"]
 
 
 def test_group_by_audience_uses_labels():
     tools, installed = _catalog()
     groups = group_tools(tools, installed, "audience", _BLURBS)
-    assert [title for title, _ in groups] == ["for AI", "for both", "for you"]
-    assert [t.id for _, members in groups for t in members] == ["rg", "fd", "lazygit"]
+    assert [title for title, _, _ in groups] == ["for AI", "for both", "for you"]
+    assert all(detail == title for title, detail, _ in groups)
+    assert [t.id for _, _, members in groups for t in members] == ["rg", "fd", "lazygit"]
 
 
 def test_group_by_status_splits_missing_then_installed():
     tools, installed = _catalog()
     groups = group_tools(tools, installed, "status", _BLURBS)
-    assert groups[0][0] == "missing"
-    assert [t.id for t in groups[0][1]] == ["fd", "lazygit"]
-    assert groups[1][0] == "installed"
-    assert [t.id for t in groups[1][1]] == ["rg"]
+    assert groups[0][:2] == ("missing", "missing")
+    assert [t.id for t in groups[0][2]] == ["fd", "lazygit"]
+    assert groups[1][:2] == ("installed", "installed")
+    assert [t.id for t in groups[1][2]] == ["rg"]
 
 
-def test_group_by_category_is_alphabetical_with_blurb_titles():
+def test_group_by_category_keeps_titles_short_and_blurbs_in_detail():
     tools, installed = _catalog()
     groups = group_tools(tools, installed, "category", _BLURBS)
-    # "git" has no blurb -> plain title; "search" has one -> appended.
-    assert [title for title, _ in groups] == [
-        "git",
-        "search — Find files and code at speed",
+    # "git" has no blurb -> detail is the plain name; "search" has one -> appended.
+    assert [(title, detail) for title, detail, _ in groups] == [
+        ("git", "git"),
+        ("search", "search — Find files and code at speed"),
     ]
     # within a group: priority then id
-    assert [t.id for t in groups[1][1]] == ["rg", "fd"]
+    assert [t.id for t in groups[1][2]] == ["rg", "fd"]
 
 
 def test_sort_for_table_by_each_key():
@@ -196,11 +199,56 @@ async def test_ctrl_c_aborts_with_none():
 async def test_detail_bar_follows_the_highlighted_row():
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
-        assert app.detail_text == ""  # section row highlighted on start
+        assert app.detail_text == "git"  # first section row highlighted on start
         await pilot.press("down")  # lazygit: empty desc -> falls back to name
         assert "lazygit" in app.detail_text
         assert "P2" in app.detail_text
         assert "for you" in app.detail_text
+
+
+async def test_section_row_detail_shows_the_group_blurb():
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("down", "down")  # past lazygit onto the "search" section row
+        assert app.detail_text == "search — Find files and code at speed"
+
+
+_WIDE_DESC = "finds files fast while respecting your gitignore rules"
+
+
+def _screen_text(app: CatalogApp) -> str:
+    """The painted screen as plain text (the SVG export NBSP-encodes spaces)."""
+    return html.unescape(app.export_screenshot()).replace("\xa0", " ")
+
+
+def _wide_catalog() -> tuple[list[Tool], dict[str, bool]]:
+    tools = [
+        _tool("rg", priority="P0", audience="ai", desc="recursive grep, fast"),
+        _tool("fd", priority="P1", desc=_WIDE_DESC),
+    ]
+    return tools, {"rg": True, "fd": False}
+
+
+async def test_view_switch_repaints_cells_at_full_width():
+    # Regression: after clear(columns=True) + re-add, DataTable kept serving
+    # render caches measured at the old column widths, truncating every cell
+    # to its header width until some cell mutation flushed them.
+    tools, installed = _wide_catalog()
+    app = CatalogApp(tools, installed, _BLURBS)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.press("right")  # category -> priority rebuilds the table
+        assert _WIDE_DESC in _screen_text(app)
+
+
+async def test_section_titles_do_not_inflate_the_sel_column():
+    # Regression: the full "category — blurb" title used to live in the section
+    # row's first cell, widening Sel to the title length and squeezing the
+    # description column off the screen.
+    tools, installed = _wide_catalog()
+    blurbs = {"search": "Find files and code at speed across very large source trees"}
+    app = CatalogApp(tools, installed, blurbs)
+    async with app.run_test(size=(120, 30)):
+        assert _WIDE_DESC in _screen_text(app)
 
 
 async def test_header_click_sorts_only_in_table_view():
