@@ -105,6 +105,23 @@ make doctor                                  # audit PATH (read-only report)
 make fix                                     # wire PATH into your shell
 ```
 
+## Selecting tools
+
+The wizard opens a single catalog screen (keyboard and mouse):
+
+| Key / action | Effect |
+| --- | --- |
+| ←/→ or click a tab | switch grouping: Category · Priority · Audience · Status · Table |
+| click a column header (Table view) | re-sort by that column |
+| ↑/↓ | move; the bottom bar shows the highlighted tool's details |
+| space / a / i | toggle · select all · invert |
+| enter | install the selection (audit + confirm follow) |
+| q | abort |
+
+Priorities are color-coded (P0 essential → P3 niche) and every tool shows who
+it serves (AI · you · both) plus its install state, with a legend pinned at
+the bottom. `--all` and `--categories A,B` skip the screen entirely.
+
 ## Supported platforms
 
 | OS / Distro            | Detected via      | Native fallback   | Notes                                  |

@@ -1,9 +1,10 @@
 """Entry point for the tools-installer wizard. Run via `make setup` (uv run setup.py).
 
-This is the composition root: it performs the real terminal IO (questionary) and
-the real home-path wiring, and composes the pure, fully-tested installer package.
-It deliberately lives outside the `installer/` package so the untyped questionary
-boundary is isolated from the strict-typed, fully-covered core.
+This is the composition root: it performs the real terminal IO (the Textual
+catalog screen for selection; questionary for confirms and choices) and the
+real home-path wiring, and composes the pure, fully-tested installer package.
+It deliberately lives outside the `installer/` package so the untyped
+questionary boundary is isolated from the strict-typed, fully-covered core.
 """
 
 import os
@@ -14,6 +15,7 @@ import questionary
 from rich.console import Console
 
 from installer.app import clean_rc_duplicates, configure_path, run_doctor, run_uninstall, run_wizard
+from installer.catalog_tui import CatalogApp
 from installer.cli import parse_args
 from installer.model import Tool, load_categories, load_tools
 from installer.platform import Platform, detect
@@ -21,6 +23,7 @@ from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.selection import Choice
 from installer.shellrc import collect_bin_dirs
+from installer.status import is_installed
 
 _REGISTRY = Path(__file__).parent / "installer" / "registry.toml"
 _DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
@@ -103,6 +106,11 @@ def _ask_mismatch(tool_id: str) -> str:
             ("Fall back to another install method (brew/native)", "fallback"),
         ],
     )
+
+
+def _select_catalog(tools: list[Tool]) -> list[str] | None:
+    installed = {tool.id: is_installed(tool) for tool in tools}
+    return CatalogApp(tools, installed, load_categories(_REGISTRY)).run()
 
 
 def _resolve_link_mode(link_mode_option: str | None) -> str:
@@ -217,6 +225,7 @@ def main(argv: list[str]) -> int:
         options,
         on_mismatch=_ask_mismatch,
         category_blurbs=load_categories(_REGISTRY),
+        select_catalog=_select_catalog,
     )
     if summary is None:
         console.print("Aborted.")
