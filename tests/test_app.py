@@ -626,3 +626,89 @@ def test_run_wizard_threads_category_blurbs_into_choices() -> None:
         category_blurbs={"search": "Find files and code at speed"},
     )
     assert seen[0][0].description == "Find files and code at speed — rg"
+
+
+def test_catalog_seam_replaces_two_step_selection():
+    installed_ids, install = _recording_install()
+    prompter = FakePrompter(categories=["IGNORED"], tools=["IGNORED"], confirm=True)
+    console, _buf = _console()
+    summary = run_wizard(
+        _catalog(),
+        _platform(),
+        prompter,
+        console,
+        Options(all=False, categories=(), yes=False),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        installed=_never_installed,
+        select_catalog=lambda tools: ["jq"],
+    )
+    assert installed_ids == ["jq"]
+    assert summary is not None
+    assert prompter.confirmed == 1  # the confirm step still runs
+
+
+def test_catalog_seam_abort_returns_none_without_confirm():
+    installed_ids, install = _recording_install()
+    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    console, _buf = _console()
+    summary = run_wizard(
+        _catalog(),
+        _platform(),
+        prompter,
+        console,
+        Options(all=False, categories=(), yes=False),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        installed=_never_installed,
+        select_catalog=lambda tools: None,
+    )
+    assert summary is None
+    assert installed_ids == []
+    assert prompter.confirmed == 0
+
+
+def test_all_flag_bypasses_catalog_seam():
+    def boom(tools: list[Tool]) -> list[str] | None:
+        raise AssertionError("select_catalog must not be called under --all")
+
+    installed_ids, install = _recording_install()
+    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    console, _buf = _console()
+    run_wizard(
+        _catalog(),
+        _platform(),
+        prompter,
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        installed=_never_installed,
+        select_catalog=boom,
+    )
+    assert installed_ids == ["rg", "fd", "jq"]
+
+
+def test_categories_flag_bypasses_catalog_seam():
+    def boom(tools: list[Tool]) -> list[str] | None:
+        raise AssertionError("select_catalog must not be called under --categories")
+
+    installed_ids, install = _recording_install()
+    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    console, _buf = _console()
+    run_wizard(
+        _catalog(),
+        _platform(),
+        prompter,
+        console,
+        Options(all=False, categories=("data",), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        installed=_never_installed,
+        select_catalog=boom,
+    )
+    assert installed_ids == ["jq"]

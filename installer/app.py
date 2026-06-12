@@ -42,6 +42,10 @@ from installer.status import is_installed
 from installer.uninstall import plan_uninstall, remove_paths
 from installer.versions import TagResolver, resolve_github_tag
 
+# Catalog selection seam: given the platform-filtered tools, return the chosen
+# ids (the Textual screen in production), or None when the user aborted.
+SelectCatalog = Callable[[list[Tool]], list[str] | None]
+
 
 def _choose_tools(
     tools: list[Tool],
@@ -49,11 +53,18 @@ def _choose_tools(
     options: Options,
     installed: Callable[[Tool], bool],
     category_blurbs: dict[str, str] | None = None,
-) -> list[Tool]:
+    select_catalog: SelectCatalog | None = None,
+) -> list[Tool] | None:
+    """The tools to install, or None when the user aborted the selection screen."""
     if options.all:
         return tools
-    if options.categories:
+    if options.categories:  # flags always win over the interactive seam
         return [tool for tool in tools if tool.category in options.categories]
+    if select_catalog is not None:
+        chosen_ids = select_catalog(tools)
+        if chosen_ids is None:
+            return None
+        return select_tools(tools, chosen_ids)
     chosen_categories = prompter.select_categories(category_choices(tools, category_blurbs))
     wanted = set(chosen_categories)
     in_categories = [tool for tool in tools if tool.category in wanted]
@@ -74,6 +85,7 @@ def run_wizard(
     installed: Callable[[Tool], bool] = is_installed,
     on_mismatch: OnMismatch | None = None,
     category_blurbs: dict[str, str] | None = None,
+    select_catalog: SelectCatalog | None = None,
 ) -> Summary | None:
     """Drive the full wizard. Returns the install summary, or None if the user declined.
 
@@ -81,8 +93,13 @@ def run_wizard(
     --yes implies unattended: the mismatch prompt is suppressed and a checksum
     mismatch hard-fails that tool.
     category_blurbs feeds the category menu's hover descriptions.
+    select_catalog, when given, replaces the whole two-step category->tool
+    selection (including its intermediate audit) with the single catalog
+    screen; its None return (user aborted) aborts the wizard.
     """
-    selected = _choose_tools(tools, prompter, options, installed, category_blurbs)
+    selected = _choose_tools(tools, prompter, options, installed, category_blurbs, select_catalog)
+    if selected is None:
+        return None
     statuses = audit(selected, installed)
     render_audit(statuses, console)
     if not options.yes and not prompter.confirm("Install the selected tools?"):
