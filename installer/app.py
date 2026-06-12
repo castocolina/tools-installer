@@ -42,8 +42,9 @@ from installer.status import is_installed
 from installer.uninstall import plan_uninstall, remove_paths
 from installer.versions import TagResolver, resolve_github_tag
 
-# Catalog selection seam: given the platform-filtered tools, return the chosen
-# ids (the Textual screen in production), or None when the user aborted.
+# Catalog selection seam: given the full catalog (platform applicability is
+# resolved at install time), return the chosen ids (the Textual screen in
+# production), or None when the user aborted.
 SelectCatalog = Callable[[list[Tool]], list[str] | None]
 
 

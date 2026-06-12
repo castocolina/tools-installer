@@ -22,9 +22,9 @@ curl -fsSL https://raw.githubusercontent.com/castocolina/tools-installer/main/in
 - **Bootstraps itself** — `install.sh` detects your OS/arch, ensures [`uv`](https://docs.astral.sh/uv/)
   is present (via Astral's official installer, *not* Homebrew), fetches this repo,
   and launches the wizard. No Python, no Homebrew required up front.
-- **Interactive wizard (TUI)** — browse by category, toggle tools with the
-  **spacebar** (arrows to move, space to mark, enter to confirm) — the same feel
-  as `sv` or the Claude plugin marketplace.
+- **Interactive wizard (TUI)** — one catalog screen for all 49 tools: switch the
+  grouping (category · priority · audience · status · table) with ←/→ or the mouse,
+  toggle with **space**, confirm with **enter**. See [Selecting tools](#selecting-tools).
 - **Installs in userspace by default** — `~/.local/bin` for CLIs, `~/Applications`
   for macOS GUIs. No `sudo`, no writing to `/Applications` or system paths, so it
   works on locked-down corporate Macs and atomic/immutable Linux.

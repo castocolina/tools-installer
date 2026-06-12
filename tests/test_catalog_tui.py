@@ -181,6 +181,18 @@ async def test_q_aborts_with_none():
     assert app.return_value is None
 
 
+async def test_ctrl_c_aborts_with_none():
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("ctrl+c")
+        # The binding must have triggered exit() — app must no longer be running
+        # before the context manager closes it.  Without the priority binding,
+        # ctrl+c fires the system help_quit action (shows a hint, does NOT exit)
+        # and is_running stays True here.
+        assert not app.is_running
+    assert app.return_value is None
+
+
 async def test_detail_bar_follows_the_highlighted_row():
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:

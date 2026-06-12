@@ -123,6 +123,7 @@ class CatalogApp(App[list[str] | None]):
     DataTable { height: 1fr; }
     """
     BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("ctrl+c", "abort", "quit", show=False, priority=True),
         Binding("left", "prev_view", "prev view", priority=True),
         Binding("right", "next_view", "next view", priority=True),
         Binding("space", "toggle_tool", "toggle", priority=True),
