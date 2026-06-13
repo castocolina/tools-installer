@@ -232,6 +232,15 @@ def test_render_guard_status_active_shims_no_warning():
     assert "guard warning" not in out
 
 
+def test_render_guard_status_includes_reload_next_step():
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+    render_guard_status({"pip": True, "npm": False}, None, console)
+    out = buf.getvalue()
+    assert "pip/npm ban active" in out
+    assert "hash -r" in out  # the reload next step from guard_guidance
+
+
 def test_guidance_text_styles_by_severity_and_suppresses_empty_next_step() -> None:
     from installer.guidance import Guidance
     from installer.render import guidance_text

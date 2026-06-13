@@ -10,7 +10,7 @@ from installer.audit import ToolStatus
 from installer.doctor import DoctorReport
 from installer.download import DOWNLOAD_KINDS
 from installer.engine import InstallOutcome
-from installer.guidance import Guidance, doctor_guidance
+from installer.guidance import Guidance, doctor_guidance, guard_guidance
 from installer.links import TROUBLESHOOTING_URL
 from installer.session import Summary
 
@@ -108,14 +108,10 @@ def render_guard(
 
 
 def render_guard_status(status: dict[str, bool], warning: str | None, console: Console) -> None:
-    """Read-only doctor line: silent unless the ban is active or PATH order is off."""
-    active = [name for name, installed in status.items() if installed]
-    if not active and not warning:
-        return
-    if active:
-        console.print(f"pip/npm ban active: {', '.join(active)} shimmed.")
-    if warning:
-        console.print(f"  guard warning: {warning}")
+    """Read-only doctor lines: silent unless the ban is active or PATH order is off."""
+    items = guard_guidance(status, warning)
+    if items:
+        console.print(guidance_text(items))
 
 
 def render_verification(outcomes: list[InstallOutcome], console: Console) -> None:
