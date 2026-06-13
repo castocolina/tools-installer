@@ -49,3 +49,17 @@ directory's ownership.
 
 Homebrew is never a prerequisite. It is offered as an optional package; an
 official `.sh` installer or a release archive is always preferred when available.
+
+## `pip` or `npm` prints a "banned" message
+
+`make guard` installs PATH shims and shell aliases that redirect bare `pip`,
+`pip3`, and `npm` to their sanctioned replacements (`uv` for Python packages,
+`pnpm` for global node packages). If you need the real tool:
+
+- Run `make unguard` to remove the ban entirely, or
+- Use the sanctioned alternative: `uv add` / `uv pip install` instead of `pip`,
+  and `pnpm add -g` instead of `npm install -g`.
+
+If a real `pip` or `npm` binary resolves before `~/.local/bin` on your `PATH`,
+the shims are silently bypassed — `make doctor` will flag that ordering so you
+can decide whether to adjust it.

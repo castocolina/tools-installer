@@ -36,6 +36,9 @@ wget -qO- https://raw.githubusercontent.com/castocolina/tools-installer/main/ins
 - **Declarative catalog** — every tool is one entry in
   [`installer/registry.toml`](installer/registry.toml). Adding a tool is a data
   change, not code.
+- **Optional pip/npm ban** — `make guard` drops shims + shell aliases that block
+  bare `pip`/`pip3` (use `uv`) and `npm` (use `pnpm`), so the system Python and
+  global node_modules stay clean. Opt-in and fully removable with `make unguard`.
 
 ## Available tools
 
@@ -191,6 +194,23 @@ remove them. Your own content is never touched, and the removal always asks firs
 make doctor   # diagnose
 make fix      # apply
 ```
+
+## Banning pip / npm (optional)
+
+The installer can steer you off the unmanaged installers:
+
+```sh
+make guard     # block bare pip/pip3 (-> uv) and npm (-> pnpm)
+make unguard   # remove the ban
+```
+
+It works in two layers: PATH shims in `~/.local/bin` (catch every caller,
+including scripts and agents) and interactive-shell aliases (a clearer message at
+the prompt). `make doctor` reports whether the ban is active.
+
+It is **not** a sandbox: `python -m pip install` bypasses the `pip` shim, and a
+real `pip`/`npm` earlier on your `PATH` wins — `make doctor` warns about that
+ordering. `make uninstall` removes the ban along with everything else.
 
 ## What's NOT in v1
 
