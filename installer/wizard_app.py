@@ -17,8 +17,8 @@ from typing import ClassVar
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Center, Middle
-from textual.screen import Screen
-from textual.widgets import Label
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Label, ListItem, ListView
 
 from installer.catalog_tui import CatalogScreen
 from installer.model import Tool
@@ -31,6 +31,13 @@ _PLACEHOLDER_TEXT = {
     "fix": "Fix — coming in Phase 2",
     "uninstall": "Uninstall — coming in Phase 3",
     "policies": "Policies — coming in Phase 4",
+}
+_PALETTE_LABEL = {
+    "catalog": "Catalog — pick tools to install",
+    "doctor": "Doctor — audit your PATH",
+    "fix": "Fix — wire PATH into your shells",
+    "uninstall": "Uninstall — remove installed tools",
+    "policies": "Policies — pip/npm ban and env tweaks",
 }
 
 
@@ -45,6 +52,32 @@ class PlaceholderScreen(Screen[None]):
         yield Middle(Center(Label(self._message, id="placeholder")))
 
 
+class NavScreen(ModalScreen[str | None]):
+    """Our command palette: a modal list of views, dismissing the chosen one.
+
+    Replaces Textual's default palette (disabled on the app), whose options
+    dead-end by closing the screen. Selecting an item dismisses with the view
+    name; Escape dismisses with None (no navigation).
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "cancel", "close", show=False),
+    ]
+    DEFAULT_CSS = """
+    NavScreen { align: center middle; }
+    NavScreen > ListView { width: 60; height: auto; border: round $accent; }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield ListView(*[ListItem(Label(_PALETTE_LABEL[name]), id=name) for name in VIEW_ORDER])
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        self.dismiss(event.item.id)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class UnifiedApp(App[list[str] | None]):
     """One app hosting the wizard views. run() returns the catalog selection
     (ids in catalog order) on accept, or None when aborted. `current_view` and
@@ -53,6 +86,7 @@ class UnifiedApp(App[list[str] | None]):
     ENABLE_COMMAND_PALETTE = False  # replace Textual's dead-ending default palette
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("ctrl+c", "abort", "quit", show=False, priority=True),
+        Binding("ctrl+p", "open_nav", "navigate", priority=True),
         *[
             Binding(str(i + 1), f"show('{name}')", name, priority=True)
             for i, name in enumerate(VIEW_ORDER)
@@ -101,6 +135,13 @@ class UnifiedApp(App[list[str] | None]):
 
     def action_show(self, name: str) -> None:
         self.show_view(name)
+
+    def action_open_nav(self) -> None:
+        self.push_screen(NavScreen(), self._navigate)
+
+    def _navigate(self, name: str | None) -> None:
+        if name is not None:
+            self.show_view(name)
 
     def on_catalog_screen_decided(self, message: CatalogScreen.Decided) -> None:
         self.exit(message.result)
