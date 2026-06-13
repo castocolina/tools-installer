@@ -1,4 +1,5 @@
 import html
+from collections.abc import Mapping
 from typing import Any
 
 import pytest
@@ -7,8 +8,27 @@ from textual.widgets import DataTable
 from textual.widgets.data_table import ColumnKey
 
 from installer.catalog_tui import group_tools, sort_for_table
+from installer.doctor import DoctorReport
 from installer.model import Method, Tool
 from installer.wizard_app import UnifiedApp
+
+
+def _unified_app(
+    tools: list[Tool], installed: Mapping[str, bool], blurbs: Mapping[str, str]
+) -> UnifiedApp:
+    # The catalog tests exercise only the catalog view; the doctor/guard/fix
+    # data is required by the constructor but irrelevant here, so pass neutral
+    # defaults.
+    return UnifiedApp(
+        tools,
+        installed,
+        blurbs,
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_status={},
+        guard_warning=None,
+        fix_preview="",
+        fix=lambda: None,
+    )
 
 
 def _tool(
@@ -118,7 +138,7 @@ def test_group_tools_rejects_unknown_view():
 
 def _app() -> UnifiedApp:
     tools, installed = _catalog()
-    return UnifiedApp(tools, installed, _BLURBS)
+    return _unified_app(tools, installed, _BLURBS)
 
 
 async def test_starts_in_category_view_with_section_rows():
@@ -246,7 +266,7 @@ async def test_view_switch_repaints_cells_at_full_width():
     # render caches measured at the old column widths, truncating every cell
     # to its header width until some cell mutation flushed them.
     tools, installed = _wide_catalog()
-    app = UnifiedApp(tools, installed, _BLURBS)
+    app = _unified_app(tools, installed, _BLURBS)
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.press("right")  # category -> priority rebuilds the table
         assert _WIDE_DESC in _screen_text(app)
@@ -258,7 +278,7 @@ async def test_section_titles_do_not_inflate_the_sel_column():
     # description column off the screen.
     tools, installed = _wide_catalog()
     blurbs = {"search": "Find files and code at speed across very large source trees"}
-    app = UnifiedApp(tools, installed, blurbs)
+    app = _unified_app(tools, installed, blurbs)
     async with app.run_test(size=(120, 30)):
         assert _WIDE_DESC in _screen_text(app)
 
@@ -303,7 +323,7 @@ async def test_status_message_clears_once_a_tool_is_selected():
 
 
 async def test_empty_catalog_enter_is_blocked_then_aborts():
-    app = UnifiedApp([], {}, {})
+    app = _unified_app([], {}, {})
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("space")  # toggle on empty table must not crash
         await pilot.press("enter")  # no tools -> blocked, must not crash

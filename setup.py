@@ -7,7 +7,9 @@ It deliberately lives outside the `installer/` package so the untyped
 questionary boundary is isolated from the strict-typed, fully-covered core.
 """
 
+import io
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -23,6 +25,8 @@ from installer.app import (
     run_wizard,
 )
 from installer.cli import parse_args
+from installer.doctor import DoctorReport, audit_path
+from installer.guards import guard_path_warning, guard_status
 from installer.model import Tool, load_categories, load_tools
 from installer.platform import Platform, detect
 from installer.prompt import CallbackPrompter
@@ -138,9 +142,62 @@ def _ask_mismatch(tool_id: str) -> str:
     )
 
 
-def _select_catalog(tools: list[Tool]) -> list[str] | None:
+def _doctor_data(
+    tools: list[Tool], platform: Platform
+) -> tuple[DoctorReport, dict[str, bool], str | None]:
+    path_value = os.environ.get("PATH", "")
+    bin_dirs = collect_bin_dirs(tools, platform, _DEFAULT_BIN_DIR)
+    report = audit_path(bin_dirs, path_value, Path.is_dir)
+    status = guard_status(_DEFAULT_BIN_DIR)
+    warning = (
+        guard_path_warning(_DEFAULT_BIN_DIR, path_value, shutil.which)
+        if any(status.values())
+        else None
+    )
+    return report, status, warning
+
+
+def _build_app(
+    tools: list[Tool], platform: Platform, *, initial_view: str = "catalog"
+) -> UnifiedApp:
     installed = {tool.id: is_installed(tool) for tool in tools}
-    return UnifiedApp(tools, installed, load_categories(_REGISTRY)).run()
+    report, status, warning = _doctor_data(tools, platform)
+    link_mode = _resolve_link_mode(None)
+    rc_paths = _rc_paths_for_mode(link_mode)
+
+    def _apply_fix() -> None:
+        # Runs live inside the FixScreen (next task). Use a quiet console so
+        # configure_path's own prints never corrupt the running TUI; the screen
+        # renders its own result.
+        configure_path(
+            tools,
+            Console(file=io.StringIO()),
+            platform=platform,
+            default_bin_dir=_DEFAULT_BIN_DIR,
+            myshellrc_path=_MYSHELLRC,
+            rc_paths=rc_paths,
+            link_mode=link_mode,
+        )
+
+    preview = (
+        f"Will wire the managed bin dirs into "
+        f"{', '.join(str(p) for p in rc_paths)} (mode: {link_mode})."
+    )
+    return UnifiedApp(
+        tools,
+        installed,
+        load_categories(_REGISTRY),
+        report=report,
+        guard_status=status,
+        guard_warning=warning,
+        fix_preview=preview,
+        fix=_apply_fix,
+        initial_view=initial_view,
+    )
+
+
+def _select_catalog(tools: list[Tool]) -> list[str] | None:
+    return _build_app(tools, detect()).run()
 
 
 def _resolve_link_mode(link_mode_option: str | None) -> str:

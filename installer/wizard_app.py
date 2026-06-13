@@ -11,17 +11,20 @@ is always `[catalog]` or `[catalog, <one other view>]`. The other views are
 placeholders until later phases fill them in.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Center, Middle
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Label, ListItem, ListView
+from textual.widgets import Label, ListItem, ListView, Static
 
 from installer.catalog_tui import CatalogScreen
+from installer.doctor import DoctorReport
+from installer.guidance import Guidance, doctor_guidance, guard_guidance
 from installer.model import Tool
+from installer.render import guidance_text
 
 # Navigation order shared by every route, so the palette and the direct 1..N key
 # bindings expose exactly the same views in the same order.
@@ -50,6 +53,35 @@ class PlaceholderScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield Middle(Center(Label(self._message, id="placeholder")))
+
+
+class DoctorScreen(Screen[None]):
+    """Read-only PATH audit + guidance, color-coded by severity."""
+
+    DEFAULT_CSS = """
+    DoctorScreen #doctor-body { padding: 1 2; }
+    """
+
+    def __init__(
+        self,
+        report: DoctorReport,
+        guard_status: dict[str, bool],
+        guard_warning: str | None,
+    ) -> None:
+        super().__init__()
+        self._report = report
+        self._guard_status = guard_status
+        self._guard_warning = guard_warning
+        self.guidance: list[Guidance] = []  # public test seam
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="doctor-body")
+
+    def on_mount(self) -> None:
+        self.guidance = doctor_guidance(self._report) + guard_guidance(
+            self._guard_status, self._guard_warning
+        )
+        self.query_one("#doctor-body", Static).update(guidance_text(self.guidance))
 
 
 class NavScreen(ModalScreen[str | None]):
@@ -98,16 +130,28 @@ class UnifiedApp(App[list[str] | None]):
         tools: list[Tool],
         installed: Mapping[str, bool],
         blurbs: Mapping[str, str],
+        *,
+        report: DoctorReport,
+        guard_status: dict[str, bool],
+        guard_warning: str | None,
+        fix_preview: str,
+        fix: Callable[[], None],
+        initial_view: str = "catalog",
     ) -> None:
         super().__init__()
         self._catalog = CatalogScreen(tools, installed, blurbs)
-        # Placeholder screens are held as instances and pushed by value. Textual
-        # types `push_screen`/`pop_screen` generically (so they stay fully typed
-        # under pyright strict), unlike `install_screen`/`switch_screen` whose
-        # bare-`Screen` stubs leak `Unknown`.
-        self._placeholders: dict[str, Screen[None]] = {
-            name: PlaceholderScreen(message) for name, message in _PLACEHOLDER_TEXT.items()
+        # Non-catalog views, pushed by value. Doctor is real; the rest are
+        # placeholders until their phases. push_screen/pop_screen stay fully
+        # typed under pyright strict (unlike install_screen/switch_screen).
+        self._views: dict[str, Screen[None]] = {
+            "doctor": DoctorScreen(report, guard_status, guard_warning),
+            "fix": PlaceholderScreen(_PLACEHOLDER_TEXT["fix"]),
+            "uninstall": PlaceholderScreen(_PLACEHOLDER_TEXT["uninstall"]),
+            "policies": PlaceholderScreen(_PLACEHOLDER_TEXT["policies"]),
         }
+        self._fix_preview = fix_preview  # consumed by FixScreen in the next task
+        self._fix = fix
+        self._initial_view = initial_view
         self.current_view = "catalog"
 
     @property
@@ -130,7 +174,7 @@ class UnifiedApp(App[list[str] | None]):
         if self.current_view != "catalog":
             self.pop_screen()
         if name != "catalog":
-            self.push_screen(self._placeholders[name])
+            self.push_screen(self._views[name])
         self.current_view = name
 
     def _navigable(self) -> bool:
@@ -139,7 +183,7 @@ class UnifiedApp(App[list[str] | None]):
         # placeholder is the active screen — never on top of the palette, which
         # would push onto a live modal and break the [catalog] / [catalog, <view>]
         # stack invariant.
-        return self.screen is self._catalog or self.screen in self._placeholders.values()
+        return self.screen is self._catalog or self.screen in self._views.values()
 
     def action_show(self, name: str) -> None:
         if not self._navigable():
