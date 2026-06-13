@@ -14,7 +14,14 @@ from pathlib import Path
 import questionary
 from rich.console import Console
 
-from installer.app import clean_rc_duplicates, configure_path, run_doctor, run_uninstall, run_wizard
+from installer.app import (
+    clean_rc_duplicates,
+    configure_path,
+    run_doctor,
+    run_guard,
+    run_uninstall,
+    run_wizard,
+)
 from installer.catalog_tui import CatalogApp
 from installer.cli import parse_args
 from installer.model import Tool, load_categories, load_tools
@@ -84,6 +91,21 @@ def _ask_confirm(message: str) -> bool:
     if answer is None:  # questionary returns None on Ctrl+C / Ctrl+D at the prompt
         raise KeyboardInterrupt
     return bool(answer)
+
+
+def _ask_optin(message: str) -> bool:
+    answer = questionary.confirm(message, default=False, style=_STYLE).ask()
+    if answer is None:  # Ctrl+C / Ctrl+D
+        raise KeyboardInterrupt
+    return bool(answer)
+
+
+def _ban_rc_paths(link_mode: str) -> list[Path]:
+    # Aliases follow the PATH model: centralized/single keep one ~/.myshellrc;
+    # split writes into each rc file directly.
+    if link_mode == "split":
+        return _rc_paths_for_mode(link_mode)
+    return [_MYSHELLRC]
 
 
 def _ask_select(message: str, choices: list[tuple[str, str]]) -> str:
@@ -176,8 +198,27 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
         console,
         default_bin_dir=_DEFAULT_BIN_DIR,
         myshellrc_path=_MYSHELLRC,
+        rc_paths=_RC_PATHS,
         confirm=confirm,
     )
+    return 0
+
+
+def _run_guard(
+    console: Console, *, remove: bool, link_mode_option: str | None, assume_yes: bool
+) -> int:
+    link_mode = _resolve_link_mode(link_mode_option)
+    confirm = (lambda _message: True) if assume_yes else _ask_confirm
+    acted = run_guard(
+        remove=remove,
+        shim_dir=_DEFAULT_BIN_DIR,
+        rc_paths=_ban_rc_paths(link_mode),
+        path_value=os.environ.get("PATH", ""),
+        console=console,
+        confirm=confirm,
+    )
+    if acted and not remove:
+        console.print("Open a new shell (or run `hash -r`) so cached command paths refresh.")
     return 0
 
 
@@ -207,6 +248,14 @@ def main(argv: list[str]) -> int:
         return _run_fix(console, link_mode_option=options.link_mode)
     if options.uninstall:
         return _run_uninstall(console, assume_yes=options.yes)
+    if options.guard:
+        return _run_guard(
+            console, remove=False, link_mode_option=options.link_mode, assume_yes=options.yes
+        )
+    if options.unguard:
+        return _run_guard(
+            console, remove=True, link_mode_option=options.link_mode, assume_yes=options.yes
+        )
     can_proceed = options.all or bool(options.categories) or sys.stdin.isatty()
     if not can_proceed:
         console.print(
@@ -241,6 +290,14 @@ def main(argv: list[str]) -> int:
         link_mode=link_mode,
     )
     _verify_and_clean(console, tools, platform, assume_yes=options.yes)
+    if (
+        sys.stdin.isatty()
+        and not options.yes
+        and _ask_optin(
+            "Enable the pip/npm ban? Blocks bare pip/npm so installs go through uv/pnpm."
+        )
+    ):
+        _run_guard(console, remove=False, link_mode_option=options.link_mode, assume_yes=False)
     if summary.failed or summary.mismatched:
         render_troubleshooting(console)
         return 1

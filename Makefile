@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install build setup run doctor fix uninstall validate test
+.PHONY: help install build setup run doctor fix uninstall guard unguard validate test
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -24,6 +24,12 @@ fix:  ## Wire PATH into your shell (~/.myshellrc + rc files)
 
 uninstall:  ## Remove userspace artifacts: ~/.local/opt/* dirs, ~/.local/bin symlinks, and the managed ~/.myshellrc PATH block (previews, then asks to confirm)
 	uv run setup.py --uninstall
+
+guard:  ## Ban bare pip/npm (shims + aliases steering to uv/pnpm; opt-in, removable)
+	uv run setup.py --guard
+
+unguard:  ## Remove the pip/npm ban
+	uv run setup.py --unguard
 
 validate:  ## Lint, format-check, type-check, security, dead-code
 	# setup.py (composition root) is lint/format-gated but stays out of pyright/coverage:
