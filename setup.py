@@ -7,7 +7,9 @@ It deliberately lives outside the `installer/` package so the untyped
 questionary boundary is isolated from the strict-typed, fully-covered core.
 """
 
+import io
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -23,6 +25,8 @@ from installer.app import (
     run_wizard,
 )
 from installer.cli import parse_args
+from installer.doctor import DoctorReport, audit_path
+from installer.guards import guard_path_warning, guard_status
 from installer.model import Tool, load_categories, load_tools
 from installer.platform import Platform, detect
 from installer.prompt import CallbackPrompter
@@ -138,9 +142,66 @@ def _ask_mismatch(tool_id: str) -> str:
     )
 
 
-def _select_catalog(tools: list[Tool]) -> list[str] | None:
+def _doctor_data(
+    tools: list[Tool], platform: Platform
+) -> tuple[DoctorReport, dict[str, bool], str | None]:
+    path_value = os.environ.get("PATH", "")
+    bin_dirs = collect_bin_dirs(tools, platform, _DEFAULT_BIN_DIR)
+    report = audit_path(bin_dirs, path_value, Path.is_dir)
+    status = guard_status(_DEFAULT_BIN_DIR)
+    warning = (
+        guard_path_warning(_DEFAULT_BIN_DIR, path_value, shutil.which)
+        if any(status.values())
+        else None
+    )
+    return report, status, warning
+
+
+def _build_app(
+    tools: list[Tool],
+    platform: Platform,
+    *,
+    initial_view: str = "catalog",
+    link_mode: str = "centralized",
+) -> UnifiedApp:
     installed = {tool.id: is_installed(tool) for tool in tools}
-    return UnifiedApp(tools, installed, load_categories(_REGISTRY)).run()
+    report, status, warning = _doctor_data(tools, platform)
+    rc_paths = _rc_paths_for_mode(link_mode)
+
+    def _apply_fix() -> None:
+        # Runs live inside the FixScreen. A quiet console keeps configure_path's
+        # own prints from corrupting the running TUI; the screen renders its own
+        # result. Link mode is resolved before the app opens (never prompted while
+        # the TUI is live).
+        configure_path(
+            tools,
+            Console(file=io.StringIO()),
+            platform=platform,
+            default_bin_dir=_DEFAULT_BIN_DIR,
+            myshellrc_path=_MYSHELLRC,
+            rc_paths=rc_paths,
+            link_mode=link_mode,
+        )
+
+    preview = (
+        f"Will wire the managed bin dirs into "
+        f"{', '.join(str(p) for p in rc_paths)} (mode: {link_mode})."
+    )
+    return UnifiedApp(
+        tools,
+        installed,
+        load_categories(_REGISTRY),
+        report=report,
+        guard_status=status,
+        guard_warning=warning,
+        fix_preview=preview,
+        fix=_apply_fix,
+        initial_view=initial_view,
+    )
+
+
+def _select_catalog(tools: list[Tool]) -> list[str] | None:
+    return _build_app(tools, detect()).run()
 
 
 def _resolve_link_mode(link_mode_option: str | None) -> str:
@@ -170,14 +231,18 @@ def _rc_paths_for_mode(link_mode: str) -> list[Path]:
 
 
 def _run_doctor(console: Console) -> int:
+    tools = load_tools(_REGISTRY)
+    platform = detect()
+    if sys.stdin.isatty():
+        _build_app(tools, platform, initial_view="doctor").run()
+        return 0
     run_doctor(
-        load_tools(_REGISTRY),
+        tools,
         console,
-        platform=detect(),
+        platform=platform,
         default_bin_dir=_DEFAULT_BIN_DIR,
         path_value=os.environ.get("PATH", ""),
         exists=Path.is_dir,
-        hint="Run 'make fix' to wire PATH into your shell.",
     )
     return 0
 
@@ -186,11 +251,19 @@ def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
     # No re-audit after writing: the process PATH cannot change until the shell
     # restarts, so a post-fix audit would re-show "missing" and recreate the
     # confusion the doctor/fix split removes.
+    tools = load_tools(_REGISTRY)
+    platform = detect()
+    if sys.stdin.isatty() and link_mode_option is None:
+        # Resolve the link mode once BEFORE opening the app (the TUI cannot host a
+        # questionary prompt). The FixScreen then previews and applies live.
+        link_mode = _resolve_link_mode(None)
+        _build_app(tools, platform, initial_view="fix", link_mode=link_mode).run()
+        return 0
     link_mode = _resolve_link_mode(link_mode_option)
     configure_path(
-        load_tools(_REGISTRY),
+        tools,
         console,
-        platform=detect(),
+        platform=platform,
         default_bin_dir=_DEFAULT_BIN_DIR,
         myshellrc_path=_MYSHELLRC,
         rc_paths=_rc_paths_for_mode(link_mode),
@@ -239,7 +312,6 @@ def _verify_and_clean(
         default_bin_dir=_DEFAULT_BIN_DIR,
         path_value=os.environ.get("PATH", ""),
         exists=Path.is_dir,
-        hint="Restart your shell (or: source ~/.myshellrc) to apply.",
     )
     managed = set(collect_bin_dirs(tools, platform, _DEFAULT_BIN_DIR))
     confirm = (lambda _message: True) if assume_yes else _ask_confirm

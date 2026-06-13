@@ -194,6 +194,15 @@ installed are never reported. It changes nothing.
   `~/.myshellrc` sourced from both rc files), **single** (sourced from your current
   shell only), or **split** (the PATH block written directly into each rc file).
 
+Run interactively, `make doctor` and `make fix` open inside the unified app as
+**guided views** (reach any view with `Ctrl+P` or the number keys `1`–`5`). The
+**Doctor view** is read-only: every finding is shown with a plain-language meaning
+and the exact next step — including when a shell reload is needed and that transient
+duplicates clear on a new shell — color-coded by severity. The **Fix view** previews
+what will be wired and applies it in place when you press `a`, then tells you to
+restart your shell (or `source ~/.myshellrc`). Running without a terminal — or
+`make fix ARGS="--link-mode=…"` — keeps the plain console behavior described above.
+
 After an install, the wizard audits your live PATH and — when a tool's own
 installer added a duplicate `export PATH` line to `.bashrc`/`.zshrc` for a
 directory `~/.myshellrc` already covers — previews those lines and offers to

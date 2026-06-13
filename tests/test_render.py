@@ -60,7 +60,7 @@ def test_render_summary_handles_empty() -> None:
     assert "Installed: 0" in out
 
 
-def test_render_doctor_prints_findings_then_hint() -> None:
+def test_render_doctor_prints_findings_with_meaning_and_next_step() -> None:
     from installer.doctor import DoctorReport
     from installer.render import render_doctor
 
@@ -70,23 +70,22 @@ def test_render_doctor_prints_findings_then_hint() -> None:
         duplicated=(Path("/b/bin"),),
     )
     console, buf = _console()
-    render_doctor(report, console, "Run 'make fix' to wire PATH into your shell.")
+    render_doctor(report, console)
     out = buf.getvalue()
     assert "/a/bin" in out and "/c/bin" in out and "/b/bin" in out
-    assert "missing from PATH" in out
-    assert "make fix" in out
-    assert "github.com" not in out  # troubleshooting URL no longer printed here
+    assert "not on PATH" in out  # the missing-dir guidance title
+    assert "make fix" in out  # the missing-dir next step
+    assert "github.com" not in out  # troubleshooting URL never printed here
 
 
-def test_render_doctor_healthy_prints_no_hint() -> None:
+def test_render_doctor_healthy_says_healthy() -> None:
     from installer.doctor import DoctorReport
     from installer.render import render_doctor
 
     console, buf = _console()
-    render_doctor(DoctorReport(missing=(), broken=(), duplicated=()), console, "HINT")
+    render_doctor(DoctorReport(missing=(), broken=(), duplicated=()), console)
     out = buf.getvalue()
     assert "healthy" in out.lower()
-    assert "HINT" not in out
 
 
 def test_render_troubleshooting_prints_link() -> None:
@@ -231,3 +230,31 @@ def test_render_guard_status_active_shims_no_warning():
     out = buf.getvalue()
     assert "pip/npm ban active" in out
     assert "guard warning" not in out
+
+
+def test_render_guard_status_includes_reload_next_step():
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+    render_guard_status({"pip": True, "npm": False}, None, console)
+    out = buf.getvalue()
+    assert "pip/npm ban active" in out
+    assert "hash -r" in out  # the reload next step from guard_guidance
+
+
+def test_guidance_text_styles_by_severity_and_suppresses_empty_next_step() -> None:
+    from installer.guidance import Guidance
+    from installer.render import guidance_text
+
+    items = [
+        Guidance(title="All good", meaning="No issues.", next_step="", severity="ok"),
+        Guidance(title="Bad dir", meaning="Missing.", next_step="Run make fix.", severity="warn"),
+    ]
+    text = guidance_text(items)
+    plain = text.plain
+    # Empty next_step (the ok item) renders no arrow line; the warn item does.
+    assert "→" not in plain.split("Bad dir")[0]
+    assert "→ Run make fix." in plain
+    # Severity drives the style spans: ok->green title, warn->yellow title.
+    styles = {str(span.style) for span in text.spans}
+    assert "green" in styles
+    assert "yellow" in styles

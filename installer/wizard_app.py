@@ -1,34 +1,36 @@
 """Unified Textual shell hosting the wizard views behind one app.
 
-Phase 1 of the unified-UI redesign. The app owns navigation and the screen
-stack; the catalog is the only functional view. Execution stays behind the pure
-`installer/` core invoked from `setup.py`; the app only collects the catalog
-decision (`list[str] | None`).
+The app owns navigation and the screen stack. The catalog, doctor, and fix are
+functional views; uninstall and policies remain placeholders until later phases.
+Execution stays behind the pure `installer/` core invoked from `setup.py`, with
+one deliberate exception: the fix view applies its PATH wiring live through an
+injected closure. The app's run value stays the catalog decision (`list[str] | None`).
 
 The catalog is the base screen (`get_default_screen`); it cannot be switched
 out. Navigation is therefore a stack with the catalog at the bottom: the stack
-is always `[catalog]` or `[catalog, <one other view>]`. The other views are
-placeholders until later phases fill them in.
+is always `[catalog]` or `[catalog, <one other view>]`.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import ClassVar
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Center, Middle
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Label, ListItem, ListView
+from textual.widgets import Label, ListItem, ListView, Static
 
 from installer.catalog_tui import CatalogScreen
+from installer.doctor import DoctorReport
+from installer.guidance import Guidance, doctor_guidance, guard_guidance
 from installer.model import Tool
+from installer.render import guidance_text
 
 # Navigation order shared by every route, so the palette and the direct 1..N key
 # bindings expose exactly the same views in the same order.
 VIEW_ORDER: tuple[str, ...] = ("catalog", "doctor", "fix", "uninstall", "policies")
 _PLACEHOLDER_TEXT = {
-    "doctor": "Doctor — coming in Phase 2",
-    "fix": "Fix — coming in Phase 2",
     "uninstall": "Uninstall — coming in Phase 3",
     "policies": "Policies — coming in Phase 4",
 }
@@ -50,6 +52,79 @@ class PlaceholderScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield Middle(Center(Label(self._message, id="placeholder")))
+
+
+class DoctorScreen(Screen[None]):
+    """Read-only PATH audit + guidance, color-coded by severity."""
+
+    DEFAULT_CSS = """
+    DoctorScreen #doctor-body { padding: 1 2; }
+    """
+
+    def __init__(
+        self,
+        report: DoctorReport,
+        guard_status: dict[str, bool],
+        guard_warning: str | None,
+    ) -> None:
+        super().__init__()
+        self._report = report
+        self._guard_status = guard_status
+        self._guard_warning = guard_warning
+        self.guidance: list[Guidance] = []  # public test seam
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="doctor-body")
+
+    def on_mount(self) -> None:
+        self.guidance = doctor_guidance(self._report) + guard_guidance(
+            self._guard_status, self._guard_warning
+        )
+        self.query_one("#doctor-body", Static).update(guidance_text(self.guidance))
+
+
+class FixScreen(Screen[None]):
+    """Preview the PATH wiring + reload guidance; Apply runs it live, in place."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("a", "apply", "apply", show=True),
+    ]
+    DEFAULT_CSS = """
+    FixScreen #fix-body { padding: 1 2; }
+    """
+
+    def __init__(self, preview: str, fix: Callable[[], None]) -> None:
+        super().__init__()
+        self._preview = preview
+        self._fix = fix
+        self.applied = False  # public test seam
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="fix-body")
+
+    def on_mount(self) -> None:
+        self._refresh_body()
+
+    # NB: not named `_render` — that collides with Textual's internal
+    # Widget._render(), which the compositor calls to produce the visual.
+    def _refresh_body(self) -> None:
+        body = self.query_one("#fix-body", Static)
+        text = Text()
+        if self.applied:
+            text.append("PATH wired.", style="green")
+            text.append("\n  → Restart your shell or run `source ~/.myshellrc` to apply.")
+        else:
+            text.append("Press 'a' to wire the managed PATH into your shells.", style="yellow")
+            text.append(f"\n\n{self._preview}")
+            text.append("\n\nAfter applying, restart your shell or `source ~/.myshellrc`.")
+        body.update(text)
+
+    def action_apply(self) -> None:
+        if self.applied:
+            return
+        self._fix()
+        self.applied = True
+        self._refresh_body()
 
 
 class NavScreen(ModalScreen[str | None]):
@@ -98,17 +173,31 @@ class UnifiedApp(App[list[str] | None]):
         tools: list[Tool],
         installed: Mapping[str, bool],
         blurbs: Mapping[str, str],
+        *,
+        report: DoctorReport,
+        guard_status: dict[str, bool],
+        guard_warning: str | None,
+        fix_preview: str,
+        fix: Callable[[], None],
+        initial_view: str = "catalog",
     ) -> None:
         super().__init__()
         self._catalog = CatalogScreen(tools, installed, blurbs)
-        # Placeholder screens are held as instances and pushed by value. Textual
-        # types `push_screen`/`pop_screen` generically (so they stay fully typed
-        # under pyright strict), unlike `install_screen`/`switch_screen` whose
-        # bare-`Screen` stubs leak `Unknown`.
-        self._placeholders: dict[str, Screen[None]] = {
-            name: PlaceholderScreen(message) for name, message in _PLACEHOLDER_TEXT.items()
+        # Non-catalog views, pushed by value. Doctor is real; the rest are
+        # placeholders until their phases. push_screen/pop_screen stay fully
+        # typed under pyright strict (unlike install_screen/switch_screen).
+        self._views: dict[str, Screen[None]] = {
+            "doctor": DoctorScreen(report, guard_status, guard_warning),
+            "fix": FixScreen(fix_preview, fix),
+            "uninstall": PlaceholderScreen(_PLACEHOLDER_TEXT["uninstall"]),
+            "policies": PlaceholderScreen(_PLACEHOLDER_TEXT["policies"]),
         }
+        self._initial_view = initial_view
         self.current_view = "catalog"
+
+    def on_mount(self) -> None:
+        if self._initial_view != "catalog":
+            self.show_view(self._initial_view)
 
     @property
     def catalog(self) -> CatalogScreen:
@@ -130,7 +219,7 @@ class UnifiedApp(App[list[str] | None]):
         if self.current_view != "catalog":
             self.pop_screen()
         if name != "catalog":
-            self.push_screen(self._placeholders[name])
+            self.push_screen(self._views[name])
         self.current_view = name
 
     def _navigable(self) -> bool:
@@ -139,7 +228,7 @@ class UnifiedApp(App[list[str] | None]):
         # placeholder is the active screen — never on top of the palette, which
         # would push onto a live modal and break the [catalog] / [catalog, <view>]
         # stack invariant.
-        return self.screen is self._catalog or self.screen in self._placeholders.values()
+        return self.screen is self._catalog or self.screen in self._views.values()
 
     def action_show(self, name: str) -> None:
         if not self._navigable():

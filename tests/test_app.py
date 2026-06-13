@@ -220,7 +220,7 @@ def test_configure_path_writes_myshellrc_and_wires_all_rcs(tmp_path: Path):
     assert "# zsh" in zshrc.read_text()  # existing content preserved
 
 
-def test_run_doctor_reports_problems_with_hint_and_never_writes(tmp_path: Path):
+def test_run_doctor_reports_problems_and_never_writes(tmp_path: Path):
     from installer.app import run_doctor
 
     bin_dir = tmp_path / ".local" / "bin"
@@ -233,7 +233,6 @@ def test_run_doctor_reports_problems_with_hint_and_never_writes(tmp_path: Path):
         default_bin_dir=bin_dir,
         path_value="/usr/bin",
         exists=lambda _p: False,  # default dir absent -> missing + broken
-        hint="Run 'make fix' to wire PATH into your shell.",
     )
 
     assert bin_dir in report.missing
@@ -243,7 +242,7 @@ def test_run_doctor_reports_problems_with_hint_and_never_writes(tmp_path: Path):
     assert list(tmp_path.iterdir()) == []  # diagnosis only: nothing written
 
 
-def test_run_doctor_healthy_reports_no_hint(tmp_path: Path):
+def test_run_doctor_healthy_says_healthy(tmp_path: Path):
     from installer.app import run_doctor
 
     bin_dir = tmp_path / "bin"
@@ -256,12 +255,10 @@ def test_run_doctor_healthy_reports_no_hint(tmp_path: Path):
         default_bin_dir=bin_dir,
         path_value=str(bin_dir),
         exists=lambda _p: True,
-        hint="HINT",
     )
 
     assert report.missing == () and report.broken == () and report.duplicated == ()
     assert "healthy" in buf.getvalue().lower()
-    assert "HINT" not in buf.getvalue()
 
 
 def test_configure_path_honors_exists_filter(tmp_path: Path):
@@ -795,7 +792,6 @@ def test_run_doctor_reports_active_ban(tmp_path: Path):
         default_bin_dir=shim_dir,
         path_value=str(shim_dir),
         exists=lambda _p: True,
-        hint="hint",
         which=lambda name: str(shim_dir / name),
     )
     assert "pip/npm ban active" in buf.getvalue()
