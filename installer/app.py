@@ -12,6 +12,7 @@ from installer.doctor import DoctorReport, audit_path
 from installer.engine import install_tool
 from installer.guards import (
     guard_path_warning,
+    guard_status,
     install_shims,
     remove_ban_aliases,
     remove_shims,
@@ -25,6 +26,7 @@ from installer.render import (
     render_audit,
     render_doctor,
     render_guard,
+    render_guard_status,
     render_rc_duplicates,
     render_summary,
     render_uninstall,
@@ -169,15 +171,22 @@ def run_doctor(
     path_value: str,
     exists: Callable[[Path], bool],
     hint: str,
+    which: Callable[[str], str | None] = shutil.which,
 ) -> DoctorReport:
     """Audit the PATH (read-only) and render the report; `hint` is the next-step line.
 
-    Fixing is a separate explicit action (configure_path, reached via --fix):
-    a diagnosis that silently rewrites shell config is what this split removes.
+    Also reports pip/npm-ban status. The PATH-order warning is shown only when the
+    ban is actually installed (an irrelevant warning otherwise). Fixing the PATH
+    remains a separate explicit action.
     """
     bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir, exists)
     report = audit_path(bin_dirs, path_value, exists)
     render_doctor(report, console, hint)
+    status = guard_status(default_bin_dir)
+    warning = (
+        guard_path_warning(default_bin_dir, path_value, which) if any(status.values()) else None
+    )
+    render_guard_status(status, warning, console)
     return report
 
 
@@ -252,18 +261,27 @@ def run_uninstall(
     *,
     default_bin_dir: Path,
     myshellrc_path: Path,
+    rc_paths: list[Path],
     confirm: Callable[[str], bool],
 ) -> list[Path]:
-    """Preview userspace artifacts, confirm, then remove them and strip the PATH block.
+    """Preview userspace artifacts, confirm, then remove them, the PATH block, and
+    any pip/npm-ban artifacts (shims + alias blocks).
 
-    Returns the removed paths ([] if there was nothing to remove or the user declined).
+    Returns the removed download/app paths ([] if nothing to remove or declined).
     """
     paths = plan_uninstall(tools, default_bin_dir)
+    shimmed = [name for name, installed in guard_status(default_bin_dir).items() if installed]
     render_uninstall(paths, console)
-    if not paths:
+    if shimmed:
+        console.print(f"The pip/npm ban will also be removed ({', '.join(shimmed)}).")
+    if not paths and not shimmed:
         return []
     if not confirm("Remove these artifacts?"):
         return []
     remove_paths(paths)
     remove_managed_block(myshellrc_path)
+    remove_shims(default_bin_dir)
+    remove_ban_aliases(myshellrc_path)
+    for rc_path in rc_paths:
+        remove_ban_aliases(rc_path)
     return paths

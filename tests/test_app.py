@@ -321,6 +321,7 @@ def test_run_uninstall_removes_when_confirmed(tmp_path: Path, monkeypatch: pytes
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=myshellrc,
+        rc_paths=[],
         confirm=lambda _m: True,
     )
     assert set(removed) == {opt, bin_dir / "fd"}
@@ -353,6 +354,7 @@ def test_run_uninstall_aborts_when_declined(tmp_path: Path, monkeypatch: pytest.
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
         confirm=lambda _m: False,
     )
     assert removed == []
@@ -519,6 +521,7 @@ def test_run_uninstall_nothing_to_remove_skips_confirm(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
         confirm=fail_confirm,
     )
     assert removed == []
@@ -774,4 +777,49 @@ def test_run_guard_remove_strips_shims_and_aliases(tmp_path: Path):
         which=lambda _n: None,
     )
     assert not (shim_dir / "pip").exists()
+    assert "tools-installer ban" not in rc.read_text()
+
+
+def test_run_doctor_reports_active_ban(tmp_path: Path):
+    from installer.app import run_doctor
+    from installer.guards import install_shims
+
+    shim_dir = tmp_path / ".local" / "bin"
+    install_shims(shim_dir)
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+    run_doctor(
+        [],
+        console,
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        default_bin_dir=shim_dir,
+        path_value=str(shim_dir),
+        exists=lambda _p: True,
+        hint="hint",
+        which=lambda name: str(shim_dir / name),
+    )
+    assert "pip/npm ban active" in buf.getvalue()
+
+
+def test_run_uninstall_also_removes_guard_artifacts(tmp_path: Path):
+    from installer.app import run_uninstall
+    from installer.guards import install_shims, write_ban_aliases
+
+    shim_dir = tmp_path / ".local" / "bin"
+    myshellrc = tmp_path / ".myshellrc"
+    rc = tmp_path / ".zshrc"
+    install_shims(shim_dir)
+    write_ban_aliases(myshellrc)
+    write_ban_aliases(rc)
+    console = Console(file=io.StringIO(), width=100)
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=shim_dir,
+        myshellrc_path=myshellrc,
+        rc_paths=[rc],
+        confirm=lambda _m: True,
+    )
+    assert not (shim_dir / "pip").exists()
+    assert "tools-installer ban" not in myshellrc.read_text()
     assert "tools-installer ban" not in rc.read_text()
