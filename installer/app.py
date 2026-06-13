@@ -170,10 +170,9 @@ def run_doctor(
     default_bin_dir: Path,
     path_value: str,
     exists: Callable[[Path], bool],
-    hint: str,
     which: Callable[[str], str | None] = shutil.which,
 ) -> DoctorReport:
-    """Audit the PATH (read-only) and render the report; `hint` is the next-step line.
+    """Audit the PATH (read-only) and render the report.
 
     Also reports pip/npm-ban status. The PATH-order warning is shown only when the
     ban is actually installed (an irrelevant warning otherwise). Fixing the PATH
@@ -181,7 +180,7 @@ def run_doctor(
     """
     bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir, exists)
     report = audit_path(bin_dirs, path_value, exists)
-    render_doctor(report, console, hint)
+    render_doctor(report, console)
     status = guard_status(default_bin_dir)
     warning = (
         guard_path_warning(default_bin_dir, path_value, which) if any(status.values()) else None

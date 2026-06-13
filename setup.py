@@ -177,7 +177,6 @@ def _run_doctor(console: Console) -> int:
         default_bin_dir=_DEFAULT_BIN_DIR,
         path_value=os.environ.get("PATH", ""),
         exists=Path.is_dir,
-        hint="Run 'make fix' to wire PATH into your shell.",
     )
     return 0
 
@@ -239,7 +238,6 @@ def _verify_and_clean(
         default_bin_dir=_DEFAULT_BIN_DIR,
         path_value=os.environ.get("PATH", ""),
         exists=Path.is_dir,
-        hint="Restart your shell (or: source ~/.myshellrc) to apply.",
     )
     managed = set(collect_bin_dirs(tools, platform, _DEFAULT_BIN_DIR))
     confirm = (lambda _message: True) if assume_yes else _ask_confirm
