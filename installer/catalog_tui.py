@@ -280,6 +280,10 @@ class CatalogScreen(Screen[list[str] | None]):
             chosen = tool.id in self.selected
             table.update_cell(tool.id, "sel", self._mark(chosen))
 
+    def _clear_status(self) -> None:
+        self.status_text = ""
+        self.query_one("#status-line", Static).update("")
+
     def action_toggle_tool(self) -> None:
         tool = self._highlighted_tool()
         if tool is None:  # empty catalog or a section row
@@ -287,16 +291,20 @@ class CatalogScreen(Screen[list[str] | None]):
         self.selected.symmetric_difference_update({tool.id})
         chosen = tool.id in self.selected
         self.query_one(DataTable[Any]).update_cell(tool.id, "sel", self._mark(chosen))
+        self._clear_status()
 
     def action_select_all(self) -> None:
         self.selected = {tool.id for tool in self.tools}
         self._refresh_marks()
+        self._clear_status()
 
     def action_invert(self) -> None:
         self.selected = {tool.id for tool in self.tools} - self.selected
         self._refresh_marks()
+        self._clear_status()
 
     def action_accept(self) -> None:
+        self._clear_status()
         chosen = [tool.id for tool in self.tools if tool.id in self.selected]
         if not chosen:
             self.status_text = "Select at least one tool, or press q to quit."

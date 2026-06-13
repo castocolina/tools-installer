@@ -293,6 +293,15 @@ async def test_enter_with_empty_selection_is_a_no_op():
         assert "Select at least one tool" in app.catalog.status_text
 
 
+async def test_status_message_clears_once_a_tool_is_selected():
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("enter")  # empty -> warning shown
+        assert "Select at least one tool" in app.catalog.status_text
+        await pilot.press("space")  # select the highlighted tool
+        assert app.catalog.status_text == ""
+
+
 async def test_empty_catalog_enter_is_blocked_then_aborts():
     app = UnifiedApp([], {}, {})
     async with app.run_test(size=(100, 30)) as pilot:
