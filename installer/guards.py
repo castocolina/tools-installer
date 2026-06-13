@@ -41,3 +41,41 @@ def is_our_shim(path: Path) -> bool:
         return SHIM_SENTINEL in path.read_text()
     except (OSError, UnicodeDecodeError):
         return False
+
+
+def install_shims(shim_dir: Path) -> dict[str, str]:
+    """Write npm/pip/pip3 shims into shim_dir (mode 0o755). Idempotent.
+
+    Never overwrites a real binary already living there (sentinel check).
+    Returns {name: 'created' | 'refreshed' | 'skipped (real binary here)'}.
+    """
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    results: dict[str, str] = {}
+    for name in BANNED:
+        target = shim_dir / name
+        if target.exists() and not is_our_shim(target):
+            results[name] = "skipped (real binary here)"
+            continue
+        had = target.exists()
+        target.write_text(shim_script(name))
+        target.chmod(0o755)
+        results[name] = "refreshed" if had else "created"
+    return results
+
+
+def remove_shims(shim_dir: Path) -> dict[str, str]:
+    """Remove only the shims we created. Returns {name: 'removed' | 'absent'}."""
+    results: dict[str, str] = {}
+    for name in BANNED:
+        target = shim_dir / name
+        if target.exists() and is_our_shim(target):
+            target.unlink()
+            results[name] = "removed"
+        else:
+            results[name] = "absent"
+    return results
+
+
+def guard_status(shim_dir: Path) -> dict[str, bool]:
+    """{name: our shim is installed} for each banned command."""
+    return {name: is_our_shim(shim_dir / name) for name in BANNED}
