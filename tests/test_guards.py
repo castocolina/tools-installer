@@ -2,13 +2,18 @@ import subprocess
 from pathlib import Path
 
 from installer.guards import (
+    BAN_BEGIN,
+    BAN_END,
     BANNED,
     SHIM_SENTINEL,
+    ban_alias_block,
     guard_status,
     install_shims,
     is_our_shim,
+    remove_ban_aliases,
     remove_shims,
     shim_script,
+    write_ban_aliases,
 )
 
 
@@ -85,3 +90,42 @@ def test_guard_status_reports_installed_ours(tmp_path: Path):
     status = guard_status(tmp_path)
     assert status["npm"] is True
     assert status["pip"] is False
+
+
+def test_ban_alias_block_aliases_each_banned_command():
+    block = ban_alias_block()
+    assert block.startswith(BAN_BEGIN)
+    assert block.rstrip().endswith(BAN_END)
+    for name in BANNED:
+        assert f"alias {name}=" in block
+
+
+def test_write_ban_aliases_is_idempotent(tmp_path: Path):
+    rc = tmp_path / ".zshrc"
+    rc.write_text("# user content\n")
+    write_ban_aliases(rc)
+    write_ban_aliases(rc)
+    text = rc.read_text()
+    assert "# user content" in text
+    assert text.count(BAN_BEGIN) == 1  # not duplicated
+
+
+def test_remove_ban_aliases_strips_block_preserving_user_content(tmp_path: Path):
+    rc = tmp_path / ".zshrc"
+    rc.write_text("# user content\n")
+    write_ban_aliases(rc)
+    remove_ban_aliases(rc)
+    text = rc.read_text()
+    assert "# user content" in text
+    assert BAN_BEGIN not in text
+
+
+def test_remove_ban_aliases_missing_file_is_noop(tmp_path: Path):
+    remove_ban_aliases(tmp_path / "nope")  # must not raise
+
+
+def test_remove_ban_aliases_no_block_is_noop(tmp_path: Path):
+    rc = tmp_path / ".zshrc"
+    rc.write_text("# user content\n")
+    remove_ban_aliases(rc)
+    assert rc.read_text() == "# user content\n"

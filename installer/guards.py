@@ -13,6 +13,8 @@ real npm/pip earlier on PATH wins. guard_path_warning flags the PATH-order case.
 
 from pathlib import Path
 
+from installer.shellrc import apply_block, strip_block
+
 BANNED: dict[str, str] = {
     "npm": "pnpm (pnpm add -g <pkg>)",
     "pip": "uv (uv pip install / uv add)",
@@ -79,3 +81,30 @@ def remove_shims(shim_dir: Path) -> dict[str, str]:
 def guard_status(shim_dir: Path) -> dict[str, bool]:
     """{name: our shim is installed} for each banned command."""
     return {name: is_our_shim(shim_dir / name) for name in BANNED}
+
+
+def ban_alias_block() -> str:
+    """Marker-delimited alias block (no trailing newline, like shellrc blocks)."""
+    lines = [BAN_BEGIN]
+    for name, hint in BANNED.items():
+        lines.append(
+            f"""alias {name}='echo "tools-installer: {name} is banned — use {hint}." >&2; false'"""
+        )
+    lines.append(BAN_END)
+    return "\n".join(lines)
+
+
+def write_ban_aliases(rc_path: Path) -> None:
+    """Idempotently write the alias block into rc_path, preserving the rest."""
+    existing = rc_path.read_text() if rc_path.exists() else ""
+    rc_path.write_text(apply_block(existing, ban_alias_block(), begin=BAN_BEGIN, end=BAN_END))
+
+
+def remove_ban_aliases(rc_path: Path) -> None:
+    """Strip the alias block from rc_path. A missing file or absent block is a no-op."""
+    if not rc_path.exists():
+        return
+    original = rc_path.read_text()
+    stripped = strip_block(original, BAN_BEGIN, BAN_END)
+    if stripped != original:
+        rc_path.write_text(stripped)
