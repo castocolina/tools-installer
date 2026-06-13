@@ -4,11 +4,13 @@ from pathlib import Path
 
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from installer.audit import ToolStatus
-from installer.doctor import DoctorReport, has_problems
+from installer.doctor import DoctorReport
 from installer.download import DOWNLOAD_KINDS
 from installer.engine import InstallOutcome
+from installer.guidance import Guidance, doctor_guidance
 from installer.links import TROUBLESHOOTING_URL
 from installer.session import Summary
 
@@ -72,19 +74,25 @@ def render_rc_duplicates(found: dict[Path, list[str]], console: Console) -> None
             console.print(f"    {line}")
 
 
-def render_doctor(report: DoctorReport, console: Console, hint: str) -> None:
-    """Print the PATH audit; on any problem, close with the caller's next-step hint."""
-    if not has_problems(report):
-        console.print("PATH looks healthy: all bin dirs present, on PATH, and unique.")
-        return
-    for label, dirs in (
-        ("missing from PATH", report.missing),
-        ("does not exist", report.broken),
-        ("duplicated on PATH", report.duplicated),
-    ):
-        for directory in dirs:
-            console.print(f"  {label}: {directory}")
-    console.print(hint)
+_SEVERITY_STYLE: dict[str, str] = {"ok": "green", "warn": "yellow", "error": "red"}
+
+
+def guidance_text(items: list[Guidance]) -> Text:
+    """Render guidance items as one colored block: title (by severity), meaning, next step."""
+    text = Text()
+    for index, item in enumerate(items):
+        if index:
+            text.append("\n")
+        text.append(item.title, style=_SEVERITY_STYLE[item.severity])
+        text.append(f"\n  {item.meaning}")
+        if item.next_step:
+            text.append(f"\n  → {item.next_step}")
+    return text
+
+
+def render_doctor(report: DoctorReport, console: Console) -> None:
+    """Print each PATH finding with its meaning and exact next step (color by severity)."""
+    console.print(guidance_text(doctor_guidance(report)))
 
 
 def render_guard(
