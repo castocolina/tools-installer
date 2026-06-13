@@ -83,23 +83,33 @@ def apply_block(content: str, block: str, begin: str = _PATH_BEGIN, end: str = _
     return f"{block}\n"
 
 
+def strip_block(content: str, begin: str, end: str) -> str:
+    """Return content with the last begin..end block removed; unchanged if absent.
+
+    Mirrors apply_block's last-begin pairing, so an orphan begin (no matching
+    end) is left untouched rather than eating the rest of the file.
+    """
+    lines = content.split("\n")
+    if begin not in lines:
+        return content
+    start = max(index for index, line in enumerate(lines) if line == begin)
+    for stop in range(start, len(lines)):
+        if lines[stop] == end:
+            return "\n".join(lines[:start] + lines[stop + 1 :])
+    return content
+
+
 def remove_managed_block(path: Path) -> None:
     """Strip the managed PATH block from `path`, preserving the rest. Idempotent.
 
-    Pairs the LAST begin marker with the following end marker (mirroring
-    apply_block). A missing file or a file without the block is left untouched.
+    A missing file, or a file without the block, is left untouched.
     """
     if not path.exists():
         return
-    lines = path.read_text().split("\n")
-    if _PATH_BEGIN not in lines:
-        return
-    start = max(index for index, line in enumerate(lines) if line == _PATH_BEGIN)
-    for stop in range(start, len(lines)):
-        if lines[stop] == _PATH_END:
-            kept = lines[:start] + lines[stop + 1 :]
-            path.write_text("\n".join(kept))
-            return
+    original = path.read_text()
+    stripped = strip_block(original, _PATH_BEGIN, _PATH_END)
+    if stripped != original:
+        path.write_text(stripped)
 
 
 def write_myshellrc(bin_dirs: list[Path], path: Path) -> None:

@@ -8,6 +8,7 @@ from installer.shellrc import (
     ensure_source,
     managed_block,
     remove_managed_block,
+    strip_block,
     write_myshellrc,
 )
 
@@ -216,3 +217,19 @@ def test_collect_bin_dirs_only_includes_platform_applicable_methods() -> None:
     dirs = collect_bin_dirs([tool], macos, Path("~/.local/bin"), exists=lambda _p: True)
     assert Path("/opt/homebrew/bin") in dirs
     assert Path("/home/linuxbrew/.linuxbrew/bin") not in dirs
+
+
+def test_strip_block_removes_the_last_well_formed_block():
+    begin, end = "# >>> b >>>", "# <<< b <<<"
+    text = f"keep\n{begin}\ninside\n{end}\ntail"
+    assert strip_block(text, begin, end) == "keep\ntail"
+
+
+def test_strip_block_absent_marker_is_unchanged():
+    assert strip_block("nothing here", "# >>> b >>>", "# <<< b <<<") == "nothing here"
+
+
+def test_strip_block_orphan_begin_is_unchanged():
+    begin, end = "# >>> b >>>", "# <<< b <<<"
+    text = f"keep\n{begin}\nno end marker"
+    assert strip_block(text, begin, end) == text
