@@ -267,7 +267,7 @@ async def test_number_key_navigates_to_each_view() -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("2")
         assert app.current_view == "doctor"
-        assert "coming in Phase 2" in app.screen.query_one("#placeholder").renderable.plain
+        assert "coming in Phase 2" in str(app.screen.query_one("#placeholder", Label).content)
         await pilot.press("3")
         assert app.current_view == "fix"
         await pilot.press("4")
@@ -341,24 +341,32 @@ On `UnifiedApp`, disable the default palette and add the direct key bindings:
     ]
 ```
 
-Install the placeholders in `on_mount` and add the dispatch:
+Install the placeholders in `on_mount` and add the dispatch. **Note (foundation from Task 1):** the catalog is the app's *base screen* via `get_default_screen()` — it is **not** installed by name and **cannot** be `switch_screen`-ed out. So navigation is a stack with the catalog at the bottom: the stack is always `[catalog]` or `[catalog, <one other view>]`. Do **not** install or push the catalog here.
 
 ```python
     def on_mount(self) -> None:
-        self.install_screen(self._catalog, name="catalog")
         for name, message in _PLACEHOLDER_TEXT.items():
             self.install_screen(PlaceholderScreen(message), name=name)
-        self.push_screen("catalog")
 
     def show_view(self, name: str) -> None:
+        # Invariant: the stack is [catalog] or [catalog, <one other view>]. The
+        # catalog is the base screen, so navigating to it pops back; navigating
+        # away pushes (from catalog) or switches (replacing another view).
         if name == self.current_view:
             return
-        self.switch_screen(name)
+        if name == "catalog":
+            self.pop_screen()
+        elif self.current_view == "catalog":
+            self.push_screen(name)
+        else:
+            self.switch_screen(name)
         self.current_view = name
 
     def action_show(self, name: str) -> None:
         self.show_view(name)
 ```
+
+`current_view` tracks the **active screen/view** (distinct from `CatalogScreen.view`, which is the catalog's grouping). Task 1 left it set-but-unread; this task is its first reader.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -671,16 +679,16 @@ Add a `status_text` field in `__init__` (next to `self.detail_text = ""`):
         self.status_text = ""
 ```
 
-Add a status line to `DEFAULT_CSS` (inside the existing block):
+Add a status line to `DEFAULT_CSS` (inside the existing block). **Use the id `status-line`, NOT `status`** — `status` is already the id of the Status grouping Tab (tab ids are the `VIEWS` names), so reusing it makes `query_one("#status")` ambiguous and breaks `test_clicking_a_tab_switches_view`:
 
 ```python
-    #status { dock: bottom; height: 1; padding: 0 1; color: $warning; }
+    #status-line { dock: bottom; height: 1; padding: 0 1; color: $warning; }
 ```
 
 Yield it in `compose`, right after the `#legend` Static:
 
 ```python
-        yield Static("", id="status")
+        yield Static("", id="status-line")
 ```
 
 Replace `action_accept`:
@@ -690,7 +698,7 @@ Replace `action_accept`:
         chosen = [tool.id for tool in self.tools if tool.id in self.selected]
         if not chosen:
             self.status_text = "Select at least one tool, or press q to quit."
-            self.query_one("#status", Static).update(Text(self.status_text, style="yellow"))
+            self.query_one("#status-line", Static).update(Text(self.status_text, style="yellow"))
             return
         self.app.exit(chosen)
 ```
