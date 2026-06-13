@@ -22,7 +22,6 @@ from installer.app import (
     run_uninstall,
     run_wizard,
 )
-from installer.catalog_tui import CatalogApp
 from installer.cli import parse_args
 from installer.model import Tool, load_categories, load_tools
 from installer.platform import Platform, detect
@@ -31,6 +30,7 @@ from installer.render import render_troubleshooting
 from installer.selection import Choice
 from installer.shellrc import collect_bin_dirs
 from installer.status import is_installed
+from installer.wizard_app import UnifiedApp
 
 _REGISTRY = Path(__file__).parent / "installer" / "registry.toml"
 _DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
@@ -140,7 +140,7 @@ def _ask_mismatch(tool_id: str) -> str:
 
 def _select_catalog(tools: list[Tool]) -> list[str] | None:
     installed = {tool.id: is_installed(tool) for tool in tools}
-    return CatalogApp(tools, installed, load_categories(_REGISTRY)).run()
+    return UnifiedApp(tools, installed, load_categories(_REGISTRY)).run()
 
 
 def _resolve_link_mode(link_mode_option: str | None) -> str:

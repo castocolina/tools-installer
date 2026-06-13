@@ -10,9 +10,11 @@ from collections.abc import Mapping
 from typing import Any, ClassVar, Literal
 
 from rich.text import Text
-from textual.app import App, ComposeResult
+from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.coordinate import Coordinate
+from textual.message import Message
+from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Static, Tab, Tabs
 
 from installer.model import Tool
@@ -114,22 +116,30 @@ _LEGEND = (
 )
 
 
-class CatalogApp(App[list[str] | None]):
+class CatalogScreen(Screen[list[str] | None]):
     """Single-screen tool picker; ←/→ or clicking the tabs switches the grouping.
 
-    run() returns the selected ids in catalog order, or None when aborted (q).
-    State the tests assert on (view, table_sort, selected, detail_text) is
-    deliberately public.
+    Mounted as the unified app's base screen. Accept/abort post a `Decided`
+    message carrying the selected ids in catalog order (or None on abort); the
+    host app turns that into its run() result. State the tests assert on (view,
+    table_sort, selected, detail_text) is deliberately public.
     """
 
-    CSS = """
+    class Decided(Message):
+        """The user resolved the catalog: `result` is the selected ids in catalog
+        order, or None when aborted. The host app forwards it to App.exit."""
+
+        def __init__(self, result: list[str] | None) -> None:
+            super().__init__()
+            self.result = result
+
+    DEFAULT_CSS = """
     Tabs { dock: top; }
     #detail { dock: bottom; height: 2; padding: 0 1; background: $surface; }
     #legend { dock: bottom; height: 1; padding: 0 1; }
     DataTable { height: 1fr; }
     """
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("ctrl+c", "abort", "quit", show=False, priority=True),
         Binding("left", "prev_view", "prev view", priority=True),
         Binding("right", "next_view", "next view", priority=True),
         Binding("space", "toggle_tool", "toggle", priority=True),
@@ -274,10 +284,12 @@ class CatalogApp(App[list[str] | None]):
         self._refresh_marks()
 
     def action_accept(self) -> None:
-        self.exit([tool.id for tool in self.tools if tool.id in self.selected])
+        self.post_message(
+            self.Decided([tool.id for tool in self.tools if tool.id in self.selected])
+        )
 
     def action_abort(self) -> None:
-        self.exit(None)
+        self.post_message(self.Decided(None))
 
     # -- detail bar ----------------------------------------------------------
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
