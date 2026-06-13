@@ -133,10 +133,22 @@ class UnifiedApp(App[list[str] | None]):
             self.push_screen(self._placeholders[name])
         self.current_view = name
 
+    def _navigable(self) -> bool:
+        # ctrl+p and the number keys are priority App bindings, so they fire even
+        # while a NavScreen modal is open. Navigate only when the catalog or a
+        # placeholder is the active screen — never on top of the palette, which
+        # would push onto a live modal and break the [catalog] / [catalog, <view>]
+        # stack invariant.
+        return self.screen is self._catalog or self.screen in self._placeholders.values()
+
     def action_show(self, name: str) -> None:
+        if not self._navigable():
+            return
         self.show_view(name)
 
     def action_open_nav(self) -> None:
+        if not self._navigable():
+            return
         self.push_screen(NavScreen(), self._navigate)
 
     def _navigate(self, name: str | None) -> None:
