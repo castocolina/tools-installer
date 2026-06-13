@@ -100,6 +100,8 @@ Everything else in the file (helpers, `compose`, `on_mount`, `_rebuild`, selecti
 
 - [ ] **Step 2: Create the `UnifiedApp` shell**
 
+> **As-built note:** the snippet below is the planned shape; under Textual 8.2.7 + strict pyright the final code (in `installer/wizard_app.py`, the source of truth) diverged: the catalog is the app's *base screen* via `get_default_screen()` (not `install_screen` + `push_screen`), and accept/abort are delivered through a typed `CatalogScreen.Decided` message that `on_catalog_screen_decided` forwards to `App.exit(...)` (reading `self.app.exit` directly leaks `Unknown` under strict pyright). See the spec's Status note and Task 2's as-built note.
+
 Create `installer/wizard_app.py`:
 
 ```python
@@ -341,25 +343,26 @@ On `UnifiedApp`, disable the default palette and add the direct key bindings:
     ]
 ```
 
-Install the placeholders in `on_mount` and add the dispatch. **Note (foundation from Task 1):** the catalog is the app's *base screen* via `get_default_screen()` — it is **not** installed by name and **cannot** be `switch_screen`-ed out. So navigation is a stack with the catalog at the bottom: the stack is always `[catalog]` or `[catalog, <one other view>]`. Do **not** install or push the catalog here.
+Build the placeholders as instances and add the dispatch. **Note (foundation from Task 1):** the catalog is the app's *base screen* via `get_default_screen()` — it **cannot** be `switch_screen`-ed out. Navigation is a stack with the catalog at the bottom: always `[catalog]` or `[catalog, <one other view>]`. **As-built (Textual 8.2.7 + strict pyright):** `install_screen`/`switch_screen` are avoided entirely — their bare-`Screen` stubs leak `Unknown` under strict pyright (no suppressions allowed) — so placeholders are held as instances in `self._placeholders` (built in `__init__`) and navigated with `push_screen(instance)` / `pop_screen` only. There is no `on_mount`. The single source of truth is `installer/wizard_app.py`.
+
+In `__init__`, build the placeholder instances:
 
 ```python
-    def on_mount(self) -> None:
-        for name, message in _PLACEHOLDER_TEXT.items():
-            self.install_screen(PlaceholderScreen(message), name=name)
+        self._placeholders: dict[str, Screen[None]] = {
+            name: PlaceholderScreen(message) for name, message in _PLACEHOLDER_TEXT.items()
+        }
+```
 
+Add the dispatch (push/pop instances; pop any overlay, then push the target unless it is the base catalog):
+
+```python
     def show_view(self, name: str) -> None:
-        # Invariant: the stack is [catalog] or [catalog, <one other view>]. The
-        # catalog is the base screen, so navigating to it pops back; navigating
-        # away pushes (from catalog) or switches (replacing another view).
         if name == self.current_view:
             return
-        if name == "catalog":
+        if self.current_view != "catalog":
             self.pop_screen()
-        elif self.current_view == "catalog":
-            self.push_screen(name)
-        else:
-            self.switch_screen(name)
+        if name != "catalog":
+            self.push_screen(self._placeholders[name])
         self.current_view = name
 
     def action_show(self, name: str) -> None:
