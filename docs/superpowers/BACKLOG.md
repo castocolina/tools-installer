@@ -12,25 +12,6 @@ captured, design not started) · **DEFERRED** (intentionally parked, YAGNI) ·
 
 ## NEXT
 
-### Environment policy / "setup tweaks" — ban bare `pip install` / `npm install -g`
-**NEEDS SCOPING.** The reference installer (uzkit) does more than install
-binaries: it also applies *environment policy*, e.g. discouraging bare
-`pip install` and `npm install -g` in favor of `uv` / `pnpm`. We want parity —
-the installer should optionally wire guardrails (shell functions / aliases /
-env vars) that steer the user toward the managed toolchain.
-
-Open questions before this can be planned:
-- **Where is the uzkit reference?** Confirm the repo/path that defines the
-  bans so we port the exact behavior, not a guess.
-- **Mechanism:** shell-function shims in `~/.myshellrc` (block bare `pip`,
-  suggest `uv pip`)? Env vars (`PIP_REQUIRE_VIRTUALENV=1`,
-  `npm_config_*`)? A mix? Must compose with the existing managed-block /
-  link-mode machinery and be cleanly removable by `make uninstall`.
-- **Opt-in vs default:** policy that edits shell behavior should almost
-  certainly be opt-in / previewed-and-confirmed, like PATH cleaning.
-
-→ Blocked on confirming the uzkit reference location with the user.
-
 ### F2 — per-tool AI rationale
 Port uzkit `docs/ia-helper-tools.md` into an optional `ai` field on each
 registry tool, surfaced in the catalog detail bar. The detail-bar slot
