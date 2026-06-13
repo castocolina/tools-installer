@@ -11,6 +11,8 @@ Neither layer is hermetic: `python -m pip install` bypasses the pip shim, and a
 real npm/pip earlier on PATH wins. guard_path_warning flags the PATH-order case.
 """
 
+import os
+from collections.abc import Callable
 from pathlib import Path
 
 from installer.shellrc import apply_block, strip_block
@@ -108,3 +110,33 @@ def remove_ban_aliases(rc_path: Path) -> None:
     stripped = strip_block(original, BAN_BEGIN, BAN_END)
     if stripped != original:
         rc_path.write_text(stripped)
+
+
+def guard_path_warning(
+    shim_dir: Path,
+    path_value: str,
+    which: Callable[[str], str | None],
+) -> str | None:
+    """Warn when the shims can't take effect: shim_dir missing from PATH, or a
+    real npm/pip/pip3 resolving before it. Returns None when the order is sound.
+
+    `which` is injected (shutil.which in production) so the check is testable.
+    """
+    target = str(shim_dir)
+    path_dirs = path_value.split(os.pathsep)
+    if target not in path_dirs:
+        return (
+            f"{target} is not on PATH — add it (early) so the ban applies to "
+            "non-interactive callers."
+        )
+    shim_index = path_dirs.index(target)
+    for name in BANNED:
+        real = which(name)
+        if real and not is_our_shim(Path(real)):
+            real_dir = str(Path(real).parent)
+            if real_dir in path_dirs and path_dirs.index(real_dir) < shim_index:
+                return (
+                    f"A real '{name}' at {real} resolves before {target}; "
+                    f"put {target} earlier on PATH."
+                )
+    return None

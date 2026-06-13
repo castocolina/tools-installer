@@ -7,6 +7,7 @@ from installer.guards import (
     BANNED,
     SHIM_SENTINEL,
     ban_alias_block,
+    guard_path_warning,
     guard_status,
     install_shims,
     is_our_shim,
@@ -129,3 +130,44 @@ def test_remove_ban_aliases_no_block_is_noop(tmp_path: Path):
     rc.write_text("# user content\n")
     remove_ban_aliases(rc)
     assert rc.read_text() == "# user content\n"
+
+
+def test_guard_path_warning_when_shim_dir_not_on_path(tmp_path: Path):
+    warning = guard_path_warning(tmp_path, path_value="/usr/bin:/bin", which=lambda _n: None)
+    assert warning is not None
+    assert str(tmp_path) in warning
+
+
+def test_guard_path_warning_when_real_tool_resolves_first(tmp_path: Path):
+    # shim dir is on PATH but AFTER /usr/bin, where a real pip lives.
+    path_value = f"/usr/bin:{tmp_path}"
+    warning = guard_path_warning(
+        tmp_path,
+        path_value=path_value,
+        which=lambda name: "/usr/bin/pip" if name == "pip" else None,
+    )
+    assert warning is not None
+    assert "/usr/bin/pip" in warning
+
+
+def test_guard_path_warning_none_when_healthy(tmp_path: Path):
+    # shim dir is first; the only resolvable tool is our own shim inside it.
+    install_shims(tmp_path)
+    path_value = f"{tmp_path}:/usr/bin"
+    warning = guard_path_warning(
+        tmp_path, path_value=path_value, which=lambda name: str(tmp_path / name)
+    )
+    assert warning is None
+
+
+def test_guard_path_warning_none_when_real_tool_not_on_path_dirs(tmp_path: Path):
+    # A real binary resolves but its parent dir isn't in the path_dirs list.
+    # This can happen when which finds it via a dir not listed in path_value.
+    install_shims(tmp_path)
+    path_value = f"{tmp_path}:/usr/bin"
+    warning = guard_path_warning(
+        tmp_path,
+        path_value=path_value,
+        which=lambda name: "/opt/local/bin/pip" if name == "pip" else str(tmp_path / name),
+    )
+    assert warning is None
