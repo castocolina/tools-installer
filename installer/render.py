@@ -87,6 +87,29 @@ def render_doctor(report: DoctorReport, console: Console, hint: str) -> None:
     console.print(hint)
 
 
+def render_guard(
+    actions: dict[str, str], warning: str | None, console: Console, *, removing: bool
+) -> None:
+    """Print the per-command shim actions, then any PATH-order warning."""
+    verb = "Removing" if removing else "Installing"
+    console.print(f"{verb} the pip/npm ban (shims + interactive aliases):")
+    for name, what in actions.items():
+        console.print(f"  {what}: {name}")
+    if warning:
+        console.print(warning)
+
+
+def render_guard_status(status: dict[str, bool], warning: str | None, console: Console) -> None:
+    """Read-only doctor line: silent unless the ban is active or PATH order is off."""
+    active = [name for name, installed in status.items() if installed]
+    if not active and not warning:
+        return
+    if active:
+        console.print(f"pip/npm ban active: {', '.join(active)} shimmed.")
+    if warning:
+        console.print(f"  guard warning: {warning}")
+
+
 def render_verification(outcomes: list[InstallOutcome], console: Console) -> None:
     """One line per download-based install: sha256-verified, unverified, or mismatched.
 

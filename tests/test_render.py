@@ -7,7 +7,13 @@ from installer.audit import ToolStatus
 from installer.checksums import ChecksumMismatch
 from installer.engine import InstallOutcome
 from installer.model import Method, Tool
-from installer.render import render_audit, render_summary, render_verification
+from installer.render import (
+    render_audit,
+    render_guard,
+    render_guard_status,
+    render_summary,
+    render_verification,
+)
 from installer.session import Summary
 
 
@@ -171,3 +177,57 @@ def test_render_verification_ignores_failed_download_outcome():
     ]
     render_verification(outcomes, console)
     assert console.export_text().strip() == ""
+
+
+def test_render_guard_prints_actions_and_warning():
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+    render_guard({"pip": "created", "npm": "created"}, "watch PATH order", console, removing=False)
+    out = buf.getvalue()
+    assert "Installing the pip/npm ban" in out
+    assert "created: pip" in out
+    assert "watch PATH order" in out
+
+
+def test_render_guard_removing_has_no_warning():
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+    render_guard({"pip": "removed"}, None, console, removing=True)
+    out = buf.getvalue()
+    assert "Removing the pip/npm ban" in out
+    assert "removed: pip" in out
+
+
+def test_render_guard_status_silent_when_inactive():
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+    render_guard_status({"pip": False, "npm": False, "pip3": False}, None, console)
+    assert buf.getvalue() == ""
+
+
+def test_render_guard_status_reports_active_shims_and_warning():
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+    render_guard_status({"pip": True, "npm": False, "pip3": True}, "PATH order", console)
+    out = buf.getvalue()
+    assert "pip/npm ban active" in out
+    assert "pip" in out
+    assert "PATH order" in out
+
+
+def test_render_guard_status_warning_only_no_active_shims():
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+    render_guard_status({"pip": False, "npm": False}, "PATH order warning", console)
+    out = buf.getvalue()
+    assert "pip/npm ban active" not in out
+    assert "PATH order warning" in out
+
+
+def test_render_guard_status_active_shims_no_warning():
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+    render_guard_status({"pip": True, "npm": False}, None, console)
+    out = buf.getvalue()
+    assert "pip/npm ban active" in out
+    assert "guard warning" not in out
