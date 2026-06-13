@@ -14,6 +14,7 @@ placeholders until later phases fill them in.
 from collections.abc import Callable, Mapping
 from typing import ClassVar
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Center, Middle
@@ -30,8 +31,6 @@ from installer.render import guidance_text
 # bindings expose exactly the same views in the same order.
 VIEW_ORDER: tuple[str, ...] = ("catalog", "doctor", "fix", "uninstall", "policies")
 _PLACEHOLDER_TEXT = {
-    "doctor": "Doctor — coming in Phase 2",
-    "fix": "Fix — coming in Phase 2",
     "uninstall": "Uninstall — coming in Phase 3",
     "policies": "Policies — coming in Phase 4",
 }
@@ -82,6 +81,50 @@ class DoctorScreen(Screen[None]):
             self._guard_status, self._guard_warning
         )
         self.query_one("#doctor-body", Static).update(guidance_text(self.guidance))
+
+
+class FixScreen(Screen[None]):
+    """Preview the PATH wiring + reload guidance; Apply runs it live, in place."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("a", "apply", "apply", show=True),
+    ]
+    DEFAULT_CSS = """
+    FixScreen #fix-body { padding: 1 2; }
+    """
+
+    def __init__(self, preview: str, fix: Callable[[], None]) -> None:
+        super().__init__()
+        self._preview = preview
+        self._fix = fix
+        self.applied = False  # public test seam
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="fix-body")
+
+    def on_mount(self) -> None:
+        self._refresh_body()
+
+    # NB: not named `_render` — that collides with Textual's internal
+    # Widget._render(), which the compositor calls to produce the visual.
+    def _refresh_body(self) -> None:
+        body = self.query_one("#fix-body", Static)
+        text = Text()
+        if self.applied:
+            text.append("PATH wired.", style="green")
+            text.append("\n  → Restart your shell or run `source ~/.myshellrc` to apply.")
+        else:
+            text.append("Press 'a' to wire the managed PATH into your shells.", style="yellow")
+            text.append(f"\n\n{self._preview}")
+            text.append("\n\nAfter applying, restart your shell or `source ~/.myshellrc`.")
+        body.update(text)
+
+    def action_apply(self) -> None:
+        if self.applied:
+            return
+        self._fix()
+        self.applied = True
+        self._refresh_body()
 
 
 class NavScreen(ModalScreen[str | None]):
@@ -145,14 +188,16 @@ class UnifiedApp(App[list[str] | None]):
         # typed under pyright strict (unlike install_screen/switch_screen).
         self._views: dict[str, Screen[None]] = {
             "doctor": DoctorScreen(report, guard_status, guard_warning),
-            "fix": PlaceholderScreen(_PLACEHOLDER_TEXT["fix"]),
+            "fix": FixScreen(fix_preview, fix),
             "uninstall": PlaceholderScreen(_PLACEHOLDER_TEXT["uninstall"]),
             "policies": PlaceholderScreen(_PLACEHOLDER_TEXT["policies"]),
         }
-        self._fix_preview = fix_preview  # consumed by FixScreen in the next task
-        self._fix = fix
         self._initial_view = initial_view
         self.current_view = "catalog"
+
+    def on_mount(self) -> None:
+        if self._initial_view != "catalog":
+            self.show_view(self._initial_view)
 
     @property
     def catalog(self) -> CatalogScreen:

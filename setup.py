@@ -158,17 +158,21 @@ def _doctor_data(
 
 
 def _build_app(
-    tools: list[Tool], platform: Platform, *, initial_view: str = "catalog"
+    tools: list[Tool],
+    platform: Platform,
+    *,
+    initial_view: str = "catalog",
+    link_mode: str = "centralized",
 ) -> UnifiedApp:
     installed = {tool.id: is_installed(tool) for tool in tools}
     report, status, warning = _doctor_data(tools, platform)
-    link_mode = _resolve_link_mode(None)
     rc_paths = _rc_paths_for_mode(link_mode)
 
     def _apply_fix() -> None:
-        # Runs live inside the FixScreen (next task). Use a quiet console so
-        # configure_path's own prints never corrupt the running TUI; the screen
-        # renders its own result.
+        # Runs live inside the FixScreen. A quiet console keeps configure_path's
+        # own prints from corrupting the running TUI; the screen renders its own
+        # result. Link mode is resolved before the app opens (never prompted while
+        # the TUI is live).
         configure_path(
             tools,
             Console(file=io.StringIO()),
@@ -227,10 +231,15 @@ def _rc_paths_for_mode(link_mode: str) -> list[Path]:
 
 
 def _run_doctor(console: Console) -> int:
+    tools = load_tools(_REGISTRY)
+    platform = detect()
+    if sys.stdin.isatty():
+        _build_app(tools, platform, initial_view="doctor").run()
+        return 0
     run_doctor(
-        load_tools(_REGISTRY),
+        tools,
         console,
-        platform=detect(),
+        platform=platform,
         default_bin_dir=_DEFAULT_BIN_DIR,
         path_value=os.environ.get("PATH", ""),
         exists=Path.is_dir,
@@ -242,11 +251,19 @@ def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
     # No re-audit after writing: the process PATH cannot change until the shell
     # restarts, so a post-fix audit would re-show "missing" and recreate the
     # confusion the doctor/fix split removes.
+    tools = load_tools(_REGISTRY)
+    platform = detect()
+    if sys.stdin.isatty() and link_mode_option is None:
+        # Resolve the link mode once BEFORE opening the app (the TUI cannot host a
+        # questionary prompt). The FixScreen then previews and applies live.
+        link_mode = _resolve_link_mode(None)
+        _build_app(tools, platform, initial_view="fix", link_mode=link_mode).run()
+        return 0
     link_mode = _resolve_link_mode(link_mode_option)
     configure_path(
-        load_tools(_REGISTRY),
+        tools,
         console,
-        platform=detect(),
+        platform=platform,
         default_bin_dir=_DEFAULT_BIN_DIR,
         myshellrc_path=_MYSHELLRC,
         rc_paths=_rc_paths_for_mode(link_mode),
