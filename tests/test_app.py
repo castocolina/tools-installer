@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from installer.app import run_wizard
+from installer.app import run_guard, run_wizard
 from installer.checksums import ChecksumMismatch
 from installer.cli import Options
 from installer.engine import ChecksumPolicy, InstallOutcome
@@ -712,3 +712,66 @@ def test_categories_flag_bypasses_catalog_seam():
         select_catalog=boom,
     )
     assert installed_ids == ["jq"]
+
+
+def test_run_guard_install_writes_shims_and_aliases_and_returns_true(tmp_path: Path):
+    shim_dir = tmp_path / "bin"
+    rc = tmp_path / ".myshellrc"
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+    acted = run_guard(
+        remove=False,
+        shim_dir=shim_dir,
+        rc_paths=[rc],
+        path_value=f"{shim_dir}:/usr/bin",
+        console=console,
+        confirm=lambda _m: True,
+        which=lambda _n: None,
+    )
+    assert acted is True
+    assert (shim_dir / "pip").exists()
+    assert "tools-installer ban" in rc.read_text()
+    assert "Installing the pip/npm ban" in buf.getvalue()
+
+
+def test_run_guard_declined_does_nothing(tmp_path: Path):
+    shim_dir = tmp_path / "bin"
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+    acted = run_guard(
+        remove=False,
+        shim_dir=shim_dir,
+        rc_paths=[tmp_path / ".myshellrc"],
+        path_value="",
+        console=console,
+        confirm=lambda _m: False,
+        which=lambda _n: None,
+    )
+    assert acted is False
+    assert not shim_dir.exists()
+
+
+def test_run_guard_remove_strips_shims_and_aliases(tmp_path: Path):
+    shim_dir = tmp_path / "bin"
+    rc = tmp_path / ".myshellrc"
+    console = Console(file=io.StringIO(), width=100)
+    run_guard(
+        remove=False,
+        shim_dir=shim_dir,
+        rc_paths=[rc],
+        path_value=f"{shim_dir}",
+        console=console,
+        confirm=lambda _m: True,
+        which=lambda _n: None,
+    )
+    run_guard(
+        remove=True,
+        shim_dir=shim_dir,
+        rc_paths=[rc],
+        path_value=f"{shim_dir}",
+        console=console,
+        confirm=lambda _m: True,
+        which=lambda _n: None,
+    )
+    assert not (shim_dir / "pip").exists()
+    assert "tools-installer ban" not in rc.read_text()

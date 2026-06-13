@@ -1,5 +1,6 @@
 """The interactive wizard flow: select -> audit -> confirm -> install -> summarize."""
 
+import shutil
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -9,6 +10,13 @@ from installer.audit import audit
 from installer.cli import Options
 from installer.doctor import DoctorReport, audit_path
 from installer.engine import install_tool
+from installer.guards import (
+    guard_path_warning,
+    install_shims,
+    remove_ban_aliases,
+    remove_shims,
+    write_ban_aliases,
+)
 from installer.model import Tool
 from installer.platform import Platform
 from installer.prompt import Prompter
@@ -16,6 +24,7 @@ from installer.rcclean import find_duplicate_path_lines, strip_lines
 from installer.render import (
     render_audit,
     render_doctor,
+    render_guard,
     render_rc_duplicates,
     render_summary,
     render_uninstall,
@@ -203,6 +212,38 @@ def clean_rc_duplicates(
     for rc_path, indices in indices_by_file.items():
         rc_path.write_text(strip_lines(rc_path.read_text(), indices))
     return found
+
+
+def run_guard(
+    *,
+    remove: bool,
+    shim_dir: Path,
+    rc_paths: list[Path],
+    path_value: str,
+    console: Console,
+    confirm: Callable[[str], bool],
+    which: Callable[[str], str | None] = shutil.which,
+) -> bool:
+    """Install or remove the pip/npm ban (PATH shims + interactive aliases).
+
+    Previews the targets, confirms, then acts on both layers. Returns whether it
+    acted. The shim dir doubles as the managed bin dir (already on PATH).
+    """
+    targets = ", ".join(str(rc_path) for rc_path in rc_paths)
+    verb = "Remove" if remove else "Install"
+    if not confirm(f"{verb} the pip/npm ban (shims in {shim_dir} + aliases in {targets})?"):
+        return False
+    if remove:
+        actions = remove_shims(shim_dir)
+        for rc_path in rc_paths:
+            remove_ban_aliases(rc_path)
+        render_guard(actions, None, console, removing=True)
+        return True
+    actions = install_shims(shim_dir)
+    for rc_path in rc_paths:
+        write_ban_aliases(rc_path)
+    render_guard(actions, guard_path_warning(shim_dir, path_value, which), console, removing=False)
+    return True
 
 
 def run_uninstall(
