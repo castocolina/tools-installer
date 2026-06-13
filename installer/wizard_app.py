@@ -1,14 +1,14 @@
 """Unified Textual shell hosting the wizard views behind one app.
 
-Phase 1 of the unified-UI redesign. The app owns navigation and the screen
-stack; the catalog is the only functional view. Execution stays behind the pure
-`installer/` core invoked from `setup.py`; the app only collects the catalog
-decision (`list[str] | None`).
+The app owns navigation and the screen stack. The catalog, doctor, and fix are
+functional views; uninstall and policies remain placeholders until later phases.
+Execution stays behind the pure `installer/` core invoked from `setup.py`, with
+one deliberate exception: the fix view applies its PATH wiring live through an
+injected closure. The app's run value stays the catalog decision (`list[str] | None`).
 
 The catalog is the base screen (`get_default_screen`); it cannot be switched
 out. Navigation is therefore a stack with the catalog at the bottom: the stack
-is always `[catalog]` or `[catalog, <one other view>]`. The other views are
-placeholders until later phases fill them in.
+is always `[catalog]` or `[catalog, <one other view>]`.
 """
 
 from collections.abc import Callable, Mapping
