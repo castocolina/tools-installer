@@ -271,11 +271,13 @@ def run_uninstall(
     """
     paths = plan_uninstall(tools, default_bin_dir)
     shimmed = [name for name, installed in guard_status(default_bin_dir).items() if installed]
-    render_uninstall(paths, console)
+    if not paths and not shimmed:
+        render_uninstall([], console)  # prints the "nothing to uninstall" line
+        return []
+    if paths:
+        render_uninstall(paths, console)
     if shimmed:
         console.print(f"The pip/npm ban will also be removed ({', '.join(shimmed)}).")
-    if not paths and not shimmed:
-        return []
     if not confirm("Remove these artifacts?"):
         return []
     remove_paths(paths)

@@ -811,7 +811,8 @@ def test_run_uninstall_also_removes_guard_artifacts(tmp_path: Path):
     install_shims(shim_dir)
     write_ban_aliases(myshellrc)
     write_ban_aliases(rc)
-    console = Console(file=io.StringIO(), width=100)
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
     run_uninstall(
         [],
         console,
@@ -823,3 +824,8 @@ def test_run_uninstall_also_removes_guard_artifacts(tmp_path: Path):
     assert not (shim_dir / "pip").exists()
     assert "tools-installer ban" not in myshellrc.read_text()
     assert "tools-installer ban" not in rc.read_text()
+    # With only guard artifacts (no tool paths), the preview must announce the
+    # ban removal and NOT contradict itself with "nothing to uninstall".
+    out = buf.getvalue()
+    assert "The pip/npm ban will also be removed" in out
+    assert "Nothing to uninstall" not in out

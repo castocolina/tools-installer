@@ -101,11 +101,19 @@ def _ask_optin(message: str) -> bool:
 
 
 def _ban_rc_paths(link_mode: str) -> list[Path]:
-    # Aliases follow the PATH model: centralized/single keep one ~/.myshellrc;
-    # split writes into each rc file directly.
+    # Where to WRITE aliases, following the PATH model: centralized/single keep
+    # one ~/.myshellrc; split writes into each rc file directly.
     if link_mode == "split":
         return _rc_paths_for_mode(link_mode)
     return [_MYSHELLRC]
+
+
+def _all_ban_rc_paths() -> list[Path]:
+    # Where to REMOVE aliases from: every file an install could have written to,
+    # across all link modes. remove_ban_aliases is a no-op where the block is
+    # absent, so removal needs no link-mode guess (which would otherwise strand
+    # aliases when the user picks a different mode than they installed with).
+    return [_MYSHELLRC, *_RC_PATHS]
 
 
 def _ask_select(message: str, choices: list[tuple[str, str]]) -> str:
@@ -204,14 +212,14 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
     return 0
 
 
-def _run_guard(console: Console, *, remove: bool, link_mode: str, assume_yes: bool) -> int:
-    # link_mode is already resolved by the caller (the standalone flags resolve it
-    # here; the wizard opt-in reuses the mode it just resolved for configure_path).
+def _run_guard(console: Console, *, remove: bool, rc_paths: list[Path], assume_yes: bool) -> int:
+    # The caller picks rc_paths: install targets the link-mode location, removal
+    # sweeps every possible location (so it never depends on a link-mode guess).
     confirm = (lambda _message: True) if assume_yes else _ask_confirm
     acted = run_guard(
         remove=remove,
         shim_dir=_DEFAULT_BIN_DIR,
-        rc_paths=_ban_rc_paths(link_mode),
+        rc_paths=rc_paths,
         path_value=os.environ.get("PATH", ""),
         console=console,
         confirm=confirm,
@@ -251,15 +259,13 @@ def main(argv: list[str]) -> int:
         return _run_guard(
             console,
             remove=False,
-            link_mode=_resolve_link_mode(options.link_mode),
+            rc_paths=_ban_rc_paths(_resolve_link_mode(options.link_mode)),
             assume_yes=options.yes,
         )
     if options.unguard:
+        # Removal needs no link-mode prompt — it sweeps every rc file.
         return _run_guard(
-            console,
-            remove=True,
-            link_mode=_resolve_link_mode(options.link_mode),
-            assume_yes=options.yes,
+            console, remove=True, rc_paths=_all_ban_rc_paths(), assume_yes=options.yes
         )
     can_proceed = options.all or bool(options.categories) or sys.stdin.isatty()
     if not can_proceed:
@@ -303,8 +309,8 @@ def main(argv: list[str]) -> int:
         )
     ):
         # The opt-in IS the confirmation, and link_mode is already resolved above:
-        # assume_yes=True so run_guard neither re-confirms nor re-prompts for the mode.
-        _run_guard(console, remove=False, link_mode=link_mode, assume_yes=True)
+        # assume_yes=True so run_guard does not re-confirm.
+        _run_guard(console, remove=False, rc_paths=_ban_rc_paths(link_mode), assume_yes=True)
     if summary.failed or summary.mismatched:
         render_troubleshooting(console)
         return 1
