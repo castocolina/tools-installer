@@ -185,7 +185,8 @@ def _build_app(
 
     preview = (
         f"Will wire the managed bin dirs into "
-        f"{', '.join(str(p) for p in rc_paths)} (mode: {link_mode})."
+        f"{', '.join(str(p) for p in rc_paths)} (mode: {link_mode}).\n"
+        'For a different layout, run `make fix ARGS="--link-mode=centralized|single|split"`.'
     )
     return UnifiedApp(
         tools,

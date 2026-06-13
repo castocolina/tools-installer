@@ -198,6 +198,35 @@ async def test_ctrl_p_does_not_stack_a_second_palette() -> None:
         assert not isinstance(app.screen, NavScreen)
 
 
+async def test_fix_screen_surfaces_apply_failure_without_crashing() -> None:
+    def boom() -> None:
+        raise OSError("permission denied: ~/.myshellrc")
+
+    app = _app(fix=boom)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("3")  # fix view
+        assert isinstance(app.screen, FixScreen)
+        await pilot.press("a")  # apply fails inside the closure
+        assert app.is_running  # the error was caught; no traceback tore down the app
+        assert app.screen.applied is False
+        assert app.screen.error is not None
+        assert "permission denied" in app.screen.error
+        await pilot.press("a")  # the error path allows a retry (still not applied)
+        assert app.screen.applied is False
+
+
+async def test_navigating_away_from_fix_without_apply_writes_nothing() -> None:
+    applied: list[str] = []
+    app = _app(fix=lambda: applied.append("ran"))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("3")  # fix view
+        assert isinstance(app.screen, FixScreen)
+        await pilot.press("1")  # back to catalog without applying
+        assert app.current_view == "catalog"
+        assert app.screen is app.catalog
+        assert applied == []  # the fix closure was never called
+
+
 async def test_palette_from_placeholder_navigates_without_desync() -> None:
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
