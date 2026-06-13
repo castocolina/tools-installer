@@ -145,12 +145,22 @@ async def test_clicking_a_tab_switches_view():
         assert app.catalog.view == "status"
 
 
-async def test_space_toggles_tool_rows_and_ignores_section_rows():
+async def test_cursor_starts_on_first_tool_row_not_a_section_header():
+    app = _app()  # category view: rows are [#git, lazygit, #search, rg, fd]
+    async with app.run_test(size=(100, 30)) as pilot:
+        # The first selectable row (lazygit) is highlighted, so the first
+        # `space` toggles a tool instead of being a silent no-op on a header.
+        await pilot.press("space")
+        assert app.catalog.selected == {"lazygit"}
+
+
+async def test_space_ignores_section_rows():
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("space")  # cursor starts on the "git" section row -> no-op
+        await pilot.press("up")  # from lazygit onto the "git" section row
+        await pilot.press("space")  # section row -> no-op
         assert app.catalog.selected == set()
-        await pilot.press("down", "space")  # first tool row: lazygit
+        await pilot.press("down", "space")  # back to lazygit
         assert app.catalog.selected == {"lazygit"}
         await pilot.press("space")  # toggle off again
         assert app.catalog.selected == set()
@@ -159,7 +169,7 @@ async def test_space_toggles_tool_rows_and_ignores_section_rows():
 async def test_select_all_and_invert():
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("down")  # move to lazygit so cursor/detail survival is meaningful
+        # cursor already starts on lazygit (the first tool row)
         await pilot.press("a")
         assert app.catalog.selected == {"rg", "fd", "lazygit"}
         # select-all must not reset the cursor or blank the detail bar
@@ -200,17 +210,18 @@ async def test_ctrl_c_aborts_with_none():
 async def test_detail_bar_follows_the_highlighted_row():
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
-        assert app.catalog.detail_text == "git"  # first section row highlighted on start
-        await pilot.press("down")  # lazygit: empty desc -> falls back to name
+        # lazygit is highlighted on start: empty desc -> falls back to name
         assert "lazygit" in app.catalog.detail_text
         assert "P2" in app.catalog.detail_text
         assert "for you" in app.catalog.detail_text
+        await pilot.press("up")  # onto the "git" section row
+        assert app.catalog.detail_text == "git"
 
 
 async def test_section_row_detail_shows_the_group_blurb():
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("down", "down")  # past lazygit onto the "search" section row
+        await pilot.press("down")  # from lazygit onto the "search" section row
         assert app.catalog.detail_text == "search — Find files and code at speed"
 
 

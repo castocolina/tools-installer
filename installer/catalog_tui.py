@@ -224,6 +224,9 @@ class CatalogScreen(Screen[list[str] | None]):
         # widths after clear(columns=True); a cell mutation arriving in a later
         # render cycle flushes them (textual 8.2.7), so re-mark every row once
         # the rebuilt table has painted.
+        first_tool = self._first_tool_row()
+        if first_tool is not None:
+            table.move_cursor(row=first_tool)
         table.call_after_refresh(self._refresh_marks)
 
     # -- view switching ---------------------------------------------------
@@ -257,6 +260,13 @@ class CatalogScreen(Screen[list[str] | None]):
             return None
         cell_key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0))
         return self._by_id.get(cell_key.row_key.value)
+
+    def _first_tool_row(self) -> int | None:
+        table = self.query_one(DataTable[Any])
+        for index, row_key in enumerate(table.rows):
+            if row_key.value in self._by_id:  # tool rows key on the id; sections on "#title"
+                return index
+        return None
 
     def _mark(self, chosen: bool) -> Text:
         return Text("[x]" if chosen else "[ ]", style="green" if chosen else "")
