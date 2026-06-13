@@ -25,9 +25,12 @@ wget -qO- https://raw.githubusercontent.com/castocolina/tools-installer/main/ins
   is present (via Astral's official installer, *not* Homebrew), fetches this repo,
   and launches the wizard. No Python, no Homebrew required up front; either
   `curl` or `wget` will do.
-- **Interactive wizard (TUI)** — one catalog screen for all 49 tools: switch the
-  grouping (category · priority · audience · status · table) with ←/→ or the mouse,
-  toggle with **space**, confirm with **enter**. See [Selecting tools](#selecting-tools).
+- **Interactive wizard (TUI)** — one Textual app. The catalog view lists all 49
+  tools: switch the grouping (category · priority · audience · status · table) with
+  ←/→ or the mouse, toggle with **space**, confirm with **enter**. **Ctrl+P** opens
+  an in-app command palette (number keys `1`–`5` switch views too); the doctor, fix,
+  uninstall, and policies views are being folded into the same app. See
+  [Selecting tools](#selecting-tools).
 - **Installs in userspace by default** — `~/.local/bin` for CLIs, `~/Applications`
   for macOS GUIs. No `sudo`, no writing to `/Applications` or system paths, so it
   works on locked-down corporate Macs and atomic/immutable Linux.
@@ -115,16 +118,22 @@ make fix                                     # wire PATH into your shell
 
 ## Selecting tools
 
-The wizard opens a single catalog screen (keyboard and mouse):
+The wizard opens on the catalog view of a single Textual app (keyboard and mouse):
 
 | Key / action | Effect |
 | --- | --- |
+| Ctrl+P, or 1–5 | open the in-app command palette / jump straight to a view |
 | ←/→ or click a tab | switch grouping: Category · Priority · Audience · Status · Table |
 | click a column header (Table view) | re-sort by that column |
 | ↑/↓ | move; the bottom bar shows the highlighted tool's (or group's) details |
 | space / a / i | toggle · select all · invert |
 | enter | install the selection (audit + confirm follow) |
 | q | abort |
+
+The cursor starts on the first selectable tool, and **enter** with nothing
+selected is a guided no-op (it prompts you to pick at least one tool or quit),
+never a silent exit. Ctrl+P opens **our** command palette — Textual's default
+palette is disabled.
 
 Priorities are color-coded (P0 essential → P3 niche) and every tool shows who
 it serves (AI · you · both) plus its install state, with a legend pinned at
