@@ -64,6 +64,18 @@ def test_guard_guidance_reports_path_order_warning() -> None:
     assert item.next_step
 
 
+def test_guard_guidance_singular_wording_for_one_active() -> None:
+    items = guard_guidance({"pip": True, "npm": False}, None)
+    item = next(i for i in items if "ban active" in i.title)
+    assert "pip is shimmed to its replacement" in item.meaning
+
+
+def test_guard_guidance_plural_wording_for_multiple_active() -> None:
+    items = guard_guidance({"pip": True, "npm": True, "pip3": True}, None)
+    item = next(i for i in items if "ban active" in i.title)
+    assert "are shimmed to their replacements" in item.meaning
+
+
 def test_guidance_is_frozen() -> None:
     g = Guidance(title="t", meaning="m", next_step="n", severity="ok")
     try:

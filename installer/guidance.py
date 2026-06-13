@@ -69,10 +69,17 @@ def guard_guidance(status: dict[str, bool], warning: str | None) -> list[Guidanc
     items: list[Guidance] = []
     active = [name for name, installed in status.items() if installed]
     if active:
+        # Agree the verb/possessive with the count so a single active shim reads
+        # "pip is shimmed to its replacement" rather than "pip are ... their".
+        shimmed = (
+            f"{active[0]} is shimmed to its replacement"
+            if len(active) == 1
+            else f"{', '.join(active)} are shimmed to their replacements"
+        )
         items.append(
             Guidance(
                 title="pip/npm ban active",
-                meaning=f"{', '.join(active)} are shimmed to their replacements.",
+                meaning=f"{shimmed}.",
                 next_step="Open a new shell or run `hash -r` so cached command paths refresh.",
                 severity="ok",
             )

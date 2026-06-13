@@ -98,6 +98,7 @@ class FixScreen(Screen[None]):
         self._preview = preview
         self._fix = fix
         self.applied = False  # public test seam
+        self.error: str | None = None  # public test seam; set when an apply fails
 
     def compose(self) -> ComposeResult:
         yield Static(id="fix-body")
@@ -113,6 +114,10 @@ class FixScreen(Screen[None]):
         if self.applied:
             text.append("PATH wired.", style="green")
             text.append("\n  → Restart your shell or run `source ~/.myshellrc` to apply.")
+        elif self.error is not None:
+            text.append("Fix failed.", style="red")
+            text.append(f"\n  {self.error}")
+            text.append("\n  → Check the target is writable, then press 'a' to retry.")
         else:
             text.append("Press 'a' to wire the managed PATH into your shells.", style="yellow")
             text.append(f"\n\n{self._preview}")
@@ -122,7 +127,15 @@ class FixScreen(Screen[None]):
     def action_apply(self) -> None:
         if self.applied:
             return
-        self._fix()
+        try:
+            self._fix()
+        except OSError as exc:
+            # Surface the failure in place (PRD: a failed core action is shown,
+            # never a silent crash); `applied` stays False so 'a' retries.
+            self.error = str(exc)
+            self._refresh_body()
+            return
+        self.error = None
         self.applied = True
         self._refresh_body()
 
