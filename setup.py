@@ -204,10 +204,9 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
     return 0
 
 
-def _run_guard(
-    console: Console, *, remove: bool, link_mode_option: str | None, assume_yes: bool
-) -> int:
-    link_mode = _resolve_link_mode(link_mode_option)
+def _run_guard(console: Console, *, remove: bool, link_mode: str, assume_yes: bool) -> int:
+    # link_mode is already resolved by the caller (the standalone flags resolve it
+    # here; the wizard opt-in reuses the mode it just resolved for configure_path).
     confirm = (lambda _message: True) if assume_yes else _ask_confirm
     acted = run_guard(
         remove=remove,
@@ -250,11 +249,17 @@ def main(argv: list[str]) -> int:
         return _run_uninstall(console, assume_yes=options.yes)
     if options.guard:
         return _run_guard(
-            console, remove=False, link_mode_option=options.link_mode, assume_yes=options.yes
+            console,
+            remove=False,
+            link_mode=_resolve_link_mode(options.link_mode),
+            assume_yes=options.yes,
         )
     if options.unguard:
         return _run_guard(
-            console, remove=True, link_mode_option=options.link_mode, assume_yes=options.yes
+            console,
+            remove=True,
+            link_mode=_resolve_link_mode(options.link_mode),
+            assume_yes=options.yes,
         )
     can_proceed = options.all or bool(options.categories) or sys.stdin.isatty()
     if not can_proceed:
@@ -297,7 +302,9 @@ def main(argv: list[str]) -> int:
             "Enable the pip/npm ban? Blocks bare pip/npm so installs go through uv/pnpm."
         )
     ):
-        _run_guard(console, remove=False, link_mode_option=options.link_mode, assume_yes=False)
+        # The opt-in IS the confirmation, and link_mode is already resolved above:
+        # assume_yes=True so run_guard neither re-confirms nor re-prompts for the mode.
+        _run_guard(console, remove=False, link_mode=link_mode, assume_yes=True)
     if summary.failed or summary.mismatched:
         render_troubleshooting(console)
         return 1
