@@ -285,8 +285,19 @@ async def test_header_click_sorts_only_in_table_view():
         assert app.catalog.table_sort == "id"  # ignored outside the table view
 
 
-async def test_empty_catalog_is_safe():
+async def test_enter_with_empty_selection_is_a_no_op():
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("enter")  # nothing selected
+        assert app.is_running  # did not exit / return a selection
+        assert "Select at least one tool" in app.catalog.status_text
+
+
+async def test_empty_catalog_enter_is_blocked_then_aborts():
     app = UnifiedApp([], {}, {})
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("space", "enter")  # toggle on empty table must not crash
-    assert app.return_value == []
+        await pilot.press("space")  # toggle on empty table must not crash
+        await pilot.press("enter")  # no tools -> blocked, must not crash
+        assert app.is_running
+        await pilot.press("q")
+    assert app.return_value is None

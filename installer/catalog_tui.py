@@ -137,6 +137,7 @@ class CatalogScreen(Screen[list[str] | None]):
     Tabs { dock: top; }
     #detail { dock: bottom; height: 2; padding: 0 1; background: $surface; }
     #legend { dock: bottom; height: 1; padding: 0 1; }
+    #status-line { dock: bottom; height: 1; padding: 0 1; color: $warning; }
     DataTable { height: 1fr; }
     """
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -161,6 +162,7 @@ class CatalogScreen(Screen[list[str] | None]):
         self.table_sort: TableSortKey = "priority"
         self.selected: set[str] = set()
         self.detail_text = ""
+        self.status_text = ""
         self._installed = dict(installed)
         self._blurbs = dict(blurbs)
         # str | None keys let row-key lookups stay branchless under strict typing
@@ -179,6 +181,7 @@ class CatalogScreen(Screen[list[str] | None]):
         yield Tabs(*[Tab(_TAB_LABELS[view], id=view) for view in VIEWS])
         yield DataTable()
         yield Static(Text.from_markup(_LEGEND), id="legend")
+        yield Static("", id="status-line")
         yield Static("", id="detail")
         yield Footer()
 
@@ -294,9 +297,12 @@ class CatalogScreen(Screen[list[str] | None]):
         self._refresh_marks()
 
     def action_accept(self) -> None:
-        self.post_message(
-            self.Decided([tool.id for tool in self.tools if tool.id in self.selected])
-        )
+        chosen = [tool.id for tool in self.tools if tool.id in self.selected]
+        if not chosen:
+            self.status_text = "Select at least one tool, or press q to quit."
+            self.query_one("#status-line", Static).update(Text(self.status_text, style="yellow"))
+            return
+        self.post_message(self.Decided(chosen))
 
     def action_abort(self) -> None:
         self.post_message(self.Decided(None))
