@@ -78,3 +78,20 @@ def test_doctor_and_fix_both_parse():
     # Precedence (doctor -> fix -> uninstall) is applied in setup.main.
     opts = parse_args(["--doctor", "--fix"])
     assert opts.doctor is True and opts.fix is True
+
+
+def test_parse_guard_flag():
+    options = parse_args(["--guard"])
+    assert options.guard is True
+    assert options.unguard is False
+
+
+def test_parse_unguard_flag():
+    options = parse_args(["--unguard"])
+    assert options.unguard is True
+
+
+def test_guard_defaults_false():
+    options = parse_args([])
+    assert options.guard is False
+    assert options.unguard is False
