@@ -90,6 +90,16 @@ async def test_palette_escape_does_not_navigate() -> None:
         assert not isinstance(app.screen, NavScreen)
 
 
+async def test_ctrl_c_aborts_from_a_placeholder_view() -> None:
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("2")  # navigate onto the doctor placeholder
+        assert app.current_view == "doctor"
+        await pilot.press("ctrl+c")  # abort must work from any view
+        assert not app.is_running
+    assert app.return_value is None
+
+
 async def test_number_keys_are_inert_while_the_palette_is_open() -> None:
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
