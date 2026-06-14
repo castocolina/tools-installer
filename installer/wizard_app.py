@@ -163,8 +163,8 @@ class UninstallScreen(Screen[None]):
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("space", "toggle_selected", "toggle", show=True),
-        Binding("a", "select_all", "all"),
-        Binding("i", "invert", "invert"),
+        Binding("a", "select_all", "all", show=True),
+        Binding("i", "invert", "invert", show=True),
         Binding("enter", "remove", "remove selected", show=True, priority=True),
     ]
     DEFAULT_CSS = """
@@ -327,9 +327,12 @@ class UninstallScreen(Screen[None]):
         if tool_count:
             parts.append(f"Removed {tool_count} tool(s).")
         if self.remove_ban:
-            parts.append("pip/npm ban removed — open a new shell or run `hash -r`.")
+            parts.append(
+                "pip/npm ban removed — open a new shell or run `hash -r` so cached"
+                " command paths refresh."
+            )
         if self.remove_path_block:
-            parts.append("PATH wiring removed — restart your shell to update PATH.")
+            parts.append("PATH wiring removed — restart your shell to drop the managed dirs.")
         # One line per outcome: a single joined line overflows the terminal width and
         # truncates the reload guidance, so the "needs a new shell" steps go unseen.
         return "\n".join(parts)
