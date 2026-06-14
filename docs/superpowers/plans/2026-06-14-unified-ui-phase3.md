@@ -20,6 +20,7 @@
 - **`installer/wizard_app.py`** *(modify)* — add `UninstallInputs` dataclass + `UninstallScreen`; replace the `"uninstall"` placeholder; thread `UninstallInputs` through `UnifiedApp.__init__`.
 - **`setup.py`** *(modify, IO boundary)* — build `UninstallInputs` + `remove` closure in `_build_app`; add the interactive branch to `_run_uninstall`.
 - **Tests:** `tests/test_shellrc.py`, `tests/test_uninstall.py`, `tests/test_app.py`, `tests/test_wizard_app.py`.
+- **E2E (agent-driven):** `tests/test_uninstall_e2e.py` — drives the *real* `UnifiedApp` through the *real* removal core against a sandboxed HOME, saving an SVG screenshot to `.e2e-artifacts/` for a verification subagent to inspect. `.gitignore` ignores `.e2e-artifacts/`.
 - **Docs:** `README.md`, `memory/roadmap-status.md`.
 
 ---
@@ -799,7 +800,168 @@ git commit -m "feat: open the app on the uninstall view for interactive --uninst
 
 ---
 
-## Task 8: Full validation, docs, and roadmap status
+## Task 8: End-to-end uninstall through the real core (sandboxed)
+
+This is a **true E2E**: it builds real artifacts + a real ban + a real managed PATH block on disk under a sandbox HOME, drives the *actual* `UnifiedApp` keystroke-by-keystroke, lets it call the *real* `perform_uninstall` (not a fake), and asserts the real files are gone. It also saves an SVG screenshot of the applied state to `.e2e-artifacts/uninstall.svg` so the Task 9 verification subagent can confirm the UI rendered the guidance. The sandbox is `tmp_path`; the real `$HOME` is never referenced.
+
+**Files:**
+- Create: `tests/test_uninstall_e2e.py`
+- Modify: `.gitignore`
+
+- [ ] **Step 1: Ignore the artifacts directory**
+
+Append to `.gitignore`:
+
+```gitignore
+# Agent-driven E2E screenshots (Phase 3 uninstall verification)
+.e2e-artifacts/
+```
+
+- [ ] **Step 2: Write the E2E test**
+
+Create `tests/test_uninstall_e2e.py`:
+
+```python
+"""End-to-end uninstall: drive the real UnifiedApp through the real removal
+core against a sandboxed HOME, asserting real artifacts are deleted while the
+real $HOME is never touched. Saves an SVG screenshot for agent inspection."""
+
+from pathlib import Path
+
+from installer.app import UninstallDecision, perform_uninstall
+from installer.doctor import DoctorReport
+from installer.guards import guard_status, install_shims, write_ban_aliases
+from installer.model import Method, Tool
+from installer.shellrc import has_managed_block, write_myshellrc
+from installer.uninstall import removable_tools
+from installer.wizard_app import UnifiedApp, UninstallInputs
+
+_ARTIFACTS = Path(__file__).resolve().parent.parent / ".e2e-artifacts"
+
+
+def _dl_tool() -> Tool:
+    return Tool(
+        id="fd",
+        name="fd",
+        category="search",
+        cmd="fd",
+        methods=(
+            Method(
+                kind="github_release",
+                params={"repo": "a/fd", "asset": "x", "member": "fd"},
+            ),
+        ),
+    )
+
+
+def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
+    bin_dir = home / ".local" / "bin"
+    opt = home / ".local" / "opt" / "fd"
+    opt.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (opt / "fd").write_text("binary")
+    (bin_dir / "fd").symlink_to(opt / "fd")
+    myshellrc = home / ".myshellrc"
+    install_shims(bin_dir)  # real ban shims
+    write_ban_aliases(myshellrc)  # real alias block
+    write_myshellrc([bin_dir], myshellrc)  # real managed PATH block
+
+    removable = removable_tools([_dl_tool()], bin_dir)
+
+    def _remove(decision: UninstallDecision) -> None:
+        perform_uninstall(
+            decision, bin_dir=bin_dir, myshellrc_path=myshellrc, rc_paths=[myshellrc]
+        )
+
+    inputs = UninstallInputs(
+        removable=removable,
+        ban_names=[name for name, active in guard_status(bin_dir).items() if active],
+        has_path_block=has_managed_block(myshellrc),
+        remove=_remove,
+    )
+    app = UnifiedApp(
+        [_dl_tool()],
+        {"fd": True},
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_status=guard_status(bin_dir),
+        guard_warning=None,
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=inputs,
+        initial_view="uninstall",
+    )
+    return app, opt, bin_dir, myshellrc
+
+
+async def test_uninstall_e2e_removes_everything_against_sandbox(tmp_path: Path) -> None:
+    app, opt, bin_dir, myshellrc = _build_real_app(tmp_path)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("a")  # select tools + ban + PATH wiring
+        await pilot.press("enter")  # apply live through the real core
+        assert app.screen.applied is True
+        _ARTIFACTS.mkdir(exist_ok=True)
+        (_ARTIFACTS / "uninstall.svg").write_text(pilot.app.export_screenshot())
+
+    # Real artifacts removed:
+    assert not opt.exists()
+    assert not (bin_dir / "fd").exists()
+    # Ban shims + managed PATH block + alias block all removed:
+    assert all(active is False for active in guard_status(bin_dir).values())
+    assert has_managed_block(myshellrc) is False
+    assert "alias" not in myshellrc.read_text()
+```
+
+- [ ] **Step 3: Run the E2E test**
+
+Run: `uv run pytest tests/test_uninstall_e2e.py -v`
+Expected: PASS (1 passed); `.e2e-artifacts/uninstall.svg` is created.
+
+- [ ] **Step 4: Sanity-check the screenshot artifact carries the guidance**
+
+Run: `grep -o "Removed\|ban removed\|PATH wiring removed" .e2e-artifacts/uninstall.svg | sort -u`
+Expected: all three strings appear (the applied state rendered them — Textual embeds row text in the SVG).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tests/test_uninstall_e2e.py .gitignore
+git commit -m "test: end-to-end uninstall through the real core, sandboxed"
+```
+
+---
+
+## Task 9: Agent-driven E2E verification gate
+
+A fresh **verification subagent** independently confirms the feature end-to-end and — critically — proves the real `$HOME` was never mutated (the PRD's hard safety rule). This is a review gate, not new code: dispatch the subagent, read its verdict, and only proceed if it returns PASS.
+
+**Files:** none (verification only).
+
+- [ ] **Step 1: Dispatch the verification subagent**
+
+Dispatch a fresh `general-purpose` subagent (via the Agent tool) with exactly this prompt:
+
+> You are verifying the Phase 3 uninstall view end-to-end. Work from the repo root `/Users/ramon/git/personal/tools-installer`. Do NOT modify any source or test files. Perform these steps and report a verdict:
+>
+> 1. **Capture real-home baseline.** Run: `shasum -a 256 ~/.zshrc ~/.bashrc ~/.myshellrc 2>/dev/null > /tmp/home-before.txt; cat /tmp/home-before.txt`. (Missing files simply won't appear — that's fine.)
+> 2. **Run the E2E test.** Run: `uv run pytest tests/test_uninstall_e2e.py -v`. Confirm it passes.
+> 3. **Inspect the rendered UI.** Run: `grep -o "Removed\|ban removed\|PATH wiring removed" .e2e-artifacts/uninstall.svg | sort -u`. Confirm all three guidance strings are present — this proves the applied state actually rendered, not just a state flag.
+> 4. **Run the full suite + gate.** Run: `make validate && make test`. Confirm green and that coverage on `installer/` is 100%.
+> 5. **Prove real-home safety.** Run: `shasum -a 256 ~/.zshrc ~/.bashrc ~/.myshellrc 2>/dev/null > /tmp/home-after.txt; diff /tmp/home-before.txt /tmp/home-after.txt && echo IDENTICAL`. Confirm `IDENTICAL` (no real rc file changed during any test run).
+>
+> Return a verdict block: `VERDICT: PASS` or `VERDICT: FAIL`, followed by the exact command output for any step that did not meet its expectation. If FAIL, name the failing step and the discrepancy.
+
+- [ ] **Step 2: Act on the verdict**
+
+If the subagent returns `VERDICT: FAIL`, stop and fix the root cause (re-run the relevant earlier task), then re-dispatch. Only proceed to Task 10 on `VERDICT: PASS`.
+
+- [ ] **Step 3: Record the verification**
+
+No commit (verification produces no tracked files). Note in the eventual PR/branch summary that the agent-driven E2E gate passed, including the real-home `IDENTICAL` check.
+
+---
+
+## Task 10: Full validation, docs, and roadmap status
 
 **Files:**
 - Modify: `README.md`, `memory/roadmap-status.md`
@@ -833,6 +995,7 @@ Expected: green on the exact tree of the final commit. Phase 3 complete.
 
 ## Self-Review Notes
 
-- **Spec coverage:** list = removable-artifact tools (Task 2); live-apply like FixScreen (Tasks 4/6); explicit ban + PATH toggles (Task 4 rows, Task 3 composer); preview-as-confirmation + empty refusal + error path + nothing-line (Task 6); `--uninstall` opens on view, non-interactive unchanged (Task 7); reload guidance wording (Task 4 `_applied_summary`); navigation parity + abort (Tasks 4/6); 100% coverage + validate (Task 8). Phase 4 boundary respected — no ban *model* introduced; ban removal reuses `remove_shims`/`remove_ban_aliases`.
+- **Spec coverage:** list = removable-artifact tools (Task 2); live-apply like FixScreen (Tasks 4/6); explicit ban + PATH toggles (Task 4 rows, Task 3 composer); preview-as-confirmation + empty refusal + error path + nothing-line (Task 6); `--uninstall` opens on view, non-interactive unchanged (Task 7); reload guidance wording (Task 4 `_applied_summary`); navigation parity + abort (Tasks 4/6); real-core E2E + agent-driven verification incl. real-home safety proof (Tasks 8/9); 100% coverage + validate + docs (Task 10). Phase 4 boundary respected — no ban *model* introduced; ban removal reuses `remove_shims`/`remove_ban_aliases`.
+- **E2E vs unit:** Tasks 4–6 inject a fake `remove` closure to isolate the screen; Task 8 wires the *real* `perform_uninstall` against a sandbox HOME for a true round-trip (real shims/aliases/PATH block created, then removed). Task 9's subagent additionally hashes the real `~/.zshrc`/`~/.bashrc`/`~/.myshellrc` before and after the whole suite and asserts `IDENTICAL`, enforcing the PRD's "never mutate real home" rule.
 - **Type consistency:** `UninstallDecision(paths: tuple[Path, ...], remove_ban: bool, remove_path_block: bool)`, `perform_uninstall(decision, *, bin_dir, myshellrc_path, rc_paths)`, `removable_tools(...) -> list[tuple[Tool, list[Path]]]`, `has_managed_block(path) -> bool`, `UninstallInputs(removable, ban_names, has_path_block, remove)` are used identically across tasks and tests.
 - **Adjust-on-contact:** Task 7's `_run_uninstall` rewrite must preserve the current call's exact `confirm`/path argument expressions; only the `isatty` branch is new. If the existing `_run_uninstall` already differs (e.g., a `_confirm` name), match what is there.
