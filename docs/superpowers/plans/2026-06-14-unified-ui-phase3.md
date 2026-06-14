@@ -20,7 +20,7 @@
 - **`installer/wizard_app.py`** *(modify)* — add `UninstallInputs` dataclass + `UninstallScreen`; replace the `"uninstall"` placeholder; thread `UninstallInputs` through `UnifiedApp.__init__`.
 - **`setup.py`** *(modify, IO boundary)* — build `UninstallInputs` + `remove` closure in `_build_app`; add the interactive branch to `_run_uninstall`.
 - **Tests:** `tests/test_shellrc.py`, `tests/test_uninstall.py`, `tests/test_app.py`, `tests/test_wizard_app.py`.
-- **E2E (agent-driven):** `tests/test_uninstall_e2e.py` — drives the *real* `UnifiedApp` through the *real* removal core against a sandboxed HOME, saving an SVG screenshot to `.e2e-artifacts/` for a verification subagent to inspect. `.gitignore` ignores `.e2e-artifacts/`.
+- **E2E (agent-driven):** `tests/test_uninstall_e2e.py` — (a) drives the *real* `UnifiedApp` through the *real* removal core against a sandboxed HOME and asserts real artifacts are gone; (b) captures a labeled **UX journey** of SVG screenshots (open → empty-refusal → selected → applied → error) into `.e2e-artifacts/ux/`. A safety subagent (Task 9) inspects the removal screenshot and proves real-home is untouched; a `ui-ux-designer` subagent (Task 10) role-plays the end user and critiques the journey. `.gitignore` ignores `.e2e-artifacts/`.
 - **Docs:** `README.md`, `memory/roadmap-status.md`.
 
 ---
@@ -922,16 +922,83 @@ Expected: PASS (1 passed); `.e2e-artifacts/uninstall.svg` is created.
 Run: `grep -o "Removed\|ban removed\|PATH wiring removed" .e2e-artifacts/uninstall.svg | sort -u`
 Expected: all three strings appear (the applied state rendered them — Textual embeds row text in the SVG).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Capture the UX journey screenshots**
+
+Append to `tests/test_uninstall_e2e.py` (a capture-and-assert test: it both writes the frames the Task 10 evaluator reads and pins that each state renders its key text). `_dl_tool`, `_build_real_app`, `_ARTIFACTS`, and the imports are already defined above:
+
+```python
+_UX = _ARTIFACTS / "ux"
+
+
+def _snapshot(app: UnifiedApp, name: str) -> None:
+    _UX.mkdir(parents=True, exist_ok=True)
+    (_UX / name).write_text(app.export_screenshot())
+
+
+def _error_app(home: Path) -> UnifiedApp:
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "fd").write_text("x")
+
+    def _boom(_decision: UninstallDecision) -> None:
+        raise OSError("permission denied")
+
+    inputs = UninstallInputs(
+        removable=[(_dl_tool(), [bin_dir / "fd"])],
+        ban_names=[],
+        has_path_block=False,
+        remove=_boom,
+    )
+    return UnifiedApp(
+        [_dl_tool()],
+        {"fd": True},
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_status={},
+        guard_warning=None,
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=inputs,
+        initial_view="uninstall",
+    )
+
+
+async def test_uninstall_ux_journey_captures_each_state(tmp_path: Path) -> None:
+    app, _opt, _bin_dir, _myshellrc = _build_real_app(tmp_path)
+    async with app.run_test(size=(100, 30)) as pilot:
+        _snapshot(app, "01-open.svg")  # first sight of the view
+        await pilot.press("enter")  # nothing selected -> refusal, not a dead-end
+        assert "at least one" in app.screen.status_text
+        _snapshot(app, "02-empty-refusal.svg")
+        await pilot.press("a")  # select tools + ban + PATH wiring
+        _snapshot(app, "03-selected.svg")
+        await pilot.press("enter")  # apply live
+        assert app.screen.applied is True
+        _snapshot(app, "04-applied.svg")
+
+    err = _error_app(tmp_path / "home2")
+    async with err.run_test(size=(100, 30)) as pilot:
+        await pilot.press("a")
+        await pilot.press("enter")  # removal raises -> error must render, not crash
+        assert err.screen.error is not None
+        _snapshot(err, "05-error.svg")
+```
+
+- [ ] **Step 6: Run the E2E + journey tests**
+
+Run: `uv run pytest tests/test_uninstall_e2e.py -v`
+Expected: PASS (2 passed); `.e2e-artifacts/ux/01-open.svg` … `05-error.svg` plus `.e2e-artifacts/uninstall.svg` exist.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add tests/test_uninstall_e2e.py .gitignore
-git commit -m "test: end-to-end uninstall through the real core, sandboxed"
+git commit -m "test: end-to-end uninstall + UX journey screenshots, sandboxed"
 ```
 
 ---
 
-## Task 9: Agent-driven E2E verification gate
+## Task 9: Agent-driven E2E safety verification gate
 
 A fresh **verification subagent** independently confirms the feature end-to-end and — critically — proves the real `$HOME` was never mutated (the PRD's hard safety rule). This is a review gate, not new code: dispatch the subagent, read its verdict, and only proceed if it returns PASS.
 
@@ -961,7 +1028,52 @@ No commit (verification produces no tracked files). Note in the eventual PR/bran
 
 ---
 
-## Task 10: Full validation, docs, and roadmap status
+## Task 10: Agent-driven UX evaluation (end-user critique)
+
+A fresh **`ui-ux-designer` subagent role-plays the end user** and judges the uninstall experience from the journey screenshots Task 8 captured — not "do the files get deleted" (Task 9 covers that) but "is this flow understandable, trustworthy, and free of dead-ends for a real person." This is a quality gate: high-severity UX findings are fixed before the feature is considered done.
+
+**Files:** none directly (findings may loop back to Tasks 4/6 for screen/wording changes).
+
+- [ ] **Step 1: Dispatch the UX-evaluator subagent**
+
+Dispatch a subagent with `subagent_type: "agent-ui-ux-designer:ui-ux-designer"` and this prompt:
+
+> You are evaluating the UX of a new terminal (Textual TUI) "Uninstall" view as if you were the end user — both a first-time user removing a tool and a returning user cleaning up. Work from repo root `/Users/ramon/git/personal/tools-installer`.
+>
+> The journey screenshots are SVG files in `.e2e-artifacts/ux/` (Textual embeds all visible text and colors as `<text>`/`fill` attributes, so read them with the Read tool or `cat`; if you want a rendered raster, try `uv run python -c "import cairosvg, sys; cairosvg.svg2png(url=sys.argv[1], write_to=sys.argv[2])" <in.svg> <out.png>` and Read the PNG — skip if cairosvg is absent). The frames, in order:
+> - `01-open.svg` — the view as first seen (tool rows, plus a pip/npm-ban row and a PATH-wiring row).
+> - `02-empty-refusal.svg` — the user pressed "remove" with nothing selected.
+> - `03-selected.svg` — everything toggled on.
+> - `04-applied.svg` — after applying the removal.
+> - `05-error.svg` — a removal that failed (e.g. permission denied).
+>
+> Walk the journey in order and narrate the end-user experience. Evaluate specifically against these product criteria (from the PRD):
+> 1. **No dead-end flows** — every state is either an action with a preview/confirm or a guidance screen with a clear next step. Empty selection must be a clear no-op, never an unexplained exit.
+> 2. **Trustworthy destruction** — before anything is deleted, can the user tell exactly what will be removed? Are the tool rows visually distinct from the ban / PATH-wiring rows (they are NOT packages)?
+> 3. **Clear outcome + reload guidance** — does the applied state say what was removed AND that a shell reload is needed where relevant (open a new shell / `hash -r` for the ban; restart shell for PATH wiring)? Does it distinguish "done now" from "needs a new shell"?
+> 4. **Discoverability** — from `01-open`, can a first-time user tell how to select, how to remove, and how to leave without removing?
+> 5. **Failure clarity** — does `05-error` explain what failed and what to try, without a traceback?
+>
+> Return: a short end-user walkthrough, then a findings table with columns `Severity (CRITICAL/HIGH/MEDIUM/LOW) | Frame | Issue | Suggested fix`, then `VERDICT: SHIP` or `VERDICT: FIX-FIRST`. Cite the specific frame and on-screen wording for each finding. Be honest and opinionated; do not invent praise.
+
+- [ ] **Step 2: Triage and fix high-severity findings**
+
+For every CRITICAL or HIGH finding, fix the root cause — usually wording or layout in `UninstallScreen` (Task 4) or `_applied_summary` (Task 4), or the refusal/error text (Task 6). Re-run Task 8 to regenerate the screenshots (`uv run pytest tests/test_uninstall_e2e.py -v`), then re-dispatch the evaluator. Repeat until no CRITICAL/HIGH findings remain. MEDIUM/LOW findings are recorded for follow-up but do not block.
+
+- [ ] **Step 3: Commit any UX fixes**
+
+If Step 2 changed code, commit it (tests already cover the seams; update any assertion whose wording you changed):
+
+```bash
+git add installer/wizard_app.py tests/test_wizard_app.py
+git commit -m "fix: address end-user UX findings on the uninstall view"
+```
+
+If no code changed (VERDICT: SHIP on the first pass), record that the UX gate passed in the eventual PR/branch summary; no commit.
+
+---
+
+## Task 11: Full validation, docs, and roadmap status
 
 **Files:**
 - Modify: `README.md`, `memory/roadmap-status.md`
@@ -995,7 +1107,8 @@ Expected: green on the exact tree of the final commit. Phase 3 complete.
 
 ## Self-Review Notes
 
-- **Spec coverage:** list = removable-artifact tools (Task 2); live-apply like FixScreen (Tasks 4/6); explicit ban + PATH toggles (Task 4 rows, Task 3 composer); preview-as-confirmation + empty refusal + error path + nothing-line (Task 6); `--uninstall` opens on view, non-interactive unchanged (Task 7); reload guidance wording (Task 4 `_applied_summary`); navigation parity + abort (Tasks 4/6); real-core E2E + agent-driven verification incl. real-home safety proof (Tasks 8/9); 100% coverage + validate + docs (Task 10). Phase 4 boundary respected — no ban *model* introduced; ban removal reuses `remove_shims`/`remove_ban_aliases`.
+- **Spec coverage:** list = removable-artifact tools (Task 2); live-apply like FixScreen (Tasks 4/6); explicit ban + PATH toggles (Task 4 rows, Task 3 composer); preview-as-confirmation + empty refusal + error path + nothing-line (Task 6); `--uninstall` opens on view, non-interactive unchanged (Task 7); reload guidance wording (Task 4 `_applied_summary`); navigation parity + abort (Tasks 4/6); real-core E2E + journey capture (Task 8); agent-driven safety verification incl. real-home proof (Task 9); agent-driven end-user UX critique against the PRD UX criteria (Task 10); 100% coverage + validate + docs (Task 11). Phase 4 boundary respected — no ban *model* introduced; ban removal reuses `remove_shims`/`remove_ban_aliases`.
 - **E2E vs unit:** Tasks 4–6 inject a fake `remove` closure to isolate the screen; Task 8 wires the *real* `perform_uninstall` against a sandbox HOME for a true round-trip (real shims/aliases/PATH block created, then removed). Task 9's subagent additionally hashes the real `~/.zshrc`/`~/.bashrc`/`~/.myshellrc` before and after the whole suite and asserts `IDENTICAL`, enforcing the PRD's "never mutate real home" rule.
+- **Two distinct agent gates:** Task 9 is a *correctness/safety* PASS/FAIL gate (files removed, real home untouched). Task 10 is a *UX-quality* gate — a `ui-ux-designer` agent role-plays the end user over the journey screenshots and returns severity-ranked findings + SHIP/FIX-FIRST; CRITICAL/HIGH findings loop back to Task 4/6 before the feature is done. They answer different questions: "does it work safely?" vs "is it good to use?"
 - **Type consistency:** `UninstallDecision(paths: tuple[Path, ...], remove_ban: bool, remove_path_block: bool)`, `perform_uninstall(decision, *, bin_dir, myshellrc_path, rc_paths)`, `removable_tools(...) -> list[tuple[Tool, list[Path]]]`, `has_managed_block(path) -> bool`, `UninstallInputs(removable, ban_names, has_path_block, remove)` are used identically across tasks and tests.
 - **Adjust-on-contact:** Task 7's `_run_uninstall` rewrite must preserve the current call's exact `confirm`/path argument expressions; only the `isatty` branch is new. If the existing `_run_uninstall` already differs (e.g., a `_confirm` name), match what is there.
