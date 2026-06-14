@@ -920,8 +920,12 @@ Expected: PASS (1 passed); `.e2e-artifacts/uninstall.svg` is created.
 
 - [ ] **Step 4: Sanity-check the screenshot artifact carries the guidance**
 
-Run: `grep -o "Removed\|ban removed\|PATH wiring removed" .e2e-artifacts/uninstall.svg | sort -u`
-Expected: all three strings appear (the applied state rendered them — Textual embeds row text in the SVG).
+NOTE: a literal `grep "ban removed"` will FALSE-NEGATIVE — Textual's SVG encodes spaces inside a styled run as `&#160;`/`\xa0`, so multi-word phrases never match an ASCII-space grep (only the single word "Removed" does). Use an entity-aware check:
+
+```bash
+uv run python -c "import re,html; t=re.sub(r'<[^>]+>','',html.unescape(open('.e2e-artifacts/uninstall.svg').read()).replace(chr(160),' ')); print(all(s in t for s in ['Removed','ban removed','PATH wiring removed']))"
+```
+Expected: `True` (the applied state rendered all three guidance phrases).
 
 - [ ] **Step 5: Capture the UX journey screenshots**
 
@@ -1013,7 +1017,7 @@ Dispatch a fresh `general-purpose` subagent (via the Agent tool) with exactly th
 >
 > 1. **Capture real-home baseline.** Run: `shasum -a 256 ~/.zshrc ~/.bashrc ~/.myshellrc 2>/dev/null > /tmp/home-before.txt; cat /tmp/home-before.txt`. (Missing files simply won't appear — that's fine.)
 > 2. **Run the E2E test.** Run: `uv run pytest tests/test_uninstall_e2e.py -v`. Confirm it passes.
-> 3. **Inspect the rendered UI.** Run: `grep -o "Removed\|ban removed\|PATH wiring removed" .e2e-artifacts/uninstall.svg | sort -u`. Confirm all three guidance strings are present — this proves the applied state actually rendered, not just a state flag.
+> 3. **Inspect the rendered UI.** Textual SVGs encode spaces inside a styled run as `&#160;`, so a literal-space grep false-negatives on multi-word phrases — use the entity-aware check: `uv run python -c "import re,html; t=re.sub(r'<[^>]+>','',html.unescape(open('.e2e-artifacts/uninstall.svg').read()).replace(chr(160),' ')); print(all(s in t for s in ['Removed','ban removed','PATH wiring removed']))"`. Confirm it prints `True` — this proves the applied state actually rendered the guidance, not just a state flag.
 > 4. **Run the full suite + gate.** Run: `make validate && make test`. Confirm green and that coverage on `installer/` is 100%.
 > 5. **Prove real-home safety.** Run: `shasum -a 256 ~/.zshrc ~/.bashrc ~/.myshellrc 2>/dev/null > /tmp/home-after.txt; diff /tmp/home-before.txt /tmp/home-after.txt && echo IDENTICAL`. Confirm `IDENTICAL` (no real rc file changed during any test run).
 >
