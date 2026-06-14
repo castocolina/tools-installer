@@ -24,3 +24,6 @@ coverage.xml
 # OS
 .DS_Store
 .superpowers/
+
+# Agent-driven E2E screenshots (Phase 3 uninstall verification)
+.e2e-artifacts/
