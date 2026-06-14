@@ -90,10 +90,21 @@ deletion logic; the removers are reused as-is.
 Mirrors `CatalogScreen`'s toggle muscle-memory and `FixScreen`'s
 preview → apply → applied lifecycle:
 
-- **Layout**: a `DataTable` of removable tools (Sel / Tool / what gets removed);
-  below it a **visually distinct** section listing the ban row and the
-  PATH-wiring row when applicable (framed/labeled — *not* fake tool rows); then a
-  status line for refusals/results.
+- **Layout**: a single `DataTable` (Sel / Item / Removes) holding the removable
+  tool rows, then the ban and PATH-wiring rows when applicable, then a status
+  line for refusals/results.
+  - **AS-BUILT deviation (intentional):** the original draft proposed a *separate
+    framed section below the table* for the ban/PATH rows ("not fake tool rows").
+    The implementation instead folds them into the **same** `DataTable` as rows
+    keyed `#ban`/`#path-block`, made **visually distinct** by `bold yellow` styling
+    plus a `shell config:` prefix in the Removes column (vs. plain `bold` package
+    rows). Rationale: one uniform toggle surface (same `space`/`a`/`i`/`enter`
+    muscle-memory across every removable thing) is simpler and avoids a
+    second focusable widget with its own navigation. The `ui-ux-designer` review
+    (Task 10) evaluated this exact layout and judged the package-vs-config
+    distinction **resolved** (VERDICT: SHIP), so the "visually distinct" intent is
+    met without a separate section. The `#`-prefixed keys cannot collide with real
+    tool ids (mirrors `CatalogScreen`'s `#section` convention).
 - **State (public test seams)**: `selected: set[str]`, `remove_ban: bool`,
   `remove_path_block: bool`, `applied: bool`, `error: str | None`,
   `status_text: str` — following the Phase 1/2 public-seam convention.
@@ -120,7 +131,9 @@ Inlined in the applied state (like `FixScreen`), consistent with `guidance.py`'s
 vocabulary — *not* a guidance-core expansion (that core maps doctor/guard
 *findings*, not post-action results):
 
-- tools removed → "Removed N item(s)."
+- tools removed → "Removed N tool(s)." (counts selected tools, not artifact
+  paths — the ban and PATH wiring get their own lines below, so "tool(s)" is the
+  accurate unit)
 - ban removed → "pip/npm ban removed — open a new shell or run `hash -r` so cached
   command paths refresh."
 - PATH block removed → "PATH wiring removed — restart your shell to drop the
