@@ -84,6 +84,21 @@ def plan_uninstall(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
     return found
 
 
+def removable_tools(tools: list[Tool], default_bin_dir: Path) -> list[tuple[Tool, list[Path]]]:
+    """Tools that have userspace artifacts on disk, each paired with its paths.
+
+    A tool is included only when `plan_uninstall([tool], default_bin_dir)` is
+    non-empty, so cask/brew/native-managed tools (nothing to remove) are dropped.
+    Order follows the input list.
+    """
+    result: list[tuple[Tool, list[Path]]] = []
+    for tool in tools:
+        paths = plan_uninstall([tool], default_bin_dir)
+        if paths:
+            result.append((tool, paths))
+    return result
+
+
 def remove_paths(paths: list[Path]) -> None:
     """Delete each path: a symlink is unlinked (target preserved), a dir is removed
     recursively, a file is unlinked."""

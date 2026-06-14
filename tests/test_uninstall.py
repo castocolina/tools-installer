@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from installer.model import Method, Tool
-from installer.uninstall import plan_uninstall, remove_paths
+from installer.uninstall import plan_uninstall, removable_tools, remove_paths
 
 
 def _tool(method: Method, *, tool_id: str = "t", cmd: str = "t") -> Tool:
@@ -264,3 +264,37 @@ def test_plan_app_skips_cli_install_would_have_rejected(
         # install_app rejects these clis, so no symlink was ever created -> plan
         # must not touch the unrelated bin_dir/demo file.
         assert plan_uninstall([tool], bin_dir) == [bundle]
+
+
+def test_removable_tools_lists_only_tools_with_existing_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    opt = tmp_path / ".local" / "opt" / "fd"
+    opt.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (opt / "fd").write_text("binary")
+    (bin_dir / "fd").symlink_to(opt / "fd")  # both the opt dir and the bin symlink are artifacts
+    dl_tool = _tool(
+        Method(kind="github_release", params={"repo": "a/fd", "asset": "x", "member": "fd"}),
+        tool_id="fd",
+        cmd="fd",
+    )
+    brew_tool = _tool(Method(kind="brew", params={"formula": "x"}), tool_id="b", cmd="b")
+
+    result = removable_tools([dl_tool, brew_tool], bin_dir)
+
+    assert [tool.id for tool, _ in result] == ["fd"]  # brew tool dropped (no artifacts)
+    assert set(result[0][1]) == {opt, bin_dir / "fd"}  # both artifacts paired with the tool
+
+
+def test_removable_tools_empty_when_nothing_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    dl_tool = _tool(
+        Method(kind="github_release", params={"repo": "a/fd", "asset": "x", "member": "fd"})
+    )
+    assert removable_tools([dl_tool], bin_dir) == []
