@@ -6,6 +6,7 @@ from installer.shellrc import (
     apply_block,
     collect_bin_dirs,
     ensure_source,
+    has_managed_block,
     managed_block,
     remove_managed_block,
     strip_block,
@@ -233,3 +234,17 @@ def test_strip_block_orphan_begin_is_unchanged():
     begin, end = "# >>> b >>>", "# <<< b <<<"
     text = f"keep\n{begin}\nno end marker"
     assert strip_block(text, begin, end) == text
+
+
+def test_has_managed_block_true_when_markers_present(tmp_path: Path) -> None:
+    rc = tmp_path / ".myshellrc"
+    write_myshellrc([tmp_path / "bin"], rc)
+    assert has_managed_block(rc) is True
+
+
+def test_has_managed_block_false_for_plain_or_missing_file(tmp_path: Path) -> None:
+    missing = tmp_path / "nope"
+    assert has_managed_block(missing) is False
+    plain = tmp_path / ".myshellrc"
+    plain.write_text("export EDITOR=vim\n")
+    assert has_managed_block(plain) is False
