@@ -255,6 +255,37 @@ async def test_navigating_away_from_fix_without_apply_writes_nothing() -> None:
         assert applied == []  # the fix closure was never called
 
 
+async def test_uninstall_toggle_selects_highlighted_tool() -> None:
+    app = _app(uninstall=_uninstall_inputs(removable=[(_tool("rg"), [Path("/opt/rg")])]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        assert isinstance(app.screen, UninstallScreen)
+        await pilot.press("space")
+        assert app.screen.selected == {"rg"}
+        await pilot.press("space")
+        assert app.screen.selected == set()
+
+
+async def test_uninstall_select_all_includes_ban_and_block() -> None:
+    inputs = _uninstall_inputs(
+        removable=[(_tool("rg"), [Path("/opt/rg")])],
+        ban_names=["pip", "npm"],
+        has_path_block=True,
+    )
+    app = _app(uninstall=inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        assert isinstance(app.screen, UninstallScreen)
+        await pilot.press("a")
+        assert app.screen.selected == {"rg"}
+        assert app.screen.remove_ban is True
+        assert app.screen.remove_path_block is True
+        await pilot.press("i")  # invert clears everything
+        assert app.screen.selected == set()
+        assert app.screen.remove_ban is False
+        assert app.screen.remove_path_block is False
+
+
 async def test_palette_from_placeholder_navigates_without_desync() -> None:
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
