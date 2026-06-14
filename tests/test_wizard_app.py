@@ -3,6 +3,7 @@ from pathlib import Path
 
 from textual.widgets import Label
 
+from installer.app import UninstallDecision
 from installer.doctor import DoctorReport
 from installer.model import Method, Tool
 from installer.wizard_app import (
@@ -12,6 +13,8 @@ from installer.wizard_app import (
     NavScreen,
     PlaceholderScreen,
     UnifiedApp,
+    UninstallInputs,
+    UninstallScreen,
 )
 
 
@@ -28,6 +31,21 @@ def _tool(tool_id: str) -> Tool:
     )
 
 
+def _uninstall_inputs(
+    *,
+    removable: list[tuple[Tool, list[Path]]] | None = None,
+    ban_names: list[str] | None = None,
+    has_path_block: bool = False,
+    remove: Callable[[UninstallDecision], None] = lambda _decision: None,
+) -> UninstallInputs:
+    return UninstallInputs(
+        removable=removable if removable is not None else [],
+        ban_names=ban_names if ban_names is not None else [],
+        has_path_block=has_path_block,
+        remove=remove,
+    )
+
+
 def _app(
     *,
     report: DoctorReport | None = None,
@@ -35,6 +53,7 @@ def _app(
     guard_warning: str | None = None,
     fix_preview: str = "Will wire ~/.local/bin into ~/.zshrc",
     fix: Callable[[], None] = lambda: None,
+    uninstall: UninstallInputs | None = None,
     initial_view: str = "catalog",
 ) -> UnifiedApp:
     tools = [_tool("rg"), _tool("fd")]
@@ -48,6 +67,7 @@ def _app(
         guard_warning=guard_warning,
         fix_preview=fix_preview,
         fix=fix,
+        uninstall=uninstall or _uninstall_inputs(),
         initial_view=initial_view,
     )
 
@@ -80,6 +100,14 @@ async def test_number_key_navigates_to_each_view() -> None:
         assert app.current_view == "policies"
         await pilot.press("1")
         assert app.current_view == "catalog"
+
+
+async def test_uninstall_view_is_reachable() -> None:
+    app = _app(uninstall=_uninstall_inputs(removable=[(_tool("rg"), [Path("/opt/rg")])]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        assert app.current_view == "uninstall"
+        assert isinstance(app.screen, UninstallScreen)
 
 
 async def test_doctor_screen_renders_guidance() -> None:
@@ -234,10 +262,10 @@ async def test_palette_from_placeholder_navigates_without_desync() -> None:
         assert app.current_view == "doctor"
         await pilot.press("ctrl+p")
         assert isinstance(app.screen, NavScreen)
-        # ListView starts on catalog(0); step to uninstall(3): catalog,doctor,fix,uninstall
-        await pilot.press("down", "down", "down", "enter")
-        assert app.current_view == "uninstall"
+        # ListView starts on catalog(0); step to policies(4): catalog,doctor,fix,uninstall,policies
+        await pilot.press("down", "down", "down", "down", "enter")
+        assert app.current_view == "policies"
         assert not isinstance(app.screen, NavScreen)
         assert isinstance(app.screen, PlaceholderScreen)
         # the SCREEN shown matches current_view (no desync)
-        assert "Uninstall" in str(app.screen.query_one("#placeholder", Label).content)
+        assert "Policies" in str(app.screen.query_one("#placeholder", Label).content)

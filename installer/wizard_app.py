@@ -12,15 +12,19 @@ is always `[catalog]` or `[catalog, <one other view>]`.
 """
 
 from collections.abc import Callable, Mapping
-from typing import ClassVar
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, ClassVar
 
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Center, Middle
+from textual.coordinate import Coordinate
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Label, ListItem, ListView, Static
+from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
+from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
 from installer.guidance import Guidance, doctor_guidance, guard_guidance
@@ -31,7 +35,6 @@ from installer.render import guidance_text
 # bindings expose exactly the same views in the same order.
 VIEW_ORDER: tuple[str, ...] = ("catalog", "doctor", "fix", "uninstall", "policies")
 _PLACEHOLDER_TEXT = {
-    "uninstall": "Uninstall — coming in Phase 3",
     "policies": "Policies — coming in Phase 4",
 }
 _PALETTE_LABEL = {
@@ -41,6 +44,18 @@ _PALETTE_LABEL = {
     "uninstall": "Uninstall — remove installed tools",
     "policies": "Policies — pip/npm ban and env tweaks",
 }
+
+
+@dataclass(frozen=True)
+class UninstallInputs:
+    """Everything the UninstallScreen needs: the listable tools with their
+    artifact paths, the active ban names, whether a managed PATH block exists,
+    and the live removal closure bound by the composition root."""
+
+    removable: list[tuple[Tool, list[Path]]]
+    ban_names: list[str]
+    has_path_block: bool
+    remove: Callable[[UninstallDecision], None]
 
 
 class PlaceholderScreen(Screen[None]):
@@ -140,6 +155,169 @@ class FixScreen(Screen[None]):
         self._refresh_body()
 
 
+class UninstallScreen(Screen[None]):
+    """Toggle tools (and the ban / PATH wiring) to remove, then apply live."""
+
+    _BAN_KEY = "#ban"
+    _BLOCK_KEY = "#path-block"
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("space", "toggle_selected", "toggle", show=True),
+        Binding("a", "select_all", "all"),
+        Binding("i", "invert", "invert"),
+        Binding("enter", "remove", "remove selected", show=True, priority=True),
+    ]
+    DEFAULT_CSS = """
+    UninstallScreen #uninstall-status { dock: bottom; height: 1; padding: 0 1; color: $warning; }
+    UninstallScreen DataTable { height: 1fr; }
+    """
+
+    def __init__(self, inputs: UninstallInputs) -> None:
+        super().__init__()
+        self._removable = inputs.removable
+        self._ban_names = inputs.ban_names
+        self._has_path_block = inputs.has_path_block
+        self._remove = inputs.remove
+        self.selected: set[str] = set()
+        self.remove_ban = False
+        self.remove_path_block = False
+        self.applied = False
+        self.error: str | None = None
+        self.status_text = ""
+
+    def compose(self) -> ComposeResult:
+        yield DataTable()
+        yield Static("", id="uninstall-status")
+
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable[Any])
+        table.cursor_type = "row"
+        table.add_column("Sel", key="sel")
+        table.add_column("Item", key="item")
+        table.add_column("Removes", key="removes")
+        for tool, paths in self._removable:
+            table.add_row(
+                self._mark(False),
+                Text(tool.id, style="bold"),
+                Text(f"{len(paths)} artifact(s)", style="dim"),
+                key=tool.id,
+            )
+        if self._ban_names:
+            table.add_row(
+                self._mark(False),
+                Text("pip/npm ban", style="bold yellow"),
+                Text(f"shims + aliases ({', '.join(self._ban_names)})", style="dim"),
+                key=self._BAN_KEY,
+            )
+        if self._has_path_block:
+            table.add_row(
+                self._mark(False),
+                Text("PATH wiring", style="bold yellow"),
+                Text("managed block in ~/.myshellrc", style="dim"),
+                key=self._BLOCK_KEY,
+            )
+        if table.row_count == 0:
+            self._set_status("Nothing to uninstall.", style="green")
+        table.focus()
+
+    def _mark(self, chosen: bool) -> Text:
+        return Text("[x]" if chosen else "[ ]", style="green" if chosen else "")
+
+    def _toggleable_keys(self) -> list[str]:
+        keys = [tool.id for tool, _ in self._removable]
+        if self._ban_names:
+            keys.append(self._BAN_KEY)
+        if self._has_path_block:
+            keys.append(self._BLOCK_KEY)
+        return keys
+
+    def _is_chosen(self, key: str) -> bool:
+        if key == self._BAN_KEY:
+            return self.remove_ban
+        if key == self._BLOCK_KEY:
+            return self.remove_path_block
+        return key in self.selected
+
+    def _set_chosen(self, key: str, chosen: bool) -> None:
+        if key == self._BAN_KEY:
+            self.remove_ban = chosen
+        elif key == self._BLOCK_KEY:
+            self.remove_path_block = chosen
+        elif chosen:
+            self.selected.add(key)
+        else:
+            self.selected.discard(key)
+        self.query_one(DataTable[Any]).update_cell(key, "sel", self._mark(chosen))
+
+    def _highlighted_key(self) -> str | None:
+        table = self.query_one(DataTable[Any])
+        if table.row_count == 0:
+            return None
+        cell_key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0))
+        return cell_key.row_key.value
+
+    def _set_status(self, text: str, *, style: str) -> None:
+        self.status_text = text
+        self.query_one("#uninstall-status", Static).update(Text(text, style=style))
+
+    def _nothing_chosen(self) -> bool:
+        return not self.selected and not self.remove_ban and not self.remove_path_block
+
+    def action_toggle_selected(self) -> None:
+        if self.applied:
+            return
+        key = self._highlighted_key()
+        if key is None:
+            return
+        self._set_chosen(key, not self._is_chosen(key))
+
+    def action_select_all(self) -> None:
+        if self.applied:
+            return
+        for key in self._toggleable_keys():
+            self._set_chosen(key, True)
+
+    def action_invert(self) -> None:
+        if self.applied:
+            return
+        for key in self._toggleable_keys():
+            self._set_chosen(key, not self._is_chosen(key))
+
+    def action_remove(self) -> None:
+        if self.applied or not self._toggleable_keys():
+            return
+        if self._nothing_chosen():
+            self._set_status("Select at least one item to remove.", style="yellow")
+            return
+        paths: list[Path] = []
+        for tool, tool_paths in self._removable:
+            if tool.id in self.selected:
+                paths.extend(tool_paths)
+        decision = UninstallDecision(
+            paths=tuple(paths), remove_ban=self.remove_ban, remove_path_block=self.remove_path_block
+        )
+        try:
+            self._remove(decision)
+        except OSError as exc:
+            self.error = str(exc)
+            self._set_status(
+                f"Uninstall failed: {exc}. Check permissions, then press enter.",
+                style="red",
+            )
+            return
+        self.error = None
+        self.applied = True
+        self._set_status(self._applied_summary(len(paths)), style="green")
+
+    def _applied_summary(self, removed: int) -> str:
+        parts = [f"Removed {removed} item(s)."]
+        if self.remove_ban:
+            parts.append("pip/npm ban removed — open a new shell or run `hash -r`.")
+        if self.remove_path_block:
+            parts.append("PATH wiring removed — restart your shell to drop the managed dirs.")
+        return "  ".join(parts)
+
+
 class NavScreen(ModalScreen[str | None]):
     """Our command palette: a modal list of views, dismissing the chosen one.
 
@@ -192,6 +370,7 @@ class UnifiedApp(App[list[str] | None]):
         guard_warning: str | None,
         fix_preview: str,
         fix: Callable[[], None],
+        uninstall: UninstallInputs,
         initial_view: str = "catalog",
     ) -> None:
         super().__init__()
@@ -202,7 +381,7 @@ class UnifiedApp(App[list[str] | None]):
         self._views: dict[str, Screen[None]] = {
             "doctor": DoctorScreen(report, guard_status, guard_warning),
             "fix": FixScreen(fix_preview, fix),
-            "uninstall": PlaceholderScreen(_PLACEHOLDER_TEXT["uninstall"]),
+            "uninstall": UninstallScreen(uninstall),
             "policies": PlaceholderScreen(_PLACEHOLDER_TEXT["policies"]),
         }
         self._initial_view = initial_view
