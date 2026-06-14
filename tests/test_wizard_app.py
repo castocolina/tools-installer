@@ -445,6 +445,43 @@ async def test_uninstall_applied_summary_ban_and_path() -> None:
         assert "PATH wiring removed" in app.screen.status_text
 
 
+async def test_uninstall_applied_summary_omits_tool_line_when_no_tool() -> None:
+    """Selecting only the ban (no tool) yields no 'Removed N tool(s).' line
+    (covers the `if tool_count:` false branch of _applied_summary)."""
+    inputs = _uninstall_inputs(
+        removable=[(_tool("rg"), [Path("/opt/rg")])],
+        ban_names=["pip"],
+        remove=lambda _d: None,
+    )
+    app = _app(uninstall=inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        assert isinstance(app.screen, UninstallScreen)
+        await pilot.press("down")  # move cursor off the tool row onto the ban row
+        await pilot.press("space")  # select only the ban
+        assert app.screen.selected == set()
+        assert app.screen.remove_ban is True
+        await pilot.press("enter")
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.applied is True
+        assert "tool(s)" not in app.screen.status_text
+        assert "ban removed" in app.screen.status_text
+
+
+async def test_uninstall_toggle_clears_stale_validation_toast() -> None:
+    """A refusal toast must not linger once the selection changes (covers the
+    `if self.status_text:` true branch of _clear_status)."""
+    app = _app(uninstall=_uninstall_inputs(removable=[(_tool("rg"), [Path("/opt/rg")])]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        await pilot.press("enter")  # nothing selected → refusal toast
+        assert isinstance(app.screen, UninstallScreen)
+        assert "at least one" in app.screen.status_text
+        await pilot.press("space")  # select rg → toast cleared
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.status_text == ""
+
+
 async def test_palette_from_placeholder_navigates_without_desync() -> None:
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:

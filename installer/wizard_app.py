@@ -22,7 +22,7 @@ from textual.binding import Binding, BindingType
 from textual.containers import Center, Middle
 from textual.coordinate import Coordinate
 from textual.screen import ModalScreen, Screen
-from textual.widgets import DataTable, Label, ListItem, ListView, Static
+from textual.widgets import DataTable, Footer, Label, ListItem, ListView, Static
 
 from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
@@ -168,7 +168,7 @@ class UninstallScreen(Screen[None]):
         Binding("enter", "remove", "remove selected", show=True, priority=True),
     ]
     DEFAULT_CSS = """
-    UninstallScreen #uninstall-status { dock: bottom; height: 1; padding: 0 1; color: $warning; }
+    UninstallScreen #uninstall-status { height: auto; padding: 0 1; color: $warning; }
     UninstallScreen DataTable { height: 1fr; }
     """
 
@@ -188,6 +188,7 @@ class UninstallScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield DataTable()
         yield Static("", id="uninstall-status")
+        yield Footer()
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable[Any])
@@ -206,14 +207,17 @@ class UninstallScreen(Screen[None]):
             table.add_row(
                 self._mark(False),
                 Text("pip/npm ban", style="bold yellow"),
-                Text(f"shims + aliases ({', '.join(self._ban_names)})", style="dim"),
+                Text(
+                    f"shell config: shims + aliases ({', '.join(self._ban_names)})",
+                    style="dim",
+                ),
                 key=self._BAN_KEY,
             )
         if self._has_path_block:
             table.add_row(
                 self._mark(False),
                 Text("PATH wiring", style="bold yellow"),
-                Text("managed block in ~/.myshellrc", style="dim"),
+                Text("shell config: managed block in ~/.myshellrc", style="dim"),
                 key=self._BLOCK_KEY,
             )
         if table.row_count == 0:
@@ -260,6 +264,11 @@ class UninstallScreen(Screen[None]):
         self.status_text = text
         self.query_one("#uninstall-status", Static).update(Text(text, style=style))
 
+    def _clear_status(self) -> None:
+        if self.status_text:
+            self.status_text = ""
+            self.query_one("#uninstall-status", Static).update("")
+
     def _nothing_chosen(self) -> bool:
         return not self.selected and not self.remove_ban and not self.remove_path_block
 
@@ -270,18 +279,21 @@ class UninstallScreen(Screen[None]):
         if key is None:
             return
         self._set_chosen(key, not self._is_chosen(key))
+        self._clear_status()
 
     def action_select_all(self) -> None:
         if self.applied:
             return
         for key in self._toggleable_keys():
             self._set_chosen(key, True)
+        self._clear_status()
 
     def action_invert(self) -> None:
         if self.applied:
             return
         for key in self._toggleable_keys():
             self._set_chosen(key, not self._is_chosen(key))
+        self._clear_status()
 
     def action_remove(self) -> None:
         if self.applied or not self._toggleable_keys():
@@ -307,15 +319,20 @@ class UninstallScreen(Screen[None]):
             return
         self.error = None
         self.applied = True
-        self._set_status(self._applied_summary(len(paths)), style="green")
+        tool_count = sum(1 for tool, _ in self._removable if tool.id in self.selected)
+        self._set_status(self._applied_summary(tool_count), style="green")
 
-    def _applied_summary(self, removed: int) -> str:
-        parts = [f"Removed {removed} item(s)."]
+    def _applied_summary(self, tool_count: int) -> str:
+        parts: list[str] = []
+        if tool_count:
+            parts.append(f"Removed {tool_count} tool(s).")
         if self.remove_ban:
             parts.append("pip/npm ban removed — open a new shell or run `hash -r`.")
         if self.remove_path_block:
-            parts.append("PATH wiring removed — restart your shell to drop the managed dirs.")
-        return "  ".join(parts)
+            parts.append("PATH wiring removed — restart your shell to update PATH.")
+        # One line per outcome: a single joined line overflows the terminal width and
+        # truncates the reload guidance, so the "needs a new shell" steps go unseen.
+        return "\n".join(parts)
 
 
 class NavScreen(ModalScreen[str | None]):
