@@ -784,12 +784,13 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
 
 - [ ] **Step 3: Verify non-interactive behavior and validation**
 
-Run:
+**SAFETY:** never run a real `--uninstall --yes` against your actual home — with auto-confirm it would delete real artifacts and strip your real rc files (the PRD's hard rule). `_DEFAULT_BIN_DIR`/`_MYSHELLRC`/`_RC_PATHS` derive from `Path.home()`, which honors `$HOME` on POSIX, so verify with an **isolated empty HOME**:
+
 ```bash
-uv run setup.py --uninstall --yes < /dev/null   # non-TTY path: console run_uninstall, app NOT launched
+HOME="$(mktemp -d)" uv run setup.py --uninstall --yes < /dev/null   # redirected to a throwaway home
 make validate
 ```
-Expected: the `--yes` path prints the console uninstall flow (or the nothing-line) and does **not** launch the TUI; `make validate` is green (ruff, ruff format, pyright strict, bandit, vulture, shellcheck).
+Expected: against the empty temp home the non-TTY path prints the "nothing to uninstall" line and exits 0 **without launching the TUI** (proving `sys.stdin.isatty()` gating); `make validate` is green (ruff, ruff format, pyright strict, bandit, vulture, shellcheck). Do NOT run the bare `uv run setup.py --uninstall --yes` (real home).
 
 - [ ] **Step 4: Commit**
 
