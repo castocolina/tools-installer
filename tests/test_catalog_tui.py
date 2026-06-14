@@ -10,7 +10,7 @@ from textual.widgets.data_table import ColumnKey
 from installer.catalog_tui import group_tools, sort_for_table
 from installer.doctor import DoctorReport
 from installer.model import Method, Tool
-from installer.wizard_app import UnifiedApp
+from installer.wizard_app import UnifiedApp, UninstallInputs
 
 
 def _unified_app(
@@ -28,6 +28,9 @@ def _unified_app(
         guard_warning=None,
         fix_preview="",
         fix=lambda: None,
+        uninstall=UninstallInputs(
+            removable=[], ban_names=[], has_path_block=False, remove=lambda _decision: None
+        ),
     )
 
 

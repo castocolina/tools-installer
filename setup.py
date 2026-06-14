@@ -17,8 +17,10 @@ import questionary
 from rich.console import Console
 
 from installer.app import (
+    UninstallDecision,
     clean_rc_duplicates,
     configure_path,
+    perform_uninstall,
     run_doctor,
     run_guard,
     run_uninstall,
@@ -32,9 +34,10 @@ from installer.platform import Platform, detect
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.selection import Choice
-from installer.shellrc import collect_bin_dirs
+from installer.shellrc import collect_bin_dirs, has_managed_block
 from installer.status import is_installed
-from installer.wizard_app import UnifiedApp
+from installer.uninstall import removable_tools
+from installer.wizard_app import UnifiedApp, UninstallInputs
 
 _REGISTRY = Path(__file__).parent / "installer" / "registry.toml"
 _DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
@@ -167,6 +170,25 @@ def _build_app(
     installed = {tool.id: is_installed(tool) for tool in tools}
     report, status, warning = _doctor_data(tools, platform)
     rc_paths = _rc_paths_for_mode(link_mode)
+    removable = removable_tools(tools, _DEFAULT_BIN_DIR)
+    ban_names = [name for name, active in status.items() if active]
+
+    def _do_uninstall(decision: UninstallDecision) -> None:
+        # Runs live inside the UninstallScreen. rc_paths is the standard set so the
+        # ban aliases are cleaned wherever they were written, regardless of mode.
+        perform_uninstall(
+            decision,
+            bin_dir=_DEFAULT_BIN_DIR,
+            myshellrc_path=_MYSHELLRC,
+            rc_paths=_RC_PATHS,
+        )
+
+    uninstall_inputs = UninstallInputs(
+        removable=removable,
+        ban_names=ban_names,
+        has_path_block=has_managed_block(_MYSHELLRC),
+        remove=_do_uninstall,
+    )
 
     def _apply_fix() -> None:
         # Runs live inside the FixScreen. A quiet console keeps configure_path's
@@ -197,6 +219,7 @@ def _build_app(
         guard_warning=warning,
         fix_preview=preview,
         fix=_apply_fix,
+        uninstall=uninstall_inputs,
         initial_view=initial_view,
     )
 
@@ -274,6 +297,9 @@ def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
 
 
 def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
+    if sys.stdin.isatty() and not assume_yes:
+        _build_app(load_tools(_REGISTRY), detect(), initial_view="uninstall").run()
+        return 0
     confirm = (lambda _message: True) if assume_yes else _ask_confirm
     run_uninstall(
         load_tools(_REGISTRY),

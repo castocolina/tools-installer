@@ -2,6 +2,7 @@
 
 import shutil
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from rich.console import Console
@@ -286,3 +287,33 @@ def run_uninstall(
     for rc_path in rc_paths:
         remove_ban_aliases(rc_path)
     return paths
+
+
+@dataclass(frozen=True)
+class UninstallDecision:
+    """The levers the in-app uninstall view collected: selected artifact paths,
+    plus whether to also remove the pip/npm ban and the managed PATH block."""
+
+    paths: tuple[Path, ...]
+    remove_ban: bool
+    remove_path_block: bool
+
+
+def perform_uninstall(
+    decision: UninstallDecision,
+    *,
+    bin_dir: Path,
+    myshellrc_path: Path,
+    rc_paths: list[Path],
+) -> None:
+    """Apply exactly the levers the view chose, composing the existing core
+    removers. Unlike `run_uninstall`, nothing is removed all-or-nothing: a
+    partial selection leaves the ban and PATH wiring untouched."""
+    remove_paths(list(decision.paths))
+    if decision.remove_ban:
+        remove_shims(bin_dir)
+        remove_ban_aliases(myshellrc_path)
+        for rc_path in rc_paths:
+            remove_ban_aliases(rc_path)
+    if decision.remove_path_block:
+        remove_managed_block(myshellrc_path)

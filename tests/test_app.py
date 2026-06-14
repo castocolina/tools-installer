@@ -825,3 +825,58 @@ def test_run_uninstall_also_removes_guard_artifacts(tmp_path: Path):
     out = buf.getvalue()
     assert "The pip/npm ban will also be removed" in out
     assert "Nothing to uninstall" not in out
+
+
+def test_perform_uninstall_removes_only_chosen_levers(tmp_path: Path) -> None:
+    from installer.app import UninstallDecision, perform_uninstall
+    from installer.shellrc import write_myshellrc
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    artifact = bin_dir / "fd"
+    artifact.write_text("binary")
+    myshellrc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], myshellrc)  # writes the managed PATH block
+
+    # Only the artifact is selected; ban + path-block left intact.
+    decision = UninstallDecision(paths=(artifact,), remove_ban=False, remove_path_block=False)
+    perform_uninstall(decision, bin_dir=bin_dir, myshellrc_path=myshellrc, rc_paths=[])
+
+    assert not artifact.exists()
+    assert "tools-installer path" in myshellrc.read_text()  # block preserved
+
+
+def test_perform_uninstall_removes_path_block_when_chosen(tmp_path: Path) -> None:
+    from installer.app import UninstallDecision, perform_uninstall
+    from installer.shellrc import write_myshellrc
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    myshellrc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], myshellrc)
+
+    decision = UninstallDecision(paths=(), remove_ban=True, remove_path_block=True)
+    perform_uninstall(decision, bin_dir=bin_dir, myshellrc_path=myshellrc, rc_paths=[myshellrc])
+
+    assert "tools-installer path" not in myshellrc.read_text()  # block stripped
+
+
+def test_perform_uninstall_ban_lever_removes_shims_and_aliases(tmp_path: Path) -> None:
+    from installer.app import UninstallDecision, perform_uninstall
+    from installer.guards import guard_status, install_shims, write_ban_aliases
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    myshellrc = tmp_path / ".myshellrc"
+    rc = tmp_path / ".zshrc"
+    install_shims(bin_dir)  # plant real ban shims
+    write_ban_aliases(myshellrc)  # plant the alias block in both targets
+    write_ban_aliases(rc)
+    assert any(guard_status(bin_dir).values())  # precondition: ban is active
+
+    decision = UninstallDecision(paths=(), remove_ban=True, remove_path_block=False)
+    perform_uninstall(decision, bin_dir=bin_dir, myshellrc_path=myshellrc, rc_paths=[rc])
+
+    assert all(active is False for active in guard_status(bin_dir).values())  # shims gone
+    assert "alias" not in myshellrc.read_text()  # alias block stripped from myshellrc
+    assert "alias" not in rc.read_text()  # ...and from each rc path

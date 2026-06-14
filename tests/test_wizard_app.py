@@ -3,6 +3,7 @@ from pathlib import Path
 
 from textual.widgets import Label
 
+from installer.app import UninstallDecision
 from installer.doctor import DoctorReport
 from installer.model import Method, Tool
 from installer.wizard_app import (
@@ -12,6 +13,8 @@ from installer.wizard_app import (
     NavScreen,
     PlaceholderScreen,
     UnifiedApp,
+    UninstallInputs,
+    UninstallScreen,
 )
 
 
@@ -28,6 +31,21 @@ def _tool(tool_id: str) -> Tool:
     )
 
 
+def _uninstall_inputs(
+    *,
+    removable: list[tuple[Tool, list[Path]]] | None = None,
+    ban_names: list[str] | None = None,
+    has_path_block: bool = False,
+    remove: Callable[[UninstallDecision], None] = lambda _decision: None,
+) -> UninstallInputs:
+    return UninstallInputs(
+        removable=removable if removable is not None else [],
+        ban_names=ban_names if ban_names is not None else [],
+        has_path_block=has_path_block,
+        remove=remove,
+    )
+
+
 def _app(
     *,
     report: DoctorReport | None = None,
@@ -35,6 +53,7 @@ def _app(
     guard_warning: str | None = None,
     fix_preview: str = "Will wire ~/.local/bin into ~/.zshrc",
     fix: Callable[[], None] = lambda: None,
+    uninstall: UninstallInputs | None = None,
     initial_view: str = "catalog",
 ) -> UnifiedApp:
     tools = [_tool("rg"), _tool("fd")]
@@ -48,6 +67,7 @@ def _app(
         guard_warning=guard_warning,
         fix_preview=fix_preview,
         fix=fix,
+        uninstall=uninstall or _uninstall_inputs(),
         initial_view=initial_view,
     )
 
@@ -80,6 +100,14 @@ async def test_number_key_navigates_to_each_view() -> None:
         assert app.current_view == "policies"
         await pilot.press("1")
         assert app.current_view == "catalog"
+
+
+async def test_uninstall_view_is_reachable() -> None:
+    app = _app(uninstall=_uninstall_inputs(removable=[(_tool("rg"), [Path("/opt/rg")])]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        assert app.current_view == "uninstall"
+        assert isinstance(app.screen, UninstallScreen)
 
 
 async def test_doctor_screen_renders_guidance() -> None:
@@ -227,6 +255,233 @@ async def test_navigating_away_from_fix_without_apply_writes_nothing() -> None:
         assert applied == []  # the fix closure was never called
 
 
+async def test_uninstall_toggle_selects_highlighted_tool() -> None:
+    app = _app(uninstall=_uninstall_inputs(removable=[(_tool("rg"), [Path("/opt/rg")])]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        assert isinstance(app.screen, UninstallScreen)
+        await pilot.press("space")
+        assert app.screen.selected == {"rg"}
+        await pilot.press("space")
+        assert app.screen.selected == set()
+
+
+async def test_uninstall_select_all_includes_ban_and_block() -> None:
+    inputs = _uninstall_inputs(
+        removable=[(_tool("rg"), [Path("/opt/rg")])],
+        ban_names=["pip", "npm"],
+        has_path_block=True,
+    )
+    app = _app(uninstall=inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        assert isinstance(app.screen, UninstallScreen)
+        await pilot.press("a")
+        assert app.screen.selected == {"rg"}
+        assert app.screen.remove_ban is True
+        assert app.screen.remove_path_block is True
+        await pilot.press("i")  # invert clears everything
+        assert app.screen.selected == set()
+        assert app.screen.remove_ban is False
+        assert app.screen.remove_path_block is False
+
+
+async def test_uninstall_apply_calls_remove_and_flips_applied() -> None:
+    captured: list[UninstallDecision] = []
+    inputs = _uninstall_inputs(
+        removable=[(_tool("rg"), [Path("/opt/rg")])],
+        ban_names=["pip"],
+        remove=captured.append,
+    )
+    app = _app(uninstall=inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        await pilot.press("space")  # select rg
+        await pilot.press("enter")
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.applied is True
+        assert captured[0].paths == (Path("/opt/rg"),)
+        assert captured[0].remove_ban is False
+
+
+async def test_uninstall_empty_selection_refuses() -> None:
+    captured: list[UninstallDecision] = []
+    inputs = _uninstall_inputs(removable=[(_tool("rg"), [Path("/opt/rg")])], remove=captured.append)
+    app = _app(uninstall=inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        await pilot.press("enter")  # nothing selected
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.applied is False
+        assert captured == []  # closure never called
+        assert "at least one" in app.screen.status_text
+
+
+async def test_uninstall_apply_error_surfaces_and_does_not_crash() -> None:
+    def boom(_decision: UninstallDecision) -> None:
+        raise OSError("permission denied")
+
+    inputs = _uninstall_inputs(removable=[(_tool("rg"), [Path("/opt/rg")])], remove=boom)
+    app = _app(uninstall=inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        await pilot.press("space")
+        await pilot.press("enter")
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.applied is False
+        assert app.screen.error == "permission denied"
+        assert "failed" in app.screen.status_text.lower()
+
+
+async def test_uninstall_initial_view_opens_on_uninstall() -> None:
+    app = _app(
+        uninstall=_uninstall_inputs(removable=[(_tool("rg"), [Path("/opt/rg")])]),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(100, 30)):
+        assert isinstance(app.screen, UninstallScreen)
+
+
+async def test_uninstall_empty_state_shows_nothing_line() -> None:
+    app = _app(uninstall=_uninstall_inputs())  # no removable, no ban, no block
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        await pilot.press("enter")  # no-op
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.applied is False
+        assert "Nothing to uninstall" in app.screen.status_text
+
+
+async def test_ctrl_c_aborts_from_uninstall_view() -> None:
+    app = _app(uninstall=_uninstall_inputs(removable=[(_tool("rg"), [Path("/opt/rg")])]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        await pilot.press("ctrl+c")
+    assert app.return_value is None
+
+
+async def test_uninstall_empty_table_toggle_noop() -> None:
+    """Space on an empty uninstall table is a no-op (covers _highlighted_key row_count==0)."""
+    app = _app(uninstall=_uninstall_inputs())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        assert isinstance(app.screen, UninstallScreen)
+        await pilot.press("space")
+        assert app.screen.selected == set()
+        assert app.screen.applied is False
+
+
+async def test_uninstall_keys_noop_after_applied() -> None:
+    """space/a/i are no-ops once applied is True."""
+    inputs = _uninstall_inputs(
+        removable=[(_tool("rg"), [Path("/opt/rg")])],
+        ban_names=["pip"],
+        has_path_block=True,
+        remove=lambda _d: None,
+    )
+    app = _app(uninstall=inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        assert isinstance(app.screen, UninstallScreen)
+        await pilot.press("a")  # select all
+        await pilot.press("enter")  # apply → applied = True
+        assert app.screen.applied is True
+        selected_snapshot = set(app.screen.selected)
+        ban_snapshot = app.screen.remove_ban
+        block_snapshot = app.screen.remove_path_block
+        # These should all be no-ops now
+        await pilot.press("space")
+        await pilot.press("a")
+        await pilot.press("i")
+        assert app.screen.applied is True
+        assert app.screen.selected == selected_snapshot
+        assert app.screen.remove_ban == ban_snapshot
+        assert app.screen.remove_path_block == block_snapshot
+
+
+async def test_uninstall_partial_selection_apply() -> None:
+    """Only selected tools appear in the UninstallDecision paths (covers the
+    `if tool.id in self.selected` false branch for the unselected tool)."""
+    captured: list[UninstallDecision] = []
+    inputs = _uninstall_inputs(
+        removable=[
+            (_tool("rg"), [Path("/opt/rg")]),
+            (_tool("fd"), [Path("/opt/fd")]),
+        ],
+        remove=captured.append,
+    )
+    app = _app(uninstall=inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        assert isinstance(app.screen, UninstallScreen)
+        # Cursor starts on row 0 (rg); space selects only that one.
+        await pilot.press("space")
+        assert len(app.screen.selected) == 1
+        await pilot.press("enter")
+    assert len(captured) == 1
+    assert len(captured[0].paths) == 1
+    assert Path("/opt/rg") in captured[0].paths
+    assert Path("/opt/fd") not in captured[0].paths
+
+
+async def test_uninstall_applied_summary_ban_and_path() -> None:
+    """Status text mentions ban and PATH lines when both are selected (covers
+    _applied_summary branches for remove_ban and remove_path_block)."""
+    inputs = _uninstall_inputs(
+        removable=[(_tool("rg"), [Path("/opt/rg")])],
+        ban_names=["pip"],
+        has_path_block=True,
+        remove=lambda _d: None,
+    )
+    app = _app(uninstall=inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        assert isinstance(app.screen, UninstallScreen)
+        await pilot.press("a")  # select all: tool + ban + path block
+        await pilot.press("enter")
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.applied is True
+        assert "ban removed" in app.screen.status_text
+        assert "PATH wiring removed" in app.screen.status_text
+
+
+async def test_uninstall_applied_summary_omits_tool_line_when_no_tool() -> None:
+    """Selecting only the ban (no tool) yields no 'Removed N tool(s).' line
+    (covers the `if tool_count:` false branch of _applied_summary)."""
+    inputs = _uninstall_inputs(
+        removable=[(_tool("rg"), [Path("/opt/rg")])],
+        ban_names=["pip"],
+        remove=lambda _d: None,
+    )
+    app = _app(uninstall=inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        assert isinstance(app.screen, UninstallScreen)
+        await pilot.press("down")  # move cursor off the tool row onto the ban row
+        await pilot.press("space")  # select only the ban
+        assert app.screen.selected == set()
+        assert app.screen.remove_ban is True
+        await pilot.press("enter")
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.applied is True
+        assert "tool(s)" not in app.screen.status_text
+        assert "ban removed" in app.screen.status_text
+
+
+async def test_uninstall_toggle_clears_stale_validation_toast() -> None:
+    """A refusal toast must not linger once the selection changes (covers the
+    `if self.status_text:` true branch of _clear_status)."""
+    app = _app(uninstall=_uninstall_inputs(removable=[(_tool("rg"), [Path("/opt/rg")])]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        await pilot.press("enter")  # nothing selected → refusal toast
+        assert isinstance(app.screen, UninstallScreen)
+        assert "at least one" in app.screen.status_text
+        await pilot.press("space")  # select rg → toast cleared
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.status_text == ""
+
+
 async def test_palette_from_placeholder_navigates_without_desync() -> None:
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
@@ -234,10 +489,10 @@ async def test_palette_from_placeholder_navigates_without_desync() -> None:
         assert app.current_view == "doctor"
         await pilot.press("ctrl+p")
         assert isinstance(app.screen, NavScreen)
-        # ListView starts on catalog(0); step to uninstall(3): catalog,doctor,fix,uninstall
-        await pilot.press("down", "down", "down", "enter")
-        assert app.current_view == "uninstall"
+        # ListView starts on catalog(0); step to policies(4): catalog,doctor,fix,uninstall,policies
+        await pilot.press("down", "down", "down", "down", "enter")
+        assert app.current_view == "policies"
         assert not isinstance(app.screen, NavScreen)
         assert isinstance(app.screen, PlaceholderScreen)
         # the SCREEN shown matches current_view (no desync)
-        assert "Uninstall" in str(app.screen.query_one("#placeholder", Label).content)
+        assert "Policies" in str(app.screen.query_one("#placeholder", Label).content)

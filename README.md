@@ -28,9 +28,9 @@ wget -qO- https://raw.githubusercontent.com/castocolina/tools-installer/main/ins
 - **Interactive wizard (TUI)** — one Textual app. The catalog view lists all 49
   tools: switch the grouping (category · priority · audience · status · table) with
   ←/→ or the mouse, toggle with **space**, confirm with **enter**. **Ctrl+P** opens
-  an in-app command palette (number keys `1`–`5` switch views too); the doctor, fix,
-  uninstall, and policies views are being folded into the same app. See
-  [Selecting tools](#selecting-tools).
+  an in-app command palette (number keys `1`–`5` switch views too); the catalog,
+  doctor, fix, and **uninstall** views all live in the same app (policies arrives
+  in a later phase). See [Selecting tools](#selecting-tools).
 - **Installs in userspace by default** — `~/.local/bin` for CLIs, `~/Applications`
   for macOS GUIs. No `sudo`, no writing to `/Applications` or system paths, so it
   works on locked-down corporate Macs and atomic/immutable Linux.
@@ -251,7 +251,7 @@ workflow has a `make` target so local runs and CI are identical:
 | `make validate`  | pre-commit gates: `ruff check`, `ruff format --check`, `pyright`, `bandit`, `vulture`, `shellcheck` |
 | `make test`      | `pytest` with coverage                                          |
 | `make build`     | build the distributable                                         |
-| `make uninstall` | remove userspace artifacts: `~/.local/opt/*` dirs, `~/.local/bin` symlinks, and the managed `~/.myshellrc` PATH block (previews, then asks to confirm) |
+| `make uninstall` | remove userspace artifacts. Interactively (a TTY) this opens the app on the **uninstall view**: toggle which tools to remove, plus independent toggles for the pip/npm ban and the managed `~/.myshellrc` PATH wiring, applied live with reload guidance. Non-interactively / `--yes` it runs the unchanged console flow (previews `~/.local/opt/*` dirs, `~/.local/bin` symlinks, and the PATH block, then confirms) |
 
 Quality gates are not optional and must not be bypassed (`# noqa`, `# type: ignore`,
 skipped tests, lowered coverage floors). The full contributor rules live in

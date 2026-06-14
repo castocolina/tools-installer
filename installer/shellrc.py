@@ -112,6 +112,14 @@ def remove_managed_block(path: Path) -> None:
         path.write_text(stripped)
 
 
+def has_managed_block(path: Path) -> bool:
+    """True when `path` exists and contains the managed PATH block begin marker."""
+    if not path.exists():
+        return False
+    lines = path.read_text().split("\n")
+    return _PATH_BEGIN in lines
+
+
 def write_myshellrc(bin_dirs: list[Path], path: Path) -> None:
     """Idempotently write the managed PATH block into ~/.myshellrc, preserving the rest."""
     existing = path.read_text() if path.exists() else ""
