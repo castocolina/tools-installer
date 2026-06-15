@@ -1,10 +1,10 @@
 """Unified Textual shell hosting the wizard views behind one app.
 
-The app owns navigation and the screen stack. The catalog, doctor, and fix are
-functional views; uninstall and policies remain placeholders until later phases.
-Execution stays behind the pure `installer/` core invoked from `setup.py`, with
-one deliberate exception: the fix view applies its PATH wiring live through an
-injected closure. The app's run value stays the catalog decision (`list[str] | None`).
+The app owns navigation and the screen stack. Catalog, doctor, fix, uninstall,
+and policies are all functional views. Execution stays behind the pure
+`installer/` core invoked from `setup.py`, with one deliberate exception: the
+fix, uninstall, and policies views apply their changes live through injected
+closures. The app's run value stays the catalog decision (`list[str] | None`).
 
 The catalog is the base screen (`get_default_screen`); it cannot be switched
 out. Navigation is therefore a stack with the catalog at the bottom: the stack
@@ -29,14 +29,12 @@ from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
 from installer.guidance import Guidance, doctor_guidance, guard_guidance
 from installer.model import Tool
+from installer.policy import Policy, PolicyResult
 from installer.render import guidance_text
 
 # Navigation order shared by every route, so the palette and the direct 1..N key
 # bindings expose exactly the same views in the same order.
 VIEW_ORDER: tuple[str, ...] = ("catalog", "doctor", "fix", "uninstall", "policies")
-_PLACEHOLDER_TEXT = {
-    "policies": "Policies — coming in Phase 4",
-}
 _PALETTE_LABEL = {
     "catalog": "Catalog — pick tools to install",
     "doctor": "Doctor — audit your PATH",
@@ -56,6 +54,14 @@ class UninstallInputs:
     ban_names: list[str]
     has_path_block: bool
     remove: Callable[[UninstallDecision], None]
+
+
+@dataclass(frozen=True)
+class PolicyInputs:
+    """The policies the PoliciesScreen renders, each carrying its own bound
+    apply/remove closures. The composition root builds these from the pure core."""
+
+    policies: list[Policy]
 
 
 class PlaceholderScreen(Screen[None]):
@@ -338,6 +344,102 @@ class UninstallScreen(Screen[None]):
         return "\n".join(parts)
 
 
+class PoliciesScreen(Screen[None]):
+    """Toggle environment policies (the pip/npm ban) on/off, applied live.
+
+    Unlike the catalog/uninstall views there is no select-then-apply step: each
+    toggle is an immediate, idempotent mutation, so only `enter` is bound (not
+    `space`, whose 'harmless select' meaning elsewhere would be a footgun here).
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("enter", "toggle_policy", "toggle policy", show=True, priority=True),
+    ]
+    DEFAULT_CSS = """
+    PoliciesScreen #policies-status { height: auto; padding: 0 1; color: $warning; }
+    PoliciesScreen DataTable { height: 1fr; }
+    """
+
+    def __init__(self, inputs: PolicyInputs) -> None:
+        super().__init__()
+        self._policies = inputs.policies
+        self.active_state: dict[str, bool] = {
+            policy.id: policy.active for policy in inputs.policies
+        }
+        self.status_text = ""
+        self.error: str | None = None
+
+    def compose(self) -> ComposeResult:
+        yield DataTable()
+        yield Static("", id="policies-status")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable[Any])
+        table.cursor_type = "row"
+        table.add_column("State", key="state")
+        table.add_column("Policy", key="policy")
+        table.add_column("Effect", key="effect")
+        for policy in self._policies:
+            table.add_row(
+                self._state_cell(self.active_state[policy.id]),
+                Text(policy.label, style="bold yellow"),
+                Text(f"shell config: {policy.description}", style="dim"),
+                key=policy.id,
+            )
+        table.focus()
+
+    def _state_cell(self, active: bool) -> Text:
+        # A ●/○ glyph carries the state independent of color: the lone row is
+        # always focused, so the selection highlight flattens the green/dim cue.
+        label = "● [on]" if active else "○ [off]"
+        return Text(label, style="green" if active else "dim")
+
+    def _highlighted_policy(self) -> Policy | None:
+        table = self.query_one(DataTable[Any])
+        if table.row_count == 0:
+            return None
+        cell_key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0))
+        policy_id = cell_key.row_key.value
+        return next((policy for policy in self._policies if policy.id == policy_id), None)
+
+    def _set_status(self, text: str, *, style: str) -> None:
+        self.status_text = text
+        self.query_one("#policies-status", Static).update(Text(text, style=style))
+
+    def action_toggle_policy(self) -> None:
+        policy = self._highlighted_policy()
+        if policy is None:
+            return
+        active = self.active_state[policy.id]
+        try:
+            result = policy.remove() if active else policy.apply()
+        except OSError as exc:
+            self.error = str(exc)
+            self._set_status(
+                f"Policy change failed: {exc}. Check permissions, then press enter.",
+                style="red",
+            )
+            return
+        self.error = None
+        new_active = not active
+        self.active_state[policy.id] = new_active
+        self.query_one(DataTable[Any]).update_cell(policy.id, "state", self._state_cell(new_active))
+        verb = "enabled" if new_active else "disabled"
+        self._set_status(self._summary(policy, verb, result), style="green")
+
+    def _summary(self, policy: Policy, verb: str, result: PolicyResult) -> str:
+        # One line per outcome: a single joined line overflows the terminal width
+        # and truncates the reload guidance (the Phase 3 fix).
+        parts = [f"{policy.label} {verb}."]
+        parts.extend(f"{layer.name}: {layer.detail}" for layer in result.layers)
+        if result.reload_hint:
+            parts.append(result.reload_hint)
+        if result.warning:
+            parts.append(result.warning)
+        return "\n".join(parts)
+
+
 class NavScreen(ModalScreen[str | None]):
     """Our command palette: a modal list of views, dismissing the chosen one.
 
@@ -391,18 +493,19 @@ class UnifiedApp(App[list[str] | None]):
         fix_preview: str,
         fix: Callable[[], None],
         uninstall: UninstallInputs,
+        policies: PolicyInputs,
         initial_view: str = "catalog",
     ) -> None:
         super().__init__()
         self._catalog = CatalogScreen(tools, installed, blurbs)
-        # Non-catalog views, pushed by value. Doctor is real; the rest are
-        # placeholders until their phases. push_screen/pop_screen stay fully
+        # Non-catalog views, pushed by value. Doctor is real; uninstall and
+        # policies are live-toggle screens. push_screen/pop_screen stay fully
         # typed under pyright strict (unlike install_screen/switch_screen).
         self._views: dict[str, Screen[None]] = {
             "doctor": DoctorScreen(report, guard_status, guard_warning),
             "fix": FixScreen(fix_preview, fix),
             "uninstall": UninstallScreen(uninstall),
-            "policies": PlaceholderScreen(_PLACEHOLDER_TEXT["policies"]),
+            "policies": PoliciesScreen(policies),
         }
         self._initial_view = initial_view
         self.current_view = "catalog"

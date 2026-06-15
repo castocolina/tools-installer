@@ -29,8 +29,8 @@ wget -qO- https://raw.githubusercontent.com/castocolina/tools-installer/main/ins
   tools: switch the grouping (category · priority · audience · status · table) with
   ←/→ or the mouse, toggle with **space**, confirm with **enter**. **Ctrl+P** opens
   an in-app command palette (number keys `1`–`5` switch views too); the catalog,
-  doctor, fix, and **uninstall** views all live in the same app (policies arrives
-  in a later phase). See [Selecting tools](#selecting-tools).
+  doctor, fix, **uninstall**, and **policies** views all live in the same app.
+  See [Selecting tools](#selecting-tools).
 - **Installs in userspace by default** — `~/.local/bin` for CLIs, `~/Applications`
   for macOS GUIs. No `sudo`, no writing to `/Applications` or system paths, so it
   works on locked-down corporate Macs and atomic/immutable Linux.
@@ -222,13 +222,21 @@ make guard     # block bare pip/pip3 (-> uv) and npm (-> pnpm)
 make unguard   # remove the ban
 ```
 
-It works in two layers: PATH shims in `~/.local/bin` (catch every caller,
+Run interactively (a TTY), `make guard` / `make unguard` open the unified app on
+the **policies view**. The pip/npm ban is one row there: **enter** toggles it on
+or off, applied live. The view reports each layer it touched (shims, aliases) and
+reminds you to open a new shell or run `hash -r` so cached command paths refresh.
+Non-interactively (a pipe) or with `--yes`, the same commands run the unchanged
+console flow with no prompt.
+
+The ban works in two layers: PATH shims in `~/.local/bin` (catch every caller,
 including scripts and agents) and interactive-shell aliases (a clearer message at
 the prompt). `make doctor` reports whether the ban is active.
 
 It is **not** a sandbox: `python -m pip install` bypasses the `pip` shim, and a
 real `pip`/`npm` earlier on your `PATH` wins — `make doctor` warns about that
-ordering. `make uninstall` removes the ban along with everything else.
+ordering. The ban is also a toggle in the **uninstall view** (and `make
+uninstall` removes it along with everything else).
 
 ## What's NOT in v1
 
@@ -252,6 +260,7 @@ workflow has a `make` target so local runs and CI are identical:
 | `make test`      | `pytest` with coverage                                          |
 | `make build`     | build the distributable                                         |
 | `make uninstall` | remove userspace artifacts. Interactively (a TTY) this opens the app on the **uninstall view**: toggle which tools to remove, plus independent toggles for the pip/npm ban and the managed `~/.myshellrc` PATH wiring, applied live with reload guidance. Non-interactively / `--yes` it runs the unchanged console flow (previews `~/.local/opt/*` dirs, `~/.local/bin` symlinks, and the PATH block, then confirms) |
+| `make guard` / `make unguard` | toggle the pip/npm ban. Interactively (a TTY) opens the app on the **policies view** (enter toggles, applied live); non-interactively / `--yes` runs the unchanged console flow |
 
 Quality gates are not optional and must not be bypassed (`# noqa`, `# type: ignore`,
 skipped tests, lowered coverage floors). The full contributor rules live in

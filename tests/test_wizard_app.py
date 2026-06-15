@@ -1,17 +1,19 @@
 from collections.abc import Callable, Mapping
 from pathlib import Path
-
-from textual.widgets import Label
+from typing import Any
 
 from installer.app import UninstallDecision
 from installer.doctor import DoctorReport
 from installer.model import Method, Tool
+from installer.policy import Policy, PolicyLayer, PolicyResult
 from installer.wizard_app import (
     VIEW_ORDER,
     DoctorScreen,
     FixScreen,
     NavScreen,
     PlaceholderScreen,
+    PoliciesScreen,
+    PolicyInputs,
     UnifiedApp,
     UninstallInputs,
     UninstallScreen,
@@ -46,6 +48,34 @@ def _uninstall_inputs(
     )
 
 
+def _ok_result() -> PolicyResult:
+    return PolicyResult(
+        layers=(PolicyLayer("Shims", "3 active in /bin"), PolicyLayer("Aliases", "written to /rc")),
+        reload_hint="Open a new shell or run `hash -r` so cached command paths refresh.",
+        warning=None,
+    )
+
+
+def _fake_policy(
+    *,
+    active: bool = False,
+    apply: Callable[[], PolicyResult] = _ok_result,
+    remove: Callable[[], PolicyResult] = _ok_result,
+) -> Policy:
+    return Policy(
+        id="ban",
+        label="pip/npm ban",
+        description="blocks bare pip/npm",
+        active=active,
+        apply=apply,
+        remove=remove,
+    )
+
+
+def _policy_inputs(policies: list[Policy] | None = None) -> PolicyInputs:
+    return PolicyInputs(policies=policies if policies is not None else [_fake_policy()])
+
+
 def _app(
     *,
     report: DoctorReport | None = None,
@@ -54,6 +84,7 @@ def _app(
     fix_preview: str = "Will wire ~/.local/bin into ~/.zshrc",
     fix: Callable[[], None] = lambda: None,
     uninstall: UninstallInputs | None = None,
+    policies: PolicyInputs | None = None,
     initial_view: str = "catalog",
 ) -> UnifiedApp:
     tools = [_tool("rg"), _tool("fd")]
@@ -68,6 +99,7 @@ def _app(
         fix_preview=fix_preview,
         fix=fix,
         uninstall=uninstall or _uninstall_inputs(),
+        policies=policies or _policy_inputs(),
         initial_view=initial_view,
     )
 
@@ -485,7 +517,7 @@ async def test_uninstall_toggle_clears_stale_validation_toast() -> None:
 async def test_palette_from_placeholder_navigates_without_desync() -> None:
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("2")  # -> doctor placeholder
+        await pilot.press("2")  # -> doctor view
         assert app.current_view == "doctor"
         await pilot.press("ctrl+p")
         assert isinstance(app.screen, NavScreen)
@@ -493,6 +525,134 @@ async def test_palette_from_placeholder_navigates_without_desync() -> None:
         await pilot.press("down", "down", "down", "down", "enter")
         assert app.current_view == "policies"
         assert not isinstance(app.screen, NavScreen)
-        assert isinstance(app.screen, PlaceholderScreen)
-        # the SCREEN shown matches current_view (no desync)
-        assert "Policies" in str(app.screen.query_one("#placeholder", Label).content)
+        assert isinstance(app.screen, PoliciesScreen)
+
+
+async def test_policies_view_is_reachable() -> None:
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        assert app.current_view == "policies"
+        assert isinstance(app.screen, PoliciesScreen)
+
+
+async def test_policies_reachable_via_palette() -> None:
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("ctrl+p")
+        assert isinstance(app.screen, NavScreen)
+        await pilot.press("down", "down", "down", "down", "enter")  # 5th item: policies
+        assert app.current_view == "policies"
+        assert isinstance(app.screen, PoliciesScreen)
+
+
+async def test_policies_initial_view_opens_on_policies() -> None:
+    app = _app(initial_view="policies")
+    async with app.run_test(size=(100, 30)):
+        assert isinstance(app.screen, PoliciesScreen)
+
+
+async def test_policy_toggle_enables_inactive_policy() -> None:
+    calls: list[str] = []
+    policy = _fake_policy(active=False, apply=lambda: (calls.append("apply"), _ok_result())[1])
+    app = _app(policies=_policy_inputs([policy]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        await pilot.press("enter")
+        assert isinstance(app.screen, PoliciesScreen)
+        assert calls == ["apply"]
+        assert app.screen.active_state["ban"] is True
+        assert "enabled" in app.screen.status_text
+        assert "Shims:" in app.screen.status_text
+
+
+async def test_policy_state_cell_carries_glyph_for_on_and_off() -> None:
+    """State must be legible without relying on color: the single row is always
+    focused, so the green/dim styling collapses under the selection highlight.
+    A ●/○ glyph keeps on-vs-off distinct in monochrome and on toggle."""
+    from textual.widgets import DataTable
+
+    app = _app(policies=_policy_inputs([_fake_policy(active=False)]), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        table = screen.query_one(DataTable[Any])
+        assert table.get_cell("ban", "state").plain == "○ [off]"
+        await pilot.press("enter")
+        assert table.get_cell("ban", "state").plain == "● [on]"
+
+
+async def test_policy_toggle_disables_active_policy() -> None:
+    calls: list[str] = []
+    policy = _fake_policy(active=True, remove=lambda: (calls.append("remove"), _ok_result())[1])
+    app = _app(policies=_policy_inputs([policy]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        await pilot.press("enter")
+        assert isinstance(app.screen, PoliciesScreen)
+        assert calls == ["remove"]
+        assert app.screen.active_state["ban"] is False
+        assert "disabled" in app.screen.status_text
+
+
+async def test_policy_toggle_error_surfaces_and_does_not_crash() -> None:
+    def boom() -> PolicyResult:
+        raise OSError("permission denied")
+
+    app = _app(policies=_policy_inputs([_fake_policy(active=False, apply=boom)]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        await pilot.press("enter")
+        assert isinstance(app.screen, PoliciesScreen)
+        assert app.screen.active_state["ban"] is False  # unchanged on failure
+        assert app.screen.error == "permission denied"
+        assert "failed" in app.screen.status_text.lower()
+
+
+async def test_policy_toggle_noop_on_empty_table() -> None:
+    """Enter on an empty policies table is a no-op (covers _highlighted_policy
+    row_count==0 and the action_toggle_policy policy-is-None guard)."""
+    app = _app(policies=_policy_inputs([]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        assert isinstance(app.screen, PoliciesScreen)
+        await pilot.press("enter")
+        assert app.screen.status_text == ""
+        assert app.screen.error is None
+
+
+async def test_policy_summary_includes_warning_when_set() -> None:
+    """_summary appends the warning line when PolicyResult.warning is non-None
+    (covers the `if result.warning:` branch)."""
+
+    def apply_with_warning() -> PolicyResult:
+        return PolicyResult(
+            layers=(PolicyLayer("Shims", "2 active"),),
+            reload_hint=None,
+            warning="pip found on PATH ahead of shims — move the shim dir earlier.",
+        )
+
+    policy = _fake_policy(active=False, apply=apply_with_warning)
+    app = _app(policies=_policy_inputs([policy]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        await pilot.press("enter")
+        assert isinstance(app.screen, PoliciesScreen)
+        assert app.screen.active_state["ban"] is True
+        assert "pip found on PATH" in app.screen.status_text
+
+
+async def test_placeholder_screen_renders_message() -> None:
+    """PlaceholderScreen renders its message in the #placeholder label.
+    The class is kept as a stand-in for future views; this test covers
+    lines 71-72 and 75 of wizard_app.py."""
+    from textual.app import App
+    from textual.widgets import Label
+
+    class _WrapApp(App[None]):
+        def get_default_screen(self) -> PlaceholderScreen:
+            return PlaceholderScreen("hello placeholder")
+
+    async with _WrapApp().run_test(size=(80, 20)) as pilot:
+        label = pilot.app.query_one("#placeholder", Label)
+        assert "hello placeholder" in str(label.content)

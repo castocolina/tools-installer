@@ -31,13 +31,14 @@ from installer.doctor import DoctorReport, audit_path
 from installer.guards import guard_path_warning, guard_status
 from installer.model import Tool, load_categories, load_tools
 from installer.platform import Platform, detect
+from installer.policy import ban_policy
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.selection import Choice
 from installer.shellrc import collect_bin_dirs, has_managed_block
 from installer.status import is_installed
 from installer.uninstall import removable_tools
-from installer.wizard_app import UnifiedApp, UninstallInputs
+from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 
 _REGISTRY = Path(__file__).parent / "installer" / "registry.toml"
 _DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
@@ -96,13 +97,6 @@ def _ask_checkbox(message: str, choices: list[Choice]) -> list[str]:
 def _ask_confirm(message: str) -> bool:
     answer = questionary.confirm(message, default=True, style=_STYLE).ask()
     if answer is None:  # questionary returns None on Ctrl+C / Ctrl+D at the prompt
-        raise KeyboardInterrupt
-    return bool(answer)
-
-
-def _ask_optin(message: str) -> bool:
-    answer = questionary.confirm(message, default=False, style=_STYLE).ask()
-    if answer is None:  # Ctrl+C / Ctrl+D
         raise KeyboardInterrupt
     return bool(answer)
 
@@ -189,6 +183,17 @@ def _build_app(
         has_path_block=has_managed_block(_MYSHELLRC),
         remove=_do_uninstall,
     )
+    policy_inputs = PolicyInputs(
+        policies=[
+            ban_policy(
+                shim_dir=_DEFAULT_BIN_DIR,
+                apply_rc_paths=_ban_rc_paths(link_mode),
+                remove_rc_paths=_all_ban_rc_paths(),
+                path_value=os.environ.get("PATH", ""),
+                which=shutil.which,
+            )
+        ]
+    )
 
     def _apply_fix() -> None:
         # Runs live inside the FixScreen. A quiet console keeps configure_path's
@@ -220,6 +225,7 @@ def _build_app(
         fix_preview=preview,
         fix=_apply_fix,
         uninstall=uninstall_inputs,
+        policies=policy_inputs,
         initial_view=initial_view,
     )
 
@@ -354,14 +360,22 @@ def main(argv: list[str]) -> int:
         return _run_fix(console, link_mode_option=options.link_mode)
     if options.uninstall:
         return _run_uninstall(console, assume_yes=options.yes)
-    if options.guard:
-        return _run_guard(
-            console,
-            remove=False,
-            rc_paths=_ban_rc_paths(_resolve_link_mode(options.link_mode)),
-            assume_yes=options.yes,
-        )
-    if options.unguard:
+    if options.guard or options.unguard:
+        if sys.stdin.isatty() and not options.yes:
+            # Honor an explicit --link-mode so the ban's aliases land in the same
+            # rc files as the rest of the wiring; default stays centralized.
+            link_mode = options.link_mode or "centralized"
+            _build_app(
+                load_tools(_REGISTRY), detect(), initial_view="policies", link_mode=link_mode
+            ).run()
+            return 0
+        if options.guard:
+            return _run_guard(
+                console,
+                remove=False,
+                rc_paths=_ban_rc_paths(_resolve_link_mode(options.link_mode)),
+                assume_yes=options.yes,
+            )
         # Removal needs no link-mode prompt — it sweeps every rc file.
         return _run_guard(
             console, remove=True, rc_paths=_all_ban_rc_paths(), assume_yes=options.yes
@@ -400,16 +414,6 @@ def main(argv: list[str]) -> int:
         link_mode=link_mode,
     )
     _verify_and_clean(console, tools, platform, assume_yes=options.yes)
-    if (
-        sys.stdin.isatty()
-        and not options.yes
-        and _ask_optin(
-            "Enable the pip/npm ban? Blocks bare pip/npm so installs go through uv/pnpm."
-        )
-    ):
-        # The opt-in IS the confirmation, and link_mode is already resolved above:
-        # assume_yes=True so run_guard does not re-confirm.
-        _run_guard(console, remove=False, rc_paths=_ban_rc_paths(link_mode), assume_yes=True)
     if summary.failed or summary.mismatched:
         render_troubleshooting(console)
         return 1

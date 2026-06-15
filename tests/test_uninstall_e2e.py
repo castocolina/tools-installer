@@ -12,7 +12,7 @@ from installer.guards import guard_status, install_shims, write_ban_aliases
 from installer.model import Method, Tool
 from installer.shellrc import has_managed_block, write_myshellrc
 from installer.uninstall import removable_tools
-from installer.wizard_app import UnifiedApp, UninstallInputs, UninstallScreen
+from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs, UninstallScreen
 
 _ARTIFACTS = Path(__file__).resolve().parent.parent / ".e2e-artifacts"
 _UX = _ARTIFACTS / "ux"
@@ -63,6 +63,7 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
         fix_preview="",
         fix=lambda: None,
         uninstall=inputs,
+        policies=PolicyInputs(policies=[]),
         initial_view="uninstall",
     )
     return app, opt, bin_dir, myshellrc
@@ -97,6 +98,7 @@ def _error_app(home: Path) -> UnifiedApp:
         fix_preview="",
         fix=lambda: None,
         uninstall=inputs,
+        policies=PolicyInputs(policies=[]),
         initial_view="uninstall",
     )
 
