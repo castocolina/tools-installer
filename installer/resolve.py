@@ -4,7 +4,7 @@ from installer.model import Method, Tool
 from installer.platform import Platform
 
 # Lower rank is tried first. The default ladder:
-#   1) official script  2) userspace download  3) native pkg manager  4) brew/cask
+#   1) official script  2) userspace install (download/node)  3) native pkg manager  4) brew/cask
 _RANK = {
     "script": 10,
     "github_release": 20,

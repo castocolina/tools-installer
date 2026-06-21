@@ -1,6 +1,6 @@
 """Per-method-kind executors: build an argv and hand it to the injected runner.
 
-Only command-based kinds live here (script, native package managers, brew, cask).
+Only command-based kinds live here (script, node, native package managers, brew, cask).
 Download-based kinds (github_release, tarball) live in `installer.download`.
 """
 
