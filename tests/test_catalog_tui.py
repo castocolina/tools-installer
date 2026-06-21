@@ -29,7 +29,7 @@ def _unified_app(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            removable=[], ban_names=[], has_path_block=False, remove=lambda _decision: None
+            rows=[], ban_names=[], has_path_block=False, remove=lambda _decision: None
         ),
         policies=PolicyInputs(policies=[]),
     )
@@ -240,6 +240,23 @@ async def test_detail_bar_follows_the_highlighted_row():
         assert "for you" in app.catalog.detail_text
         await pilot.press("up")  # onto the "git" section row
         assert app.catalog.detail_text == "git"
+
+
+async def test_detail_bar_shows_requires_when_declared():
+    """A tool with declared dependencies shows a `requires …` slot in the detail
+    bar (the no-op seam for the deps PRD); tools without it are unchanged."""
+    tools = [_tool("mmdc", desc="mermaid cli")]
+    tools[0] = Tool(
+        id="mmdc",
+        name="mmdc",
+        category="search",
+        cmd="mmdc",
+        methods=(Method(kind="brew", params={"formula": "mmdc"}),),
+        requires=("pnpm", "node"),
+    )
+    app = _unified_app(tools, {"mmdc": False}, _BLURBS)
+    async with app.run_test(size=(100, 30)):
+        assert "requires pnpm, node" in app.catalog.detail_text
 
 
 async def test_section_row_detail_shows_the_group_blurb():

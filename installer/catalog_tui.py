@@ -3,21 +3,21 @@
 The wizard's interactive selection step (uzkit-parity F1): tools grouped by
 category, priority, audience, install status, or shown as a flat sortable
 table. Pure grouping/sorting helpers live alongside the app so they can be
-unit-tested without a terminal.
+unit-tested without a terminal. The browsable-list mechanics live in the
+reusable `ToolBrowser` widget; this screen wires the catalog's data into it.
 """
 
 from collections.abc import Mapping
-from typing import Any, ClassVar, Literal
+from typing import Literal
 
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.binding import Binding, BindingType
-from textual.coordinate import Coordinate
 from textual.message import Message
-from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Static, Tab, Tabs
+from textual.widgets import DataTable
 
 from installer.model import Tool
+from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
+from installer.ui_common import AppScreen, mark
 
 TableSortKey = Literal["id", "category", "priority", "audience", "installed"]
 
@@ -91,7 +91,7 @@ _PRIORITY_STYLE = {"P0": "bold red", "P1": "bold yellow", "P2": "blue", "P3": "d
 _AUDIENCE_STYLE = {"ai": "bold cyan", "human": "magenta", "both": ""}
 
 # Sortable Table-view columns by column key; absent keys (sel/desc) don't sort.
-_SORT_BY_COLUMN: dict[str | None, TableSortKey] = {
+_SORT_BY_COLUMN: dict[str, TableSortKey] = {
     "pri": "priority",
     "tool": "id",
     "cat": "category",
@@ -116,13 +116,14 @@ _LEGEND = (
 )
 
 
-class CatalogScreen(Screen[list[str] | None]):
+class CatalogScreen(AppScreen):
     """Single-screen tool picker; ←/→ or clicking the tabs switches the grouping.
 
     Mounted as the unified app's base screen. Accept/abort post a `Decided`
     message carrying the selected ids in catalog order (or None on abort); the
     host app turns that into its run() result. State the tests assert on (view,
-    table_sort, selected, detail_text) is deliberately public.
+    table_sort, selected, detail_text, status_text) is delegated to the embedded
+    `ToolBrowser` (or the screen's StatusLine) and exposed as public properties.
     """
 
     class Decided(Message):
@@ -133,70 +134,41 @@ class CatalogScreen(Screen[list[str] | None]):
             super().__init__()
             self.result = result
 
-    DEFAULT_CSS = """
-    Tabs { dock: top; }
-    #detail { dock: bottom; height: 2; padding: 0 1; background: $surface; }
-    #legend { dock: bottom; height: 1; padding: 0 1; }
-    #status-line { dock: bottom; height: 1; padding: 0 1; color: $warning; }
-    DataTable { height: 1fr; }
-    """
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("left", "prev_view", "prev view", priority=True),
-        Binding("right", "next_view", "next view", priority=True),
-        Binding("space", "toggle_tool", "toggle", priority=True),
-        Binding("a", "select_all", "all"),
-        Binding("i", "invert", "invert"),
-        Binding("enter", "accept", "install selected", priority=True),
-        Binding("q", "abort", "quit"),
-    ]
-
     def __init__(
         self,
         tools: list[Tool],
         installed: Mapping[str, bool],
         blurbs: Mapping[str, str],
     ) -> None:
-        super().__init__()
+        super().__init__(view="catalog")
         self.tools = list(tools)
-        self.view = VIEWS[0]
         self.table_sort: TableSortKey = "priority"
-        self.selected: set[str] = set()
-        self.detail_text = ""
-        self.status_text = ""
         self._installed = dict(installed)
         self._blurbs = dict(blurbs)
-        # str | None keys let row-key lookups stay branchless under strict typing
-        # (RowKey.value is str | None; ours are always tool ids).
-        self._by_id: dict[str | None, Tool] = {tool.id: tool for tool in self.tools}
-        # Tab ids are exactly the view names. A dict (str | None keys) instead of
-        # `id if id in VIEWS else ...` keeps the handler branchless: pyright can't
-        # narrow `str | None` through an `in` check, and a branch would be
-        # uncoverable (tabs are built from VIEWS, so misses can't happen).
-        self._view_for: dict[str | None, str] = {view: view for view in VIEWS}
-        # Section-row key -> detail-bar line, rebuilt with the table (str | None
-        # keys for the same branchless RowKey lookups as _by_id).
-        self._section_detail: dict[str | None, str] = {}
+        self._browser: ToolBrowser[Tool] = ToolBrowser(self._adapter())
 
-    def compose(self) -> ComposeResult:
-        yield Tabs(*[Tab(_TAB_LABELS[view], id=view) for view in VIEWS])
-        yield DataTable()
-        yield Static(Text.from_markup(_LEGEND), id="legend")
-        yield Static("", id="status-line")
-        yield Static("", id="detail")
-        yield Footer()
+    def _adapter(self) -> BrowserAdapter[Tool]:
+        return BrowserAdapter(
+            items=self.tools,
+            columns=_COLUMNS,
+            item_id=lambda tool: tool.id,
+            row_cells=self._row_cells,
+            detail_text=self._detail_text,
+            groups=self._groups,
+            views=tuple((view, _TAB_LABELS[view]) for view in VIEWS),
+            legend=_LEGEND,
+            on_sort=self._sort,
+            sortable_in_views=frozenset({"table"}),
+        )
 
-    def on_mount(self) -> None:
-        table = self.query_one(DataTable[Any])
-        table.cursor_type = "row"
-        table.focus()
-        self._rebuild()
+    def compose_body(self) -> ComposeResult:
+        yield self._browser
 
-    # -- rows -----------------------------------------------------------
+    # -- catalog data wiring for the browser adapter -----------------------
     def _row_cells(self, tool: Tool) -> list[Text]:
-        chosen = tool.id in self.selected
         installed = self._installed[tool.id]
         return [
-            Text("[x]" if chosen else "[ ]", style="green" if chosen else ""),
+            mark(tool.id in self._browser.selected),
             Text(tool.priority, style=_PRIORITY_STYLE[tool.priority]),
             Text(tool.id, style="bold"),
             Text(tool.category),
@@ -205,128 +177,62 @@ class CatalogScreen(Screen[list[str] | None]):
             Text(tool.desc or tool.name, style="dim"),
         ]
 
-    def _groups(self) -> list[tuple[str, str, list[Tool]]]:
-        if self.view == "table":
+    def _groups(self, view: str) -> list[Section[Tool]]:
+        if view == "table":
             return [("", "", sort_for_table(self.tools, self._installed, self.table_sort))]
-        return group_tools(self.tools, self._installed, self.view, self._blurbs)
+        return group_tools(self.tools, self._installed, view, self._blurbs)
 
-    def _rebuild(self) -> None:
-        table = self.query_one(DataTable[Any])
-        table.clear(columns=True)
-        self._section_detail.clear()
-        for label, key in _COLUMNS:
-            table.add_column(label, key=key)
-        for title, detail, members in self._groups():
-            if title:
-                section = Text(f"── {title} ", style="bold")
-                table.add_row(section, "", "", "", "", "", "", key=f"#{title}")
-                self._section_detail[f"#{title}"] = detail
-            for tool in members:
-                table.add_row(*self._row_cells(tool), key=tool.id)
-        # DataTable keeps serving render caches measured at the previous column
-        # widths after clear(columns=True); a cell mutation arriving in a later
-        # render cycle flushes them (textual 8.2.7), so re-mark every row once
-        # the rebuilt table has painted.
-        first_tool = self._first_tool_row()
-        if first_tool is not None:
-            table.move_cursor(row=first_tool)
-        table.call_after_refresh(self._refresh_marks)
-
-    # -- view switching ---------------------------------------------------
-    def _switch_view(self, step: int) -> None:
-        index = (VIEWS.index(self.view) + step) % len(VIEWS)
-        self.query_one(Tabs).active = VIEWS[index]
-
-    def action_prev_view(self) -> None:
-        self._switch_view(-1)
-
-    def action_next_view(self) -> None:
-        self._switch_view(1)
-
-    def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
-        self.view = self._view_for.get(event.tab.id, self.view)
-        self._rebuild()
-
-    def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
-        if self.view != "table":
-            return
-        key = _SORT_BY_COLUMN.get(event.column_key.value)
-        if key is None:
-            return
-        self.table_sort = key
-        self._rebuild()
-
-    # -- selection ----------------------------------------------------------
-    def _highlighted_tool(self) -> Tool | None:
-        table = self.query_one(DataTable[Any])
-        if table.row_count == 0:
-            return None
-        cell_key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0))
-        return self._by_id.get(cell_key.row_key.value)
-
-    def _first_tool_row(self) -> int | None:
-        table = self.query_one(DataTable[Any])
-        for index, row_key in enumerate(table.rows):
-            if row_key.value in self._by_id:  # tool rows key on the id; sections on "#title"
-                return index
-        return None
-
-    def _mark(self, chosen: bool) -> Text:
-        return Text("[x]" if chosen else "[ ]", style="green" if chosen else "")
-
-    def _refresh_marks(self) -> None:
-        table = self.query_one(DataTable[Any])
-        for tool in self.tools:
-            chosen = tool.id in self.selected
-            table.update_cell(tool.id, "sel", self._mark(chosen))
-
-    def _clear_status(self) -> None:
-        self.status_text = ""
-        self.query_one("#status-line", Static).update("")
-
-    def action_toggle_tool(self) -> None:
-        tool = self._highlighted_tool()
-        if tool is None:  # empty catalog or a section row
-            return
-        self.selected.symmetric_difference_update({tool.id})
-        chosen = tool.id in self.selected
-        self.query_one(DataTable[Any]).update_cell(tool.id, "sel", self._mark(chosen))
-        self._clear_status()
-
-    def action_select_all(self) -> None:
-        self.selected = {tool.id for tool in self.tools}
-        self._refresh_marks()
-        self._clear_status()
-
-    def action_invert(self) -> None:
-        self.selected = {tool.id for tool in self.tools} - self.selected
-        self._refresh_marks()
-        self._clear_status()
-
-    def action_accept(self) -> None:
-        self._clear_status()
-        chosen = [tool.id for tool in self.tools if tool.id in self.selected]
-        if not chosen:
-            self.status_text = "Select at least one tool, or press q to quit."
-            self.query_one("#status-line", Static).update(Text(self.status_text, style="yellow"))
-            return
-        self.post_message(self.Decided(chosen))
-
-    def action_abort(self) -> None:
-        self.post_message(self.Decided(None))
-
-    # -- detail bar ----------------------------------------------------------
-    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        tool = self._by_id.get(event.row_key.value)
-        detail = self.query_one("#detail", Static)
-        if tool is None:  # a section row: show the group's detail line
-            self.detail_text = self._section_detail.get(event.row_key.value, "")
-            detail.update(Text(self.detail_text, style="bold"))
-            return
-        self.detail_text = (
+    def _detail_text(self, tool: Tool) -> str:
+        detail = (
             f"[bold]{tool.id}[/] — {tool.desc or tool.name}  |  "
             f"[{_PRIORITY_STYLE[tool.priority]}]{tool.priority}"
             f" {PRIORITY_LABEL[tool.priority]}[/]  |  "
             f"for {AUDIENCE_LABEL[tool.audience]}"
         )
-        detail.update(Text.from_markup(self.detail_text))
+        # Dependency slot for the deps PRD: shown only when declared, so the
+        # layout is unchanged for the common no-requires case.
+        if tool.requires:
+            detail += f"  |  requires {', '.join(tool.requires)}"
+        return detail
+
+    def _sort(self, column_key: str) -> None:
+        key = _SORT_BY_COLUMN.get(column_key)
+        if key is None:
+            return
+        self.table_sort = key
+
+    # -- public seams (delegated to the browser / status line) -------------
+    @property
+    def view(self) -> str:
+        return self._browser.view
+
+    @property
+    def selected(self) -> set[str]:
+        return self._browser.selected
+
+    @property
+    def detail_text(self) -> str:
+        return self._browser.detail_text
+
+    @property
+    def status_text(self) -> str:
+        return self.status.text
+
+    def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
+        # The catalog test drives header sort directly on the screen. Forward it
+        # to the browser, which owns the table and the view-gated sort handling.
+        self._browser.on_data_table_header_selected(event)
+
+    # -- accept ------------------------------------------------------------
+    def on_tool_browser_selection_changed(self, event: ToolBrowser.SelectionChanged) -> None:
+        # Clear the "select at least one" warning the moment the user selects.
+        event.stop()
+        self.status.clear()
+
+    def on_tool_browser_accepted(self, event: ToolBrowser.Accepted) -> None:
+        event.stop()
+        if not event.ids:
+            self.status.set("Select at least one tool, or press q to quit.", "warn")
+            return
+        self.status.clear()
+        self.post_message(self.Decided(event.ids))

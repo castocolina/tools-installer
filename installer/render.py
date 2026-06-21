@@ -13,6 +13,7 @@ from installer.engine import InstallOutcome
 from installer.guidance import Guidance, doctor_guidance, guard_guidance
 from installer.links import TROUBLESHOOTING_URL
 from installer.session import Summary
+from installer.ui_common import SEVERITY_STYLE
 
 
 def render_audit(statuses: list[ToolStatus], console: Console) -> None:
@@ -74,16 +75,13 @@ def render_rc_duplicates(found: dict[Path, list[str]], console: Console) -> None
             console.print(f"    {line}")
 
 
-_SEVERITY_STYLE: dict[str, str] = {"ok": "green", "warn": "yellow", "error": "red"}
-
-
 def guidance_text(items: list[Guidance]) -> Text:
     """Render guidance items as one colored block: title (by severity), meaning, next step."""
     text = Text()
     for index, item in enumerate(items):
         if index:
             text.append("\n")
-        text.append(item.title, style=_SEVERITY_STYLE[item.severity])
+        text.append(item.title, style=SEVERITY_STYLE[item.severity])
         text.append(f"\n  {item.meaning}")
         if item.next_step:
             text.append(f"\n  → {item.next_step}")

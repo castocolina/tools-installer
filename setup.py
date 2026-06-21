@@ -37,7 +37,7 @@ from installer.render import render_troubleshooting
 from installer.selection import Choice
 from installer.shellrc import collect_bin_dirs, has_managed_block
 from installer.status import is_installed
-from installer.uninstall import removable_tools
+from installer.uninstall import classify_tools
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 
 _REGISTRY = Path(__file__).parent / "installer" / "registry.toml"
@@ -164,7 +164,7 @@ def _build_app(
     installed = {tool.id: is_installed(tool) for tool in tools}
     report, status, warning = _doctor_data(tools, platform)
     rc_paths = _rc_paths_for_mode(link_mode)
-    removable = removable_tools(tools, _DEFAULT_BIN_DIR)
+    rows = classify_tools(tools, _DEFAULT_BIN_DIR, installed=installed, platform=platform)
     ban_names = [name for name, active in status.items() if active]
 
     def _do_uninstall(decision: UninstallDecision) -> None:
@@ -178,7 +178,7 @@ def _build_app(
         )
 
     uninstall_inputs = UninstallInputs(
-        removable=removable,
+        rows=rows,
         ban_names=ban_names,
         has_path_block=has_managed_block(_MYSHELLRC),
         remove=_do_uninstall,

@@ -11,6 +11,35 @@ def _write(tmp_path: Path, content: str) -> Path:
     return p
 
 
+def test_tool_requires_defaults_empty_and_parses(tmp_path: Path) -> None:
+    """`requires` is a no-op dependency seam for the deps PRD: it defaults to an
+    empty tuple and parses a declared list into a tuple of ids."""
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "mmdc"
+category = "diagram"
+requires = ["pnpm", "node"]
+[[tool.method]]
+kind = "script"
+url = "https://example.test/i.sh"
+shell = "sh"
+
+[[tool]]
+id = "rg"
+category = "search"
+[[tool.method]]
+kind = "brew"
+formula = "rg"
+""",
+    )
+    tools = {tool.id: tool for tool in load_tools(manifest)}
+    assert tools["mmdc"].requires == ("pnpm", "node")
+    assert tools["rg"].requires == ()
+    assert all(isinstance(tool.requires, tuple) for tool in tools.values())
+
+
 def test_load_single_tool_with_methods(tmp_path: Path):
     manifest = _write(
         tmp_path,

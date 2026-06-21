@@ -40,6 +40,9 @@ class Tool:
     priority: str = "P3"
     audience: str = "both"
     desc: str = ""
+    # No-op dependency seam for the tool-dependencies PRD: ids this tool needs
+    # at install time. Parsed and carried here; no resolution logic lives yet.
+    requires: tuple[str, ...] = ()
 
 
 def load_tools(manifest_path: str | Path) -> list[Tool]:
@@ -78,6 +81,7 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
                 priority=row.get("priority", "P3"),
                 audience=row.get("audience", "both"),
                 desc=row.get("desc", ""),
+                requires=tuple(row.get("requires", [])),
             )
         )
     return tools

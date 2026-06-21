@@ -10,9 +10,12 @@ from installer.app import UninstallDecision, perform_uninstall
 from installer.doctor import DoctorReport
 from installer.guards import guard_status, install_shims, write_ban_aliases
 from installer.model import Method, Tool
+from installer.platform import Platform
 from installer.shellrc import has_managed_block, write_myshellrc
-from installer.uninstall import removable_tools
+from installer.uninstall import ToolRow, classify_tools
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs, UninstallScreen
+
+_LINUX = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
 
 _ARTIFACTS = Path(__file__).resolve().parent.parent / ".e2e-artifacts"
 _UX = _ARTIFACTS / "ux"
@@ -42,13 +45,13 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
     write_ban_aliases(myshellrc)
     write_myshellrc([bin_dir], myshellrc)
 
-    removable = removable_tools([_dl_tool()], bin_dir)
+    rows = classify_tools([_dl_tool()], bin_dir, installed={"fd": True}, platform=_LINUX)
 
     def _remove(decision: UninstallDecision) -> None:
         perform_uninstall(decision, bin_dir=bin_dir, myshellrc_path=myshellrc, rc_paths=[myshellrc])
 
     inputs = UninstallInputs(
-        removable=removable,
+        rows=rows,
         ban_names=[name for name, active in guard_status(bin_dir).items() if active],
         has_path_block=has_managed_block(myshellrc),
         remove=_remove,
@@ -83,7 +86,7 @@ def _error_app(home: Path) -> UnifiedApp:
         raise OSError("permission denied")
 
     inputs = UninstallInputs(
-        removable=[(_dl_tool(), [bin_dir / "fd"])],
+        rows=[ToolRow(_dl_tool(), "removable", [bin_dir / "fd"], "removable here", True)],
         ban_names=[],
         has_path_block=False,
         remove=_boom,
@@ -135,7 +138,7 @@ async def test_uninstall_ux_journey_captures_each_state(
         _snapshot(app, "01-open.svg")
         await pilot.press("enter")  # nothing selected -> refusal
         assert isinstance(app.screen, UninstallScreen)
-        assert "at least one" in app.screen.status_text
+        assert "at least one" in app.screen.status.text
         _snapshot(app, "02-empty-refusal.svg")
         await pilot.press("a")
         _snapshot(app, "03-selected.svg")

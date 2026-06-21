@@ -53,7 +53,7 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path]:
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            removable=[], ban_names=[], has_path_block=False, remove=lambda _d: None
+            rows=[], ban_names=[], has_path_block=False, remove=lambda _d: None
         ),
         policies=PolicyInputs(policies=[policy]),
         initial_view="policies",

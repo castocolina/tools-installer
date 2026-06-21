@@ -19,10 +19,9 @@ from typing import Any, ClassVar
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Center, Middle
 from textual.coordinate import Coordinate
 from textual.screen import ModalScreen, Screen
-from textual.widgets import DataTable, Footer, Label, ListItem, ListView, Static
+from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
 from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
@@ -31,6 +30,9 @@ from installer.guidance import Guidance, doctor_guidance, guard_guidance
 from installer.model import Tool
 from installer.policy import Policy, PolicyResult
 from installer.render import guidance_text
+from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
+from installer.ui_common import AppScreen, mark, multiline_summary
+from installer.uninstall import ToolRow
 
 # Navigation order shared by every route, so the palette and the direct 1..N key
 # bindings expose exactly the same views in the same order.
@@ -46,11 +48,11 @@ _PALETTE_LABEL = {
 
 @dataclass(frozen=True)
 class UninstallInputs:
-    """Everything the UninstallScreen needs: the listable tools with their
-    artifact paths, the active ban names, whether a managed PATH block exists,
-    and the live removal closure bound by the composition root."""
+    """Everything the UninstallScreen needs: every classified tool (catalog
+    parity, not just the removable ones), the active ban names, whether a managed
+    PATH block exists, and the live removal closure bound by the composition root."""
 
-    removable: list[tuple[Tool, list[Path]]]
+    rows: list[ToolRow]
     ban_names: list[str]
     has_path_block: bool
     remove: Callable[[UninstallDecision], None]
@@ -64,22 +66,11 @@ class PolicyInputs:
     policies: list[Policy]
 
 
-class PlaceholderScreen(Screen[None]):
-    """A navigable stand-in for a view whose body lands in a later phase."""
-
-    def __init__(self, message: str) -> None:
-        super().__init__()
-        self._message = message
-
-    def compose(self) -> ComposeResult:
-        yield Middle(Center(Label(self._message, id="placeholder")))
-
-
-class DoctorScreen(Screen[None]):
+class DoctorScreen(AppScreen):
     """Read-only PATH audit + guidance, color-coded by severity."""
 
     DEFAULT_CSS = """
-    DoctorScreen #doctor-body { padding: 1 2; }
+    DoctorScreen #doctor-body { padding: 1 4; }
     """
 
     def __init__(
@@ -88,13 +79,13 @@ class DoctorScreen(Screen[None]):
         guard_status: dict[str, bool],
         guard_warning: str | None,
     ) -> None:
-        super().__init__()
+        super().__init__(view="doctor")
         self._report = report
         self._guard_status = guard_status
         self._guard_warning = guard_warning
         self.guidance: list[Guidance] = []  # public test seam
 
-    def compose(self) -> ComposeResult:
+    def compose_body(self) -> ComposeResult:
         yield Static(id="doctor-body")
 
     def on_mount(self) -> None:
@@ -104,24 +95,24 @@ class DoctorScreen(Screen[None]):
         self.query_one("#doctor-body", Static).update(guidance_text(self.guidance))
 
 
-class FixScreen(Screen[None]):
+class FixScreen(AppScreen):
     """Preview the PATH wiring + reload guidance; Apply runs it live, in place."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("a", "apply", "apply", show=True),
     ]
     DEFAULT_CSS = """
-    FixScreen #fix-body { padding: 1 2; }
+    FixScreen #fix-body { padding: 1 4; }
     """
 
     def __init__(self, preview: str, fix: Callable[[], None]) -> None:
-        super().__init__()
+        super().__init__(view="fix")
         self._preview = preview
         self._fix = fix
         self.applied = False  # public test seam
         self.error: str | None = None  # public test seam; set when an apply fails
 
-    def compose(self) -> ComposeResult:
+    def compose_body(self) -> ComposeResult:
         yield Static(id="fix-body")
 
     def on_mount(self) -> None:
@@ -161,172 +152,224 @@ class FixScreen(Screen[None]):
         self._refresh_body()
 
 
-class UninstallScreen(Screen[None]):
-    """Toggle tools (and the ban / PATH wiring) to remove, then apply live."""
+@dataclass(frozen=True)
+class _UninstallEntry:
+    """A browsable uninstall row: either a classified tool or an environment
+    pseudo-row (the pip/npm ban or the managed PATH block).
 
-    _BAN_KEY = "#ban"
-    _BLOCK_KEY = "#path-block"
+    `key` is the stable id (a tool id, or "#ban"/"#path-block"). `cells` are the
+    pre-rendered columns. `selectable` gates toggling (removable tools and the env
+    rows are selectable; managed/absent/unavailable tools are not). `detail` is
+    the detail-bar line. `paths` are the tool's removable artifacts (empty for env
+    rows). `is_ban`/`is_path_block` flag the env rows so a selection maps back to
+    the UninstallDecision levers."""
 
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("space", "toggle_selected", "toggle", show=True),
-        Binding("a", "select_all", "all", show=True),
-        Binding("i", "invert", "invert", show=True),
-        Binding("enter", "remove", "remove selected", show=True, priority=True),
-    ]
-    DEFAULT_CSS = """
-    UninstallScreen #uninstall-status { height: auto; padding: 0 1; color: $warning; }
-    UninstallScreen DataTable { height: 1fr; }
-    """
+    key: str
+    cells: list[Text]
+    selectable: bool
+    detail: str
+    paths: tuple[Path, ...]
+    is_ban: bool
+    is_path_block: bool
+
+
+# Section titles per state, in display order. The "environment" section holds the
+# ban/PATH pseudo-rows.
+_STATE_TITLES: tuple[tuple[str, str], ...] = (
+    ("removable", "removable here"),
+    ("managed", "managed elsewhere"),
+    ("absent", "not installed"),
+    ("unavailable", "not available"),
+)
+_BAN_KEY = "#ban"
+_BLOCK_KEY = "#path-block"
+
+
+class UninstallScreen(AppScreen):
+    """Full catalog-parity uninstall browser. Every tool is listed with its
+    removability state; only removable tools (and the env rows) toggle. Enter
+    removes exactly the selected artifacts + env levers, applied live."""
 
     def __init__(self, inputs: UninstallInputs) -> None:
-        super().__init__()
-        self._removable = inputs.removable
+        super().__init__(view="uninstall", accent="red")
+        self._rows = inputs.rows
         self._ban_names = inputs.ban_names
         self._has_path_block = inputs.has_path_block
         self._remove = inputs.remove
-        self.selected: set[str] = set()
-        self.remove_ban = False
-        self.remove_path_block = False
         self.applied = False
         self.error: str | None = None
-        self.status_text = ""
+        self._entries = self._build_entries()
+        self._by_key = {entry.key: entry for entry in self._entries}
+        self._browser: ToolBrowser[_UninstallEntry] = ToolBrowser(self._adapter())
 
-    def compose(self) -> ComposeResult:
-        yield DataTable()
-        yield Static("", id="uninstall-status")
-        yield Footer()
+    # -- entry construction ------------------------------------------------
+    def _build_entries(self) -> list[_UninstallEntry]:
+        entries = [self._tool_entry(row) for row in self._rows]
+        if self._ban_names:
+            entries.append(self._ban_entry())
+        if self._has_path_block:
+            entries.append(self._block_entry())
+        return entries
+
+    def _tool_entry(self, row: ToolRow) -> _UninstallEntry:
+        selectable = row.state == "removable"
+        style = "" if selectable else "dim"
+        installed_via = {
+            "removable": "userspace",
+            "managed": "package manager",
+            "absent": "—",
+            "unavailable": "—",
+        }[row.state]
+        removes = (
+            f"{len(row.paths)} artifact(s)"
+            if selectable
+            else {
+                "managed": "nothing (managed elsewhere)",
+                "absent": "nothing (not installed)",
+                "unavailable": "nothing (unavailable)",
+            }[row.state]
+        )
+        cells = [
+            mark(False) if selectable else Text(""),
+            Text(row.tool.id, style="bold" if selectable else "dim"),
+            Text(row.tool.category, style=style),
+            Text(installed_via, style=style),
+            Text(removes, style=style),
+        ]
+        return _UninstallEntry(
+            key=row.tool.id,
+            cells=cells,
+            selectable=selectable,
+            detail=row.hint,
+            paths=tuple(row.paths),
+            is_ban=False,
+            is_path_block=False,
+        )
+
+    def _ban_entry(self) -> _UninstallEntry:
+        return _UninstallEntry(
+            key=_BAN_KEY,
+            cells=[
+                mark(False),
+                Text("pip/npm ban", style="bold yellow"),
+                Text("env", style="yellow"),
+                Text("shell config", style="dim"),
+                Text(f"shims + aliases ({', '.join(self._ban_names)})", style="dim"),
+            ],
+            selectable=True,
+            detail=f"pip/npm ban — shims + interactive aliases ({', '.join(self._ban_names)})",
+            paths=(),
+            is_ban=True,
+            is_path_block=False,
+        )
+
+    def _block_entry(self) -> _UninstallEntry:
+        return _UninstallEntry(
+            key=_BLOCK_KEY,
+            cells=[
+                mark(False),
+                Text("PATH wiring", style="bold yellow"),
+                Text("env", style="yellow"),
+                Text("shell config", style="dim"),
+                Text("managed block in ~/.myshellrc", style="dim"),
+            ],
+            selectable=True,
+            detail="PATH wiring — the managed block in ~/.myshellrc",
+            paths=(),
+            is_ban=False,
+            is_path_block=True,
+        )
+
+    # -- browser adapter ---------------------------------------------------
+    def _adapter(self) -> BrowserAdapter[_UninstallEntry]:
+        return BrowserAdapter(
+            items=self._entries,
+            columns=(
+                ("Sel", "sel"),
+                ("Tool", "tool"),
+                ("Cat", "cat"),
+                ("Installed via", "via"),
+                ("What gets removed", "removes"),
+            ),
+            item_id=lambda entry: entry.key,
+            row_cells=lambda entry: entry.cells,
+            detail_text=lambda entry: entry.detail,
+            groups=self._groups,
+            views=(("all", "All"),),
+            detail_is_markup=False,
+            selectable=lambda entry: entry.selectable,
+        )
+
+    def _groups(self, _view: str) -> list[Section[_UninstallEntry]]:
+        by_state: dict[str, list[_UninstallEntry]] = {}
+        for row, entry in zip(self._rows, self._entries, strict=False):
+            by_state.setdefault(row.state, []).append(entry)
+        sections: list[Section[_UninstallEntry]] = [
+            (title, title, by_state[state]) for state, title in _STATE_TITLES if by_state.get(state)
+        ]
+        env = [entry for entry in self._entries if entry.is_ban or entry.is_path_block]
+        if env:
+            sections.append(("environment", "shell config the installer manages", env))
+        return sections
+
+    def compose_body(self) -> ComposeResult:
+        yield self._browser
 
     def on_mount(self) -> None:
-        table = self.query_one(DataTable[Any])
-        table.cursor_type = "row"
-        table.add_column("Sel", key="sel")
-        table.add_column("Item", key="item")
-        table.add_column("Removes", key="removes")
-        for tool, paths in self._removable:
-            table.add_row(
-                self._mark(False),
-                Text(tool.id, style="bold"),
-                Text(f"{len(paths)} artifact(s)", style="dim"),
-                key=tool.id,
-            )
-        if self._ban_names:
-            table.add_row(
-                self._mark(False),
-                Text("pip/npm ban", style="bold yellow"),
-                Text(
-                    f"shell config: shims + aliases ({', '.join(self._ban_names)})",
-                    style="dim",
-                ),
-                key=self._BAN_KEY,
-            )
-        if self._has_path_block:
-            table.add_row(
-                self._mark(False),
-                Text("PATH wiring", style="bold yellow"),
-                Text("shell config: managed block in ~/.myshellrc", style="dim"),
-                key=self._BLOCK_KEY,
-            )
-        if table.row_count == 0:
-            self._set_status("Nothing to uninstall.", style="green")
-        table.focus()
+        if not self._entries:
+            self.status.set("Nothing to uninstall.", "ok")
 
-    def _mark(self, chosen: bool) -> Text:
-        return Text("[x]" if chosen else "[ ]", style="green" if chosen else "")
+    # -- public seams the tests assert on ----------------------------------
+    @property
+    def selected(self) -> set[str]:
+        """Selected *tool* ids (the env pseudo-rows are reported separately)."""
+        return {key for key in self._browser.selected if key not in (_BAN_KEY, _BLOCK_KEY)}
 
-    def _toggleable_keys(self) -> list[str]:
-        keys = [tool.id for tool, _ in self._removable]
-        if self._ban_names:
-            keys.append(self._BAN_KEY)
-        if self._has_path_block:
-            keys.append(self._BLOCK_KEY)
-        return keys
+    @property
+    def remove_ban(self) -> bool:
+        return _BAN_KEY in self._browser.selected
 
-    def _is_chosen(self, key: str) -> bool:
-        if key == self._BAN_KEY:
-            return self.remove_ban
-        if key == self._BLOCK_KEY:
-            return self.remove_path_block
-        return key in self.selected
+    @property
+    def remove_path_block(self) -> bool:
+        return _BLOCK_KEY in self._browser.selected
 
-    def _set_chosen(self, key: str, chosen: bool) -> None:
-        if key == self._BAN_KEY:
-            self.remove_ban = chosen
-        elif key == self._BLOCK_KEY:
-            self.remove_path_block = chosen
-        elif chosen:
-            self.selected.add(key)
-        else:
-            self.selected.discard(key)
-        self.query_one(DataTable[Any]).update_cell(key, "sel", self._mark(chosen))
+    @property
+    def detail_text(self) -> str:
+        return self._browser.detail_text
 
-    def _highlighted_key(self) -> str | None:
-        table = self.query_one(DataTable[Any])
-        if table.row_count == 0:
-            return None
-        cell_key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0))
-        return cell_key.row_key.value
+    # -- messages from the browser -----------------------------------------
+    def on_tool_browser_selection_changed(self, event: ToolBrowser.SelectionChanged) -> None:
+        event.stop()
+        self.status.clear()
 
-    def _set_status(self, text: str, *, style: str) -> None:
-        self.status_text = text
-        self.query_one("#uninstall-status", Static).update(Text(text, style=style))
-
-    def _clear_status(self) -> None:
-        if self.status_text:
-            self.status_text = ""
-            self.query_one("#uninstall-status", Static).update("")
-
-    def _nothing_chosen(self) -> bool:
-        return not self.selected and not self.remove_ban and not self.remove_path_block
-
-    def action_toggle_selected(self) -> None:
-        if self.applied:
+    def on_tool_browser_accepted(self, event: ToolBrowser.Accepted) -> None:
+        event.stop()
+        if self.applied or not self._entries:  # nothing to uninstall: keep the standing message
             return
-        key = self._highlighted_key()
-        if key is None:
-            return
-        self._set_chosen(key, not self._is_chosen(key))
-        self._clear_status()
-
-    def action_select_all(self) -> None:
-        if self.applied:
-            return
-        for key in self._toggleable_keys():
-            self._set_chosen(key, True)
-        self._clear_status()
-
-    def action_invert(self) -> None:
-        if self.applied:
-            return
-        for key in self._toggleable_keys():
-            self._set_chosen(key, not self._is_chosen(key))
-        self._clear_status()
-
-    def action_remove(self) -> None:
-        if self.applied or not self._toggleable_keys():
-            return
-        if self._nothing_chosen():
-            self._set_status("Select at least one item to remove.", style="yellow")
+        if not event.ids:
+            self.status.set("Select at least one item to remove.", "warn")
             return
         paths: list[Path] = []
-        for tool, tool_paths in self._removable:
-            if tool.id in self.selected:
-                paths.extend(tool_paths)
+        for key in event.ids:
+            paths.extend(self._by_key[key].paths)
         decision = UninstallDecision(
-            paths=tuple(paths), remove_ban=self.remove_ban, remove_path_block=self.remove_path_block
+            paths=tuple(paths),
+            remove_ban=self.remove_ban,
+            remove_path_block=self.remove_path_block,
         )
         try:
             self._remove(decision)
         except OSError as exc:
             self.error = str(exc)
-            self._set_status(
+            self.status.set(
                 f"Uninstall failed: {exc}. Check permissions, then press enter.",
-                style="red",
+                "error",
             )
             return
         self.error = None
         self.applied = True
-        tool_count = sum(1 for tool, _ in self._removable if tool.id in self.selected)
-        self._set_status(self._applied_summary(tool_count), style="green")
+        tool_count = sum(1 for key in event.ids if key not in (_BAN_KEY, _BLOCK_KEY))
+        self.status.set(self._applied_summary(tool_count), "ok")
 
     def _applied_summary(self, tool_count: int) -> str:
         parts: list[str] = []
@@ -341,10 +384,10 @@ class UninstallScreen(Screen[None]):
             parts.append("PATH wiring removed — restart your shell to drop the managed dirs.")
         # One line per outcome: a single joined line overflows the terminal width and
         # truncates the reload guidance, so the "needs a new shell" steps go unseen.
-        return "\n".join(parts)
+        return multiline_summary(parts)
 
 
-class PoliciesScreen(Screen[None]):
+class PoliciesScreen(AppScreen):
     """Toggle environment policies (the pip/npm ban) on/off, applied live.
 
     Unlike the catalog/uninstall views there is no select-then-apply step: each
@@ -356,23 +399,19 @@ class PoliciesScreen(Screen[None]):
         Binding("enter", "toggle_policy", "toggle policy", show=True, priority=True),
     ]
     DEFAULT_CSS = """
-    PoliciesScreen #policies-status { height: auto; padding: 0 1; color: $warning; }
     PoliciesScreen DataTable { height: 1fr; }
     """
 
     def __init__(self, inputs: PolicyInputs) -> None:
-        super().__init__()
+        super().__init__(view="policies")
         self._policies = inputs.policies
         self.active_state: dict[str, bool] = {
             policy.id: policy.active for policy in inputs.policies
         }
-        self.status_text = ""
         self.error: str | None = None
 
-    def compose(self) -> ComposeResult:
+    def compose_body(self) -> ComposeResult:
         yield DataTable()
-        yield Static("", id="policies-status")
-        yield Footer()
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable[Any])
@@ -403,10 +442,6 @@ class PoliciesScreen(Screen[None]):
         policy_id = cell_key.row_key.value
         return next((policy for policy in self._policies if policy.id == policy_id), None)
 
-    def _set_status(self, text: str, *, style: str) -> None:
-        self.status_text = text
-        self.query_one("#policies-status", Static).update(Text(text, style=style))
-
     def action_toggle_policy(self) -> None:
         policy = self._highlighted_policy()
         if policy is None:
@@ -416,9 +451,9 @@ class PoliciesScreen(Screen[None]):
             result = policy.remove() if active else policy.apply()
         except OSError as exc:
             self.error = str(exc)
-            self._set_status(
+            self.status.set(
                 f"Policy change failed: {exc}. Check permissions, then press enter.",
-                style="red",
+                "error",
             )
             return
         self.error = None
@@ -426,7 +461,7 @@ class PoliciesScreen(Screen[None]):
         self.active_state[policy.id] = new_active
         self.query_one(DataTable[Any]).update_cell(policy.id, "state", self._state_cell(new_active))
         verb = "enabled" if new_active else "disabled"
-        self._set_status(self._summary(policy, verb, result), style="green")
+        self.status.set(self._summary(policy, verb, result), "ok")
 
     def _summary(self, policy: Policy, verb: str, result: PolicyResult) -> str:
         # One line per outcome: a single joined line overflows the terminal width
@@ -437,7 +472,7 @@ class PoliciesScreen(Screen[None]):
             parts.append(result.reload_hint)
         if result.warning:
             parts.append(result.warning)
-        return "\n".join(parts)
+        return multiline_summary(parts)
 
 
 class NavScreen(ModalScreen[str | None]):
@@ -473,7 +508,14 @@ class UnifiedApp(App[list[str] | None]):
 
     ENABLE_COMMAND_PALETTE = False  # replace Textual's dead-ending default palette
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("ctrl+c", "abort", "quit", show=False, priority=True),
+        # ctrl+c is the hard abort: unguarded, so it quits from anywhere — even on
+        # top of the NavScreen modal. q is the soft quit: priority so it fires on
+        # every view, but guarded (see action_abort) to no-op under the palette.
+        Binding("ctrl+c", "hard_abort", "quit", show=False, priority=True),
+        Binding("q", "abort", "quit", show=True, priority=True),
+        # esc is NOT priority: NavScreen's own escape->cancel must win while the
+        # palette is open; elsewhere no screen binds escape, so it bubbles to back.
+        Binding("escape", "back", "back", show=True),
         Binding("ctrl+p", "open_nav", "navigate", priority=True),
         *[
             Binding(str(i + 1), f"show('{name}')", name, priority=True)
@@ -550,6 +592,13 @@ class UnifiedApp(App[list[str] | None]):
             return
         self.show_view(name)
 
+    async def action_back(self) -> None:
+        # One-deep stack: from a pushed view, esc goes home to the catalog; on the
+        # catalog itself there is nowhere further back, so esc is inert. async to
+        # match App.action_back's signature (pyright-strict rejects a sync override).
+        if self._navigable() and self.current_view != "catalog":
+            self.show_view("catalog")
+
     def action_open_nav(self) -> None:
         if not self._navigable():
             return
@@ -563,4 +612,12 @@ class UnifiedApp(App[list[str] | None]):
         self.exit(message.result)
 
     def action_abort(self) -> None:
+        # The soft quit (q). Guarded so a priority q binding does not quit out from
+        # under the NavScreen palette; ctrl+c (action_hard_abort) stays unguarded.
+        if not self._navigable():
+            return
+        self.exit(None)
+
+    def action_hard_abort(self) -> None:
+        # The hard quit (ctrl+c): always exits, including on top of the palette.
         self.exit(None)

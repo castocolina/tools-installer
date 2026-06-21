@@ -3,6 +3,7 @@ and install_app create. Cask/brew/native-managed artifacts are left alone."""
 
 import shutil
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from installer.apps import APP_KINDS, cli_spec
@@ -10,6 +11,8 @@ from installer.download import DOWNLOAD_KINDS
 from installer.executors import ExecutorError
 from installer.locations import applications_dir, opt_dir
 from installer.model import Method, Tool
+from installer.platform import Platform
+from installer.resolve import resolve_methods
 
 
 def _exists(path: Path) -> bool:
@@ -84,19 +87,77 @@ def plan_uninstall(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
     return found
 
 
-def removable_tools(tools: list[Tool], default_bin_dir: Path) -> list[tuple[Tool, list[Path]]]:
-    """Tools that have userspace artifacts on disk, each paired with its paths.
+@dataclass(frozen=True)
+class ToolRow:
+    """A tool annotated with its removability on this machine + platform.
 
-    A tool is included only when `plan_uninstall([tool], default_bin_dir)` is
-    non-empty, so cask/brew/native-managed tools (nothing to remove) are dropped.
-    Order follows the input list.
-    """
-    result: list[tuple[Tool, list[Path]]] = []
+    States: "removable" (userspace artifacts on disk → selectable, has paths),
+    "managed" (installed but no userspace artifacts → inert, manager hint),
+    "absent" (resolvable here but not installed → inert), "unavailable" (no
+    method applies to this platform → inert)."""
+
+    tool: Tool
+    state: str
+    paths: list[Path]
+    hint: str
+    selectable: bool
+
+
+def _manager_name(method: Method, param: str, fallback: str) -> str:
+    # brew/cask uninstall takes the formula/cask name (in the method params),
+    # NOT the runnable cmd — they differ for e.g. rg/ripgrep, code/visual-studio-code.
+    value = method.params.get(param)
+    return value if isinstance(value, str) and value else fallback
+
+
+def _manager_hint(tool: Tool) -> str:
+    for method in tool.methods:
+        if method.kind == "cask":
+            name = _manager_name(method, "cask", tool.cmd)
+            return f"managed by Homebrew — `brew uninstall --cask {name}`"
+        if method.kind == "brew":
+            name = _manager_name(method, "formula", tool.cmd)
+            return f"managed by Homebrew — `brew uninstall {name}`"
+    return "managed outside this installer — remove with your package manager"
+
+
+def _managed_hint(tool: Tool, which: Callable[[str], str | None]) -> str:
+    # Surface where the tool actually resolves on PATH (e.g. /opt/homebrew/bin/rg)
+    # so "managed elsewhere" is concrete: the user sees it is a real, brew/system
+    # install this installer did not place and should not delete.
+    hint = _manager_hint(tool)
+    path = which(tool.cmd)
+    return f"{hint} — found at {path}" if path else hint
+
+
+def classify_tools(
+    tools: list[Tool],
+    default_bin_dir: Path,
+    *,
+    installed: dict[str, bool],
+    platform: Platform,
+    which: Callable[[str], str | None] = shutil.which,
+) -> list[ToolRow]:
+    """Classify every tool by removability, one ToolRow per tool in input order.
+
+    Reuses plan_uninstall (userspace artifacts), the installed map, the platform
+    resolver, and `which` (to resolve where a managed tool lives) so the Uninstall
+    view shows full catalog parity: removable-here vs managed-elsewhere vs
+    not-installed vs unavailable."""
+    rows: list[ToolRow] = []
     for tool in tools:
         paths = plan_uninstall([tool], default_bin_dir)
         if paths:
-            result.append((tool, paths))
-    return result
+            rows.append(
+                ToolRow(tool, "removable", paths, "installed in userspace — removable here", True)
+            )
+        elif installed.get(tool.id, False):
+            rows.append(ToolRow(tool, "managed", [], _managed_hint(tool, which), False))
+        elif resolve_methods(tool, platform):
+            rows.append(ToolRow(tool, "absent", [], "not installed", False))
+        else:
+            rows.append(ToolRow(tool, "unavailable", [], f"not available on {platform.os}", False))
+    return rows
 
 
 def remove_paths(paths: list[Path]) -> None:
