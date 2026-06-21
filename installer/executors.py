@@ -69,6 +69,11 @@ def _brew(method: Method, runner: Runner) -> None:
     runner(["brew", "install", require_str(method, "formula")])
 
 
+def _node(method: Method, runner: Runner) -> None:
+    # pnpm only — bare npm is banned. `add -g` installs the package's CLI globally.
+    runner(["pnpm", "add", "-g", require_str(method, "npm_pkg")])
+
+
 def _cask(method: Method, runner: Runner) -> None:
     # --appdir keeps the bundle in userspace; brew's default appdir is /Applications,
     # which the PRD forbids (corporate machines without sudo).
@@ -79,6 +84,7 @@ def _cask(method: Method, runner: Runner) -> None:
 
 EXECUTORS: dict[str, Callable[[Method, Runner], None]] = {
     "script": _script,
+    "node": _node,
     "dnf": _dnf,
     "apt": _apt,
     "pacman": _pacman,

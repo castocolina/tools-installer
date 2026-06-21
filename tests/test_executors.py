@@ -75,7 +75,7 @@ def test_unsupported_kind_raises():
 
 
 def test_every_command_kind_has_an_executor():
-    assert set(EXECUTORS) == {"script", "dnf", "apt", "pacman", "brew", "cask"}
+    assert set(EXECUTORS) == {"script", "node", "dnf", "apt", "pacman", "brew", "cask"}
 
 
 def test_script_passes_env_assignments_to_the_shell() -> None:
@@ -119,3 +119,16 @@ def test_cask_missing_param_raises():
     with pytest.raises(ExecutorError, match="cask"):
         execute(Method(kind="cask", params={}), runner)
     assert calls == []
+
+
+def test_node_runs_pnpm_add_global_never_bare_npm():
+    calls: list[list[str]] = []
+    method = Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"})
+    execute(method, calls.append)
+    assert calls == [["pnpm", "add", "-g", "@mermaid-js/mermaid-cli"]]
+    assert all(call[0] != "npm" for call in calls)
+
+
+def test_node_without_npm_pkg_raises_executor_error():
+    with pytest.raises(ExecutorError, match="npm_pkg"):
+        execute(Method(kind="node", params={}), lambda _cmd: None)
