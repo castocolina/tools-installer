@@ -6,6 +6,7 @@ from pathlib import Path
 
 METHOD_KINDS = (
     "script",
+    "node",
     "github_release",
     "tarball",
     "app",
@@ -70,6 +71,12 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
                 raise ValueError(f"tool '{row['id']}': method 'arch' must be a list of strings")
             arch_targets = tuple(raw_arch)
             params = {k: v for k, v in entry.items() if k not in ("kind", "os", "arch")}
+            if kind == "node":
+                npm_pkg = params.get("npm_pkg")
+                if not isinstance(npm_pkg, str) or not npm_pkg:
+                    raise ValueError(
+                        f"tool '{row['id']}': method 'node' requires a non-empty 'npm_pkg'"
+                    )
             methods.append(Method(kind=kind, params=params, os=os_targets, arch=arch_targets))
         tools.append(
             Tool(

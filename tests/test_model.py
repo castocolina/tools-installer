@@ -278,3 +278,38 @@ desc = ""
     )
     with pytest.raises(ValueError, match="category 'search' is missing a non-empty 'desc'"):
         load_categories(manifest)
+
+
+def test_node_kind_parses_with_npm_pkg(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "mmdc"
+category = "diagram"
+cmd = "mmdc"
+requires = ["pnpm"]
+[[tool.method]]
+kind = "node"
+npm_pkg = "@mermaid-js/mermaid-cli"
+""",
+    )
+    tools = load_tools(manifest)
+    method = tools[0].methods[0]
+    assert method.kind == "node"
+    assert method.params["npm_pkg"] == "@mermaid-js/mermaid-cli"
+
+
+def test_node_method_without_npm_pkg_is_a_config_error(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "broken"
+category = "diagram"
+[[tool.method]]
+kind = "node"
+""",
+    )
+    with pytest.raises(ValueError, match="node.*npm_pkg"):
+        load_tools(manifest)
