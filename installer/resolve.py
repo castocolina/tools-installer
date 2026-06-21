@@ -8,6 +8,7 @@ from installer.platform import Platform
 _RANK = {
     "script": 10,
     "github_release": 20,
+    "node": 20,
     "tarball": 20,
     "app": 20,
     "dnf": 30,
@@ -32,7 +33,7 @@ def _applies(method: Method, platform: Platform) -> bool:
     if method.arch and platform.arch not in method.arch:
         return False
     kind = method.kind
-    if kind in ("script", "github_release", "tarball", "app"):
+    if kind in ("script", "node", "github_release", "tarball", "app"):
         return True
     if kind == "brew":
         return platform.has_brew

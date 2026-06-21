@@ -123,3 +123,15 @@ def test_app_ranks_with_userspace_downloads_before_cask() -> None:
     tool = Tool(id="t", name="t", category="c", cmd="t", methods=(cask, app))
     mac = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
     assert [m.kind for m in resolve_methods(tool, mac)] == ["app", "cask"]
+
+
+def test_node_is_userspace_ranked_before_brew():
+    platform = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    tool = _tool("brew", "node")
+    assert [m.kind for m in resolve_methods(tool, platform)] == ["node", "brew"]
+
+
+def test_node_applies_on_every_platform():
+    for os_name in ("debian", "arch", "fedora", "macos"):
+        platform = Platform(os=os_name, arch="amd64", immutable=False, has_brew=False)
+        assert [m.kind for m in resolve_methods(_tool("node"), platform)] == ["node"]
