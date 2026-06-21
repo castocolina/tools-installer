@@ -20,6 +20,7 @@ coverage.xml
 
 # Session / local state
 .remember/
+.codegraph/
 
 # OS
 .DS_Store

@@ -335,4 +335,10 @@ the app.
 **Created**: 2026-06-13
 **Clarification Rounds**: 2
 **Quality Score**: 98/100
-**Status**: Roadmap for handoff. No code this session. Implementing session starts at Phase 1 (the unified app shell).
+**Status**: ✅ **Implemented (Phases 1–4 on `main`)**, plus a follow-on "shared
+pattern" consolidation (AppScreen/WayfindingHeader/ToolBrowser/catalog-parity
+uninstall) on branch `feat/unified-ui-shared-pattern`. Phase 4's anticipated
+"future env tweaks" are now scoped in
+`docs/prds/dependencies-and-shell-tweaks-v1.0-prd.md` (Workstream B).
+*(Original handoff status: "Roadmap for handoff. No code this session. Implementing
+session starts at Phase 1.")*
