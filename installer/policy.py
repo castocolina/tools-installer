@@ -20,6 +20,7 @@ from installer.guards import (
     remove_shims,
     write_ban_aliases,
 )
+from installer.tweaks import TweakBundle, remove_tweak, tweak_present, write_tweak
 
 _RELOAD_HINT = "Open a new shell or run `hash -r` so cached command paths refresh."
 
@@ -109,6 +110,41 @@ def ban_policy(
         label="pip/npm ban",
         description="blocks bare pip/npm so installs go through uv/pnpm (shims + aliases)",
         active=any(guard_status(shim_dir).values()),
+        apply=_apply,
+        remove=_remove,
+    )
+
+
+def tweak_policy(bundle: TweakBundle, *, rc_path: Path) -> Policy:
+    """A curated shell-tweak bundle as a Policy, parallel to ban_policy.
+
+    apply writes the bundle's marker block into rc_path; remove strips it. `active`
+    is "the bundle's block is present in rc_path". Idempotent (reuses tweaks'
+    block machinery). The id is namespaced `tweak:<id>` so it never collides with
+    the ban or another bundle in the Policies tab.
+    """
+
+    def _apply() -> PolicyResult:
+        write_tweak(bundle, rc_path)
+        return PolicyResult(
+            layers=(PolicyLayer(bundle.label, f"written to {_display_path(rc_path)}"),),
+            reload_hint=_RELOAD_HINT,
+            warning=None,
+        )
+
+    def _remove() -> PolicyResult:
+        remove_tweak(bundle, rc_path)
+        return PolicyResult(
+            layers=(PolicyLayer(bundle.label, f"cleared from {_display_path(rc_path)}"),),
+            reload_hint=_RELOAD_HINT,
+            warning=None,
+        )
+
+    return Policy(
+        id=f"tweak:{bundle.id}",
+        label=bundle.label,
+        description=bundle.description,
+        active=tweak_present(bundle, rc_path),
         apply=_apply,
         remove=_remove,
     )

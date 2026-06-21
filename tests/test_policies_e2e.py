@@ -10,7 +10,8 @@ import pytest
 from installer.doctor import DoctorReport
 from installer.guards import guard_status
 from installer.model import Method, Tool
-from installer.policy import ban_policy
+from installer.policy import ban_policy, tweak_policy
+from installer.tweaks import BUNDLES, TweakBundle
 from installer.wizard_app import (
     PoliciesScreen,
     PolicyInputs,
@@ -86,6 +87,49 @@ async def test_policies_e2e_toggle_round_trip_against_sandbox(
 
     assert all(active is False for active in guard_status(bin_dir).values())
     assert "alias" not in rc.read_text()
+
+
+def _countdown() -> TweakBundle:
+    return next(b for b in BUNDLES if b.id == "countdown")
+
+
+async def test_policies_screen_toggles_a_tweak_bundle_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc = tmp_path / ".myshellrc"
+    policy = tweak_policy(_countdown(), rc_path=rc)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    app = UnifiedApp(
+        [_tool()],
+        {"rg": True},
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_status=guard_status(bin_dir),
+        guard_warning=None,
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=UninstallInputs(
+            rows=[], ban_names=[], has_path_block=False, remove=lambda _d: None
+        ),
+        policies=PolicyInputs(policies=[policy]),
+        initial_view="policies",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, PoliciesScreen)
+        assert app.screen.active_state["tweak:countdown"] is False
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, PoliciesScreen)
+        assert app.screen.active_state["tweak:countdown"] is True
+        assert "wait_time()" in rc.read_text()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, PoliciesScreen)
+        assert app.screen.active_state["tweak:countdown"] is False
+        assert "wait_time()" not in rc.read_text()
 
 
 def test_real_home_rc_files_are_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

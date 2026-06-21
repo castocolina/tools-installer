@@ -31,12 +31,13 @@ from installer.doctor import DoctorReport, audit_path
 from installer.guards import guard_path_warning, guard_status
 from installer.model import Tool, load_categories, load_tools
 from installer.platform import Platform, detect
-from installer.policy import ban_policy
+from installer.policy import ban_policy, tweak_policy
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.selection import Choice
 from installer.shellrc import collect_bin_dirs, has_managed_block
 from installer.status import is_installed
+from installer.tweaks import applicable_bundles
 from installer.uninstall import classify_tools
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 
@@ -191,7 +192,8 @@ def _build_app(
                 remove_rc_paths=_all_ban_rc_paths(),
                 path_value=os.environ.get("PATH", ""),
                 which=shutil.which,
-            )
+            ),
+            *(tweak_policy(bundle, rc_path=_MYSHELLRC) for bundle in applicable_bundles(platform)),
         ]
     )
 
