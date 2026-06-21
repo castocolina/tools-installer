@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from installer.deps import requires_integrity_errors
 from installer.model import load_categories, load_tools
 from installer.platform import Platform
 from installer.resolve import resolve_methods
@@ -474,3 +475,15 @@ def test_every_category_blurb_is_used_by_a_tool() -> None:
     used = {t.category for t in load_tools(REGISTRY)}
     orphans = sorted(set(blurbs) - used)
     assert not orphans, f"[[category]] blurbs with no tools: {orphans}"
+
+
+def test_shipped_registry_requires_all_resolve() -> None:
+    tools = load_tools(REGISTRY)
+    assert requires_integrity_errors(tools) == []
+
+
+def test_shipped_node_tools_require_pnpm() -> None:
+    tools = load_tools(REGISTRY)
+    for tool in tools:
+        if any(m.kind == "node" for m in tool.methods):
+            assert "pnpm" in tool.requires, f"{tool.id}: node tool must require pnpm"

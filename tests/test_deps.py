@@ -1,6 +1,11 @@
 import pytest
 
-from installer.deps import DependencyCycleError, Resolution, resolve_dependencies
+from installer.deps import (
+    DependencyCycleError,
+    Resolution,
+    requires_integrity_errors,
+    resolve_dependencies,
+)
 from installer.model import Method, Tool
 
 
@@ -104,3 +109,16 @@ def test_unknown_required_id_warns_and_continues() -> None:
     result = _resolve([user], [user])
     assert [t.id for t in result.order] == ["user"]
     assert any("unknown tool 'ghost'" in w for w in result.warnings)
+
+
+def test_integrity_flags_unknown_requires_id() -> None:
+    good = _tool("good")
+    bad = _tool("bad", "ghost")
+    errors = requires_integrity_errors([good, bad])
+    assert any("bad" in e and "ghost" in e for e in errors)
+
+
+def test_integrity_clean_catalog_has_no_errors() -> None:
+    a = _tool("a", "b")
+    b = _tool("b")
+    assert requires_integrity_errors([a, b]) == []

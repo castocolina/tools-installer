@@ -135,3 +135,16 @@ def resolve_dependencies(
 
     dragged_in = tuple(t.id for t in ordered if t.id not in selected_ids)
     return Resolution(order=tuple(ordered), dragged_in=dragged_in, warnings=tuple(warnings))
+
+
+def requires_integrity_errors(catalog: list[Tool]) -> list[str]:
+    """Every `requires` id must resolve to a real catalog tool. Returns a list of
+    human-readable errors (empty = clean). Used by a registry-integrity test so a
+    typo'd dependency id fails CI instead of shipping a broken install."""
+    ids = {t.id for t in catalog}
+    errors: list[str] = []
+    for tool in catalog:
+        for dep_id in tool.requires:
+            if dep_id not in ids:
+                errors.append(f"tool '{tool.id}' requires unknown tool '{dep_id}'")
+    return errors
