@@ -9,6 +9,7 @@ from installer.engine import InstallOutcome
 from installer.model import Method, Tool
 from installer.render import (
     render_audit,
+    render_dependency_notice,
     render_guard,
     render_guard_status,
     render_summary,
@@ -239,6 +240,22 @@ def test_render_guard_status_includes_reload_next_step():
     out = buf.getvalue()
     assert "pip/npm ban active" in out
     assert "hash -r" in out  # the reload next step from guard_guidance
+
+
+def test_render_dependency_notice_shows_dragged_in_and_warnings() -> None:
+    console, buf = _console()
+    render_dependency_notice(
+        ("pnpm",), ("foo is not available on this platform — skipped",), console
+    )
+    out = buf.getvalue()
+    assert "pnpm" in out
+    assert "not available" in out
+
+
+def test_render_dependency_notice_silent_when_nothing_to_say() -> None:
+    console, buf = _console()
+    render_dependency_notice((), (), console)
+    assert buf.getvalue().strip() == ""
 
 
 def test_guidance_text_styles_by_severity_and_suppresses_empty_next_step() -> None:

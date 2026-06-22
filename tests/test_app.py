@@ -861,6 +861,53 @@ def test_perform_uninstall_removes_path_block_when_chosen(tmp_path: Path) -> Non
     assert "tools-installer path" not in myshellrc.read_text()  # block stripped
 
 
+def test_run_wizard_installs_dependencies_before_dependents() -> None:
+    mmdc = Tool(
+        id="mmdc",
+        name="mmdc",
+        category="c",
+        cmd="mmdc",
+        methods=(Method(kind="node", params={"npm_pkg": "@x/mmdc"}),),
+        requires=("pnpm",),
+    )
+    pnpm = Tool(
+        id="pnpm",
+        name="pnpm",
+        category="c",
+        cmd="pnpm",
+        methods=(Method(kind="node", params={"npm_pkg": "@x/pnpm"}),),
+    )
+    catalog = [mmdc, pnpm]
+    installed_order: list[str] = []
+
+    def record_install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+    ) -> InstallOutcome:
+        installed_order.append(tool.id)
+        return InstallOutcome(tool.id, "installed", method_kind="node")
+
+    console, _buf = _console()
+    summary = run_wizard(
+        catalog,
+        Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
+        FakePrompter(categories=[], tools=[], confirm=True),
+        console,
+        Options(all=False, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=record_install,
+        installed=_never_installed,
+        select_catalog=lambda tools: ["mmdc"],
+    )
+    assert installed_order == ["pnpm", "mmdc"]
+    assert summary is not None
+
+
 def test_perform_uninstall_ban_lever_removes_shims_and_aliases(tmp_path: Path) -> None:
     from installer.app import UninstallDecision, perform_uninstall
     from installer.guards import guard_status, install_shims, write_ban_aliases

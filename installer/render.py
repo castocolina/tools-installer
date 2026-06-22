@@ -16,6 +16,21 @@ from installer.session import Summary
 from installer.ui_common import SEVERITY_STYLE
 
 
+def render_dependency_notice(
+    dragged_in: tuple[str, ...],
+    warnings: tuple[str, ...],
+    console: Console,
+) -> None:
+    """Announce auto-added dependencies and any skip warnings. Silent when both
+    are empty so the common no-dependency case prints nothing."""
+    if dragged_in:
+        console.print(
+            f"[cyan]Added dependencies:[/] {', '.join(dragged_in)} (required by your selection)."
+        )
+    for warning in warnings:
+        console.print(f"[yellow]⚠ {warning}[/]")
+
+
 def render_audit(statuses: list[ToolStatus], console: Console) -> None:
     """Print a table of each selected tool, its category, and installed/missing."""
     table = Table(title="Pre-flight audit")

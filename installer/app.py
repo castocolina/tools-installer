@@ -9,6 +9,7 @@ from rich.console import Console
 
 from installer.audit import audit
 from installer.cli import Options
+from installer.deps import resolve_dependencies
 from installer.doctor import DoctorReport, audit_path
 from installer.engine import install_tool
 from installer.guards import (
@@ -25,6 +26,7 @@ from installer.prompt import Prompter
 from installer.rcclean import find_duplicate_path_lines, strip_lines
 from installer.render import (
     render_audit,
+    render_dependency_notice,
     render_doctor,
     render_guard,
     render_guard_status,
@@ -33,6 +35,7 @@ from installer.render import (
     render_uninstall,
     render_verification,
 )
+from installer.resolve import resolve_methods
 from installer.run import Runner, run_command
 from installer.selection import category_choices, select_tools, tool_choices
 from installer.session import (
@@ -113,11 +116,18 @@ def run_wizard(
     selected = _choose_tools(tools, prompter, options, installed, category_blurbs, select_catalog)
     if selected is None:
         return None
-    statuses = audit(selected, installed)
+    resolution = resolve_dependencies(
+        order_for_install(selected),
+        tools,
+        available=lambda tool: bool(resolve_methods(tool, platform)),
+        is_installed=installed,
+    )
+    render_dependency_notice(resolution.dragged_in, resolution.warnings, console)
+    ordered = list(resolution.order)
+    statuses = audit(ordered, installed)
     render_audit(statuses, console)
     if not options.yes and not prompter.confirm("Install the selected tools?"):
         return None
-    ordered = order_for_install(selected)
     outcomes = run_installs(
         ordered,
         platform,
