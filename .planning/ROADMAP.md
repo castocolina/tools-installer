@@ -16,18 +16,25 @@ uninstall sweep that misses tweak-managed executables), and lets Oh-My-Zsh's
 bundled `git`/`docker` plugins be enabled through the existing shell-tweak
 mechanism.
 
-**More phases are coming.** Five more PRDs from the same 2026-09-04 batch
-(`postinstall-hooks`, `catalog-expansion`, `live-package-management`,
-`background-maintenance-daemon`, `agent-cli-ergonomics`) will be ingested in
-subsequent merge-mode passes immediately after this one, each expected to
-append further phases to this roadmap. This is not the complete project
-scope.
+**More phases are coming.** Three more PRDs from the same 2026-09-04 batch
+(`live-package-management`, `background-maintenance-daemon`,
+`agent-cli-ergonomics`) will be ingested in subsequent merge-mode passes
+immediately after this one, each expected to append further phases to this
+roadmap. This is not the complete project scope.
 
 **Batch 2/7 (`package-manager-policy`) added Phases 4-6**: extending the
 `npm`/`pip` ban to `npx` with a redirect policy, correcting `codegraph`'s and
 `mmdc`'s install methods (plus the puppeteer/chrome-headless-shell chain
 mmdc actually needs), and hardening the already-shipped SDKMAN-exclusivity
 work (commit `0e05f50`) alongside two registry-authoring guidelines.
+
+**Batch 3/7 (`catalog-expansion` + `postinstall-hooks`, ingested together
+since postinstall-hooks' proving case is codegraph's MCP registration, which
+only exists once catalog-expansion adds it) added Phases 7-9**: new
+system/user-tier registry entries (zsh, oh-my-zsh, gnu-bash, Apple
+Containers, kitty, wezterm), the new AI-tier entries plus a new `uv-tool`
+executor kind (antigravity, cursor-agent, rtk, graphify), and the
+postinstall-hooks mechanism itself proven via codegraph's MCP registration.
 
 ## Phases
 
@@ -41,6 +48,9 @@ work (commit `0e05f50`) alongside two registry-authoring guidelines.
 - [ ] **Phase 4: npm/npx Ban Extension & Redirect Policy** - Extend the ban to `npx` and redirect it to `pnpm dlx`, leaving `npm` hard-blocked pending its own subcommand-allowlist decision
 - [ ] **Phase 5: Registry Method Corrections (codegraph/mmdc/puppeteer)** - Move `codegraph` to `kind="github_release"`, resolve `mmdc`'s install method with real research, and give `puppeteer`/`chrome-headless-shell` their own catalog entries
 - [ ] **Phase 6: SDKMAN Hardening & Registry-Authoring Guidelines** - Verify and harden the already-shipped SDKMAN-exclusivity work, and document the per-tool verification checklist and brew-preference guideline
+- [ ] **Phase 7: System & User Tier Catalog Expansion** - Add zsh, oh-my-zsh, gnu-bash, Apple Containers (system tier) and kitty, wezterm (user tier), with real Linux/Bazzite parity
+- [ ] **Phase 8: AI Tier Catalog Expansion & uv-tool Executor** - Add the new `uv-tool` executor kind, antigravity, cursor-agent, rtk, and wire `recommends` for agent hosts
+- [ ] **Phase 9: Postinstall Hooks Mechanism** - Add the optional per-tool postinstall field/execution/idempotency mechanism, proven via codegraph's MCP registration
 
 ## Phase Details
 
@@ -110,10 +120,44 @@ work (commit `0e05f50`) alongside two registry-authoring guidelines.
   4. "Prefer brew over other userspace package managers, except SDKMAN for the Java toolchain" is written down as a registry-authoring guideline.
 **Plans**: TBD
 
+### Phase 7: System & User Tier Catalog Expansion
+**Goal**: The system-tier prerequisites the user actually starts a fresh machine from (shell, shell framework, container runtime) and the terminal emulators they pick personally both exist in the catalog with verified, per-platform install methods.
+**Depends on**: Phase 1 (needs `tier` field to exist) and Phase 4-6's registry-authoring verification checklist (REQ-registry-authoring-verification-checklist) as the discipline this phase's new entries must follow
+**Requirements**: REQ-system-tier-shell-container-entries, REQ-terminal-emulator-entries, REQ-linux-bazzite-shell-parity
+**Success Criteria** (what must be TRUE):
+  1. `zsh`, `oh-my-zsh`, `gnu-bash` (macOS), Apple Containers (macOS) install cleanly via verified live methods; `oh-my-zsh`'s actual `.zshrc`-rewriting behavior has been read and confirmed safe as a `kind="script"` candidate before being treated as one.
+  2. `kitty`, `wezterm` install cleanly on macOS (brew) with a verified Linux path (distro package or GitHub-release download).
+  3. `zsh`/`oh-my-zsh` have a working Linux/Bazzite install path; the existing `podman` entry (not a new one) is the container-runtime story there.
+  4. Whether Apple Containers needs an actual install step on a current macOS, or is a pure version-gate/doc entry, is resolved and recorded.
+**Plans**: TBD
+
+### Phase 8: AI Tier Catalog Expansion & uv-tool Executor
+**Goal**: The agent-facing tools this project exists to serve — including the new `uv-tool` installer kind `graphify` needs — are in the catalog with verified install methods, and selecting an agent host surfaces its recommended companion tools.
+**Depends on**: Phase 1 (tier field), Phase 2 (`recommends` mechanism must exist to be wired here)
+**Requirements**: REQ-uv-tool-executor, REQ-agent-host-entries, REQ-rtk-github-release, REQ-recommends-wiring-agent-hosts
+**Success Criteria** (what must be TRUE):
+  1. `installer/executors.py` has a working `kind="uv-tool"` executor (`uv tool install <pkg>`); `graphify` installs via it using the PyPI package `graphifyy`.
+  2. `antigravity` and `cursor-agent` install via a verified official method (not assumed) — the actual install method for both is unverified as of this ingest and needs GSD's own research pass first.
+  3. `rtk` installs via `kind="github_release"` from `rtk-ai/rtk`, checksum-verified against its release's `checksums.txt`.
+  4. Selecting `claude`/`opencode`/`codex`/`cursor-agent`/`antigravity` surfaces its `recommends` list (`codegraph`, `graphify`, `rtk`) via the Phase 2 mechanism, without auto-installing anything.
+**Plans**: TBD
+
+### Phase 9: Postinstall Hooks Mechanism
+**Goal**: A catalog tool can declare a one-time, non-interactive follow-up action that runs immediately after its own successful install, proven end-to-end via codegraph's MCP registration for whichever agent hosts are already present.
+**Depends on**: Phase 8 (codegraph must exist in the registry as the proving case)
+**Requirements**: REQ-postinstall-field, REQ-postinstall-execution-timing, REQ-postinstall-idempotency-live-check, REQ-postinstall-noninteractive-only, REQ-codegraph-mcp-postinstall
+**Success Criteria** (what must be TRUE):
+  1. A tool can declare an optional `postinstall` command (inline or `postinstall_script` file) in the registry; it runs exactly once per successful install, immediately after the specific `Method` that succeeded.
+  2. A postinstall failure is visible to the user but never marks the tool's own install as failed.
+  3. Idempotency is a live check ("is the effect already present"), with no new state-tracking database anywhere in the codebase.
+  4. A tool whose only setup path is interactive is not wired to this mechanism at all.
+  5. After installing `codegraph`, its MCP server registers for every already-installed agent host (`claude`/`codex`/`opencode`/`cursor-agent`), and cleanly no-ops when none are installed.
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -123,3 +167,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 4. npm/npx Ban Extension & Redirect Policy | 0/TBD | Not started | - |
 | 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 0/TBD | Not started | - |
 | 6. SDKMAN Hardening & Registry-Authoring Guidelines | 0/TBD | Not started | - |
+| 7. System & User Tier Catalog Expansion | 0/TBD | Not started | - |
+| 8. AI Tier Catalog Expansion & uv-tool Executor | 0/TBD | Not started | - |
+| 9. Postinstall Hooks Mechanism | 0/TBD | Not started | - |

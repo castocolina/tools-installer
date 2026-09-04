@@ -5,3 +5,7 @@ No DOCs were present in the batch-1 classification (`catalog-tiers-and-dependenc
 
 No DOCs were present in the batch-2 classification (`package-manager-policy`,
 1 classification, type `PRD`). No context entries to extract.
+
+No DOCs were present in the batch-3 classification (`catalog-expansion`,
+`postinstall-hooks`, 2 classifications, both type `PRD`). No context entries
+to extract.

@@ -182,3 +182,125 @@ confidence: high, manifest_override: true, locked: false)
 - acceptance: (absent — no code acceptance stated in the source; documentation-only guideline)
 - scope: .claude/architecture.md or standards doc, registry-authoring guideline
 - status: open question whether this should later be enforced by lint/test (e.g. flag a new `kind="node"` entry and require an explicit justification comment) — Open Question 4
+
+---
+
+Source PRD: `docs/prds/2026-09-04-catalog-expansion-v1.0-prd.md`
+(classified `docs/prds/2026-09-04-catalog-expansion-v1.0-prd.md`,
+confidence: high, manifest_override: true, locked: false)
+
+## REQ-uv-tool-executor
+- source: docs/prds/2026-09-04-catalog-expansion-v1.0-prd.md
+- description: Add a new `"uv-tool"` executor kind to `installer/executors.py`, mirroring the existing `"node"` kind's shape (`pnpm add -g <npm_pkg>` -> `uv tool install <pypi_pkg>`), using this project's own already-trusted `uv` toolchain rather than adding a new trust dependency.
+- acceptance:
+  - `installer/executors.py` gains a `"uv-tool"` kind mirroring `"node"`'s shape.
+  - `graphify`'s registry entry uses `kind="uv-tool"`, package `graphifyy` (double-y package name; the CLI command is `graphify` — confirmed via research, not assumed), `requires = ["uv"]` (uv is already a catalog tool).
+  - `graphify` installs via the new `kind="uv-tool"` executor.
+- scope: installer/executors.py, uv-tool executor kind, graphify entry
+
+## REQ-system-tier-shell-container-entries
+- source: docs/prds/2026-09-04-catalog-expansion-v1.0-prd.md
+- description: Add registry entries for `zsh`, `oh-my-zsh` (`kind="script"`, official install script, `requires = ["zsh"]`), `gnu-bash` (macOS only, via brew — a distinct, newer bash from Apple's ancient GPL-constrained bash 3.2), and Apple Containers (macOS only, native `container` CLI) to the system tier.
+- acceptance:
+  - `zsh`: platform-appropriate install (brew on macOS, distro package manager on Linux where not already the default shell).
+  - `oh-my-zsh`: `kind="script"` matching the `bun`/`pnpm`/`fnm` pattern (`codegraph` is `kind="github_release"`, not `kind="script"`, per the package-manager-policy PRD), `requires = ["zsh"]`; the installer's actual behavior (larger/more invasive than `bun`/`fnm`'s, rewrites `.zshrc`) is verified before assuming it is a safe, reviewable `kind="script"` candidate.
+  - `gnu-bash`: `os = ["macos"]`-scoped brew install; absent on Linux (system bash already current GNU bash there).
+  - Apple Containers: macOS-only registry entry reflecting that the `container` CLI ships with the OS on recent macOS versions (nothing to install), or documents the minimum OS version requirement if there is.
+  - Every entry verified against its live, current release/formula before merging.
+- scope: registry.toml, zsh/oh-my-zsh/gnu-bash/Apple-Containers entries, system tier
+- status: Apple Containers — open question whether there is anything to actually install on a current macOS, or whether the entry is purely a version-gate/documentation entry (Open Question 4).
+
+## REQ-terminal-emulator-entries
+- source: docs/prds/2026-09-04-catalog-expansion-v1.0-prd.md
+- description: Add `kitty` and `wezterm` as user-tier registry entries — brew on macOS (both in homebrew-core); Linux via each distro's package manager or the project's existing `.zip`/GitHub-release download path if no native package exists.
+- acceptance:
+  - `kitty`, `wezterm` install cleanly on macOS via verified live methods.
+  - Linux install path verified live before adding, per this project's existing registry-authoring convention (every prior batch verified assets against live releases).
+- scope: registry.toml, kitty/wezterm entries, user tier
+
+## REQ-agent-host-entries
+- source: docs/prds/2026-09-04-catalog-expansion-v1.0-prd.md
+- description: Add ai-tier registry entries for `antigravity`, `cursor-agent`, `codegraph` (`kind="github_release"` per the package-manager-policy PRD's verified finding — prebuilt binary, no npm), and `graphify` (`kind="uv-tool"`, see REQ-uv-tool-executor).
+- acceptance:
+  - `antigravity`, `cursor-agent` install via a verified official method (brew cask for a GUI app, or an official script/binary for a CLI) — not assumed; neither was verified during this PRD's own research (Open Question 2).
+  - `codegraph` installs via `kind="github_release"`, not `kind="node"` or `kind="script"`.
+  - No pnpm-bug exposure for any of these four entries.
+- scope: registry.toml, antigravity/cursor-agent/codegraph/graphify entries, ai tier
+- status: `antigravity`/`cursor-agent` install methods unverified as of this PRD (Open Question 2) — may need a new method kind if either turns out to be npm-only with no brew formula/official script, facing the same pnpm-bug tradeoff this whole effort exists to avoid.
+
+## REQ-rtk-github-release
+- source: docs/prds/2026-09-04-catalog-expansion-v1.0-prd.md
+- description: Add `rtk` ("Rust Token Killer") as an ai-tier registry entry, `kind="github_release"` from `rtk-ai/rtk` (verified via the GitHub API: pure Rust, prebuilt per-platform tarballs — `rtk-aarch64-apple-darwin.tar.gz`, `rtk-x86_64-apple-darwin.tar.gz`, `rtk-aarch64-unknown-linux-gnu.tar.gz`, `rtk-x86_64-unknown-linux-musl.tar.gz` — same shape as `rg`/`fd`/`codegraph`), checksum-verified against the release's `checksums.txt` using the existing `checksum` registry param.
+- acceptance:
+  - `rtk` installs via `kind="github_release"` from `rtk-ai/rtk`, checksum-verified against its release's `checksums.txt`.
+- scope: registry.toml, rtk entry, ai tier
+
+## REQ-recommends-wiring-agent-hosts
+- source: docs/prds/2026-09-04-catalog-expansion-v1.0-prd.md
+- description: Wire the `Tool.recommends` soft-dependency field (mechanism defined by the catalog-tiers-and-dependency-chain PRD, batch 1, see REQ-recommends-soft-dependency) with concrete data: `claude`, `opencode`, `codex`, `cursor-agent`, and `antigravity` each gain `recommends = ["codegraph", "graphify", "rtk"]` (adjusted per tool as it makes sense) — surfaced, never auto-installed, when one of those is selected.
+- acceptance:
+  - `claude`, `opencode`, `codex`, `cursor-agent`, `antigravity` each declare a `recommends` list naming `codegraph`/`graphify`/`rtk` as appropriate per tool.
+  - Selecting any of these tools surfaces its `recommends` list without auto-installing anything (per REQ-recommends-soft-dependency's mechanism).
+- scope: registry.toml, recommends data, ai tier
+- relation: instantiates REQ-recommends-soft-dependency (batch 1 mechanism) with concrete tool data — additive, not a competing variant.
+
+## REQ-linux-bazzite-shell-parity
+- source: docs/prds/2026-09-04-catalog-expansion-v1.0-prd.md
+- description: Give the new system-tier tools (`zsh`, `oh-my-zsh`) a real Linux/Bazzite install path, reusing the existing "Immutable Linux and Bazzite Requirements" precedent from the doctor/catalog refresh PRD (prefer containerized, Homebrew/linuxbrew, or userspace paths over native package-manager writes on an atomic/immutable distro); `podman` already exists in the catalog as the container-runtime story for Linux/Bazzite, so no new container tool is needed there.
+- acceptance:
+  - Linux/Bazzite has a working shell-setup path (`zsh`/`oh-my-zsh`).
+  - Relies on the existing `podman` entry for containers — no new container tool added.
+  - Each system-tier tool's actual OS-conditional prerequisites verified individually — "Bazzite needs less setup than macOS" is not applied as a blanket rule (correction from an earlier draft, per user review: Homebrew's own bootstrap is `curl|bash` on every platform including Linux; the real distinction is that Bazzite's base image already ships `curl`/`git`/build tooling, not that brew skips its own bootstrap there).
+- scope: registry.toml, Linux/Bazzite parity, system tier
+
+---
+
+Source PRD: `docs/prds/2026-09-04-postinstall-hooks-v1.0-prd.md`
+(classified `docs/prds/2026-09-04-postinstall-hooks-v1.0-prd.md`,
+confidence: high, manifest_override: true, locked: false)
+
+## REQ-postinstall-field
+- source: docs/prds/2026-09-04-postinstall-hooks-v1.0-prd.md
+- description: Add an optional `postinstall` field declared per tool/`Method` (resolved 2026-09-04) that names a command to run once after that install succeeds — either inline (a short one-or-two-line command string directly in the `[[tool.method]]` block) or, for anything that would bloat `registry.toml`, a `postinstall_script` field naming a bundled script file following the exact precedent of `installer/tweaks.py`'s `ManagedExecutable`/`helper_assets/` mechanism (`wait_time.py`). A tool with no `postinstall` behaves exactly as today.
+- acceptance:
+  - `postinstall` is optional; absent on a tool it behaves exactly as today.
+  - Both an inline command string and a `postinstall_script` file (helper_assets/-bundled, `ManagedExecutable`-precedent) are supported, chosen per tool as appropriate.
+  - The command runs through the same trusted `Runner` seam every other executor uses (`installer/executors.py`) — no new subprocess-invocation path, inheriting the existing security posture (registry-authored only, never templated from user input beyond the existing `{ver}`/`{arch.*}` token vocabulary).
+  - The command can reference AI-agent host CLIs by their catalog tool ids, so "run for every installed host" is expressible declaratively rather than hardcoded per tool.
+- scope: installer/executors.py, registry.toml schema, Tool/Method model, postinstall field
+
+## REQ-postinstall-execution-timing
+- source: docs/prds/2026-09-04-postinstall-hooks-v1.0-prd.md
+- description: The postinstall step runs immediately after the `Method` that just ran reports success — not batched, not deferred to end-of-session — dispatched through the existing `run_live` workflow (the single live-mutation path this codebase already settled on during the TUI interaction consistency work), and is aware of (or can query) which `Method`/`kind` actually installed the tool. A postinstall failure must not be reported as an install failure for the tool itself — surfaced as a distinct warning, visible in the TUI the same way an install outcome is shown today, never a silent side effect.
+- acceptance:
+  - The postinstall command runs exactly once per successful install, never on a no-op outcome.
+  - A postinstall failure is visible to the user but does not mark the tool's own install as failed.
+  - Modeled as an extension of `run_live`, not a new parallel execution mechanism.
+- scope: installer/session.py or installer/engine.py, run_live workflow, postinstall execution timing
+
+## REQ-postinstall-idempotency-live-check
+- source: docs/prds/2026-09-04-postinstall-hooks-v1.0-prd.md
+- description: Idempotency via a live "is the effect already present" check (e.g. `shutil.which`-shaped, synchronous PATH/filesystem lookup — already used throughout this codebase in `guard_status`/`status.is_installed`/`has_managed_block`), not a new tracked-state database — this project has no state-tracking primitive anywhere today and adding one here would be the first of its kind, with a real risk of drifting out of sync with reality.
+- acceptance:
+  - No new tracking state beyond querying live installer state (e.g. `status.is_installed`).
+  - The idempotency check asks "is the effect already present" (e.g., for codegraph: is the MCP entry already in that host's config file), not "did I previously run this."
+  - Re-running the installer does not repeat unwanted postinstall side effects.
+- scope: postinstall idempotency, live-check pattern, no new state database
+
+## REQ-postinstall-noninteractive-only
+- source: docs/prds/2026-09-04-postinstall-hooks-v1.0-prd.md
+- description: A postinstall command must run unattended to completion (flags/env vars supplying every answer an interactive prompt would ask) — a hard requirement, not a preference, since an interactive step would hang the TUI's live-apply flow with no way to answer it. A tool whose only postinstall/setup path is interactive is not a candidate for this mechanism; it either stays a manual step documented for the user, or ships without a `postinstall` field at all.
+- acceptance:
+  - Every `postinstall` command is verified non-interactive (flags/env vars covering every prompt) before it is added to the registry.
+  - A tool with an interactive-only setup path does not get a `postinstall` field.
+- scope: postinstall field validation, non-interactive requirement, registry-authoring discipline
+
+## REQ-codegraph-mcp-postinstall
+- source: docs/prds/2026-09-04-postinstall-hooks-v1.0-prd.md
+- description: After `codegraph` installs, run its global MCP-registration step ("init global") for each of `claude`/`codex`/`opencode`/`cursor-agent` that is already installed on this machine — never installing those hosts as a side effect (would violate the existing `Tool.requires` boundary between "needs to exist" and "optionally integrates with"). If none of those hosts are installed yet, the postinstall step is a documented no-op, not an error.
+- acceptance:
+  - `codegraph`'s postinstall registers it as an MCP server for every already-installed agent host, and no-ops cleanly when none are installed.
+  - After installing `codegraph`, its MCP server is usable from every already-installed agent host without a separate manual step.
+  - Never installs an agent host as a side effect of the postinstall step.
+- scope: registry.toml codegraph entry, MCP server registration, postinstall
+- status: exact non-interactive setup invocation (flags/env vars/config file) for codegraph's "init global" step is per-tool research deferred to implementation, not resolved by this PRD (Per-Tool Postinstall Research section); discovery mechanism for "which hosts are installed" leans toward reusing `status.is_installed` directly but is an implementation detail deferred to planning (Open Question 3).

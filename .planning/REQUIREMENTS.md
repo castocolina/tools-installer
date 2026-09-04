@@ -42,14 +42,35 @@ Each maps to exactly one roadmap phase.
 - [ ] **REQ-registry-authoring-verification-checklist**: Establish a mandatory per-tool, per-OS verification step before any new registry entry ships — read the tool's actual install script/package metadata (not its marketing page), confirmed independently per OS (a macOS-only prerequisite may be a no-op on Bazzite, and vice versa). Recording mechanism (comment citing what was checked, vs. a stronger checked-in excerpt) is unresolved.
 - [ ] **REQ-brew-preference-guideline**: "Prefer brew over other userspace package managers" becomes a documented registry-authoring guideline (not code-enforced) for new tools generally — with SDKMAN as the Java-toolchain's specific carve-out (REQ-sdkman-exclusivity). Enforcement mechanism (lint/test vs. pure convention) unresolved.
 
+### Catalog Expansion (ingest batch 3/7 part A: `catalog-expansion`)
+
+- [ ] **REQ-uv-tool-executor**: New `installer/executors.py` `kind="uv-tool"`, mirroring the existing `"node"` kind's shape (`uv tool install <pypi_pkg>` instead of `pnpm add -g <npm_pkg>`), using this project's already-trusted `uv` toolchain. `graphify`'s registry entry uses it (`kind="uv-tool"`, package `graphifyy` — double-y, note the PyPI package name differs from the CLI command `graphify`; `requires = ["uv"]`).
+- [ ] **REQ-system-tier-shell-container-entries**: New system-tier registry entries: `zsh`, `oh-my-zsh` (official install script, `requires = ["zsh"]` — verify its actual `.zshrc`-rewriting behavior before treating it as a safe reviewable `kind="script"` candidate), `gnu-bash` (macOS-only, brew), Apple Containers (macOS-only, native `container` CLI — may be a version-gate/doc entry with nothing to actually install on a current macOS).
+  - status: whether there is anything to actually install for Apple Containers on a current macOS, or whether the entry is purely a doc/version-gate, is unresolved (Open Question 4).
+- [ ] **REQ-terminal-emulator-entries**: `kitty`, `wezterm` as user-tier entries — brew on macOS (both in homebrew-core); Linux via distro package manager or the existing GitHub-release download path if no native package exists, verified live before adding (per this project's registry-authoring convention).
+- [ ] **REQ-agent-host-entries**: `antigravity`, `cursor-agent` as ai-tier entries via their verified official install method (not assumed); `codegraph` via `kind="github_release"` (per batch 2's `REQ-codegraph-github-release` finding, inherited not re-verified).
+  - status: `antigravity`/`cursor-agent`'s actual, current install methods are unverified as of this ingest — needs the same live-verification pass every prior registry batch did (Open Question 2). This is a genuine external-research gap, appropriate for GSD's research-capable agents (`gsd-phase-researcher` et al.) at planning time, not resolvable from the PRD alone.
+- [ ] **REQ-rtk-github-release**: `rtk` ("Rust Token Killer") registry entry, `kind="github_release"` from `rtk-ai/rtk` (confirmed via GitHub API: pure Rust, prebuilt per-platform tarballs, `checksums.txt` release asset usable with this project's existing checksum-verification feature). Default branch is `develop`, not `main` — only matters if anything references the branch directly.
+- [ ] **REQ-recommends-wiring-agent-hosts**: Instantiates batch 1's `REQ-recommends-soft-dependency` mechanism with concrete data — `claude`/`opencode`/`codex`/`cursor-agent`/`antigravity` each gain `recommends = ["codegraph", "graphify", "rtk"]` (adjusted per tool as appropriate).
+- [ ] **REQ-linux-bazzite-shell-parity**: New system-tier tools (`zsh`, `oh-my-zsh`) get a real Linux/Bazzite install path, not just macOS; reuses the existing `podman` catalog entry for the container-runtime story on Linux/Bazzite (Apple Containers is macOS-only). Corrects an earlier draft's claim that "brew doesn't need curl on Bazzite" — Homebrew's bootstrap is `curl|bash` on every platform including Linux; the real distinction is that Bazzite's base image already ships `curl`/`git`/build tooling, not that brew needs less there.
+
+### Postinstall Hooks (ingest batch 3/7 part B: `postinstall-hooks`)
+
+- [ ] **REQ-postinstall-field**: Optional `postinstall` field declared per tool/`Method` (not kind-agnostic), either inline (short command string) or a `postinstall_script` file reference for anything multi-line, mirroring `installer/tweaks.py`'s `ManagedExecutable`/`helper_assets/` precedent — keeps `registry.toml` from bloating with long inline scripts. Runs through the same trusted `Runner` seam every other executor uses.
+- [ ] **REQ-postinstall-execution-timing**: The postinstall step dispatches immediately after the specific `Method` that just ran reports success (not batched, not deferred to end-of-session), and is aware of which `Method`/`kind` actually installed the tool. A postinstall failure is surfaced as a distinct warning, never marks the tool's own install as failed (the binary is on PATH and usable regardless).
+- [ ] **REQ-postinstall-idempotency-live-check**: Idempotency via a live check ("is the effect already present" — e.g. is the MCP entry already in a host's config file), not a new state-tracking database — consistent with this codebase's existing all-live-check convention (`status.is_installed`, `guard_status`, `has_managed_block`). `shutil.which` is a synchronous PATH lookup, not a subprocess spawn — confirmed not to hang or block the Textual event loop.
+- [ ] **REQ-postinstall-noninteractive-only**: A postinstall command must run unattended to completion; a tool whose only postinstall/setup path is interactive is not a candidate for this mechanism — hard requirement, since an interactive step would hang the TUI's live-apply flow with no way to answer it.
+- [ ] **REQ-codegraph-mcp-postinstall**: After `codegraph` installs, run its global MCP-registration step for each of `claude`/`codex`/`opencode`/`cursor-agent` that is already installed on this machine (never installing those hosts as a side effect); a documented no-op when none are installed. The proving case for the whole postinstall mechanism — depends on `codegraph` existing in the registry (REQ-agent-host-entries, this same batch).
+  - status: the exact non-interactive invocation for codegraph's MCP-registration step (flags/env vars) is deferred research at implementation time, per the source PRD's own framing — not resolved here (Open Question 3).
+
 ## v2 Requirements
 
-None deferred from batches 1-2. The five remaining companion PRDs from the
-same 2026-09-04 planning batch (`postinstall-hooks`, `catalog-expansion`,
-`live-package-management`, `background-maintenance-daemon`,
-`agent-cli-ergonomics`) will be ingested in subsequent merge-mode passes
-immediately after this one, adding their own v1 requirements (and likely
-further ROADMAP.md phases) rather than v2 deferral of this batch's scope.
+None deferred from batches 1-3. The three remaining companion PRDs from the
+same 2026-09-04 planning batch (`live-package-management`,
+`background-maintenance-daemon`, `agent-cli-ergonomics`) will be ingested in
+subsequent merge-mode passes immediately after this one, adding their own v1
+requirements (and likely further ROADMAP.md phases) rather than v2 deferral
+of this batch's scope.
 
 ## Out of Scope
 
@@ -84,12 +105,24 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-sdkman-exclusivity | Phase 6 | Shipped ahead of plan (`0e05f50`) — verify/harden |
 | REQ-registry-authoring-verification-checklist | Phase 6 | Pending |
 | REQ-brew-preference-guideline | Phase 6 | Pending |
+| REQ-system-tier-shell-container-entries | Phase 7 | Pending |
+| REQ-terminal-emulator-entries | Phase 7 | Pending |
+| REQ-linux-bazzite-shell-parity | Phase 7 | Pending |
+| REQ-uv-tool-executor | Phase 8 | Pending |
+| REQ-agent-host-entries | Phase 8 | Pending (external research needed) |
+| REQ-rtk-github-release | Phase 8 | Pending |
+| REQ-recommends-wiring-agent-hosts | Phase 8 | Pending |
+| REQ-postinstall-field | Phase 9 | Pending |
+| REQ-postinstall-execution-timing | Phase 9 | Pending |
+| REQ-postinstall-idempotency-live-check | Phase 9 | Pending |
+| REQ-postinstall-noninteractive-only | Phase 9 | Pending |
+| REQ-codegraph-mcp-postinstall | Phase 9 | Pending (depends on Phase 8) |
 
 **Coverage:**
-- v1 requirements: 16 total
-- Mapped to phases: 16
+- v1 requirements: 28 total
+- Mapped to phases: 28
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-04*
-*Last updated: 2026-09-04 after ingest batch 2/7 (package-manager-policy) merged*
+*Last updated: 2026-09-04 after ingest batch 3/7 (catalog-expansion + postinstall-hooks) merged*
