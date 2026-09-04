@@ -73,7 +73,9 @@ previously blocked on this exact mechanism not existing yet.
   2. `uv`, `pnpm`, `brew`, and `sdkman` are shown as `tier="system"` tools.
   3. Selecting a dependent tool whose `requires` crosses a tier boundary (primary proof case: `java` needing `sdkman`, already shipped and decision-independent) still automatically drags in its dependency and reports it, exactly as it does today — with zero new resolver code. `mmdc` needing `pnpm` is a secondary example only, pending `mmdc`'s open install-method decision (Phase 5, REQ-mmdc-install-decision) — it may become `mmdc` needing `puppeteer` instead.
   4. `.claude/architecture.md` states plainly that `tier` is a browsing label and `requires` remains the only mechanism that determines install order.
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] 01-01-PLAN.md — Tier enum + hard-required Tool.tier validation, full registry backfill, resolver cross-tier proof, architecture.md statement
 
 ### Phase 2: Tier-Scoped Catalog Views & Recommends
 **Goal**: Browsing the catalog matches how the user actually walks a fresh machine — system prerequisites, then personal picks, then agent tooling — as three top-level views, and picking an AI tool can surface complementary tools without ever auto-installing them.
