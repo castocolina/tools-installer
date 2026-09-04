@@ -37,7 +37,7 @@ Each maps to exactly one roadmap phase.
 - [ ] **REQ-mmdc-install-decision**: Decide and record `mmdc`'s install method explicitly (pnpm with documented mitigation, or Homebrew) — genuinely open, needs research into pnpm-vs-brew tradeoffs (postinstall-script security vs. the known global-install bug) and whether `volta` is a viable alternative; puppeteer/chrome-headless-shell remain required regardless of which manager installs mmdc itself, and whether that dependency applies identically on macOS vs. Linux is also unverified.
   User question (2026-09-04): could `volta` replace pnpm as the global installer for node-only packages, avoiding pnpm's version-upgrade global-package-loss bug entirely, and would it be equally or more secure? Unverified — needs real research, not assumption: volta manages its own install/shim directory rather than using `pnpm add -g`'s mechanism, so it plausibly sidesteps that specific bug, but it is unconfirmed whether volta's own global-install path still shells out to npm internally — if it does, it would inherit npm's unrestricted-postinstall-script behavior, losing the supply-chain-security advantage pnpm's gated postinstall scripts currently provide. This is a real tradeoff to resolve with research, not a clear win either way.
 - [ ] **REQ-puppeteer-catalog-entries**: `puppeteer` and `chrome-headless-shell` become their own catalog entries rather than an invisible peer-dependency of `mmdc`; `mmdc.requires` gains `["puppeteer"]` so `resolve_dependencies` drags it in automatically.
-- [ ] **REQ-pnpm-global-reinstall-mitigation**: For any tool that must stay on `pnpm add -g` despite the known global-install bug, snapshot the pnpm-managed global set and reinstall it together in one invocation after `pnpm` itself updates — the verified-correct mitigation for the bug's actual root cause. Depends on the not-yet-ingested `live-package-management` PRD's update mechanism (batch 5/7).
+- [ ] **REQ-pnpm-global-reinstall-mitigation**: For any tool that must stay on `pnpm add -g` despite the known global-install bug, snapshot the pnpm-managed global set and reinstall it together in one invocation after `pnpm` itself updates — the verified-correct mitigation for the bug's actual root cause. **Unblocked (batch 4/4)**: sequences after Phase 12's `REQ-update-action-manager-delegation` (the "update mechanism" this requirement was waiting on) — triggers when `pnpm` itself is the tool being updated via that action.
 - [ ] **REQ-sdkman-exclusivity**: `java`/`gradle`/`maven`/`groovy`/`springbootcli` install exclusively through SDKMAN, never a native/brew fallback, with SDKMAN's own install correctly self-detected (no re-running its bootstrap on every JVM-tool install). **Already implemented and shipped in commit `0e05f50`, outside GSD's normal flow** — treat as prior art requiring verification/hardening (broader test coverage, e2e, review), not as sufficient as-is. `java`'s SDKMAN candidate may need a pinned `version` to avoid an interactive prompt — unverified end-to-end.
 - [ ] **REQ-registry-authoring-verification-checklist**: Establish a mandatory per-tool, per-OS verification step before any new registry entry ships — read the tool's actual install script/package metadata (not its marketing page), confirmed independently per OS (a macOS-only prerequisite may be a no-op on Bazzite, and vice versa). Recording mechanism (comment citing what was checked, vs. a stronger checked-in excerpt) is unresolved.
 - [ ] **REQ-brew-preference-guideline**: "Prefer brew over other userspace package managers" becomes a documented registry-authoring guideline (not code-enforced) for new tools generally — with SDKMAN as the Java-toolchain's specific carve-out (REQ-sdkman-exclusivity). Enforcement mechanism (lint/test vs. pure convention) unresolved.
@@ -63,14 +63,38 @@ Each maps to exactly one roadmap phase.
 - [ ] **REQ-codegraph-mcp-postinstall**: After `codegraph` installs, run its global MCP-registration step for each of `claude`/`codex`/`opencode`/`cursor-agent` that is already installed on this machine (never installing those hosts as a side effect); a documented no-op when none are installed. The proving case for the whole postinstall mechanism — depends on `codegraph` existing in the registry (REQ-agent-host-entries, this same batch).
   - status: the exact non-interactive invocation for codegraph's MCP-registration step (flags/env vars) is deferred research at implementation time, per the source PRD's own framing — not resolved here (Open Question 3).
 
+### Agent CLI Ergonomics (ingest batch 4/4 part A: `agent-cli-ergonomics`)
+
+- [ ] **REQ-codex-skip-tweak**: A `codex-skip` tweak, parallel to the existing `claude-skip` tweak, aliasing `codex` to its bypass-permissions flag with user-supplied flags respected (appended, never dropped).
+  - status: codex's exact current flag name is unverified — needs the same live-verification pass every registry addition gets (Open Question 2).
+- [ ] **REQ-opencode-auto-tweak**: An `opencode-auto` tweak aliasing `opencode` to `opencode --auto` — explicitly *not* a full bypass-permissions equivalent (explicit deny rules still apply); Policies detail-panel copy must be honest about this narrower semantic so it isn't mistaken for `claude-skip`'s full bypass.
+- [ ] **REQ-cursor-agent-default-model-wrapper**: A `cursor-agent`/`cursor` wrapper that injects a plain, live-verified `--model <slug>` (no bracket syntax — confirmed unimplemented by a Cursor employee, not just buggy) on any bare invocation with no `--model` passed, since cursor-agent's model selection is stateful (persists across sessions) and a bare non-interactive call would otherwise silently inherit whatever was last selected anywhere. Never claims to set 1M context (confirmed interactive-Max-Mode-only, unreachable non-interactively).
+  - status: the exact current high-effort "sol" model slug is unverified — must be confirmed via `cursor-agent`'s own live model-listing command at implementation time, never typed from memory (Open Question 1, narrowed from the original bracket-syntax question which is now fully resolved).
+- [ ] **REQ-agent-tweak-self-update-durability**: All three permissive-mode tweaks use a shell alias/function (`installer/tweaks.py`'s existing mechanism), not a file-based shim in the tool's own install directory — an alias lives in shell config, not the path a self-updating binary rewrites, and shell alias/function lookup happens before PATH search. `cursor-agent`'s wrapper specifically needs a shell *function* (not a plain alias), since it must conditionally omit its injection when the user already passed `--model`.
+
+### Background Maintenance Daemon (ingest batch 4/4 part B: `background-maintenance-daemon`)
+
+- [ ] **REQ-launchd-prune-policy**: A new `daemon_policy` factory (parallel to `ban_policy`/`tweak_policy` in `installer/policy.py`) installs/removes a macOS-only LaunchAgent running the existing `scripts/prune-user-tmpdir.sh --apply` daily via `StartCalendarInterval`, with `--days` defaulting to 3 (the script's own default, kept as a script-accepted param, not hardcoded higher just because it's unattended). No changes to the prune script's own logic/safety checks (dry-run default, `lsof` open-file skip).
+- [ ] **REQ-daemon-log-diagnostics**: Scheduled runs write to a single append-mode log file under the existing managed-state directory convention (one file, not one-per-run, capped by simple size/age truncation); the Policies view's detail panel for this policy gains a "last run: <timestamp>, <N> items removed" line plus a keybinding to view the log — not a new top-level Diagnostics view (would violate the one-view-registry standard for a single script's output).
+- [ ] **REQ-daemon-dependency-gating**: `fd`/`rg` are declared as `requires` on this policy (matching the `docker` tweak's `watch` dependency pattern) but the policy's `apply` never refuses to run when they're missing — it degrades to the script's own find/grep fallback (already confirmed in the script itself), surfaced via the existing `missing_requires` "recommended but not required" UI with no new mechanism.
+
+### Live Package Management (ingest batch 4/4 part C: `live-package-management`)
+
+- [ ] **REQ-version-aware-status-github**: For `github_release`-kind tools, resolve current installed version (run the tool's own `--version` flag and parse it) and compare against the already-working `resolve_github_tag`. A tool with no reliable version-check mechanism shows "unknown," never a false "up to date." MVP piece #1 (low effort, low risk — reuses an existing, tested resolver).
+- [ ] **REQ-cached-timestamped-version-state**: A local JSON cache file, one entry per tool (`tool_id`, `latest_version`, `checked_at`) — an entry older than 7 days shows a stale marker and triggers background re-check; a fresh session doesn't refetch everything, only what's gone stale. MVP piece #2.
+- [ ] **REQ-background-version-refresh-worker**: A Textual `Worker`-based background refresh, consistent with the existing `run_live` async pattern, that never blocks first paint or keypresses; network failures degrade to "unknown," never crash or silently retry forever. MVP piece #3.
+  - status: whether refresh fires on catalog load or only on an explicit "check for updates" action is unresolved (Open Question 1) — the user's own recollection favored on-load, weighed against real network/latency tradeoffs.
+- [ ] **REQ-manager-version-resolution**: `brew outdated`/`pnpm outdated -g`/`uv tool list --outdated`-equivalent resolution (verify exact commands, not assumed) as the authoritative current+latest source for brew/pnpm/uv-tool-managed entries — each needs its own `Runner`-shaped seam per manager, not raw subprocess calls in the TUI layer. MVP piece #4.
+- [ ] **REQ-update-action-manager-delegation**: A manual "update" action parallel to install/uninstall, delegating to the tool's actual owning manager (this installer's own path, brew, pnpm, or uv tool) rather than assuming this installer's executor owns every tool; reuses `UninstallState`'s existing "managed elsewhere" concept rather than inventing a parallel one. MVP piece #5, last of the MVP set — **this is the "update mechanism" batch 2's `REQ-pnpm-global-reinstall-mitigation` was waiting on; that dependency is now unblocked** (see its updated status entry below).
+- [ ] **REQ-manager-drift-alerting**: If a tool is currently installed via `pnpm`/`npm`/`npx`/`pnpx` and a newer/safer version is available via `brew`, surface a distinct alert (changing which manager owns a tool is a bigger action than a version bump) — the alert half only, not auto-remediation (auto-updating the registry + filing a GitHub issue is explicitly deferred, needs a GitHub API/auth story this project doesn't have). Deferred, not MVP — depends on REQ-manager-version-resolution existing first, but cheap once it does.
+
 ## v2 Requirements
 
-None deferred from batches 1-3. The three remaining companion PRDs from the
-same 2026-09-04 planning batch (`live-package-management`,
-`background-maintenance-daemon`, `agent-cli-ergonomics`) will be ingested in
-subsequent merge-mode passes immediately after this one, adding their own v1
-requirements (and likely further ROADMAP.md phases) rather than v2 deferral
-of this batch's scope.
+None deferred. All seven PRDs from the 2026-09-04 planning batch
+(`catalog-tiers-and-dependency-chain`, `package-manager-policy`,
+`catalog-expansion`, `postinstall-hooks`, `live-package-management`,
+`background-maintenance-daemon`, `agent-cli-ergonomics`) are now fully
+ingested as of this batch.
 
 ## Out of Scope
 
@@ -101,7 +125,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-codegraph-github-release | Phase 5 | Pending |
 | REQ-mmdc-install-decision | Phase 5 | Pending |
 | REQ-puppeteer-catalog-entries | Phase 5 | Pending |
-| REQ-pnpm-global-reinstall-mitigation | Phase 5 | Blocked (depends on batch 5/7 ingest) |
+| REQ-pnpm-global-reinstall-mitigation | Phase 5 | Sequences after Phase 12 |
 | REQ-sdkman-exclusivity | Phase 6 | Shipped ahead of plan (`0e05f50`) — verify/harden |
 | REQ-registry-authoring-verification-checklist | Phase 6 | Pending |
 | REQ-brew-preference-guideline | Phase 6 | Pending |
@@ -117,12 +141,25 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-postinstall-idempotency-live-check | Phase 9 | Pending |
 | REQ-postinstall-noninteractive-only | Phase 9 | Pending |
 | REQ-codegraph-mcp-postinstall | Phase 9 | Pending (depends on Phase 8) |
+| REQ-codex-skip-tweak | Phase 10 | Pending |
+| REQ-opencode-auto-tweak | Phase 10 | Pending |
+| REQ-cursor-agent-default-model-wrapper | Phase 10 | Pending |
+| REQ-agent-tweak-self-update-durability | Phase 10 | Pending |
+| REQ-launchd-prune-policy | Phase 11 | Pending |
+| REQ-daemon-log-diagnostics | Phase 11 | Pending |
+| REQ-daemon-dependency-gating | Phase 11 | Pending |
+| REQ-version-aware-status-github | Phase 12 | Pending |
+| REQ-cached-timestamped-version-state | Phase 12 | Pending |
+| REQ-background-version-refresh-worker | Phase 12 | Pending |
+| REQ-manager-version-resolution | Phase 12 | Pending |
+| REQ-update-action-manager-delegation | Phase 12 | Pending |
+| REQ-manager-drift-alerting | Phase 12 | Deferred (stretch, not MVP) |
 
 **Coverage:**
-- v1 requirements: 28 total
-- Mapped to phases: 28
+- v1 requirements: 41 total
+- Mapped to phases: 41
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-04*
-*Last updated: 2026-09-04 after ingest batch 3/7 (catalog-expansion + postinstall-hooks) merged*
+*Last updated: 2026-09-04 after ingest batch 4/4 (agent-cli-ergonomics + background-maintenance-daemon + live-package-management) merged — all 7 PRDs of the 2026-09-04 batch now ingested*

@@ -9,3 +9,7 @@ No SPECs were present in the batch-2 classification (`package-manager-policy`,
 No SPECs were present in the batch-3 classification (`catalog-expansion`,
 `postinstall-hooks`, 2 classifications, both type `PRD`). No constraint entries
 to extract.
+
+No SPECs were present in the batch-4 classification (`agent-cli-ergonomics`,
+`background-maintenance-daemon`, `live-package-management`, 3 classifications,
+all type `PRD`). No constraint entries to extract.

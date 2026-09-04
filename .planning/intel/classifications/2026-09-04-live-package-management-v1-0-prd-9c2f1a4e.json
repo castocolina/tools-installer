@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/ramon/git/personal/tools-installer/docs/prds/2026-09-04-live-package-management-v1.0-prd.md",
+  "type": "PRD",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Live Package Management and Version Awareness - Product Requirements Document (PRD)",
+  "summary": "Requirements for version-aware, manager-aware tool status and update actions in the installer TUI.",
+  "scope": ["catalog TUI", "wizard app", "version resolution", "package managers", "brew", "pnpm", "uv tool", "background refresh", "update action", "manager-drift alerting"],
+  "cross_refs": ["installer/versions.py", "installer/catalog_tui.py", "installer/wizard_app.py", "installer/status.py"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

@@ -16,11 +16,10 @@ uninstall sweep that misses tweak-managed executables), and lets Oh-My-Zsh's
 bundled `git`/`docker` plugins be enabled through the existing shell-tweak
 mechanism.
 
-**More phases are coming.** Three more PRDs from the same 2026-09-04 batch
-(`live-package-management`, `background-maintenance-daemon`,
-`agent-cli-ergonomics`) will be ingested in subsequent merge-mode passes
-immediately after this one, each expected to append further phases to this
-roadmap. This is not the complete project scope.
+**All 7 PRDs of the 2026-09-04 planning batch are now ingested** (as of
+batch 4/4). This roadmap's 12 phases are the complete scope of that
+planning batch — no further PRD-ingest passes are expected to append phases
+here, though future planning work outside this batch could still do so.
 
 **Batch 2/7 (`package-manager-policy`) added Phases 4-6**: extending the
 `npm`/`pip` ban to `npx` with a redirect policy, correcting `codegraph`'s and
@@ -35,6 +34,14 @@ system/user-tier registry entries (zsh, oh-my-zsh, gnu-bash, Apple
 Containers, kitty, wezterm), the new AI-tier entries plus a new `uv-tool`
 executor kind (antigravity, cursor-agent, rtk, graphify), and the
 postinstall-hooks mechanism itself proven via codegraph's MCP registration.
+
+**Batch 4/4 (final batch — `agent-cli-ergonomics` + `background-maintenance-daemon`
++ `live-package-management`, bundled since none of the three depend on each
+other) added Phases 10-12**: permissive-mode shell aliases and a durable
+cursor-agent default-model wrapper, a macOS-only LaunchAgent wrapping the
+existing tmpdir-prune script, and version-aware status plus a manager-delegated
+update action — which also unblocks Phase 5's `REQ-pnpm-global-reinstall-mitigation`,
+previously blocked on this exact mechanism not existing yet.
 
 ## Phases
 
@@ -51,6 +58,9 @@ postinstall-hooks mechanism itself proven via codegraph's MCP registration.
 - [ ] **Phase 7: System & User Tier Catalog Expansion** - Add zsh, oh-my-zsh, gnu-bash, Apple Containers (system tier) and kitty, wezterm (user tier), with real Linux/Bazzite parity
 - [ ] **Phase 8: AI Tier Catalog Expansion & uv-tool Executor** - Add the new `uv-tool` executor kind, antigravity, cursor-agent, rtk, and wire `recommends` for agent hosts
 - [ ] **Phase 9: Postinstall Hooks Mechanism** - Add the optional per-tool postinstall field/execution/idempotency mechanism, proven via codegraph's MCP registration
+- [ ] **Phase 10: Agent CLI Ergonomics** - Add `codex-skip`/`opencode-auto` tweaks and a durable, live-verified cursor-agent default-model wrapper
+- [ ] **Phase 11: Background Maintenance Daemon** - Wrap the existing tmpdir-prune script as a toggleable, macOS-only LaunchAgent with visible logs
+- [ ] **Phase 12: Version-Aware Status & Update Action** - Add version-aware status, a cached/staleness-tracked version check, and a manager-delegated update action (unblocks Phase 5's pnpm-reinstall mitigation)
 
 ## Phase Details
 
@@ -154,10 +164,44 @@ postinstall-hooks mechanism itself proven via codegraph's MCP registration.
   5. After installing `codegraph`, its MCP server registers for every already-installed agent host (`claude`/`codex`/`opencode`/`cursor-agent`), and cleanly no-ops when none are installed.
 **Plans**: TBD
 
+### Phase 10: Agent CLI Ergonomics
+**Goal**: `codex` and `opencode` get the same permissive-mode convenience `claude-skip` already provides, honestly labeled per their real (differing) semantics, and `cursor-agent` reliably gets a known-good default model on any bare invocation instead of silently inheriting whatever was last selected elsewhere.
+**Depends on**: Nothing — extends the existing `TweakBundle`/`tweak_policy` mechanism, independent of Phases 1-9
+**Requirements**: REQ-codex-skip-tweak, REQ-opencode-auto-tweak, REQ-cursor-agent-default-model-wrapper, REQ-agent-tweak-self-update-durability
+**Success Criteria** (what must be TRUE):
+  1. `codex-skip` aliases `codex` to its verified real bypass-permissions flag, with user-supplied flags always respected.
+  2. `opencode-auto` aliases `opencode` to `opencode --auto`, with Policies detail-panel copy that accurately describes its narrower (not full-bypass) semantic.
+  3. Invoking `cursor-agent`/`cursor` with no `--model` injects a live-verified, plain model slug (no bracket syntax); passing an explicit `--model` is never overridden.
+  4. All three tweaks survive the target CLI self-updating in place (durable by construction — shell alias/function lookup precedes PATH search).
+**Plans**: TBD
+
+### Phase 11: Background Maintenance Daemon
+**Goal**: The existing, already-safe `scripts/prune-user-tmpdir.sh` becomes a set-and-forget background policy, toggleable the same way every other Policies entry already is, with a real audit trail instead of silent background deletion.
+**Depends on**: Nothing — new `daemon_policy` factory parallel to existing `Policy` factories, independent of Phases 1-10
+**Requirements**: REQ-launchd-prune-policy, REQ-daemon-log-diagnostics, REQ-daemon-dependency-gating
+**Success Criteria** (what must be TRUE):
+  1. The Policies view offers a macOS-only toggle that installs/removes a LaunchAgent running the existing prune script daily (`--days 3` default, unchanged script logic/safety checks).
+  2. The policy is invisible/inert on Linux.
+  3. `fd`/`rg` show as recommended-but-optional; the daemon still runs correctly (via the script's own find/grep fallback) without them.
+  4. Scheduled runs write an inspectable log, surfaced via the Policies detail panel for this one policy — no new top-level Diagnostics view.
+**Plans**: TBD
+
+### Phase 12: Version-Aware Status & Update Action
+**Goal**: The catalog can answer "what's out of date" and act on it through the tool's own real manager, not just "is it installed" — and this becomes the mechanism Phase 5's pnpm-reinstall mitigation was waiting on.
+**Depends on**: Nothing structurally for pieces #1-#4; piece #5 (the update action) is what Phase 5's `REQ-pnpm-global-reinstall-mitigation` sequences after
+**Requirements**: REQ-version-aware-status-github, REQ-cached-timestamped-version-state, REQ-background-version-refresh-worker, REQ-manager-version-resolution, REQ-update-action-manager-delegation, REQ-manager-drift-alerting
+**Success Criteria** (what must be TRUE):
+  1. The catalog shows, per `github_release`-kind tool, current version vs. latest available, reusing the existing `resolve_github_tag` resolver.
+  2. Version checks are cached with a `checked_at` timestamp; entries older than 7 days show stale and trigger a background re-check, not a full refetch every session.
+  3. Version checks run via a Textual `Worker` without blocking first paint or keypresses; network failures degrade to "unknown," never crash.
+  4. An "update" action exists and delegates to the tool's actual owning manager (brew/pnpm/uv tool/this installer's own path) — not assumed to always be this installer's executor.
+  5. (Stretch, deferred/non-MVP) A tool installed via pnpm/npm with a newer version available via brew surfaces a distinct manager-drift alert.
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -170,3 +214,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. System & User Tier Catalog Expansion | 0/TBD | Not started | - |
 | 8. AI Tier Catalog Expansion & uv-tool Executor | 0/TBD | Not started | - |
 | 9. Postinstall Hooks Mechanism | 0/TBD | Not started | - |
+| 10. Agent CLI Ergonomics | 0/TBD | Not started | - |
+| 11. Background Maintenance Daemon | 0/TBD | Not started | - |
+| 12. Version-Aware Status & Update Action | 0/TBD | Not started | - |

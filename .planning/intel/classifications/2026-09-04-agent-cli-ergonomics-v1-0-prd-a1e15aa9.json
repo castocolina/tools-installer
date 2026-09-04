@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/ramon/git/personal/tools-installer/docs/prds/2026-09-04-agent-cli-ergonomics-v1.0-prd.md",
+  "type": "PRD",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Agent CLI Ergonomics: Permissive Aliases and Model Defaults - Product Requirements Document (PRD)",
+  "summary": "Adds permissive-mode aliases for codex/opencode and a cursor-agent default-model wrapper, extending the existing claude-skip tweak pattern.",
+  "scope": ["claude-skip", "codex-skip", "opencode-auto", "cursor-agent", "shell aliases", "tweaks catalog"],
+  "cross_refs": ["installer/tweaks.py"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

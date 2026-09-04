@@ -153,7 +153,7 @@ confidence: high, manifest_override: true, locked: false)
   - Triggers when `pnpm` itself is the tool being updated, as a natural extension of the update mechanism described in the companion `2026-09-04-live-package-management-v1.0-prd.md` (not yet ingested) — not a separate standalone feature.
   - Scope: mitigation only for tools that must stay on `pnpm` — not a reason to keep more tools on `pnpm` than necessary; `codegraph` still moves to `kind="github_release"` regardless.
 - scope: pnpm global-install mitigation, installer update mechanism
-- status: depends on companion `live-package-management` PRD's update mechanism (not yet ingested)
+- status: **unblocked (updated batch 4/4)** — the companion `docs/prds/2026-09-04-live-package-management-v1.0-prd.md` is now ingested (this run). Its `REQ-update-action-manager-delegation` (MVP piece #5: an "update" action delegating to the correct underlying manager — brew, pnpm, uv tool, or this installer's own path — per tool) is exactly the "update mechanism" this requirement was waiting on: when `pnpm` itself is the tool being updated via that action, this requirement's snapshot-and-reinstall-together mitigation is a natural extension of it, as originally described. The dependency is resolvable/sequenceable now, not blocked on missing scope — `REQ-pnpm-global-reinstall-mitigation` should sequence after `REQ-update-action-manager-delegation` is implemented (see `INGEST-CONFLICTS.md` INFO entry, this run).
 
 ## REQ-sdkman-exclusivity
 - source: docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md
@@ -304,3 +304,148 @@ confidence: high, manifest_override: true, locked: false)
   - Never installs an agent host as a side effect of the postinstall step.
 - scope: registry.toml codegraph entry, MCP server registration, postinstall
 - status: exact non-interactive setup invocation (flags/env vars/config file) for codegraph's "init global" step is per-tool research deferred to implementation, not resolved by this PRD (Per-Tool Postinstall Research section); discovery mechanism for "which hosts are installed" leans toward reusing `status.is_installed` directly but is an implementation detail deferred to planning (Open Question 3).
+
+---
+
+Source PRD: `docs/prds/2026-09-04-agent-cli-ergonomics-v1.0-prd.md`
+(classified `docs/prds/2026-09-04-agent-cli-ergonomics-v1.0-prd.md`,
+confidence: high, manifest_override: true, locked: false)
+
+## REQ-codex-skip-tweak
+- source: docs/prds/2026-09-04-agent-cli-ergonomics-v1.0-prd.md
+- description: Add a `codex-skip` tweak, parallel to the existing `claude-skip` tweak, that aliases `codex` to its actual bypass-permissions flag — unverified as of this PRD, needs the same live-verification pass every registry addition gets in this project (does not assume codex's flag name without checking it against codex's own current docs at implementation time).
+- acceptance:
+  - `codex-skip` aliases `codex` to its verified real bypass-permissions flag.
+  - The alias is a plain shell alias (matching `_CLAUDE_BODY`'s existing shape) so user-supplied flags append after the injected ones, never silently dropped.
+  - Does not change `codex`'s own default when invoked via its full path or `command codex` — opt-in and bypassable, not a hard override.
+  - Reuses `TweakBundle`/`tweak_policy` unchanged — no new mechanism.
+- scope: codex-skip tweak, installer/tweaks.py, shell aliases
+- status: `codex`'s actual bypass-permissions flag name is unverified as of this PRD (Open Question 2) — needs live-verification against codex's own current docs before shipping.
+
+## REQ-opencode-auto-tweak
+- source: docs/prds/2026-09-04-agent-cli-ergonomics-v1.0-prd.md
+- description: Add an `opencode-auto` tweak that aliases `opencode` to `opencode --auto` — explicitly *not* a bypass-permissions equivalent, since opencode has no `--dangerously-skip-permissions`-shaped flag (permissions are config-driven via `opencode.json`, and `--auto` auto-approves requests that would otherwise prompt while explicit deny rules still apply — narrower semantics than `claude-skip`'s full bypass). The Policies detail-panel copy for this tweak must describe the narrower semantic honestly, not imply full bypass, so a user does not mistake it for `claude-skip`.
+- acceptance:
+  - `opencode-auto` aliases `opencode` to `opencode --auto`, with Policies detail-panel copy that accurately describes the narrower (not full bypass) semantic.
+  - User-supplied flags on the alias are respected (appended, never silently dropped).
+  - The third-party `mynameistito/opencode-dangerously-skip-permissions` patch is explicitly out of scope of this tweak's default behavior — not bundled in, not recommended without a separate, explicit decision.
+- scope: opencode-auto tweak, installer/tweaks.py, shell aliases, Policies detail panel copy
+- status: whether the third-party permission-bypass patch should be offered at all as a separate, clearly-labeled opt-in is unresolved (Open Question 4) — this PRD's default position is no.
+
+## REQ-cursor-agent-default-model-wrapper
+- source: docs/prds/2026-09-04-agent-cli-ergonomics-v1.0-prd.md
+- description: Add a `cursor-agent`/`cursor` default-model wrapper — a shell *function* (not a plain alias, since it must conditionally omit its injection when the user already passed `--model`) that injects a verified-real, plain `--model <slug>` flag (no bracket syntax — confirmed unimplemented in `--model` by a Cursor employee via a closed community-forum thread, 2026-07-26, no ETA; documented in `--help` by mistake) on any bare invocation, selecting a high-effort "sol" family variant. This wrapper exists because `cursor-agent`'s model selection is stateful, not per-invocation — whatever model/effort was last selected (Cursor Desktop, an interactive CLI session, or a prior `--model` flag) persists in the CLI's own config and becomes the default for the next bare invocation, so a non-interactive call with no `--model` silently inherits whatever was last selected somewhere else. The wrapper actively asserts a known-good default on every bare invocation, not merely a convenience shortcut.
+- acceptance:
+  - Injects `--model <exact-verified-model-slug>` (plain id, no bracket suffix) only when the user did not already pass `--model` on the invocation.
+  - The exact slug is confirmed at implementation time via `cursor-agent --list-models` (or the CLI's current equivalent invocation — verify the flag name too), never typed from memory or from this PRD's research.
+  - Effort is expressed however `cursor-agent`'s real non-bracket flag surface expresses it (a separate `--effort`-style flag, or baked into the model slug itself, e.g. `...-high`) — determined from the same live listing/`--help` output, not assumed from the (confirmed non-functional) bracket-attribute convention.
+  - Never claims to set 1M context in its description/UI copy — 1M context is confirmed unreachable non-interactively (Max Mode is interactive-only via the in-app `/model` picker); no non-interactive equivalent exists.
+  - No bracket-syntax model parameterization (`model[key=value,...]`) is ever emitted — confirmed unimplemented, not merely buggy, so no wrapper should emit it.
+- scope: cursor-agent default-model wrapper, installer/tweaks.py, shell function
+- status: exact current high-effort "sol" model slug and effort-flag syntax not yet known — must be confirmed via `cursor-agent`'s own live model-listing command at implementation time (Open Question 1, narrowed from "is the bracket-syntax bug fixed" — that part is resolved: not a bug, confirmed unimplemented).
+
+## REQ-agent-tweak-self-update-durability
+- source: docs/prds/2026-09-04-agent-cli-ergonomics-v1.0-prd.md
+- description: All three new tweaks (`codex-skip`, `opencode-auto`, the `cursor-agent` wrapper) use the existing shell alias/function mechanism (`installer/tweaks.py`), not a file-based shim (`installer/guards.py`'s existing ban mechanism) or a watchdog daemon that re-asserts the alias/shim after every self-update — because agent-host CLIs on macOS frequently self-update in place (rewriting the binary at the same user-local path), and shell alias/function lookup happens *before* PATH search in bash/zsh, so a tool rewriting its own binary in place does not affect an alias pointing at its command name. A watchdog daemon was explicitly considered and rejected as unnecessary, since the alias approach is already durable by construction.
+- acceptance: (absent — no explicit new code-level acceptance criteria beyond "reuse `TweakBundle`/`tweak_policy` unchanged"; a design-decision requirement governing how the three tweaks above must be mechanically implemented)
+- scope: self-update durability, installer/tweaks.py, TweakBundle mechanism
+- caveat: durable against the tool being *re-invoked* after a self-update, not durable against a tool that rewrites its own in-process behavior *mid-session* while already running (a running process holding an open handle to its old binary, or re-executing itself after a self-update) — that gap is inherent to how the target CLI implements self-update, not something a shell-level alias/shim can address from outside; explicitly out of scope, not a defect in this requirement.
+
+---
+
+Source PRD: `docs/prds/2026-09-04-background-maintenance-daemon-v1.0-prd.md`
+(classified `docs/prds/2026-09-04-background-maintenance-daemon-v1.0-prd.md`,
+confidence: high, manifest_override: true, locked: false)
+
+## REQ-launchd-prune-policy
+- source: docs/prds/2026-09-04-background-maintenance-daemon-v1.0-prd.md
+- description: Add a new macOS-only `Policy` (a new `daemon_policy`-style factory in `installer/policy.py`, parallel to `ban_policy`/`tweak_policy`, not an overload of `TweakBundle` — the execution model, a persistent `launchd` LaunchAgent, is genuinely different from every existing rc-file-based policy in this repo, even though the `Policy` interface `id`/`label`/`description`/`active`/`apply`/`remove` stays identical) that installs/removes a LaunchAgent running the existing `scripts/prune-user-tmpdir.sh --apply` daily via `StartCalendarInterval` (a fixed time of day, not a drifting `StartInterval` seconds count), passing `--apply --days <configured threshold, default 3>`. Reuses `scripts/prune-user-tmpdir.sh` exactly as it exists today — no changes to the script's own cleanup logic, safety checks (`lsof`-based open-file skipping), or default thresholds.
+- acceptance:
+  - The Policies view offers a macOS-only toggle that installs/removes a LaunchAgent running the existing prune script on a schedule.
+  - The policy is invisible/inert on Linux — reuses `applicable_bundles`-style OS gating (`installer/tweaks.py`), no new gating mechanism.
+  - The plist runs `--apply` (not dry-run) daily via `StartCalendarInterval`, passing `--days 3` by default (the script's own accepted param, not hardcoded) — but the policy toggle itself defaults to a conservative interval/threshold, not an aggressive one, given it runs unattended with no human reviewing output.
+  - Install/remove is idempotent, matching every other policy's apply/remove contract (`PolicyResult`).
+  - Disabling the policy fully removes the LaunchAgent — no orphaned scheduled job survives a toggle-off.
+  - The prune script's own safety checks (dry-run default, `lsof` open-file skip) are verified unchanged, not weakened by the daemon wrapper.
+  - The plist explicitly sets `PATH` or uses absolute paths to `fd`/`rg`/the script itself, since launchd's environment is not the user's login shell PATH by default — otherwise the "fallback to find/grep" behavior could trigger even when `fd`/`rg` are actually installed, just not visible to launchd's minimal environment.
+- scope: installer/policy.py, daemon_policy factory, LaunchAgent plist, scripts/prune-user-tmpdir.sh, macOS-only Policy
+
+## REQ-daemon-log-diagnostics
+- source: docs/prds/2026-09-04-background-maintenance-daemon-v1.0-prd.md
+- description: Scheduled runs write to a single append-mode log file under the project's existing managed-state directory convention (e.g. `<managed-state-dir>/logs/prune-user-tmpdir.log`, reusing whatever root `tweaks.py`'s `ManagedExecutable`/policy machinery already keeps its own managed files under, not a new one) — plain text, one line per run (timestamp, `--days` value used, dry-run vs. `--apply`, count of items removed/skipped, any error), a direct redirect of the script's own existing `--verbose` output plus a leading timestamp+outcome line the LaunchAgent wrapper adds around it. The file is capped with simple size/age-based truncation at write time (e.g. keep the last N runs or last 90 days) — no full logrotate dependency for something this small. Surfaced via a "last run: `<timestamp>`, `<N>` items removed" line plus a keybinding to open/tail the log file, added to the Policies view's existing detail panel for this specific policy — not a new top-level Diagnostics view, per `.claude/architecture.md`'s "one view registry, one nav path" standard.
+- acceptance:
+  - Scheduled runs write an inspectable log, not silent output.
+  - Log format: one line per run with timestamp, `--days` value, dry-run/`--apply`, items removed/skipped, and any error — reusing the script's existing `--verbose` text, not a newly-invented structured format.
+  - Log file is capped via simple size/age-based truncation, not unbounded growth.
+  - The Policies view's existing detail panel for this policy shows last-run status and a way to view/tail the log — no new top-level Diagnostics view added, scoped to this one policy entry.
+- scope: log location/format/rotation, Policies view detail panel, installer/policy.py
+- status: if a second daemon-shaped policy is ever added later and this pattern proves worth generalizing, promoting it to a real Diagnostics view is a natural follow-up — explicitly not assumed necessary now for a single script (non-goal for this PRD).
+
+## REQ-daemon-dependency-gating
+- source: docs/prds/2026-09-04-background-maintenance-daemon-v1.0-prd.md
+- description: `fd`/`rg` are declared as `requires` on this policy the same way `watch` is on the `docker` tweak, but the policy's `apply` must not refuse to run when they are missing — it degrades to the script's own existing `find`/`grep` fallback (already confirmed by reading the script, 2026-09-04: `command -v fd`/`command -v rg` checked, with fallback), and the Policies view's existing `missing_requires` display already communicates "recommended but not required" without any new UI mechanism.
+- acceptance:
+  - `fd`/`rg` show as recommended-but-optional, matching the existing `missing_requires` UI, and the daemon still runs correctly without them.
+- scope: dependency gating, requires/missing_requires reuse, installer/policy.py
+
+---
+
+Source PRD: `docs/prds/2026-09-04-live-package-management-v1.0-prd.md`
+(classified `docs/prds/2026-09-04-live-package-management-v1.0-prd.md`,
+confidence: high, manifest_override: true, locked: false)
+
+## REQ-version-aware-status-github
+- source: docs/prds/2026-09-04-live-package-management-v1.0-prd.md
+- description: For a `github_release`-kind tool, determine current installed version by running the tool's own version flag (e.g. `--version`) and parsing it, and compare against latest via the already-existing `resolve_github_tag` (`installer/versions.py`) — MVP piece #1, lowest effort/risk (reuses an existing, tested resolver; read-only, no new subprocess trust boundary beyond what `Runner` already covers).
+- acceptance:
+  - The catalog can show, per tool, current version and latest available version where determinable, starting with `github_release`-kind tools.
+  - A tool with no reliable version-check mechanism (e.g. a `script`-kind installer with no `--version` flag) degrades gracefully — shows "unknown," never a false "up to date."
+- scope: installer/versions.py, installer/status.py, version-aware status, github_release tools
+- status: MVP — piece #1 of 5, ships first (lowest effort/risk).
+
+## REQ-cached-timestamped-version-state
+- source: docs/prds/2026-09-04-live-package-management-v1.0-prd.md
+- description: Persist version-check results in a small local JSON cache file (one entry per tool: `tool_id`, `latest_version`, `checked_at`), consistent with this project's existing preference for plain files over new storage engines (`~/.myshellrc`, the registry itself). Resolved per user (2026-09-04): an entry older than 7 days is shown as stale (e.g. a dim "checked 12d ago" marker) rather than silently trusted, and only entries past that threshold trigger a background re-check on catalog load — so a fresh session does not refetch everything every time, only what has actually gone stale.
+- acceptance:
+  - A local JSON cache file persists `(tool_id, latest_version, checked_at)` per tool — no database.
+  - An entry older than 7 days is marked stale in the UI and triggers a background re-check; entries within 7 days are not re-fetched.
+- scope: version cache persistence, JSON cache file, staleness threshold
+- status: MVP — piece #2 of 5.
+
+## REQ-background-version-refresh-worker
+- source: docs/prds/2026-09-04-live-package-management-v1.0-prd.md
+- description: Run version checks as a Textual background `Worker` on catalog load (or an explicit "check for updates" action — see Open Questions), using Textual's own `Worker` API, consistent with how this app already handles async live-apply flows (`run_live`), never blocking keypresses or navigation. Network failures during a background check degrade to "unknown," not a crash or silent infinite retry.
+- acceptance:
+  - Version checks run in the background without blocking the TUI.
+  - A background worker firing on every catalog load is genuinely non-blocking, not just backgrounded-but-still-gating first paint.
+  - Network failures degrade to "unknown," never crash the check or silently retry forever.
+- scope: Textual Worker, background refresh, installer/catalog_tui.py, installer/wizard_app.py
+- status: MVP — piece #3 of 5 (medium effort/risk: real async wiring, but `run_live` precedent exists to copy). Open Question 1 unresolved: background-on-load vs. an explicit "check for updates" action the user triggers — the user's own recollection favored on-load, but that has real network/latency tradeoffs worth weighing.
+
+## REQ-manager-version-resolution
+- source: docs/prds/2026-09-04-live-package-management-v1.0-prd.md
+- description: For a `brew`/`cask`-kind tool, use `brew outdated` (or `brew info --json`) as the authoritative source for both current and latest version — do not re-derive via GitHub when brew already knows. For a `node`/`uv-tool`-kind tool, use `pnpm outdated -g` / a `uv tool list --outdated`-equivalent (verify the actual command — not assumed here) as the authoritative source, mirroring the brew case. Each needs its own `Runner`-shaped seam per manager, extending `installer/versions.py`'s existing `resolve_github_tag`/`Fetch` seam (injectable fetch function, already tested with a stub) rather than replacing it.
+- acceptance:
+  - `brew`/`cask`-kind tools resolve current+latest version via `brew outdated`/`brew info --json`.
+  - `node`/`uv-tool`-kind tools resolve current+latest version via `pnpm outdated -g` / the verified `uv tool` equivalent.
+  - Each manager lookup is behind its own injectable, testable `Runner`-style seam — not raw subprocess calls sprinkled through the TUI layer.
+- scope: installer/versions.py, brew/pnpm/uv-tool version resolution, Runner seam per manager
+- status: MVP — piece #4 of 5, ships after piece #1 (medium effort/risk: three new `Runner`-shaped seams, one per manager, each needing its own tests).
+
+## REQ-update-action-manager-delegation
+- source: docs/prds/2026-09-04-live-package-management-v1.0-prd.md
+- description: Add an "update" action in the TUI, parallel to the existing install/uninstall actions, that delegates to whichever manager actually owns the current install (this installer's own download path, brew, pnpm, uv tool) rather than assuming this installer's own executor is authoritative for every tool. Needs piece #4 (manager-version-resolution) done first, plus correctly identifying which manager owns a given install — reuses `installer/uninstall.py`'s existing `UninstallState` concept ("managed elsewhere" already exists) rather than inventing a parallel one.
+- acceptance:
+  - An update action exists and delegates to the correct underlying manager (this installer's own path, brew, pnpm, uv tool) per tool.
+  - Applying an update uses the same mechanism that originally installed the tool, not a mismatched one.
+  - Manager identification reuses the existing `removable`/`managed`/`absent`/`unavailable` (`UninstallState`) distinction from `installer/uninstall.py` rather than a parallel mechanism.
+- scope: installer/status.py, installer/uninstall.py, update action, TUI
+- status: MVP — piece #5 of 5, last of the MVP set (needs piece #4 first; a wrong manager identification could update, or no-op, the wrong thing). This is the "update mechanism" that batch-2's `REQ-pnpm-global-reinstall-mitigation` (`docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md`) was recorded as depending on — that dependency is now unblocked now that this requirement exists (see `INGEST-CONFLICTS.md` INFO entry, this run).
+
+## REQ-manager-drift-alerting
+- source: docs/prds/2026-09-04-live-package-management-v1.0-prd.md
+- description: If a tool is currently installed via `pnpm`/`npm`/`npx`/`pnpx` and a newer (or safer) version is available via `brew`, surface that as an alert — distinct from ordinary version-update awareness, since acting on it means changing which manager owns the tool, not just bumping a version. The alert half only (not auto-remediation); depends on piece #4 (manager-version-resolution) existing first, but is cheap once it does (a comparison, not new fetching).
+- acceptance:
+  - A tool installed via `pnpm`/`npm`/`npx`/`pnpx` with a newer/safer brew-available version surfaces a distinct manager-drift alert, not just a version-update notice.
+- scope: manager-drift alerting, installer/status.py
+- status: Deferred (not MVP) — depends on `REQ-manager-version-resolution` shipping first; cheap add-on once it does. See `SYNTHESIS.md`'s out-of-scope section for the auto-remediation half (deferred item #7 in the source PRD), which is not captured as a requirement.
