@@ -776,6 +776,27 @@ kind = "brew"
 formula = "lazydocker"
 
 [[tool]]
+id = "watch"
+name = "watch"
+category = "shell"
+cmd = "watch"
+priority = "P1"
+audience = "both"
+desc = "Repeats commands on an interval for live terminal checks; required by the Docker shortcuts policy."
+[[tool.method]]
+kind = "dnf"
+package = "procps-ng"
+[[tool.method]]
+kind = "apt"
+package = "procps"
+[[tool.method]]
+kind = "pacman"
+package = "procps-ng"
+[[tool.method]]
+kind = "brew"
+formula = "watch"
+
+[[tool]]
 id = "docker"
 name = "Docker CLI"
 category = "docker"

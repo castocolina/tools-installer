@@ -8,7 +8,7 @@ paths. The pip/npm ban is the first and only instance; future env tweaks slot in
 with no screen changes.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,7 +20,14 @@ from installer.guards import (
     remove_shims,
     write_ban_aliases,
 )
-from installer.tweaks import TweakBundle, remove_tweak, tweak_present, write_tweak
+from installer.tweaks import (
+    TweakBundle,
+    install_tweak_executables,
+    remove_tweak,
+    remove_tweak_executables,
+    tweak_present,
+    write_tweak,
+)
 
 _RELOAD_HINT = "Open a new shell or run `hash -r` so cached command paths refresh."
 
@@ -59,6 +66,8 @@ class Policy:
     active: bool
     apply: Callable[[], PolicyResult]
     remove: Callable[[], PolicyResult]
+    requires: tuple[str, ...] = ()
+    missing_requires: tuple[str, ...] = ()
 
 
 def ban_policy(
@@ -115,7 +124,19 @@ def ban_policy(
     )
 
 
-def tweak_policy(bundle: TweakBundle, *, rc_path: Path) -> Policy:
+def _required_bin_dir(bundle: TweakBundle, bin_dir: Path | None) -> Path | None:
+    if bundle.executables and bin_dir is None:
+        raise ValueError(f"bundle '{bundle.id}' requires a managed bin_dir")
+    return bin_dir
+
+
+def tweak_policy(
+    bundle: TweakBundle,
+    *,
+    rc_path: Path,
+    bin_dir: Path | None = None,
+    installed_tools: Mapping[str, bool] | None = None,
+) -> Policy:
     """A curated shell-tweak bundle as a Policy, parallel to ban_policy.
 
     apply writes the bundle's marker block into rc_path; remove strips it. `active`
@@ -125,21 +146,47 @@ def tweak_policy(bundle: TweakBundle, *, rc_path: Path) -> Policy:
     """
 
     def _apply() -> PolicyResult:
-        write_tweak(bundle, rc_path)
+        target_bin_dir = _required_bin_dir(bundle, bin_dir)
+        written = (
+            install_tweak_executables(bundle, target_bin_dir) if target_bin_dir is not None else ()
+        )
+        write_tweak(bundle, rc_path, bin_dir=target_bin_dir)
+        layers = [PolicyLayer(bundle.label, f"written to {_display_path(rc_path)}")]
+        if target_bin_dir is not None and bundle.executables:
+            names = ", ".join(path.name for path in written) or "0 managed helpers"
+            layers.append(
+                PolicyLayer("Executable", f"installed {names} in {_display_path(target_bin_dir)}")
+            )
         return PolicyResult(
-            layers=(PolicyLayer(bundle.label, f"written to {_display_path(rc_path)}"),),
+            layers=tuple(layers),
             reload_hint=_RELOAD_HINT,
             warning=None,
         )
 
     def _remove() -> PolicyResult:
+        target_bin_dir = _required_bin_dir(bundle, bin_dir)
         remove_tweak(bundle, rc_path)
+        removed = (
+            remove_tweak_executables(bundle, target_bin_dir) if target_bin_dir is not None else ()
+        )
+        layers = [PolicyLayer(bundle.label, f"cleared from {_display_path(rc_path)}")]
+        if target_bin_dir is not None and bundle.executables:
+            layers.append(
+                PolicyLayer(
+                    "Executable",
+                    f"{len(removed)} removed from {_display_path(target_bin_dir)}",
+                )
+            )
         return PolicyResult(
-            layers=(PolicyLayer(bundle.label, f"cleared from {_display_path(rc_path)}"),),
+            layers=tuple(layers),
             reload_hint=_RELOAD_HINT,
             warning=None,
         )
 
+    installed_tools = installed_tools or {}
+    missing_requires = tuple(
+        tool_id for tool_id in bundle.requires if not installed_tools.get(tool_id, False)
+    )
     return Policy(
         id=f"tweak:{bundle.id}",
         label=bundle.label,
@@ -147,4 +194,6 @@ def tweak_policy(bundle: TweakBundle, *, rc_path: Path) -> Policy:
         active=tweak_present(bundle, rc_path),
         apply=_apply,
         remove=_remove,
+        requires=bundle.requires,
+        missing_requires=missing_requires,
     )

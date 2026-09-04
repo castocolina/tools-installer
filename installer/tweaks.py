@@ -10,10 +10,22 @@ sourcing covers it with no extra wiring.
 """
 
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 
 from installer.platform import Platform
 from installer.shellrc import apply_block, strip_block
+
+_BIN_DIR_PLACEHOLDER = "__TOOLS_INSTALLER_BIN_DIR__"
+
+
+@dataclass(frozen=True)
+class ManagedExecutable:
+    """A standalone helper copied from the package into the managed bin dir."""
+
+    asset: str
+    command: str
+    sentinel: str
 
 
 @dataclass(frozen=True)
@@ -27,6 +39,8 @@ class TweakBundle:
     description: str
     platforms: tuple[str, ...]
     body: str
+    requires: tuple[str, ...] = ()
+    executables: tuple[ManagedExecutable, ...] = ()
 
 
 # Raw strings so backslash escapes survive verbatim into the shell file:
@@ -47,15 +61,11 @@ _DOCKER_BODY = (
     "alias docker-memory='docker-stats'"
 )
 
-_COUNTDOWN_BODY = r"""wait_time() {
-    secs=${1:-0}
-    while [ "$secs" -gt 0 ]; do
-        printf '    WAIT %s\033[0K\r' "$secs"
-        sleep 1
-        secs=$((secs - 1))
-    done
-    printf '\033[0K\r'
-}"""
+_COUNTDOWN_BODY = (
+    "wait_time() {\n"
+    f'    uv run --no-project --script "{_BIN_DIR_PLACEHOLDER}/tools-installer-wait-time" "$@"\n'
+    "}"
+)
 
 _CLAUDE_BODY = "alias claude='claude --dangerously-skip-permissions'"
 
@@ -78,13 +88,23 @@ BUNDLES: tuple[TweakBundle, ...] = (
         "docker-ps (live table), docker-stats, docker-memory (needs `watch`)",
         (),
         _DOCKER_BODY,
+        requires=("watch",),
     ),
     TweakBundle(
         "countdown",
         "Countdown helper",
-        "wait_time <secs> — a portable terminal countdown",
+        "wait_time <duration|target> - uv-run Python countdown for seconds, "
+        "1d10m15s, or a clock time",
         (),
         _COUNTDOWN_BODY,
+        requires=("uv",),
+        executables=(
+            ManagedExecutable(
+                asset="helper_assets/wait_time.py",
+                command="tools-installer-wait-time",
+                sentinel="tools-installer-helper: wait_time",
+            ),
+        ),
     ),
     TweakBundle(
         "claude-skip",
@@ -110,17 +130,61 @@ def _markers(bundle_id: str) -> tuple[str, str]:
     )
 
 
-def tweak_block(bundle: TweakBundle) -> str:
+def _default_bin_dir() -> Path:
+    return Path.home() / ".local" / "bin"
+
+
+def _render_body(bundle: TweakBundle, bin_dir: Path | None) -> str:
+    return bundle.body.replace(_BIN_DIR_PLACEHOLDER, str(bin_dir or _default_bin_dir()))
+
+
+def _is_our_executable(path: Path, sentinel: str) -> bool:
+    try:
+        return sentinel in path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def install_tweak_executables(bundle: TweakBundle, bin_dir: Path) -> tuple[Path, ...]:
+    """Copy bundle helper executables into the managed bin dir."""
+    if not bundle.executables:
+        return ()
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    package_files = resources.files("installer")
+    for executable in bundle.executables:
+        target = bin_dir / executable.command
+        if target.exists() and not _is_our_executable(target, executable.sentinel):
+            raise OSError(f"{target} exists and is not managed by tools-installer")
+        source = package_files.joinpath(executable.asset).read_text()
+        target.write_text(source)
+        target.chmod(0o755)
+        written.append(target)
+    return tuple(written)
+
+
+def remove_tweak_executables(bundle: TweakBundle, bin_dir: Path) -> tuple[Path, ...]:
+    """Remove only helper executables owned by this bundle."""
+    removed: list[Path] = []
+    for executable in bundle.executables:
+        target = bin_dir / executable.command
+        if target.exists() and _is_our_executable(target, executable.sentinel):
+            target.unlink()
+            removed.append(target)
+    return tuple(removed)
+
+
+def tweak_block(bundle: TweakBundle, bin_dir: Path | None = None) -> str:
     """Marker-delimited block (no trailing newline, like shellrc/guards blocks)."""
     begin, end = _markers(bundle.id)
-    return f"{begin}\n{bundle.body}\n{end}"
+    return f"{begin}\n{_render_body(bundle, bin_dir)}\n{end}"
 
 
-def write_tweak(bundle: TweakBundle, rc_path: Path) -> None:
+def write_tweak(bundle: TweakBundle, rc_path: Path, bin_dir: Path | None = None) -> None:
     """Idempotently write the bundle's block into rc_path, preserving the rest."""
     begin, end = _markers(bundle.id)
     existing = rc_path.read_text() if rc_path.exists() else ""
-    rc_path.write_text(apply_block(existing, tweak_block(bundle), begin=begin, end=end))
+    rc_path.write_text(apply_block(existing, tweak_block(bundle, bin_dir), begin=begin, end=end))
 
 
 def remove_tweak(bundle: TweakBundle, rc_path: Path) -> None:

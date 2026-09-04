@@ -15,14 +15,20 @@ from textual.app import ComposeResult
 from textual.message import Message
 from textual.widgets import DataTable
 
+from installer.enums import Audience, Priority
 from installer.model import Tool
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import AppScreen, mark
 
 TableSortKey = Literal["id", "category", "priority", "audience", "installed"]
 
-PRIORITY_LABEL = {"P0": "essential", "P1": "recommended", "P2": "nice-to-have", "P3": "niche"}
-AUDIENCE_LABEL = {"ai": "AI", "human": "you", "both": "both"}
+PRIORITY_LABEL = {
+    Priority.P0: "essential",
+    Priority.P1: "recommended",
+    Priority.P2: "nice-to-have",
+    Priority.P3: "niche",
+}
+AUDIENCE_LABEL = {Audience.AI: "AI", Audience.HUMAN: "human", Audience.BOTH: "both"}
 
 
 def sort_for_table(
@@ -55,11 +61,13 @@ def group_tools(
     ordered = sorted(tools, key=lambda t: (t.priority, t.id))
     if view == "priority":
         groups = [
-            (p, f"{p} · {PRIORITY_LABEL[p]}", [t for t in ordered if t.priority == p])
-            for p in ("P0", "P1", "P2", "P3")
+            (p.value, f"{p} · {PRIORITY_LABEL[p]}", [t for t in ordered if t.priority == p])
+            for p in Priority
         ]
     elif view == "audience":
-        titles = {a: f"for {AUDIENCE_LABEL[a]}" for a in ("ai", "both", "human")}
+        titles = {
+            a: f"for {AUDIENCE_LABEL[a]}" for a in (Audience.AI, Audience.BOTH, Audience.HUMAN)
+        }
         groups = [
             (title, title, [t for t in ordered if t.audience == a]) for a, title in titles.items()
         ]
@@ -87,8 +95,13 @@ _TAB_LABELS = {
     "status": "Status",
     "table": "Table",
 }
-_PRIORITY_STYLE = {"P0": "bold red", "P1": "bold yellow", "P2": "blue", "P3": "dim"}
-_AUDIENCE_STYLE = {"ai": "bold cyan", "human": "magenta", "both": ""}
+_PRIORITY_STYLE = {
+    Priority.P0: "bold red",
+    Priority.P1: "bold yellow",
+    Priority.P2: "blue",
+    Priority.P3: "dim",
+}
+_AUDIENCE_STYLE = {Audience.AI: "bold cyan", Audience.HUMAN: "magenta", Audience.BOTH: ""}
 
 # Sortable Table-view columns by column key; absent keys (sel/desc) don't sort.
 _SORT_BY_COLUMN: dict[str, TableSortKey] = {
@@ -111,7 +124,7 @@ _COLUMNS = (
 
 _LEGEND = (
     "[bold red]P0[/] essential · [bold yellow]P1[/] recommended · [blue]P2[/] nice-to-have"
-    " · [dim]P3[/] niche  |  for [bold cyan]AI[/] / [magenta]you[/] / both"
+    " · [dim]P3[/] niche  |  for [bold cyan]AI[/] / [magenta]human[/] / both"
     "  |  [green]✓ installed[/] · [yellow]○ missing[/]"
 )
 

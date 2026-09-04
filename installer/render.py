@@ -10,6 +10,7 @@ from installer.audit import ToolStatus
 from installer.doctor import DoctorReport
 from installer.download import DOWNLOAD_KINDS
 from installer.engine import InstallOutcome
+from installer.enums import InstallStatus
 from installer.guidance import Guidance, doctor_guidance, guard_guidance
 from installer.links import TROUBLESHOOTING_URL
 from installer.session import Summary
@@ -138,10 +139,10 @@ def render_verification(outcomes: list[InstallOutcome], console: Console) -> Non
     for outcome in outcomes:
         if outcome.method_kind not in DOWNLOAD_KINDS:
             continue
-        if outcome.status == "installed":
+        if outcome.status == InstallStatus.INSTALLED:
             marker = "sha256 ✓" if outcome.verified else "unverified"
             console.print(f"  {outcome.tool_id}: {marker}")
-        elif outcome.status == "checksum-mismatch":
+        elif outcome.status == InstallStatus.CHECKSUM_MISMATCH:
             # The engine always carries the ChecksumMismatch in errors[0] for
             # this status; a malformed outcome should fail loudly here rather
             # than print a vague line (same philosophy as session.summarize).

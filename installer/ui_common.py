@@ -11,14 +11,19 @@ from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
+from textual.containers import Horizontal
 from textual.coordinate import Coordinate
+from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import DataTable, Rule, Static
 
+from installer.enums import Severity
+
 T = TypeVar("T")
 
-SEVERITY_STYLE: dict[str, str] = {"ok": "green", "warn": "yellow", "error": "red"}
+SEVERITY_STYLE = {Severity.OK: "green", Severity.WARN: "yellow", Severity.ERROR: "red"}
 
 
 def mark(chosen: bool) -> Text:
@@ -62,9 +67,9 @@ class StatusLine(Static):
         super().__init__("")
         self.text = ""  # public test seam
 
-    def set(self, text: str, severity: str) -> None:
+    def set(self, text: str, severity: Severity | str) -> None:
         self.text = text
-        self.update(Text(text, style=SEVERITY_STYLE[severity]))
+        self.update(Text(text, style=SEVERITY_STYLE[Severity(severity)]))
 
     def clear(self) -> None:
         self.text = ""
@@ -177,11 +182,21 @@ class FooterBar(Static):
         self.update(self.render_text())
 
 
-class WayfindingHeader(Static):
+class WayfindingHeader(Horizontal):
     """Docked-top breadcrumb of the four views; the active one is accent-bold,
     the rest dim. Accent recolors per screen (e.g. destructive red on uninstall)."""
 
-    DEFAULT_CSS = "WayfindingHeader { height: 1; padding: 0 1; }"
+    class Navigate(Message):
+        """A header token was clicked and requested top-level navigation."""
+
+        def __init__(self, view: str) -> None:
+            super().__init__()
+            self.view = view
+
+    DEFAULT_CSS = """
+    WayfindingHeader { height: 1; padding: 0 1; }
+    WayfindingHeader > WayfindingTab { width: auto; height: 1; margin-right: 4; }
+    """
 
     def __init__(self, *, active: str, accent: str = "$accent") -> None:
         super().__init__()
@@ -201,8 +216,35 @@ class WayfindingHeader(Static):
         ]
         return "    ".join(parts)
 
+    def compose(self) -> ComposeResult:
+        for index, view in enumerate(VIEWS):
+            yield WayfindingTab(
+                index=index, view=view, active=view.name == self._active, accent=self._accent
+            )
+
+
+class WayfindingTab(Static):
+    """One clickable view token in the WayfindingHeader."""
+
+    def __init__(self, *, index: int, view: View, active: bool, accent: str) -> None:
+        super().__init__(id=f"nav-{view.name}")
+        self._index = index
+        self._view = view
+        self._active = active
+        self._accent = accent
+
+    def render_markup(self) -> str:
+        content = f"{_view_key(self._index)} {self._view.label}"
+        if self._active:
+            return f"[bold {self._accent}]{content}[/]"
+        return f"[dim]{content}[/]"
+
     def on_mount(self) -> None:
         self.update(self.render_markup())
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        self.post_message(WayfindingHeader.Navigate(self._view.name))
 
 
 class ModeBadge(Static):

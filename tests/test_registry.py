@@ -39,6 +39,7 @@ def test_registry_includes_requested_installable_entries() -> None:
         "claude",
         "opencode",
         "docker",
+        "watch",
         "podman",
         "colima",
         "vscode",
@@ -142,6 +143,25 @@ def test_container_tools_resolve_on_immutable_linux_without_native_writes() -> N
     assert [m.kind for m in resolve_methods(tools["docker"], immutable_fedora)] == ["brew"]
     assert [m.kind for m in resolve_methods(tools["podman"], immutable_fedora)] == ["brew"]
     assert [m.kind for m in resolve_methods(tools["colima"], immutable_fedora)] == ["brew"]
+
+
+def test_watch_is_generic_shell_tool_required_by_docker_aliases() -> None:
+    watch = _tools_by_id()["watch"]
+    assert watch.category == "shell"
+    assert watch.cmd == "watch"
+    assert watch.priority == "P1"
+    assert "Docker shortcuts policy" in watch.desc
+    methods = {method.kind: method.params for method in watch.methods}
+    assert methods["dnf"]["package"] == "procps-ng"
+    assert methods["apt"]["package"] == "procps"
+    assert methods["pacman"]["package"] == "procps-ng"
+    assert methods["brew"]["formula"] == "watch"
+
+
+def test_watch_resolves_on_immutable_linux_through_brew() -> None:
+    watch = _tools_by_id()["watch"]
+    immutable_fedora = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+    assert [m.kind for m in resolve_methods(watch, immutable_fedora)] == ["brew"]
 
 
 def test_jetbrains_toolbox_is_macos_cask_only() -> None:

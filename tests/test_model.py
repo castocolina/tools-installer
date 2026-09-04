@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from installer.enums import Audience, Priority
 from installer.model import Method, Tool, load_categories, load_tools
 
 
@@ -66,6 +67,7 @@ formula = "uv"
     assert isinstance(tool, Tool)
     assert tool.id == "uv"
     assert tool.priority == "P0"
+    assert tool.priority is Priority.P0
     assert [m.kind for m in tool.methods] == ["script", "brew"]
     assert isinstance(tool.methods[0], Method)
     assert tool.methods[0].params["url"] == "https://astral.sh/uv/install.sh"
@@ -88,6 +90,7 @@ formula = "jq"
     assert tool.cmd == "jq"
     assert tool.priority == "P3"  # default
     assert tool.audience == "both"  # default
+    assert tool.audience is Audience.BOTH
 
 
 def test_tool_without_methods_raises(tmp_path: Path):
@@ -97,7 +100,7 @@ def test_tool_without_methods_raises(tmp_path: Path):
 [[tool]]
 id = "broken"
 name = "broken"
-category = "x"
+category = "search"
 """,
     )
     with pytest.raises(ValueError, match="no install methods"):
@@ -111,7 +114,7 @@ def test_unknown_method_kind_raises(tmp_path: Path):
 [[tool]]
 id = "weird"
 name = "weird"
-category = "x"
+category = "search"
 [[tool.method]]
 kind = "snap"
 package = "weird"
@@ -126,7 +129,7 @@ def test_load_tools_reads_method_os_targets(tmp_path: Path) -> None:
     manifest.write_text(
         "[[tool]]\n"
         'id = "demo"\n'
-        'category = "misc"\n'
+        'category = "search"\n'
         "[[tool.method]]\n"
         'kind = "script"\n'
         'os = ["macos"]\n'
@@ -143,7 +146,7 @@ def test_load_tools_rejects_os_as_a_string(tmp_path: Path) -> None:
     manifest.write_text(
         "[[tool]]\n"
         'id = "demo"\n'
-        'category = "misc"\n'
+        'category = "search"\n'
         "[[tool.method]]\n"
         'kind = "script"\n'
         'os = "macos"\n'  # must be a list, not a string
@@ -158,7 +161,7 @@ def test_load_tools_reads_method_arch_targets(tmp_path: Path) -> None:
     manifest.write_text(
         "[[tool]]\n"
         'id = "demo"\n'
-        'category = "misc"\n'
+        'category = "search"\n'
         "[[tool.method]]\n"
         'kind = "script"\n'
         'os = ["macos"]\n'
@@ -177,7 +180,7 @@ def test_load_tools_rejects_arch_as_a_string(tmp_path: Path) -> None:
     manifest.write_text(
         "[[tool]]\n"
         'id = "demo"\n'
-        'category = "misc"\n'
+        'category = "search"\n'
         "[[tool.method]]\n"
         'kind = "script"\n'
         'arch = "arm64"\n'  # must be a list, not a string
@@ -192,13 +195,63 @@ def test_load_tools_rejects_requires_as_a_string(tmp_path: Path) -> None:
     manifest.write_text(
         "[[tool]]\n"
         'id = "demo"\n'
-        'category = "misc"\n'
+        'category = "search"\n'
         'requires = "pnpm"\n'  # must be a list, not a string
         "[[tool.method]]\n"
         'kind = "script"\n'
         'url = "https://example.test/i.sh"\n'
     )
     with pytest.raises(ValueError, match="'requires' must be a list"):
+        load_tools(manifest)
+
+
+def test_load_tools_rejects_unknown_category(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "misc"
+[[tool.method]]
+kind = "brew"
+formula = "demo"
+""",
+    )
+    with pytest.raises(ValueError, match="unknown category"):
+        load_tools(manifest)
+
+
+def test_load_tools_rejects_unknown_priority(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+priority = "P99"
+[[tool.method]]
+kind = "brew"
+formula = "demo"
+""",
+    )
+    with pytest.raises(ValueError, match="unknown priority"):
+        load_tools(manifest)
+
+
+def test_load_tools_rejects_unknown_audience(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+audience = "you"
+[[tool.method]]
+kind = "brew"
+formula = "demo"
+""",
+    )
+    with pytest.raises(ValueError, match="unknown audience"):
         load_tools(manifest)
 
 
@@ -292,6 +345,19 @@ desc = ""
 """,
     )
     with pytest.raises(ValueError, match="category 'search' is missing a non-empty 'desc'"):
+        load_categories(manifest)
+
+
+def test_load_categories_rejects_unknown_category_id(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[category]]
+id = "misc"
+desc = "Miscellaneous tools"
+""",
+    )
+    with pytest.raises(ValueError, match="unknown category id"):
         load_categories(manifest)
 
 

@@ -1,3 +1,5 @@
+import pytest
+
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.model import Method, Tool
 from installer.platform import Platform
@@ -33,9 +35,9 @@ def test_order_for_install_sorts_by_priority_then_keeps_catalog_order():
     assert [t.id for t in order_for_install(tools)] == ["b", "d", "a", "c"]
 
 
-def test_order_for_install_puts_unknown_priority_last():
-    tools = [_tool("x", "P99"), _tool("y", "P3"), _tool("z", "P0")]
-    assert [t.id for t in order_for_install(tools)] == ["z", "y", "x"]
+def test_tool_rejects_unknown_priority():
+    with pytest.raises(ValueError, match="unknown priority"):
+        _tool("x", "P99")
 
 
 def test_run_installs_calls_install_per_tool_with_injected_deps():

@@ -6,26 +6,30 @@ place. `severity` drives color-coding downstream.
 """
 
 from dataclasses import dataclass
-from typing import Literal
 
 from installer.doctor import DoctorReport, has_problems
+from installer.enums import Severity
 
-Severity = Literal["ok", "warn", "error"]
 
-
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Guidance:
     title: str
     meaning: str
     next_step: str  # empty only for the healthy/ok case
     severity: Severity
 
+    def __init__(self, title: str, meaning: str, next_step: str, severity: Severity | str) -> None:
+        object.__setattr__(self, "title", title)
+        object.__setattr__(self, "meaning", meaning)
+        object.__setattr__(self, "next_step", next_step)
+        object.__setattr__(self, "severity", Severity(severity))
+
 
 _HEALTHY = Guidance(
     title="PATH looks healthy",
     meaning="All bin dirs are present, on PATH, and unique.",
     next_step="",
-    severity="ok",
+    severity=Severity.OK,
 )
 
 
@@ -40,7 +44,7 @@ def doctor_guidance(report: DoctorReport) -> list[Guidance]:
                 title=f"{directory} does not exist",
                 meaning=f"{directory} is declared but does not exist yet.",
                 next_step="It is created when a tool installs there — nothing to do now.",
-                severity="error",
+                severity=Severity.ERROR,
             )
         )
     for directory in report.missing:
@@ -49,7 +53,7 @@ def doctor_guidance(report: DoctorReport) -> list[Guidance]:
                 title=f"{directory} not on PATH",
                 meaning=f"{directory} is not on your PATH.",
                 next_step="Run `make fix`, then open a new terminal (or `source ~/.myshellrc`).",
-                severity="warn",
+                severity=Severity.WARN,
             )
         )
     for directory in report.duplicated:
@@ -58,7 +62,7 @@ def doctor_guidance(report: DoctorReport) -> list[Guidance]:
                 title=f"{directory} duplicated on PATH",
                 meaning=f"{directory} appears more than once on PATH.",
                 next_step="Harmless — transient duplicates clear when you open a new shell.",
-                severity="warn",
+                severity=Severity.WARN,
             )
         )
     return items
@@ -81,7 +85,7 @@ def guard_guidance(status: dict[str, bool], warning: str | None) -> list[Guidanc
                 title="pip/npm ban active",
                 meaning=f"{shimmed}.",
                 next_step="Open a new shell or run `hash -r` so cached command paths refresh.",
-                severity="ok",
+                severity=Severity.OK,
             )
         )
     if warning:
@@ -92,7 +96,7 @@ def guard_guidance(status: dict[str, bool], warning: str | None) -> list[Guidanc
                 next_step=(
                     "Put the shim dir ahead of the real binary on PATH, then reopen the shell."
                 ),
-                severity="warn",
+                severity=Severity.WARN,
             )
         )
     return items

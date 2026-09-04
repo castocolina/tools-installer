@@ -98,9 +98,15 @@ async def test_policies_screen_toggles_a_tweak_bundle_live(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     rc = tmp_path / ".myshellrc"
-    policy = tweak_policy(_countdown(), rc_path=rc)
     bin_dir = tmp_path / ".local" / "bin"
     bin_dir.mkdir(parents=True)
+    policy = tweak_policy(
+        _countdown(),
+        rc_path=rc,
+        bin_dir=bin_dir,
+        installed_tools={"uv": True},
+    )
+    helper = bin_dir / "tools-installer-wait-time"
     app = UnifiedApp(
         [_tool()],
         {"rg": True},
@@ -125,11 +131,13 @@ async def test_policies_screen_toggles_a_tweak_bundle_live(
         assert isinstance(app.screen, PoliciesScreen)
         assert app.screen.active_state["tweak:countdown"] is True
         assert "wait_time()" in rc.read_text()
+        assert helper.exists()
         await pilot.press("space")
         await pilot.pause()
         assert isinstance(app.screen, PoliciesScreen)
         assert app.screen.active_state["tweak:countdown"] is False
         assert "wait_time()" not in rc.read_text()
+        assert not helper.exists()
 
 
 def test_real_home_rc_files_are_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

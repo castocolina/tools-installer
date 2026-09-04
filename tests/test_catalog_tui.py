@@ -7,8 +7,9 @@ from rich.text import Text
 from textual.widgets import DataTable
 from textual.widgets.data_table import ColumnKey
 
-from installer.catalog_tui import group_tools, sort_for_table
+from installer.catalog_tui import AUDIENCE_LABEL, group_tools, sort_for_table
 from installer.doctor import DoctorReport
+from installer.enums import Audience
 from installer.model import Method, Tool
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 
@@ -83,9 +84,14 @@ def test_group_by_priority_orders_tiers_and_drops_empty():
 def test_group_by_audience_uses_labels():
     tools, installed = _catalog()
     groups = group_tools(tools, installed, "audience", _BLURBS)
-    assert [title for title, _, _ in groups] == ["for AI", "for both", "for you"]
+    assert [title for title, _, _ in groups] == ["for AI", "for both", "for human"]
     assert all(detail == title for title, detail, _ in groups)
     assert [t.id for _, _, members in groups for t in members] == ["rg", "fd", "lazygit"]
+
+
+def test_audience_labels_keep_domain_names():
+    assert AUDIENCE_LABEL[Audience.HUMAN] == "human"
+    assert "you" not in AUDIENCE_LABEL.values()
 
 
 def test_group_by_status_splits_missing_then_installed():
@@ -237,7 +243,7 @@ async def test_detail_bar_follows_the_highlighted_row():
         # lazygit is highlighted on start: empty desc -> falls back to name
         assert "lazygit" in app.catalog.detail_text
         assert "P2" in app.catalog.detail_text
-        assert "for you" in app.catalog.detail_text
+        assert "for human" in app.catalog.detail_text
         await pilot.press("up")  # onto the "git" section row
         assert app.catalog.detail_text == "git"
 

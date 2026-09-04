@@ -175,7 +175,15 @@ def _build_app(
                 path_value=os.environ.get("PATH", ""),
                 which=shutil.which,
             ),
-            *(tweak_policy(bundle, rc_path=_MYSHELLRC) for bundle in applicable_bundles(platform)),
+            *(
+                tweak_policy(
+                    bundle,
+                    rc_path=_MYSHELLRC,
+                    bin_dir=_DEFAULT_BIN_DIR,
+                    installed_tools=installed,
+                )
+                for bundle in applicable_bundles(platform)
+            ),
         ]
     )
 

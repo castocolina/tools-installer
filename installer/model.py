@@ -3,6 +3,9 @@
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypeVar
+
+from installer.enums import Audience, Category, Priority
 
 METHOD_KINDS = (
     "script",
@@ -18,9 +21,23 @@ METHOD_KINDS = (
     "cask",
 )
 
+EnumValue = TypeVar("EnumValue", Audience, Category, Priority)
+
 
 def _empty_params() -> dict[str, object]:
     return {}
+
+
+def _parse_enum(enum_type: type[EnumValue], value: object, field: str, context: str) -> EnumValue:
+    if not isinstance(value, str):
+        raise ValueError(f"{context}: '{field}' must be a string")
+    try:
+        return enum_type(value)
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in enum_type)
+        raise ValueError(
+            f"{context}: unknown {field} '{value}' (expected one of: {allowed})"
+        ) from exc
 
 
 @dataclass(frozen=True)
@@ -31,19 +48,45 @@ class Method:
     arch: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Tool:
     id: str
     name: str
     category: str
     cmd: str
     methods: tuple[Method, ...]
-    priority: str = "P3"
-    audience: str = "both"
+    priority: Priority
+    audience: Audience
     desc: str = ""
     # No-op dependency seam for the tool-dependencies PRD: ids this tool needs
     # at install time. Parsed and carried here; no resolution logic lives yet.
     requires: tuple[str, ...] = ()
+
+    def __init__(
+        self,
+        id: str,
+        name: str,
+        category: str | Category,
+        cmd: str,
+        methods: tuple[Method, ...],
+        priority: str | Priority = Priority.P3,
+        audience: str | Audience = Audience.BOTH,
+        desc: str = "",
+        requires: tuple[str, ...] = (),
+    ) -> None:
+        object.__setattr__(self, "id", id)
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "category", str(category))
+        object.__setattr__(self, "cmd", cmd)
+        object.__setattr__(self, "methods", methods)
+        object.__setattr__(
+            self, "priority", _parse_enum(Priority, priority, "priority", f"tool '{id}'")
+        )
+        object.__setattr__(
+            self, "audience", _parse_enum(Audience, audience, "audience", f"tool '{id}'")
+        )
+        object.__setattr__(self, "desc", desc)
+        object.__setattr__(self, "requires", requires)
 
 
 def load_tools(manifest_path: str | Path) -> list[Tool]:
@@ -55,6 +98,7 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
         raw_methods = row.get("method", [])
         if not raw_methods:
             raise ValueError(f"tool '{row['id']}' declares no install methods")
+        _parse_enum(Category, row["category"], "category", f"tool '{row['id']}'")
         methods: list[Method] = []
         for entry in raw_methods:
             kind = entry["kind"]
@@ -111,6 +155,7 @@ def load_categories(manifest_path: str | Path) -> dict[str, str]:
         cat_id = row.get("id")
         if not isinstance(cat_id, str) or not cat_id:
             raise ValueError(f"category section #{index} is missing a non-empty 'id'")
+        _parse_enum(Category, cat_id, "category id", f"category section #{index}")
         desc = row.get("desc")
         if not isinstance(desc, str) or not desc:
             raise ValueError(f"category '{cat_id}' is missing a non-empty 'desc'")

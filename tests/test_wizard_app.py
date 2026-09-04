@@ -648,6 +648,17 @@ async def test_policies_view_is_reachable() -> None:
         assert isinstance(app.screen, PoliciesScreen)
 
 
+async def test_clicking_main_header_navigates_between_views() -> None:
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.click("#nav-policies")
+        assert app.current_view == "policies"
+        assert isinstance(app.screen, PoliciesScreen)
+        await pilot.click("#nav-doctor")
+        assert app.current_view == "doctor"
+        assert isinstance(app.screen, DoctorScreen)
+
+
 async def test_policies_reachable_via_palette() -> None:
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
@@ -692,6 +703,70 @@ async def test_policy_state_cell_carries_glyph_for_on_and_off() -> None:
         assert table.get_cell("ban", "state").plain == "○ [off]"
         await pilot.press("space")
         assert table.get_cell("ban", "state").plain == "● [on]"
+
+
+async def test_policy_detail_panel_explains_tweak_rules() -> None:
+    policies = [
+        Policy(
+            id="tweak:docker",
+            label="Docker shortcuts",
+            description="docker-ps, docker-stats, docker-memory",
+            active=False,
+            apply=_ok_result,
+            remove=_ok_result,
+            requires=("watch",),
+        ),
+        Policy(
+            id="tweak:countdown",
+            label="Countdown helper",
+            description="wait_time flexible countdown",
+            active=False,
+            apply=_ok_result,
+            remove=_ok_result,
+        ),
+        Policy(
+            id="tweak:claude-skip",
+            label="claude skip-permissions",
+            description="alias claude skip permissions",
+            active=False,
+            apply=_ok_result,
+            remove=_ok_result,
+        ),
+    ]
+    app = _app(policies=_policy_inputs(policies), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert "Required tool(s): watch" in screen.detail_text
+        assert "watch-powered" in screen.detail_text
+        await pilot.press("down")
+        assert "1d10m15s" in screen.detail_text
+        assert "--seconds" in screen.detail_text
+        await pilot.press("down")
+        assert "dangerously-skip-permissions" in screen.detail_text
+
+
+async def test_policy_missing_required_tool_blocks_enable() -> None:
+    calls: list[str] = []
+    policy = Policy(
+        id="tweak:docker",
+        label="Docker shortcuts",
+        description="docker helpers",
+        active=False,
+        apply=lambda: (calls.append("apply"), _ok_result())[1],
+        remove=_ok_result,
+        requires=("watch",),
+        missing_requires=("watch",),
+    )
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert "Missing required tool(s): watch" in screen.detail_text
+        await pilot.press("space")
+        assert calls == []
+        assert screen.active_state["tweak:docker"] is False
+        assert "Install required tool(s) first: watch" in screen.status.text
 
 
 async def test_policy_toggle_disables_active_policy() -> None:

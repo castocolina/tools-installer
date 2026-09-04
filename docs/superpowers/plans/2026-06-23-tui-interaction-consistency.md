@@ -947,6 +947,152 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
+### Task 7: Numbered nav bar — circled keys + divider rule
+
+Make the `1`–`5` mapping visible and give the top strip a real nav-bar feel: prefix each view in
+the `WayfindingHeader` with its circled key glyph (❶–❺), widen the spacing, keep the active view
+accent-bold, and add a horizontal `Rule` divider between the header and the mode badge so the nav
+is clearly separated from the view content. (User-approved layout, 2026-06-26.)
+
+**Files:**
+- Modify: `installer/ui_common.py` (`WayfindingHeader.render_markup`; add `_view_key_glyph`; insert
+  a `Rule` in `AppScreen.compose`; add `AppScreen.DEFAULT_CSS` to tighten the rule)
+- Test: `tests/test_ui_common.py` (header numbering + chrome guarantee includes the `Rule`)
+
+**Interfaces:**
+- Consumes: `VIEW_LABELS`, `VIEW_MODES`, `ModeBadge`, `FooterBar` (existing chrome).
+- Produces: `WayfindingHeader.render_markup` returns each view as `<circled-key> <label>`, the active
+  one accent-bold; `AppScreen.compose` yields `WayfindingHeader → Rule → ModeBadge → body → status →
+  FooterBar`.
+
+- [ ] **Step 1: Write the failing tests**
+
+In `tests/test_ui_common.py`, update `test_wayfinding_header_highlights_active_view` (active is
+`doctor`, the 2nd view → ❷) and add a numbering test:
+
+```python
+async def test_wayfinding_header_highlights_active_view() -> None:
+    """The header numbers every view (❶–❺) and marks the active one accent-bold."""
+    from installer.ui_common import WayfindingHeader
+
+    class _Host(App[None]):
+        def compose(self) -> ComposeResult:
+            yield WayfindingHeader(active="doctor")
+
+    app = _Host()
+    async with app.run_test(size=(100, 5)):
+        markup = app.query_one(WayfindingHeader).render_markup()
+        assert "[bold $accent]❷ Doctor[/]" in markup
+        assert "[bold $accent]❶ Catalog[/]" not in markup
+        assert "[dim]❶ Catalog[/]" in markup
+
+
+def test_wayfinding_header_numbers_each_view_in_order() -> None:
+    from installer.ui_common import VIEW_LABELS, WayfindingHeader
+
+    markup = WayfindingHeader(active="catalog").render_markup()
+    for glyph, (_key, label) in zip("❶❷❸❹❺", VIEW_LABELS, strict=True):
+        assert f"{glyph} {label}" in markup
+```
+
+Extend the chrome guarantee test to assert exactly one `Rule` (keep the existing ModeBadge /
+FooterBar / StatusLine assertions); add `Rule` to its imports:
+
+```python
+    from textual.widgets import Rule, Static
+    from installer.ui_common import AppScreen, FooterBar, ModeBadge, StatusLine, WayfindingHeader
+    ...
+        assert len(screen.query(WayfindingHeader)) == 1
+        assert len(screen.query(Rule)) == 1
+        assert len(screen.query(ModeBadge)) == 1
+        assert len(screen.query(StatusLine)) == 1
+        assert len(screen.query(FooterBar)) == 1
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_ui_common.py -k "wayfinding or yields_header" -v`
+Expected: FAIL — current `render_markup` has no glyphs; compose has no `Rule`.
+
+- [ ] **Step 3: Implement**
+
+In `installer/ui_common.py`, add the glyph helper near `VIEW_LABELS`:
+
+```python
+def _view_key_glyph(index: int) -> str:
+    """The circled-digit nav key for the view at `index` (❶=0 … ❿=9), matching the
+    1-based number key that navigates to it."""
+    return chr(0x2776 + index)
+```
+
+Rewrite `WayfindingHeader.render_markup` to number each view and widen the gap:
+
+```python
+    def render_markup(self) -> str:
+        # Each view shows its circled key so the 1–5 mapping is always on screen
+        # (recognition over recall). The active view is accent-bold; the rest dim.
+        parts = [
+            f"[bold {self._accent}]{_view_key_glyph(index)} {label}[/]"
+            if key == self._active
+            else f"[dim]{_view_key_glyph(index)} {label}[/]"
+            for index, (key, label) in enumerate(VIEW_LABELS)
+        ]
+        return "    ".join(parts)
+```
+
+Add `Rule` to the `textual.widgets` import in `ui_common.py`, give `AppScreen` a `DEFAULT_CSS` that
+pins the rule tight, and insert the `Rule` in `compose`:
+
+```python
+from textual.widgets import DataTable, Rule, Static
+```
+
+```python
+class AppScreen(Screen[None]):
+    """Base scaffold: WayfindingHeader + a divider Rule + ModeBadge + the subclass
+    body + StatusLine + FooterBar. The chrome is guaranteed so a screen can never
+    ship without nav."""
+
+    DEFAULT_CSS = "AppScreen > Rule { margin: 0; color: $accent; }"
+
+    ...
+
+    def compose(self) -> ComposeResult:
+        yield WayfindingHeader(active=self._view, accent=self._accent)
+        yield Rule()
+        yield ModeBadge(VIEW_MODES[self._view])
+        yield from self.compose_body()
+        yield self.status
+        yield FooterBar(self._view)
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest tests/test_ui_common.py -v`
+Expected: PASS. Also search for and update any other test asserting the old header text
+(`uv run pytest tests/ -k header -v`); the uninstall red-accent test still passes because the active
+entry remains `[bold red]…`.
+
+- [ ] **Step 5: Full gate and commit**
+
+```bash
+make validate && make test
+git add installer/ui_common.py tests/test_ui_common.py
+git commit -m "feat: number the nav bar with circled keys and a divider rule
+
+Each view shows its 1-5 key (❶–❺) so the mapping is always on screen; a Rule
+separates the nav from the view content. Active view stays accent-bold.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+```
+
+> **Visual confirmation required:** because the rule color/margin and inter-view spacing cannot be
+> judged from headless tests, after this task render a real screenshot (Textual `save_screenshot`)
+> of one screen and confirm the look before considering it done; tune the `Rule` color and the join
+> spacing if needed.
+
+---
+
 ## Self-Review
 
 **Spec coverage:**

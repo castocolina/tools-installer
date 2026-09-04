@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 
 from installer.apps import APP_KINDS, cli_spec
 from installer.download import DOWNLOAD_KINDS
+from installer.enums import UninstallState
 from installer.executors import ExecutorError
 from installer.locations import applications_dir, opt_dir
 from installer.model import Method, Tool
@@ -87,20 +88,34 @@ def plan_uninstall(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
     return found
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class ToolRow:
     """A tool annotated with its removability on this machine + platform.
 
-    States: "removable" (userspace artifacts on disk → selectable, has paths),
-    "managed" (installed but no userspace artifacts → inert, manager hint),
-    "absent" (resolvable here but not installed → inert), "unavailable" (no
-    method applies to this platform → inert)."""
+    States: removable (userspace artifacts on disk -> selectable, has paths),
+    managed (installed but no userspace artifacts -> inert, manager hint),
+    absent (resolvable here but not installed -> inert), unavailable (no method
+    applies to this platform -> inert)."""
 
     tool: Tool
-    state: str
+    state: UninstallState
     paths: list[Path]
     hint: str
     selectable: bool
+
+    def __init__(
+        self,
+        tool: Tool,
+        state: UninstallState | str,
+        paths: list[Path],
+        hint: str,
+        selectable: bool,
+    ) -> None:
+        object.__setattr__(self, "tool", tool)
+        object.__setattr__(self, "state", UninstallState(state))
+        object.__setattr__(self, "paths", paths)
+        object.__setattr__(self, "hint", hint)
+        object.__setattr__(self, "selectable", selectable)
 
 
 def _manager_name(method: Method, param: str, fallback: str) -> str:
@@ -166,14 +181,26 @@ def classify_tools(
         paths = plan_uninstall([tool], default_bin_dir)
         if paths:
             rows.append(
-                ToolRow(tool, "removable", paths, "installed in userspace — removable here", True)
+                ToolRow(
+                    tool,
+                    UninstallState.REMOVABLE,
+                    paths,
+                    "installed in userspace — removable here",
+                    True,
+                )
             )
         elif installed.get(tool.id, False):
-            rows.append(ToolRow(tool, "managed", [], _managed_hint(tool, which), False))
+            rows.append(
+                ToolRow(tool, UninstallState.MANAGED, [], _managed_hint(tool, which), False)
+            )
         elif resolve_methods(tool, platform):
-            rows.append(ToolRow(tool, "absent", [], "not installed", False))
+            rows.append(ToolRow(tool, UninstallState.ABSENT, [], "not installed", False))
         else:
-            rows.append(ToolRow(tool, "unavailable", [], f"not available on {platform.os}", False))
+            rows.append(
+                ToolRow(
+                    tool, UninstallState.UNAVAILABLE, [], f"not available on {platform.os}", False
+                )
+            )
     if reverse_deps:
         rows = [
             replace(

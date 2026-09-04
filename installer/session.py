@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
+from installer.enums import InstallStatus, Priority
 from installer.model import Tool
 from installer.platform import Platform
 from installer.run import Runner, run_command
@@ -15,7 +16,7 @@ from installer.versions import TagResolver, resolve_github_tag
 MismatchChoice = Literal["retry", "skip", "fallback"]
 OnMismatch = Callable[[str], MismatchChoice]
 
-_PRIORITY_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+_PRIORITY_RANK = {Priority.P0: 0, Priority.P1: 1, Priority.P2: 2, Priority.P3: 3}
 
 
 class Install(Protocol):
@@ -64,7 +65,7 @@ def run_installs(
     outcomes: list[InstallOutcome] = []
     for tool in tools:
         outcome = install(tool, platform, runner, resolve_tag)
-        if outcome.status == "checksum-mismatch" and on_mismatch is not None:
+        if outcome.status == InstallStatus.CHECKSUM_MISMATCH and on_mismatch is not None:
             choice = on_mismatch(tool.id)
             if choice == "retry":
                 outcome = install(tool, platform, runner, resolve_tag)
@@ -81,19 +82,19 @@ def summarize(outcomes: list[InstallOutcome]) -> Summary:
     is impossible under pyright and would surface as a KeyError if one ever
     slipped through, rather than being silently dropped.
     """
-    buckets: dict[str, list[str]] = {
-        "installed": [],
-        "already-installed": [],
-        "failed": [],
-        "no-method": [],
-        "checksum-mismatch": [],
+    buckets: dict[InstallStatus, list[str]] = {
+        InstallStatus.INSTALLED: [],
+        InstallStatus.ALREADY_INSTALLED: [],
+        InstallStatus.FAILED: [],
+        InstallStatus.NO_METHOD: [],
+        InstallStatus.CHECKSUM_MISMATCH: [],
     }
     for outcome in outcomes:
         buckets[outcome.status].append(outcome.tool_id)
     return Summary(
-        installed=tuple(buckets["installed"]),
-        already=tuple(buckets["already-installed"]),
-        failed=tuple(buckets["failed"]),
-        no_method=tuple(buckets["no-method"]),
-        mismatched=tuple(buckets["checksum-mismatch"]),
+        installed=tuple(buckets[InstallStatus.INSTALLED]),
+        already=tuple(buckets[InstallStatus.ALREADY_INSTALLED]),
+        failed=tuple(buckets[InstallStatus.FAILED]),
+        no_method=tuple(buckets[InstallStatus.NO_METHOD]),
+        mismatched=tuple(buckets[InstallStatus.CHECKSUM_MISMATCH]),
     )

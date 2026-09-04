@@ -26,6 +26,7 @@ from textual.widgets import DataTable, Label, ListItem, ListView, Static
 from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
+from installer.enums import UninstallState
 from installer.guidance import Guidance, doctor_guidance, guard_guidance
 from installer.model import Tool
 from installer.policy import Policy, PolicyResult
@@ -35,6 +36,7 @@ from installer.ui_common import (
     VIEW_ORDER,
     VIEWS,
     AppScreen,
+    WayfindingHeader,
     highlighted_key,
     mark,
     multiline_summary,
@@ -186,11 +188,11 @@ class _UninstallEntry:
 
 # Section titles per state, in display order. The "environment" section holds the
 # ban/PATH pseudo-rows.
-_STATE_TITLES: tuple[tuple[str, str], ...] = (
-    ("removable", "removable here"),
-    ("managed", "managed elsewhere"),
-    ("absent", "not installed"),
-    ("unavailable", "not available"),
+_STATE_TITLES: tuple[tuple[UninstallState, str], ...] = (
+    (UninstallState.REMOVABLE, "removable here"),
+    (UninstallState.MANAGED, "managed elsewhere"),
+    (UninstallState.ABSENT, "not installed"),
+    (UninstallState.UNAVAILABLE, "not available"),
 )
 _BAN_KEY = "#ban"
 _BLOCK_KEY = "#path-block"
@@ -232,21 +234,21 @@ class UninstallScreen(AppScreen):
         return entries
 
     def _tool_entry(self, row: ToolRow) -> _UninstallEntry:
-        selectable = row.state == "removable"
+        selectable = row.state == UninstallState.REMOVABLE
         style = "" if selectable else "dim"
         installed_via = {
-            "removable": "userspace",
-            "managed": "package manager",
-            "absent": "—",
-            "unavailable": "—",
+            UninstallState.REMOVABLE: "userspace",
+            UninstallState.MANAGED: "package manager",
+            UninstallState.ABSENT: "—",
+            UninstallState.UNAVAILABLE: "—",
         }[row.state]
         removes = (
             f"{len(row.paths)} artifact(s)"
             if selectable
             else {
-                "managed": "nothing (managed elsewhere)",
-                "absent": "nothing (not installed)",
-                "unavailable": "nothing (unavailable)",
+                UninstallState.MANAGED: "nothing (managed elsewhere)",
+                UninstallState.ABSENT: "nothing (not installed)",
+                UninstallState.UNAVAILABLE: "nothing (unavailable)",
             }[row.state]
         )
         cells = [
@@ -321,7 +323,7 @@ class UninstallScreen(AppScreen):
         )
 
     def _groups(self, _view: str) -> list[Section[_UninstallEntry]]:
-        by_state: dict[str, list[_UninstallEntry]] = {}
+        by_state: dict[UninstallState, list[_UninstallEntry]] = {}
         for row, entry in zip(self._rows, self._entries, strict=False):
             by_state.setdefault(row.state, []).append(entry)
         sections: list[Section[_UninstallEntry]] = [
@@ -445,6 +447,7 @@ class PoliciesScreen(AppScreen):
     ]
     DEFAULT_CSS = """
     PoliciesScreen DataTable { height: 1fr; }
+    PoliciesScreen #policy-detail { height: 5; padding: 0 1; background: $surface; }
     """
 
     def __init__(self, inputs: PolicyInputs) -> None:
@@ -454,24 +457,29 @@ class PoliciesScreen(AppScreen):
             policy.id: policy.active for policy in inputs.policies
         }
         self.error: str | None = None
+        self.detail_text = ""
 
     def compose_body(self) -> ComposeResult:
         yield DataTable()
+        yield Static("", id="policy-detail")
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable[Any])
         table.cursor_type = "row"
         table.add_column("State", key="state")
         table.add_column("Policy", key="policy")
+        table.add_column("Requires", key="requires")
         table.add_column("Effect", key="effect")
         for policy in self._policies:
             table.add_row(
                 self._state_cell(self.active_state[policy.id]),
                 Text(policy.label, style="bold yellow"),
+                self._requires_cell(policy),
                 Text(f"shell config: {policy.description}", style="dim"),
                 key=policy.id,
             )
         table.focus()
+        self._set_detail(self._policies[0] if self._policies else None)
 
     def _state_cell(self, active: bool) -> Text:
         # A ●/○ glyph carries the state independent of color: the lone row is
@@ -479,16 +487,80 @@ class PoliciesScreen(AppScreen):
         label = "● [on]" if active else "○ [off]"
         return Text(label, style="green" if active else "dim")
 
+    def _requires_cell(self, policy: Policy) -> Text:
+        if policy.missing_requires:
+            return Text("missing: " + ", ".join(policy.missing_requires), style="bold yellow")
+        if policy.requires:
+            return Text(", ".join(policy.requires), style="dim")
+        return Text("none", style="dim")
+
     def _highlighted_policy(self) -> Policy | None:
         # highlighted_key is None on an empty table, matching no policy id.
         policy_id = highlighted_key(self.query_one(DataTable[Any]))
         return next((policy for policy in self._policies if policy.id == policy_id), None)
+
+    def _policy_detail(self, policy: Policy) -> str:
+        details = {
+            "ban": (
+                "Blocks bare pip, pip3, npm, and npx so installs route through uv/pnpm.",
+                "Writes PATH shims plus interactive aliases, then asks for a shell reload.",
+                "Use when humans or agents keep reaching for unmanaged package installers.",
+            ),
+            "tweak:docker": (
+                "Adds docker-ps, a watch-powered live table of names, status, and ports.",
+                "Adds docker-stats and docker-memory for quick memory inspection.",
+                "Install the catalog's watch tool first when your platform does not ship it.",
+            ),
+            "tweak:countdown": (
+                "Adds wait_time for seconds, 1d10m15s, 23h 49m, 10am, tomorrow 10am,"
+                " and compact dates.",
+                "Use wait_time --seconds to preview the parsed delay without sleeping.",
+                "Requires uv at runtime so the Python helper runs through the managed toolchain.",
+            ),
+            "tweak:claude-skip": (
+                "Aliases claude to claude --dangerously-skip-permissions.",
+                "Useful only in trusted, disposable workspaces where confirmation prompts are"
+                " intentional noise.",
+                "Disable it when you need normal Claude Code permission prompts back.",
+            ),
+            "tweak:apt-upgrade": (
+                "Adds apt-upgrade for upgrading only packages that already have updates.",
+                "Keeps the command narrower than a broad apt upgrade flow.",
+                "Offered on Linux only; it is harmless until run on an apt-based distro.",
+            ),
+        }
+        lines = [f"{policy.label} — {policy.description}"]
+        if policy.missing_requires:
+            lines.append(
+                "Missing required tool(s): "
+                f"{', '.join(policy.missing_requires)}. Install from Catalog before enabling."
+            )
+        elif policy.requires:
+            lines.append(f"Required tool(s): {', '.join(policy.requires)}.")
+        lines.extend(details.get(policy.id, ("Space toggles this reversible shell policy.",)))
+        return "\n".join(lines)
+
+    def _set_detail(self, policy: Policy | None) -> None:
+        self.detail_text = "" if policy is None else self._policy_detail(policy)
+        self.query_one("#policy-detail", Static).update(Text(self.detail_text))
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        policy = next((item for item in self._policies if item.id == event.row_key.value), None)
+        self._set_detail(policy)
 
     def action_toggle_policy(self) -> None:
         policy = self._highlighted_policy()
         if policy is None:
             return
         active = self.active_state[policy.id]
+        if not active and policy.missing_requires:
+            self.status.set(
+                "Install required tool(s) first: "
+                f"{', '.join(policy.missing_requires)}. Open Catalog, install them, then retry.",
+                "warn",
+            )
+            self._set_detail(policy)
+            return
         result, self.error = run_live(policy.remove if active else policy.apply)
         if result is None:
             self.status.set(
@@ -499,6 +571,7 @@ class PoliciesScreen(AppScreen):
         new_active = not active
         self.active_state[policy.id] = new_active
         self.query_one(DataTable[Any]).update_cell(policy.id, "state", self._state_cell(new_active))
+        self._set_detail(policy)
         verb = "enabled" if new_active else "disabled"
         self.status.set(self._summary(policy, verb, result), "ok")
 
@@ -680,6 +753,11 @@ class UnifiedApp(App[list[str] | None]):
         if not self._navigable():
             return
         await self.show_view(name)
+
+    async def on_wayfinding_header_navigate(self, event: WayfindingHeader.Navigate) -> None:
+        event.stop()
+        if self._navigable():
+            await self.show_view(event.view)
 
     async def action_back(self) -> None:
         # One-deep stack: from a pushed view, esc goes home to the catalog; on the

@@ -6,6 +6,7 @@ from typing import Literal
 from installer import apps, download, executors
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
+from installer.enums import InstallStatus
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.resolve import resolve_methods
@@ -13,17 +14,31 @@ from installer.run import CommandError, Runner, run_command
 from installer.status import is_installed
 from installer.versions import TagResolver, VersionError, resolve_github_tag
 
-Status = Literal["already-installed", "installed", "no-method", "failed", "checksum-mismatch"]
+Status = InstallStatus
 ChecksumPolicy = Literal["fail", "continue"]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class InstallOutcome:
     tool_id: str
     status: Status
     method_kind: str | None = None
     errors: tuple[Exception, ...] = ()
     verified: bool = False
+
+    def __init__(
+        self,
+        tool_id: str,
+        status: Status | str,
+        method_kind: str | None = None,
+        errors: tuple[Exception, ...] = (),
+        verified: bool = False,
+    ) -> None:
+        object.__setattr__(self, "tool_id", tool_id)
+        object.__setattr__(self, "status", InstallStatus(status))
+        object.__setattr__(self, "method_kind", method_kind)
+        object.__setattr__(self, "errors", errors)
+        object.__setattr__(self, "verified", verified)
 
 
 def _perform(method: Method, ctx: ExecContext) -> bool:
@@ -58,24 +73,26 @@ def install_tool(
     choice.
     """
     if is_installed(tool):
-        return InstallOutcome(tool.id, "already-installed")
+        return InstallOutcome(tool.id, InstallStatus.ALREADY_INSTALLED)
 
     methods = resolve_methods(tool, platform)
     if not methods:
-        return InstallOutcome(tool.id, "no-method")
+        return InstallOutcome(tool.id, InstallStatus.NO_METHOD)
 
     ctx = ExecContext(runner=runner, platform=platform, resolve_tag=resolve_tag)
     errors: list[Exception] = []
     for method in methods:
         try:
             verified = _perform(method, ctx)
-            return InstallOutcome(tool.id, "installed", method_kind=method.kind, verified=verified)
+            return InstallOutcome(
+                tool.id, InstallStatus.INSTALLED, method_kind=method.kind, verified=verified
+            )
         except ChecksumMismatch as exc:
             if checksum_policy == "fail":
                 return InstallOutcome(
-                    tool.id, "checksum-mismatch", method_kind=method.kind, errors=(exc,)
+                    tool.id, InstallStatus.CHECKSUM_MISMATCH, method_kind=method.kind, errors=(exc,)
                 )
             errors.append(exc)
         except (CommandError, executors.ExecutorError, VersionError) as exc:
             errors.append(exc)
-    return InstallOutcome(tool.id, "failed", errors=tuple(errors))
+    return InstallOutcome(tool.id, InstallStatus.FAILED, errors=tuple(errors))
