@@ -20,6 +20,7 @@ from installer.app import (
     UninstallDecision,
     clean_rc_duplicates,
     configure_path,
+    doctor_data,
     perform_uninstall,
     run_doctor,
     run_guard,
@@ -27,8 +28,7 @@ from installer.app import (
     run_wizard,
 )
 from installer.cli import parse_args
-from installer.doctor import DoctorReport, audit_path
-from installer.guards import guard_path_warning, guard_status
+from installer.locations import all_ban_rc_paths, ban_rc_paths, rc_paths_for_mode
 from installer.model import Tool, load_categories, load_tools
 from installer.platform import Platform, detect
 from installer.policy import ban_policy, tweak_policy
@@ -45,6 +45,7 @@ _REGISTRY = Path(__file__).parent / "installer" / "registry.toml"
 _DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
 _MYSHELLRC = Path.home() / ".myshellrc"
 _RC_PATHS = [Path.home() / ".zshrc", Path.home() / ".bashrc"]
+_SHELL = os.environ.get("SHELL", "")
 
 _STYLE = questionary.Style(
     [
@@ -102,22 +103,6 @@ def _ask_confirm(message: str) -> bool:
     return bool(answer)
 
 
-def _ban_rc_paths(link_mode: str) -> list[Path]:
-    # Where to WRITE aliases, following the PATH model: centralized/single keep
-    # one ~/.myshellrc; split writes into each rc file directly.
-    if link_mode == "split":
-        return _rc_paths_for_mode(link_mode)
-    return [_MYSHELLRC]
-
-
-def _all_ban_rc_paths() -> list[Path]:
-    # Where to REMOVE aliases from: every file an install could have written to,
-    # across all link modes. remove_ban_aliases is a no-op where the block is
-    # absent, so removal needs no link-mode guess (which would otherwise strand
-    # aliases when the user picks a different mode than they installed with).
-    return [_MYSHELLRC, *_RC_PATHS]
-
-
 def _ask_select(message: str, choices: list[tuple[str, str]]) -> str:
     answer = questionary.select(
         message,
@@ -140,21 +125,6 @@ def _ask_mismatch(tool_id: str) -> str:
     )
 
 
-def _doctor_data(
-    tools: list[Tool], platform: Platform
-) -> tuple[DoctorReport, dict[str, bool], str | None]:
-    path_value = os.environ.get("PATH", "")
-    bin_dirs = collect_bin_dirs(tools, platform, _DEFAULT_BIN_DIR)
-    report = audit_path(bin_dirs, path_value, Path.is_dir)
-    status = guard_status(_DEFAULT_BIN_DIR)
-    warning = (
-        guard_path_warning(_DEFAULT_BIN_DIR, path_value, shutil.which)
-        if any(status.values())
-        else None
-    )
-    return report, status, warning
-
-
 def _build_app(
     tools: list[Tool],
     platform: Platform,
@@ -163,8 +133,14 @@ def _build_app(
     link_mode: str = "centralized",
 ) -> UnifiedApp:
     installed = {tool.id: is_installed(tool) for tool in tools}
-    report, status, warning = _doctor_data(tools, platform)
-    rc_paths = _rc_paths_for_mode(link_mode)
+    report, status, warning = doctor_data(
+        tools,
+        platform=platform,
+        default_bin_dir=_DEFAULT_BIN_DIR,
+        path_value=os.environ.get("PATH", ""),
+        exists=Path.is_dir,
+    )
+    rc_paths = rc_paths_for_mode(link_mode, _SHELL)
     rows = classify_tools(
         tools,
         _DEFAULT_BIN_DIR,
@@ -194,8 +170,8 @@ def _build_app(
         policies=[
             ban_policy(
                 shim_dir=_DEFAULT_BIN_DIR,
-                apply_rc_paths=_ban_rc_paths(link_mode),
-                remove_rc_paths=_all_ban_rc_paths(),
+                apply_rc_paths=ban_rc_paths(link_mode, _SHELL),
+                remove_rc_paths=all_ban_rc_paths(),
                 path_value=os.environ.get("PATH", ""),
                 which=shutil.which,
             ),
@@ -257,17 +233,6 @@ def _resolve_link_mode(link_mode_option: str | None) -> str:
     )
 
 
-def _rc_paths_for_mode(link_mode: str) -> list[Path]:
-    if link_mode != "single":
-        return _RC_PATHS
-    shell = os.environ.get("SHELL", "")
-    if shell.endswith("zsh"):
-        return [Path.home() / ".zshrc"]
-    if shell.endswith("bash"):
-        return [Path.home() / ".bashrc"]
-    return _RC_PATHS  # undetectable shell -> wire both
-
-
 def _run_doctor(console: Console) -> int:
     tools = load_tools(_REGISTRY)
     platform = detect()
@@ -304,7 +269,7 @@ def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
         platform=platform,
         default_bin_dir=_DEFAULT_BIN_DIR,
         myshellrc_path=_MYSHELLRC,
-        rc_paths=_rc_paths_for_mode(link_mode),
+        rc_paths=rc_paths_for_mode(link_mode, _SHELL),
         link_mode=link_mode,
     )
     return 0
@@ -381,13 +346,11 @@ def main(argv: list[str]) -> int:
             return _run_guard(
                 console,
                 remove=False,
-                rc_paths=_ban_rc_paths(_resolve_link_mode(options.link_mode)),
+                rc_paths=ban_rc_paths(_resolve_link_mode(options.link_mode), _SHELL),
                 assume_yes=options.yes,
             )
         # Removal needs no link-mode prompt — it sweeps every rc file.
-        return _run_guard(
-            console, remove=True, rc_paths=_all_ban_rc_paths(), assume_yes=options.yes
-        )
+        return _run_guard(console, remove=True, rc_paths=all_ban_rc_paths(), assume_yes=options.yes)
     can_proceed = options.all or bool(options.categories) or sys.stdin.isatty()
     if not can_proceed:
         console.print(
@@ -418,7 +381,7 @@ def main(argv: list[str]) -> int:
         platform=platform,
         default_bin_dir=_DEFAULT_BIN_DIR,
         myshellrc_path=_MYSHELLRC,
-        rc_paths=_rc_paths_for_mode(link_mode),
+        rc_paths=rc_paths_for_mode(link_mode, _SHELL),
         link_mode=link_mode,
     )
     _verify_and_clean(console, tools, platform, assume_yes=options.yes)

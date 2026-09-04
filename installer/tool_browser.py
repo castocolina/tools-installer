@@ -14,12 +14,12 @@ from typing import Any, ClassVar, Generic, TypeVar
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.coordinate import Coordinate
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import DataTable, Static, Tab, Tabs
 
-from installer.ui_common import mark
+from installer.ui_common import highlighted_key, mark
 
 T = TypeVar("T")
 
@@ -175,11 +175,9 @@ class ToolBrowser(Widget, Generic[T]):
 
     # -- selection ---------------------------------------------------------
     def _highlighted_item(self) -> T | None:
-        table = self.query_one(DataTable[Any])
-        if table.row_count == 0:
-            return None
-        cell_key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0))
-        return self._by_id.get(cell_key.row_key.value)
+        # highlighted_key is None on an empty table; _by_id's str | None keys keep
+        # the lookup branchless (section rows key on "#title", never on None).
+        return self._by_id.get(highlighted_key(self.query_one(DataTable[Any])))
 
     def _first_selectable_row(self) -> int | None:
         table = self.query_one(DataTable[Any])
@@ -189,12 +187,18 @@ class ToolBrowser(Widget, Generic[T]):
         return None
 
     def _refresh_marks(self) -> None:
-        # Scheduled via call_after_refresh, so the table may have been cleared by
-        # a later _rebuild (single-tab activation, resize) before this fires under
-        # the real driver. Operate on the rows that ACTUALLY exist now — the flush
-        # only re-stamps the sel cell to bust the post-rebuild render cache, so a
-        # cleared table simply has nothing to flush (its own rebuild reschedules).
-        table = self.query_one(DataTable[Any])
+        # Scheduled via call_after_refresh, so by the time it fires under the real
+        # driver the DataTable may be gone or cleared. Gone: rapid navigation can
+        # pop this browser's screen (e.g. the Uninstall view) before the deferred
+        # callback runs, removing the DataTable child while the browser still
+        # reports is_mounted — query_one then raises NoMatches, which would wedge
+        # the app's message loop. Cleared: a later _rebuild (single-tab activation,
+        # resize) emptied it. Either way there is nothing to flush — the flush only
+        # re-stamps the sel cell to bust the post-rebuild render cache — so no-op.
+        try:
+            table = self.query_one(DataTable[Any])
+        except NoMatches:
+            return
         if not table.columns:
             return
         for row_key in list(table.rows):

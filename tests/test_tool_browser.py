@@ -338,6 +338,25 @@ async def test_refresh_marks_tolerates_a_cleared_table() -> None:
         refresh_marks()  # must not raise CellDoesNotExist
 
 
+async def test_refresh_marks_tolerates_a_removed_table() -> None:
+    """Regression: when the browser's screen is popped before the pending
+    call_after_refresh fires, the DataTable child is removed outright (not just
+    cleared) while the browser still reports is_mounted. The stale callback must
+    no-op, not raise NoMatches into the message loop — that unhandled exception
+    wedged all input on `make setup` (the '1-5 stop responding' bug). The host
+    app now installs its view screens so they survive pops, but the guard stays:
+    any embedder with uninstalled screens hits exactly this state."""
+    app = _Host(_adapter())
+    async with app.run_test():
+        browser = app.query_one(ToolBrowser[_Item])
+        await browser.query_one(DataTable[Any]).remove()
+        # getattr: invoke the internal flush dynamically (the production trigger is
+        # an internal call_after_refresh; this pins the same callback's robustness).
+        refresh_marks: object = getattr(browser, "_refresh_marks")  # noqa: B009
+        assert callable(refresh_marks)
+        refresh_marks()  # must not raise NoMatches
+
+
 async def test_select_all_marks_all_rows_via_flush() -> None:
     """select-all routes through the same mark flush; every present row is stamped
     [x] (exercises the flush's normal path: it re-stamps the rows that exist)."""

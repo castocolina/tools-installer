@@ -8,15 +8,11 @@ from installer.ui_common import (
     highlighted_key,
     mark,
     multiline_summary,
-    severity_style,
 )
 
 
 def test_severity_style_maps_each_level() -> None:
-    assert severity_style("ok") == "green"
-    assert severity_style("warn") == "yellow"
-    assert severity_style("error") == "red"
-    assert set(SEVERITY_STYLE) == {"ok", "warn", "error"}
+    assert SEVERITY_STYLE == {"ok": "green", "warn": "yellow", "error": "red"}
 
 
 def test_mark_renders_checkbox_glyph_and_color() -> None:
@@ -29,6 +25,17 @@ def test_mark_renders_checkbox_glyph_and_color() -> None:
 def test_multiline_summary_joins_one_line_per_part() -> None:
     assert multiline_summary(["a", "b", "c"]) == "a\nb\nc"
     assert multiline_summary([]) == ""
+
+
+def test_run_live_returns_result_or_oserror_message() -> None:
+    from installer.ui_common import run_live
+
+    assert run_live(lambda: 42) == (42, None)
+
+    def boom() -> int:
+        raise OSError("disk full")
+
+    assert run_live(boom) == (None, "disk full")
 
 
 class _TableHost(App[None]):
@@ -76,7 +83,7 @@ async def test_status_line_set_and_clear() -> None:
 
 
 async def test_wayfinding_header_highlights_active_view() -> None:
-    """The header numbers every view (❶–❺) and marks the active one accent-bold."""
+    """The header numbers every view ([1]–[5]) and marks the active one accent-bold."""
     from installer.ui_common import WayfindingHeader
 
     class _Host(App[None]):
@@ -86,17 +93,18 @@ async def test_wayfinding_header_highlights_active_view() -> None:
     app = _Host()
     async with app.run_test(size=(100, 5)):
         markup = app.query_one(WayfindingHeader).render_markup()
-        assert "[bold $accent]❷ Doctor[/]" in markup
-        assert "[bold $accent]❶ Catalog[/]" not in markup
-        assert "[dim]❶ Catalog[/]" in markup
+        assert "[bold $accent]\\[2] Doctor[/]" in markup
+        assert "[bold $accent]\\[1] Catalog[/]" not in markup
+        assert "[dim]\\[1] Catalog[/]" in markup
 
 
 def test_wayfinding_header_numbers_each_view_in_order() -> None:
-    from installer.ui_common import VIEW_LABELS, WayfindingHeader
+    from installer.ui_common import VIEWS, WayfindingHeader
 
     markup = WayfindingHeader(active="catalog").render_markup()
-    for glyph, (_key, label) in zip("❶❷❸❹❺", VIEW_LABELS, strict=True):
-        assert f"{glyph} {label}" in markup
+    for index, view in enumerate(VIEWS):
+        # The bracket is escaped in the content markup so it renders literally.
+        assert f"\\[{index + 1}] {view.label}" in markup
 
 
 async def test_app_screen_yields_header_status_and_footer() -> None:
@@ -128,10 +136,16 @@ async def test_app_screen_yields_header_status_and_footer() -> None:
         assert len(screen.query("#demo-body")) == 1
 
 
-def test_footer_actions_cover_every_view() -> None:
-    from installer.ui_common import FOOTER_ACTIONS, VIEW_LABELS
+def test_view_registry_is_complete_and_consistent() -> None:
+    """Every view row carries every chrome fact; VIEW_ORDER and the name lookup
+    derive from the same table, so they can never drift apart."""
+    from installer.ui_common import VIEW_BY_NAME, VIEW_ORDER, VIEWS
 
-    assert set(FOOTER_ACTIONS) == {key for key, _ in VIEW_LABELS}
+    assert VIEW_ORDER == ("catalog", "doctor", "fix", "uninstall", "policies")
+    assert set(VIEW_BY_NAME) == set(VIEW_ORDER)
+    for view in VIEWS:
+        assert view.label and view.palette and view.mode and view.glyph and view.hint
+        assert view.actions  # Doctor included: read-only is an explicit token
 
 
 def test_footer_bar_shows_actions_then_global_nav() -> None:
@@ -153,16 +167,10 @@ def test_footer_bar_doctor_reads_as_read_only() -> None:
     assert text.index("(read-only)") < text.index("│")
 
 
-def test_view_modes_cover_every_view() -> None:
-    from installer.ui_common import VIEW_LABELS, VIEW_MODES
-
-    assert set(VIEW_MODES) == {key for key, _ in VIEW_LABELS}
-
-
 def test_mode_badge_renders_label_glyph_and_hint() -> None:
-    from installer.ui_common import VIEW_MODES, ModeBadge
+    from installer.ui_common import VIEW_BY_NAME, ModeBadge
 
-    badge = ModeBadge(VIEW_MODES["policies"])
+    badge = ModeBadge(VIEW_BY_NAME["policies"])
     text = badge.render_text()
     assert "◆" in text.plain
     assert "[LIVE]" in text.plain
@@ -170,12 +178,12 @@ def test_mode_badge_renders_label_glyph_and_hint() -> None:
 
 
 def test_mode_badge_staged_and_readonly_strings() -> None:
-    from installer.ui_common import VIEW_MODES, ModeBadge
+    from installer.ui_common import VIEW_BY_NAME, ModeBadge
 
-    catalog_badge = ModeBadge(VIEW_MODES["catalog"])
+    catalog_badge = ModeBadge(VIEW_BY_NAME["catalog"])
     assert "[STAGED]" in catalog_badge.render_text().plain
     assert "◇" in catalog_badge.render_text().plain
-    uninstall = ModeBadge(VIEW_MODES["uninstall"]).render_text().plain
+    uninstall = ModeBadge(VIEW_BY_NAME["uninstall"]).render_text().plain
     assert "[STAGED · DESTRUCTIVE]" in uninstall
     assert "◇" in uninstall  # staged stays hollow; danger is carried by the words + red
-    assert "[READ-ONLY]" in ModeBadge(VIEW_MODES["doctor"]).render_text().plain
+    assert "[READ-ONLY]" in ModeBadge(VIEW_BY_NAME["doctor"]).render_text().plain

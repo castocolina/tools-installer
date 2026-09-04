@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
-from textual.coordinate import Coordinate
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
@@ -31,19 +30,16 @@ from installer.model import Tool
 from installer.policy import Policy, PolicyResult
 from installer.render import guidance_text
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
-from installer.ui_common import AppScreen, mark, multiline_summary
+from installer.ui_common import (
+    VIEW_ORDER,
+    VIEWS,
+    AppScreen,
+    highlighted_key,
+    mark,
+    multiline_summary,
+    run_live,
+)
 from installer.uninstall import ToolRow
-
-# Navigation order shared by every route, so the palette and the direct 1..N key
-# bindings expose exactly the same views in the same order.
-VIEW_ORDER: tuple[str, ...] = ("catalog", "doctor", "fix", "uninstall", "policies")
-_PALETTE_LABEL = {
-    "catalog": "Catalog — pick tools to install",
-    "doctor": "Doctor — audit your PATH",
-    "fix": "Fix — wire PATH into your shells",
-    "uninstall": "Uninstall — remove installed tools",
-    "policies": "Policies — pip/npm ban and env tweaks",
-}
 
 
 @dataclass(frozen=True)
@@ -140,16 +136,9 @@ class FixScreen(AppScreen):
     def action_apply(self) -> None:
         if self.applied:
             return
-        try:
-            self._fix()
-        except OSError as exc:
-            # Surface the failure in place (PRD: a failed core action is shown,
-            # never a silent crash); `applied` stays False so 'a' retries.
-            self.error = str(exc)
-            self._refresh_body()
-            return
-        self.error = None
-        self.applied = True
+        # `applied` stays False on failure so enter retries; the body shows the error.
+        _, self.error = run_live(self._fix)
+        self.applied = self.error is None
         self._refresh_body()
 
 
@@ -394,16 +383,13 @@ class UninstallScreen(AppScreen):
             remove_ban=self.remove_ban,
             remove_path_block=self.remove_path_block,
         )
-        try:
-            self._remove(decision)
-        except OSError as exc:
-            self.error = str(exc)
+        _, self.error = run_live(lambda: self._remove(decision))
+        if self.error is not None:
             self.status.set(
-                f"Uninstall failed: {exc}. Check permissions, then press enter.",
+                f"Uninstall failed: {self.error}. Check permissions, then press enter.",
                 "error",
             )
             return
-        self.error = None
         self.applied = True
         tool_count = sum(1 for key in ids if key not in (_BAN_KEY, _BLOCK_KEY))
         self.status.set(self._applied_summary(tool_count), "ok")
@@ -473,11 +459,8 @@ class PoliciesScreen(AppScreen):
         return Text(label, style="green" if active else "dim")
 
     def _highlighted_policy(self) -> Policy | None:
-        table = self.query_one(DataTable[Any])
-        if table.row_count == 0:
-            return None
-        cell_key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0))
-        policy_id = cell_key.row_key.value
+        # highlighted_key is None on an empty table, matching no policy id.
+        policy_id = highlighted_key(self.query_one(DataTable[Any]))
         return next((policy for policy in self._policies if policy.id == policy_id), None)
 
     def action_toggle_policy(self) -> None:
@@ -485,16 +468,13 @@ class PoliciesScreen(AppScreen):
         if policy is None:
             return
         active = self.active_state[policy.id]
-        try:
-            result = policy.remove() if active else policy.apply()
-        except OSError as exc:
-            self.error = str(exc)
+        result, self.error = run_live(policy.remove if active else policy.apply)
+        if result is None:
             self.status.set(
-                f"Policy change failed: {exc}. Check permissions, then press enter.",
+                f"Policy change failed: {self.error}. Check permissions, then press space.",
                 "error",
             )
             return
-        self.error = None
         new_active = not active
         self.active_state[policy.id] = new_active
         self.query_one(DataTable[Any]).update_cell(policy.id, "state", self._state_cell(new_active))
@@ -566,7 +546,7 @@ class NavScreen(ModalScreen[str | None]):
     """
 
     def compose(self) -> ComposeResult:
-        yield ListView(*[ListItem(Label(_PALETTE_LABEL[name]), id=name) for name in VIEW_ORDER])
+        yield ListView(*[ListItem(Label(view.palette), id=view.name) for view in VIEWS])
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         self.dismiss(event.item.id)
@@ -614,9 +594,8 @@ class UnifiedApp(App[list[str] | None]):
     ) -> None:
         super().__init__()
         self._catalog = CatalogScreen(tools, installed, blurbs)
-        # Non-catalog views, pushed by value. Doctor is real; uninstall and
-        # policies are live-toggle screens. push_screen/pop_screen stay fully
-        # typed under pyright strict (unlike install_screen/switch_screen).
+        # Non-catalog views, installed on mount and pushed by value. Doctor is
+        # real; uninstall and policies are live-toggle screens.
         self._views: dict[str, Screen[None]] = {
             "doctor": DoctorScreen(report, guard_status, guard_warning),
             "fix": FixScreen(fix_preview, fix),
@@ -626,7 +605,25 @@ class UnifiedApp(App[list[str] | None]):
         self._initial_view = initial_view
         self.current_view = "catalog"
 
+    # Textual annotates install_screen with a bare (unparameterized) Screen, which
+    # pyright-strict reports as partially unknown at the call site. Re-declare it
+    # precisely for type checking only — zero runtime cost, no suppression — the
+    # same pattern as the UninstallScreen.app narrowing above.
+    if TYPE_CHECKING:
+
+        def install_screen(self, screen: Screen[None], name: str) -> None: ...
+
     async def on_mount(self) -> None:
+        # Install every view screen: an installed screen is SUSPENDED when popped;
+        # an uninstalled one is REMOVED (App._replace_screen) — its whole widget
+        # tree destroyed. Re-pushing the same instance then re-composes onto stale
+        # state: pending callbacks lose their widgets, and screen.focused can point
+        # at a detached widget, collapsing the binding chain so the App's priority
+        # number keys stop matching — later keys in a fast burst were silently
+        # dropped (the "press 2 for Doctor but land elsewhere" bug). The catalog
+        # needs no install: it is the base screen and is never popped.
+        for name, screen in self._views.items():
+            self.install_screen(screen, name)
         if self._initial_view != "catalog":
             await self.show_view(self._initial_view)
 

@@ -63,3 +63,54 @@ def test_applications_dir_is_home_applications(
 ) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     assert applications_dir() == tmp_path / "Applications"
+
+
+def test_rc_paths_for_mode_centralized_and_split_wire_both(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.locations import rc_paths_for_mode
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    both = [tmp_path / ".zshrc", tmp_path / ".bashrc"]
+    assert rc_paths_for_mode("centralized", "/bin/zsh") == both
+    assert rc_paths_for_mode("split", "/bin/bash") == both
+
+
+def test_rc_paths_for_mode_single_follows_the_shell(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.locations import rc_paths_for_mode
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert rc_paths_for_mode("single", "/bin/zsh") == [tmp_path / ".zshrc"]
+    assert rc_paths_for_mode("single", "/usr/local/bin/bash") == [tmp_path / ".bashrc"]
+    # undetectable shell -> wire both rather than guess wrong
+    assert rc_paths_for_mode("single", "/bin/fish") == [
+        tmp_path / ".zshrc",
+        tmp_path / ".bashrc",
+    ]
+
+
+def test_ban_rc_paths_follow_the_path_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.locations import ban_rc_paths
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # centralized/single: aliases live in the one managed file
+    assert ban_rc_paths("centralized", "/bin/zsh") == [tmp_path / ".myshellrc"]
+    assert ban_rc_paths("single", "/bin/zsh") == [tmp_path / ".myshellrc"]
+    # split: no ~/.myshellrc exists, write into each rc directly
+    assert ban_rc_paths("split", "/bin/zsh") == [tmp_path / ".zshrc", tmp_path / ".bashrc"]
+
+
+def test_all_ban_rc_paths_cover_every_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from installer.locations import all_ban_rc_paths
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # removal sweeps every file any mode could have written to
+    assert all_ban_rc_paths() == [
+        tmp_path / ".myshellrc",
+        tmp_path / ".zshrc",
+        tmp_path / ".bashrc",
+    ]

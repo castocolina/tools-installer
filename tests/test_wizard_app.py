@@ -839,3 +839,55 @@ async def test_rapid_view_switching_keeps_stack_one_deep() -> None:
         await pilot.press("3")
         assert app.current_view == "fix"
         assert len(app.screen_stack) == 2
+
+
+async def test_rapid_switch_away_from_uninstall_does_not_wedge() -> None:
+    """Navigating away from Uninstall before its ToolBrowser's post-mount refresh
+    callback runs must not raise. The browser schedules _refresh_marks via
+    call_after_refresh; awaiting push_screen mounts the screen but does not drain
+    that callback, so a subsequent navigation can pop the Uninstall screen and
+    remove its DataTable while the refresh is still pending. If the callback then
+    dereferences the gone table it raises NoMatches into Textual's message loop
+    and input wedges — the reported 'keys stop responding' bug. pilot.press can't
+    expose this (it settles each key, draining the callback between presses), so
+    we drive the nav actions back-to-back without settling, as the driver does."""
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        # uninstall is the ToolBrowser view; each following action leaves the
+        # previous view before its deferred refresh has settled.
+        for name in ("doctor", "fix", "uninstall", "policies", "uninstall", "fix", "catalog"):
+            await app.run_action(f"show('{name}')")
+        await pilot.pause()
+        # Not wedged: navigation still works and no exception was stored.
+        await pilot.press("4")
+        assert app.current_view == "uninstall"
+
+
+async def test_unsettled_key_burst_lands_on_the_last_key_pressed() -> None:
+    """Keys delivered faster than a screen transition settles must not be dropped.
+
+    The view screens used to be pushed uninstalled, so App._replace_screen
+    REMOVED a popped screen's whole widget tree; re-pushing the same instance
+    left screen.focused pointing at a detached widget, collapsing the binding
+    chain to that lone widget — the App's priority number keys no longer matched
+    and later keys in a fast burst were silently dropped (the reported "press 2
+    for Doctor but land elsewhere" bug). pilot.press cannot expose this (it
+    settles every key), so post the Key events directly and only yield between
+    them, the way the real driver delivers a fast burst.
+    """
+    import asyncio
+
+    from textual import events
+
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        for key in "52452152":  # ends on 2: the user's "come back to Doctor" step
+            event = events.Key(key, key)
+            event.set_sender(app)
+            app.post_message(event)
+            await asyncio.sleep(0)  # yield so the burst overlaps the transitions
+        await pilot.pause()
+        assert app.current_view == "doctor"
+        # and the keys still work afterwards
+        await pilot.press("3")
+        assert app.current_view == "fix"

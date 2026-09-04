@@ -173,6 +173,27 @@ def configure_path(
     console.print(f"PATH configured in {myshellrc_path} (restart your shell or source it).")
 
 
+def doctor_data(
+    tools: list[Tool],
+    *,
+    platform: Platform,
+    default_bin_dir: Path,
+    path_value: str,
+    exists: Callable[[Path], bool],
+    which: Callable[[str], str | None] = shutil.which,
+) -> tuple[DoctorReport, dict[str, bool], str | None]:
+    """Assemble the doctor inputs shared by the CLI report and the TUI screen:
+    the PATH audit, the pip/npm-ban status, and the PATH-order warning — shown
+    only when a ban is actually installed (an irrelevant warning otherwise)."""
+    bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir, exists)
+    report = audit_path(bin_dirs, path_value, exists)
+    status = guard_status(default_bin_dir)
+    warning = (
+        guard_path_warning(default_bin_dir, path_value, which) if any(status.values()) else None
+    )
+    return report, status, warning
+
+
 def run_doctor(
     tools: list[Tool],
     console: Console,
@@ -183,19 +204,17 @@ def run_doctor(
     exists: Callable[[Path], bool],
     which: Callable[[str], str | None] = shutil.which,
 ) -> DoctorReport:
-    """Audit the PATH (read-only) and render the report.
-
-    Also reports pip/npm-ban status. The PATH-order warning is shown only when the
-    ban is actually installed (an irrelevant warning otherwise). Fixing the PATH
-    remains a separate explicit action.
-    """
-    bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir, exists)
-    report = audit_path(bin_dirs, path_value, exists)
-    render_doctor(report, console)
-    status = guard_status(default_bin_dir)
-    warning = (
-        guard_path_warning(default_bin_dir, path_value, which) if any(status.values()) else None
+    """Audit the PATH (read-only) and render the report. Fixing the PATH
+    remains a separate explicit action."""
+    report, status, warning = doctor_data(
+        tools,
+        platform=platform,
+        default_bin_dir=default_bin_dir,
+        path_value=path_value,
+        exists=exists,
+        which=which,
     )
+    render_doctor(report, console)
     render_guard_status(status, warning, console)
     return report
 

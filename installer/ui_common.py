@@ -6,8 +6,9 @@ catalog_tui.py adopts them when its browser is extracted into a shared widget
 """
 
 from abc import abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -15,11 +16,9 @@ from textual.coordinate import Coordinate
 from textual.screen import Screen
 from textual.widgets import DataTable, Rule, Static
 
+T = TypeVar("T")
+
 SEVERITY_STYLE: dict[str, str] = {"ok": "green", "warn": "yellow", "error": "red"}
-
-
-def severity_style(level: str) -> str:
-    return SEVERITY_STYLE[level]
 
 
 def mark(chosen: bool) -> Text:
@@ -31,6 +30,17 @@ def multiline_summary(parts: list[str]) -> str:
     """One line per outcome. A single joined line overflows terminal width and
     truncates trailing reload guidance, so outcomes are newline-separated."""
     return "\n".join(parts)
+
+
+def run_live(action: Callable[[], T]) -> tuple[T | None, str | None]:
+    """Run a live core mutation from a screen: (result, None) on success,
+    (None, message) on OSError. The single apply workflow shared by the fix,
+    uninstall, and policies screens — a failed core action is surfaced, never a
+    silent crash (PRD), and no screen writes its own try/except for it."""
+    try:
+        return action(), None
+    except OSError as exc:
+        return None, str(exc)
 
 
 def highlighted_key(table: DataTable[Any]) -> str | None:
@@ -54,78 +64,110 @@ class StatusLine(Static):
 
     def set(self, text: str, severity: str) -> None:
         self.text = text
-        self.update(Text(text, style=severity_style(severity)))
+        self.update(Text(text, style=SEVERITY_STYLE[severity]))
 
     def clear(self) -> None:
         self.text = ""
         self.update("")
 
 
-# The five views in navigation order with their short header labels. The Ctrl+P
-# palette is a separate concern: it keys off VIEW_ORDER and its own richer
-# descriptions (in wizard_app), so this tuple drives the WayfindingHeader only.
-VIEW_LABELS: tuple[tuple[str, str], ...] = (
-    ("catalog", "Catalog"),
-    ("doctor", "Doctor"),
-    ("fix", "Fix"),
-    ("uninstall", "Uninstall"),
-    ("policies", "Policies"),
-)
-
-
-def _view_key_glyph(index: int) -> str:
-    """The circled-digit nav key for the view at `index` (❶=0 … ❿=9), matching the
-    1-based number key that navigates to it."""
-    return chr(0x2776 + index)
-
-
 @dataclass(frozen=True)
-class ViewMode:
-    """The apply-semantics badge for a view: a bracketed label (the load-bearing
-    signal), a glyph whose fill is the colorblind-safe cue (hollow ◇ = staged,
-    filled ◆ = live), a concrete color, and a plain-language controls hint."""
+class View:
+    """Everything the chrome knows about one navigable view, in one row:
+    the stable name, the header label, the ctrl+p palette description, the
+    apply-semantics badge (mode label + glyph + style + hint), and the footer
+    action-zone hint. Every per-view UI fact derives from the VIEWS table below,
+    so adding a view is a one-row change — the header, palette, badge, footer,
+    and 1-N key bindings all follow.
 
+    Badge encoding: the bracketed mode label is the load-bearing signal; the
+    glyph fill is the colorblind-safe cue (hollow ◇ = staged: nothing changes
+    until you commit; filled ◆ = live: each action applies immediately;
+    ▸ = single-action apply; ‹ = read-only); the style is a concrete color."""
+
+    name: str
     label: str
+    palette: str
+    mode: str
     glyph: str
     style: str
     hint: str
+    actions: str
 
 
-# One mode per view. Hollow ◇ = staged (nothing changes until you commit);
-# filled ◆ = live (each action applies immediately). Fix is a single-action
-# apply (▸); Doctor is read-only (‹). Hints name the keys finalized for each view.
-VIEW_MODES: dict[str, ViewMode] = {
-    "catalog": ViewMode(
-        "STAGED", "◇", "cyan", "space marks a tool · enter installs your selection"
+# The single per-view registry, in navigation order (the 1-based position is the
+# number key that navigates to the view). Hints name the keys finalized per view;
+# Doctor's action zone is an explicit token, not an empty gap.
+VIEWS: tuple[View, ...] = (
+    View(
+        name="catalog",
+        label="Catalog",
+        palette="Catalog — pick tools to install",
+        mode="STAGED",
+        glyph="◇",
+        style="cyan",
+        hint="space marks a tool · enter installs your selection",
+        actions="space toggle · enter install · a all · i invert",
     ),
-    "doctor": ViewMode("READ-ONLY", "‹", "dim", "audit report · nothing here changes your system"),
-    "fix": ViewMode("APPLY", "▸", "yellow", "enter wires the managed PATH into your shells"),
-    "uninstall": ViewMode(
-        "STAGED · DESTRUCTIVE",
-        "◇",
-        "red",
-        "space marks · enter removes marked items (you'll confirm)",
+    View(
+        name="doctor",
+        label="Doctor",
+        palette="Doctor — audit your PATH",
+        mode="READ-ONLY",
+        glyph="‹",
+        style="dim",
+        hint="audit report · nothing here changes your system",
+        actions="(read-only)",
     ),
-    "policies": ViewMode(
-        "LIVE", "◆", "yellow", "space toggles a policy and applies it now · reversible"
+    View(
+        name="fix",
+        label="Fix",
+        palette="Fix — wire PATH into your shells",
+        mode="APPLY",
+        glyph="▸",
+        style="yellow",
+        hint="enter wires the managed PATH into your shells",
+        actions="enter apply",
     ),
-}
+    View(
+        name="uninstall",
+        label="Uninstall",
+        palette="Uninstall — remove installed tools",
+        mode="STAGED · DESTRUCTIVE",
+        glyph="◇",
+        style="red",
+        hint="space marks · enter removes marked items (you'll confirm)",
+        actions="space mark · enter remove · a all · i invert",
+    ),
+    View(
+        name="policies",
+        label="Policies",
+        palette="Policies — pip/npm ban and env tweaks",
+        mode="LIVE",
+        glyph="◆",
+        style="yellow",
+        hint="space toggles a policy and applies it now · reversible",
+        actions="space toggle",
+    ),
+)
+
+VIEW_ORDER: tuple[str, ...] = tuple(view.name for view in VIEWS)
+VIEW_BY_NAME: dict[str, View] = {view.name: view for view in VIEWS}
+
+
+def _view_key(index: int) -> str:
+    """The bracketed nav key for the view at `index` ([1] … [5]), matching the
+    1-based number key that navigates to it. Full-size digits stay legible where
+    the old circled glyphs (❶❷…) rendered too small in many terminal fonts. The
+    leading bracket is escaped so Textual content markup renders it literally
+    instead of parsing it as a tag."""
+    return f"\\[{index + 1}]"
 
 
 # The always-available navigation, shown dim on every view so the user learns one
 # rule: the dim cluster right of the separator is global nav; everything left is
 # what this screen does.
 GLOBAL_NAV: str = "1–5 views · ^p nav · esc back · q quit"
-
-# The action-zone hint per view (left of the separator). Doctor is read-only, so
-# its action zone is an explicit token, not an empty gap.
-FOOTER_ACTIONS: dict[str, str] = {
-    "catalog": "space toggle · enter install · a all · i invert",
-    "doctor": "(read-only)",
-    "fix": "enter apply",
-    "uninstall": "space mark · enter remove · a all · i invert",
-    "policies": "space toggle",
-}
 
 
 class FooterBar(Static):
@@ -141,7 +183,7 @@ class FooterBar(Static):
 
     def render_text(self) -> Text:
         text = Text()
-        text.append(FOOTER_ACTIONS[self._view])
+        text.append(VIEW_BY_NAME[self._view].actions)
         text.append("   │   ", style="dim")
         text.append(GLOBAL_NAV, style="dim")
         return text
@@ -164,13 +206,13 @@ class WayfindingHeader(Static):
     def render_markup(self) -> str:
         # Textual content markup (not Rich Text): $accent is a Textual theme variable
         # that Rich's own style parser rejects, so markup lets Textual resolve it at render time.
-        # Each view shows its circled key so the 1–5 mapping is always on screen
+        # Each view shows its bracketed key so the 1–5 mapping is always on screen
         # (recognition over recall). The active view is accent-bold; the rest dim.
         parts = [
-            f"[bold {self._accent}]{_view_key_glyph(index)} {label}[/]"
-            if key == self._active
-            else f"[dim]{_view_key_glyph(index)} {label}[/]"
-            for index, (key, label) in enumerate(VIEW_LABELS)
+            f"[bold {self._accent}]{_view_key(index)} {view.label}[/]"
+            if view.name == self._active
+            else f"[dim]{_view_key(index)} {view.label}[/]"
+            for index, view in enumerate(VIEWS)
         ]
         return "    ".join(parts)
 
@@ -180,22 +222,22 @@ class WayfindingHeader(Static):
 
 class ModeBadge(Static):
     """Docked under the breadcrumb: names the view's apply semantics, redundantly
-    encoded (bracketed label + glyph + color) so the cue survives a colorblind
-    reader and a flattened selection highlight."""
+    encoded (bracketed mode label + glyph + color) so the cue survives a
+    colorblind reader and a flattened selection highlight."""
 
     DEFAULT_CSS = "ModeBadge { height: 1; padding: 0 1; }"
 
-    def __init__(self, mode: ViewMode) -> None:
+    def __init__(self, view: View) -> None:
         super().__init__()
-        self._mode = mode
+        self._view = view
 
     def render_text(self) -> Text:
-        # Rich Text (not markup): the [LABEL] brackets are literal, and the colors
+        # Rich Text (not markup): the [MODE] brackets are literal, and the colors
         # are concrete, so no content-markup escaping or theme-var resolution is
         # needed. Public seam: tests assert on exactly what on_mount paints.
         text = Text()
-        text.append(f"{self._mode.glyph} [{self._mode.label}]", style=self._mode.style)
-        text.append(f"   {self._mode.hint}", style="dim")  # three spaces: badge token → hint gap
+        text.append(f"{self._view.glyph} [{self._view.mode}]", style=self._view.style)
+        text.append(f"   {self._view.hint}", style="dim")  # three spaces: badge token → hint gap
         return text
 
     def on_mount(self) -> None:
@@ -221,7 +263,7 @@ class AppScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield WayfindingHeader(active=self._view, accent=self._accent)
         yield Rule()
-        yield ModeBadge(VIEW_MODES[self._view])
+        yield ModeBadge(VIEW_BY_NAME[self._view])
         yield from self.compose_body()
         yield self.status
         yield FooterBar(self._view)

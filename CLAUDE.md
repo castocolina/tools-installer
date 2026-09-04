@@ -30,6 +30,7 @@ Python, managed with **uv**. See [PRD](docs/prds/ai-dev-tools-installer-v1.0-prd
 
 ## Detailed rules
 
+- [Architecture](.claude/architecture.md) — one view registry, one nav path, one apply workflow, wiring-only setup.py
 - [Python Tooling](.claude/python-tooling.md) — ruff, pyright, bandit, vulture, formatting
 - [Testing](.claude/testing.md) — pytest, coverage, what "done" means
 - [Git Workflow](.claude/git-workflow.md) — commits and the review cycle
