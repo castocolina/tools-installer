@@ -43,7 +43,26 @@
     "security_asvs_level": 1,
     "security_block_on": "high",
     "ui_review": true,
-    "use_worktrees": true
+    "use_worktrees": true,
+    "plan_review_convergence": true,
+    "cross_ai_execution": true,
+    "cross_ai_command": "/usr/local/bin/opencode run --model xai/grok-4.6",
+    "cross_ai_timeout": 3600
+  },
+  "review": {
+    "reviewer_instances": {
+      "opencode-plan-review": {
+        "cli": "opencode",
+        "model": "xai/grok-4.6"
+      },
+      "opencode-sol": {
+        "cli": "opencode",
+        "model": "openai/gpt-5.6-sol"
+      }
+    },
+    "default_reviewers": [
+      "opencode-plan-review"
+    ]
   },
   "ship": {
     "pr_body_sections": []
@@ -60,12 +79,32 @@
     "source_grounding_authority": "grep"
   },
   "mode": "yolo",
-  "granularity": "coarse",
+  "granularity": "fine",
   "intel": {
     "enabled": true
   },
   "graphify": {
     "enabled": true,
     "auto_update": true
+  },
+  "models": {
+    "planning": "opus",
+    "discuss": "sonnet",
+    "research": "sonnet",
+    "verification": "opus",
+    "execution": "haiku"
+  },
+  "model_overrides": {
+    "gsd-planner": "opus",
+    "gsd-code-reviewer": "opus"
+  },
+  "effort": {
+    "default": "medium",
+    "agent_overrides": {
+      "gsd-planner": "high",
+      "gsd-plan-checker": "high",
+      "gsd-code-reviewer": "high",
+      "gsd-ui-auditor": "high"
+    }
   }
 }

@@ -28,3 +28,8 @@ coverage.xml
 
 # Agent-driven E2E screenshots (Phase 3 uninstall verification)
 .e2e-artifacts/
+
+# Graphs
+.codegraph/
+.planning/graphs/
+graphify-out/
