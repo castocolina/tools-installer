@@ -74,13 +74,13 @@ async def test_policies_e2e_toggle_round_trip_against_sandbox(
     app, bin_dir, rc = _build_real_app(Path.home())
     async with app.run_test(size=(100, 30)) as pilot:
         _snapshot(app, "01-open.svg")
-        await pilot.press("enter")  # enable: writes shims + aliases live
+        await pilot.press("space")  # enable: writes shims + aliases live
         assert isinstance(app.screen, PoliciesScreen)
         assert app.screen.active_state["ban"] is True
         assert all(guard_status(bin_dir).values())
         assert "alias" in rc.read_text()
         _snapshot(app, "02-enabled.svg")
-        await pilot.press("enter")  # disable: clears both layers
+        await pilot.press("space")  # disable: clears both layers
         assert isinstance(app.screen, PoliciesScreen)
         assert app.screen.active_state["ban"] is False
         _snapshot(app, "03-disabled.svg")
@@ -120,12 +120,12 @@ async def test_policies_screen_toggles_a_tweak_bundle_live(
         await pilot.pause()
         assert isinstance(app.screen, PoliciesScreen)
         assert app.screen.active_state["tweak:countdown"] is False
-        await pilot.press("enter")
+        await pilot.press("space")
         await pilot.pause()
         assert isinstance(app.screen, PoliciesScreen)
         assert app.screen.active_state["tweak:countdown"] is True
         assert "wait_time()" in rc.read_text()
-        await pilot.press("enter")
+        await pilot.press("space")
         await pilot.pause()
         assert isinstance(app.screen, PoliciesScreen)
         assert app.screen.active_state["tweak:countdown"] is False

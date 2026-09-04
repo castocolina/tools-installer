@@ -14,7 +14,7 @@ is always `[catalog]` or `[catalog, <one other view>]`.
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -99,7 +99,8 @@ class FixScreen(AppScreen):
     """Preview the PATH wiring + reload guidance; Apply runs it live, in place."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("a", "apply", "apply", show=True),
+        Binding("enter", "apply", "apply", show=True),
+        Binding("a", "apply", "apply", show=False),  # legacy alias, kept one release
     ]
     DEFAULT_CSS = """
     FixScreen #fix-body { padding: 1 4; }
@@ -129,9 +130,9 @@ class FixScreen(AppScreen):
         elif self.error is not None:
             text.append("Fix failed.", style="red")
             text.append(f"\n  {self.error}")
-            text.append("\n  → Check the target is writable, then press 'a' to retry.")
+            text.append("\n  → Check the target is writable, then press enter to retry.")
         else:
-            text.append("Press 'a' to wire the managed PATH into your shells.", style="yellow")
+            text.append("Press enter to wire the managed PATH into your shells.", style="yellow")
             text.append(f"\n\n{self._preview}")
             text.append("\n\nAfter applying, restart your shell or `source ~/.myshellrc`.")
         body.update(text)
@@ -189,6 +190,15 @@ class UninstallScreen(AppScreen):
     """Full catalog-parity uninstall browser. Every tool is listed with its
     removability state; only removable tools (and the env rows) toggle. Enter
     removes exactly the selected artifacts + env levers, applied live."""
+
+    # Narrow .app from App[Unknown] (MessagePump default) to the concrete host
+    # app so push_screen() is typed without an Unknown generic param.
+    # UnifiedApp is defined later in this module; the string forward reference is
+    # resolved by pyright (which analyses all module-level names together).
+    if TYPE_CHECKING:
+
+        @property
+        def app(self) -> "UnifiedApp": ...
 
     def __init__(self, inputs: UninstallInputs) -> None:
         super().__init__(view="uninstall", accent="red")
@@ -349,8 +359,35 @@ class UninstallScreen(AppScreen):
         if not event.ids:
             self.status.set("Select at least one item to remove.", "warn")
             return
+        self.app.push_screen(
+            ConfirmUninstall(self._accept_summary(event.ids)),
+            self._on_confirm(event.ids),
+        )
+
+    def _accept_summary(self, ids: list[str]) -> str:
+        tool_count = sum(1 for key in ids if key not in (_BAN_KEY, _BLOCK_KEY))
+        parts: list[str] = []
+        if tool_count:
+            parts.append(f"{tool_count} tool(s)")
+        if _BAN_KEY in ids:
+            parts.append("the pip/npm ban")
+        if _BLOCK_KEY in ids:
+            parts.append("the PATH wiring")
+        return ", ".join(parts)
+
+    def _on_confirm(self, ids: list[str]) -> Callable[[bool | None], None]:
+        # Callable[[bool | None], None] is the correct pyright-strict type:
+        # ScreenResultCallbackType (textual/screen.py:83) passes Optional[ScreenResultType]
+        # to the callback, i.e. bool | None for ModalScreen[bool].
+        def run(confirmed: bool | None) -> None:
+            if confirmed:
+                self._apply_removal(ids)
+
+        return run
+
+    def _apply_removal(self, ids: list[str]) -> None:
         paths: list[Path] = []
-        for key in event.ids:
+        for key in ids:
             paths.extend(self._by_key[key].paths)
         decision = UninstallDecision(
             paths=tuple(paths),
@@ -368,7 +405,7 @@ class UninstallScreen(AppScreen):
             return
         self.error = None
         self.applied = True
-        tool_count = sum(1 for key in event.ids if key not in (_BAN_KEY, _BLOCK_KEY))
+        tool_count = sum(1 for key in ids if key not in (_BAN_KEY, _BLOCK_KEY))
         self.status.set(self._applied_summary(tool_count), "ok")
 
     def _applied_summary(self, tool_count: int) -> str:
@@ -390,13 +427,14 @@ class UninstallScreen(AppScreen):
 class PoliciesScreen(AppScreen):
     """Toggle environment policies (the pip/npm ban) on/off, applied live.
 
-    Unlike the catalog/uninstall views there is no select-then-apply step: each
-    toggle is an immediate, idempotent mutation, so only `enter` is bound (not
-    `space`, whose 'harmless select' meaning elsewhere would be a footgun here).
+    Each toggle is an immediate, idempotent, reversible mutation — there is no
+    select-then-commit step. `space` toggles the highlighted policy (matching the
+    "act on this row" meaning of `space` in the catalog/uninstall browsers);
+    `enter` is inert here because there is no staged batch to commit.
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("enter", "toggle_policy", "toggle policy", show=True, priority=True),
+        Binding("space", "toggle_policy", "toggle policy", show=True, priority=True),
     ]
     DEFAULT_CSS = """
     PoliciesScreen DataTable { height: 1fr; }
@@ -473,6 +511,42 @@ class PoliciesScreen(AppScreen):
         if result.warning:
             parts.append(result.warning)
         return multiline_summary(parts)
+
+
+class ConfirmUninstall(ModalScreen[bool]):
+    """Confirm the one destructive, hard-to-reverse commit: deleting installed
+    artifacts. enter/y confirm; escape/n cancel. Reversible actions (policies)
+    deliberately get no modal — over-confirming trains click-through."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("enter", "confirm", "remove", show=True, priority=True),
+        Binding("y", "confirm", "remove", show=False),
+        Binding("escape", "cancel", "cancel", show=True),
+        Binding("n", "cancel", "cancel", show=False),
+    ]
+    DEFAULT_CSS = """
+    ConfirmUninstall { align: center middle; }
+    ConfirmUninstall > Static { width: 60; border: round red; padding: 1 2; }
+    """
+
+    def __init__(self, summary: str) -> None:
+        super().__init__()
+        self.summary = summary  # public test seam
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            Text.from_markup(
+                f"[bold red]Remove {self.summary}?[/]\n\n"
+                "This deletes installed artifacts and is not undoable.\n"
+                "[dim]enter remove · esc cancel[/]"
+            )
+        )
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 class NavScreen(ModalScreen[str | None]):
@@ -552,9 +626,9 @@ class UnifiedApp(App[list[str] | None]):
         self._initial_view = initial_view
         self.current_view = "catalog"
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         if self._initial_view != "catalog":
-            self.show_view(self._initial_view)
+            await self.show_view(self._initial_view)
 
     @property
     def catalog(self) -> CatalogScreen:
@@ -566,17 +640,16 @@ class UnifiedApp(App[list[str] | None]):
         # Decided message rather than dismissing the only screen on the stack.
         return self._catalog
 
-    def show_view(self, name: str) -> None:
-        # Invariant: the stack is [catalog] or [catalog, <one other view>]. The
-        # catalog is the base screen, so navigating to it pops back to it;
-        # navigating to another view pops any current overlay first, then pushes
-        # the target placeholder. Push/pop keep the stack one deep at most.
+    async def show_view(self, name: str) -> None:
+        # Await each stack mutation so a transition fully settles before the next
+        # runs: this prevents a queued second nav from popping/pushing onto an
+        # in-flight stack and breaking the [catalog] / [catalog, <view>] invariant.
         if name == self.current_view:
             return
         if self.current_view != "catalog":
-            self.pop_screen()
+            await self.pop_screen()
         if name != "catalog":
-            self.push_screen(self._views[name])
+            await self.push_screen(self._views[name])
         self.current_view = name
 
     def _navigable(self) -> bool:
@@ -587,26 +660,31 @@ class UnifiedApp(App[list[str] | None]):
         # stack invariant.
         return self.screen is self._catalog or self.screen in self._views.values()
 
-    def action_show(self, name: str) -> None:
+    async def action_show(self, name: str) -> None:
         if not self._navigable():
             return
-        self.show_view(name)
+        await self.show_view(name)
 
     async def action_back(self) -> None:
         # One-deep stack: from a pushed view, esc goes home to the catalog; on the
         # catalog itself there is nowhere further back, so esc is inert. async to
         # match App.action_back's signature (pyright-strict rejects a sync override).
         if self._navigable() and self.current_view != "catalog":
-            self.show_view("catalog")
+            await self.show_view("catalog")
 
     def action_open_nav(self) -> None:
         if not self._navigable():
             return
         self.push_screen(NavScreen(), self._navigate)
 
-    def _navigate(self, name: str | None) -> None:
+    async def _navigate(self, name: str | None) -> None:
+        # Textual awaits async screen-result callbacks: textual/screen.py:83 defines
+        # ScreenResultCallbackType as a Union including Callable[[Optional[T]], Awaitable[None]],
+        # and textual/_callback.py's invoke does `if isawaitable(result): result = await result`.
+        # Using async here means the pilot awaits this callback fully before resuming, so
+        # palette tests asserting current_view immediately after enter do not need pilot.pause().
         if name is not None:
-            self.show_view(name)
+            await self.show_view(name)
 
     def on_catalog_screen_decided(self, message: CatalogScreen.Decided) -> None:
         self.exit(message.result)

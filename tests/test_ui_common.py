@@ -76,8 +76,7 @@ async def test_status_line_set_and_clear() -> None:
 
 
 async def test_wayfinding_header_highlights_active_view() -> None:
-    """The header lists every view and marks the active one so the user always
-    knows where they are (Nielsen #1)."""
+    """The header numbers every view (❶–❺) and marks the active one accent-bold."""
     from installer.ui_common import WayfindingHeader
 
     class _Host(App[None]):
@@ -86,22 +85,26 @@ async def test_wayfinding_header_highlights_active_view() -> None:
 
     app = _Host()
     async with app.run_test(size=(100, 5)):
-        header = app.query_one(WayfindingHeader)
-        markup = header.render_markup()  # exactly what on_mount renders
-        # every view is listed
-        assert "Catalog" in markup and "Doctor" in markup and "Policies" in markup
-        # the active view is accent-bold; the others are dim (the real marker)
-        assert "[bold $accent]Doctor[/]" in markup
-        assert "[bold $accent]Catalog[/]" not in markup
-        assert "[dim]Catalog[/]" in markup
+        markup = app.query_one(WayfindingHeader).render_markup()
+        assert "[bold $accent]❷ Doctor[/]" in markup
+        assert "[bold $accent]❶ Catalog[/]" not in markup
+        assert "[dim]❶ Catalog[/]" in markup
+
+
+def test_wayfinding_header_numbers_each_view_in_order() -> None:
+    from installer.ui_common import VIEW_LABELS, WayfindingHeader
+
+    markup = WayfindingHeader(active="catalog").render_markup()
+    for glyph, (_key, label) in zip("❶❷❸❹❺", VIEW_LABELS, strict=True):
+        assert f"{glyph} {label}" in markup
 
 
 async def test_app_screen_yields_header_status_and_footer() -> None:
     """A subclass implements compose_body only; the scaffold guarantees header
-    + status line + footer so chrome can never be omitted again."""
-    from textual.widgets import Footer, Static
+    + Rule divider + status line + footer so chrome can never be omitted again."""
+    from textual.widgets import Rule, Static
 
-    from installer.ui_common import AppScreen, StatusLine, WayfindingHeader
+    from installer.ui_common import AppScreen, FooterBar, ModeBadge, StatusLine, WayfindingHeader
 
     class _Demo(AppScreen):
         def __init__(self) -> None:
@@ -118,6 +121,61 @@ async def test_app_screen_yields_header_status_and_footer() -> None:
     async with app.run_test(size=(100, 20)):
         screen = app.screen
         assert len(screen.query(WayfindingHeader)) == 1
+        assert len(screen.query(Rule)) == 1
+        assert len(screen.query(ModeBadge)) == 1
         assert len(screen.query(StatusLine)) == 1
-        assert len(screen.query(Footer)) == 1
+        assert len(screen.query(FooterBar)) == 1
         assert len(screen.query("#demo-body")) == 1
+
+
+def test_footer_actions_cover_every_view() -> None:
+    from installer.ui_common import FOOTER_ACTIONS, VIEW_LABELS
+
+    assert set(FOOTER_ACTIONS) == {key for key, _ in VIEW_LABELS}
+
+
+def test_footer_bar_shows_actions_then_global_nav() -> None:
+    from installer.ui_common import FooterBar
+
+    text = FooterBar("catalog").render_text().plain
+    assert "space toggle" in text and "enter install" in text
+    assert "│" in text  # zone separator
+    assert "1–5 views" in text and "^p nav" in text and "q quit" in text
+    # the action zone is left of the separator; global nav is right of it
+    assert text.index("space toggle") < text.index("│") < text.index("1–5 views")
+
+
+def test_footer_bar_doctor_reads_as_read_only() -> None:
+    from installer.ui_common import FooterBar
+
+    text = FooterBar("doctor").render_text().plain
+    assert "(read-only)" in text
+    assert text.index("(read-only)") < text.index("│")
+
+
+def test_view_modes_cover_every_view() -> None:
+    from installer.ui_common import VIEW_LABELS, VIEW_MODES
+
+    assert set(VIEW_MODES) == {key for key, _ in VIEW_LABELS}
+
+
+def test_mode_badge_renders_label_glyph_and_hint() -> None:
+    from installer.ui_common import VIEW_MODES, ModeBadge
+
+    badge = ModeBadge(VIEW_MODES["policies"])
+    text = badge.render_text()
+    assert "◆" in text.plain
+    assert "[LIVE]" in text.plain
+    assert "space toggles a policy and applies it now" in text.plain
+
+
+def test_mode_badge_staged_and_readonly_strings() -> None:
+    from installer.ui_common import VIEW_MODES, ModeBadge
+
+    catalog_badge = ModeBadge(VIEW_MODES["catalog"])
+    assert "[STAGED]" in catalog_badge.render_text().plain
+    assert "◇" in catalog_badge.render_text().plain
+    uninstall = ModeBadge(VIEW_MODES["uninstall"]).render_text().plain
+    assert "[STAGED · DESTRUCTIVE]" in uninstall
+    assert "◇" in uninstall  # staged stays hollow; danger is carried by the words + red
+    assert "[READ-ONLY]" in ModeBadge(VIEW_MODES["doctor"]).render_text().plain

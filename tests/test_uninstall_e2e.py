@@ -116,7 +116,9 @@ async def test_uninstall_e2e_removes_everything_against_sandbox(
     app, opt, bin_dir, myshellrc = _build_real_app(Path.home())
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("a")  # select all: tool + ban + PATH block
-        await pilot.press("enter")  # apply live against the sandbox
+        await pilot.press("enter")  # accept → confirmation modal
+        await pilot.press("enter")  # confirm: apply live against the sandbox
+        await pilot.pause()
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is True
         _ARTIFACTS.mkdir(exist_ok=True)
@@ -142,15 +144,21 @@ async def test_uninstall_ux_journey_captures_each_state(
         _snapshot(app, "02-empty-refusal.svg")
         await pilot.press("a")
         _snapshot(app, "03-selected.svg")
-        await pilot.press("enter")  # apply live
+        await pilot.press("enter")  # accept → confirmation modal
+        await pilot.pause()
+        _snapshot(app, "04-modal.svg")
+        await pilot.press("enter")  # confirm: apply live
+        await pilot.pause()
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is True
-        _snapshot(app, "04-applied.svg")
+        _snapshot(app, "05-applied.svg")
 
     err = _error_app(tmp_path / "home2")
     async with err.run_test(size=(100, 30)) as pilot:
         await pilot.press("a")
-        await pilot.press("enter")  # removal raises -> error must render, not crash
+        await pilot.press("enter")  # accept → confirmation modal
+        await pilot.press("enter")  # confirm → removal raises -> error must render, not crash
+        await pilot.pause()
         assert isinstance(err.screen, UninstallScreen)
         assert err.screen.error is not None
-        _snapshot(err, "05-error.svg")
+        _snapshot(err, "06-error.svg")
