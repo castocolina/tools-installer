@@ -1,7 +1,7 @@
 ---
 phase: 1
 reviewers: [opencode-plan-review]
-reviewed_at: 2026-09-04T21:49:44Z
+reviewed_at: 2026-09-04T22:11:00Z
 plans_reviewed: [01-01-PLAN.md]
 models:
   opencode-plan-review: "xai/grok-4.6 (reasoning=high)"
@@ -9,22 +9,22 @@ model_sources:
   opencode-plan-review: "pinned"
 ---
 
-# Cross-AI Plan Review — Phase 1 (Cycle 2)
+# Cross-AI Plan Review — Phase 1 (Cycle 3)
 
 ## Consensus Summary
 
-Only one reviewer (`opencode-plan-review`, an OpenCode instance running `xai/grok-4.6`) ran
-this cycle, so there is no cross-reviewer consensus to synthesize — no "Agreed Strengths" or
-"Agreed Concerns" sections apply. This is cycle 2, run specifically to verify that the plan was
-revised to incorporate cycle 1's 6 actionable findings (SC#2 id-pinning, registry.toml splitter
-substring bug, `_tool()` keyword-only tier param, two-row fixture clarification, live-availability
-leak in the cross-tier proof, and two corrected factual counts). The reviewer independently
-re-derived every factual claim against the live tree (registry counts, fixture counts,
-`_parse_enum`/`_tool`/`_resolve` call sites, `.claude/architecture.md` line count) and confirmed
-all 6 findings are now incorporated into `01-01-PLAN.md`'s actual task text, not merely asserted.
-It raised two new LOW-severity observations (SC#2 pinning lives only in a shell verify, not a
-durable pytest; a `re.split` code example in the plan's action text drops delimiters if followed
-literally) and no HIGH or MEDIUM findings. Overall risk: LOW.
+Only one reviewer (`opencode-plan-review`, OpenCode running `xai/grok-4.6`) ran this cycle, so
+there is no cross-reviewer consensus to synthesize. This is cycle 3, run specifically to verify
+that cycle 2's 2 LOW findings (SC#2 pinning living only in a shell verify, and an unsafe
+`re.split` code example) were genuinely incorporated into `01-01-PLAN.md`'s task text, and to
+independently re-derive every load-bearing count the plan makes against the live tree rather than
+trusting the plan's own arithmetic. The reviewer confirmed both cycle-2 findings are resolved with
+concrete task-text citations, re-verified all major counts (65 registry entries, the 21/9/35 tier
+distribution via category histogram, 42 `load_tools(REGISTRY)` sites, 11 `test_deps.py` tests, the
+25-line `architecture.md`, and — specifically re-checked on request — the 17-total/15-affected/16-
+insertion arithmetic for `tests/test_model.py`'s `tier =` fixture backfill) and found all of them
+exact matches to the current source. It raised no new HIGH, MEDIUM, or LOW findings. Overall risk:
+LOW.
 
 ### Agreed Strengths
 Not applicable — single reviewer this cycle.
@@ -39,57 +39,105 @@ Not applicable — single reviewer this cycle.
 
 ## OpenCode Review (opencode-plan-review)
 
-I'll verify cycle-1 findings against the current plan text, then check the referenced files so the review is grounded in the repo.
-Cycle-1 wording looks updated; next I'll check registry counts, fixtures, and `_parse_enum` against the plan's claims.
+I'll verify cycle-2 findings against the live tree and check the plan's count claims in the real source files.
+Next I'll count registry entries, `load_tools` fixtures, and the other claims against the live files.
+I need exact fixture and registry counts, so I'll inspect `test_model.py` and the catalog fields next.
 
-### Phase 1 Plan Review — Cycle 2
+### Phase 1 Plan Review — Cycle 3
 
 #### 1. Summary
 
-The revised plan is executable against the current tree and meets Phase 1. Cycle 1's six findings
-are in the plan text, not just claimed. The reviewer re-derived the 21/9/35 split from
-`installer/registry.toml` (65 tools); `mmdc`→`pnpm` is the only user→system `requires` edge;
-`java`→`sdkman` is system→system; `_parse_enum` / `_tool` / `_resolve` / `architecture.md`
-(25 lines) / 11 `test_deps.py` tests all match. Residual risk is LOW: leftover nits, not blockers.
+Both cycle-2 LOW findings are in the live `01-01-PLAN.md` task text, not just the incorporation
+table. Independent recounts against the tree match the plan: 65 `[[tool]]` rows, D-04/D-05 →
+21/9/35, 17 `load_tools` tests in `tests/test_model.py` minus two early-exit tests = 15 fixtures /
+16 `tier =` lines, 42 `load_tools(REGISTRY)` sites, 11 `test_deps.py` tests, 25-line
+`architecture.md`. No new HIGH/MEDIUM issues. Residual risk is LOW.
 
-#### 2. Cycle-1 Findings Incorporation Check
+#### 2. Verification of the 2 cycle-2 findings
 
-| # | Finding | Verdict | Evidence |
-|---|---------|---------|----------|
-| 1 | SC#2 not pinned by id | **INCORPORATED** | Task 1 third `<verify>`: `assert tools['uv'] == 'system'` (and `pnpm`/`brew`/`sdkman`). `fails_when` names "ROADMAP Phase 1 SC#2 pinned by id, not merely inferred from the aggregate Counter". Also in Task 1 `<acceptance_criteria>` and plan `<success_criteria>`. |
-| 2 | registry.toml splitter substring bug | **INCORPORATED** | Task 1 `<action>`: split on line-anchored `[[tool]]` (`re.split(r"(?m)^\[\[tool\]\]$")` or stripped line equals `[[tool]]`); "never a bare substring search like `text.split("[[tool]]")`"; cites `installer/registry.toml:2` (`# Each [[tool]] declares…`). Confirmed: bare split yields 67 parts; there are 65 real `[[tool]]` rows plus that comment. |
-| 3 | `_tool()` `tier` must be keyword-only | **INCORPORATED** | Task 2 `<behavior>`: `_tool(tool_id: str, *requires: str, tier: str = "user")` with `tier` after `*requires`. Explains that `_tool("mmdc", "pnpm")` at `tests/test_deps.py:12,51` would bind `tier="pnpm"` if `tier` sat before `*requires`. Matches current helper. |
-| 4 | Two-row fixture needs two `tier =` lines | **INCORPORATED** | Task 1 `<action>` + `<artifacts_produced>`: `test_tool_requires_defaults_empty_and_parses` has `mmdc` and `rg` (`tests/test_model.py:21-35`); both need `tier =`; 16 insertions across 15 tests. Confirmed: 17 `load_tools` tests, minus `test_tool_without_methods_raises` and `test_load_tools_rejects_unknown_category` = 15. |
-| 5 | Live-availability leak in cross-tier proof | **INCORPORATED** | Task 2 `<behavior>`: resolve via `_resolve` (`tests/test_deps.py:23-37`), "never call `resolve_dependencies` directly with a live `available` callable"; default `available_ids is None` makes every loaded id available (`tests/test_deps.py:30`). |
-| 6 | Factual counts (11 tests, 25 lines) | **INCORPORATED** | Task 2 `<acceptance_criteria>`: "11 pre-existing tests". Task 3 `<read_first>`: "whole file, 25 lines". Confirmed: 11 `test_*` functions in `tests/test_deps.py`; `.claude/architecture.md` is 25 lines. |
+**1. LOW — SC#2 / 21-9-35 not in pytest — RESOLVED**
 
-#### 3. Strengths
+Plan now adds durable tests, not only shell verifies:
 
-- **Counts match the tree.** 65 `[[tool]]` entries; category histogram `pkg-mgr=3, shell=4, docker=5, runtime=9` → 21 system; `ai` category (4) + `{rg,fd,bat,eza,sd}` → 9 ai; remainder 35 user. All 65 rows have exactly one `audience =` line (`installer/registry.toml`).
-- **Honest SC#3.** ROADMAP still calls `java`→`sdkman` a cross-tier proof; both are `runtime` → `system` under D-04 (`java` `requires = ["sdkman"]`). Plan uses `mmdc` (`diagram`→user, `requires = ["pnpm"]`) → `pnpm` (`pkg-mgr`→system) as the real cross-tier edge and keeps java/sdkman as a same-tier regression.
-- **D-03 vs constructor default is justified.** Production `Tool(` exists only in `installer/model.py:137` (`load_tools`). ~47 test `Tool(` sites stay valid if `__init__` defaults `tier`. Hard-required check is `"tier" not in row` in `load_tools`, not the constructor — matches D-03.
-- **Validation order is right.** Empty methods (`installer/model.py:100-101`) then category (`:102`) then new tier check: `test_tool_without_methods_raises` and `test_load_tools_rejects_unknown_category` still fail first; the other 15 `load_tools` fixtures need `tier =`.
-- **Whole-line split also avoids `[[tool.method]]`.** A bare `split("[[tool]]")` would fragment every method table, not just line 2. The planned `^[[tool]]$` match does not.
-- **Resolver proof stays a proof.** `installer/deps.py` has no `.tier` reads (`:63`, `:92-93`, `:126-128`). Task 2 forbids editing it and checks `git diff --stat -- installer/deps.py`.
-- **Scope is tight.** No `catalog_tui.py`, no `recommends`, no new resolver branches. Phase 2 can consume `Tool.tier`.
+- Task 1 `<behavior>` items 4-5: `test_registry_tier_distribution_is_pinned`
+  (`{"system": 21, "ai": 9, "user": 35}`) and `test_bootstrap_package_managers_are_system_tier`
+  (`uv`/`pnpm`/`brew`/`sdkman`).
+- `tests/test_registry.py` is in `files_modified`, `must_haves.artifacts`, and Task 1 `<files>`.
+- `<acceptance_criteria>` / `<success_criteria>` require the pytest pin so a later
+  reclassification fails CI.
 
-#### 4. Concerns
+Live anchors: `_tools_by_id()` at `tests/test_registry.py:11-12`; `test_registry_has_unique_tools_and_cmds`
+at `:407`; unrelated `test_script_installer_tier_resolves_script_then_brew` at `:498` (leave
+untouched -- correct).
 
-- **LOW — SC#2 / 21-9-35 live only in Task 1 shell verifies, not pytest.** `uv run python3 -c "… assert tools['uv'] == 'system' …"` and the Counter assert run during execution; they are not added to `tests/test_registry.py` (42 `load_tools(REGISTRY)` sites). A later catalog edit can reclassify `uv`/`pnpm`/`brew`/`sdkman` and CI will not catch it. Missing `tier` still fails those 42 loads; wrong `tier` does not.
-- **LOW — `re.split` example drops delimiters.** `re.split(r"(?m)^\[\[tool\]\]$", text)` yields preamble + 65 bodies **without** `[[tool]]` headers (join-back required; skip `parts[0]`). The line-iteration alternative in the same paragraph is safer. Not a logic error if the executor join-backs correctly.
+**2. LOW -- `re.split` drops `[[tool]]` delimiters -- RESOLVED**
 
-No HIGH or MEDIUM findings on this cycle.
+Task 1 `<action>` now specifies only the line-iteration splitter (`stripped == "[[tool]]"`, header
+kept). `re.split(r"(?m)^\[\[tool\]\]$")` is an explicitly rejected alternative. Fourth `<verify>`
+is `grep -c '^\[\[tool\]\]$'` = 65 after comment strip. Live: `installer/registry.toml:2` comment
+contains the substring; 65 whole-line `[[tool]]` headers (first `:59`, last `:1576`).
 
-#### 5. Suggestions
+**Cycle-2 row 4 arithmetic (requested re-check): CORRECT**
 
-- Add one `test_registry.py` test: distribution `{'system': 21, 'ai': 9, 'user': 35}` and `uv`/`pnpm`/`brew`/`sdkman` → `system`. That is the durable form of cycle-1 finding 1.
-- Prefer the line-iteration splitter only; drop the `re.split` example, or use a capturing split and skip the preamble.
-- Keep the synthetic cross-tier test as the durable SC#3 proof. Phase 5 may retarget `mmdc`'s `requires` (ROADMAP Phase 5 / `REQ-mmdc-install-decision`); the real-registry test will need a new edge then.
+`tests/test_model.py` has **17** tests that call `load_tools` (call sites `:38, :64, :89, :107,
+:124, :138, :156, :171, :190, :205, :221, :238, :255, :378, :396, :414, :432`). Exclude
+`test_tool_without_methods_raises` (`:96-107`, fails at `installer/model.py:100-101`) and
+`test_load_tools_rejects_unknown_category` (`:208-221`, fails at `:102`). Remaining **15**.
+`test_tool_requires_defaults_empty_and_parses` has two rows (`:21-35`, `mmdc` and `rg`) →
+**16** insertions. Two other `[[tool]]`-adjacent fixtures (`:268`, `:286`) only call
+`load_categories` (`installer/model.py:152-172`) and correctly need no `tier`.
 
-#### 6. Risk Assessment
+#### 3. New Concerns
 
-**LOW.** Cycle-1 gaps are closed in the plan text. Independent checks against `installer/model.py`, `installer/deps.py`, `installer/registry.toml`, `tests/test_model.py`, `tests/test_deps.py`, and `.claude/architecture.md` support the mechanism. Remaining items are persistence of SC#2 in pytest and backfill-script hygiene — neither blocks execution or the phase goal.
+None. No HIGH/MEDIUM/LOW findings this cycle.
+
+Counts re-derived from the tree (not the plan's claims):
+
+| Claim | Live evidence | Verdict |
+|---|---|---|
+| 65 tools | 65 `^[[tool]]$`, 65 `^category =`, 65 `^audience =` | exact |
+| 21/9/35 | pkg-mgr 3 + shell 4 + docker 5 + runtime 9 = 21 system; ai-cat 4 + `{rg,fd,bat,eza,sd}` = 9 ai; 65-21-9 = 35 user | exact |
+| SC#2 four ids | `uv` `:60` pkg-mgr, `brew` `:135` pkg-mgr, `pnpm` `:1386` pkg-mgr, `sdkman` `:1203` runtime | all -> system under D-04 |
+| Cross-tier edge | `mmdc` `:1576-1584` diagram + `requires = ["pnpm"]`; `pnpm` pkg-mgr | user->system |
+| java/sdkman | both `runtime` (`:1202-1225`); `java` `requires = ["sdkman"]` | system->system |
+| 42 `load_tools(REGISTRY)` | `tests/test_registry.py` | exact |
+| 11 deps tests | `tests/test_deps.py:40-121` | exact |
+| `architecture.md` 25 lines | `.claude/architecture.md` | exact |
+| Production `Tool(` | only `installer/model.py:137` | exact |
+| `deps.py` never reads `.tier` | `installer/deps.py:63, :92-93, :126-128` walk `.requires` only | exact |
+| `EnumValue` bound | `installer/model.py:25` is `Audience, Category, Priority` -- plan correctly adds `Tier` | exact |
+| uv field order | `installer/registry.toml:59-66` id/name/category/cmd/priority/audience/desc | exact |
+
+`requires-python = ">=3.11"` (`pyproject.toml:5`): `StrEnum` hashes/equals its value, so the
+Counter dict compare needs no `str()`.
+
+#### 4. Suggestions
+
+- Follow the plan, not `01-PATTERNS.md`: that file still says "no `__init__` default" and "~240
+  entries". The plan's constructor default is the right call (48 test `Tool(` sites; production
+  only `installer/model.py:137`).
+- Task 2 will need `load_tools` + a registry path in `tests/test_deps.py` (today it only imports
+  `Method, Tool` at `:9`). Obvious at implementation time.
+- Optional: Task 3 `<verify>` could also grep `requires` / `resolve_dependencies` so SC#4 is not
+  only the word `browsing`.
+
+#### 5. Risk Assessment
+
+**LOW.** Cycle-2 gaps are closed in task text. Live file:line checks support the mechanism, the
+21/9/35 pin, and the resolver proof. Nothing new blocks execution.
 
 #### Status: Approved
 
 ---
+
+## Note on this cycle's process
+
+An earlier verification pass in this cycle was run against a stale, isolated worktree copy of
+`tests/test_model.py` that was missing two tests (`test_sdkman_kind_parses_with_candidate`,
+`test_sdkman_method_without_candidate_is_a_config_error`) present in the actual repo tree. That
+stale copy produced a false-positive finding claiming the plan's "15 tests / 16 insertions" count
+was arithmetically inconsistent with its own stated exclusions (it is not — 17 total load_tools
+tests minus 2 early-exit exclusions is exactly 15, contributing 16 insertions once the two-row
+fixture is counted). The opencode/grok-4.6 pass above ran against the correct, live main-repo tree
+and re-confirmed the plan's arithmetic is exact; the false-positive is recorded here only so it is
+not silently reintroduced by a future cycle re-reading stale context.
