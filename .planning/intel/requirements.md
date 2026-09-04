@@ -25,6 +25,7 @@ confidence: high, manifest_override: true, locked: false)
   - System-tier prerequisite tools drag in correctly via `requires` when a dependent tool is selected from any tier view, using the existing `resolve_dependencies` — no new resolver code.
   - Selecting an ai-tier tool that needs an undeclared system-tier prerequisite still drags it in automatically, with no manual step.
 - scope: dependency chain, requires declarations, Homebrew bootstrap order, oh-my-zsh
+- caution: this batch's Phase 1 success criteria (see existing ROADMAP.md) illustrate this requirement with `mmdc`→`pnpm` as a cross-tier example. Batch 2 (`package-manager-policy`) leaves `mmdc`'s install method (pnpm vs. brew) as an open, unresolved decision — see `REQ-mmdc-install-decision` below and `WARNING` in `INGEST-CONFLICTS.md`. The underlying requirement (resolver already handles cross-tier `requires`) is unaffected; only the specific illustrative example may need to change if `mmdc` moves to brew.
 
 ## REQ-install-failure-propagation
 - source: docs/prds/2026-09-04-catalog-tiers-and-dependency-chain-v1.0-prd.md
@@ -68,3 +69,116 @@ confidence: high, manifest_override: true, locked: false)
 - acceptance:
   - Oh-My-Zsh's `git`/`docker` plugins are enabled via a config-array edit to `.zshrc`, not a separate `Tool` entry.
 - scope: oh-my-zsh, shell config, installer/shellrc.py
+
+---
+
+Source PRD: `docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md`
+(classified `docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md`,
+confidence: high, manifest_override: true, locked: false)
+
+## REQ-npx-ban
+- source: docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md
+- description: Extend the existing npm/pip/pip3 ban mechanism (`installer/guards.py:BANNED`, POSIX shim + shell alias + doctor/guard status) to also cover bare `npx`, pointing users at pnpm's dlx equivalent.
+- acceptance:
+  - `installer/guards.py:BANNED` gains an `"npx"` entry.
+  - The shim, alias, and doctor/guard status reporting treat `npx` exactly like the existing three banned commands — same removability, same opt-in nature, same PATH-order warning logic.
+  - Existing tests for the ban (shim generation, alias write/remove, guard status, doctor guidance) are extended to cover `npx`, not duplicated into a parallel test file.
+  - Running `npx <pkg>` after the ban is active gives the same clear, actionable guidance `npm` already does.
+  - Doctor/guard status reporting covers `npx` the same way it covers the other three banned commands.
+- scope: installer/guards.py, npx ban, doctor/guard status reporting
+
+## REQ-npm-npx-redirect-policy
+- source: docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md
+- description: Decide, per command rather than as one global switch, whether npm/npx become a transparent redirect to pnpm's equivalent CLI surface instead of a hard block. `npx` is resolved: it redirects unconditionally to `pnpm dlx` (a clean 1:1 mapping — `pnpx`/`pnx` are pnpm's own aliases for the same thing — no allowlist needed). `npm` remains unresolved — it has subcommands with no clean pnpm equivalent (`npm ci`, `npm publish`), so which subcommands are safe to forward is an open question. `pip`/`pip3` stay hard-blocked (uv is not a drop-in argv-compatible replacement for pip's CLI — different flag surface, different subcommand names).
+- acceptance:
+  - Whichever behavior is chosen per command, it remains idempotent and removable, matching the existing ban's shape.
+  - If npm/npx become a transparent redirect, it preserves the user's original exit code and stdout/stderr from the underlying `pnpm`/`pnpm dlx` invocation.
+  - The redirect must not silently swallow the failure mode where a tool's *internal* tooling calls bare `npm` — either it succeeds silently (fine, it never needed npm) or fails in a new, harder-to-diagnose spot mid-install (the risk to design against).
+- scope: installer/guards.py, redirect vs. hard-block policy
+- status: partially resolved — npx→`pnpm dlx` redirect decided; npm subcommand allowlist unresolved (Open Question 2)
+
+## REQ-codegraph-github-release
+- source: docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md
+- description: Move `codegraph`'s registry entry off `pnpm add -g` (which hits pnpm's known, unfixed global-install data-loss bug — pnpm#11520, pnpm#11587) onto `kind="github_release"`, since `codegraph`'s real `install.sh` (fetched and read 2026-09-04) downloads a prebuilt binary from GitHub Releases and its own header states no Node.js/npm is required.
+- acceptance:
+  - `codegraph`'s registry entry uses `kind="github_release"`, not `kind="node"` or `kind="script"`.
+  - The registry entry templates `{ver}`/`{arch.*}` the same way every other `github_release` entry does; `strip_components=1` matches the archive's `codegraph-<target>/` top-level layout.
+  - `codegraph` installs via `kind="github_release"`, not `pnpm add -g`.
+  - `codegraph` installs and updates reliably without the pnpm global-install bug.
+- scope: registry.toml, codegraph entry
+
+## REQ-mmdc-install-decision
+- source: docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md
+- description: Decide `mmdc`'s (`@mermaid-js/mermaid-cli`) install method explicitly and record it — keep on `pnpm add -g` with a documented mitigation, or switch to the Homebrew formula (currently version-equal to npm at `11.17.0` as of 2026-09-04, so the freshness tradeoff that previously motivated staying on pnpm no longer applies today, though it can drift again in the future).
+- acceptance:
+  - The mmdc decision (keep on pnpm with documented risk, or switch to brew) is made explicitly and recorded, not left ambiguous in the registry.
+- scope: registry.toml, mmdc entry
+- status: unresolved — Open Question 3; PRD leans brew but explicitly defers the final call to the user.
+  User clarification (2026-09-04, given while approving this ingest batch's WARNING gate):
+  the decision is open because it needs real research, not a coin-flip between two known
+  options — pnpm is preferred over npm generally for security (pnpm gates package
+  postinstall scripts by default; npm runs them unrestricted), but pnpm specifically has
+  the known global-install/version-upgrade data-loss bug this PRD batch documents. The user
+  also flagged `volta` as a candidate they believe is meant for Node's own runtime/version
+  management rather than global CLI package installs, but said explicitly they are not
+  certain of that distinction — this needs to be verified as part of the research, not
+  assumed either way. Whichever package manager mmdc ends up on (pnpm, brew, or volta),
+  the `puppeteer`/`chrome-headless-shell` dependency chain (see REQ-puppeteer-catalog-entries)
+  is still required for mmdc to actually run from the CLI — that dependency is orthogonal to
+  which package manager installs mmdc itself, not eliminated by picking a different one.
+  Also unresolved: whether puppeteer/chrome-headless-shell is required identically on macOS
+  as on Linux, or whether one platform needs it and the other does not — unverified, flagged
+  by the user as a real open question for the research phase to close, not assumed either way.
+
+## REQ-puppeteer-catalog-entries
+- source: docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md
+- description: `puppeteer` and `chrome-headless-shell` become their own catalog entries, not bundled invisibly inside mmdc's install, regardless of which path (brew or pnpm) mmdc itself uses — mmdc's real `package.json` declares `puppeteer` as a peerDependency (not auto-installed transitively), and puppeteer itself downloads a multi-hundred-MB `chrome-headless-shell` binary as part of its own install.
+- acceptance:
+  - `puppeteer`: modeled as `kind="node"` (no non-npm distribution), or — if mmdc moves to brew — needs verification of whether the Homebrew formula's install already provisions a working puppeteer/chromium (its dependency list only names `node`).
+  - `chrome-headless-shell`: has no independent install method of its own (puppeteer downloads it as part of its own install) — likely modeled as a `requires` edge on `puppeteer` documenting the relationship rather than a separately installable artifact; whether it needs its own `Tool` entry at all is unresolved.
+  - `mmdc.requires` gains `["puppeteer"]` (in addition to, or in place of, `["pnpm"]`) so `resolve_dependencies` drags puppeteer in automatically instead of leaving it a silent, invisible peer-dependency gap.
+  - Puppeteer's Chrome download (multi-hundred-MB, network-dependent) is documented clearly so it does not look like a hang or a failed install to the user.
+- scope: registry.toml, puppeteer entry, chrome-headless-shell entry
+- status: `chrome-headless-shell` catalog-entry shape unresolved (Open Question 3a).
+  Also unresolved per user clarification (2026-09-04): whether puppeteer's
+  chrome-headless-shell download is required identically on macOS and Linux, or is
+  platform-specific to one of them — unverified, needs research before the registry
+  entry's `os`/`arch` scoping can be decided.
+
+## REQ-pnpm-global-reinstall-mitigation
+- source: docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md
+- description: For any tool that stays on `pnpm add -g` despite the known global-install bug (the `mmdc` case, and any future `kind="node"` entry with no alternative), the installer should snapshot the set of pnpm-managed global packages it installed and reinstall that whole set in one `pnpm add -g <all-of-them>` invocation after pnpm itself is updated — the bug is keyed on "packages installed together in one invocation," so reinstalling everything together in a single invocation is the verified-correct mitigation, not a workaround that happens to help.
+- acceptance:
+  - No new tracking state is needed beyond querying "which currently-selected/installed tools use `kind=\"node\"`" — the registry is already the source of truth.
+  - Triggers when `pnpm` itself is the tool being updated, as a natural extension of the update mechanism described in the companion `2026-09-04-live-package-management-v1.0-prd.md` (not yet ingested) — not a separate standalone feature.
+  - Scope: mitigation only for tools that must stay on `pnpm` — not a reason to keep more tools on `pnpm` than necessary; `codegraph` still moves to `kind="github_release"` regardless.
+- scope: pnpm global-install mitigation, installer update mechanism
+- status: depends on companion `live-package-management` PRD's update mechanism (not yet ingested)
+
+## REQ-sdkman-exclusivity
+- source: docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md
+- description: `java`, `gradle`, `maven`, `groovy`, `springbootcli` install exclusively through SDKMAN — never brew or a native package manager, even though brew formulas exist for all five — because SDKMAN also owns JVM version management across these five tools together, which a one-off brew formula per tool does not coordinate. A code review of commits `431a0a9`/`0db5865` found each tool declared `requires = ["sdkman"]` but resolved to `dnf`/`apt`/`pacman`/`brew` instead, bypassing SDKMAN entirely, and that SDKMAN's own `sdkman-init.sh` (mode 644, sourced not executed) could never be detected as installed by `shutil.which()`.
+- acceptance:
+  - `java`/`gradle`/`maven`/`groovy`/`springbootcli` each declare a single `kind="sdkman"` method (candidate name + `bin_dir` under `~/.sdkman/candidates/<candidate>/current/bin`); all prior `dnf`/`apt`/`pacman`/`brew` methods removed, not kept as fallback.
+  - A new `"sdkman"` method `kind` sources `~/.sdkman/bin/sdkman-init.sh` and runs `sdk install <candidate> [version]` in one `bash -c` invocation, ranked in the userspace tier (same rank as `node`/`github_release`) ahead of native/brew, on every platform.
+  - `springbootcli`'s SDKMAN candidate is `springboot` (not `spring-boot`/`spring`); `cmd` stays `spring`.
+  - `installer/status.py::is_installed` gains a generic `detect_path` fallback (checked via `Path(...).expanduser().exists()` after `which()` fails, before the app/cask bundle check); SDKMAN's own method declares `detect_path = "~/.sdkman/bin/sdkman-init.sh"`.
+  - Non-interactive install relies on SDKMAN's own `?ci=true` bootstrap flag persisting `sdkman_auto_answer=true` in `~/.sdkman/etc/config` — not yet independently re-verified end-to-end against a real, unconfigured machine.
+  - `java`/`gradle`/`maven`/`groovy`/`springbootcli` install exclusively through SDKMAN with no native/brew fallback.
+  - SDKMAN's own install is correctly detected without re-running its bootstrap on every subsequent JVM-tool install.
+- scope: installer/model.py, installer/executors.py, installer/resolve.py, installer/status.py, registry.toml
+- status: **already implemented and shipped ahead of this PRD** (commit `0e05f50`, pushed to `main` directly by the assistant during a review pass — a process deviation from GSD's research→plan→execute→verify flow, per the user's explicit standing instruction "no vamos a implementar nada"). Treat as prior art to verify and harden (broader test coverage, e2e verification, review), not a spec to re-derive from zero or accept as sufficient. `java`'s SDKMAN method has no pinned `version` set — `sdk install java` with no version may prompt interactively for a vendor-qualified choice unless a default is pre-configured; unresolved (Open Question 6a).
+
+## REQ-registry-authoring-verification-checklist
+- source: docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md
+- description: Establish a mandatory per-tool, per-OS verification step before any new registry entry ships — read the tool's actual install script/package metadata (not its marketing page) to confirm what it depends on underneath, and confirm the same install path is meaningful on every OS this installer targets (a step unconditionally required on macOS, e.g. Xcode Command Line Tools, may be a no-op on Bazzite, whose base image already ships `curl`/`git`/build tooling; conversely Homebrew's own bootstrap is curl|bash on every platform including Linux, so system-tier prerequisites need per-OS verification, not assumption from the macOS case).
+- acceptance: (absent — no explicit code acceptance stated in the source; a documented, non-negotiable part of the registry-authoring checklist, extending the existing "verify assets resolve" discipline to also cover "what does the install actually depend on")
+- scope: registry-authoring process, documentation
+- status: open question on how this gets recorded — a registry-entry comment citing what was checked is the stated minimum bar; whether it needs to be stronger (e.g. a checked-in excerpt of the install script's relevant portion) is unresolved (Open Question 5)
+
+## REQ-brew-preference-guideline
+- source: docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md
+- description: Establish "prefer brew over other userspace package managers" as a registry-authoring guideline for new tools, documented in `.claude/architecture.md` or a similar standards doc — not enforced by code, since there is no way to mechanically prove a "better" method exists.
+- acceptance: (absent — no code acceptance stated in the source; documentation-only guideline)
+- scope: .claude/architecture.md or standards doc, registry-authoring guideline
+- status: open question whether this should later be enforced by lint/test (e.g. flag a new `kind="node"` entry and require an explicit justification comment) — Open Question 4
