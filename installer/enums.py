@@ -20,6 +20,14 @@ class Audience(StrEnum):
     HUMAN = "human"
 
 
+class Tier(StrEnum):
+    """Bootstrap-order / top-level view a tool belongs to."""
+
+    SYSTEM = "system"
+    USER = "user"
+    AI = "ai"
+
+
 class Category(StrEnum):
     """Registry category ids declared in registry.toml."""
 

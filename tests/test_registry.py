@@ -1,3 +1,4 @@
+from collections import Counter
 from pathlib import Path
 
 from installer.deps import requires_integrity_errors
@@ -410,6 +411,23 @@ def test_registry_has_unique_tools_and_cmds() -> None:
     cmds = [t.cmd for t in tools]
     assert len(ids) == len(set(ids))
     assert len(cmds) == len(set(cmds))
+
+
+def test_registry_tier_distribution_is_pinned() -> None:
+    # Deliberate tripwire: any phase that adds or removes a registry entry
+    # (ROADMAP Phases 7 and 8 both will) must update these counts in the same
+    # commit that changes the catalog.
+    assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
+        "system": 21,
+        "ai": 9,
+        "user": 35,
+    }
+
+
+def test_bootstrap_package_managers_are_system_tier() -> None:
+    tools = _tools_by_id()
+    for tool_id in ("uv", "pnpm", "brew", "sdkman"):
+        assert tools[tool_id].tier == "system"
 
 
 def test_gitui_is_linux_download_and_brew_only_on_macos() -> None:

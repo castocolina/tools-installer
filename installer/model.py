@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeVar
 
-from installer.enums import Audience, Category, Priority
+from installer.enums import Audience, Category, Priority, Tier
 
 METHOD_KINDS = (
     "script",
@@ -22,7 +22,7 @@ METHOD_KINDS = (
     "cask",
 )
 
-EnumValue = TypeVar("EnumValue", Audience, Category, Priority)
+EnumValue = TypeVar("EnumValue", Audience, Category, Priority, Tier)
 
 
 def _empty_params() -> dict[str, object]:
@@ -58,6 +58,7 @@ class Tool:
     methods: tuple[Method, ...]
     priority: Priority
     audience: Audience
+    tier: Tier
     desc: str = ""
     # No-op dependency seam for the tool-dependencies PRD: ids this tool needs
     # at install time. Parsed and carried here; no resolution logic lives yet.
@@ -72,6 +73,7 @@ class Tool:
         methods: tuple[Method, ...],
         priority: str | Priority = Priority.P3,
         audience: str | Audience = Audience.BOTH,
+        tier: str | Tier = Tier.USER,
         desc: str = "",
         requires: tuple[str, ...] = (),
     ) -> None:
@@ -86,6 +88,7 @@ class Tool:
         object.__setattr__(
             self, "audience", _parse_enum(Audience, audience, "audience", f"tool '{id}'")
         )
+        object.__setattr__(self, "tier", _parse_enum(Tier, tier, "tier", f"tool '{id}'"))
         object.__setattr__(self, "desc", desc)
         object.__setattr__(self, "requires", requires)
 
@@ -100,6 +103,8 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
         if not raw_methods:
             raise ValueError(f"tool '{row['id']}' declares no install methods")
         _parse_enum(Category, row["category"], "category", f"tool '{row['id']}'")
+        if "tier" not in row:
+            raise ValueError(f"tool '{row['id']}': missing required 'tier'")
         methods: list[Method] = []
         for entry in raw_methods:
             kind = entry["kind"]
@@ -142,6 +147,7 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
                 methods=tuple(methods),
                 priority=row.get("priority", "P3"),
                 audience=row.get("audience", "both"),
+                tier=row["tier"],
                 desc=row.get("desc", ""),
                 requires=tuple(raw_requires),
             )

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from installer.enums import Audience, Priority
+from installer.enums import Audience, Priority, Tier
 from installer.model import Method, Tool, load_categories, load_tools
 
 
@@ -21,6 +21,7 @@ def test_tool_requires_defaults_empty_and_parses(tmp_path: Path) -> None:
 [[tool]]
 id = "mmdc"
 category = "diagram"
+tier = "user"
 requires = ["pnpm", "node"]
 [[tool.method]]
 kind = "script"
@@ -30,6 +31,7 @@ shell = "sh"
 [[tool]]
 id = "rg"
 category = "search"
+tier = "user"
 [[tool.method]]
 kind = "brew"
 formula = "rg"
@@ -51,6 +53,7 @@ name = "uv"
 category = "pkg-mgr"
 cmd = "uv"
 priority = "P0"
+tier = "user"
 desc = "Python package manager"
 [[tool.method]]
 kind = "script"
@@ -81,6 +84,7 @@ def test_cmd_defaults_to_id(tmp_path: Path):
 id = "jq"
 name = "jq"
 category = "data"
+tier = "user"
 [[tool.method]]
 kind = "brew"
 formula = "jq"
@@ -115,6 +119,7 @@ def test_unknown_method_kind_raises(tmp_path: Path):
 id = "weird"
 name = "weird"
 category = "search"
+tier = "user"
 [[tool.method]]
 kind = "snap"
 package = "weird"
@@ -130,6 +135,7 @@ def test_load_tools_reads_method_os_targets(tmp_path: Path) -> None:
         "[[tool]]\n"
         'id = "demo"\n'
         'category = "search"\n'
+        'tier = "user"\n'
         "[[tool.method]]\n"
         'kind = "script"\n'
         'os = ["macos"]\n'
@@ -147,6 +153,7 @@ def test_load_tools_rejects_os_as_a_string(tmp_path: Path) -> None:
         "[[tool]]\n"
         'id = "demo"\n'
         'category = "search"\n'
+        'tier = "user"\n'
         "[[tool.method]]\n"
         'kind = "script"\n'
         'os = "macos"\n'  # must be a list, not a string
@@ -162,6 +169,7 @@ def test_load_tools_reads_method_arch_targets(tmp_path: Path) -> None:
         "[[tool]]\n"
         'id = "demo"\n'
         'category = "search"\n'
+        'tier = "user"\n'
         "[[tool.method]]\n"
         'kind = "script"\n'
         'os = ["macos"]\n'
@@ -181,6 +189,7 @@ def test_load_tools_rejects_arch_as_a_string(tmp_path: Path) -> None:
         "[[tool]]\n"
         'id = "demo"\n'
         'category = "search"\n'
+        'tier = "user"\n'
         "[[tool.method]]\n"
         'kind = "script"\n'
         'arch = "arm64"\n'  # must be a list, not a string
@@ -196,6 +205,7 @@ def test_load_tools_rejects_requires_as_a_string(tmp_path: Path) -> None:
         "[[tool]]\n"
         'id = "demo"\n'
         'category = "search"\n'
+        'tier = "user"\n'
         'requires = "pnpm"\n'  # must be a list, not a string
         "[[tool.method]]\n"
         'kind = "script"\n'
@@ -229,6 +239,7 @@ def test_load_tools_rejects_unknown_priority(tmp_path: Path) -> None:
 id = "demo"
 category = "search"
 priority = "P99"
+tier = "user"
 [[tool.method]]
 kind = "brew"
 formula = "demo"
@@ -246,6 +257,7 @@ def test_load_tools_rejects_unknown_audience(tmp_path: Path) -> None:
 id = "demo"
 category = "search"
 audience = "you"
+tier = "user"
 [[tool.method]]
 kind = "brew"
 formula = "demo"
@@ -253,6 +265,57 @@ formula = "demo"
     )
     with pytest.raises(ValueError, match="unknown audience"):
         load_tools(manifest)
+
+
+def test_load_tools_rejects_missing_tier(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+[[tool.method]]
+kind = "brew"
+formula = "demo"
+""",
+    )
+    with pytest.raises(ValueError, match="tier"):
+        load_tools(manifest)
+
+
+def test_load_tools_rejects_unknown_tier(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "cloud"
+[[tool.method]]
+kind = "brew"
+formula = "demo"
+""",
+    )
+    with pytest.raises(ValueError, match="unknown tier"):
+        load_tools(manifest)
+
+
+def test_tier_parses_to_enum_member(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "uv"
+category = "pkg-mgr"
+tier = "system"
+[[tool.method]]
+kind = "brew"
+formula = "uv"
+""",
+    )
+    tool = load_tools(manifest)[0]
+    assert tool.tier is Tier.SYSTEM
+    assert tool.tier == "system"
 
 
 def test_load_categories_reads_ordered_blurbs(tmp_path: Path) -> None:
@@ -369,6 +432,7 @@ def test_node_kind_parses_with_npm_pkg(tmp_path: Path) -> None:
 id = "mmdc"
 category = "diagram"
 cmd = "mmdc"
+tier = "user"
 requires = ["pnpm"]
 [[tool.method]]
 kind = "node"
@@ -388,6 +452,7 @@ def test_node_method_without_npm_pkg_is_a_config_error(tmp_path: Path) -> None:
 [[tool]]
 id = "broken"
 category = "diagram"
+tier = "user"
 [[tool.method]]
 kind = "node"
 """,
@@ -404,6 +469,7 @@ def test_sdkman_kind_parses_with_candidate(tmp_path: Path) -> None:
 id = "java"
 category = "runtime"
 cmd = "java"
+tier = "user"
 requires = ["sdkman"]
 [[tool.method]]
 kind = "sdkman"
@@ -424,6 +490,7 @@ def test_sdkman_method_without_candidate_is_a_config_error(tmp_path: Path) -> No
 [[tool]]
 id = "broken"
 category = "runtime"
+tier = "user"
 [[tool.method]]
 kind = "sdkman"
 """,
