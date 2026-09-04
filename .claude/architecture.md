@@ -23,3 +23,12 @@ state, not the churn.
 5. **No orphan helpers.** A shared helper with zero production callers is
    deleted or adopted at its duplicate sites — never kept "for later". Only its
    own test keeping it covered is the tell.
+
+## Tier is a browsing label
+
+`Tool.tier` (`system` / `user` / `ai`) is a browsing/grouping label only —
+which top-level catalog view a tool appears under (Phase 2 wires this).
+`Tool.requires`, resolved by `installer/deps.py::resolve_dependencies`, remains
+the sole mechanism that determines install order. A `requires` edge that
+crosses tiers drags in its dependency exactly like a same-tier one; the
+resolver has no tier-aware branching.
