@@ -1,10 +1,11 @@
 """Unified Textual shell hosting the wizard views behind one app.
 
-The app owns navigation and the screen stack. Catalog, doctor, fix, uninstall,
-and policies are all functional views. Execution stays behind the pure
+The app owns navigation and the screen stack. Catalog, doctor, uninstall, and
+policies are all functional views. Execution stays behind the pure
 `installer/` core invoked from `setup.py`, with one deliberate exception: the
-fix, uninstall, and policies views apply their changes live through injected
-closures. The app's run value stays the catalog decision (`list[str] | None`).
+doctor, uninstall, and policies views apply their changes live through
+injected closures. The app's run value stays the catalog decision
+(`list[str] | None`).
 
 The catalog is the base screen (`get_default_screen`); it cannot be switched
 out. Navigation is therefore a stack with the catalog at the bottom: the stack
@@ -12,7 +13,7 @@ is always `[catalog]` or `[catalog, <one other view>]`.
 """
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -62,11 +63,33 @@ class PolicyInputs:
     policies: list[Policy]
 
 
-class DoctorScreen(AppScreen):
-    """Read-only PATH audit + guidance, color-coded by severity."""
+class _BodyStatic(Static):
+    """Static with a small public render seam for headless tests."""
 
+    @property
+    def renderable(self) -> Any:
+        return self.render()
+
+
+class DoctorScreen(AppScreen):
+    """PATH audit and safe PATH repair in one view."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("enter", "apply", "apply", show=True),
+        Binding("a", "apply", "apply", show=False),
+    ]
     DEFAULT_CSS = """
-    DoctorScreen #doctor-body { padding: 1 4; }
+    DoctorScreen {
+        align: center top;
+    }
+    DoctorScreen #doctor-body {
+        width: 76;
+        max-width: 90%;
+        height: auto;
+        margin: 2 0;
+        padding: 1 2;
+        border: round $accent;
+    }
     """
 
     def __init__(
@@ -74,69 +97,67 @@ class DoctorScreen(AppScreen):
         report: DoctorReport,
         guard_status: dict[str, bool],
         guard_warning: str | None,
+        fix_preview: str,
+        fix: Callable[[], None],
     ) -> None:
         super().__init__(view="doctor")
         self._report = report
         self._guard_status = guard_status
         self._guard_warning = guard_warning
-        self.guidance: list[Guidance] = []  # public test seam
+        self._fix_preview = fix_preview
+        self._fix = fix
+        self.guidance: list[Guidance] = []
+        self.applied = False
+        self.error: str | None = None
 
     def compose_body(self) -> ComposeResult:
-        yield Static(id="doctor-body")
+        yield _BodyStatic(id="doctor-body")
 
     def on_mount(self) -> None:
         self.guidance = doctor_guidance(self._report) + guard_guidance(
             self._guard_status, self._guard_warning
         )
-        self.query_one("#doctor-body", Static).update(guidance_text(self.guidance))
-
-
-class FixScreen(AppScreen):
-    """Preview the PATH wiring + reload guidance; Apply runs it live, in place."""
-
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("enter", "apply", "apply", show=True),
-        Binding("a", "apply", "apply", show=False),  # legacy alias, kept one release
-    ]
-    DEFAULT_CSS = """
-    FixScreen #fix-body { padding: 1 4; }
-    """
-
-    def __init__(self, preview: str, fix: Callable[[], None]) -> None:
-        super().__init__(view="fix")
-        self._preview = preview
-        self._fix = fix
-        self.applied = False  # public test seam
-        self.error: str | None = None  # public test seam; set when an apply fails
-
-    def compose_body(self) -> ComposeResult:
-        yield Static(id="fix-body")
-
-    def on_mount(self) -> None:
         self._refresh_body()
 
-    # NB: not named `_render` — that collides with Textual's internal
-    # Widget._render(), which the compositor calls to produce the visual.
     def _refresh_body(self) -> None:
-        body = self.query_one("#fix-body", Static)
+        body = self.query_one("#doctor-body", _BodyStatic)
         text = Text()
+        text.append("PATH Doctor\n", style="bold")
+        text.append("Audit\n", style="bold")
+        text.append(guidance_text(self._tui_guidance()))
+        text.append("\n\nSafe fix preview\n", style="bold")
+        text.append(self._fix_preview)
+        text.append("\n\nAction\n", style="bold")
         if self.applied:
             text.append("PATH wired.", style="green")
-            text.append("\n  → Restart your shell or run `source ~/.myshellrc` to apply.")
+            text.append("\nRestart your shell or run `source ~/.myshellrc` to apply.")
         elif self.error is not None:
             text.append("Fix failed.", style="red")
-            text.append(f"\n  {self.error}")
-            text.append("\n  → Check the target is writable, then press enter to retry.")
+            text.append(f"\n{self.error}")
+            text.append("\nCheck the target is writable, then press enter to retry.")
         else:
             text.append("Press enter to wire the managed PATH into your shells.", style="yellow")
-            text.append(f"\n\n{self._preview}")
-            text.append("\n\nAfter applying, restart your shell or `source ~/.myshellrc`.")
+            text.append("\nViewing this screen did not change your shell files.")
         body.update(text)
+
+    def _tui_guidance(self) -> list[Guidance]:
+        """Keep CLI doctor wording unchanged while the TUI points to the live apply action."""
+        return [
+            replace(
+                item,
+                next_step=(
+                    "Press enter to apply the safe fix below, then open a new terminal "
+                    "(or `source ~/.myshellrc`)."
+                ),
+            )
+            if item.next_step.startswith("Run `make fix`")
+            else item
+            for item in self.guidance
+        ]
 
     def action_apply(self) -> None:
         if self.applied:
             return
-        # `applied` stays False on failure so enter retries; the body shows the error.
         _, self.error = run_live(self._fix)
         self.applied = self.error is None
         self._refresh_body()
@@ -594,11 +615,9 @@ class UnifiedApp(App[list[str] | None]):
     ) -> None:
         super().__init__()
         self._catalog = CatalogScreen(tools, installed, blurbs)
-        # Non-catalog views, installed on mount and pushed by value. Doctor is
-        # real; uninstall and policies are live-toggle screens.
+        # Non-catalog views, installed on mount and pushed by value.
         self._views: dict[str, Screen[None]] = {
-            "doctor": DoctorScreen(report, guard_status, guard_warning),
-            "fix": FixScreen(fix_preview, fix),
+            "doctor": DoctorScreen(report, guard_status, guard_warning, fix_preview, fix),
             "uninstall": UninstallScreen(uninstall),
             "policies": PoliciesScreen(policies),
         }

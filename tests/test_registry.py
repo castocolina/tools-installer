@@ -1,11 +1,19 @@
 from pathlib import Path
 
 from installer.deps import requires_integrity_errors
-from installer.model import load_categories, load_tools
+from installer.model import Tool, load_categories, load_tools
 from installer.platform import Platform
 from installer.resolve import resolve_methods
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+
+
+def _tools_by_id() -> dict[str, Tool]:
+    return {tool.id: tool for tool in load_tools(REGISTRY)}
+
+
+def _ids_by_priority(priority: str) -> set[str]:
+    return {tool.id for tool in load_tools(REGISTRY) if tool.priority == priority}
 
 
 def test_registry_loads():
@@ -20,6 +28,130 @@ def test_registry_ids_unique():
 
 def test_every_tool_has_at_least_one_method():
     assert all(t.methods for t in load_tools(REGISTRY))
+
+
+def test_registry_includes_requested_installable_entries() -> None:
+    ids = set(_tools_by_id())
+    assert {
+        "brew",
+        "git",
+        "codex",
+        "claude",
+        "opencode",
+        "docker",
+        "podman",
+        "colima",
+        "vscode",
+        "jetbrains-toolbox",
+        "sdkman",
+        "java",
+        "groovy",
+        "springbootcli",
+        "gradle",
+        "maven",
+    } <= ids
+
+
+def test_human_agent_clis_are_p0_human_tools() -> None:
+    tools = _tools_by_id()
+    for tool_id in ("codex", "claude", "opencode"):
+        tool = tools[tool_id]
+        assert tool.priority == "P0"
+        assert tool.audience == "human"
+        assert tool.category == "ai"
+
+
+def test_high_use_agent_utilities_are_p0() -> None:
+    assert {
+        "rg",
+        "jq",
+        "fd",
+        "sd",
+        "eza",
+        "bat",
+        "yq",
+        "gh",
+        "git",
+    } <= _ids_by_priority("P0")
+
+
+def test_priority_tool_descriptions_name_replacements_or_value() -> None:
+    tools = _tools_by_id()
+    expected_fragments = {
+        "rg": ("grep", ".gitignore"),
+        "fd": ("find", ".gitignore"),
+        "sd": ("sed", "literal"),
+        "eza": ("ls", "Git"),
+        "bat": ("cat", "syntax"),
+        "yq": ("YAML", "JSON"),
+        "jq": ("JSON", "filters"),
+        "git": ("version control", "agents"),
+        "brew": ("Homebrew", "immutable Linux"),
+    }
+    for tool_id, fragments in expected_fragments.items():
+        desc = tools[tool_id].desc
+        for fragment in fragments:
+            assert fragment in desc, f"{tool_id}: missing {fragment!r} in {desc!r}"
+        assert len(desc) <= 150, f"{tool_id}: description is too long"
+
+
+def test_java_tools_depend_on_sdkman() -> None:
+    tools = _tools_by_id()
+    for tool_id in ("java", "groovy", "springbootcli", "gradle", "maven"):
+        assert "sdkman" in tools[tool_id].requires
+
+
+def test_sdkman_uses_init_script_and_declares_bin_dir() -> None:
+    sdkman = _tools_by_id()["sdkman"]
+    assert sdkman.cmd == "sdkman-init.sh"
+    assert "shell function" in sdkman.desc
+    assert "sourcing" in sdkman.desc
+    assert [m.kind for m in sdkman.methods] == ["script"]
+    assert sdkman.methods[0].params["url"] == "https://get.sdkman.io?ci=true"
+    assert sdkman.methods[0].params["bin_dir"] == "~/.sdkman/bin"
+
+
+def test_agent_clis_use_supported_install_methods() -> None:
+    tools = _tools_by_id()
+    codex = tools["codex"]
+    claude = tools["claude"]
+    opencode = tools["opencode"]
+
+    assert [m.kind for m in codex.methods] == ["script", "cask"]
+    assert next(m for m in codex.methods if m.kind == "script").params["url"] == (
+        "https://chatgpt.com/codex/install.sh"
+    )
+    assert next(m for m in codex.methods if m.kind == "cask").params["cask"] == "codex"
+
+    assert [m.kind for m in claude.methods] == ["script", "cask"]
+    assert next(m for m in claude.methods if m.kind == "script").params["url"] == (
+        "https://claude.ai/install.sh"
+    )
+    assert next(m for m in claude.methods if m.kind == "cask").params["cask"] == "claude-code"
+
+    assert [m.kind for m in opencode.methods] == ["script", "pacman", "brew"]
+    assert next(m for m in opencode.methods if m.kind == "script").params["url"] == (
+        "https://opencode.ai/install"
+    )
+
+
+def test_container_tools_resolve_on_immutable_linux_without_native_writes() -> None:
+    tools = _tools_by_id()
+    immutable_fedora = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+
+    assert [m.kind for m in resolve_methods(tools["docker"], immutable_fedora)] == ["brew"]
+    assert [m.kind for m in resolve_methods(tools["podman"], immutable_fedora)] == ["brew"]
+    assert [m.kind for m in resolve_methods(tools["colima"], immutable_fedora)] == ["brew"]
+
+
+def test_jetbrains_toolbox_is_macos_cask_only() -> None:
+    tools = _tools_by_id()
+    toolbox = tools["jetbrains-toolbox"]
+    assert toolbox.cmd == "jetbrains-toolbox"
+    assert toolbox.category == "editor"
+    assert [m.kind for m in toolbox.methods] == ["cask"]
+    assert toolbox.methods[0].params["cask"] == "jetbrains-toolbox"
+    assert toolbox.methods[0].params["app"] == "JetBrains Toolbox.app"
 
 
 def test_registry_includes_homebrew_with_os_targeted_install() -> None:
@@ -144,7 +276,7 @@ def test_download_tools_resolve_github_release_then_brew_on_macos() -> None:
 
 # GUI apps with no Linux install method yet (VS Code tar.gz / Sublime tarball
 # are a future batch). Every other tool must resolve on every platform.
-MACOS_ONLY = {"vscode", "sublime"}
+MACOS_ONLY = {"vscode", "sublime", "jetbrains-toolbox"}
 
 
 def test_every_tool_resolves_at_least_one_method_on_each_platform() -> None:
@@ -228,11 +360,10 @@ def test_gron_uses_tgz_with_trailing_version() -> None:
     assert method.params["strip"] == 0
 
 
-def test_registry_has_fifty_unique_tools_and_cmds() -> None:
+def test_registry_has_unique_tools_and_cmds() -> None:
     tools = load_tools(REGISTRY)
     ids = [t.id for t in tools]
     cmds = [t.cmd for t in tools]
-    assert len(ids) == 50
     assert len(ids) == len(set(ids))
     assert len(cmds) == len(set(cmds))
 
@@ -307,7 +438,17 @@ def test_ast_grep_cmd_is_ast_grep_not_sg() -> None:
 
 def test_runtime_category_members() -> None:
     runtimes = sorted(t.id for t in load_tools(REGISTRY) if t.category == "runtime")
-    assert runtimes == ["bun", "deno", "fnm"]
+    assert runtimes == [
+        "bun",
+        "deno",
+        "fnm",
+        "gradle",
+        "groovy",
+        "java",
+        "maven",
+        "sdkman",
+        "springbootcli",
+    ]
 
 
 def test_script_installer_tier_resolves_script_then_brew() -> None:

@@ -68,6 +68,31 @@ def test_app_bundle_as_plain_file_is_not_installed(tmp_path: Path, monkeypatch: 
     assert is_installed(_app_tool(), app_roots=(tmp_path,)) is False
 
 
+def test_cask_app_bundle_present_counts_as_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import installer.status as status
+
+    def which_none(cmd: str) -> str | None:
+        return None
+
+    monkeypatch.setattr(status.shutil, "which", which_none)
+    (tmp_path / "JetBrains Toolbox.app").mkdir()
+    tool = Tool(
+        id="jetbrains-toolbox",
+        name="JetBrains Toolbox",
+        category="editor",
+        cmd="jetbrains-toolbox",
+        methods=(
+            Method(
+                kind="cask",
+                params={"cask": "jetbrains-toolbox", "app": "JetBrains Toolbox.app"},
+            ),
+        ),
+    )
+    assert is_installed(tool, app_roots=(tmp_path,)) is True
+
+
 def test_app_tool_without_bundle_or_cmd_is_not_installed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

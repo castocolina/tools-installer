@@ -180,7 +180,7 @@ def _build_app(
     )
 
     def _apply_fix() -> None:
-        # Runs live inside the FixScreen. A quiet console keeps configure_path's
+        # Runs live inside the DoctorScreen. A quiet console keeps configure_path's
         # own prints from corrupting the running TUI; the screen renders its own
         # result. Link mode is resolved before the app opens (never prompted while
         # the TUI is live).
@@ -258,9 +258,9 @@ def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
     platform = detect()
     if sys.stdin.isatty() and link_mode_option is None:
         # Resolve the link mode once BEFORE opening the app (the TUI cannot host a
-        # questionary prompt). The FixScreen then previews and applies live.
+        # questionary prompt). The DoctorScreen then previews and applies live.
         link_mode = _resolve_link_mode(None)
-        _build_app(tools, platform, initial_view="fix", link_mode=link_mode).run()
+        _build_app(tools, platform, initial_view="doctor", link_mode=link_mode).run()
         return 0
     link_mode = _resolve_link_mode(link_mode_option)
     configure_path(

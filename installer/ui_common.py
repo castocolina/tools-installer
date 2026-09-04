@@ -74,16 +74,11 @@ class StatusLine(Static):
 @dataclass(frozen=True)
 class View:
     """Everything the chrome knows about one navigable view, in one row:
-    the stable name, the header label, the ctrl+p palette description, the
-    apply-semantics badge (mode label + glyph + style + hint), and the footer
-    action-zone hint. Every per-view UI fact derives from the VIEWS table below,
-    so adding a view is a one-row change — the header, palette, badge, footer,
-    and 1-N key bindings all follow.
-
-    Badge encoding: the bracketed mode label is the load-bearing signal; the
-    glyph fill is the colorblind-safe cue (hollow ◇ = staged: nothing changes
-    until you commit; filled ◆ = live: each action applies immediately;
-    ▸ = single-action apply; ‹ = read-only); the style is a concrete color."""
+    the stable name, the header label, the ctrl+p palette description, the mode
+    label, the color style, the hint, and the footer action-zone text. Every
+    per-view UI fact derives from the VIEWS table below, so adding a view is a
+    one-row change — the header, palette, badge, footer, and 1-N key bindings
+    all follow."""
 
     name: str
     label: str
@@ -102,51 +97,41 @@ VIEWS: tuple[View, ...] = (
     View(
         name="catalog",
         label="Catalog",
-        palette="Catalog — pick tools to install",
+        palette="Catalog - pick tools to install",
         mode="STAGED",
-        glyph="◇",
+        glyph="o",
         style="cyan",
-        hint="space marks a tool · enter installs your selection",
-        actions="space toggle · enter install · a all · i invert",
+        hint="space marks a tool; enter installs your selection",
+        actions="space toggle | enter install | a all | i invert",
     ),
     View(
         name="doctor",
         label="Doctor",
-        palette="Doctor — audit your PATH",
-        mode="READ-ONLY",
-        glyph="‹",
-        style="dim",
-        hint="audit report · nothing here changes your system",
-        actions="(read-only)",
-    ),
-    View(
-        name="fix",
-        label="Fix",
-        palette="Fix — wire PATH into your shells",
-        mode="APPLY",
-        glyph="▸",
+        palette="Doctor - audit PATH and apply the safe fix",
+        mode="AUDIT + APPLY",
+        glyph=">",
         style="yellow",
-        hint="enter wires the managed PATH into your shells",
+        hint="audit report stays read-only until you press enter",
         actions="enter apply",
     ),
     View(
         name="uninstall",
         label="Uninstall",
-        palette="Uninstall — remove installed tools",
-        mode="STAGED · DESTRUCTIVE",
-        glyph="◇",
+        palette="Uninstall - remove installed tools",
+        mode="STAGED / DESTRUCTIVE",
+        glyph="o",
         style="red",
-        hint="space marks · enter removes marked items (you'll confirm)",
-        actions="space mark · enter remove · a all · i invert",
+        hint="space marks; enter removes marked items (you'll confirm)",
+        actions="space mark | enter remove | a all | i invert",
     ),
     View(
         name="policies",
         label="Policies",
-        palette="Policies — pip/npm ban and env tweaks",
+        palette="Policies - pip/npm ban and env tweaks",
         mode="LIVE",
-        glyph="◆",
+        glyph="*",
         style="yellow",
-        hint="space toggles a policy and applies it now · reversible",
+        hint="space toggles a policy and applies it now; reversible",
         actions="space toggle",
     ),
 )
@@ -156,7 +141,7 @@ VIEW_BY_NAME: dict[str, View] = {view.name: view for view in VIEWS}
 
 
 def _view_key(index: int) -> str:
-    """The bracketed nav key for the view at `index` ([1] … [5]), matching the
+    """The bracketed nav key for the view at `index` ([1] … [4]), matching the
     1-based number key that navigates to it. Full-size digits stay legible where
     the old circled glyphs (❶❷…) rendered too small in many terminal fonts. The
     leading bracket is escaped so Textual content markup renders it literally
@@ -167,13 +152,13 @@ def _view_key(index: int) -> str:
 # The always-available navigation, shown dim on every view so the user learns one
 # rule: the dim cluster right of the separator is global nav; everything left is
 # what this screen does.
-GLOBAL_NAV: str = "1–5 views · ^p nav · esc back · q quit"
+GLOBAL_NAV: str = "1-4 views | ^p nav | esc back | q quit"
 
 
 class FooterBar(Static):
     """Two-zone key hints: this view's actions, a separator, then dim global nav.
     Replaces Textual's Footer, whose undifferentiated binding union read the same
-    on every view (including read-only Doctor)."""
+    on every view."""
 
     DEFAULT_CSS = "FooterBar { dock: bottom; height: 1; padding: 0 1; background: $surface; }"
 
@@ -193,7 +178,7 @@ class FooterBar(Static):
 
 
 class WayfindingHeader(Static):
-    """Docked-top breadcrumb of the five views; the active one is accent-bold,
+    """Docked-top breadcrumb of the four views; the active one is accent-bold,
     the rest dim. Accent recolors per screen (e.g. destructive red on uninstall)."""
 
     DEFAULT_CSS = "WayfindingHeader { height: 1; padding: 0 1; }"
@@ -206,7 +191,7 @@ class WayfindingHeader(Static):
     def render_markup(self) -> str:
         # Textual content markup (not Rich Text): $accent is a Textual theme variable
         # that Rich's own style parser rejects, so markup lets Textual resolve it at render time.
-        # Each view shows its bracketed key so the 1–5 mapping is always on screen
+        # Each view shows its bracketed key so the 1–4 mapping is always on screen
         # (recognition over recall). The active view is accent-bold; the rest dim.
         parts = [
             f"[bold {self._accent}]{_view_key(index)} {view.label}[/]"

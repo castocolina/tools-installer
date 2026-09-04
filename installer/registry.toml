@@ -80,7 +80,7 @@ category = "search"
 cmd = "rg"
 priority = "P0"
 audience = "ai"
-desc = "Fast recursive search; respects .gitignore"
+desc = "Replaces recursive grep with faster code search, .gitignore awareness, and focused output for agents."
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
@@ -117,7 +117,7 @@ category = "data"
 cmd = "jq"
 priority = "P0"
 audience = "ai"
-desc = "Surgical queries and edits on JSON"
+desc = "Turns JSON into precise filters so agents inspect only the fields they need."
 [[tool.method]]
 kind = "dnf"
 package = "jq"
@@ -136,9 +136,9 @@ id = "brew"
 name = "Homebrew"
 category = "pkg-mgr"
 cmd = "brew"
-priority = "P1"
+priority = "P0"
 audience = "both"
-desc = "The missing package manager (optional; some tools only live here)"
+desc = "Homebrew supplies user-space packages on macOS and immutable Linux when native writes are unsafe."
 # bin_dir assumes Apple Silicon (/opt/homebrew/bin). Intel Macs use /usr/local/bin;
 # arch-aware wiring is a deferred refinement, so PATH may be wrong on Intel.
 [[tool.method]]
@@ -161,9 +161,9 @@ id = "fd"
 name = "fd"
 category = "search"
 cmd = "fd"
-priority = "P1"
-audience = "both"
-desc = "Fast, user-friendly alternative to find"
+priority = "P0"
+audience = "ai"
+desc = "Replaces most find usage with faster defaults, .gitignore awareness, and simpler paths."
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
@@ -187,9 +187,9 @@ id = "bat"
 name = "bat"
 category = "view"
 cmd = "bat"
-priority = "P1"
+priority = "P0"
 audience = "both"
-desc = "A cat clone with syntax highlighting and git integration"
+desc = "Replaces cat for code review with syntax highlighting, paging, and Git-aware context."
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
@@ -213,9 +213,9 @@ id = "sd"
 name = "sd"
 category = "text"
 cmd = "sd"
-priority = "P2"
-audience = "both"
-desc = "Intuitive find-and-replace (sed alternative)"
+priority = "P0"
+audience = "ai"
+desc = "Replaces common sed substitutions with clearer syntax and safer literal defaults."
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
@@ -233,6 +233,27 @@ strip = 1
 [[tool.method]]
 kind = "brew"
 formula = "sd"
+
+[[tool]]
+id = "git"
+name = "Git"
+category = "git"
+cmd = "git"
+priority = "P0"
+audience = "both"
+desc = "Core version control for users and agents; replaces manual file snapshots with auditable history."
+[[tool.method]]
+kind = "dnf"
+package = "git"
+[[tool.method]]
+kind = "apt"
+package = "git"
+[[tool.method]]
+kind = "pacman"
+package = "git"
+[[tool.method]]
+kind = "brew"
+formula = "git"
 
 [[tool]]
 id = "delta"
@@ -266,9 +287,9 @@ id = "eza"
 name = "eza"
 category = "view"
 cmd = "eza"
-priority = "P2"
+priority = "P0"
 audience = "both"
-desc = "A modern replacement for ls"
+desc = "Replaces ls with clearer file metadata, Git status, and readable defaults."
 # eza publishes no macOS asset; mac installs via brew.
 [[tool.method]]
 kind = "github_release"
@@ -368,9 +389,9 @@ id = "gh"
 name = "GitHub CLI"
 category = "git"
 cmd = "gh"
-priority = "P1"
+priority = "P0"
 audience = "both"
-desc = "GitHub on the command line"
+desc = "Uses GitHub from the terminal so agents and users can inspect PRs, issues, and auth state."
 # gh ships macOS only as .zip/.pkg; mac installs via brew.
 [[tool.method]]
 kind = "github_release"
@@ -389,9 +410,9 @@ id = "yq"
 name = "yq"
 category = "data"
 cmd = "yq"
-priority = "P2"
+priority = "P0"
 audience = "ai"
-desc = "Portable command-line YAML/JSON processor"
+desc = "Queries YAML and JSON without ad hoc parsing, reducing noisy config inspection."
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
@@ -755,6 +776,60 @@ kind = "brew"
 formula = "lazydocker"
 
 [[tool]]
+id = "docker"
+name = "Docker CLI"
+category = "docker"
+cmd = "docker"
+priority = "P1"
+audience = "both"
+desc = "Controls Docker engines and contexts; agents use it to inspect containers without parsing desktop UI state."
+[[tool.method]]
+kind = "dnf"
+package = "docker"
+[[tool.method]]
+kind = "apt"
+package = "docker.io"
+[[tool.method]]
+kind = "pacman"
+package = "docker"
+[[tool.method]]
+kind = "brew"
+formula = "docker"
+
+[[tool]]
+id = "podman"
+name = "Podman"
+category = "docker"
+cmd = "podman"
+priority = "P1"
+audience = "both"
+desc = "Rootless container engine often safer on Linux and immutable desktops than daemon-first workflows."
+[[tool.method]]
+kind = "dnf"
+package = "podman"
+[[tool.method]]
+kind = "apt"
+package = "podman"
+[[tool.method]]
+kind = "pacman"
+package = "podman"
+[[tool.method]]
+kind = "brew"
+formula = "podman"
+
+[[tool]]
+id = "colima"
+name = "Colima"
+category = "docker"
+cmd = "colima"
+priority = "P1"
+audience = "both"
+desc = "Runs container runtimes in a lightweight VM, giving macOS and Linux users a Docker-compatible engine."
+[[tool.method]]
+kind = "brew"
+formula = "colima"
+
+[[tool]]
 id = "dive"
 name = "dive"
 category = "docker"
@@ -1023,6 +1098,59 @@ kind = "brew"
 formula = "aichat"
 
 [[tool]]
+id = "codex"
+name = "Codex CLI"
+category = "ai"
+cmd = "codex"
+priority = "P0"
+audience = "human"
+desc = "OpenAI coding agent for the user; coordinates local coding sessions rather than serving as an agent subtool."
+[[tool.method]]
+kind = "script"
+url = "https://chatgpt.com/codex/install.sh"
+shell = "sh"
+[[tool.method]]
+kind = "cask"
+os = ["macos"]
+cask = "codex"
+
+[[tool]]
+id = "claude"
+name = "Claude Code"
+category = "ai"
+cmd = "claude"
+priority = "P0"
+audience = "human"
+desc = "Anthropic coding agent for the user; complements Codex and needs clear install ownership."
+[[tool.method]]
+kind = "script"
+url = "https://claude.ai/install.sh"
+shell = "bash"
+[[tool.method]]
+kind = "cask"
+os = ["macos"]
+cask = "claude-code"
+
+[[tool]]
+id = "opencode"
+name = "OpenCode"
+category = "ai"
+cmd = "opencode"
+priority = "P0"
+audience = "human"
+desc = "Open source coding agent for the user, useful when teams want provider-flexible terminal workflows."
+[[tool.method]]
+kind = "script"
+url = "https://opencode.ai/install"
+shell = "bash"
+[[tool.method]]
+kind = "pacman"
+package = "opencode"
+[[tool.method]]
+kind = "brew"
+formula = "anomalyco/tap/opencode"
+
+[[tool]]
 id = "deno"
 name = "Deno"
 category = "runtime"
@@ -1049,6 +1177,121 @@ archive = "zip"
 [[tool.method]]
 kind = "brew"
 formula = "deno"
+
+[[tool]]
+id = "sdkman"
+name = "SDKMAN"
+category = "runtime"
+cmd = "sdkman-init.sh"
+priority = "P1"
+audience = "both"
+desc = "User-space manager for Java and JVM tools; after sourcing sdkman-init.sh it exposes the sdk shell function."
+[[tool.method]]
+kind = "script"
+url = "https://get.sdkman.io?ci=true"
+shell = "bash"
+bin_dir = "~/.sdkman/bin"
+
+[[tool]]
+id = "java"
+name = "Java"
+category = "runtime"
+cmd = "java"
+priority = "P1"
+audience = "both"
+desc = "JVM runtime required by Gradle, Maven, Groovy, and many enterprise projects; SDKMAN owns user-space setup."
+requires = ["sdkman"]
+[[tool.method]]
+kind = "dnf"
+package = "java-latest-openjdk"
+[[tool.method]]
+kind = "apt"
+package = "default-jdk"
+[[tool.method]]
+kind = "pacman"
+package = "jdk-openjdk"
+[[tool.method]]
+kind = "brew"
+formula = "openjdk"
+
+[[tool]]
+id = "groovy"
+name = "Groovy"
+category = "runtime"
+cmd = "groovy"
+priority = "P2"
+audience = "both"
+desc = "JVM scripting language for build and automation scripts; SDKMAN keeps versions in user space."
+requires = ["sdkman"]
+[[tool.method]]
+kind = "dnf"
+package = "groovy"
+[[tool.method]]
+kind = "apt"
+package = "groovy"
+[[tool.method]]
+kind = "pacman"
+package = "groovy"
+[[tool.method]]
+kind = "brew"
+formula = "groovy"
+
+[[tool]]
+id = "springbootcli"
+name = "Spring Boot CLI"
+category = "runtime"
+cmd = "spring"
+priority = "P2"
+audience = "both"
+desc = "Bootstraps and runs Spring projects from the terminal; SDKMAN keeps the CLI tied to JVM tooling."
+requires = ["sdkman"]
+[[tool.method]]
+kind = "brew"
+formula = "spring-boot"
+
+[[tool]]
+id = "gradle"
+name = "Gradle"
+category = "runtime"
+cmd = "gradle"
+priority = "P1"
+audience = "both"
+desc = "Build tool for JVM projects; SDKMAN helps avoid global system Gradle drift."
+requires = ["sdkman"]
+[[tool.method]]
+kind = "dnf"
+package = "gradle"
+[[tool.method]]
+kind = "apt"
+package = "gradle"
+[[tool.method]]
+kind = "pacman"
+package = "gradle"
+[[tool.method]]
+kind = "brew"
+formula = "gradle"
+
+[[tool]]
+id = "maven"
+name = "Maven"
+category = "runtime"
+cmd = "mvn"
+priority = "P1"
+audience = "both"
+desc = "Standard Java build tool; SDKMAN keeps Maven aligned with the selected JVM."
+requires = ["sdkman"]
+[[tool.method]]
+kind = "dnf"
+package = "maven"
+[[tool.method]]
+kind = "apt"
+package = "maven"
+[[tool.method]]
+kind = "pacman"
+package = "maven"
+[[tool.method]]
+kind = "brew"
+formula = "maven"
 
 [[tool]]
 id = "procs"
@@ -1280,9 +1523,9 @@ id = "vscode"
 name = "Visual Studio Code"
 category = "editor"
 cmd = "code"
-priority = "P3"
+priority = "P1"
 audience = "both"
-desc = "Microsoft's extensible code editor"
+desc = "GUI editor with a `code` CLI; on Bazzite prefer Flatpak or containers when native app writes are unsafe."
 # Arch-split `latest` aliases (each 302s to the current build's CDN zip); the
 # universal zip is ~120 MB larger per download and ~2x on disk -> not used.
 [[tool.method]]
@@ -1303,6 +1546,20 @@ cli = "Contents/Resources/app/bin/code"
 kind = "cask"
 os = ["macos"]
 cask = "visual-studio-code"
+
+[[tool]]
+id = "jetbrains-toolbox"
+name = "JetBrains Toolbox"
+category = "editor"
+cmd = "jetbrains-toolbox"
+priority = "P2"
+audience = "human"
+desc = "Manages JetBrains IDEs such as IntelliJ IDEA and PyCharm without modeling each IDE separately."
+[[tool.method]]
+kind = "cask"
+os = ["macos"]
+cask = "jetbrains-toolbox"
+app = "JetBrains Toolbox.app"
 
 [[tool]]
 id = "sublime"

@@ -83,7 +83,7 @@ async def test_status_line_set_and_clear() -> None:
 
 
 async def test_wayfinding_header_highlights_active_view() -> None:
-    """The header numbers every view ([1]–[5]) and marks the active one accent-bold."""
+    """The header numbers every view ([1]–[4]) and marks the active one accent-bold."""
     from installer.ui_common import WayfindingHeader
 
     class _Host(App[None]):
@@ -141,11 +141,35 @@ def test_view_registry_is_complete_and_consistent() -> None:
     derive from the same table, so they can never drift apart."""
     from installer.ui_common import VIEW_BY_NAME, VIEW_ORDER, VIEWS
 
-    assert VIEW_ORDER == ("catalog", "doctor", "fix", "uninstall", "policies")
+    assert VIEW_ORDER == ("catalog", "doctor", "uninstall", "policies")
     assert set(VIEW_BY_NAME) == set(VIEW_ORDER)
     for view in VIEWS:
         assert view.label and view.palette and view.mode and view.glyph and view.hint
-        assert view.actions  # Doctor included: read-only is an explicit token
+        assert view.actions
+
+
+def test_view_order_collapses_fix_into_doctor() -> None:
+    from installer.ui_common import VIEW_BY_NAME, VIEW_ORDER
+
+    assert VIEW_ORDER == ("catalog", "doctor", "uninstall", "policies")
+    assert "fix" not in VIEW_BY_NAME
+
+
+def test_doctor_view_advertises_audit_and_apply() -> None:
+    from installer.ui_common import VIEW_BY_NAME
+
+    doctor = VIEW_BY_NAME["doctor"]
+    assert doctor.label == "Doctor"
+    assert doctor.palette == "Doctor - audit PATH and apply the safe fix"
+    assert doctor.mode == "AUDIT + APPLY"
+    assert doctor.hint == "audit report stays read-only until you press enter"
+    assert doctor.actions == "enter apply"
+
+
+def test_global_nav_names_four_views() -> None:
+    from installer.ui_common import GLOBAL_NAV
+
+    assert GLOBAL_NAV == "1-4 views | ^p nav | esc back | q quit"
 
 
 def test_footer_bar_shows_actions_then_global_nav() -> None:
@@ -154,17 +178,17 @@ def test_footer_bar_shows_actions_then_global_nav() -> None:
     text = FooterBar("catalog").render_text().plain
     assert "space toggle" in text and "enter install" in text
     assert "│" in text  # zone separator
-    assert "1–5 views" in text and "^p nav" in text and "q quit" in text
+    assert "1-4 views" in text and "^p nav" in text and "q quit" in text
     # the action zone is left of the separator; global nav is right of it
-    assert text.index("space toggle") < text.index("│") < text.index("1–5 views")
+    assert text.index("space toggle") < text.index("│") < text.index("1-4 views")
 
 
-def test_footer_bar_doctor_reads_as_read_only() -> None:
+def test_footer_bar_doctor_shows_apply_actions() -> None:
     from installer.ui_common import FooterBar
 
     text = FooterBar("doctor").render_text().plain
-    assert "(read-only)" in text
-    assert text.index("(read-only)") < text.index("│")
+    assert "enter apply" in text
+    assert text.index("enter apply") < text.index("│")
 
 
 def test_mode_badge_renders_label_glyph_and_hint() -> None:
@@ -172,18 +196,20 @@ def test_mode_badge_renders_label_glyph_and_hint() -> None:
 
     badge = ModeBadge(VIEW_BY_NAME["policies"])
     text = badge.render_text()
-    assert "◆" in text.plain
+    assert "*" in text.plain
     assert "[LIVE]" in text.plain
     assert "space toggles a policy and applies it now" in text.plain
 
 
-def test_mode_badge_staged_and_readonly_strings() -> None:
+def test_mode_badge_staged_and_apply_strings() -> None:
     from installer.ui_common import VIEW_BY_NAME, ModeBadge
 
     catalog_badge = ModeBadge(VIEW_BY_NAME["catalog"])
     assert "[STAGED]" in catalog_badge.render_text().plain
-    assert "◇" in catalog_badge.render_text().plain
+    assert "o" in catalog_badge.render_text().plain
     uninstall = ModeBadge(VIEW_BY_NAME["uninstall"]).render_text().plain
-    assert "[STAGED · DESTRUCTIVE]" in uninstall
-    assert "◇" in uninstall  # staged stays hollow; danger is carried by the words + red
-    assert "[READ-ONLY]" in ModeBadge(VIEW_BY_NAME["doctor"]).render_text().plain
+    assert "[STAGED / DESTRUCTIVE]" in uninstall
+    assert "o" in uninstall
+    doctor = ModeBadge(VIEW_BY_NAME["doctor"]).render_text().plain
+    assert "[AUDIT + APPLY]" in doctor
+    assert ">" in doctor
