@@ -78,6 +78,10 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
                         f"tool '{row['id']}': method 'node' requires a non-empty 'npm_pkg'"
                     )
             methods.append(Method(kind=kind, params=params, os=os_targets, arch=arch_targets))
+        raw_requires = row.get("requires", [])
+        if isinstance(raw_requires, str):
+            # tuple("pnpm") would silently become ('p','n','p','m'); a list is required.
+            raise ValueError(f"tool '{row['id']}': 'requires' must be a list of tool ids")
         tools.append(
             Tool(
                 id=row["id"],
@@ -88,7 +92,7 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
                 priority=row.get("priority", "P3"),
                 audience=row.get("audience", "both"),
                 desc=row.get("desc", ""),
-                requires=tuple(row.get("requires", [])),
+                requires=tuple(raw_requires),
             )
         )
     return tools

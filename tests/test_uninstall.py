@@ -269,7 +269,7 @@ def test_plan_app_skips_cli_install_would_have_rejected(
 # --- classify_tools: removability over ALL tools (Phase 3) -----------------
 
 from installer.platform import Platform  # noqa: E402
-from installer.uninstall import ToolRow, classify_tools  # noqa: E402
+from installer.uninstall import ToolRow, classify_tools, reverse_dependencies  # noqa: E402
 
 _LINUX = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
 _MAC = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
@@ -481,3 +481,72 @@ def test_classify_unavailable_when_no_method_applies(
 
 def test_classify_returns_a_row_per_tool_in_order() -> None:
     assert isinstance(ToolRow(_dl("a"), "absent", [], "h", False).tool, Tool)
+
+
+# --- reverse_dependencies + reverse_deps warn-but-allow (Task A8) -----------
+
+
+def _dep_tool(tool_id: str, *requires: str) -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="c",
+        cmd=tool_id,
+        methods=(Method(kind="node", params={"npm_pkg": f"@x/{tool_id}"}),),
+        requires=tuple(requires),
+    )
+
+
+def test_reverse_dependencies_maps_dep_to_its_dependents() -> None:
+    rev = reverse_dependencies(
+        [_dep_tool("mmdc", "pnpm"), _dep_tool("other", "pnpm"), _dep_tool("pnpm")]
+    )
+    assert sorted(rev["pnpm"]) == ["mmdc", "other"]
+    assert "mmdc" not in rev
+
+
+def test_reverse_dependencies_empty_when_no_requires() -> None:
+    assert reverse_dependencies([_dep_tool("a"), _dep_tool("b")]) == {}
+
+
+def test_classify_appends_required_by_note_to_hint() -> None:
+    pnpm = Tool(
+        id="pnpm",
+        name="pnpm",
+        category="pkg-mgr",
+        cmd="pnpm",
+        methods=(Method(kind="script", params={"url": "https://x"}),),
+    )
+    mmdc = _dep_tool("mmdc", "pnpm")
+    platform = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    rows = classify_tools(
+        [pnpm, mmdc],
+        Path("/tmp/bin"),
+        installed={"pnpm": True, "mmdc": False},
+        platform=platform,
+        which=lambda _cmd: None,
+        reverse_deps={"pnpm": ["mmdc"]},
+    )
+    pnpm_row = next(r for r in rows if r.tool.id == "pnpm")
+    mmdc_row = next(r for r in rows if r.tool.id == "mmdc")
+    assert "required by mmdc" in pnpm_row.hint
+    assert "required by" not in mmdc_row.hint
+
+
+def test_classify_without_reverse_deps_leaves_hint_unchanged() -> None:
+    pnpm = Tool(
+        id="pnpm",
+        name="pnpm",
+        category="pkg-mgr",
+        cmd="pnpm",
+        methods=(Method(kind="script", params={"url": "https://x"}),),
+    )
+    platform = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    rows = classify_tools(
+        [pnpm],
+        Path("/tmp/bin"),
+        installed={"pnpm": True},
+        platform=platform,
+        which=lambda _cmd: None,
+    )
+    assert "required by" not in rows[0].hint

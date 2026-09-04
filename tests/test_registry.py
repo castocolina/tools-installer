@@ -228,11 +228,11 @@ def test_gron_uses_tgz_with_trailing_version() -> None:
     assert method.params["strip"] == 0
 
 
-def test_registry_has_forty_nine_unique_tools_and_cmds() -> None:
+def test_registry_has_fifty_unique_tools_and_cmds() -> None:
     tools = load_tools(REGISTRY)
     ids = [t.id for t in tools]
     cmds = [t.cmd for t in tools]
-    assert len(ids) == 49
+    assert len(ids) == 50
     assert len(ids) == len(set(ids))
     assert len(cmds) == len(set(cmds))
 

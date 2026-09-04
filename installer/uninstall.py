@@ -3,7 +3,7 @@ and install_app create. Cask/brew/native-managed artifacts are left alone."""
 
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 from installer.apps import APP_KINDS, cli_spec
@@ -130,6 +130,18 @@ def _managed_hint(tool: Tool, which: Callable[[str], str | None]) -> str:
     return f"{hint} — found at {path}" if path else hint
 
 
+def reverse_dependencies(tools: list[Tool]) -> dict[str, list[str]]:
+    """Map each tool id to the ids of tools that declare it in ``requires``.
+
+    Used by the Uninstall view to warn (but allow) when removing a tool others
+    depend on — never a cascade or a block. Ids with no dependents are omitted."""
+    rev: dict[str, list[str]] = {}
+    for tool in tools:
+        for dep_id in tool.requires:
+            rev.setdefault(dep_id, []).append(tool.id)
+    return rev
+
+
 def classify_tools(
     tools: list[Tool],
     default_bin_dir: Path,
@@ -137,13 +149,18 @@ def classify_tools(
     installed: dict[str, bool],
     platform: Platform,
     which: Callable[[str], str | None] = shutil.which,
+    reverse_deps: dict[str, list[str]] | None = None,
 ) -> list[ToolRow]:
     """Classify every tool by removability, one ToolRow per tool in input order.
 
     Reuses plan_uninstall (userspace artifacts), the installed map, the platform
     resolver, and `which` (to resolve where a managed tool lives) so the Uninstall
     view shows full catalog parity: removable-here vs managed-elsewhere vs
-    not-installed vs unavailable."""
+    not-installed vs unavailable.
+
+    When ``reverse_deps`` is provided, any tool that other tools depend on gets a
+    "required by …" note appended to its hint — warn-but-allow, no cascade or
+    block."""
     rows: list[ToolRow] = []
     for tool in tools:
         paths = plan_uninstall([tool], default_bin_dir)
@@ -157,6 +174,16 @@ def classify_tools(
             rows.append(ToolRow(tool, "absent", [], "not installed", False))
         else:
             rows.append(ToolRow(tool, "unavailable", [], f"not available on {platform.os}", False))
+    if reverse_deps:
+        rows = [
+            replace(
+                row,
+                hint=f"{row.hint} · required by {', '.join(reverse_deps[row.tool.id])}",
+            )
+            if reverse_deps.get(row.tool.id)
+            else row
+            for row in rows
+        ]
     return rows
 
 

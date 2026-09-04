@@ -176,6 +176,27 @@ Homebrew is **an optional package you can install from the wizard** (`brew-mac`,
 `brew-linux`), never a prerequisite — some packages only live there, but if the
 author ships an `.sh` that works, that wins.
 
+A fifth kind covers npm-package CLIs:
+
+5. **npm package** (`kind = "node"`) — installs the CLI via `pnpm add -g <npm_pkg>`.
+   `pnpm` is used consistently (bare `npm` is never called, matching the pip/npm ban).
+   Example: `mmdc` (`@mermaid-js/mermaid-cli`) declares `kind = "node"` with
+   `npm_pkg = "@mermaid-js/mermaid-cli"` and `requires = ["pnpm"]`.
+
+### Tool dependencies (`requires`)
+
+A registry entry can declare `requires = ["<tool-id>", ...]`. When you select a
+tool, the installer expands the full transitive dependency set, adds any missing
+dependencies to the install list (printing "Added dependencies: …"), and installs
+them first in dependency order. A dependency that is unavailable on your platform
+is skipped with a warning, and any tool that needs it is skipped too.
+
+The catalog detail bar shows a `requires: …` line for tools that have dependencies.
+
+**Uninstalling** a tool that other tools depend on appends a "required by …" note to
+its row in the uninstall view — warn-but-allow: it does not block the removal and
+does not cascade to dependents.
+
 ## PATH doctor & fix
 
 `make doctor` is a **read-only report**: it audits the live PATH against the bin
@@ -237,6 +258,23 @@ It is **not** a sandbox: `python -m pip install` bypasses the `pip` shim, and a
 real `pip`/`npm` earlier on your `PATH` wins — `make doctor` warns about that
 ordering. The ban is also a toggle in the **uninstall view** (and `make
 uninstall` removes it along with everything else).
+
+### Shell tweak bundles
+
+The policies view also surfaces four curated, independently-toggleable shell-tweak
+bundles. Each writes its own marker block into `~/.myshellrc` (already sourced by
+bash and zsh) and takes effect in a new shell. Enabling or disabling one never
+touches another bundle or your own content.
+
+| Bundle | Available on | What it adds |
+| --- | --- | --- |
+| **Docker shortcuts** | all | `docker-ps` (live container table via `watch`), `docker-stats`, `docker-memory` |
+| **Countdown helper** | all | `wait_time <secs>` — a portable terminal countdown |
+| **claude skip-permissions** | all | `alias claude='claude --dangerously-skip-permissions'` |
+| **apt selective upgrade** | Linux | `apt-upgrade` — upgrades only packages that have available updates |
+
+`docker-ps` requires the `watch` command to be on your PATH. The `apt-upgrade`
+bundle is offered on Linux only (not macOS).
 
 ## What's NOT in v1
 

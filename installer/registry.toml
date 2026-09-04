@@ -52,6 +52,9 @@ desc = "Secret scanning and security checks"
 [[category]]
 id = "editor"
 desc = "GUI editors (macOS app installs)"
+[[category]]
+id = "diagram"
+desc = "Diagram and chart generators"
 
 [[tool]]
 id = "uv"
@@ -1321,3 +1324,16 @@ cli = "Contents/SharedSupport/bin/subl"
 kind = "cask"
 os = ["macos"]
 cask = "sublime-text"
+
+[[tool]]
+id = "mmdc"
+name = "Mermaid CLI"
+category = "diagram"
+cmd = "mmdc"
+priority = "P2"
+audience = "both"
+desc = "Render Mermaid diagrams to SVG/PNG/PDF from the command line"
+requires = ["pnpm"]
+[[tool.method]]
+kind = "node"
+npm_pkg = "@mermaid-js/mermaid-cli"
