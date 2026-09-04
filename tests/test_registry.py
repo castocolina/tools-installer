@@ -110,6 +110,30 @@ def test_sdkman_uses_init_script_and_declares_bin_dir() -> None:
     assert [m.kind for m in sdkman.methods] == ["script"]
     assert sdkman.methods[0].params["url"] == "https://get.sdkman.io?ci=true"
     assert sdkman.methods[0].params["bin_dir"] == "~/.sdkman/bin"
+    # sdkman-init.sh is sourced, not executed — it never carries the execute
+    # bit, so `which` can never find it; detect_path is the fallback marker.
+    assert sdkman.methods[0].params["detect_path"] == "~/.sdkman/bin/sdkman-init.sh"
+
+
+def test_java_tools_install_exclusively_through_sdkman() -> None:
+    # brew is preferred generally, but Java-toolchain tools must go through
+    # SDKMAN specifically, never a native/brew package — no fallback method.
+    tools = _tools_by_id()
+    expected_candidates = {
+        "java": "java",
+        "groovy": "groovy",
+        "springbootcli": "springboot",
+        "gradle": "gradle",
+        "maven": "maven",
+    }
+    for tool_id, candidate in expected_candidates.items():
+        tool = tools[tool_id]
+        assert [m.kind for m in tool.methods] == ["sdkman"], (
+            f"{tool_id}: must install exclusively through sdkman"
+        )
+        method = tool.methods[0]
+        assert method.params["candidate"] == candidate
+        assert method.params["bin_dir"] == f"~/.sdkman/candidates/{candidate}/current/bin"
 
 
 def test_agent_clis_use_supported_install_methods() -> None:

@@ -1212,6 +1212,7 @@ kind = "script"
 url = "https://get.sdkman.io?ci=true"
 shell = "bash"
 bin_dir = "~/.sdkman/bin"
+detect_path = "~/.sdkman/bin/sdkman-init.sh"
 
 [[tool]]
 id = "java"
@@ -1220,20 +1221,12 @@ category = "runtime"
 cmd = "java"
 priority = "P1"
 audience = "both"
-desc = "JVM runtime required by Gradle, Maven, Groovy, and many enterprise projects; SDKMAN owns user-space setup."
+desc = "JVM runtime required by Gradle, Maven, Groovy, and many enterprise projects; installed and version-managed exclusively through SDKMAN, never a native/brew package."
 requires = ["sdkman"]
 [[tool.method]]
-kind = "dnf"
-package = "java-latest-openjdk"
-[[tool.method]]
-kind = "apt"
-package = "default-jdk"
-[[tool.method]]
-kind = "pacman"
-package = "jdk-openjdk"
-[[tool.method]]
-kind = "brew"
-formula = "openjdk"
+kind = "sdkman"
+candidate = "java"
+bin_dir = "~/.sdkman/candidates/java/current/bin"
 
 [[tool]]
 id = "groovy"
@@ -1242,20 +1235,12 @@ category = "runtime"
 cmd = "groovy"
 priority = "P2"
 audience = "both"
-desc = "JVM scripting language for build and automation scripts; SDKMAN keeps versions in user space."
+desc = "JVM scripting language for build and automation scripts; installed and version-managed exclusively through SDKMAN, never a native/brew package."
 requires = ["sdkman"]
 [[tool.method]]
-kind = "dnf"
-package = "groovy"
-[[tool.method]]
-kind = "apt"
-package = "groovy"
-[[tool.method]]
-kind = "pacman"
-package = "groovy"
-[[tool.method]]
-kind = "brew"
-formula = "groovy"
+kind = "sdkman"
+candidate = "groovy"
+bin_dir = "~/.sdkman/candidates/groovy/current/bin"
 
 [[tool]]
 id = "springbootcli"
@@ -1264,11 +1249,12 @@ category = "runtime"
 cmd = "spring"
 priority = "P2"
 audience = "both"
-desc = "Bootstraps and runs Spring projects from the terminal; SDKMAN keeps the CLI tied to JVM tooling."
+desc = "Bootstraps and runs Spring projects from the terminal; installed and version-managed exclusively through SDKMAN (candidate 'springboot'), never a native/brew package."
 requires = ["sdkman"]
 [[tool.method]]
-kind = "brew"
-formula = "spring-boot"
+kind = "sdkman"
+candidate = "springboot"
+bin_dir = "~/.sdkman/candidates/springboot/current/bin"
 
 [[tool]]
 id = "gradle"
@@ -1277,20 +1263,12 @@ category = "runtime"
 cmd = "gradle"
 priority = "P1"
 audience = "both"
-desc = "Build tool for JVM projects; SDKMAN helps avoid global system Gradle drift."
+desc = "Build tool for JVM projects; installed and version-managed exclusively through SDKMAN, never a native/brew package."
 requires = ["sdkman"]
 [[tool.method]]
-kind = "dnf"
-package = "gradle"
-[[tool.method]]
-kind = "apt"
-package = "gradle"
-[[tool.method]]
-kind = "pacman"
-package = "gradle"
-[[tool.method]]
-kind = "brew"
-formula = "gradle"
+kind = "sdkman"
+candidate = "gradle"
+bin_dir = "~/.sdkman/candidates/gradle/current/bin"
 
 [[tool]]
 id = "maven"
@@ -1299,20 +1277,12 @@ category = "runtime"
 cmd = "mvn"
 priority = "P1"
 audience = "both"
-desc = "Standard Java build tool; SDKMAN keeps Maven aligned with the selected JVM."
+desc = "Standard Java build tool; installed and version-managed exclusively through SDKMAN, never a native/brew package."
 requires = ["sdkman"]
 [[tool.method]]
-kind = "dnf"
-package = "maven"
-[[tool.method]]
-kind = "apt"
-package = "maven"
-[[tool.method]]
-kind = "pacman"
-package = "maven"
-[[tool.method]]
-kind = "brew"
-formula = "maven"
+kind = "sdkman"
+candidate = "maven"
+bin_dir = "~/.sdkman/candidates/maven/current/bin"
 
 [[tool]]
 id = "procs"

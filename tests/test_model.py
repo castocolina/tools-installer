@@ -394,3 +394,39 @@ kind = "node"
     )
     with pytest.raises(ValueError, match="node.*npm_pkg"):
         load_tools(manifest)
+
+
+def test_sdkman_kind_parses_with_candidate(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "java"
+category = "runtime"
+cmd = "java"
+requires = ["sdkman"]
+[[tool.method]]
+kind = "sdkman"
+candidate = "java"
+bin_dir = "~/.sdkman/candidates/java/current/bin"
+""",
+    )
+    tools = load_tools(manifest)
+    method = tools[0].methods[0]
+    assert method.kind == "sdkman"
+    assert method.params["candidate"] == "java"
+
+
+def test_sdkman_method_without_candidate_is_a_config_error(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "broken"
+category = "runtime"
+[[tool.method]]
+kind = "sdkman"
+""",
+    )
+    with pytest.raises(ValueError, match="sdkman.*candidate"):
+        load_tools(manifest)

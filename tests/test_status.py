@@ -144,3 +144,41 @@ def test_cmd_on_path_still_wins_for_app_tools(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(status.shutil, "which", which_found)
     assert is_installed(_app_tool()) is True
+
+
+def _detect_path_tool(detect_path: str) -> Tool:
+    return Tool(
+        id="sdkman",
+        name="SDKMAN",
+        category="runtime",
+        cmd="sdkman-init.sh",
+        methods=(
+            Method(
+                kind="script",
+                params={"url": "https://example.test/i.sh", "detect_path": detect_path},
+            ),
+        ),
+    )
+
+
+def test_detect_path_present_counts_as_installed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import installer.status as status
+
+    def which_none(cmd: str) -> str | None:
+        return None
+
+    monkeypatch.setattr(status.shutil, "which", which_none)
+    marker = tmp_path / "sdkman-init.sh"
+    marker.touch()  # a non-executable file — `which` could never find this
+    assert is_installed(_detect_path_tool(str(marker))) is True
+
+
+def test_detect_path_absent_is_not_installed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import installer.status as status
+
+    def which_none(cmd: str) -> str | None:
+        return None
+
+    monkeypatch.setattr(status.shutil, "which", which_none)
+    missing = tmp_path / "sdkman-init.sh"
+    assert is_installed(_detect_path_tool(str(missing))) is False

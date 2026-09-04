@@ -135,3 +135,16 @@ def test_node_applies_on_every_platform():
     for os_name in ("debian", "arch", "fedora", "macos"):
         platform = Platform(os=os_name, arch="amd64", immutable=False, has_brew=False)
         assert [m.kind for m in resolve_methods(_tool("node"), platform)] == ["node"]
+
+
+def test_sdkman_is_userspace_ranked_before_brew():
+    platform = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    tool = _tool("brew", "sdkman")
+    assert [m.kind for m in resolve_methods(tool, platform)] == ["sdkman", "brew"]
+
+
+def test_sdkman_applies_on_every_platform_including_immutable():
+    for os_name in ("debian", "arch", "fedora", "macos"):
+        for immutable in (False, True):
+            platform = Platform(os=os_name, arch="amd64", immutable=immutable, has_brew=False)
+            assert [m.kind for m in resolve_methods(_tool("sdkman"), platform)] == ["sdkman"]

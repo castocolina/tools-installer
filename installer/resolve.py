@@ -4,11 +4,13 @@ from installer.model import Method, Tool
 from installer.platform import Platform
 
 # Lower rank is tried first. The default ladder:
-#   1) official script  2) userspace install (download/node)  3) native pkg manager  4) brew/cask
+#   1) official script  2) userspace install (download/node/sdkman)
+#   3) native pkg manager  4) brew/cask
 _RANK = {
     "script": 10,
     "github_release": 20,
     "node": 20,
+    "sdkman": 20,
     "tarball": 20,
     "app": 20,
     "dnf": 30,
@@ -33,7 +35,7 @@ def _applies(method: Method, platform: Platform) -> bool:
     if method.arch and platform.arch not in method.arch:
         return False
     kind = method.kind
-    if kind in ("script", "node", "github_release", "tarball", "app"):
+    if kind in ("script", "node", "sdkman", "github_release", "tarball", "app"):
         return True
     if kind == "brew":
         return platform.has_brew

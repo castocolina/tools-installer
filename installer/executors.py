@@ -74,6 +74,21 @@ def _node(method: Method, runner: Runner) -> None:
     runner(["pnpm", "add", "-g", require_str(method, "npm_pkg")])
 
 
+def _sdkman(method: Method, runner: Runner) -> None:
+    # `sdk` is a shell function defined by sourcing sdkman-init.sh, not a PATH
+    # binary — it must be sourced in the same shell invocation that calls it.
+    # The sdkman tool's own bootstrap runs with `?ci=true`, which persists
+    # `sdkman_auto_answer=true` in ~/.sdkman/etc/config, so a candidate install
+    # here does not hang on an interactive version-choice prompt.
+    candidate = require_str(method, "candidate")
+    version = method.params.get("version")
+    install = ["sdk", "install", candidate]
+    if isinstance(version, str) and version:
+        install.append(version)
+    pipeline = f'. "$HOME/.sdkman/bin/sdkman-init.sh" && {shlex.join(install)}'
+    runner(["bash", "-c", pipeline])
+
+
 def _cask(method: Method, runner: Runner) -> None:
     # --appdir keeps the bundle in userspace; brew's default appdir is /Applications,
     # which the PRD forbids (corporate machines without sudo).
@@ -85,6 +100,7 @@ def _cask(method: Method, runner: Runner) -> None:
 EXECUTORS: dict[str, Callable[[Method, Runner], None]] = {
     "script": _script,
     "node": _node,
+    "sdkman": _sdkman,
     "dnf": _dnf,
     "apt": _apt,
     "pacman": _pacman,

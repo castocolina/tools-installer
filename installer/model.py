@@ -10,6 +10,7 @@ from installer.enums import Audience, Category, Priority
 METHOD_KINDS = (
     "script",
     "node",
+    "sdkman",
     "github_release",
     "tarball",
     "app",
@@ -120,6 +121,12 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
                 if not isinstance(npm_pkg, str) or not npm_pkg:
                     raise ValueError(
                         f"tool '{row['id']}': method 'node' requires a non-empty 'npm_pkg'"
+                    )
+            if kind == "sdkman":
+                candidate = params.get("candidate")
+                if not isinstance(candidate, str) or not candidate:
+                    raise ValueError(
+                        f"tool '{row['id']}': method 'sdkman' requires a non-empty 'candidate'"
                     )
             methods.append(Method(kind=kind, params=params, os=os_targets, arch=arch_targets))
         raw_requires = row.get("requires", [])

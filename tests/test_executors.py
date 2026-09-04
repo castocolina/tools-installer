@@ -75,7 +75,7 @@ def test_unsupported_kind_raises():
 
 
 def test_every_command_kind_has_an_executor():
-    assert set(EXECUTORS) == {"script", "node", "dnf", "apt", "pacman", "brew", "cask"}
+    assert set(EXECUTORS) == {"script", "node", "sdkman", "dnf", "apt", "pacman", "brew", "cask"}
 
 
 def test_script_passes_env_assignments_to_the_shell() -> None:
@@ -132,3 +132,29 @@ def test_node_runs_pnpm_add_global_never_bare_npm():
 def test_node_without_npm_pkg_raises_executor_error():
     with pytest.raises(ExecutorError, match="npm_pkg"):
         execute(Method(kind="node", params={}), lambda _cmd: None)
+
+
+def test_sdkman_sources_init_script_then_installs_candidate():
+    calls, runner = _record()
+    execute(Method(kind="sdkman", params={"candidate": "java"}), runner)
+    assert calls == [["bash", "-c", '. "$HOME/.sdkman/bin/sdkman-init.sh" && sdk install java']]
+
+
+def test_sdkman_appends_version_when_given():
+    calls, runner = _record()
+    execute(
+        Method(kind="sdkman", params={"candidate": "java", "version": "21.0.4-tem"}),
+        runner,
+    )
+    assert calls == [
+        [
+            "bash",
+            "-c",
+            '. "$HOME/.sdkman/bin/sdkman-init.sh" && sdk install java 21.0.4-tem',
+        ]
+    ]
+
+
+def test_sdkman_without_candidate_raises_executor_error():
+    with pytest.raises(ExecutorError, match="candidate"):
+        execute(Method(kind="sdkman", params={}), lambda _cmd: None)
