@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from installer.deps import (
@@ -6,10 +8,10 @@ from installer.deps import (
     requires_integrity_errors,
     resolve_dependencies,
 )
-from installer.model import Method, Tool
+from installer.model import Method, Tool, load_tools
 
 
-def _tool(tool_id: str, *requires: str) -> Tool:
+def _tool(tool_id: str, *requires: str, tier: str = "user") -> Tool:
     return Tool(
         id=tool_id,
         name=tool_id,
@@ -17,6 +19,7 @@ def _tool(tool_id: str, *requires: str) -> Tool:
         cmd=tool_id,
         methods=(Method(kind="node", params={"npm_pkg": f"@x/{tool_id}"}),),
         requires=tuple(requires),
+        tier=tier,
     )
 
 
@@ -122,3 +125,28 @@ def test_integrity_clean_catalog_has_no_errors() -> None:
     a = _tool("a", "b")
     b = _tool("b")
     assert requires_integrity_errors([a, b]) == []
+
+
+def test_resolver_drags_in_dependency_across_a_tier_boundary() -> None:
+    pnpm = _tool("pnpm", tier="system")
+    mmdc = _tool("mmdc", "pnpm", tier="ai")
+    result = _resolve([mmdc], [mmdc, pnpm])
+    assert "pnpm" in result.dragged_in
+    assert [t.id for t in result.order] == ["pnpm", "mmdc"]
+    assert result.warnings == ()
+
+
+def test_real_registry_cross_tier_and_same_tier_requires_edges_resolve_unchanged() -> None:
+    registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+    catalog = load_tools(registry)
+    by_id = {tool.id: tool for tool in catalog}
+    mmdc = by_id["mmdc"]
+    pnpm = by_id["pnpm"]
+    java = by_id["java"]
+    sdkman = by_id["sdkman"]
+    assert mmdc.tier == "user" and pnpm.tier == "system"
+    assert java.tier == sdkman.tier == "system"
+    mmdc_result = _resolve([mmdc], catalog)
+    assert "pnpm" in mmdc_result.dragged_in
+    java_result = _resolve([java], catalog)
+    assert "sdkman" in java_result.dragged_in
