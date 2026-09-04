@@ -1,0 +1,20 @@
+{
+  "source_path": "/Users/ramon/git/personal/tools-installer/docs/prds/2026-09-04-catalog-tiers-and-dependency-chain-v1.0-prd.md",
+  "type": "PRD",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Catalog Tiers and Dependency Chain - Product Requirements Document (PRD)",
+  "summary": "Adds a system/user/ai tier field and a dependency graph model to the tool catalog, replacing the flat category/priority structure.",
+  "scope": ["catalog tiers", "dependency chain", "oh-my-zsh", "Homebrew bootstrap order", "install-time failure propagation", "uninstall sweep", "catalog TUI", "recommends soft dependency"],
+  "cross_refs": [
+    "docs/prds/2026-09-04-catalog-expansion-v1.0-prd.md",
+    "docs/prds/2026-09-04-postinstall-hooks-v1.0-prd.md",
+    "docs/prds/dependencies-and-shell-tweaks-v1.0-prd.md",
+    "docs/superpowers/plans/2026-06-21-dependencies-and-shell-tweaks.md",
+    "docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md",
+    ".claude/architecture.md"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}
