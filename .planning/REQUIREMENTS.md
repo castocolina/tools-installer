@@ -10,12 +10,12 @@ Each maps to exactly one roadmap phase.
 
 ### Catalog Tiers
 
-- [ ] **REQ-catalog-tier-field**: Every registry tool declares a `tier` (`system`/`user`/`ai`) on the `Tool` model and `registry.toml` schema, validated the same way an unknown `Priority` is rejected today; `uv`/`pnpm`/`brew`/`sdkman` migrate to `tier="system"`.
+- [x] **REQ-catalog-tier-field**: Every registry tool declares a `tier` (`system`/`user`/`ai`) on the `Tool` model and `registry.toml` schema, validated the same way an unknown `Priority` is rejected today; `uv`/`pnpm`/`brew`/`sdkman` migrate to `tier="system"`.
 - [ ] **REQ-catalog-tier-views**: The catalog's single flat view splits into three tier-scoped top-level views (System/User/AI) reachable directly from the top nav, each keeping the existing Category/Priority/Audience/Status/Table grouping, with cross-tier `requires` drag-in still visible from a dependent tool's own tier view.
 
 ### Dependency Chain
 
-- [ ] **REQ-dependency-chain-requires**: Cross-tier `requires` chains resolve via the existing resolver (`installer/deps.py:resolve_dependencies`) with zero new resolver logic, demonstrated end-to-end using `java`->`sdkman` (already shipped, decision-independent) as the primary proof case once `sdkman` carries `tier="system"`; `mmdc`->`pnpm` is a secondary example only if `mmdc`'s install method (batch 2, REQ-mmdc-install-decision) stays on pnpm — it may become `mmdc`->`puppeteer` instead if that decision resolves to brew.
+- [x] **REQ-dependency-chain-requires**: Cross-tier `requires` chains resolve via the existing resolver (`installer/deps.py:resolve_dependencies`) with zero new resolver logic, demonstrated end-to-end using `java`->`sdkman` (already shipped, decision-independent) as the primary proof case once `sdkman` carries `tier="system"`; `mmdc`->`pnpm` is a secondary example only if `mmdc`'s install method (batch 2, REQ-mmdc-install-decision) stays on pnpm — it may become `mmdc`->`puppeteer` instead if that decision resolves to brew.
 - [ ] **REQ-recommends-soft-dependency**: `Tool.recommends: tuple[str, ...] = ()`, a soft-dependency field distinct from `requires`, surfaces (never auto-installs) complementary tools via a one-action, non-blocking prompt when a tool such as `claude`/`opencode` is selected.
 
 ### Install/Uninstall Lifecycle
@@ -113,8 +113,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| REQ-catalog-tier-field | Phase 1 | Pending |
-| REQ-dependency-chain-requires | Phase 1 | Pending |
+| REQ-catalog-tier-field | Phase 1 | Complete |
+| REQ-dependency-chain-requires | Phase 1 | Complete |
 | REQ-catalog-tier-views | Phase 2 | Pending |
 | REQ-recommends-soft-dependency | Phase 2 | Pending |
 | REQ-install-failure-propagation | Phase 3 | Pending |
