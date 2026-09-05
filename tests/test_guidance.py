@@ -99,6 +99,26 @@ def test_guard_guidance_no_cross_reference_for_plain_block() -> None:
     assert "warning" not in item.meaning.lower()
 
 
+def test_guard_guidance_volta_note_follows_guards_when_pnpm_is_live() -> None:
+    items = guard_guidance({"pnpm": True, "npm": True}, None)
+    assert "guards active" in items[0].title
+    volta = items[1]
+    assert "volta" in volta.title.lower()
+    assert volta.severity == "ok"
+    assert "npm install --global" in volta.meaning
+    assert "install scripts" in volta.meaning
+    assert "pnpm add" in volta.next_step
+
+
+def test_guard_guidance_volta_note_absent_when_pnpm_is_not_live() -> None:
+    items = guard_guidance({"npm": True, "pnpm": False}, None)
+    assert not [i for i in items if "volta" in i.title.lower()]
+
+
+def test_guard_guidance_volta_note_never_appears_alone() -> None:
+    assert guard_guidance({"pip": False, "npm": False}, None) == []
+
+
 def test_guidance_is_frozen() -> None:
     g = Guidance(title="t", meaning="m", next_step="n", severity="ok")
     try:

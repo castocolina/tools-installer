@@ -102,6 +102,22 @@ def guard_guidance(status: dict[str, bool], warning: str | None) -> list[Guidanc
                 severity=Severity.OK,
             )
         )
+    # plan 04-03's install_global_redirect_shims writes the pnpm wrapper only
+    # when volta actually resolved, so a live pnpm shim is the one honest
+    # on-disk signal that global installs are being routed to volta rather
+    # than falling back to the hard block.
+    if status.get("pnpm", False):
+        items.append(
+            Guidance(
+                title="Volta global installs run npm install scripts",
+                meaning=(
+                    "A global install through volta runs a real `npm install --global`; "
+                    "npm's install scripts are not gated the way pnpm gates them."
+                ),
+                next_step="Keep untrusted packages on a project-local `pnpm add`.",
+                severity=Severity.OK,
+            )
+        )
     if warning:
         items.append(
             Guidance(
