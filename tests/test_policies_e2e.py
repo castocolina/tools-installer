@@ -12,6 +12,7 @@ from installer.guards import guard_status
 from installer.model import Method, Tool
 from installer.policy import ban_policy, omz_plugins_policy, tweak_policy
 from installer.tweaks import BUNDLES, TweakBundle
+from installer.uninstall import SweepResult
 from installer.wizard_app import (
     PoliciesScreen,
     PolicyInputs,
@@ -54,7 +55,7 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path]:
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=[], ban_names=[], has_path_block=False, remove=lambda _d: None
+            rows=[], ban_names=[], has_path_block=False, remove=lambda _d: SweepResult()
         ),
         policies=PolicyInputs(policies=[policy]),
         initial_view="policies",
@@ -117,7 +118,7 @@ async def test_policies_screen_toggles_a_tweak_bundle_live(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=[], ban_names=[], has_path_block=False, remove=lambda _d: None
+            rows=[], ban_names=[], has_path_block=False, remove=lambda _d: SweepResult()
         ),
         policies=PolicyInputs(policies=[policy]),
         initial_view="policies",
@@ -180,7 +181,7 @@ async def test_policies_screen_toggles_omz_plugins_live(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=[], ban_names=[], has_path_block=False, remove=lambda _d: None
+            rows=[], ban_names=[], has_path_block=False, remove=lambda _d: SweepResult()
         ),
         policies=PolicyInputs(policies=[policy]),
         initial_view="policies",
@@ -217,7 +218,7 @@ def _omz_app(home: Path, *, present: bool, zshrc_text: str) -> tuple[UnifiedApp,
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=[], ban_names=[], has_path_block=False, remove=lambda _d: None
+            rows=[], ban_names=[], has_path_block=False, remove=lambda _d: SweepResult()
         ),
         policies=PolicyInputs(policies=[policy]),
         initial_view="policies",

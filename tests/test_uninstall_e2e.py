@@ -14,7 +14,7 @@ from installer.platform import Platform
 from installer.policy import omz_plugins_policy, tweak_policy
 from installer.shellrc import has_managed_block, write_myshellrc
 from installer.tweaks import BUNDLES
-from installer.uninstall import ToolRow, active_tweak_ids, classify_tools
+from installer.uninstall import SweepResult, ToolRow, active_tweak_ids, classify_tools
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs, UninstallScreen
 
 _LINUX = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
@@ -49,8 +49,10 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
 
     rows = classify_tools([_dl_tool()], bin_dir, installed={"fd": True}, platform=_LINUX)
 
-    def _remove(decision: UninstallDecision) -> None:
-        perform_uninstall(decision, bin_dir=bin_dir, myshellrc_path=myshellrc, rc_paths=[myshellrc])
+    def _remove(decision: UninstallDecision) -> SweepResult:
+        return perform_uninstall(
+            decision, bin_dir=bin_dir, myshellrc_path=myshellrc, rc_paths=[myshellrc]
+        )
 
     inputs = UninstallInputs(
         rows=rows,
@@ -98,8 +100,8 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
     rows = classify_tools([_dl_tool()], bin_dir, installed={"fd": True}, platform=_LINUX)
     tweak_ids = active_tweak_ids(BUNDLES, rc_path=myshellrc, bin_dir=bin_dir, zshrc_path=zshrc)
 
-    def _remove(decision: UninstallDecision) -> None:
-        perform_uninstall(
+    def _remove(decision: UninstallDecision) -> SweepResult:
+        return perform_uninstall(
             decision,
             bin_dir=bin_dir,
             myshellrc_path=myshellrc,
@@ -141,7 +143,7 @@ def _error_app(home: Path) -> UnifiedApp:
     bin_dir.mkdir(parents=True)
     (bin_dir / "fd").write_text("x")
 
-    def _boom(_decision: UninstallDecision) -> None:
+    def _boom(_decision: UninstallDecision) -> SweepResult:
         raise OSError("permission denied")
 
     inputs = UninstallInputs(

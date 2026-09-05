@@ -13,6 +13,7 @@ from installer.doctor import DoctorReport
 from installer.enums import Audience
 from installer.model import Method, Tool, load_categories, load_tools
 from installer.selection import select_tools
+from installer.uninstall import SweepResult
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 from tests.test_registry import REGISTRY
 
@@ -33,7 +34,7 @@ def _unified_app(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=[], ban_names=[], has_path_block=False, remove=lambda _decision: None
+            rows=[], ban_names=[], has_path_block=False, remove=lambda _decision: SweepResult()
         ),
         policies=PolicyInputs(policies=[]),
     )

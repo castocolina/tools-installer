@@ -1141,3 +1141,51 @@ def test_run_uninstall_preview_stays_silent_about_a_zshrc_it_does_not_own(
     assert "countdown" in out
     assert "omz-plugins" not in out
     assert zshrc.read_text() == hand_written
+
+
+def test_run_uninstall_reports_what_the_sweep_did_not_what_it_previewed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+    from installer.tweaks import BUNDLES
+
+    rc_path, bin_dir = _enable_countdown(tmp_path, monkeypatch)
+    console, buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=rc_path,
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=BUNDLES,
+    )
+    assert "Shell tweaks disabled: tweak:countdown." in buf.getvalue()
+
+
+def test_run_uninstall_names_the_tweaks_it_could_not_disable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import policy as policy_module
+    from installer.app import run_uninstall
+    from installer.tweaks import BUNDLES, TweakBundle
+
+    rc_path, bin_dir = _enable_countdown(tmp_path, monkeypatch)
+
+    def boom(_bundle: TweakBundle, _path: Path) -> None:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(policy_module, "remove_tweak", boom)
+    console, buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=rc_path,
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=BUNDLES,
+    )
+    out = buf.getvalue()
+    assert "Could not disable: tweak:countdown." in out
+    assert "Shell tweaks disabled" not in out

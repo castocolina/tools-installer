@@ -43,7 +43,7 @@ from installer.ui_common import (
     multiline_summary,
     run_live,
 )
-from installer.uninstall import ToolRow
+from installer.uninstall import SweepResult, ToolRow
 
 
 @dataclass(frozen=True)
@@ -56,7 +56,7 @@ class UninstallInputs:
     rows: list[ToolRow]
     ban_names: list[str]
     has_path_block: bool
-    remove: Callable[[UninstallDecision], None]
+    remove: Callable[[UninstallDecision], SweepResult]
     tweak_ids: tuple[str, ...] = ()
 
 
@@ -448,8 +448,8 @@ class UninstallScreen(AppScreen):
             remove_path_block=self.remove_path_block,
             remove_tweaks=self.remove_tweaks,
         )
-        _, self.error = run_live(lambda: self._remove(decision))
-        if self.error is not None:
+        swept, self.error = run_live(lambda: self._remove(decision))
+        if swept is None:
             self.status.set(
                 f"Uninstall failed: {self.error}. Check permissions, then press enter.",
                 "error",
@@ -457,9 +457,9 @@ class UninstallScreen(AppScreen):
             return
         self.applied = True
         tool_count = sum(1 for key in ids if key not in _ENV_KEYS)
-        self.status.set(self._applied_summary(tool_count), "ok")
+        self.status.set(self._applied_summary(tool_count, swept), "ok")
 
-    def _applied_summary(self, tool_count: int) -> str:
+    def _applied_summary(self, tool_count: int, swept: SweepResult) -> str:
         parts: list[str] = []
         if tool_count:
             parts.append(f"Removed {tool_count} tool(s).")
@@ -471,10 +471,19 @@ class UninstallScreen(AppScreen):
         if self.remove_path_block:
             parts.append("PATH wiring removed — restart your shell to drop the managed dirs.")
         if self.remove_tweaks:
-            parts.append(
-                f"shell tweaks disabled ({', '.join(self._tweak_ids)}) — open a new "
-                "shell so functions and aliases refresh."
-            )
+            # From the sweep's own result, never from the row's snapshot: the
+            # snapshot describes what was offered, not what came off.
+            if swept.swept:
+                parts.append(
+                    f"shell tweaks disabled ({', '.join(swept.swept)}) — open a new "
+                    "shell so functions and aliases refresh."
+                )
+            if swept.failed:
+                parts.append(
+                    f"could not disable {', '.join(swept.failed)} — check permissions and re-run."
+                )
+            if not swept.swept and not swept.failed:
+                parts.append("no shell tweaks were still enabled — nothing to disable.")
         # One line per outcome: a single joined line overflows the terminal width and
         # truncates the reload guidance, so the "needs a new shell" steps go unseen.
         return multiline_summary(parts)

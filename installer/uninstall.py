@@ -249,6 +249,45 @@ def _omz_policy(zshrc_path: Path, state_path: Path) -> Policy:
     return omz_plugins_policy(zshrc_path=zshrc_path, state_path=state_path, present=True)
 
 
+@dataclass(frozen=True)
+class SweepResult:
+    """What a teardown actually did: the ids it disabled, and the ids it could not.
+
+    The sweep's return value is the only ground truth about its effect. Every
+    id a caller could otherwise report comes from a separate, earlier
+    `active_tweak_ids` call, which is structurally incapable of reflecting what
+    happened — so reporting from anything but this is reporting the preview.
+    """
+
+    swept: tuple[str, ...] = ()
+    failed: tuple[str, ...] = ()
+
+
+def _active_policies(
+    bundles: tuple[TweakBundle, ...],
+    *,
+    rc_path: Path,
+    bin_dir: Path,
+    zshrc_path: Path | None,
+) -> list[Policy]:
+    """Every policy whose footprint is still on this machine, built exactly once.
+
+    One construction pass is what makes the "single predicate" claim literal:
+    `active_tweak_ids` reads the ids off these objects and `sweep_tweaks` calls
+    remove on the very same ones, so the preview and the effect cannot be
+    derived from two separate reads of the same files.
+    """
+    policies: list[Policy] = []
+    for bundle in bundles:
+        if tweak_present(bundle, rc_path) or tweak_executables_present(bundle, bin_dir):
+            policies.append(tweak_policy(bundle, rc_path=rc_path, bin_dir=bin_dir))
+    if zshrc_path is not None:
+        policy = _omz_policy(zshrc_path, rc_path)
+        if policy.active:
+            policies.append(policy)
+    return policies
+
+
 def active_tweak_ids(
     bundles: tuple[TweakBundle, ...],
     *,
@@ -282,15 +321,12 @@ def active_tweak_ids(
     omitting it silently narrows the sweep to bundles and leaves the Oh-My-Zsh
     plugins=(...) edit on the machine with nothing reporting it.
     """
-    ids: list[str] = []
-    for bundle in bundles:
-        if tweak_present(bundle, rc_path) or tweak_executables_present(bundle, bin_dir):
-            ids.append(tweak_policy(bundle, rc_path=rc_path, bin_dir=bin_dir).id)
-    if zshrc_path is not None:
-        policy = _omz_policy(zshrc_path, rc_path)
-        if policy.active:
-            ids.append(policy.id)
-    return tuple(ids)
+    return tuple(
+        policy.id
+        for policy in _active_policies(
+            bundles, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc_path
+        )
+    )
 
 
 def sweep_tweaks(
@@ -299,32 +335,37 @@ def sweep_tweaks(
     rc_path: Path,
     bin_dir: Path,
     zshrc_path: Path | None = None,
-) -> tuple[str, ...]:
+) -> SweepResult:
     """Disable every tweak active_tweak_ids reports, via Policy.remove.
 
     This is D-04's symmetric teardown: it writes no removal logic of its own,
     it calls the exact same Policy.remove closures the Policies view calls when
     the user toggles a tweak off, so "full uninstall" and "toggle off" are the
-    same operation by construction. Because it reads active_tweak_ids rather
-    than re-deriving, the preview a caller printed and the effect this
-    performs cannot diverge. Idempotent: a second call finds nothing active
-    and returns an empty tuple.
+    same operation by construction. It acts on the very policy objects the
+    preview was built from, so a preview and its effect cannot diverge.
+    Idempotent: a second call finds nothing active and reports nothing.
+
+    Failures are isolated per policy. A read-only ~/.local/bin, an
+    immutable-flagged rc file or an EACCES on an unlink raises OSError, and
+    letting the first one propagate abandoned every later bundle and the
+    .zshrc arm after it — leaving a half-torn-down machine with no record of
+    what had already gone. Each failure is collected and the sweep continues,
+    so the caller can name what did not come off.
 
     The None default on zshrc_path exists for unit tests and any caller working
     only with bundles; production callers MUST pass the real path, because
     omitting it silently narrows the sweep to bundles and leaves the Oh-My-Zsh
     plugins=(...) edit on the machine with nothing reporting it.
     """
-    ids = active_tweak_ids(bundles, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc_path)
-    active = set(ids)
-    for bundle in bundles:
-        # Dispatch on the same namespaced Policy id active_tweak_ids reports,
-        # so the two arms below cannot match off one another's entry.
-        policy = tweak_policy(bundle, rc_path=rc_path, bin_dir=bin_dir)
-        if policy.id in active:
+    swept: list[str] = []
+    failed: list[str] = []
+    for policy in _active_policies(
+        bundles, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc_path
+    ):
+        try:
             policy.remove()
-    if zshrc_path is not None:
-        policy = _omz_policy(zshrc_path, rc_path)
-        if policy.id in active:
-            policy.remove()
-    return ids
+        except OSError:
+            failed.append(policy.id)
+        else:
+            swept.append(policy.id)
+    return SweepResult(swept=tuple(swept), failed=tuple(failed))

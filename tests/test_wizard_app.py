@@ -9,7 +9,7 @@ from installer.doctor import DoctorReport
 from installer.model import Method, Tool
 from installer.policy import Policy, PolicyLayer, PolicyResult
 from installer.ui_common import BASE_VIEW
-from installer.uninstall import ToolRow
+from installer.uninstall import SweepResult, ToolRow
 from installer.wizard_app import (
     VIEW_ORDER,
     ConfirmUninstall,
@@ -37,6 +37,18 @@ def _tool(tool_id: str) -> Tool:
     )
 
 
+def _recorder(
+    captured: list[UninstallDecision], result: SweepResult | None = None
+) -> Callable[[UninstallDecision], SweepResult]:
+    """A remove closure that records the decision and reports a sweep outcome."""
+
+    def record(decision: UninstallDecision) -> SweepResult:
+        captured.append(decision)
+        return result if result is not None else SweepResult()
+
+    return record
+
+
 def _removable_row(tool: Tool, paths: list[Path]) -> ToolRow:
     return ToolRow(tool, "removable", paths, "installed in userspace — removable here", True)
 
@@ -46,7 +58,7 @@ def _uninstall_inputs(
     rows: list[ToolRow] | None = None,
     ban_names: list[str] | None = None,
     has_path_block: bool = False,
-    remove: Callable[[UninstallDecision], None] = lambda _decision: None,
+    remove: Callable[[UninstallDecision], SweepResult] = lambda _decision: SweepResult(),
     tweak_ids: tuple[str, ...] = (),
 ) -> UninstallInputs:
     return UninstallInputs(
@@ -417,7 +429,7 @@ async def test_uninstall_non_selectable_row_shows_hint() -> None:
 async def test_uninstall_apply_calls_remove_and_flips_applied() -> None:
     captured: list[UninstallDecision] = []
     rows = [_removable_row(_tool("rg"), [Path("/opt/rg")])]
-    app = _app(uninstall=_uninstall_inputs(rows=rows, remove=captured.append))
+    app = _app(uninstall=_uninstall_inputs(rows=rows, remove=_recorder(captured)))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         screen = app.screen
@@ -433,7 +445,7 @@ async def test_uninstall_apply_calls_remove_and_flips_applied() -> None:
 async def test_uninstall_empty_selection_refuses() -> None:
     captured: list[UninstallDecision] = []
     inputs = _uninstall_inputs(
-        rows=[_removable_row(_tool("rg"), [Path("/opt/rg")])], remove=captured.append
+        rows=[_removable_row(_tool("rg"), [Path("/opt/rg")])], remove=_recorder(captured)
     )
     app = _app(uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
@@ -446,7 +458,7 @@ async def test_uninstall_empty_selection_refuses() -> None:
 
 
 async def test_uninstall_apply_error_surfaces_and_does_not_crash() -> None:
-    def boom(_decision: UninstallDecision) -> None:
+    def boom(_decision: UninstallDecision) -> SweepResult:
         raise OSError("permission denied")
 
     inputs = _uninstall_inputs(rows=[_removable_row(_tool("rg"), [Path("/opt/rg")])], remove=boom)
@@ -522,7 +534,7 @@ async def test_uninstall_partial_selection_apply() -> None:
             _removable_row(_tool("rg"), [Path("/opt/rg")]),
             _removable_row(_tool("fd"), [Path("/opt/fd")]),
         ],
-        remove=captured.append,
+        remove=_recorder(captured),
     )
     app = _app(uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
@@ -548,7 +560,7 @@ async def test_uninstall_applied_summary_ban_and_path() -> None:
         rows=[_removable_row(_tool("rg"), [Path("/opt/rg")])],
         ban_names=["pip"],
         has_path_block=True,
-        remove=lambda _d: None,
+        remove=lambda _d: SweepResult(),
     )
     app = _app(uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
@@ -572,7 +584,7 @@ async def test_uninstall_applied_summary_omits_tool_line_when_no_tool() -> None:
     inputs = _uninstall_inputs(
         rows=[_removable_row(_tool("rg"), [Path("/opt/rg")])],
         ban_names=["pip"],
-        remove=lambda _d: None,
+        remove=lambda _d: SweepResult(),
     )
     app = _app(uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
@@ -596,7 +608,7 @@ async def test_uninstall_applied_summary_omits_tool_line_when_no_tool() -> None:
 async def test_uninstall_cancel_modal_removes_nothing() -> None:
     captured: list[UninstallDecision] = []
     rows = [_removable_row(_tool("rg"), [Path("/opt/rg")])]
-    app = _app(uninstall=_uninstall_inputs(rows=rows, remove=captured.append))
+    app = _app(uninstall=_uninstall_inputs(rows=rows, remove=_recorder(captured)))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         screen = app.screen
@@ -639,7 +651,7 @@ async def test_uninstall_screen_omits_the_tweaks_row_when_none_are_active() -> N
 async def test_uninstall_screen_reports_the_tweaks_lever_in_its_summaries() -> None:
     inputs = _uninstall_inputs(
         tweak_ids=("countdown", "omz-plugins"),
-        remove=lambda _d: None,
+        remove=lambda _d: SweepResult(),
     )
     app = _app(uninstall=inputs, initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:
@@ -1026,3 +1038,44 @@ async def test_unsettled_key_burst_lands_on_the_last_key_pressed() -> None:
         # and the keys still work afterwards
         await pilot.press("5")
         assert app.current_view == "uninstall"
+
+
+async def test_uninstall_summary_reports_the_sweep_result_not_the_snapshot() -> None:
+    """The row's tweak_ids describe what was OFFERED. Only the sweep's own
+    return value knows what came off, so the summary must read that."""
+    captured: list[UninstallDecision] = []
+    inputs = _uninstall_inputs(
+        tweak_ids=("tweak:countdown", "omz-plugins"),
+        remove=_recorder(
+            captured, SweepResult(swept=("omz-plugins",), failed=("tweak:countdown",))
+        ),
+    )
+    app = _app(uninstall=inputs, initial_view="uninstall")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.press("a")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.applied is True
+        status = app.screen.status.text
+        assert "shell tweaks disabled (omz-plugins)" in status
+        assert "could not disable tweak:countdown" in status
+
+
+async def test_uninstall_summary_says_so_when_the_sweep_found_nothing() -> None:
+    captured: list[UninstallDecision] = []
+    inputs = _uninstall_inputs(
+        tweak_ids=("tweak:countdown",), remove=_recorder(captured, SweepResult())
+    )
+    app = _app(uninstall=inputs, initial_view="uninstall")
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, UninstallScreen)
+        await pilot.press("a")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, UninstallScreen)
+        assert "no shell tweaks were still enabled" in app.screen.status.text

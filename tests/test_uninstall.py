@@ -4,8 +4,14 @@ import pytest
 
 from installer.model import Method, Tool
 from installer.policy import omz_plugins_policy, tweak_policy
-from installer.tweaks import BUNDLES
-from installer.uninstall import active_tweak_ids, plan_uninstall, remove_paths, sweep_tweaks
+from installer.tweaks import BUNDLES, TweakBundle
+from installer.uninstall import (
+    SweepResult,
+    active_tweak_ids,
+    plan_uninstall,
+    remove_paths,
+    sweep_tweaks,
+)
 
 
 def _tool(method: Method, *, tool_id: str = "t", cmd: str = "t") -> Tool:
@@ -582,10 +588,12 @@ def test_sweep_tweaks_disables_every_active_tweak(
     helper = bin_dir / "tools-installer-wait-time"
     assert helper.exists()
     assert "wait_time()" in rc_path.read_text()
-    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ("tweak:countdown",)
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == SweepResult(
+        swept=("tweak:countdown",)
+    )
     assert "wait_time()" not in rc_path.read_text()
     assert not helper.exists()
-    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ()
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == SweepResult()
 
 
 def _enabled_omz(
@@ -610,15 +618,18 @@ def test_sweep_tweaks_includes_the_omz_plugins_tweak(
     assert "omz-plugins" in active_tweak_ids(
         BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc
     )
-    assert "omz-plugins" in sweep_tweaks(
-        BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc
+    assert (
+        "omz-plugins"
+        in sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc).swept
     )
     assert zshrc.read_text().startswith("plugins=(z)\n")
     # Idempotent: the record is gone, so a second sweep reports and does nothing.
     assert "omz-plugins" not in active_tweak_ids(
         BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc
     )
-    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc) == ()
+    assert (
+        sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc) == SweepResult()
+    )
 
 
 def test_sweep_leaves_a_hand_authored_plugins_array_alone(
@@ -634,7 +645,9 @@ def test_sweep_leaves_a_hand_authored_plugins_array_alone(
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     assert active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc) == ()
-    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc) == ()
+    assert (
+        sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc) == SweepResult()
+    )
     assert zshrc.read_text() == hand_written
 
 
@@ -645,8 +658,9 @@ def test_sweep_removes_only_the_plugin_names_the_installer_added(
     # The user already had `git`; only `docker` was ever ours.
     zshrc, rc_path, bin_dir = _enabled_omz(tmp_path, "plugins=(git kubectl)\nsource omz\n")
     assert zshrc.read_text() == "plugins=(git kubectl docker)\nsource omz\n"
-    assert "omz-plugins" in sweep_tweaks(
-        BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc
+    assert (
+        "omz-plugins"
+        in sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc).swept
     )
     assert zshrc.read_text() == "plugins=(git kubectl)\nsource omz\n"
 
@@ -660,7 +674,9 @@ def test_orphaned_executable_is_swept_without_its_block(
     rc_path.write_text("# leftover user content\n")
     assert helper.exists()
     assert "tweak:countdown" in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
-    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ("tweak:countdown",)
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == SweepResult(
+        swept=("tweak:countdown",)
+    )
     assert not helper.exists()
 
 
@@ -672,7 +688,9 @@ def test_block_without_its_executable_is_still_swept(
     helper = bin_dir / "tools-installer-wait-time"
     helper.unlink()
     assert "tweak:countdown" in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
-    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ("tweak:countdown",)
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == SweepResult(
+        swept=("tweak:countdown",)
+    )
     assert "wait_time()" not in rc_path.read_text()
 
 
@@ -690,7 +708,7 @@ def test_sweep_never_deletes_a_file_it_does_not_own(
     stranger_text = "#!/bin/sh\necho hello\n"
     stranger.write_text(stranger_text)
     assert "tweak:countdown" not in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
-    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ()
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == SweepResult()
     assert impostor.exists() and impostor.read_text() == impostor_text
     assert stranger.exists() and stranger.read_text() == stranger_text
 
@@ -703,7 +721,8 @@ def test_preview_equals_effect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     omz_plugins_policy(zshrc_path=zshrc, state_path=rc_path, present=True).apply()
     previewed = active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc)
     swept = sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc)
-    assert previewed == swept
+    assert previewed == swept.swept
+    assert swept.failed == ()
     assert "tweak:countdown" in previewed
     assert "omz-plugins" in previewed
 
@@ -723,3 +742,32 @@ def test_reported_ids_are_namespaced_policy_ids(
     assert "countdown" not in ids
     # The .zshrc policy is deliberately un-namespaced: it is not a TweakBundle.
     assert "omz-plugins" in ids
+
+
+def test_a_failing_bundle_does_not_abort_the_rest_of_the_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read-only bin dir or an immutable rc file raises OSError. Letting the
+    first one propagate abandoned every later bundle and the .zshrc arm after
+    it, leaving a half-torn-down machine with no record of what had gone."""
+    from installer import policy as policy_module
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc_path, bin_dir = _enabled_countdown(tmp_path)
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text("plugins=(z)\nsource omz\n")
+    omz_plugins_policy(zshrc_path=zshrc, state_path=rc_path, present=True).apply()
+    real_remove = policy_module.remove_tweak
+
+    def boom(bundle: TweakBundle, path: Path) -> None:
+        if bundle.id == "countdown":
+            raise OSError("read-only file system")
+        real_remove(bundle, path)
+
+    monkeypatch.setattr(policy_module, "remove_tweak", boom)
+    result = sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc)
+    assert result.failed == ("tweak:countdown",)
+    # The .zshrc arm runs last, so it is the one a propagating error skipped —
+    # and it is the only arm that touches a file the user owns.
+    assert result.swept == ("omz-plugins",)
+    assert zshrc.read_text() == "plugins=(z)\nsource omz\n"

@@ -57,7 +57,13 @@ from installer.shellrc import (
 )
 from installer.status import is_installed
 from installer.tweaks import TweakBundle
-from installer.uninstall import active_tweak_ids, plan_uninstall, remove_paths, sweep_tweaks
+from installer.uninstall import (
+    SweepResult,
+    active_tweak_ids,
+    plan_uninstall,
+    remove_paths,
+    sweep_tweaks,
+)
 from installer.versions import TagResolver, resolve_github_tag
 
 # Catalog selection seam: given the full catalog (platform applicability is
@@ -337,7 +343,17 @@ def run_uninstall(
     remove_ban_aliases(myshellrc_path)
     for rc_path in rc_paths:
         remove_ban_aliases(rc_path)
-    sweep_tweaks(bundles, rc_path=myshellrc_path, bin_dir=default_bin_dir, zshrc_path=zshrc_path)
+    # Report the sweep's own result, not the preview: only this knows what came
+    # off, and a per-policy failure no longer aborts the rest of the teardown.
+    swept = sweep_tweaks(
+        bundles, rc_path=myshellrc_path, bin_dir=default_bin_dir, zshrc_path=zshrc_path
+    )
+    if swept.swept:
+        console.print(f"Shell tweaks disabled: {', '.join(swept.swept)}.")
+    if swept.failed:
+        console.print(
+            f"Could not disable: {', '.join(swept.failed)}. Check permissions and re-run."
+        )
     return paths
 
 
@@ -361,10 +377,14 @@ def perform_uninstall(
     rc_paths: list[Path],
     bundles: tuple[TweakBundle, ...] = (),
     zshrc_path: Path | None = None,
-) -> None:
+) -> SweepResult:
     """Apply exactly the levers the view chose, composing the existing core
     removers. Unlike `run_uninstall`, nothing is removed all-or-nothing: a
-    partial selection leaves the ban and PATH wiring untouched."""
+    partial selection leaves the ban and PATH wiring untouched.
+
+    Returns what the tweak sweep actually did, so the view reports its effect
+    rather than the snapshot it rendered its rows from. Empty when the sweep
+    lever was not selected."""
     remove_paths(list(decision.paths))
     if decision.remove_ban:
         remove_shims(bin_dir)
@@ -374,4 +394,5 @@ def perform_uninstall(
     if decision.remove_path_block:
         remove_managed_block(myshellrc_path)
     if decision.remove_tweaks:
-        sweep_tweaks(bundles, rc_path=myshellrc_path, bin_dir=bin_dir, zshrc_path=zshrc_path)
+        return sweep_tweaks(bundles, rc_path=myshellrc_path, bin_dir=bin_dir, zshrc_path=zshrc_path)
+    return SweepResult()
