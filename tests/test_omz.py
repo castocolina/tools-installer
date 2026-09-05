@@ -202,3 +202,28 @@ def test_write_refuses_a_shadowed_array_and_leaves_the_file_untouched(
     assert plugins_present(zshrc) is False
     assert remove_plugins(zshrc) == ()
     assert zshrc.read_text() == shadowed
+
+
+def test_a_crlf_zshrc_is_edited_and_keeps_its_line_endings() -> None:
+    src = 'ZSH_THEME="robbyrussell"\r\nplugins=(z)\r\nsource $ZSH/oh-my-zsh.sh\r\n'
+    out = enable_plugins(src)
+    assert out == (
+        'ZSH_THEME="robbyrussell"\r\nplugins=(z git docker)\r\nsource $ZSH/oh-my-zsh.sh\r\n'
+    )
+    assert plugins_enabled(out) is True
+    assert disable_plugins(out) == src
+
+
+def test_a_crlf_trailing_comment_survives_the_rewrite() -> None:
+    assert enable_plugins("  plugins=(z)  # mine\r\n") == "  plugins=(z git docker)  # mine\r\n"
+
+
+def test_quoted_plugin_names_are_recognised_not_duplicated() -> None:
+    # `plugins=("git" docker)` is unusual but legal zsh; "git" names the same
+    # plugin as git, so enabling must not append a redundant second entry.
+    assert enable_plugins('plugins=("git" docker)\n') == 'plugins=("git" docker)\n'
+    assert plugins_enabled('plugins=("git" "docker")\n') is True
+    # A name kept is written back verbatim — quoting style is never restyled.
+    assert enable_plugins('plugins=("z")\n') == 'plugins=("z" git docker)\n'
+    # ...and a quoted managed name is still removable.
+    assert disable_plugins('plugins=("git" z docker)\n') == "plugins=(z)\n"

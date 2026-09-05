@@ -42,8 +42,11 @@ class OmzPluginsError(OSError):
 # indent and trailer are preserved verbatim on rewrite. body excludes parentheses
 # and newlines, so a multi-line array fails to match rather than being half-parsed.
 # The anchored [ \t]* indent means a commented-out `# plugins=(...)` never matches.
+# The trailer admits a trailing \r — content is split on "\n", so a CRLF .zshrc
+# (a Windows-edited dotfile repo, a WSL round-trip) leaves one on every line —
+# and carries it back through the rewrite, keeping the file's endings uniform.
 _PLUGINS_LINE = re.compile(
-    r"^(?P<indent>[ \t]*)plugins=\((?P<body>[^()\n]*)\)(?P<trailer>[ \t]*(?:#.*)?)$"
+    r"^(?P<indent>[ \t]*)plugins=\((?P<body>[^()\n]*)\)(?P<trailer>[ \t]*(?:#.*?)?\r?)$"
 )
 
 # Any line that OPENS a plugins array, including the multi-line form
@@ -87,11 +90,22 @@ def _refusal(content: str) -> str:
     return _NO_ARRAY
 
 
+def _bare(token: str) -> str:
+    """A plugin name with zsh's optional surrounding quotes stripped.
+
+    `plugins=("git" docker)` is unusual but legal zsh, and `"git"` names the
+    same plugin as `git`. Comparing the raw token would make the membership
+    test miss it and append a redundant second `git` to the user's file.
+    """
+    return token.strip("\"'")
+
+
 def _names_in(content: str) -> list[str] | None:
+    """The plugin names in the array zsh honors, unquoted, or None if there is none."""
     found = _locate(content.split("\n"))
     if found is None:
         return None
-    return found[1].group("body").split()
+    return [_bare(token) for token in found[1].group("body").split()]
 
 
 def _rewrite(content: str, plugins: tuple[str, ...], *, enable: bool) -> str | None:
@@ -100,12 +114,15 @@ def _rewrite(content: str, plugins: tuple[str, ...], *, enable: bool) -> str | N
     if found is None:
         return None
     index, match = found
+    # Membership is tested unquoted, but every token the user already had is
+    # written back verbatim — this rewrite never restyles a name it keeps.
     existing = match.group("body").split()
     if enable:
-        names = existing + [name for name in plugins if name not in existing]
+        present = {_bare(token) for token in existing}
+        names = existing + [name for name in plugins if name not in present]
     else:
         skip = set(plugins)
-        names = [name for name in existing if name not in skip]
+        names = [token for token in existing if _bare(token) not in skip]
     # Internal whitespace inside the array is normalised to single spaces by this
     # rewrite; that is accepted and documented, not an oversight.
     lines[index] = f"{match.group('indent')}plugins=({' '.join(names)}){match.group('trailer')}"
