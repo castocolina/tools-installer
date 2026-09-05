@@ -115,10 +115,20 @@ class GlobalsAudited(Message):
     the report because building it also needs to resolve pnpm.
     """
 
-    def __init__(self, report: NodeGlobalsReport, preview: str, error: str | None) -> None:
+    def __init__(
+        self, report: NodeGlobalsReport, preview: str, error: str | None, generation: int
+    ) -> None:
         self.report = report
         self.preview = preview
         self.error = error
+        # Two audit workers can be in flight at once (e.g. a stale one from
+        # screen entry still running when a reinstall finishes and starts a
+        # fresh one): exclusive=True only marks the older worker cancelled, it
+        # cannot stop a thread already inside subprocess.run. The generation
+        # lets on_globals_audited tell which post_message is the one anyone
+        # asked for and discard the other, rather than whichever lands last
+        # silently overwriting fresher state with stale state.
+        self.generation = generation
         super().__init__()
 
 
@@ -208,6 +218,12 @@ class DoctorScreen(AppScreen):
         # Not globals_error: "nothing to reinstall" is not a failure, and the
         # error branch renders "Reinstall failed." in red.
         self.globals_note: str | None = None
+        # Bumped every time an audit worker is actually started; carried on
+        # its GlobalsAudited message so a superseded worker's result (one
+        # started before a newer request, still running when the newer one
+        # lands) is recognisably stale and discarded rather than clobbering
+        # fresher state.
+        self._globals_audit_generation = 0
 
     def compose_body(self) -> ComposeResult:
         yield _BodyStatic(id="doctor-body")
@@ -235,12 +251,19 @@ class DoctorScreen(AppScreen):
             self._start_globals_audit()
 
     def _start_globals_audit(self) -> None:
-        if self.globals_auditing or self.globals_running:
-            # A reinstall in flight re-audits when it finishes, and a second
-            # concurrent `pnpm list -g` would answer the same question twice.
+        if self.globals_running:
+            # A reinstall in flight re-audits when it finishes.
             return
+        # Deliberately NOT guarded on globals_auditing: the post-reinstall
+        # re-audit must always get a fresh worker, even if an older one
+        # (started on screen entry) is still running. exclusive=True cancels
+        # the older Worker on the Textual side, but a thread already inside
+        # subprocess.run keeps running to completion regardless — its result
+        # is still delivered. Bumping the generation here is what lets
+        # on_globals_audited recognise that stale delivery and drop it.
+        self._globals_audit_generation += 1
         self.globals_auditing = True
-        self._audit_globals_worker()
+        self._audit_globals_worker(self._globals_audit_generation)
 
     def _refresh_guidance(self) -> None:
         # IO-free by construction: the globals half reads the last audited
@@ -349,17 +372,29 @@ class DoctorScreen(AppScreen):
         # line, so a repeat press is answered by what is on screen.
         if self.globals_done or self.globals_running:
             return
+        if self.globals_auditing:
+            # Covers both "no audit has ever landed" (self._globals_report is
+            # still None: on_mount starts the first audit synchronously, so
+            # that window and this flag are the same window) and "a fresher
+            # audit is now re-asking pnpm" (screen entry, or a just-finished
+            # reinstall) while an older report is still what's on screen.
+            # Acting on that report here is exactly how a reinstall could
+            # once run against a superseded package list. Refuse and let the
+            # in-flight audit's own landing (on_globals_audited) answer this
+            # note.
+            self.globals_note = _GLOBALS_UNKNOWN_YET
+            self._refresh_body()
+            return
+        # Not auditing, past __init__: an audit has landed and set this.
         report = self._globals_report
+        if report is None:
+            return  # unreachable: globals_auditing is False only once one has
         # The footer advertises `r` (ui_common.VIEWS), so a keypress that
-        # changes nothing on screen reads as a broken binding. The three
-        # answers are not interchangeable: one is a fact about the machine, one
-        # is an admission that the machine was not readable, and one is that
-        # nobody has looked yet.
-        if report is None or not report.known or not report.managed:
-            if report is None:
-                self.globals_note = _GLOBALS_UNKNOWN_YET
-            else:
-                self.globals_note = _NOTHING_TO_REINSTALL if report.known else _GLOBALS_UNKNOWN
+        # changes nothing on screen reads as a broken binding. The two
+        # answers are not interchangeable: one is a fact about the machine,
+        # the other is an admission that the machine was not readable.
+        if not report.known or not report.managed:
+            self.globals_note = _NOTHING_TO_REINSTALL if report.known else _GLOBALS_UNKNOWN
             self._refresh_body()
             return
         self.globals_note = None
@@ -385,7 +420,7 @@ class DoctorScreen(AppScreen):
         self.post_message(GlobalsReinstalled(error))
 
     @work(thread=True, exclusive=True, group="globals-audit")
-    def _audit_globals_worker(self) -> None:
+    def _audit_globals_worker(self, generation: int) -> None:
         """Ask pnpm what it manages globally, off the event loop.
 
         `pnpm list -g --json` is a subprocess like the reinstall is, and it was
@@ -394,14 +429,21 @@ class DoctorScreen(AppScreen):
         interruptible path (Textual holds the terminal in raw mode, so a Ctrl+C
         arrives as a byte on a queue the blocked loop is not draining). It runs
         here for the same reason the reinstall does, and hands its result back
-        the same way.
+        the same way. `generation` travels with the result so a superseded
+        worker's answer can be told apart from the one anyone is waiting on.
         """
         report, error = run_live(self._node_globals)
         if report is None:
             report = _GLOBALS_UNREADABLE
-        self.post_message(GlobalsAudited(report, self._globals_preview(report), error))
+        self.post_message(GlobalsAudited(report, self._globals_preview(report), error, generation))
 
     def on_globals_audited(self, message: GlobalsAudited) -> None:
+        if message.generation != self._globals_audit_generation:
+            # A stale worker's answer, superseded by a newer audit request
+            # (e.g. the post-reinstall re-audit) already in flight. The
+            # current generation's own message is still coming; do not clear
+            # globals_auditing or apply this outdated report over it.
+            return
         self.globals_auditing = False
         self._globals_report = message.report
         self._globals_preview_text = message.preview

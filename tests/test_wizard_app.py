@@ -1476,6 +1476,94 @@ async def test_doctor_audit_that_cannot_run_renders_as_unknown_not_as_zero() -> 
         assert app.is_running
 
 
+async def test_doctor_reinstall_refuses_a_stale_report_while_reauditing() -> None:
+    # A cycle-3 review finding: only the FIRST-ever audit (report is None)
+    # was refused. A SUBSEQUENT audit -- triggered here by re-entering the
+    # screen, the same trigger the post-reinstall re-audit uses -- left a
+    # previously-landed report on screen while a fresh one was in flight, so
+    # `r` pressed in that window proceeded against the report from BEFORE
+    # whatever triggered the re-audit.
+    call_count = 0
+    second_started = threading.Event()
+    release_second = threading.Event()
+
+    def flaky() -> NodeGlobalsReport:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _mmdc_report(missing=("mmdc",))
+        second_started.set()
+        assert release_second.wait(timeout=5)
+        return _mmdc_report(missing=())
+
+    app = _app(node_globals=flaky, initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, DoctorScreen)
+        body = str(screen.query_one("#doctor-body", Static).render())
+        assert "mmdc" in body
+
+        # Re-entering starts a fresh audit (the same call `enter_view` makes
+        # on every entry) while the stale "mmdc missing" report is still
+        # what's rendered.
+        await pilot.press("escape")
+        await pilot.press("4")
+        await pilot.pause()
+        assert second_started.wait(timeout=5)
+        assert screen.globals_auditing is True
+
+        # This must NOT proceed using the stale report.
+        await pilot.press("r")
+        assert screen.globals_running is False
+        assert screen.globals_note is not None
+        assert "Still checking" in screen.globals_note
+
+        release_second.set()
+        await _settle(app, pilot)
+        body = str(screen.query_one("#doctor-body", Static).render())
+        assert "mmdc" not in body
+
+
+async def test_doctor_stale_audit_delivery_is_discarded() -> None:
+    # exclusive=True cancels the OLDER Worker object, but the thread it
+    # wraps is already inside subprocess.run and keeps running to
+    # completion -- its post_message still arrives. Without the generation
+    # check, whichever of two in-flight audits happens to land LAST would
+    # win, even if it started first and is now answering a stale question.
+    first_started = threading.Event()
+    release_first = threading.Event()
+
+    def slow_then_fast() -> NodeGlobalsReport:
+        if not first_started.is_set():
+            first_started.set()
+            assert release_first.wait(timeout=5)
+            return _mmdc_report(missing=("mmdc",))
+        return _mmdc_report(missing=())
+
+    app = _app(node_globals=slow_then_fast, initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert first_started.wait(timeout=5)
+        screen = app.screen
+        assert isinstance(screen, DoctorScreen)
+        assert screen.globals_auditing is True
+
+        # A second, newer audit starts (re-entry) while the first is still
+        # blocked.
+        await pilot.press("escape")
+        await pilot.press("4")
+        await _settle(app, pilot)
+        body = str(screen.query_one("#doctor-body", Static).render())
+        assert "mmdc" not in body
+
+        # The stale first audit now delivers its (superseded) answer.
+        release_first.set()
+        await pilot.pause()
+        await pilot.pause()
+        body = str(screen.query_one("#doctor-body", Static).render())
+        assert "mmdc" not in body
+
+
 async def test_doctor_never_asks_pnpm_from_the_main_thread() -> None:
     # Entering Doctor, re-entering it, and finishing a reinstall each re-ask
     # pnpm. Every one of those calls must land on a worker thread.
