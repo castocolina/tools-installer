@@ -160,6 +160,7 @@ def _mmdc_report(*, missing: tuple[str, ...] = ("mmdc",)) -> NodeGlobalsReport:
     return NodeGlobalsReport(
         entries=(NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),),
         missing=missing,
+        managed=("@mermaid-js/mermaid-cli",),
     )
 
 
@@ -1438,6 +1439,7 @@ async def test_doctor_rereads_node_globals_on_enter_view() -> None:
         return NodeGlobalsReport(
             entries=(NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),),
             missing=tuple(missing),
+            managed=("@mermaid-js/mermaid-cli",),
         )
 
     app = _app(node_globals=read)

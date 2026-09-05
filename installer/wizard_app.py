@@ -192,7 +192,13 @@ class DoctorScreen(AppScreen):
             text.append("\nViewing this screen did not change your shell files.")
         report = self._node_globals()
         text.append("\n\npnpm-managed globals\n", style="bold")
-        text.append(f"{len(report.entries)} catalog tool(s) installed via pnpm add -g.\n")
+        # Both counts come from pnpm's own global list, never from the catalog:
+        # a registry entry declares that a tool CAN install this way, which is
+        # not evidence that it did.
+        text.append(
+            f"{len(report.managed)} package(s) in pnpm's global set, "
+            f"{len(report.entries)} of them catalog tool(s).\n"
+        )
         # Print the core's preview string verbatim. Do not call reinstall_argv
         # here: a non-empty set with no resolvable pnpm is a returned string,
         # never an argv and never an exception (architecture rule 3).
@@ -896,7 +902,7 @@ class UnifiedApp(App[list[str] | None]):
         read_node_globals = (
             node_globals
             if node_globals is not None
-            else (lambda: NodeGlobalsReport(entries=(), missing=()))
+            else (lambda: NodeGlobalsReport(entries=(), missing=(), managed=()))
         )
         read_preview = (
             globals_preview if globals_preview is not None else (lambda: reinstall_preview(()))

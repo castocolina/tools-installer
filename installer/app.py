@@ -25,7 +25,7 @@ from installer.guards import (
 )
 from installer.model import Tool
 from installer.platform import Platform
-from installer.pnpm_globals import audit_node_globals
+from installer.pnpm_globals import audit_node_globals, pnpm_global_packages
 from installer.policy import omz_removal_detail
 from installer.prompt import Prompter
 from installer.rcclean import find_duplicate_path_lines, strip_lines
@@ -244,9 +244,15 @@ def run_doctor(
     path_value: str,
     exists: Callable[[Path], bool],
     which: Callable[[str], str | None] = shutil.which,
+    managed_globals: Callable[[], tuple[str, ...] | None] = pnpm_global_packages,
 ) -> DoctorReport:
     """Audit the PATH (read-only) and render the report. Fixing the PATH
-    remains a separate explicit action."""
+    remains a separate explicit action.
+
+    `managed_globals` is injected beside `which` for the same reason: the
+    pnpm-globals audit asks the real pnpm what it manages, and a test must be
+    able to answer for it.
+    """
     report, status, warning = doctor_data(
         tools,
         platform=platform,
@@ -257,7 +263,7 @@ def run_doctor(
     )
     render_doctor(report, console)
     render_guard_status(status, warning, console)
-    render_node_globals(audit_node_globals(tools, which=which), console)
+    render_node_globals(audit_node_globals(tools, which=which, managed=managed_globals), console)
     return report
 
 

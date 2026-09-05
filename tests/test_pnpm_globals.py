@@ -1,5 +1,6 @@
 import os
 import shlex
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -8,8 +9,11 @@ from installer.guards import REDIRECT_SENTINEL
 from installer.model import Method, Tool, load_tools
 from installer.pnpm_globals import (
     NodeGlobal,
+    NodeGlobalsReport,
     audit_node_globals,
     node_globals,
+    parse_global_packages,
+    pnpm_global_packages,
     reinstall_argv,
     reinstall_node_globals,
     reinstall_preview,
@@ -98,25 +102,122 @@ def test_node_globals_preserves_order_one_entry_per_tool() -> None:
     assert entries[0].npm_pkg == "pkg-a"
 
 
-def test_audit_lists_unresolved_commands() -> None:
-    report = audit_node_globals([_mmdc()], which=lambda _n: None)
+MMDC_PKG = "@mermaid-js/mermaid-cli"
+_PNPM_LIST_JSON = """
+[
+  {
+    "name": "global",
+    "path": "/Users/x/Library/pnpm/global/5",
+    "private": true,
+    "dependencies": {
+      "@mermaid-js/mermaid-cli": {"from": "@mermaid-js/mermaid-cli", "version": "10.9.1"},
+      "vercel": {"from": "vercel", "version": "39.1.1"}
+    }
+  }
+]
+"""
+
+
+def _managed(*packages: str) -> Callable[[], tuple[str, ...] | None]:
+    def read() -> tuple[str, ...] | None:
+        return packages
+
+    return read
+
+
+def test_parse_global_packages_reads_pnpm_list_json() -> None:
+    assert parse_global_packages(_PNPM_LIST_JSON) == (MMDC_PKG, "vercel")
+
+
+def test_parse_global_packages_handles_an_empty_global_set() -> None:
+    assert parse_global_packages('[{"path": "/g", "private": true}]') == ()
+
+
+def test_parse_global_packages_unreadable_output_is_unknown() -> None:
+    assert parse_global_packages("not json") is None
+    assert parse_global_packages('"a string"') is None
+
+
+def test_pnpm_global_packages_asks_pnpm_by_absolute_path() -> None:
+    calls: list[list[str]] = []
+
+    def runner_out(cmd: list[str]) -> str:
+        calls.append(cmd)
+        return _PNPM_LIST_JSON
+
+    packages = pnpm_global_packages(resolve_pnpm=lambda: "/real/bin/pnpm", runner_out=runner_out)
+    assert packages == (MMDC_PKG, "vercel")
+    assert calls == [["/real/bin/pnpm", "list", "-g", "--json"]]
+
+
+def test_pnpm_global_packages_unknown_when_pnpm_unresolvable() -> None:
+    def never(_cmd: list[str]) -> str:
+        raise AssertionError("must not run a command without a resolved pnpm")
+
+    assert pnpm_global_packages(resolve_pnpm=lambda: None, runner_out=never) is None
+
+
+def test_pnpm_global_packages_unknown_when_the_query_fails() -> None:
+    def boom(cmd: list[str]) -> str:
+        raise CommandError(cmd, 1)
+
+    assert pnpm_global_packages(resolve_pnpm=lambda: "/real/bin/pnpm", runner_out=boom) is None
+
+
+def test_audit_reports_only_what_pnpm_actually_manages() -> None:
+    # The catalog DECLARES mmdc; pnpm does not manage it. Reporting the catalog
+    # as the installed set told every such user a self-update lost their globals.
+    report = audit_node_globals([_mmdc()], which=lambda _n: None, managed=_managed("vercel"))
+    assert report.entries == ()
+    assert report.missing == ()
+    assert report.managed == ("vercel",)
+
+
+def test_audit_lists_a_tracked_global_whose_command_is_gone() -> None:
+    report = audit_node_globals([_mmdc()], which=lambda _n: None, managed=_managed(MMDC_PKG))
     assert report.missing == ("mmdc",)
     assert report.entries == node_globals([_mmdc()])
+    assert report.managed == (MMDC_PKG,)
 
 
 def test_audit_healthy_when_command_resolves() -> None:
-    report = audit_node_globals([_mmdc()], which=lambda _n: "/x/mmdc")
+    report = audit_node_globals([_mmdc()], which=lambda _n: "/x/mmdc", managed=_managed(MMDC_PKG))
     assert report.missing == ()
+    assert report.entries == node_globals([_mmdc()])
+
+
+def test_audit_claims_nothing_when_pnpm_cannot_be_asked() -> None:
+    report = audit_node_globals([_mmdc()], which=lambda _n: None, managed=lambda: None)
+    assert report == NodeGlobalsReport(entries=(), missing=(), managed=())
+
+
+def test_audit_keeps_non_catalog_globals_in_the_managed_set() -> None:
+    report = audit_node_globals(
+        [_mmdc()], which=lambda _n: "/x/mmdc", managed=_managed(MMDC_PKG, "vercel")
+    )
+    assert report.managed == (MMDC_PKG, "vercel")
+    assert [e.tool_id for e in report.entries] == ["mmdc"]
 
 
 def test_reinstall_argv_one_invocation_absolute_pnpm() -> None:
-    entries = node_globals([_mmdc()])
-    assert reinstall_argv(entries, pnpm="/real/bin/pnpm") == [
+    assert reinstall_argv([MMDC_PKG], pnpm="/real/bin/pnpm") == [
         "/real/bin/pnpm",
         "add",
         "-g",
-        "@mermaid-js/mermaid-cli",
+        MMDC_PKG,
     ]
+
+
+def test_reinstall_argv_replays_hand_installed_globals_too() -> None:
+    # One `pnpm add -g` supersedes the whole global set, so an argv built from
+    # the registry alone would discard everything the user added by hand.
+    argv = reinstall_argv([MMDC_PKG, "vercel", "typescript"], pnpm="/real/bin/pnpm")
+    assert argv[3:] == [MMDC_PKG, "vercel", "typescript"]
+
+
+def test_reinstall_argv_deduplicates_preserving_order() -> None:
+    argv = reinstall_argv(["a", "b", "a"], pnpm="/real/bin/pnpm")
+    assert argv[3:] == ["a", "b"]
 
 
 def test_reinstall_argv_empty_raises() -> None:
@@ -127,12 +228,12 @@ def test_reinstall_argv_empty_raises() -> None:
 def test_reinstall_node_globals_calls_runner_once() -> None:
     calls: list[list[str]] = []
     pkgs = reinstall_node_globals(
-        [_mmdc()],
+        [MMDC_PKG, "vercel"],
         runner=calls.append,
         resolve_pnpm=lambda: "/real/bin/pnpm",
     )
-    assert pkgs == ("@mermaid-js/mermaid-cli",)
-    assert calls == [reinstall_argv(node_globals([_mmdc()]), pnpm="/real/bin/pnpm")]
+    assert pkgs == (MMDC_PKG, "vercel")
+    assert calls == [["/real/bin/pnpm", "add", "-g", MMDC_PKG, "vercel"]]
     assert all(call[0] != "pnpm" for call in calls)
 
 
@@ -149,7 +250,7 @@ def test_reinstall_node_globals_empty_is_noop() -> None:
 def test_reinstall_node_globals_unresolvable_pnpm_raises_without_running() -> None:
     calls: list[list[str]] = []
     with pytest.raises(CommandError):
-        reinstall_node_globals([_mmdc()], runner=calls.append, resolve_pnpm=lambda: None)
+        reinstall_node_globals([MMDC_PKG], runner=calls.append, resolve_pnpm=lambda: None)
     assert calls == []
 
 
@@ -165,7 +266,7 @@ def test_reinstall_skips_wrapper_first_on_path(
     real = _plant_executable(tmp_path / "real", "pnpm")
     monkeypatch.setenv("PATH", f"{wrapper.parent}{os.pathsep}{real.parent}")
     calls: list[list[str]] = []
-    reinstall_node_globals([_mmdc()], runner=calls.append)
+    reinstall_node_globals([MMDC_PKG], runner=calls.append)
     assert calls
     assert calls[0][0] == str(real)
     assert all(call[0] != "pnpm" for call in calls)
@@ -179,15 +280,14 @@ def test_reinstall_preview_empty_does_not_resolve() -> None:
     assert "nothing pnpm-managed to reinstall" in text
 
 
-def test_reinstall_preview_resolvable() -> None:
-    entries = (NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),)
-    text = reinstall_preview(entries, resolve_pnpm=lambda: "/real/bin/pnpm")
-    assert text == shlex.join(reinstall_argv(entries, pnpm="/real/bin/pnpm"))
+def test_reinstall_preview_names_every_package_it_will_replace() -> None:
+    text = reinstall_preview([MMDC_PKG, "vercel"], resolve_pnpm=lambda: "/real/bin/pnpm")
+    assert text == shlex.join(reinstall_argv([MMDC_PKG, "vercel"], pnpm="/real/bin/pnpm"))
+    assert "vercel" in text
 
 
 def test_reinstall_preview_unresolvable_is_message_not_argv() -> None:
-    entries = (NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),)
-    text = reinstall_preview(entries, resolve_pnpm=lambda: None)
+    text = reinstall_preview([MMDC_PKG], resolve_pnpm=lambda: None)
     assert "pnpm" in text
     assert "add" not in text
 

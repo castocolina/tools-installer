@@ -310,7 +310,10 @@ def test_render_node_globals_silent_when_healthy() -> None:
     buf = io.StringIO()
     console = Console(file=buf, width=100)
     entries = (NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),)
-    render_node_globals(NodeGlobalsReport(entries=entries, missing=()), console)
+    render_node_globals(
+        NodeGlobalsReport(entries=entries, missing=(), managed=("@mermaid-js/mermaid-cli",)),
+        console,
+    )
     assert buf.getvalue() == ""
 
 
@@ -318,7 +321,10 @@ def test_render_node_globals_prints_finding() -> None:
     buf = io.StringIO()
     console = Console(file=buf, width=100)
     entries = (NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),)
-    render_node_globals(NodeGlobalsReport(entries=entries, missing=("mmdc",)), console)
+    render_node_globals(
+        NodeGlobalsReport(entries=entries, missing=("mmdc",), managed=("@mermaid-js/mermaid-cli",)),
+        console,
+    )
     out = buf.getvalue()
     assert "mmdc" in out
     assert "make setup" in out

@@ -248,14 +248,25 @@ def _build_app(
         'For a different layout, run `make fix ARGS="--link-mode=centralized|single|split"`.'
     )
 
+    # The audit asks the real pnpm what it manages globally, so it spawns a
+    # process; the Doctor screen reads it several times per render. Cache the
+    # answer and drop it once a reinstall has changed it.
+    cached_globals: pnpm_globals.NodeGlobalsReport | None = None
+
     def _node_globals_report() -> pnpm_globals.NodeGlobalsReport:
-        return pnpm_globals.audit_node_globals(tools)
+        nonlocal cached_globals
+        if cached_globals is None:
+            cached_globals = pnpm_globals.audit_node_globals(tools)
+        return cached_globals
 
     def _globals_preview() -> str:
-        return pnpm_globals.reinstall_preview(pnpm_globals.node_globals(tools))
+        return pnpm_globals.reinstall_preview(_node_globals_report().managed)
 
     def _reinstall_globals() -> tuple[str, ...]:
-        return pnpm_globals.reinstall_node_globals(tools)
+        nonlocal cached_globals
+        packages = pnpm_globals.reinstall_node_globals(_node_globals_report().managed)
+        cached_globals = None
+        return packages
 
     return UnifiedApp(
         tools,

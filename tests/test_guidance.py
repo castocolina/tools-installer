@@ -121,17 +121,24 @@ def test_guard_guidance_volta_note_never_appears_alone() -> None:
 
 
 def test_node_globals_guidance_silent_when_empty() -> None:
-    assert node_globals_guidance(NodeGlobalsReport(entries=(), missing=())) == []
+    assert node_globals_guidance(NodeGlobalsReport(entries=(), missing=(), managed=())) == []
 
 
 def test_node_globals_guidance_silent_when_healthy() -> None:
     entries = (NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),)
-    assert node_globals_guidance(NodeGlobalsReport(entries=entries, missing=())) == []
+    assert (
+        node_globals_guidance(
+            NodeGlobalsReport(entries=entries, missing=(), managed=("@mermaid-js/mermaid-cli",))
+        )
+        == []
+    )
 
 
 def test_node_globals_guidance_warns_and_points_at_make_setup() -> None:
     entries = (NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),)
-    items = node_globals_guidance(NodeGlobalsReport(entries=entries, missing=("mmdc",)))
+    items = node_globals_guidance(
+        NodeGlobalsReport(entries=entries, missing=("mmdc",), managed=("@mermaid-js/mermaid-cli",))
+    )
     assert len(items) == 1
     item = items[0]
     assert item.severity == "warn"

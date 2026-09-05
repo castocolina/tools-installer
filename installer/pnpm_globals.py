@@ -1,4 +1,4 @@
-"""Snapshot and reinstall the residual pnpm-managed global set.
+"""Snapshot and reinstall the pnpm-managed global set.
 
 pnpm v11 isolates each global-install invocation into its own hash-keyed
 directory, so updating pnpm itself loses the previously installed global set
@@ -17,22 +17,33 @@ argv-conditional wrapper, which would turn add -g into volta install. Naming
 the binary by absolute path is what keeps the reinstall on pnpm's
 gated-postinstall model.
 
-The snapshot IS the registry, queried live for kind="node". No persisted
-state file, matching this codebase's existing all-live-check convention
-(status.is_installed, guard_status, has_managed_block).
+The snapshot is pnpm's OWN live global list (`pnpm list -g --json`), never the
+registry catalog. A catalog entry is a DECLARATION that a tool CAN be installed
+this way, not evidence that it WAS: treating the catalog as the installed set
+told every user who had never installed mmdc that a pnpm self-update had
+destroyed their globals, and offered to "reinstall" a package they had never
+selected. The registry contributes one thing — the command name a package
+installs — which is what makes a still-tracked global checkable at all.
+
+The reinstall replays pnpm's own set for the same reason. One `pnpm add -g`
+invocation supersedes whatever the global set currently holds, so an argv built
+from the registry would silently discard every global the user added by hand.
 """
 
+import json
 import shlex
 import shutil
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from typing import cast
 
 from installer.guards import real_pnpm
 from installer.model import Tool
-from installer.run import CommandError, Runner, run_command
+from installer.run import CommandError, OutputRunner, Runner, run_command, run_output
 
 _EMPTY_PREVIEW = "nothing pnpm-managed to reinstall"
 _UNRESOLVABLE_PREVIEW = "pnpm not found on PATH - cannot preview the reinstall."
+_DEPENDENCY_GROUPS = ("dependencies", "devDependencies", "optionalDependencies")
 
 
 @dataclass(frozen=True)
@@ -44,11 +55,25 @@ class NodeGlobal:
 
 @dataclass(frozen=True)
 class NodeGlobalsReport:
+    """What pnpm actually manages globally, and which of it stopped working.
+
+    `managed` is pnpm's own list and is the exact set a reinstall replays.
+    `entries` is the part of it the catalog recognises — the only part whose
+    command name is known and therefore checkable. `missing` names the entries
+    whose command no longer resolves on PATH.
+    """
+
     entries: tuple[NodeGlobal, ...]
     missing: tuple[str, ...]
+    managed: tuple[str, ...]
 
 
 def node_globals(tools: Iterable[Tool]) -> tuple[NodeGlobal, ...]:
+    """Every catalog tool that DECLARES a kind="node" install method.
+
+    A declaration, not an installation: intersect with `pnpm_global_packages`
+    before reporting anything about the user's machine.
+    """
     found: list[NodeGlobal] = []
     for tool in tools:
         method = next((m for m in tool.methods if m.kind == "node"), None)
@@ -61,52 +86,107 @@ def node_globals(tools: Iterable[Tool]) -> tuple[NodeGlobal, ...]:
     return tuple(found)
 
 
+def parse_global_packages(raw: str) -> tuple[str, ...] | None:
+    """Package names in `pnpm list -g --json` output; None when it is unreadable.
+
+    pnpm prints an array of project objects (one global root), each carrying
+    its dependency groups as name -> details maps.
+    """
+    try:
+        data: object = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(data, (list, dict)):
+        return None
+    projects = cast(list[object], data) if isinstance(data, list) else [cast(object, data)]
+    names: list[str] = []
+    for project in projects:
+        if not isinstance(project, dict):
+            continue
+        groups = cast(dict[str, object], project)
+        for group in _DEPENDENCY_GROUPS:
+            block = groups.get(group)
+            if isinstance(block, dict):
+                names.extend(cast(dict[str, object], block))
+    return tuple(dict.fromkeys(names))
+
+
+def pnpm_global_packages(
+    *,
+    resolve_pnpm: Callable[[], str | None] = real_pnpm,
+    runner_out: OutputRunner = run_output,
+) -> tuple[str, ...] | None:
+    """Packages pnpm currently manages globally, or None when pnpm cannot be asked.
+
+    None means "unknown", not "empty". A report built from an unknown set claims
+    nothing; one built from an assumed-empty set would claim the user has no
+    globals, which is the same kind of guess this module exists to stop making.
+    """
+    pnpm = resolve_pnpm()
+    if pnpm is None:
+        return None
+    try:
+        raw = runner_out([pnpm, "list", "-g", "--json"])
+    except (OSError, CommandError):
+        return None
+    return parse_global_packages(raw)
+
+
 def audit_node_globals(
     tools: Iterable[Tool],
     *,
     which: Callable[[str], str | None] = shutil.which,
+    managed: Callable[[], tuple[str, ...] | None] = pnpm_global_packages,
 ) -> NodeGlobalsReport:
-    entries = node_globals(tools)
+    """Report pnpm's live global set, and the catalog commands in it that are broken."""
+    packages = managed()
+    if packages is None:
+        return NodeGlobalsReport(entries=(), missing=(), managed=())
+    entries = tuple(entry for entry in node_globals(tools) if entry.npm_pkg in packages)
     missing = tuple(entry.tool_id for entry in entries if which(entry.cmd) is None)
-    return NodeGlobalsReport(entries=entries, missing=missing)
+    return NodeGlobalsReport(entries=entries, missing=missing, managed=packages)
 
 
-def reinstall_argv(entries: Sequence[NodeGlobal], *, pnpm: str) -> list[str]:
+def reinstall_argv(packages: Sequence[str], *, pnpm: str) -> list[str]:
     """One invocation for the whole set: per-package calls recreate the isolation that loses them.
+
+    `packages` is pnpm's own global list, so the invocation that supersedes the
+    current global set puts back everything it held — including globals this
+    installer's registry knows nothing about.
 
     `pnpm` is a required keyword because argv[0] must be an absolute path — a bare
     program name would be resolved by subprocess.run through a PATH whose first
     entry is this installer's own pnpm wrapper.
     """
-    if not entries:
-        raise ValueError("nothing pnpm-managed to reinstall")
-    return [pnpm, "add", "-g", *(entry.npm_pkg for entry in entries)]
+    if not packages:
+        raise ValueError(_EMPTY_PREVIEW)
+    return [pnpm, "add", "-g", *dict.fromkeys(packages)]
 
 
 def reinstall_node_globals(
-    tools: Iterable[Tool],
+    packages: Sequence[str],
     *,
     runner: Runner = run_command,
     resolve_pnpm: Callable[[], str | None] = real_pnpm,
 ) -> tuple[str, ...]:
-    entries = node_globals(tools)
-    if not entries:
+    if not packages:
         return ()
     resolved = resolve_pnpm()
     if resolved is None:
         raise CommandError(["pnpm", "add", "-g"], 127)
-    runner(reinstall_argv(entries, pnpm=resolved))
-    return tuple(entry.npm_pkg for entry in entries)
+    argv = reinstall_argv(packages, pnpm=resolved)
+    runner(argv)
+    return tuple(argv[3:])
 
 
 def reinstall_preview(
-    entries: Sequence[NodeGlobal],
+    packages: Sequence[str],
     *,
     resolve_pnpm: Callable[[], str | None] = real_pnpm,
 ) -> str:
-    if not entries:
+    if not packages:
         return _EMPTY_PREVIEW
     resolved = resolve_pnpm()
     if resolved is None:
         return _UNRESOLVABLE_PREVIEW
-    return shlex.join(reinstall_argv(entries, pnpm=resolved))
+    return shlex.join(reinstall_argv(packages, pnpm=resolved))

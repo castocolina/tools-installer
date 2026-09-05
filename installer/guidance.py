@@ -142,8 +142,9 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
         Guidance(
             title="pnpm-managed global set is incomplete",
             meaning=(
-                f"{names} went missing from PATH. A pnpm self-update loses the "
-                "globals installed by earlier `pnpm add -g` invocations."
+                f"pnpm still tracks {names} globally, but the command no longer "
+                "resolves on PATH. A pnpm self-update leaves the globals installed "
+                "by earlier `pnpm add -g` invocations behind in a stale directory."
             ),
             # The prefix is load-bearing: DoctorScreen._tui_guidance rewrites a
             # next_step only when it starts with a known literal prefix — today
@@ -151,7 +152,13 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
             # would leak the keybinding into `make doctor`'s console output,
             # where no key can be pressed, and a step with an unrecognised
             # prefix would leak console instructions into the TUI.
-            next_step="Run `make setup` and open the Doctor view to reinstall the lost globals.",
+            # "reinstall the globals pnpm still tracks", not "restore my global
+            # set": one `pnpm add -g` replays exactly the set pnpm reports, so
+            # anything pnpm has already forgotten is not coming back this way.
+            next_step=(
+                "Run `make setup` and open the Doctor view to reinstall the globals "
+                "pnpm still tracks."
+            ),
             severity=Severity.WARN,
         )
     ]

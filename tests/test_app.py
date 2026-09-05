@@ -975,19 +975,23 @@ def test_run_doctor_reports_active_ban(tmp_path: Path):
     assert "pip: blocked" in out
 
 
-def test_run_doctor_reports_missing_pnpm_globals(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from installer.app import run_doctor
-
-    monkeypatch.setenv("HOME", str(tmp_path))
-    mmdc = Tool(
+def _mmdc_tool() -> Tool:
+    return Tool(
         id="mmdc",
         name="mmdc",
         category="diagram",
         cmd="mmdc",
         methods=(Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
     )
+
+
+def test_run_doctor_reports_missing_pnpm_globals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_doctor
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    mmdc = _mmdc_tool()
     bin_dir = tmp_path / "bin"
     console, buf = _console()
     run_doctor(
@@ -998,10 +1002,55 @@ def test_run_doctor_reports_missing_pnpm_globals(
         path_value=str(bin_dir),
         exists=lambda _p: True,
         which=lambda _n: None,
+        managed_globals=lambda: ("@mermaid-js/mermaid-cli",),
     )
     out = buf.getvalue()
     assert "mmdc" in out
     assert "make setup" in out
+
+
+def test_run_doctor_silent_when_the_catalog_tool_was_never_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The catalog DECLARES mmdc. pnpm does not manage it, so nothing was lost
+    # and `make doctor` must not claim a self-update destroyed the user's globals.
+    from installer.app import run_doctor
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / "bin"
+    console, buf = _console()
+    run_doctor(
+        [_mmdc_tool()],
+        console,
+        platform=_platform(),
+        default_bin_dir=bin_dir,
+        path_value=str(bin_dir),
+        exists=lambda _p: True,
+        which=lambda _n: None,
+        managed_globals=lambda: (),
+    )
+    assert "pnpm-managed global set is incomplete" not in buf.getvalue()
+
+
+def test_run_doctor_silent_when_pnpm_cannot_be_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_doctor
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / "bin"
+    console, buf = _console()
+    run_doctor(
+        [_mmdc_tool()],
+        console,
+        platform=_platform(),
+        default_bin_dir=bin_dir,
+        path_value=str(bin_dir),
+        exists=lambda _p: True,
+        which=lambda _n: None,
+        managed_globals=lambda: None,
+    )
+    assert "pnpm-managed global set is incomplete" not in buf.getvalue()
 
 
 def test_run_doctor_silent_on_healthy_pnpm_globals(
@@ -1010,23 +1059,17 @@ def test_run_doctor_silent_on_healthy_pnpm_globals(
     from installer.app import run_doctor
 
     monkeypatch.setenv("HOME", str(tmp_path))
-    mmdc = Tool(
-        id="mmdc",
-        name="mmdc",
-        category="diagram",
-        cmd="mmdc",
-        methods=(Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
-    )
     bin_dir = tmp_path / "bin"
     console, buf = _console()
     run_doctor(
-        [mmdc],
+        [_mmdc_tool()],
         console,
         platform=_platform(),
         default_bin_dir=bin_dir,
         path_value=str(bin_dir),
         exists=lambda _p: True,
         which=lambda name: "/x/mmdc" if name == "mmdc" else None,
+        managed_globals=lambda: ("@mermaid-js/mermaid-cli",),
     )
     out = buf.getvalue()
     assert "pnpm-managed global set is incomplete" not in out
