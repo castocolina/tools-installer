@@ -4,14 +4,22 @@ Only command-based kinds live here (script, node, native package managers, brew,
 Download-based kinds (github_release, tarball) live in `installer.download`.
 """
 
+import os
 import shlex
 from collections.abc import Callable
+from pathlib import Path
 from typing import cast
 
 from installer.guards import real_pnpm, shell_path
 from installer.locations import applications_dir
 from installer.model import Method
 from installer.run import Runner
+from installer.versions import (
+    PNPM_ALLOW_BUILD_MIN,
+    PNPM_CO_INSTALL_MIN,
+    meets_minimum,
+    probe_version,
+)
 
 
 class ExecutorError(RuntimeError):
@@ -69,6 +77,83 @@ def _opt_version_map(method: Method, key: str) -> dict[str, str]:
             )
         out[name] = range_
     return out
+
+
+def _require_minimum(binary: str, argv: list[str], minimum: str) -> None:
+    observed = probe_version(argv)
+    if observed is None or not meets_minimum(observed, minimum):
+        shown = observed if observed is not None else "could not be read"
+        raise ExecutorError(
+            f"{binary} {shown} does not meet the required minimum {minimum}. "
+            f"Upgrade {binary} to {minimum} or newer before using this install method."
+        )
+
+
+def _puppeteer_cache_dir() -> Path:
+    """Puppeteer's own documented locations: PUPPETEER_CACHE_DIR, else ~/.cache/puppeteer.
+
+    Reading the env var keeps the check correct for a user who moved the cache.
+    """
+    env = os.environ.get("PUPPETEER_CACHE_DIR")
+    if env:
+        return Path(env)
+    return Path.home() / ".cache" / "puppeteer"
+
+
+def _puppeteer_browser(cache_dir: Path) -> Path | None:
+    """Find a puppeteer-managed browser under cache_dir.
+
+    The layout — `<cache>/<browser>/<platform>-<build>/<browser>-<platform>/<binary>`
+    — is puppeteer's own cache convention and is matched by glob rather than
+    reconstructed, because the build and platform segments are not this project's
+    to predict.
+    """
+    shells = sorted(
+        path
+        for path in cache_dir.rglob("chrome-headless-shell")
+        if path.is_file() and os.access(path, os.X_OK)
+    )
+    if shells:
+        return shells[-1]
+    chromes = sorted(
+        path for path in cache_dir.rglob("chrome") if path.is_file() and os.access(path, os.X_OK)
+    )
+    if chromes:
+        return chromes[-1]
+    return None
+
+
+def _smoke_puppeteer_browser() -> None:
+    override = os.environ.get("PUPPETEER_EXECUTABLE_PATH")
+    if override:
+        if probe_version([override, "--version"]) is None:
+            raise ExecutorError(
+                f"installed browser {override} could not be started. "
+                "Install the platform's headless-Chrome shared libraries, or point "
+                "puppeteer at an existing browser with PUPPETEER_EXECUTABLE_PATH."
+            )
+        return
+    cache_dir = _puppeteer_cache_dir()
+    browser = _puppeteer_browser(cache_dir)
+    if browser is None:
+        raise ExecutorError(
+            f"{cache_dir} has no chrome-headless-shell or chrome binary — "
+            "puppeteer's postinstall did not leave a browser there"
+        )
+    # --version is the cheapest execution of the real binary that still goes
+    # through the dynamic loader, so a missing libnss3.so fails it exactly as
+    # a real launch would, with no sandbox, no display and no page load.
+    if probe_version([str(browser), "--version"]) is None:
+        raise ExecutorError(
+            f"installed browser {browser} could not be started. "
+            "Install the platform's headless-Chrome shared libraries, or point "
+            "puppeteer at an existing browser with PUPPETEER_EXECUTABLE_PATH."
+        )
+
+
+SMOKE_CHECKS: dict[str, Callable[[], None]] = {
+    "puppeteer-browser": _smoke_puppeteer_browser,
+}
 
 
 def _env_prefix(method: Method) -> str:
@@ -142,7 +227,29 @@ def _node(method: Method, runner: Runner) -> None:
     # pnpm's documentation, also persists the permission for future versions of
     # that package, which is why the name set is constrained at load time.
     allowances = [f"--allow-build={name}" for name in dict.fromkeys(allow_build)]
+    min_node = method.params.get("min_node")
+    if co_install or allow_build:
+        floor = PNPM_CO_INSTALL_MIN if co_install else PNPM_ALLOW_BUILD_MIN
+        # Probe the resolved absolute path, never the bare name: a bare `pnpm`
+        # would be answered by this installer's own argv-conditional wrapper.
+        _require_minimum("pnpm", [pnpm, "--version"], floor)
+    if isinstance(min_node, str) and min_node:
+        # Probe bare `node`: this installer ships no node shim, and the node
+        # that matters is exactly the one pnpm's postinstall step will find
+        # on PATH.
+        _require_minimum("node", ["node", "--version"], min_node)
     runner([pnpm, "add", "-g", *allowances, group])
+    # This proves the browser this install downloaded starts on this machine;
+    # it does not render a page, and it is not a guarantee that every later
+    # Chrome update will keep starting. An exit code from a package manager is
+    # evidence that a DOWNLOAD succeeded, never evidence that the thing
+    # downloaded can run. Accepted residual: the search covers the WHOLE
+    # cache, not just what THIS install produced, so a stale browser can pass.
+    smoke = method.params.get("smoke")
+    if smoke is not None:
+        if not isinstance(smoke, str) or smoke not in SMOKE_CHECKS:
+            raise ExecutorError(f"method '{method.kind}' unknown smoke '{smoke}'")
+        SMOKE_CHECKS[smoke]()
 
 
 def _sdkman(method: Method, runner: Runner) -> None:

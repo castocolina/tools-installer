@@ -1,12 +1,14 @@
 import os
 import shlex
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-from installer.executors import EXECUTORS, ExecutorError, execute
+import installer.executors as executors
+from installer.executors import EXECUTORS, SMOKE_CHECKS, ExecutorError, execute
 from installer.guards import REDIRECT_SENTINEL
-from installer.model import Method
+from installer.model import SMOKE_CHECK_NAMES, Method
 from installer.run import Runner
 
 
@@ -235,6 +237,22 @@ def _plant_pnpm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return fake_pnpm
 
 
+def _const_probe(result: str | None) -> Callable[[list[str]], str | None]:
+    def probe(argv: list[str]) -> str | None:
+        return result
+
+    return probe
+
+
+def _pnpm_or_node_probe(
+    pnpm: str, when_pnpm: str, otherwise: str
+) -> Callable[[list[str]], str | None]:
+    def probe(argv: list[str]) -> str | None:
+        return when_pnpm if argv[0] == pnpm else otherwise
+
+    return probe
+
+
 def test_node_co_install_emits_one_comma_joined_group(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -339,6 +357,19 @@ def test_node_versions_bare_string_raises() -> None:
 
 def test_node_smoke_does_not_change_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    cache = tmp_path / "cache"
+    browser = (
+        cache
+        / "chrome-headless-shell"
+        / "linux-140.0.0"
+        / "chrome-headless-shell-linux64"
+        / "chrome-headless-shell"
+    )
+    browser.parent.mkdir(parents=True)
+    browser.write_text("x")
+    browser.chmod(0o755)
+    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
+    monkeypatch.setattr(executors, "probe_version", _const_probe("99.0.0"))
     calls: list[list[str]] = []
     execute(
         Method(
@@ -351,6 +382,409 @@ def test_node_smoke_does_not_change_argv(tmp_path: Path, monkeypatch: pytest.Mon
         ),
         calls.append,
     )
+    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
+
+
+def test_node_without_new_params_performs_zero_probes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    seen: list[list[str]] = []
+
+    def recording_probe(argv: list[str]) -> str:
+        seen.append(argv)
+        return "99.0.0"
+
+    monkeypatch.setattr(executors, "probe_version", recording_probe)
+    calls: list[list[str]] = []
+    execute(Method(kind="node", params={"npm_pkg": "rg"}), calls.append)
+    assert seen == []
+    assert calls == [[str(pnpm), "add", "-g", "rg"]]
+
+
+def test_node_co_install_proceeds_on_pnpm_11(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        executors,
+        "probe_version",
+        _pnpm_or_node_probe(str(pnpm), "11.9.0", "v24.4.0"),
+    )
+    calls: list[list[str]] = []
+    execute(
+        Method(kind="node", params={"npm_pkg": "a", "co_install": ["b"]}),
+        calls.append,
+    )
+    assert calls == [[str(pnpm), "add", "-g", "a,b"]]
+
+
+def test_node_co_install_refuses_pnpm_10(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        executors,
+        "probe_version",
+        _pnpm_or_node_probe(str(pnpm), "10.9.0", "v24.4.0"),
+    )
+    calls: list[list[str]] = []
+    with pytest.raises(ExecutorError, match="(?s)(?=.*10[.]9[.]0)(?=.*11[.]0[.]0)"):
+        execute(
+            Method(kind="node", params={"npm_pkg": "a", "co_install": ["b"]}),
+            calls.append,
+        )
+    assert calls == []
+
+
+def test_node_allow_build_floor_is_10_4(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        executors,
+        "probe_version",
+        _pnpm_or_node_probe(str(pnpm), "10.4.0", "v24.4.0"),
+    )
+    calls: list[list[str]] = []
+    execute(
+        Method(kind="node", params={"npm_pkg": "puppeteer", "allow_build": ["puppeteer"]}),
+        calls.append,
+    )
+    assert len(calls) == 1
+    monkeypatch.setattr(
+        executors,
+        "probe_version",
+        _pnpm_or_node_probe(str(pnpm), "10.3.0", "v24.4.0"),
+    )
+    calls.clear()
+    with pytest.raises(ExecutorError, match="(?s)(?=.*10[.]3[.]0)(?=.*10[.]4[.]0)"):
+        execute(
+            Method(kind="node", params={"npm_pkg": "puppeteer", "allow_build": ["puppeteer"]}),
+            calls.append,
+        )
+    assert calls == []
+
+
+def test_node_min_node_floor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    monkeypatch.setattr(executors, "probe_version", _const_probe("v24.4.0"))
+    calls: list[list[str]] = []
+    execute(
+        Method(kind="node", params={"npm_pkg": "puppeteer", "min_node": "22.12.0"}),
+        calls.append,
+    )
+    assert calls == [[str(pnpm), "add", "-g", "puppeteer"]]
+    monkeypatch.setattr(
+        executors,
+        "probe_version",
+        _pnpm_or_node_probe("node", "v20.11.0", "11.9.0"),
+    )
+    calls.clear()
+    with pytest.raises(ExecutorError, match="(?s)(?=.*20[.]11[.]0)(?=.*22[.]12[.]0)"):
+        execute(
+            Method(kind="node", params={"npm_pkg": "puppeteer", "min_node": "22.12.0"}),
+            calls.append,
+        )
+    assert calls == []
+
+
+def test_node_unreadable_version_is_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _plant_pnpm(tmp_path, monkeypatch)
+    monkeypatch.setattr(executors, "probe_version", _const_probe(None))
+    calls: list[list[str]] = []
+    with pytest.raises(ExecutorError, match="11.0.0"):
+        execute(
+            Method(kind="node", params={"npm_pkg": "a", "co_install": ["b"]}),
+            calls.append,
+        )
+    assert calls == []
+
+
+def test_smoke_checks_match_closed_name_set() -> None:
+    assert set(SMOKE_CHECKS) == SMOKE_CHECK_NAMES == frozenset({"puppeteer-browser"})
+
+
+def _plant_browser(cache: Path, version: str = "linux-140.0.0") -> Path:
+    browser = (
+        cache
+        / "chrome-headless-shell"
+        / version
+        / "chrome-headless-shell-linux64"
+        / "chrome-headless-shell"
+    )
+    browser.parent.mkdir(parents=True)
+    browser.write_text("x")
+    browser.chmod(0o755)
+    return browser
+
+
+def test_smoke_puppeteer_browser_succeeds_when_probe_returns_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    cache = tmp_path / "cache"
+    _plant_browser(cache)
+    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
+    monkeypatch.setattr(executors, "probe_version", _const_probe("99.0.0"))
+    calls: list[list[str]] = []
+    execute(
+        Method(
+            kind="node",
+            params={
+                "npm_pkg": "puppeteer",
+                "allow_build": ["puppeteer"],
+                "smoke": "puppeteer-browser",
+            },
+        ),
+        calls.append,
+    )
+    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
+
+
+def test_smoke_puppeteer_browser_fails_when_browser_cannot_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    cache = tmp_path / "cache"
+    browser = _plant_browser(cache)
+    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
+
+    def browser_fails(argv: list[str]) -> str | None:
+        return None if "chrome" in argv[0] else "99.0.0"
+
+    monkeypatch.setattr(executors, "probe_version", browser_fails)
+    calls: list[list[str]] = []
+    with pytest.raises(ExecutorError, match="PUPPETEER_EXECUTABLE_PATH") as exc_info:
+        execute(
+            Method(
+                kind="node",
+                params={
+                    "npm_pkg": "puppeteer",
+                    "allow_build": ["puppeteer"],
+                    "smoke": "puppeteer-browser",
+                },
+            ),
+            calls.append,
+        )
+    assert str(browser) in str(exc_info.value)
+    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
+
+
+def test_smoke_puppeteer_browser_fails_when_cache_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    cache = tmp_path / "empty-cache"
+    cache.mkdir()
+    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
+    monkeypatch.setattr(executors, "probe_version", _const_probe("99.0.0"))
+    calls: list[list[str]] = []
+    with pytest.raises(ExecutorError, match=cache.as_posix()):
+        execute(
+            Method(
+                kind="node",
+                params={
+                    "npm_pkg": "puppeteer",
+                    "allow_build": ["puppeteer"],
+                    "smoke": "puppeteer-browser",
+                },
+            ),
+            calls.append,
+        )
+    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
+
+
+def test_smoke_honours_puppeteer_executable_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    custom = tmp_path / "custom-chrome"
+    custom.write_text("x")
+    custom.chmod(0o755)
+    monkeypatch.setenv("PUPPETEER_EXECUTABLE_PATH", str(custom))
+    seen: list[list[str]] = []
+
+    def fake_probe(argv: list[str]) -> str | None:
+        seen.append(argv)
+        return "99.0.0"
+
+    monkeypatch.setattr(executors, "probe_version", fake_probe)
+    calls: list[list[str]] = []
+    execute(
+        Method(
+            kind="node",
+            params={
+                "npm_pkg": "puppeteer",
+                "allow_build": ["puppeteer"],
+                "smoke": "puppeteer-browser",
+            },
+        ),
+        calls.append,
+    )
+    assert [argv[0] for argv in seen if "chrome" in argv[0] or argv[0] == str(custom)]
+    assert any(argv[0] == str(custom) for argv in seen)
+    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
+
+
+def test_smoke_prefers_headless_shell_highest_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _plant_pnpm(tmp_path, monkeypatch)
+    cache = tmp_path / "cache"
+    _plant_browser(cache, "linux-140.0.0")
+    newer = _plant_browser(cache, "linux-152.0.0")
+    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
+    seen: list[list[str]] = []
+
+    def fake_probe(argv: list[str]) -> str | None:
+        seen.append(argv)
+        return "99.0.0"
+
+    monkeypatch.setattr(executors, "probe_version", fake_probe)
+    execute(
+        Method(
+            kind="node",
+            params={
+                "npm_pkg": "puppeteer",
+                "allow_build": ["puppeteer"],
+                "smoke": "puppeteer-browser",
+            },
+        ),
+        _record()[1],
+    )
+    browser_probes = [argv for argv in seen if argv[0].endswith("chrome-headless-shell")]
+    assert browser_probes
+    assert browser_probes[-1][0] == str(newer)
+
+
+def test_node_without_smoke_never_probes_browser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    seen: list[list[str]] = []
+
+    def fake_probe(argv: list[str]) -> str:
+        seen.append(argv)
+        if argv[0] == "node":
+            return "v24.4.0"
+        return "11.9.0"
+
+    monkeypatch.setattr(executors, "probe_version", fake_probe)
+    execute(
+        Method(
+            kind="node",
+            params={
+                "npm_pkg": "puppeteer",
+                "co_install": ["x"],
+                "allow_build": ["puppeteer"],
+                "versions": {"puppeteer": "^25"},
+                "min_node": "22.12.0",
+            },
+        ),
+        _record()[1],
+    )
+    assert all("chrome" not in argv[0] for argv in seen)
+    assert any(argv[0] == str(pnpm) for argv in seen)
+    assert any(argv[0] == "node" for argv in seen)
+
+
+def test_node_versions_non_string_value_raises() -> None:
+    with pytest.raises(ExecutorError, match="versions"):
+        execute(
+            Method(kind="node", params={"npm_pkg": "x", "versions": {"puppeteer": 1}}),
+            _record()[1],
+        )
+
+
+def test_smoke_falls_back_to_chrome_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    cache = tmp_path / "cache"
+    chrome = cache / "chrome" / "linux-140.0.0" / "chrome-linux64" / "chrome"
+    chrome.parent.mkdir(parents=True)
+    chrome.write_text("x")
+    chrome.chmod(0o755)
+    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
+    seen: list[list[str]] = []
+
+    def fake_probe(argv: list[str]) -> str:
+        seen.append(argv)
+        return "99.0.0"
+
+    monkeypatch.setattr(executors, "probe_version", fake_probe)
+    calls: list[list[str]] = []
+    execute(
+        Method(
+            kind="node",
+            params={
+                "npm_pkg": "puppeteer",
+                "allow_build": ["puppeteer"],
+                "smoke": "puppeteer-browser",
+            },
+        ),
+        calls.append,
+    )
+    assert any(argv[0] == str(chrome) for argv in seen)
+    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
+
+
+def test_smoke_executable_path_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    custom = tmp_path / "broken-chrome"
+    monkeypatch.setenv("PUPPETEER_EXECUTABLE_PATH", str(custom))
+
+    def fake_probe(argv: list[str]) -> str | None:
+        return None if argv[0] == str(custom) else "99.0.0"
+
+    monkeypatch.setattr(executors, "probe_version", fake_probe)
+    calls: list[list[str]] = []
+    with pytest.raises(ExecutorError, match="PUPPETEER_EXECUTABLE_PATH"):
+        execute(
+            Method(
+                kind="node",
+                params={
+                    "npm_pkg": "puppeteer",
+                    "allow_build": ["puppeteer"],
+                    "smoke": "puppeteer-browser",
+                },
+            ),
+            calls.append,
+        )
+    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
+
+
+def test_unknown_smoke_raises_after_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    calls: list[list[str]] = []
+    with pytest.raises(ExecutorError, match="smoke"):
+        execute(
+            Method(kind="node", params={"npm_pkg": "x", "smoke": "not-a-check"}),
+            calls.append,
+        )
+    assert calls == [[str(pnpm), "add", "-g", "x"]]
+
+
+def test_puppeteer_cache_dir_falls_back_to_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    monkeypatch.delenv("PUPPETEER_CACHE_DIR", raising=False)
+    monkeypatch.setattr(executors, "probe_version", _const_probe("99.0.0"))
+    calls: list[list[str]] = []
+    expected = str(tmp_path / ".cache" / "puppeteer")
+    with pytest.raises(ExecutorError, match="puppeteer") as exc_info:
+        execute(
+            Method(
+                kind="node",
+                params={
+                    "npm_pkg": "puppeteer",
+                    "allow_build": ["puppeteer"],
+                    "smoke": "puppeteer-browser",
+                },
+            ),
+            calls.append,
+        )
+    assert expected in str(exc_info.value)
     assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
 
 

@@ -3,10 +3,13 @@ import json
 import pytest
 
 from installer.versions import (
+    PNPM_ALLOW_BUILD_MIN,
+    PNPM_CO_INSTALL_MIN,
     VersionError,
     meets_minimum,
     parse_declared_version,
     parse_version,
+    probe_version,
     resolve_github_tag,
 )
 
@@ -110,3 +113,30 @@ def test_meets_minimum_compares_tuples() -> None:
 def test_meets_minimum_is_fail_closed_on_either_side() -> None:
     assert meets_minimum("latest", "11.0.0") is False
     assert meets_minimum("99.0.0", "22.bad") is False
+
+
+def test_pnpm_floors_match_documented_feature_versions() -> None:
+    assert PNPM_CO_INSTALL_MIN == "11.0.0"
+    assert PNPM_ALLOW_BUILD_MIN == "10.4.0"
+    assert callable(probe_version)
+
+
+def test_probe_version_returns_first_nonempty_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.versions as versions
+
+    def fake_output(argv: list[str], timeout: float | None = None) -> str:
+        return "\n  11.9.0\n"
+
+    monkeypatch.setattr(versions, "run_output", fake_output)
+    assert versions.probe_version(["/x/pnpm", "--version"]) == "11.9.0"
+
+
+def test_probe_version_returns_none_on_command_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.versions as versions
+    from installer.run import CommandError
+
+    def boom(argv: list[str], timeout: float | None = None) -> str:
+        raise CommandError(argv, 127)
+
+    monkeypatch.setattr(versions, "run_output", boom)
+    assert versions.probe_version(["/x/pnpm", "--version"]) is None

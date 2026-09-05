@@ -5,6 +5,8 @@ import re
 import urllib.request
 from collections.abc import Callable
 
+from installer.run import CommandError, run_output
+
 # Resolve a repo ("owner/name") to its latest release tag, verbatim. The leading-'v'
 # convention varies per project (fd: "v10.4.2"; ripgrep: "15.1.0"), and the raw tag is
 # exactly what the release *download path* uses, so it must NOT be stripped here.
@@ -76,6 +78,40 @@ def meets_minimum(observed: str, minimum: str) -> bool:
     if got is None or need is None:
         return False
     return got >= need
+
+
+# A bound belongs on a query, never on the side-effecting install itself
+# (see installer.run.run_output).
+PROBE_VERSION_TIMEOUT = 5.0
+
+# The comma-joined group is part of the v11 global-package redesign, so on
+# pnpm 10 the same string is not a group — it is one package name containing
+# a comma (pnpm Global Packages documentation).
+PNPM_CO_INSTALL_MIN = "11.0.0"
+
+# --allow-build was added in pnpm 10.4.0 (pnpm add documentation); on anything
+# older the flag is an unknown option.
+PNPM_ALLOW_BUILD_MIN = "10.4.0"
+
+
+def _default_probe_version(argv: list[str]) -> str | None:
+    """Single seam every runtime version read goes through.
+
+    No test and no production path can reach a real `pnpm --version` subprocess
+    by accident — the same injection discipline `real_pnpm` already carries.
+    """
+    try:
+        text = run_output(argv, timeout=PROBE_VERSION_TIMEOUT)
+    except (CommandError, OSError):
+        return None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+probe_version: Callable[[list[str]], str | None] = _default_probe_version
 
 
 def urlopen_fetch(url: str) -> bytes:
