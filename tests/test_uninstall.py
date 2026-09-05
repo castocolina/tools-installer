@@ -609,3 +609,59 @@ def test_sweep_tweaks_includes_the_omz_plugins_tweak(
     assert "omz-plugins" not in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
     assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ()
     assert zshrc.read_text() == original
+
+
+def test_orphaned_executable_is_swept_without_its_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc_path, bin_dir = _enabled_countdown(tmp_path)
+    helper = bin_dir / "tools-installer-wait-time"
+    rc_path.write_text("# leftover user content\n")
+    assert helper.exists()
+    assert "countdown" in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ("countdown",)
+    assert not helper.exists()
+
+
+def test_block_without_its_executable_is_still_swept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc_path, bin_dir = _enabled_countdown(tmp_path)
+    helper = bin_dir / "tools-installer-wait-time"
+    helper.unlink()
+    assert "countdown" in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ("countdown",)
+    assert "wait_time()" not in rc_path.read_text()
+
+
+def test_sweep_never_deletes_a_file_it_does_not_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc_path = tmp_path / ".myshellrc"
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    impostor = bin_dir / "tools-installer-wait-time"
+    impostor_text = "user-owned helper"
+    impostor.write_text(impostor_text)
+    stranger = bin_dir / "my-script"
+    stranger_text = "#!/bin/sh\necho hello\n"
+    stranger.write_text(stranger_text)
+    assert "countdown" not in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ()
+    assert impostor.exists() and impostor.read_text() == impostor_text
+    assert stranger.exists() and stranger.read_text() == stranger_text
+
+
+def test_preview_equals_effect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc_path, bin_dir = _enabled_countdown(tmp_path)
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text("plugins=(z git docker)\nsource $ZSH/oh-my-zsh.sh\n")
+    previewed = active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc)
+    swept = sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc)
+    assert previewed == swept
+    assert "countdown" in previewed
+    assert "omz-plugins" in previewed

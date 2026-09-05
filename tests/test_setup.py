@@ -79,3 +79,20 @@ def test_build_app_includes_the_omz_policy_after_the_tweaks() -> None:
     tweak = body.index("tweak_policy(")
     omz = body.index("omz_plugins_policy(")
     assert ban < tweak < omz
+
+
+def test_run_uninstall_is_wired_with_bundles_and_zshrc() -> None:
+    """Assert wiring by reading setup.py source.
+
+    `_run_uninstall` closes over import-time Path.home() constants and is a
+    private composition-root helper, so calling it from tests trips pyright
+    (private usage) and would be unsafe against the real home. The wire is
+    the `bundles=applicable_bundles(platform)` and `zshrc_path=_ZSHRC` kwargs
+    on the non-TTY `run_uninstall(` call.
+    """
+    src = (Path(__file__).resolve().parent.parent / "setup.py").read_text()
+    body = src[src.index("def _run_uninstall") :]
+    body = body[: body.index("def _run_guard")]
+    assert "platform = detect()" in body
+    assert "bundles=applicable_bundles(platform)" in body
+    assert "zshrc_path=_ZSHRC" in body

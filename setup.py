@@ -297,8 +297,9 @@ def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
 
 
 def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
+    platform = detect()
     if sys.stdin.isatty() and not assume_yes:
-        _build_app(load_tools(_REGISTRY), detect(), initial_view="uninstall").run()
+        _build_app(load_tools(_REGISTRY), platform, initial_view="uninstall").run()
         return 0
     confirm = (lambda _message: True) if assume_yes else _ask_confirm
     run_uninstall(
@@ -308,6 +309,8 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
         myshellrc_path=_MYSHELLRC,
         rc_paths=_RC_PATHS,
         confirm=confirm,
+        bundles=applicable_bundles(platform),
+        zshrc_path=_ZSHRC,
     )
     return 0
 

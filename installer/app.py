@@ -56,7 +56,7 @@ from installer.shellrc import (
 )
 from installer.status import is_installed
 from installer.tweaks import TweakBundle
-from installer.uninstall import plan_uninstall, remove_paths, sweep_tweaks
+from installer.uninstall import active_tweak_ids, plan_uninstall, remove_paths, sweep_tweaks
 from installer.versions import TagResolver, resolve_github_tag
 
 # Catalog selection seam: given the full catalog (platform applicability is
@@ -296,21 +296,31 @@ def run_uninstall(
     myshellrc_path: Path,
     rc_paths: list[Path],
     confirm: Callable[[str], bool],
+    bundles: tuple[TweakBundle, ...] = (),
+    zshrc_path: Path | None = None,
 ) -> list[Path]:
-    """Preview userspace artifacts, confirm, then remove them, the PATH block, and
-    any pip/npm-ban artifacts (shims + alias blocks).
+    """Preview userspace artifacts, confirm, then remove them, the PATH block,
+    any pip/npm-ban artifacts (shims + alias blocks), and still-enabled shell
+    tweaks.
 
     Returns the removed download/app paths ([] if nothing to remove or declined).
     """
     paths = plan_uninstall(tools, default_bin_dir)
     shimmed = [name for name, installed in guard_status(default_bin_dir).items() if installed]
-    if not paths and not shimmed:
+    tweaks = active_tweak_ids(
+        bundles, rc_path=myshellrc_path, bin_dir=default_bin_dir, zshrc_path=zshrc_path
+    )
+    # A machine whose only tools-installer footprint is an enabled tweak must
+    # not be told there is nothing to uninstall.
+    if not paths and not shimmed and not tweaks:
         render_uninstall([], console)  # prints the "nothing to uninstall" line
         return []
     if paths:
         render_uninstall(paths, console)
     if shimmed:
         console.print(f"The pip/npm ban will also be removed ({', '.join(shimmed)}).")
+    if tweaks:
+        console.print(f"These shell tweaks will also be disabled ({', '.join(tweaks)}).")
     if not confirm("Remove these artifacts?"):
         return []
     remove_paths(paths)
@@ -319,6 +329,7 @@ def run_uninstall(
     remove_ban_aliases(myshellrc_path)
     for rc_path in rc_paths:
         remove_ban_aliases(rc_path)
+    sweep_tweaks(bundles, rc_path=myshellrc_path, bin_dir=default_bin_dir, zshrc_path=zshrc_path)
     return paths
 
 

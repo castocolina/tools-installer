@@ -962,3 +962,119 @@ def test_perform_uninstall_ban_lever_removes_shims_and_aliases(tmp_path: Path) -
     assert all(active is False for active in guard_status(bin_dir).values())  # shims gone
     assert "alias" not in myshellrc.read_text()  # alias block stripped from myshellrc
     assert "alias" not in rc.read_text()  # ...and from each rc path
+
+
+def _enable_countdown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    from installer.policy import tweak_policy
+    from installer.tweaks import BUNDLES
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc_path = tmp_path / ".myshellrc"
+    bin_dir = tmp_path / ".local" / "bin"
+    countdown = next(bundle for bundle in BUNDLES if bundle.id == "countdown")
+    tweak_policy(countdown, rc_path=rc_path, bin_dir=bin_dir).apply()
+    return rc_path, bin_dir
+
+
+def test_run_uninstall_previews_and_sweeps_active_tweaks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+    from installer.tweaks import BUNDLES
+
+    rc_path, bin_dir = _enable_countdown(tmp_path, monkeypatch)
+    helper = bin_dir / "tools-installer-wait-time"
+    console, buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=rc_path,
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=BUNDLES,
+    )
+    out = buf.getvalue()
+    assert "countdown" in out
+    assert "Nothing to uninstall" not in out
+    assert "wait_time()" not in rc_path.read_text()
+    assert not helper.exists()
+
+
+def test_run_uninstall_reports_nothing_to_uninstall_only_when_truly_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+    from installer.tweaks import BUNDLES
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    rc_path = tmp_path / ".myshellrc"
+    console, buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=rc_path,
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=BUNDLES,
+    )
+    assert "Nothing to uninstall" in buf.getvalue()
+
+    rc_path, bin_dir = _enable_countdown(tmp_path, monkeypatch)
+    console, buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=rc_path,
+        rc_paths=[],
+        confirm=lambda _m: False,
+        bundles=BUNDLES,
+    )
+    assert "Nothing to uninstall" not in buf.getvalue()
+    assert "countdown" in buf.getvalue()
+
+
+def test_run_uninstall_declined_removes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+    from installer.tweaks import BUNDLES
+
+    rc_path, bin_dir = _enable_countdown(tmp_path, monkeypatch)
+    helper = bin_dir / "tools-installer-wait-time"
+    console, _buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=rc_path,
+        rc_paths=[],
+        confirm=lambda _m: False,
+        bundles=BUNDLES,
+    )
+    assert helper.exists()
+    assert "wait_time()" in rc_path.read_text()
+
+
+def test_run_uninstall_without_bundles_sweeps_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+
+    rc_path, bin_dir = _enable_countdown(tmp_path, monkeypatch)
+    helper = bin_dir / "tools-installer-wait-time"
+    console, _buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=rc_path,
+        rc_paths=[],
+        confirm=lambda _m: True,
+    )
+    assert helper.exists()
+    assert "wait_time()" in rc_path.read_text()
