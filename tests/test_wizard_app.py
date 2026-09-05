@@ -1,6 +1,6 @@
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar, cast
 
 from textual.widgets import DataTable, Static
 
@@ -53,28 +53,42 @@ def _removable_row(tool: Tool, paths: list[Path]) -> ToolRow:
     return ToolRow(tool, "removable", paths, "installed in userspace — removable here", True)
 
 
+_T = TypeVar("_T")
+
+
+def _predicate(value: _T | Callable[[], _T]) -> Callable[[], _T]:
+    """Accept a plain value or the live predicate the production wire passes.
+
+    Every environment input on UninstallInputs is a predicate, because another
+    view can change it while this screen is suspended. Most tests only care
+    about one fixed reading, so they keep passing the value.
+    """
+    if callable(value):
+        # _T is unbounded, so pyright cannot rule out a _T that is itself
+        # callable; this branch is the caller's declared intent either way.
+        return cast("Callable[[], _T]", value)
+    frozen = value
+
+    def read() -> _T:
+        return frozen
+
+    return read
+
+
 def _uninstall_inputs(
     *,
     rows: list[ToolRow] | None = None,
-    ban_names: list[str] | None = None,
-    has_path_block: bool = False,
+    ban_names: list[str] | Callable[[], list[str]] | None = None,
+    has_path_block: bool | Callable[[], bool] = False,
     remove: Callable[[UninstallDecision], SweepResult] = lambda _decision: SweepResult(),
     tweak_ids: tuple[str, ...] | Callable[[], tuple[str, ...]] = (),
 ) -> UninstallInputs:
-    if callable(tweak_ids):
-        ids: Callable[[], tuple[str, ...]] = tweak_ids
-    else:
-        frozen = tweak_ids
-
-        def ids() -> tuple[str, ...]:
-            return frozen
-
     return UninstallInputs(
         rows=rows if rows is not None else [],
-        ban_names=ban_names if ban_names is not None else [],
-        has_path_block=has_path_block,
+        ban_names=_predicate(ban_names if ban_names is not None else []),
+        has_path_block=_predicate(has_path_block),
         remove=remove,
-        tweak_ids=ids,
+        tweak_ids=_predicate(tweak_ids),
     )
 
 
@@ -109,7 +123,7 @@ def _policy_inputs(policies: list[Policy] | None = None) -> PolicyInputs:
 def _app(
     *,
     report: DoctorReport | None = None,
-    guard_status: dict[str, bool] | None = None,
+    guard_status: dict[str, bool] | Callable[[], dict[str, bool]] | None = None,
     guard_warning: str | None = None,
     fix_preview: str = "Will wire ~/.local/bin into ~/.zshrc",
     fix: Callable[[], None] = lambda: None,
@@ -119,13 +133,13 @@ def _app(
 ) -> UnifiedApp:
     tools = [_tool("rg"), _tool("fd")]
     installed: Mapping[str, bool] = {"rg": True, "fd": False}
+    read_status = _predicate(guard_status or {"pip": False, "npm": False})
     return UnifiedApp(
         tools,
         installed,
         {"search": "find things"},
         report=report or DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_status=guard_status or {"pip": False, "npm": False},
-        guard_warning=guard_warning,
+        guard_state=lambda: (read_status(), guard_warning),
         fix_preview=fix_preview,
         fix=fix,
         uninstall=uninstall or _uninstall_inputs(),
@@ -1187,3 +1201,70 @@ async def test_uninstall_does_not_refresh_after_it_has_applied() -> None:
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.status.text == applied_status
         assert "#tweaks" in {row.value for row in app.screen.query_one(DataTable[Any]).rows}
+
+
+async def test_uninstall_ban_row_appears_once_the_ban_is_enabled_elsewhere() -> None:
+    """Enabling the ban in Policies must not leave its removal lever unreachable.
+
+    The flagship policy starts OFF on a fresh machine, so a build-time snapshot
+    shows the Uninstall view a machine with no ban on it for the rest of the
+    session — however many times the user enables one.
+    """
+    live: list[str] = []
+    app = _app(uninstall=_uninstall_inputs(ban_names=lambda: list(live)))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        assert isinstance(app.screen, UninstallScreen)
+        assert "#ban" not in {row.value for row in app.screen.query_one(DataTable[Any]).rows}
+        live.extend(["pip", "npm"])  # PoliciesScreen.action_toggle_policy → ban_policy.apply
+        await pilot.press("escape")
+        await pilot.press("5")
+        assert isinstance(app.screen, UninstallScreen)
+        cells = app.screen.query_one(DataTable[Any]).get_row("#ban")
+        assert "pip, npm" in " ".join(str(cell) for cell in cells)
+
+
+async def test_uninstall_path_block_row_appears_once_doctor_has_written_it() -> None:
+    """DoctorScreen.action_apply writes the very block has_path_block detects."""
+    written = [False]
+    app = _app(uninstall=_uninstall_inputs(has_path_block=lambda: written[0]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        assert isinstance(app.screen, UninstallScreen)
+        assert "#path-block" not in {row.value for row in app.screen.query_one(DataTable[Any]).rows}
+        written[0] = True  # configure_path → write_myshellrc
+        await pilot.press("escape")
+        await pilot.press("5")
+        assert isinstance(app.screen, UninstallScreen)
+        assert "#path-block" in {row.value for row in app.screen.query_one(DataTable[Any]).rows}
+
+
+async def test_uninstall_ban_row_disappears_once_the_ban_is_removed_elsewhere() -> None:
+    """The stale-True direction: a lever that removes nothing while
+    _applied_summary claims 'pip/npm ban removed' anyway."""
+    live = ["pip", "npm"]
+    app = _app(uninstall=_uninstall_inputs(ban_names=lambda: list(live)), initial_view="uninstall")
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, UninstallScreen)
+        live.clear()
+        await pilot.press("escape")
+        await pilot.press("5")
+        assert isinstance(app.screen, UninstallScreen)
+        assert "#ban" not in {row.value for row in app.screen.query_one(DataTable[Any]).rows}
+
+
+async def test_doctor_ban_report_follows_a_policies_toggle() -> None:
+    """Installed screens are suspended, not unmounted, so DoctorScreen.on_mount
+    fires once for the life of the app. Without enter_view the report shows the
+    ban state from before the user toggled it one nav step away."""
+    status = {"pip": False, "npm": False}
+    app = _app(guard_status=lambda: status)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        assert isinstance(app.screen, DoctorScreen)
+        assert all("ban" not in item.title.lower() for item in app.screen.guidance)
+        status["pip"] = True  # PoliciesScreen.action_toggle_policy → ban_policy.apply
+        await pilot.press("escape")
+        await pilot.press("4")
+        assert isinstance(app.screen, DoctorScreen)
+        assert any("ban" in item.title.lower() for item in app.screen.guidance)

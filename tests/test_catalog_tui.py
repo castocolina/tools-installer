@@ -29,12 +29,14 @@ def _unified_app(
         installed,
         blurbs,
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_status={},
-        guard_warning=None,
+        guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=[], ban_names=[], has_path_block=False, remove=lambda _decision: SweepResult()
+            rows=[],
+            ban_names=list,
+            has_path_block=lambda: False,
+            remove=lambda _decision: SweepResult(),
         ),
         policies=PolicyInputs(policies=[]),
     )

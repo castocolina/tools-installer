@@ -184,6 +184,28 @@ def configure_path(
     console.print(f"PATH configured in {myshellrc_path} (restart your shell or source it).")
 
 
+def guard_state(
+    default_bin_dir: Path,
+    path_value: str,
+    which: Callable[[str], str | None] = shutil.which,
+) -> tuple[dict[str, bool], str | None]:
+    """The pip/npm-ban status and the PATH-order warning — the latter shown only
+    when a ban is actually installed (an irrelevant warning otherwise).
+
+    Split out of `doctor_data` because it is the half that goes STALE inside a
+    running app: the Policies view installs and removes the ban live, one nav
+    step from both the Doctor report that describes it and the Uninstall row
+    that offers to remove it. Those two views re-read this on entry, while the
+    PATH audit stays a build-time snapshot — the process PATH cannot change
+    until the shell restarts, so re-auditing would only re-show "missing".
+    """
+    status = guard_status(default_bin_dir)
+    warning = (
+        guard_path_warning(default_bin_dir, path_value, which) if any(status.values()) else None
+    )
+    return status, warning
+
+
 def doctor_data(
     tools: list[Tool],
     *,
@@ -194,14 +216,10 @@ def doctor_data(
     which: Callable[[str], str | None] = shutil.which,
 ) -> tuple[DoctorReport, dict[str, bool], str | None]:
     """Assemble the doctor inputs shared by the CLI report and the TUI screen:
-    the PATH audit, the pip/npm-ban status, and the PATH-order warning — shown
-    only when a ban is actually installed (an irrelevant warning otherwise)."""
+    the PATH audit, the pip/npm-ban status, and the PATH-order warning."""
     bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir, exists)
     report = audit_path(bin_dirs, path_value, exists)
-    status = guard_status(default_bin_dir)
-    warning = (
-        guard_path_warning(default_bin_dir, path_value, which) if any(status.values()) else None
-    )
+    status, warning = guard_state(default_bin_dir, path_value, which)
     return report, status, warning
 
 

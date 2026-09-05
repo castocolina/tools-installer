@@ -61,8 +61,8 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
 
     inputs = UninstallInputs(
         rows=rows,
-        ban_names=[name for name, active in guard_status(bin_dir).items() if active],
-        has_path_block=has_managed_block(myshellrc),
+        ban_names=lambda: [name for name, active in guard_status(bin_dir).items() if active],
+        has_path_block=lambda: has_managed_block(myshellrc),
         remove=_remove,
     )
     app = UnifiedApp(
@@ -70,8 +70,7 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
         {"fd": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_status=guard_status(bin_dir),
-        guard_warning=None,
+        guard_state=lambda: (guard_status(bin_dir), None),
         fix_preview="",
         fix=lambda: None,
         uninstall=inputs,
@@ -119,8 +118,8 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
 
     inputs = UninstallInputs(
         rows=rows,
-        ban_names=[name for name, active in guard_status(bin_dir).items() if active],
-        has_path_block=has_managed_block(myshellrc),
+        ban_names=lambda: [name for name, active in guard_status(bin_dir).items() if active],
+        has_path_block=lambda: has_managed_block(myshellrc),
         remove=_remove,
         tweak_ids=tweak_ids,
     )
@@ -129,8 +128,7 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
         {"fd": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_status=guard_status(bin_dir),
-        guard_warning=None,
+        guard_state=lambda: (guard_status(bin_dir), None),
         fix_preview="",
         fix=lambda: None,
         uninstall=inputs,
@@ -155,8 +153,8 @@ def _error_app(home: Path) -> UnifiedApp:
 
     inputs = UninstallInputs(
         rows=[ToolRow(_dl_tool(), "removable", [bin_dir / "fd"], "removable here", True)],
-        ban_names=[],
-        has_path_block=False,
+        ban_names=list,
+        has_path_block=lambda: False,
         remove=_boom,
     )
     return UnifiedApp(
@@ -164,8 +162,7 @@ def _error_app(home: Path) -> UnifiedApp:
         {"fd": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_status={},
-        guard_warning=None,
+        guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
         uninstall=inputs,

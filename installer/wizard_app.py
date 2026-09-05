@@ -51,17 +51,22 @@ class UninstallInputs:
     """Everything the UninstallScreen needs: every classified tool (catalog
     parity, not just the removable ones), the active ban names, whether a managed
     PATH block exists, the active shell-tweak ids, and the live removal closure
-    bound by the composition root."""
+    bound by the composition root.
+
+    `rows` is a snapshot because nothing in this app installs or removes a tool
+    while it runs. The other three are PREDICATES, not their results, because
+    each is mutated live by another view in the same process: the Policies view
+    writes the ban's shims and aliases and toggles the tweaks, and the Doctor
+    view writes the very managed PATH block `has_path_block` detects. A value
+    frozen at construction goes stale the moment the user does — stale-False
+    leaves the lever for something they just enabled unreachable, and stale-True
+    offers a lever that removes nothing while the summary claims it did.
+    `UninstallScreen.enter_view` re-evaluates all three on every entry."""
 
     rows: list[ToolRow]
-    ban_names: list[str]
-    has_path_block: bool
+    ban_names: Callable[[], list[str]]
+    has_path_block: Callable[[], bool]
     remove: Callable[[UninstallDecision], SweepResult]
-    # A predicate, not its result. The Policies view toggles tweaks live in the
-    # same process, so a tuple frozen at construction goes stale the moment the
-    # user changes one: the #tweaks row would be missing for a tweak they just
-    # enabled, or offered (and named in the summary) for one they just turned
-    # off. UninstallScreen.enter_view re-evaluates this on every entry.
     tweak_ids: Callable[[], tuple[str, ...]] = tuple
 
 
@@ -105,15 +110,17 @@ class DoctorScreen(AppScreen):
     def __init__(
         self,
         report: DoctorReport,
-        guard_status: dict[str, bool],
-        guard_warning: str | None,
+        guard_state: Callable[[], tuple[dict[str, bool], str | None]],
         fix_preview: str,
         fix: Callable[[], None],
     ) -> None:
         super().__init__(view="doctor")
         self._report = report
-        self._guard_status = guard_status
-        self._guard_warning = guard_warning
+        # A predicate, not its result: the Policies view installs and removes the
+        # pip/npm ban live, one nav step away, and guard_guidance renders exactly
+        # that state. The PATH audit beside it stays a snapshot on purpose — the
+        # process PATH cannot change until the shell restarts.
+        self._guard_state = guard_state
         self._fix_preview = fix_preview
         self._fix = fix
         self.guidance: list[Guidance] = []
@@ -124,10 +131,23 @@ class DoctorScreen(AppScreen):
         yield _BodyStatic(id="doctor-body")
 
     def on_mount(self) -> None:
-        self.guidance = doctor_guidance(self._report) + guard_guidance(
-            self._guard_status, self._guard_warning
-        )
+        self._refresh_guidance()
         self._refresh_body()
+
+    def enter_view(self) -> None:
+        """Re-read the ban state on every entry.
+
+        Installed screens are suspended, not unmounted, so `on_mount` fires once
+        for the life of the app: without this, Policies → toggle the ban →
+        Doctor reports the state from before the toggle.
+        """
+        self._refresh_guidance()
+        if self.is_mounted:
+            self._refresh_body()
+
+    def _refresh_guidance(self) -> None:
+        status, warning = self._guard_state()
+        self.guidance = doctor_guidance(self._report) + guard_guidance(status, warning)
 
     def _refresh_body(self) -> None:
         body = self.query_one("#doctor-body", _BodyStatic)
@@ -226,10 +246,12 @@ class UninstallScreen(AppScreen):
     def __init__(self, inputs: UninstallInputs) -> None:
         super().__init__(view="uninstall", accent="red")
         self._rows = inputs.rows
-        self._ban_names = inputs.ban_names
-        self._has_path_block = inputs.has_path_block
+        self._ban_names_of = inputs.ban_names
+        self._has_path_block_of = inputs.has_path_block
         self._tweak_ids_of = inputs.tweak_ids
-        self._tweak_ids = self._tweak_ids_of()
+        self._ban_names: list[str] = self._ban_names_of()
+        self._has_path_block: bool = self._has_path_block_of()
+        self._tweak_ids: tuple[str, ...] = self._tweak_ids_of()
         self._remove = inputs.remove
         self.applied = False
         self.error: str | None = None
@@ -381,22 +403,27 @@ class UninstallScreen(AppScreen):
     def on_mount(self) -> None:
         self._show_standing_status()
 
-    def enter_view(self) -> None:
-        """Re-derive the active tweak ids each time this view is opened.
+    def _live_state(self) -> tuple[list[str], bool, tuple[str, ...]]:
+        """Every input another view can change while this one is suspended."""
+        return self._ban_names_of(), self._has_path_block_of(), self._tweak_ids_of()
 
-        The Policies view toggles the very same tweaks live, one nav step away,
-        so the row's existence and its label must be read at entry rather than
-        frozen in `__init__` — otherwise enabling a tweak leaves its lever
-        unreachable here, and disabling every tweak leaves a lever that sweeps
-        nothing while the summary names ids nothing touched. Skipped once the
-        screen has applied: that run's result is the standing message.
+    def enter_view(self) -> None:
+        """Re-derive all three environment rows each time this view is opened.
+
+        The Policies view toggles the ban and the tweaks live and the Doctor
+        view writes the managed PATH block, all one nav step away, so each row's
+        existence and its label must be read at entry rather than frozen in
+        `__init__` — otherwise enabling something leaves its lever unreachable
+        here, and disabling it leaves a lever that removes nothing while the
+        summary claims it did. Skipped once the screen has applied: that run's
+        result is the standing message.
         """
         if self.applied:
             return
-        refreshed = self._tweak_ids_of()
-        if refreshed == self._tweak_ids:
+        refreshed = self._live_state()
+        if refreshed == (self._ban_names, self._has_path_block, self._tweak_ids):
             return
-        self._tweak_ids = refreshed
+        self._ban_names, self._has_path_block, self._tweak_ids = refreshed
         self._entries = self._build_entries()
         self._by_key = {entry.key: entry for entry in self._entries}
         self._browser.reload(self._adapter())
@@ -776,8 +803,7 @@ class UnifiedApp(App[list[str] | None]):
         blurbs: Mapping[str, str],
         *,
         report: DoctorReport,
-        guard_status: dict[str, bool],
-        guard_warning: str | None,
+        guard_state: Callable[[], tuple[dict[str, bool], str | None]],
         fix_preview: str,
         fix: Callable[[], None],
         uninstall: UninstallInputs,
@@ -803,7 +829,7 @@ class UnifiedApp(App[list[str] | None]):
         }
         self._views.update(
             {
-                "doctor": DoctorScreen(report, guard_status, guard_warning, fix_preview, fix),
+                "doctor": DoctorScreen(report, guard_state, fix_preview, fix),
                 "uninstall": UninstallScreen(uninstall),
                 "policies": PoliciesScreen(policies),
             }

@@ -21,6 +21,7 @@ from installer.app import (
     clean_rc_duplicates,
     configure_path,
     doctor_data,
+    guard_state,
     perform_uninstall,
     run_doctor,
     run_guard,
@@ -143,13 +144,21 @@ def _build_app(
     link_mode: str = "centralized",
 ) -> UnifiedApp:
     installed = {tool.id: is_installed(tool) for tool in tools}
-    report, status, warning = doctor_data(
+    report, _status, _warning = doctor_data(
         tools,
         platform=platform,
         default_bin_dir=_DEFAULT_BIN_DIR,
         path_value=os.environ.get("PATH", ""),
         exists=Path.is_dir,
     )
+
+    def _guard_state() -> tuple[dict[str, bool], str | None]:
+        # Re-read, never a snapshot: the Policies view installs and removes the
+        # pip/npm ban live in this same process, and both the Doctor report and
+        # the Uninstall row describe exactly that state. One closure so the two
+        # views can never disagree about it.
+        return guard_state(_DEFAULT_BIN_DIR, os.environ.get("PATH", ""))
+
     rc_paths = rc_paths_for_mode(link_mode, _SHELL)
     rows = classify_tools(
         tools,
@@ -158,7 +167,6 @@ def _build_app(
         platform=platform,
         reverse_deps=reverse_dependencies(tools),
     )
-    ban_names = [name for name, active in status.items() if active]
     # The Policies view offers what applies HERE; the teardown sweeps every
     # bundle. A bundle whose `platforms` tuple changed between installer
     # versions, or an rc file carried between machines, would otherwise leave a
@@ -180,13 +188,14 @@ def _build_app(
             zshrc_path=_ZSHRC,
         )
 
+    # Every environment row is a predicate, not its result: the Policies and
+    # Doctor views mutate all three live in this same session, so the Uninstall
+    # view re-evaluates them on entry (see UninstallInputs).
     uninstall_inputs = UninstallInputs(
         rows=rows,
-        ban_names=ban_names,
-        has_path_block=has_managed_block(_MYSHELLRC),
+        ban_names=lambda: [name for name, active in _guard_state()[0].items() if active],
+        has_path_block=lambda: has_managed_block(_MYSHELLRC),
         remove=_do_uninstall,
-        # The predicate, not its result: the Policies view toggles these live in
-        # the same session, so the Uninstall view re-evaluates it on entry.
         tweak_ids=lambda: active_tweak_ids(
             BUNDLES, rc_path=_MYSHELLRC, bin_dir=_DEFAULT_BIN_DIR, zshrc_path=_ZSHRC
         ),
@@ -242,8 +251,7 @@ def _build_app(
         installed,
         load_categories(_REGISTRY),
         report=report,
-        guard_status=status,
-        guard_warning=warning,
+        guard_state=_guard_state,
         fix_preview=preview,
         fix=_apply_fix,
         uninstall=uninstall_inputs,
