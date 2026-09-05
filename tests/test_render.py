@@ -275,14 +275,14 @@ def test_render_guard_status_silent_when_inactive():
     assert buf.getvalue() == ""
 
 
-def test_render_guard_status_reports_active_shims_and_warning():
+def test_render_guard_status_reports_per_command_labels():
     buf = io.StringIO()
     console = Console(file=buf, width=100)
-    render_guard_status({"pip": True, "npm": False, "pip3": True}, "PATH order", console)
+    render_guard_status({"npx": True, "pip": True, "npm": False}, None, console)
     out = buf.getvalue()
     assert "Package manager guards active" in out
-    assert "pip" in out
-    assert "PATH order" in out
+    assert "npx: redirected to pnpm dlx" in out
+    assert "pip: blocked" in out
 
 
 def test_render_guard_status_warning_only_no_active_shims():
@@ -290,7 +290,7 @@ def test_render_guard_status_warning_only_no_active_shims():
     console = Console(file=buf, width=100)
     render_guard_status({"pip": False, "npm": False}, "PATH order warning", console)
     out = buf.getvalue()
-    assert "pip/npm ban active" not in out
+    assert "Package manager guards active" not in out
     assert "PATH order warning" in out
 
 
@@ -300,16 +300,16 @@ def test_render_guard_status_active_shims_no_warning():
     render_guard_status({"pip": True, "npm": False}, None, console)
     out = buf.getvalue()
     assert "Package manager guards active" in out
+    assert "pip: blocked" in out
     assert "guard warning" not in out
 
 
 def test_render_guard_status_includes_reload_next_step():
     buf = io.StringIO()
     console = Console(file=buf, width=100)
-    render_guard_status({"pip": True, "npm": False}, None, console)
+    render_guard_status({"npx": True}, None, console)
     out = buf.getvalue()
-    assert "Package manager guards active" in out
-    assert "hash -r" in out  # the reload next step from guard_guidance
+    assert "hash -r" in out
 
 
 def test_render_dependency_notice_shows_dragged_in_and_warnings() -> None:

@@ -949,7 +949,39 @@ def test_run_doctor_reports_active_ban(tmp_path: Path):
         exists=lambda _p: True,
         which=lambda name: str(shim_dir / name),
     )
-    assert "Package manager guards active" in buf.getvalue()
+    out = buf.getvalue()
+    assert "Package manager guards active" in out
+    assert "pip: blocked" in out
+
+
+def test_run_doctor_reports_npx_redirect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from installer.app import run_doctor
+    from installer.guards import install_redirect_shims
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    shim_dir = tmp_path / ".local" / "bin"
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    pnpm = real_dir / "pnpm"
+    pnpm.write_text("#!/bin/sh\n")
+    pnpm.chmod(0o755)
+
+    def lookup(name: str, _path: str) -> str | None:
+        return str(pnpm) if name == "pnpm" else None
+
+    install_redirect_shims(shim_dir, path_value=str(real_dir), lookup=lookup)
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+    run_doctor(
+        [],
+        console,
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        default_bin_dir=shim_dir,
+        path_value=str(shim_dir),
+        exists=lambda _p: True,
+        which=lambda name: str(shim_dir / name),
+    )
+    assert "npx: redirected to pnpm dlx" in buf.getvalue()
 
 
 def test_run_uninstall_also_removes_guard_artifacts(tmp_path: Path):

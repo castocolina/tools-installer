@@ -1268,3 +1268,10 @@ async def test_doctor_ban_report_follows_a_policies_toggle() -> None:
         await pilot.press("4")
         assert isinstance(app.screen, DoctorScreen)
         assert any("guards active" in item.title.lower() for item in app.screen.guidance)
+
+
+async def test_doctor_screen_shows_npx_redirect_label() -> None:
+    app = _app(guard_status={"npx": True}, initial_view="doctor")
+    async with app.run_test(size=(100, 30)):
+        assert isinstance(app.screen, DoctorScreen)
+        assert any("npx: redirected to pnpm dlx" in item.meaning for item in app.screen.guidance)
