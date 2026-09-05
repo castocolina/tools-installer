@@ -324,7 +324,12 @@ def run_guard(
     actions.update(install_global_redirect_shims(shim_dir, path_value=path_value))
     for rc_path in rc_paths:
         write_ban_aliases(rc_path)
-    render_guard(actions, guard_path_warning(shim_dir, path_value, which), console, removing=False)
+    # The same composition the Doctor/TUI path gets from guard_state: the
+    # per-name action lines never explain that npx/npm degraded to hard blocks
+    # because pnpm or volta was unresolvable, so a --guard user installing on a
+    # bare machine would otherwise never see it.
+    _status, warning = guard_state(shim_dir, path_value, which)
+    render_guard(actions, warning, console, removing=False)
     return True
 
 

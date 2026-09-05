@@ -777,6 +777,27 @@ def test_run_guard_install_writes_shims_and_aliases_and_returns_true(tmp_path: P
     assert "Installing the pip/npm ban" in buf.getvalue()
 
 
+def test_run_guard_reports_the_redirect_degradation_not_just_path_order(tmp_path: Path):
+    # A bare machine (no pnpm, no volta) degrades npx and npm to hard blocks.
+    # The per-name action lines never say so, and the PATH order here is sound,
+    # so without guard_state's composition the CLI user is told nothing.
+    shim_dir = tmp_path / "bin"
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+    run_guard(
+        remove=False,
+        shim_dir=shim_dir,
+        rc_paths=[tmp_path / ".myshellrc"],
+        path_value=f"{shim_dir}:/usr/bin",
+        console=console,
+        confirm=lambda _m: True,
+        which=lambda _n: None,
+    )
+    output = buf.getvalue()
+    assert "hard-blocked" in output
+    assert "volta" in output
+
+
 def test_run_guard_declined_does_nothing(tmp_path: Path):
     shim_dir = tmp_path / "bin"
     buf = io.StringIO()
