@@ -26,6 +26,15 @@ installer never created. Enabling therefore records the names it actually
 added, in a marker block inside the ~/.myshellrc this installer owns (the one
 place a marker may go; .zshrc never gets one), and disabling removes exactly
 those. A machine with no record is a machine this module will not touch.
+
+The record is the only thing that can distinguish the two machines, so it is
+written and cleared transactionally around the .zshrc edit — reserved before an
+enable and rolled back if that edit is refused, cleared only after a disable's
+edit has actually landed — and both files are written atomically. Either order
+of a non-transactional pair strands state: a record written after the edit can
+abandon names this installer added, and a record cleared before the edit makes a
+refused write permanent, since the retry the caller advertises would find
+nothing left to act on.
 """
 
 import os
@@ -178,23 +187,29 @@ def plugins_in(content: str) -> tuple[str, ...]:
     return tuple(_bare(token) for token in found[1].group("body").split())
 
 
-def _replace_content(zshrc_path: Path, updated: str) -> None:
-    """Replace an existing zshrc_path's content atomically.
+def _atomic_write(path: Path, updated: str) -> None:
+    """Replace path's content atomically, creating it when it does not exist yet.
 
-    .zshrc is the one file this module edits that the installer does not own,
-    and it keeps no backup, so a crash, a full disk, or a SIGKILL mid-write must
-    never be able to leave the user with a truncated shell startup file. Write a
-    sibling temp file (same directory, so the rename cannot cross a filesystem),
-    carry the original's mode over, then os.replace — which is atomic on POSIX.
+    Both files this module writes need this. .zshrc is the one it edits that the
+    installer does not own, and it keeps no backup, so a crash, a full disk, or a
+    SIGKILL mid-write must never be able to leave the user with a truncated shell
+    startup file. The ownership record is worse: it is the only thing that can
+    tell a name this installer added from one the user wrote, and a half-written
+    record is unrecoverable by design — `strip_block` refuses an orphan begin
+    marker, so a truncated record would wedge the policy permanently ON with no
+    way to clear it. Write a sibling temp file (same directory, so the rename
+    cannot cross a filesystem), carry any existing mode over, then os.replace —
+    which is atomic on POSIX.
     """
-    tmp = zshrc_path.with_name(f"{zshrc_path.name}.tools-installer.tmp")
+    tmp = path.with_name(f"{path.name}.tools-installer.tmp")
     try:
         tmp.write_text(updated)
-        shutil.copymode(zshrc_path, tmp)
-        os.replace(tmp, zshrc_path)
+        if path.exists():
+            shutil.copymode(path, tmp)
+        os.replace(tmp, path)
     except OSError:
         # The original is still intact; drop the partial temp rather than
-        # leaving a half-written file beside the user's .zshrc.
+        # leaving a half-written file beside the user's own.
         tmp.unlink(missing_ok=True)
         raise
 
@@ -218,19 +233,27 @@ def _record(state_path: Path) -> tuple[str, ...] | None:
     None and () are different answers: () means "we enabled the policy and the
     array already had every name", which is still ours to switch off, while
     None means "we never touched this machine".
+
+    Only a CLOSED begin..end block counts. An orphan begin marker — which a
+    truncated write could once leave behind — must read as "no record": treating
+    it as "owns nothing" would report the policy ON while `_clear_owned`'s
+    `strip_block` deliberately refuses to strip an unpaired marker, leaving no
+    way to ever switch it off. Last closed block wins, mirroring the same
+    last-begin pairing rule apply_block/strip_block use.
     """
     if not state_path.exists():
         return None
-    names: tuple[str, ...] | None = None
+    record: tuple[str, ...] | None = None
+    names: tuple[str, ...] = ()
     inside = False
     for line in state_path.read_text().split("\n"):
         if line == _OWNED_BEGIN:
             inside, names = True, ()
-        elif line == _OWNED_END:
-            inside = False
+        elif line == _OWNED_END and inside:
+            inside, record = False, names
         elif inside and line.startswith(_ADDED_PREFIX):
             names = tuple(line[len(_ADDED_PREFIX) :].split())
-    return names
+    return record
 
 
 def owned_plugins(state_path: Path) -> tuple[str, ...]:
@@ -251,8 +274,8 @@ def plugins_owned(state_path: Path) -> bool:
 
 def _record_owned(state_path: Path, added: tuple[str, ...]) -> None:
     existing = state_path.read_text() if state_path.exists() else ""
-    state_path.write_text(
-        apply_block(existing, _owned_block(added), begin=_OWNED_BEGIN, end=_OWNED_END)
+    _atomic_write(
+        state_path, apply_block(existing, _owned_block(added), begin=_OWNED_BEGIN, end=_OWNED_END)
     )
 
 
@@ -262,7 +285,7 @@ def _clear_owned(state_path: Path) -> None:
     original = state_path.read_text()
     stripped = strip_block(original, _OWNED_BEGIN, _OWNED_END)
     if stripped != original:
-        state_path.write_text(stripped)
+        _atomic_write(state_path, stripped)
 
 
 def write_plugins(
@@ -270,9 +293,17 @@ def write_plugins(
 ) -> tuple[str, ...]:
     """Enable managed plugins in zshrc_path, recording what was added in state_path.
 
-    Returns the names actually added. The record is written only after the
-    .zshrc edit succeeds, so a refused array never leaves a claim of ownership
-    over a file this installer did not change.
+    Returns the names actually added.
+
+    The record and the .zshrc edit are transactional, in the only order that
+    fails safe: `enable_plugins` raises for a refused array before anything is
+    written, then the claim is RESERVED, then the edit is committed, and a
+    failed edit rolls the claim back to exactly what it was. Recording after the
+    edit instead would strand names on a failed record write — the installer
+    would have added `docker` to the user's array while holding no record of it,
+    so `plugins_owned` reads False and `remove_plugins` can never take it back
+    out. An over-broad claim is recoverable (removing a name the array does not
+    contain is a no-op); an absent one is not.
     """
     if not zshrc_path.exists():
         raise OmzPluginsError(_NO_ARRAY)
@@ -280,11 +311,21 @@ def write_plugins(
     current = plugins_in(original)
     added = tuple(name for name in plugins if name not in current)
     updated = enable_plugins(original, plugins)
-    if updated != original:
-        _replace_content(zshrc_path, updated)
-    owned = list(owned_plugins(state_path))
+    previous = _record(state_path)
+    owned = list(previous or ())
     owned.extend(name for name in added if name not in owned)
     _record_owned(state_path, tuple(owned))
+    try:
+        if updated != original:
+            _atomic_write(zshrc_path, updated)
+    except OSError:
+        # Restore the record to exactly its prior state, so a refused edit
+        # leaves no claim over a file this installer did not change.
+        if previous is None:
+            _clear_owned(state_path)
+        else:
+            _record_owned(state_path, previous)
+        raise
     return added
 
 
@@ -293,20 +334,31 @@ def remove_plugins(zshrc_path: Path, state_path: Path) -> tuple[str, ...]:
 
     Provenance, not content: a user who wrote `plugins=(git docker kubectl)`
     themselves has no record, so nothing is removed and .zshrc is not opened.
-    Stays total — a missing record, a missing .zshrc, or an array this module
-    cannot parse all resolve to "nothing removed" rather than raising, because
-    the full-uninstall sweep calls this against machines in any of those states.
+    Stays total against the STATE of the machine — a missing record, a missing
+    .zshrc, or an array this module cannot parse all resolve to "nothing
+    removed" rather than raising, because the full-uninstall sweep calls this
+    against machines in any of those states. It is not total against a refused
+    WRITE: a read-only mount, an immutable .zshrc or a full disk raises OSError,
+    which `sweep_tweaks` catches and reports as a failed policy.
+
+    The record is therefore cleared LAST, and only once the file it describes
+    has actually changed. Clearing it first would make that OSError permanent:
+    the tool tells the user to fix permissions and re-run, but the re-run would
+    find no record, report "nothing to uninstall", and leave the names this
+    installer added in the user's .zshrc with no way to take them back out.
     """
     owned = owned_plugins(state_path)
-    _clear_owned(state_path)
     if not owned or not zshrc_path.exists():
+        # Nothing of ours is on disk to undo, so the claim may go unconditionally.
+        _clear_owned(state_path)
         return ()
     original = zshrc_path.read_text()
     current = plugins_in(original)
     removed = tuple(name for name in owned if name in current)
     updated = disable_plugins(original, owned)
     if updated != original:
-        _replace_content(zshrc_path, updated)
+        _atomic_write(zshrc_path, updated)
+    _clear_owned(state_path)
     return removed
 
 

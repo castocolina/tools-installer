@@ -252,22 +252,138 @@ def test_the_zshrc_rewrite_is_atomic_and_leaves_no_temp_file(
     assert sorted(p.name for p in tmp_path.iterdir()) == [".myshellrc", ".zshrc"]
 
 
+def _fail_writes_to(monkeypatch: pytest.MonkeyPatch, target: Path) -> None:
+    """Make the atomic commit fail for exactly one destination file.
+
+    This module writes two files and the ordering between them is the whole
+    subject of these tests, so a blanket `os.replace` patch cannot express which
+    of the two was refused — it would abort on whichever happens to be written
+    first and pass for the wrong reason.
+    """
+    real = omz.os.replace
+
+    def guarded(src: Path, dst: Path) -> None:
+        if dst == target:
+            raise OSError("disk full")
+        real(src, dst)
+
+    monkeypatch.setattr(omz.os, "replace", guarded)
+
+
 def test_a_failed_rewrite_leaves_the_original_intact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     zshrc, state = _sandbox(tmp_path)
-
-    def boom(_src: object, _dst: object) -> None:
-        raise OSError("disk full")
-
-    monkeypatch.setattr(omz.os, "replace", boom)
+    _fail_writes_to(monkeypatch, zshrc)
     with pytest.raises(OSError, match="disk full"):
         write_plugins(zshrc, state)
     # The whole point of the temp+replace: the user's .zshrc is never truncated,
     # and the partial temp file is cleaned up rather than left beside it.
     assert zshrc.read_text() == _ZSHRC
-    assert sorted(p.name for p in tmp_path.iterdir()) == [".zshrc"]
+    assert list(tmp_path.glob("*.tools-installer.tmp")) == []
+    # The reserved claim is rolled back to exactly what it was: no record.
+    assert plugins_owned(state) is False
+
+
+def test_a_failed_rewrite_rolls_the_claim_back_to_the_names_it_already_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Re-enabling after the user hand-deleted our name: the rollback must restore
+    # the PRIOR record, not clear it — clearing would strand the names still in
+    # the array from the first enable.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc, state = _sandbox(tmp_path, "plugins=(git)\nsource x\n")
+    assert write_plugins(zshrc, state) == ("docker",)
+    zshrc.write_text("plugins=(git)\nsource x\n")
+    _fail_writes_to(monkeypatch, zshrc)
+    with pytest.raises(OSError, match="disk full"):
+        write_plugins(zshrc, state)
+    assert zshrc.read_text() == "plugins=(git)\nsource x\n"
+    assert owned_plugins(state) == ("docker",)
+
+
+def test_a_failed_record_write_strands_no_names_in_the_users_array(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The enable-path hole: the claim is reserved BEFORE the .zshrc edit, so a
+    # refused record write aborts before anything is added. Recording afterwards
+    # instead would leave `docker` in the user's array with nothing owning it,
+    # and remove_plugins could never take it back out.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc, state = _sandbox(tmp_path)
+    _fail_writes_to(monkeypatch, state)
+    with pytest.raises(OSError, match="disk full"):
+        write_plugins(zshrc, state)
+    assert zshrc.read_text() == _ZSHRC
+    assert plugins_owned(state) is False
+    assert list(tmp_path.glob("*.tools-installer.tmp")) == []
+
+
+def test_a_failed_removal_keeps_the_record_so_the_advertised_retry_works(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The mirror of the enable path, and the more damaging direction. Both the
+    # CLI and the TUI answer a failed sweep with "check permissions and re-run",
+    # so the record must still describe reality when that re-run happens.
+    # Clearing it first made that advice the one action that could not work: the
+    # retry saw no record, reported nothing to uninstall, and left our names in
+    # the user's .zshrc permanently.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc, state = _sandbox(tmp_path, "plugins=(z kubectl)\nsource x\n")
+    assert write_plugins(zshrc, state) == ("git", "docker")
+    modified = zshrc.read_text()
+
+    _fail_writes_to(monkeypatch, zshrc)
+    with pytest.raises(OSError, match="disk full"):
+        remove_plugins(zshrc, state)
+    assert zshrc.read_text() == modified
+    assert plugins_owned(state) is True
+    assert owned_plugins(state) == ("git", "docker")
+
+    # "Permissions fixed, re-run": the retry now actually recovers.
+    monkeypatch.undo()
+    assert remove_plugins(zshrc, state) == ("git", "docker")
+    assert zshrc.read_text() == "plugins=(z kubectl)\nsource x\n"
+    assert plugins_owned(state) is False
+
+
+def test_the_record_is_written_atomically_and_leaves_no_temp_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The record is the only thing that can tell a name this installer added from
+    # one the user wrote, so it gets the same temp+replace treatment as .zshrc:
+    # a truncated record cannot be repaired (see the orphan-marker test below).
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc, state = _sandbox(tmp_path)
+    state.write_text("export EDITOR=vim\n")
+    state.chmod(0o600)
+    write_plugins(zshrc, state)
+    assert state.stat().st_mode & 0o777 == 0o600
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".myshellrc", ".zshrc"]
+    remove_plugins(zshrc, state)
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".myshellrc", ".zshrc"]
+
+
+def test_an_orphaned_begin_marker_reads_as_no_record_rather_than_wedging_the_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # What a truncated record write could leave behind. `strip_block` refuses to
+    # strip an unpaired begin marker, so reading it as "owns nothing" reported
+    # the policy ON with no way to ever switch it off. An unclosed block is not
+    # a record, and enabling over it recovers a well-formed one.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc, state = _sandbox(tmp_path, "plugins=(git)\nsource x\n")
+    state.write_text("# >>> tools-installer omz-plugins >>>\n# added: docker\n")
+    assert plugins_owned(state) is False
+    assert owned_plugins(state) == ()
+    assert remove_plugins(zshrc, state) == ()
+    assert zshrc.read_text() == "plugins=(git)\nsource x\n"
+
+    assert write_plugins(zshrc, state) == ("docker",)
+    assert plugins_owned(state) is True
+    assert owned_plugins(state) == ("docker",)
+    assert remove_plugins(zshrc, state) == ("docker",)
     assert plugins_owned(state) is False
 
 
