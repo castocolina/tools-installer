@@ -121,13 +121,23 @@ and not a `TweakBundle` — with its Oh-My-Zsh precondition carried by the
 
 A full uninstall disables every still-enabled tweak through the same
 `Policy.remove` closures the Policies view calls, via
-`installer/uninstall.py::sweep_tweaks`; it never reimplements removal, so
+`installer/uninstall.py::sweep_policies`; it never reimplements removal, so
 "full uninstall" and "toggle off" are the same operation by construction. A
 tweak counts as active when its block is present OR an owned helper executable
 is on disk, and ownership means the sentinel check in `installer/tweaks.py` —
 or, for the `.zshrc` arm, the recorded-names check in `installer/omz.py` —
 never mere existence. Every arm of the sweep answers "is this ours", not "does
-this exist". `active_tweak_ids` is the single predicate the CLI
-preview, the Uninstall view's row and the removal all read, so a preview and
-its effect cannot diverge. `plan_uninstall` stays the `Tool`-shaped artifact
-walk and knows nothing about tweaks.
+this exist". `plan_uninstall` stays the `Tool`-shaped artifact walk and knows
+nothing about tweaks.
+
+`active_policies` is the single activity predicate the CLI preview, the
+Uninstall view's row and the removal all read. A preview and its effect cannot
+diverge because they are the same objects, not because they read the same files
+twice: `active_policies` builds the list, `sweep_policies` takes it, and
+`run_uninstall` — which deletes artifacts, strips the managed block and removes
+shims and alias blocks in between — holds that one list across the whole
+teardown. `sweep_tweaks` is the read-then-sweep convenience form, for callers
+with nothing in between. The Uninstall view is a separate case: it reads
+`active_tweak_ids` at view entry rather than holding a list, because the
+Policies view can change the answer while the screen is suspended (see the
+`enter_view` rule under rule 2).

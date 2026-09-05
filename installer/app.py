@@ -59,9 +59,10 @@ from installer.status import is_installed
 from installer.tweaks import TweakBundle
 from installer.uninstall import (
     SweepResult,
-    active_tweak_ids,
+    active_policies,
     plan_uninstall,
     remove_paths,
+    sweep_policies,
     sweep_tweaks,
 )
 from installer.versions import TagResolver, resolve_github_tag
@@ -335,12 +336,27 @@ def run_uninstall(
     kwarg would type-check, pass the suite, and silently sweep nothing while
     reporting success — a user-visible data-integrity regression that nothing
     else can catch.
+
+    The tweak preview and the tweak sweep are one `active_policies` list, not
+    two reads of it: `remove_paths`, `remove_managed_block`, `remove_shims` and
+    four `remove_ban_aliases` calls sit between them, every one writing the same
+    ~/.myshellrc and bin_dir the activity predicate reads. Nothing in that set
+    changes the answer today — the shim names do not collide with the
+    `tools-installer-` helpers and every rc rewrite is marker-scoped — but this
+    is the only path that deletes the user's shell config, so the invariant is
+    held by construction rather than by that argument staying true.
     """
     paths = plan_uninstall(tools, default_bin_dir)
     shimmed = [name for name, installed in guard_status(default_bin_dir).items() if installed]
-    tweaks = active_tweak_ids(
+    # Built once and held across the teardown: the preview below and the sweep
+    # at the end act on these same objects, so nothing removed in between can
+    # make the two disagree. Re-reading before the sweep would leave the
+    # "a preview and its effect cannot diverge" invariant unenforced on the one
+    # path that deletes the user's shell config.
+    policies = active_policies(
         bundles, rc_path=myshellrc_path, bin_dir=default_bin_dir, zshrc_path=zshrc_path
     )
+    tweaks = tuple(policy.id for policy in policies)
     # A machine whose only tools-installer footprint is an enabled tweak must
     # not be told there is nothing to uninstall.
     if not paths and not shimmed and not tweaks:
@@ -368,9 +384,7 @@ def run_uninstall(
         remove_ban_aliases(rc_path)
     # Report the sweep's own result, not the preview: only this knows what came
     # off, and a per-policy failure no longer aborts the rest of the teardown.
-    swept = sweep_tweaks(
-        bundles, rc_path=myshellrc_path, bin_dir=default_bin_dir, zshrc_path=zshrc_path
-    )
+    swept = sweep_policies(policies)
     if swept.swept:
         console.print(f"Shell tweaks disabled: {', '.join(swept.swept)}.")
     if swept.failed:

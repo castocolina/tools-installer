@@ -263,19 +263,22 @@ class SweepResult:
     failed: tuple[str, ...] = ()
 
 
-def _active_policies(
+def active_policies(
     bundles: tuple[TweakBundle, ...],
     *,
     rc_path: Path,
     bin_dir: Path,
-    zshrc_path: Path | None,
+    zshrc_path: Path | None = None,
 ) -> list[Policy]:
     """Every policy whose footprint is still on this machine, built exactly once.
 
-    One construction pass is what makes the "single predicate" claim literal:
-    `active_tweak_ids` reads the ids off these objects and `sweep_tweaks` calls
-    remove on the very same ones, so the preview and the effect cannot be
-    derived from two separate reads of the same files.
+    Public because a caller that previews and then sweeps must hold ONE list
+    across both: `active_tweak_ids` reads the ids off these objects and
+    `sweep_policies` calls remove on the very same ones, so nothing between the
+    two reads can change what the second sees. `run_uninstall` needs that — it
+    deletes paths, strips the managed block and removes shims and alias blocks
+    between its preview and its sweep, all from the same rc file and bin dir the
+    predicate below reads.
     """
     policies: list[Policy] = []
     for bundle in bundles:
@@ -323,10 +326,42 @@ def active_tweak_ids(
     """
     return tuple(
         policy.id
-        for policy in _active_policies(
+        for policy in active_policies(
             bundles, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc_path
         )
     )
+
+
+def sweep_policies(policies: list[Policy]) -> SweepResult:
+    """Disable exactly these policies, via Policy.remove.
+
+    This is D-04's symmetric teardown: it writes no removal logic of its own,
+    it calls the exact same Policy.remove closures the Policies view calls when
+    the user toggles a tweak off, so "full uninstall" and "toggle off" are the
+    same operation by construction.
+
+    It takes the list rather than re-deriving it so a caller that previewed from
+    `active_policies` can hand over the very objects it showed the user. That is
+    what makes "the preview and its effect cannot diverge" a property of the
+    code rather than a claim about it: no read happens between the two.
+
+    Failures are isolated per policy. A read-only ~/.local/bin, an
+    immutable-flagged rc file or an EACCES on an unlink raises OSError, and
+    letting the first one propagate abandoned every later bundle and the
+    .zshrc arm after it — leaving a half-torn-down machine with no record of
+    what had already gone. Each failure is collected and the sweep continues,
+    so the caller can name what did not come off.
+    """
+    swept: list[str] = []
+    failed: list[str] = []
+    for policy in policies:
+        try:
+            policy.remove()
+        except OSError:
+            failed.append(policy.id)
+        else:
+            swept.append(policy.id)
+    return SweepResult(swept=tuple(swept), failed=tuple(failed))
 
 
 def sweep_tweaks(
@@ -336,36 +371,20 @@ def sweep_tweaks(
     bin_dir: Path,
     zshrc_path: Path | None = None,
 ) -> SweepResult:
-    """Disable every tweak active_tweak_ids reports, via Policy.remove.
+    """Read what is active right now and disable it: `active_policies` + `sweep_policies`.
 
-    This is D-04's symmetric teardown: it writes no removal logic of its own,
-    it calls the exact same Policy.remove closures the Policies view calls when
-    the user toggles a tweak off, so "full uninstall" and "toggle off" are the
-    same operation by construction. It acts on the very policy objects the
-    preview was built from, so a preview and its effect cannot diverge.
+    The convenience form for a caller with nothing to do between the read and
+    the sweep. `run_uninstall` is not such a caller and must not use it — it
+    deletes user artifacts in between — so it holds the list itself and calls
+    the two halves directly.
+
     Idempotent: a second call finds nothing active and reports nothing.
-
-    Failures are isolated per policy. A read-only ~/.local/bin, an
-    immutable-flagged rc file or an EACCES on an unlink raises OSError, and
-    letting the first one propagate abandoned every later bundle and the
-    .zshrc arm after it — leaving a half-torn-down machine with no record of
-    what had already gone. Each failure is collected and the sweep continues,
-    so the caller can name what did not come off.
 
     The None default on zshrc_path exists for unit tests and any caller working
     only with bundles; production callers MUST pass the real path, because
     omitting it silently narrows the sweep to bundles and leaves the Oh-My-Zsh
     plugins=(...) edit on the machine with nothing reporting it.
     """
-    swept: list[str] = []
-    failed: list[str] = []
-    for policy in _active_policies(
-        bundles, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc_path
-    ):
-        try:
-            policy.remove()
-        except OSError:
-            failed.append(policy.id)
-        else:
-            swept.append(policy.id)
-    return SweepResult(swept=tuple(swept), failed=tuple(failed))
+    return sweep_policies(
+        active_policies(bundles, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc_path)
+    )

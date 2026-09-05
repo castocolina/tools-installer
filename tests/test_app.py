@@ -1031,6 +1031,51 @@ def test_run_uninstall_previews_and_sweeps_active_tweaks(
     assert not helper.exists()
 
 
+def test_run_uninstall_sweeps_the_very_tweaks_it_previewed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The preview and the sweep are one policy list, not two reads of it.
+
+    Between them run_uninstall deletes artifacts, strips the managed block and
+    removes shims and four alias blocks — every one writing the same
+    ~/.myshellrc and bin_dir the activity predicate reads. Here a teardown step
+    rewrites ~/.myshellrc wholesale and takes the helper with it, which is the
+    hazard the invariant exists for: a second read reports nothing active, so
+    the tweak the user was just told would be disabled is silently dropped.
+    """
+    from installer import app as app_module
+    from installer.app import run_uninstall
+    from installer.tweaks import BUNDLES
+
+    rc_path, bin_dir = _enable_countdown(tmp_path, monkeypatch)
+    helper = bin_dir / "tools-installer-wait-time"
+    assert helper.exists()
+
+    def wipe_the_rc_file(path: Path) -> None:
+        # A removal step that does not respect the tweak markers. Nothing in the
+        # real teardown does this today; the invariant is what keeps it from
+        # becoming a silent data bug when something does.
+        path.write_text("")
+        helper.unlink()
+
+    monkeypatch.setattr(app_module, "remove_managed_block", wipe_the_rc_file)
+    console, buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=rc_path,
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=BUNDLES,
+        zshrc_path=tmp_path / ".zshrc",
+    )
+    out = buf.getvalue()
+    assert "These shell tweaks will also be disabled" in out
+    assert "Shell tweaks disabled" in out
+    assert "Could not disable" not in out
+
+
 def test_run_uninstall_reports_nothing_to_uninstall_only_when_truly_empty(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
