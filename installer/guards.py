@@ -529,42 +529,97 @@ def guard_path_warning(
     return None
 
 
+def exec_targets(text: str) -> tuple[str, ...]:
+    """The absolute paths a shim body execs into, parsed from its `exec` lines."""
+    targets: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("exec "):
+            continue
+        try:
+            words = shlex.split(stripped)
+        except ValueError:  # an unbalanced quote is not a target we can read
+            continue
+        if len(words) > 1:
+            targets.append(words[1])
+    return tuple(targets)
+
+
+def _stale_target_message(name: str, text: str) -> str | None:
+    """Warn when a live redirect body points at a target that is no longer runnable.
+
+    status.is_installed is `shutil.which(cmd) is not None`, so once the wrapper
+    sits in the managed bin dir the catalog reads `pnpm` as installed forever —
+    dependencies that require it resolve as satisfied, and running it prints a
+    raw `exec: <path>: not found`. The sentinel cannot see that; the baked path
+    can.
+    """
+    missing = [target for target in exec_targets(text) if not os.access(target, os.X_OK)]
+    if not missing:
+        return None
+    return f"'{name}' redirects to {missing[0]}, which no longer exists; re-apply the policy."
+
+
 def guard_redirect_warning(shim_dir: Path) -> str | None:
-    """Warn when a redirect name is installed as a hard block because its target
-    was unresolvable at apply time. Returns None when every redirect on disk is
-    live.
+    """Warn when a redirect on disk is not doing what its label claims.
+
+    Three degradations are reported: a name installed as a hard block because
+    its target was unresolvable at apply time, a pass-through name left
+    un-redirected (distinguishing "no real binary" from "a foreign binary
+    already occupies the shim dir" — the two reach the same on-disk state by
+    different routes and need different remedies), and a live redirect whose
+    baked target has since disappeared. Returns None when every redirect on disk
+    is live.
     """
     messages: list[str] = []
     for name, spec in REDIRECTED.items():
         path = shim_dir / name
         if not is_our_shim(path):
             continue
-        if REDIRECT_SENTINEL in path.read_text():
+        text = path.read_text()
+        if REDIRECT_SENTINEL not in text:
+            messages.append(
+                f"'{name}' is hard-blocked because '{spec.target}' was not "
+                "resolvable when the policy was applied; install "
+                f"{spec.target} and re-apply."
+            )
             continue
-        messages.append(
-            f"'{name}' is hard-blocked because '{spec.target}' was not "
-            "resolvable when the policy was applied; install "
-            f"{spec.target} and re-apply."
-        )
+        stale = _stale_target_message(name, text)
+        if stale is not None:
+            messages.append(stale)
     npm_path = shim_dir / "npm"
     npm_redirect_live = is_our_shim(npm_path) and REDIRECT_SENTINEL in npm_path.read_text()
     for name, spec in GLOBAL_REDIRECTED.items():
         path = shim_dir / name
-        if spec.passthrough is None:
-            if not is_our_shim(path):
+        if is_our_shim(path):
+            text = path.read_text()
+            if REDIRECT_SENTINEL not in text:
+                messages.append(
+                    f"'{name}' is hard-blocked because '{VOLTA}' was not "
+                    "resolvable when the policy was applied; install "
+                    f"{VOLTA} and re-apply."
+                )
                 continue
-            if REDIRECT_SENTINEL in path.read_text():
-                continue
+            stale = _stale_target_message(name, text)
+            if stale is not None:
+                messages.append(stale)
+            continue
+        if spec.passthrough is None or not npm_redirect_live:
+            continue
+        if path.exists():
+            # install_global_redirect_shims reached this state via
+            # "skipped (real binary here)", not via an unresolvable pnpm:
+            # telling the user pnpm could not be found while it sits in the
+            # directory being inspected sends them after a remedy that can
+            # never change anything.
             messages.append(
-                f"'{name}' is hard-blocked because '{VOLTA}' was not "
-                "resolvable when the policy was applied; install "
-                f"{VOLTA} and re-apply."
+                f"'{name}' is not redirected because a non-managed '{name}' already "
+                f"occupies {shim_dir}; move it aside and re-apply."
             )
             continue
-        if npm_redirect_live and not is_our_shim(path):
-            messages.append(
-                f"'{name}' is not redirected because a real '{spec.passthrough}' "
-                "was not resolvable when the policy was applied; install "
-                f"{spec.passthrough} and re-apply."
-            )
+        messages.append(
+            f"'{name}' is not redirected because a real '{spec.passthrough}' "
+            "was not resolvable when the policy was applied; install "
+            f"{spec.passthrough} and re-apply."
+        )
     return " ".join(messages) if messages else None

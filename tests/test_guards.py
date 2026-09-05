@@ -18,6 +18,7 @@ from installer.guards import (
     SHIM_SENTINEL,
     ban_alias_block,
     ban_body,
+    exec_targets,
     global_redirect_shim_script,
     guard_label,
     guard_path_warning,
@@ -447,8 +448,13 @@ def test_guard_path_warning_when_real_npx_resolves_first(tmp_path: Path):
 
 
 def test_guard_redirect_warning_none_when_redirect_live(tmp_path: Path):
-    (tmp_path / "npx").write_text(redirect_shim_script("npx", "/x/pnpm"))
-    assert guard_redirect_warning(tmp_path) is None
+    shim_dir = tmp_path / "shims"
+    shim_dir.mkdir()
+    pnpm = tmp_path / "pnpm"
+    pnpm.write_text("#!/bin/sh\n")
+    pnpm.chmod(0o755)
+    (shim_dir / "npx").write_text(redirect_shim_script("npx", str(pnpm)))
+    assert guard_redirect_warning(shim_dir) is None
 
 
 def test_guard_redirect_warning_when_hard_block_fallback(tmp_path: Path):
@@ -846,6 +852,64 @@ def test_guard_redirect_warning_names_npm_and_volta_when_ban_body(tmp_path: Path
     assert warning is not None
     assert "npm" in warning
     assert "volta" in warning
+
+
+def test_guard_redirect_warning_blames_the_foreign_pnpm_occupying_the_shim_dir(tmp_path: Path):
+    shim_dir, volta, pnpm = _plant_volta_pnpm(tmp_path)
+    shim_dir.mkdir()
+    foreign = shim_dir / "pnpm"
+    foreign.write_text("#!/bin/sh\necho real pnpm\n")
+    install_global_redirect_shims(
+        shim_dir,
+        path_value=f"{shim_dir}{os.pathsep}{volta.parent}",
+        lookup=_volta_pnpm_lookup(volta, pnpm),
+    )
+    warning = guard_redirect_warning(shim_dir)
+    assert warning is not None
+    assert "non-managed 'pnpm'" in warning
+    assert str(shim_dir) in warning
+    # The remedy must not send the user after a pnpm that is sitting right there.
+    assert "not resolvable" not in warning
+
+
+def test_guard_redirect_warning_reports_a_vanished_redirect_target(tmp_path: Path):
+    # is_installed is `which(cmd) is not None`, so the wrapper keeps reporting
+    # pnpm as installed after the real pnpm is gone; only the baked path knows.
+    shim_dir, volta, pnpm = _plant_volta_pnpm(tmp_path)
+    install_global_redirect_shims(
+        shim_dir,
+        path_value=f"{shim_dir}{os.pathsep}{volta.parent}",
+        lookup=_volta_pnpm_lookup(volta, pnpm),
+    )
+    assert guard_redirect_warning(shim_dir) is None
+    pnpm.unlink()
+    warning = guard_redirect_warning(shim_dir)
+    assert warning is not None
+    assert str(pnpm) in warning
+    assert "no longer exists" in warning
+
+
+def test_guard_redirect_warning_reports_a_vanished_npx_target(tmp_path: Path):
+    shim_dir = tmp_path / "shims"
+    shim_dir.mkdir()
+    pnpm = tmp_path / "pnpm"
+    pnpm.write_text("#!/bin/sh\n")
+    pnpm.chmod(0o755)
+    (shim_dir / "npx").write_text(redirect_shim_script("npx", str(pnpm)))
+    assert guard_redirect_warning(shim_dir) is None
+    pnpm.unlink()
+    warning = guard_redirect_warning(shim_dir)
+    assert warning is not None
+    assert "npx" in warning
+    assert "no longer exists" in warning
+
+
+def test_exec_targets_reads_the_baked_paths(tmp_path: Path):
+    body = global_redirect_shim_script(
+        "pnpm", volta_path="/v/volta", passthrough_path="/r/bin/pnpm"
+    )
+    assert exec_targets(body) == ("/v/volta", "/r/bin/pnpm")
+    assert exec_targets(shim_script("npm")) == ()
 
 
 def test_guard_redirect_warning_none_when_all_global_redirects_live(tmp_path: Path):
