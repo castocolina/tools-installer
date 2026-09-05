@@ -19,7 +19,9 @@ single-line one above it is dead and editing it would report success while
 loading nothing. That case refuses too.
 """
 
+import os
 import re
+import shutil
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -162,6 +164,27 @@ def plugins_enabled(content: str, plugins: tuple[str, ...] = MANAGED_PLUGINS) ->
     return all(plugin in present for plugin in plugins)
 
 
+def _replace_content(zshrc_path: Path, updated: str) -> None:
+    """Replace an existing zshrc_path's content atomically.
+
+    .zshrc is the one file this module edits that the installer does not own,
+    and it keeps no backup, so a crash, a full disk, or a SIGKILL mid-write must
+    never be able to leave the user with a truncated shell startup file. Write a
+    sibling temp file (same directory, so the rename cannot cross a filesystem),
+    carry the original's mode over, then os.replace — which is atomic on POSIX.
+    """
+    tmp = zshrc_path.with_name(f"{zshrc_path.name}.tools-installer.tmp")
+    try:
+        tmp.write_text(updated)
+        shutil.copymode(zshrc_path, tmp)
+        os.replace(tmp, zshrc_path)
+    except OSError:
+        # The original is still intact; drop the partial temp rather than
+        # leaving a half-written file beside the user's .zshrc.
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def write_plugins(zshrc_path: Path, plugins: tuple[str, ...] = MANAGED_PLUGINS) -> tuple[str, ...]:
     """Enable managed plugins in zshrc_path. Returns the names actually added."""
     if not zshrc_path.exists():
@@ -171,7 +194,7 @@ def write_plugins(zshrc_path: Path, plugins: tuple[str, ...] = MANAGED_PLUGINS) 
     added = tuple(name for name in plugins if name not in current)
     updated = enable_plugins(original, plugins)
     if updated != original:
-        zshrc_path.write_text(updated)
+        _replace_content(zshrc_path, updated)
     return added
 
 
@@ -184,7 +207,7 @@ def remove_plugins(zshrc_path: Path, plugins: tuple[str, ...] = MANAGED_PLUGINS)
     removed = tuple(name for name in plugins if name in current)
     updated = disable_plugins(original, plugins)
     if updated != original:
-        zshrc_path.write_text(updated)
+        _replace_content(zshrc_path, updated)
     return removed
 
 

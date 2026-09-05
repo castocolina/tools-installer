@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from installer import omz
 from installer.omz import (
     OmzPluginsError,
     disable_plugins,
@@ -227,3 +228,36 @@ def test_quoted_plugin_names_are_recognised_not_duplicated() -> None:
     assert enable_plugins('plugins=("z")\n') == 'plugins=("z" git docker)\n'
     # ...and a quoted managed name is still removable.
     assert disable_plugins('plugins=("git" z docker)\n') == "plugins=(z)\n"
+
+
+def test_the_zshrc_rewrite_is_atomic_and_leaves_no_temp_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text(_ZSHRC)
+    zshrc.chmod(0o600)
+    write_plugins(zshrc)
+    assert "plugins=(z sudo git docker)" in zshrc.read_text()
+    # Mode carried over from the original, and no sibling temp file survives.
+    assert zshrc.stat().st_mode & 0o777 == 0o600
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".zshrc"]
+
+
+def test_a_failed_rewrite_leaves_the_original_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text(_ZSHRC)
+
+    def boom(_src: object, _dst: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(omz.os, "replace", boom)
+    with pytest.raises(OSError, match="disk full"):
+        write_plugins(zshrc)
+    # The whole point of the temp+replace: the user's .zshrc is never truncated,
+    # and the partial temp file is cleaned up rather than left beside it.
+    assert zshrc.read_text() == _ZSHRC
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".zshrc"]
