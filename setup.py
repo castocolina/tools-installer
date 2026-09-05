@@ -40,7 +40,12 @@ from installer.shellrc import collect_bin_dirs, has_managed_block
 from installer.status import is_installed
 from installer.tweaks import applicable_bundles
 from installer.ui_common import BASE_VIEW
-from installer.uninstall import active_tweak_ids, classify_tools, reverse_dependencies
+from installer.uninstall import (
+    SweepResult,
+    active_tweak_ids,
+    classify_tools,
+    reverse_dependencies,
+)
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 
 _REGISTRY = Path(__file__).parent / "installer" / "registry.toml"
@@ -156,10 +161,11 @@ def _build_app(
     ban_names = [name for name, active in status.items() if active]
     bundles = applicable_bundles(platform)
 
-    def _do_uninstall(decision: UninstallDecision) -> None:
+    def _do_uninstall(decision: UninstallDecision) -> SweepResult:
         # Runs live inside the UninstallScreen. rc_paths is the standard set so the
         # ban aliases are cleaned wherever they were written, regardless of mode.
-        perform_uninstall(
+        # The sweep result is returned so the view reports what came off.
+        return perform_uninstall(
             decision,
             bin_dir=_DEFAULT_BIN_DIR,
             myshellrc_path=_MYSHELLRC,
@@ -173,7 +179,9 @@ def _build_app(
         ban_names=ban_names,
         has_path_block=has_managed_block(_MYSHELLRC),
         remove=_do_uninstall,
-        tweak_ids=active_tweak_ids(
+        # The predicate, not its result: the Policies view toggles these live in
+        # the same session, so the Uninstall view re-evaluates it on entry.
+        tweak_ids=lambda: active_tweak_ids(
             bundles, rc_path=_MYSHELLRC, bin_dir=_DEFAULT_BIN_DIR, zshrc_path=_ZSHRC
         ),
     )

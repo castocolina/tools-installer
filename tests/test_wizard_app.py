@@ -59,14 +59,22 @@ def _uninstall_inputs(
     ban_names: list[str] | None = None,
     has_path_block: bool = False,
     remove: Callable[[UninstallDecision], SweepResult] = lambda _decision: SweepResult(),
-    tweak_ids: tuple[str, ...] = (),
+    tweak_ids: tuple[str, ...] | Callable[[], tuple[str, ...]] = (),
 ) -> UninstallInputs:
+    if callable(tweak_ids):
+        ids: Callable[[], tuple[str, ...]] = tweak_ids
+    else:
+        frozen = tweak_ids
+
+        def ids() -> tuple[str, ...]:
+            return frozen
+
     return UninstallInputs(
         rows=rows if rows is not None else [],
         ban_names=ban_names if ban_names is not None else [],
         has_path_block=has_path_block,
         remove=remove,
-        tweak_ids=tweak_ids,
+        tweak_ids=ids,
     )
 
 
@@ -1079,3 +1087,103 @@ async def test_uninstall_summary_says_so_when_the_sweep_found_nothing() -> None:
         await pilot.pause()
         assert isinstance(app.screen, UninstallScreen)
         assert "no shell tweaks were still enabled" in app.screen.status.text
+
+
+async def test_uninstall_tweaks_row_follows_a_live_policies_toggle() -> None:
+    """The Policies view and the Uninstall view are one process, one nav path.
+    A tweak enabled in Policies must be reachable in Uninstall in the same
+    session, and one disabled there must stop being offered."""
+    live: list[str] = []
+
+    def tweak_ids() -> tuple[str, ...]:
+        return tuple(live)
+
+    app = _app(uninstall=_uninstall_inputs(tweak_ids=tweak_ids))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")  # uninstall: nothing enabled yet
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert "#tweaks" not in {row.value for row in screen.query_one(DataTable[Any]).rows}
+
+        # The user enables a tweak over in Policies, then comes back.
+        live.append("tweak:countdown")
+        await pilot.press("escape")
+        await pilot.press("5")
+        assert isinstance(app.screen, UninstallScreen)
+        keys = {row.value for row in app.screen.query_one(DataTable[Any]).rows}
+        assert "#tweaks" in keys
+        await pilot.press("a")
+        assert app.screen.remove_tweaks is True
+
+        # ...and disables it again: the lever must go, and the stale mark with it.
+        live.clear()
+        await pilot.press("escape")
+        await pilot.press("5")
+        assert isinstance(app.screen, UninstallScreen)
+        assert "#tweaks" not in {row.value for row in app.screen.query_one(DataTable[Any]).rows}
+        assert app.screen.remove_tweaks is False
+
+
+async def test_uninstall_row_label_follows_the_live_tweak_ids() -> None:
+    live = ["tweak:countdown", "omz-plugins"]
+
+    def tweak_ids() -> tuple[str, ...]:
+        return tuple(live)
+
+    app = _app(uninstall=_uninstall_inputs(tweak_ids=tweak_ids), initial_view="uninstall")
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, UninstallScreen)
+        live.remove("omz-plugins")
+        await pilot.press("escape")
+        await pilot.press("5")
+        assert isinstance(app.screen, UninstallScreen)
+        cells = app.screen.query_one(DataTable[Any]).get_row("#tweaks")
+        rendered = " ".join(str(cell) for cell in cells)
+        assert "tweak:countdown" in rendered
+        assert "omz-plugins" not in rendered
+
+
+async def test_uninstall_first_entry_picks_up_state_changed_before_it_was_ever_shown() -> None:
+    """The screen is installed on app mount but only mounted on first push, so
+    the first entry refreshes a screen whose widgets do not exist yet."""
+    live: list[str] = []
+
+    def tweak_ids() -> tuple[str, ...]:
+        return tuple(live)
+
+    app = _app(uninstall=_uninstall_inputs(tweak_ids=tweak_ids))
+    async with app.run_test(size=(100, 30)) as pilot:
+        live.append("tweak:countdown")  # enabled in Policies before Uninstall is opened
+        await pilot.press("5")
+        assert isinstance(app.screen, UninstallScreen)
+        assert "#tweaks" in {row.value for row in app.screen.query_one(DataTable[Any]).rows}
+
+
+async def test_uninstall_does_not_refresh_after_it_has_applied() -> None:
+    """Once a removal has run, the standing message is that run's result — a
+    re-entry must not rebuild the rows out from under it."""
+    captured: list[UninstallDecision] = []
+    live = ["tweak:countdown"]
+
+    def tweak_ids() -> tuple[str, ...]:
+        return tuple(live)
+
+    inputs = _uninstall_inputs(
+        tweak_ids=tweak_ids,
+        remove=_recorder(captured, SweepResult(swept=("tweak:countdown",))),
+    )
+    app = _app(uninstall=inputs, initial_view="uninstall")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("a")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.applied is True
+        applied_status = app.screen.status.text
+        live.clear()  # the sweep really did disable it
+        await pilot.press("escape")
+        await pilot.press("5")
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.status.text == applied_status
+        assert "#tweaks" in {row.value for row in app.screen.query_one(DataTable[Any]).rows}

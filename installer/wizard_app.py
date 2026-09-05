@@ -57,7 +57,12 @@ class UninstallInputs:
     ban_names: list[str]
     has_path_block: bool
     remove: Callable[[UninstallDecision], SweepResult]
-    tweak_ids: tuple[str, ...] = ()
+    # A predicate, not its result. The Policies view toggles tweaks live in the
+    # same process, so a tuple frozen at construction goes stale the moment the
+    # user changes one: the #tweaks row would be missing for a tweak they just
+    # enabled, or offered (and named in the summary) for one they just turned
+    # off. UninstallScreen.enter_view re-evaluates this on every entry.
+    tweak_ids: Callable[[], tuple[str, ...]] = tuple
 
 
 @dataclass(frozen=True)
@@ -223,7 +228,8 @@ class UninstallScreen(AppScreen):
         self._rows = inputs.rows
         self._ban_names = inputs.ban_names
         self._has_path_block = inputs.has_path_block
-        self._tweak_ids = inputs.tweak_ids
+        self._tweak_ids_of = inputs.tweak_ids
+        self._tweak_ids = self._tweak_ids_of()
         self._remove = inputs.remove
         self.applied = False
         self.error: str | None = None
@@ -373,8 +379,35 @@ class UninstallScreen(AppScreen):
         yield self._browser
 
     def on_mount(self) -> None:
+        self._show_standing_status()
+
+    def enter_view(self) -> None:
+        """Re-derive the active tweak ids each time this view is opened.
+
+        The Policies view toggles the very same tweaks live, one nav step away,
+        so the row's existence and its label must be read at entry rather than
+        frozen in `__init__` — otherwise enabling a tweak leaves its lever
+        unreachable here, and disabling every tweak leaves a lever that sweeps
+        nothing while the summary names ids nothing touched. Skipped once the
+        screen has applied: that run's result is the standing message.
+        """
+        if self.applied:
+            return
+        refreshed = self._tweak_ids_of()
+        if refreshed == self._tweak_ids:
+            return
+        self._tweak_ids = refreshed
+        self._entries = self._build_entries()
+        self._by_key = {entry.key: entry for entry in self._entries}
+        self._browser.reload(self._adapter())
+        if self.is_mounted:
+            self._show_standing_status()
+
+    def _show_standing_status(self) -> None:
         if not self._entries:
             self.status.set("Nothing to uninstall.", "ok")
+        else:
+            self.status.clear()
 
     # -- public seams the tests assert on ----------------------------------
     @property
@@ -765,7 +798,7 @@ class UnifiedApp(App[list[str] | None]):
             for tier in Tier
         }
         # Non-base views, installed on mount and pushed by value.
-        self._views: dict[str, Screen[None]] = {
+        self._views: dict[str, AppScreen] = {
             name: screen for name, screen in self._catalogs.items() if name != BASE_VIEW
         }
         self._views.update(
@@ -832,7 +865,12 @@ class UnifiedApp(App[list[str] | None]):
         if self.current_view != BASE_VIEW:
             await self.pop_screen()
         if name != BASE_VIEW:
-            await self.push_screen(self._views[name])
+            entering = self._views[name]
+            # The single navigation path is also the single refresh point: a
+            # view holding state another view can change live re-derives it
+            # here, before it is shown (rule 2).
+            entering.enter_view()
+            await self.push_screen(entering)
         self.current_view = name
 
     def _navigable(self) -> bool:

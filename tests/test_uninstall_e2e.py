@@ -98,7 +98,9 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
     omz_plugins_policy(zshrc_path=zshrc, state_path=myshellrc, present=True).apply()
 
     rows = classify_tools([_dl_tool()], bin_dir, installed={"fd": True}, platform=_LINUX)
-    tweak_ids = active_tweak_ids(BUNDLES, rc_path=myshellrc, bin_dir=bin_dir, zshrc_path=zshrc)
+
+    def tweak_ids() -> tuple[str, ...]:
+        return active_tweak_ids(BUNDLES, rc_path=myshellrc, bin_dir=bin_dir, zshrc_path=zshrc)
 
     def _remove(decision: UninstallDecision) -> SweepResult:
         return perform_uninstall(

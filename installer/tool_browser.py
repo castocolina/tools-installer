@@ -159,6 +159,24 @@ class ToolBrowser(Widget, Generic[T]):
         # the rebuilt table has painted.
         table.call_after_refresh(self.refresh_marks)
 
+    def reload(self, adapter: BrowserAdapter[T]) -> None:
+        """Swap in a freshly derived adapter and repaint.
+
+        The host owns the item list. When a row's existence depends on state
+        another view can change live — the Uninstall view's shell-tweak lever
+        being the case — the host re-derives its adapter and hands it here
+        rather than shipping a snapshot frozen at construction. Marks on rows
+        that no longer exist are dropped so a stale selection can never be
+        committed; marks the host shares with another browser are untouched,
+        because only ids this adapter used to carry are considered.
+        """
+        stale = {key for key in self._by_id if key is not None}
+        self._adapter = adapter
+        self._by_id = {adapter.item_id(item): item for item in adapter.items}
+        self.selected -= stale - {key for key in self._by_id if key is not None}
+        if self.is_mounted:
+            self._rebuild()
+
     # -- view switching ----------------------------------------------------
     def _switch_view(self, step: int) -> None:
         index = (self._view_names.index(self.view) + step) % len(self._view_names)
