@@ -11,6 +11,7 @@ import io
 import os
 import shutil
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import questionary
@@ -249,27 +250,24 @@ def _build_app(
     )
 
     # The audit asks the real pnpm what it manages globally, so it spawns a
-    # process; the Doctor screen reads it several times per render. Cache the
-    # answer and drop it once a reinstall has changed it.
-    cached_globals: pnpm_globals.NodeGlobalsReport | None = None
-
+    # process. DoctorScreen calls this only from a thread worker and holds the
+    # answer itself, which is why there is no cache here any more: the cache
+    # existed because every render re-read the report, and a cell written by the
+    # reinstall worker and read by the event loop was a race waiting to be lost.
     def _node_globals_report() -> pnpm_globals.NodeGlobalsReport:
-        nonlocal cached_globals
-        if cached_globals is None:
-            cached_globals = pnpm_globals.audit_node_globals(tools)
-        return cached_globals
+        return pnpm_globals.audit_node_globals(tools)
 
-    def _globals_preview() -> str:
-        report = _node_globals_report()
-        # `known` travels with the set: an unreadable global set has no preview,
-        # and must not borrow the empty set's "nothing to reinstall".
+    def _globals_preview(report: pnpm_globals.NodeGlobalsReport) -> str:
+        # Takes the audited report rather than fetching one: fetching would put
+        # `pnpm list -g --json` back on whatever thread renders. `known` travels
+        # with the set, so an unreadable global set has no preview and must not
+        # borrow the empty set's "nothing to reinstall".
         return pnpm_globals.reinstall_preview(report.managed, known=report.known)
 
-    def _reinstall_globals() -> tuple[str, ...]:
-        nonlocal cached_globals
-        packages = pnpm_globals.reinstall_node_globals(_node_globals_report().managed)
-        cached_globals = None
-        return packages
+    def _reinstall_globals(packages: Sequence[str]) -> tuple[str, ...]:
+        # The set to replay is the one the user saw and consented to, passed in
+        # by the screen — not one re-derived here behind their back.
+        return pnpm_globals.reinstall_node_globals(packages)
 
     return UnifiedApp(
         tools,

@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from installer.run import CommandError, run_captured, run_command, run_output
+from installer.run import TIMEOUT_CODE, CommandError, run_captured, run_command, run_output
 
 
 def test_run_command_success(monkeypatch: pytest.MonkeyPatch):
@@ -71,3 +71,26 @@ def test_run_output_raises_when_binary_missing() -> None:
     with pytest.raises(CommandError) as exc:
         run_output(["definitely-not-a-real-binary-xyz"])
     assert exc.value.returncode == 127
+
+
+def test_run_output_unbounded_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A side-effecting child (`pnpm add -g` of a Puppeteer-carrying package)
+    # legitimately takes minutes; killing it half-way is worse than waiting.
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd: list[str], **kwargs: object):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    run_output(["anything"])
+    assert seen["timeout"] is None
+
+
+def test_run_output_timeout_fails_fast_instead_of_hanging() -> None:
+    # A query run while a TUI owns the terminal has no recoverable input path
+    # if the child wedges, so the bound has to be on the call.
+    with pytest.raises(CommandError) as exc:
+        run_output([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.2)
+    assert exc.value.returncode == TIMEOUT_CODE
+    assert "timed out" in str(exc.value)

@@ -12,7 +12,7 @@ be switched out. Navigation is therefore a stack with the base view at the
 bottom: the stack is always `[base]` or `[base, <one other view>]`.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -87,6 +87,11 @@ _NOTHING_TO_REINSTALL = "Nothing to reinstall — pnpm manages no globals here."
 # itself is exactly the one that must not be told there is nothing to restore.
 _GLOBALS_UNKNOWN = "pnpm's global set could not be read — install or repair pnpm, then retry."
 _GLOBALS_UNKNOWN_COUNT = "pnpm's global set could not be read (pnpm missing, or the query failed)."
+_GLOBALS_CHECKING = "Checking pnpm's global set..."
+_GLOBALS_UNKNOWN_YET = "Still checking pnpm's global set — press r again in a moment."
+# An audit that could not run answers the same question as a pnpm that could not
+# be asked: nothing was learned. One shape, so no consumer has to handle two.
+_GLOBALS_UNREADABLE = NodeGlobalsReport(entries=(), missing=(), managed=(), known=False)
 
 
 class GlobalsReinstalled(Message):
@@ -97,6 +102,22 @@ class GlobalsReinstalled(Message):
     """
 
     def __init__(self, error: str | None) -> None:
+        self.error = error
+        super().__init__()
+
+
+class GlobalsAudited(Message):
+    """The threaded `pnpm list -g --json` finished; the screen may now render it.
+
+    Same hand-off as GlobalsReinstalled, for the same reason: the audit spawns a
+    subprocess, so it cannot run on the event loop, and its result cannot be
+    written into a widget from the worker's own thread. `preview` travels with
+    the report because building it also needs to resolve pnpm.
+    """
+
+    def __init__(self, report: NodeGlobalsReport, preview: str, error: str | None) -> None:
+        self.report = report
+        self.preview = preview
         self.error = error
         super().__init__()
 
@@ -139,8 +160,8 @@ class DoctorScreen(AppScreen):
         fix: Callable[[], None],
         *,
         node_globals: Callable[[], NodeGlobalsReport],
-        globals_preview: Callable[[], str],
-        reinstall_globals: Callable[[], tuple[str, ...]],
+        globals_preview: Callable[[NodeGlobalsReport], str],
+        reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]],
     ) -> None:
         super().__init__(view="doctor")
         self._report = report
@@ -151,13 +172,21 @@ class DoctorScreen(AppScreen):
         self._guard_state = guard_state
         self._fix_preview = fix_preview
         self._fix = fix
-        # Same predicate rule as guard_state: this screen is installed once and
-        # suspended, so a snapshot taken at mount would go stale. globals_preview
-        # is a callable rather than the plain str that fix_preview is because the
-        # reinstall preview depends on whether a real pnpm currently resolves.
+        # node_globals shells out to `pnpm list -g --json`, so it is NEVER
+        # called from the event loop: _audit_globals_worker calls it on a thread
+        # and posts GlobalsAudited back. The result is held here rather than
+        # re-derived per render, which is what makes every render IO-free.
+        # globals_preview takes the report for the same reason — building the
+        # preview from a fresh audit would put the subprocess back on the loop.
+        # reinstall_globals takes its package list for the same reason again,
+        # and it removes the last shared cell two threads could race on.
         self._node_globals = node_globals
         self._globals_preview = globals_preview
         self._reinstall_globals = reinstall_globals
+        # None until the first audit lands: "not asked yet" is not "pnpm manages
+        # nothing" any more than "could not be asked" is (NodeGlobalsReport.known).
+        self._globals_report: NodeGlobalsReport | None = None
+        self._globals_preview_text = ""
         self.guidance: list[Guidance] = []
         self.applied = False
         self.error: str | None = None
@@ -172,6 +201,10 @@ class DoctorScreen(AppScreen):
         # body renders while it does, and what stops a second `r` stacking a
         # concurrent install.
         self.globals_running = False
+        # The audit's own in-flight flag. It cannot share globals_running: the
+        # two workers run for different reasons, and a render that cannot tell
+        # them apart would say "Reinstalling" for a read.
+        self.globals_auditing = False
         # Not globals_error: "nothing to reinstall" is not a failure, and the
         # error branch renders "Reinstall failed." in red.
         self.globals_note: str | None = None
@@ -182,24 +215,45 @@ class DoctorScreen(AppScreen):
     def on_mount(self) -> None:
         self._refresh_guidance()
         self._refresh_body()
+        self._start_globals_audit()
 
     def enter_view(self) -> None:
-        """Re-read the ban state on every entry.
+        """Re-read the ban state on every entry, and re-ask pnpm off the loop.
 
         Installed screens are suspended, not unmounted, so `on_mount` fires once
         for the life of the app: without this, Policies → toggle the ban →
-        Doctor reports the state from before the toggle.
+        Doctor reports the state from before the toggle. The globals audit needs
+        the same freshness but cannot be taken here synchronously, so it is
+        started as a worker and rendered when it lands.
+
+        The audit is not started on the first entry: this runs BEFORE the screen
+        is pushed, and `on_mount` starts it a moment later.
         """
         self._refresh_guidance()
         if self.is_mounted:
             self._refresh_body()
+            self._start_globals_audit()
+
+    def _start_globals_audit(self) -> None:
+        if self.globals_auditing or self.globals_running:
+            # A reinstall in flight re-audits when it finishes, and a second
+            # concurrent `pnpm list -g` would answer the same question twice.
+            return
+        self.globals_auditing = True
+        self._audit_globals_worker()
 
     def _refresh_guidance(self) -> None:
+        # IO-free by construction: the globals half reads the last audited
+        # report, never the closure that would spawn `pnpm list -g --json`.
+        # Before the first audit lands there is nothing to say about the
+        # globals, which is honest — node_globals_guidance only ever speaks
+        # about a set it has seen.
         status, warning = self._guard_state()
+        globals_report = self._globals_report
         self.guidance = (
             doctor_guidance(self._report)
             + guard_guidance(status, warning)
-            + node_globals_guidance(self._node_globals())
+            + (node_globals_guidance(globals_report) if globals_report is not None else [])
         )
 
     def _refresh_body(self) -> None:
@@ -221,25 +275,28 @@ class DoctorScreen(AppScreen):
         else:
             text.append("Press enter to wire the managed PATH into your shells.", style="yellow")
             text.append("\nViewing this screen did not change your shell files.")
-        report = self._node_globals()
+        report = self._globals_report
         text.append("\n\npnpm-managed globals\n", style="bold")
         # Both counts come from pnpm's own global list, never from the catalog:
         # a registry entry declares that a tool CAN install this way, which is
         # not evidence that it did. A count is only printable when the list was
-        # actually read: report.known False means every field is empty because
-        # nothing was learned, and "0 package(s)" would state that unknown as a
-        # fact.
-        if report.known:
+        # actually read: report None means the audit has not landed yet and
+        # report.known False means it landed empty-handed, and "0 package(s)"
+        # would state either of those unknowns as a fact.
+        if report is None:
+            text.append(f"{_GLOBALS_CHECKING}\n", style="yellow")
+        elif report.known:
             text.append(
                 f"{len(report.managed)} package(s) in pnpm's global set, "
                 f"{len(report.entries)} of them catalog tool(s).\n"
             )
         else:
             text.append(f"{_GLOBALS_UNKNOWN_COUNT}\n", style="yellow")
-        # Print the core's preview string verbatim. Do not call reinstall_argv
-        # here: a non-empty set with no resolvable pnpm is a returned string,
-        # never an argv and never an exception (architecture rule 3).
-        text.append(self._globals_preview())
+        # Print the core's preview string verbatim, as resolved by the audit
+        # worker. Do not call reinstall_argv here: a non-empty set with no
+        # resolvable pnpm is a returned string, never an argv and never an
+        # exception (architecture rule 3).
+        text.append(self._globals_preview_text)
         text.append("\n")
         if self.globals_running:
             text.append("Reinstalling the pnpm global set...", style="yellow")
@@ -292,41 +349,80 @@ class DoctorScreen(AppScreen):
         # line, so a repeat press is answered by what is on screen.
         if self.globals_done or self.globals_running:
             return
-        report = self._node_globals()
-        if not report.known or not report.managed:
-            # The footer advertises `r` (ui_common.VIEWS), so a keypress that
-            # changes nothing on screen reads as a broken binding. The two
-            # answers are not interchangeable: one is a fact about the machine,
-            # the other is an admission that the machine was not readable.
-            self.globals_note = _NOTHING_TO_REINSTALL if report.known else _GLOBALS_UNKNOWN
+        report = self._globals_report
+        # The footer advertises `r` (ui_common.VIEWS), so a keypress that
+        # changes nothing on screen reads as a broken binding. The three
+        # answers are not interchangeable: one is a fact about the machine, one
+        # is an admission that the machine was not readable, and one is that
+        # nobody has looked yet.
+        if report is None or not report.known or not report.managed:
+            if report is None:
+                self.globals_note = _GLOBALS_UNKNOWN_YET
+            else:
+                self.globals_note = _NOTHING_TO_REINSTALL if report.known else _GLOBALS_UNKNOWN
             self._refresh_body()
             return
         self.globals_note = None
         self.globals_running = True
         self._refresh_body()
-        self._reinstall_globals_worker()
+        # The package list is passed in rather than re-derived inside the
+        # worker: re-deriving would put `pnpm list -g --json` on a second
+        # thread, and the set the user consented to is the one on screen.
+        self._reinstall_globals_worker(report.managed)
 
-    @work(thread=True, exclusive=True)
-    def _reinstall_globals_worker(self) -> None:
+    # Distinct groups: `exclusive` cancels within a group, so leaving both
+    # workers in the default one would let a reinstall cancel an in-flight
+    # audit and vice versa.
+    @work(thread=True, exclusive=True, group="globals-reinstall")
+    def _reinstall_globals_worker(self, packages: tuple[str, ...]) -> None:
         """Run the reinstall off the event loop, then hand the outcome back to it.
 
         A synchronous subprocess here would freeze every frame for the length of
         a `pnpm add -g`. Widgets may only be touched from the app's own thread,
         hence a posted message rather than a direct refresh.
         """
-        _, error = run_live(self._reinstall_globals)
+        _, error = run_live(lambda: self._reinstall_globals(packages))
         self.post_message(GlobalsReinstalled(error))
+
+    @work(thread=True, exclusive=True, group="globals-audit")
+    def _audit_globals_worker(self) -> None:
+        """Ask pnpm what it manages globally, off the event loop.
+
+        `pnpm list -g --json` is a subprocess like the reinstall is, and it was
+        the last one still running on the loop: on a cold cache every Doctor
+        render blocked the whole UI for its duration, with no timeout and no
+        interruptible path (Textual holds the terminal in raw mode, so a Ctrl+C
+        arrives as a byte on a queue the blocked loop is not draining). It runs
+        here for the same reason the reinstall does, and hands its result back
+        the same way.
+        """
+        report, error = run_live(self._node_globals)
+        if report is None:
+            report = _GLOBALS_UNREADABLE
+        self.post_message(GlobalsAudited(report, self._globals_preview(report), error))
+
+    def on_globals_audited(self, message: GlobalsAudited) -> None:
+        self.globals_auditing = False
+        self._globals_report = message.report
+        self._globals_preview_text = message.preview
+        if self.globals_note == _GLOBALS_UNKNOWN_YET:
+            # That note asked the user to wait for exactly this message.
+            self.globals_note = None
+        self._refresh_guidance()
+        self._refresh_body()
 
     def on_globals_reinstalled(self, message: GlobalsReinstalled) -> None:
         self.globals_running = False
         self.globals_error = message.error
         self.globals_done = message.error is None
+        self._refresh_body()
         # The globals audit is a live `shutil.which` probe whose answer this
         # action just tried to change — unlike the PATH audit, which is a
         # deliberate snapshot. Without this the screen renders "mmdc went
-        # missing" directly above "pnpm globals reinstalled."
-        self._refresh_guidance()
-        self._refresh_body()
+        # missing" directly above "pnpm globals reinstalled." Re-asking is a
+        # subprocess, so it goes back through the worker rather than being
+        # taken inline here, where it would block the loop twice over.
+        self._start_globals_audit()
 
 
 @dataclass(frozen=True)
@@ -952,8 +1048,8 @@ class UnifiedApp(App[list[str] | None]):
         uninstall: UninstallInputs,
         policies: PolicyInputs,
         node_globals: Callable[[], NodeGlobalsReport] | None = None,
-        globals_preview: Callable[[], str] | None = None,
-        reinstall_globals: Callable[[], tuple[str, ...]] | None = None,
+        globals_preview: Callable[[NodeGlobalsReport], str] | None = None,
+        reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
         initial_view: str = BASE_VIEW,
     ) -> None:
         super().__init__()
@@ -983,10 +1079,15 @@ class UnifiedApp(App[list[str] | None]):
             if node_globals is not None
             else (lambda: NodeGlobalsReport(entries=(), missing=(), managed=()))
         )
-        read_preview = (
-            globals_preview if globals_preview is not None else (lambda: reinstall_preview(()))
-        )
-        run_reinstall = reinstall_globals if reinstall_globals is not None else (lambda: ())
+
+        def _default_preview(report: NodeGlobalsReport) -> str:
+            return reinstall_preview(report.managed, known=report.known)
+
+        def _no_reinstall(_packages: Sequence[str]) -> tuple[str, ...]:
+            return ()
+
+        read_preview = globals_preview if globals_preview is not None else _default_preview
+        run_reinstall = reinstall_globals if reinstall_globals is not None else _no_reinstall
         self._views.update(
             {
                 "doctor": DoctorScreen(

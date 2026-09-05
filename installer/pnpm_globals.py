@@ -132,16 +132,33 @@ def parse_global_packages(raw: str) -> tuple[str, ...] | None:
     return tuple(dict.fromkeys(names))
 
 
+LIST_TIMEOUT_SECONDS = 20.0
+
+
+def _run_list(argv: list[str]) -> str:
+    """The default OutputRunner for the global-set query, bounded in time.
+
+    `pnpm list -g --json` is a QUERY, so waiting forever is never the right
+    answer — and pnpm can block indefinitely on store-lock contention. The one
+    caller that matters runs inside a Textual thread worker whose result the
+    event loop is waiting on, so an unbounded child would leave the Doctor
+    "checking pnpm's global set..." with nothing to end it. A timeout surfaces
+    as CommandError, which pnpm_global_packages already reads as "unknown".
+    """
+    return run_output(argv, timeout=LIST_TIMEOUT_SECONDS)
+
+
 def pnpm_global_packages(
     *,
     resolve_pnpm: Callable[[], str | None] = real_pnpm,
-    runner_out: OutputRunner = run_output,
+    runner_out: OutputRunner = _run_list,
 ) -> tuple[str, ...] | None:
     """Packages pnpm currently manages globally, or None when pnpm cannot be asked.
 
     None means "unknown", not "empty". A report built from an unknown set claims
     nothing; one built from an assumed-empty set would claim the user has no
     globals, which is the same kind of guess this module exists to stop making.
+    A query that times out is one more way of not being able to ask.
     """
     pnpm = resolve_pnpm()
     if pnpm is None:

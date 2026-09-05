@@ -5,9 +5,11 @@ from pathlib import Path
 
 import pytest
 
+from installer import pnpm_globals
 from installer.guards import REDIRECT_SENTINEL
 from installer.model import Method, Tool, load_tools
 from installer.pnpm_globals import (
+    LIST_TIMEOUT_SECONDS,
     NodeGlobal,
     NodeGlobalsReport,
     PnpmUnavailable,
@@ -19,7 +21,7 @@ from installer.pnpm_globals import (
     reinstall_node_globals,
     reinstall_preview,
 )
-from installer.run import CommandError
+from installer.run import TIMEOUT_CODE, CommandError
 from installer.ui_common import run_live
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
@@ -168,6 +170,31 @@ def test_pnpm_global_packages_unknown_when_the_query_fails() -> None:
         raise CommandError(cmd, 1)
 
     assert pnpm_global_packages(resolve_pnpm=lambda: "/real/bin/pnpm", runner_out=boom) is None
+
+
+def test_pnpm_global_packages_reads_a_timeout_as_unknown() -> None:
+    def wedged(cmd: list[str]) -> str:
+        raise CommandError(cmd, TIMEOUT_CODE, detail="timed out after 20s")
+
+    assert pnpm_global_packages(resolve_pnpm=lambda: "/real/bin/pnpm", runner_out=wedged) is None
+
+
+def test_the_global_set_query_is_time_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The one caller that matters runs inside a Textual thread worker the Doctor
+    # screen is waiting on, so an unbounded `pnpm list -g --json` (pnpm can
+    # block indefinitely on store-lock contention) leaves the screen checking
+    # forever with no interruptible path.
+    seen: list[float | None] = []
+
+    def fake_run_output(cmd: list[str], *, timeout: float | None = None) -> str:
+        assert cmd[1:] == ["list", "-g", "--json"]
+        seen.append(timeout)
+        return "[]"
+
+    monkeypatch.setattr(pnpm_globals, "run_output", fake_run_output)
+    assert pnpm_global_packages(resolve_pnpm=lambda: "/real/bin/pnpm") == ()
+    assert seen == [LIST_TIMEOUT_SECONDS]
+    assert 0 < LIST_TIMEOUT_SECONDS <= 60
 
 
 def test_audit_reports_only_what_pnpm_actually_manages() -> None:
