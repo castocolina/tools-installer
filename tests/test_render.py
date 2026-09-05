@@ -280,7 +280,7 @@ def test_render_guard_status_reports_active_shims_and_warning():
     console = Console(file=buf, width=100)
     render_guard_status({"pip": True, "npm": False, "pip3": True}, "PATH order", console)
     out = buf.getvalue()
-    assert "pip/npm ban active" in out
+    assert "Package manager guards active" in out
     assert "pip" in out
     assert "PATH order" in out
 
@@ -299,7 +299,7 @@ def test_render_guard_status_active_shims_no_warning():
     console = Console(file=buf, width=100)
     render_guard_status({"pip": True, "npm": False}, None, console)
     out = buf.getvalue()
-    assert "pip/npm ban active" in out
+    assert "Package manager guards active" in out
     assert "guard warning" not in out
 
 
@@ -308,7 +308,7 @@ def test_render_guard_status_includes_reload_next_step():
     console = Console(file=buf, width=100)
     render_guard_status({"pip": True, "npm": False}, None, console)
     out = buf.getvalue()
-    assert "pip/npm ban active" in out
+    assert "Package manager guards active" in out
     assert "hash -r" in out  # the reload next step from guard_guidance
 
 

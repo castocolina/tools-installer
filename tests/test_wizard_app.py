@@ -1267,4 +1267,4 @@ async def test_doctor_ban_report_follows_a_policies_toggle() -> None:
         await pilot.press("escape")
         await pilot.press("4")
         assert isinstance(app.screen, DoctorScreen)
-        assert any("ban" in item.title.lower() for item in app.screen.guidance)
+        assert any("guards active" in item.title.lower() for item in app.screen.guidance)

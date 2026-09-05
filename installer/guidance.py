@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from installer.doctor import DoctorReport, has_problems
 from installer.enums import Severity
+from installer.guards import GLOBAL_REDIRECTED, REDIRECTED, guard_label, guarded_names
 
 
 @dataclass(frozen=True, init=False)
@@ -69,21 +70,34 @@ def doctor_guidance(report: DoctorReport) -> list[Guidance]:
 
 
 def guard_guidance(status: dict[str, bool], warning: str | None) -> list[Guidance]:
-    """pip/npm-ban + PATH-order guidance; empty when nothing is active and no warning."""
+    """Per-command guard labels + PATH-order guidance.
+
+    Empty when nothing is active and there is no warning.
+    """
     items: list[Guidance] = []
-    active = [name for name, installed in status.items() if installed]
+    active = [name for name in guarded_names() if status.get(name, False)]
     if active:
-        # Agree the verb/possessive with the count so a single active shim reads
-        # "pip is shimmed to its replacement" rather than "pip are ... their".
-        shimmed = (
-            f"{active[0]} is shimmed to its replacement"
-            if len(active) == 1
-            else f"{', '.join(active)} are shimmed to their replacements"
-        )
+        meaning = "; ".join(f"{name}: {guard_label(name)}" for name in active) + "."
+        # guard_label is deliberately static, so npx still reads as redirected even
+        # on a machine where install_redirect_shims fell back to the hard-block body
+        # because pnpm was unresolvable. That honest signal lives in
+        # guard_redirect_warning, which plan 04-01 folded into guard_state's warning
+        # string — a separate channel a reader could miss. This is the accepted cost
+        # of D-02's "no status enum" constraint, not a defect; the cross-reference
+        # is what keeps the two channels connected on the page. Do not recompute
+        # redirect health here: this function takes a bool dict and a string, and
+        # reading the shim bodies from it would put IO in the wording layer.
+        if warning is not None and any(
+            name in REDIRECTED or name in GLOBAL_REDIRECTED for name in active
+        ):
+            meaning += (
+                " Labels describe the configured redirect; "
+                "the warning below reports anything that degraded."
+            )
         items.append(
             Guidance(
-                title="pip/npm ban active",
-                meaning=f"{shimmed}.",
+                title="Package manager guards active",
+                meaning=meaning,
                 next_step="Open a new shell or run `hash -r` so cached command paths refresh.",
                 severity=Severity.OK,
             )

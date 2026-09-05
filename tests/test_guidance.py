@@ -48,32 +48,55 @@ def test_guard_guidance_silent_when_inactive_and_no_warning() -> None:
     assert guard_guidance({"pip": False, "npm": False}, None) == []
 
 
-def test_guard_guidance_reports_active_ban_with_reload_step() -> None:
-    items = guard_guidance({"pip": True, "npm": False}, None)
-    item = next(i for i in items if "ban active" in i.title)
+def test_guard_guidance_reports_active_guards_with_per_command_labels() -> None:
+    items = guard_guidance({"npx": True, "pip": True, "npm": False}, None)
+    item = next(i for i in items if "guards active" in i.title)
     assert item.severity == "ok"
-    assert "pip" in item.meaning
-    assert "hash -r" in item.next_step or "new shell" in item.next_step
+    assert item.title == "Package manager guards active"
+    assert "npx: redirected to pnpm dlx" in item.meaning
+    assert "pip: blocked" in item.meaning
+    assert "npm:" not in item.meaning
+    assert "hash -r" in item.next_step
 
 
 def test_guard_guidance_reports_path_order_warning() -> None:
     items = guard_guidance({"pip": False}, "shim dir is behind the real binary")
     item = next(i for i in items if "order" in i.title.lower())
     assert item.severity == "warn"
-    assert "shim dir is behind the real binary" in item.meaning
+    assert item.meaning == "shim dir is behind the real binary"
     assert item.next_step
 
 
-def test_guard_guidance_singular_wording_for_one_active() -> None:
-    items = guard_guidance({"pip": True, "npm": False}, None)
-    item = next(i for i in items if "ban active" in i.title)
-    assert "pip is shimmed to its replacement" in item.meaning
+def test_guard_guidance_npm_label_names_volta_split() -> None:
+    items = guard_guidance({"npm": True}, None)
+    item = next(i for i in items if "guards active" in i.title)
+    assert "npm: global installs redirected to volta install, other npm use blocked" in item.meaning
 
 
-def test_guard_guidance_plural_wording_for_multiple_active() -> None:
-    items = guard_guidance({"pip": True, "npm": True, "pip3": True}, None)
-    item = next(i for i in items if "ban active" in i.title)
-    assert "are shimmed to their replacements" in item.meaning
+def test_guard_guidance_entries_follow_guarded_names_order() -> None:
+    items = guard_guidance({"npx": True, "pip": True, "npm": False}, None)
+    item = next(i for i in items if "guards active" in i.title)
+    assert item.meaning.index("pip:") < item.meaning.index("npx:")
+
+
+def test_guard_guidance_cross_references_warning_when_redirect_is_active() -> None:
+    items = guard_guidance({"npx": True}, "npx is hard-blocked because pnpm was not resolvable")
+    item = next(i for i in items if "guards active" in i.title)
+    without = next(i for i in guard_guidance({"npx": True}, None) if "guards active" in i.title)
+    assert len(item.meaning) > len(without.meaning)
+    assert "warning" in item.meaning.lower()
+
+
+def test_guard_guidance_no_cross_reference_without_warning() -> None:
+    items = guard_guidance({"npx": True}, None)
+    item = next(i for i in items if "guards active" in i.title)
+    assert "warning" not in item.meaning.lower()
+
+
+def test_guard_guidance_no_cross_reference_for_plain_block() -> None:
+    items = guard_guidance({"pip": True}, "PATH order warning")
+    item = next(i for i in items if "guards active" in i.title)
+    assert "warning" not in item.meaning.lower()
 
 
 def test_guidance_is_frozen() -> None:

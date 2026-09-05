@@ -949,7 +949,7 @@ def test_run_doctor_reports_active_ban(tmp_path: Path):
         exists=lambda _p: True,
         which=lambda name: str(shim_dir / name),
     )
-    assert "pip/npm ban active" in buf.getvalue()
+    assert "Package manager guards active" in buf.getvalue()
 
 
 def test_run_uninstall_also_removes_guard_artifacts(tmp_path: Path):
