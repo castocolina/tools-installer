@@ -58,6 +58,10 @@
       "opencode-sol": {
         "cli": "opencode",
         "model": "openai/gpt-5.6-sol"
+      },
+      "codex-sol-high": {
+        "cli": "codex",
+        "model": "gpt-5.6-sol"
       }
     },
     "default_reviewers": [
