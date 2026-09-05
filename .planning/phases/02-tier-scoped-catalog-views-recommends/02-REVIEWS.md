@@ -237,13 +237,134 @@ None of these four are HIGH: they are executor-facing verification-script precis
 
 CYCLE_SUMMARY: current_high=0 current_actionable=4
 
+## Cycle 2 disposition (superseded below by cycle 3)
+
+## Current HIGH Concerns (as of cycle 2)
+
+None.
+
+## Current Actionable Non-HIGH Concerns (as of cycle 2)
+
+- **MEDIUM** — 02-02's gating `tmux` script (`02-02-PLAN.md:824`) presses `Space` on the AI view's row 0, which is a Category section header, not `rg` (the actual first AI-tier tool per `installer/registry.toml:78-84`); the `recommends` prompt grep will never match. Needs: retarget the script (switch to Table grouping, or add enough arrow-key navigation to land on `claude`) before marking Rule 8 verification as satisfied.
+- **MEDIUM** — 02-01's plan-level step 6 verify (`02-01-PLAN.md:910-916`) asserts marking `mmdc` demonstrates the SC#2 `pnpm` drag-in, but Task 3's own tmux script (`:846`) never marks `mmdc` — it only checks nav tokens. Needs: align step 6 with what Task 3 actually scripts, or add a second script that opens the User view, marks `mmdc`, and greps for `pnpm`.
+- **LOW** — ROADMAP.md SC#4 (`:98`) still names `codegraph`/`graphify`/`rtk` as the illustrative `recommends` example; those are Phase 8 catalog entries that don't exist yet in Phase 2's registry state. Needs: reword the parenthetical to `rg`/`fd`/`jq` (the tools this phase's fixtures actually use) or explicitly note the example is forward-looking to Phase 8.
+- **LOW** — 02-01 Task 2's number-key migration recipe (`tests/test_wizard_app.py` call sites `:336/:352/:376/:393/:414`) lists only 5 of roughly 20 `press("3")`-shaped sites that need shifting to `press("4")`. Needs: either enumerate the full site list or replace the enumerated list with a `grep -n` command so the executor can't stop at the 5 named lines.
+
+All four of the above were incorporated in commit `8877fcf` (see the cycle-2 `<review_dispositions>`
+tables in each PLAN.md). Cycle 3 below re-verifies each against current plan text and live source.
+
+---
+
+# Cycle 3 Review — 2026-09-05T03:30:56Z (final cycle, max-cycles=3)
+
+**Reviewers this cycle:** `opencode-plan-review` (OpenCode adapter, `xai/grok-4.6`,
+`reasoning=high`, resolved via `pinned` model source — same configured `review.default_reviewers`
+instance as cycles 1 and 2). No other lane was configured or detected as a default this cycle
+either; single-reviewer, so the plan-review-convergence consensus gate does not engage.
+
+**Scope:** this cycle does NOT re-litigate cycle 1. It re-verifies the four cycle-2 findings
+(fixed in commit `8877fcf`, dispositioned in `02-01-PLAN.md` and `02-02-PLAN.md`'s cycle-2
+`<review_dispositions>` tables) against the CURRENT plan text and the live repository tree.
+
+## Consensus Summary
+
+Single reviewer again this cycle — no cross-reviewer synthesis is possible. The reviewer's verdict
+is source-grounded: every claim cites `path:line` against the real tree
+(`installer/registry.toml`, `installer/tool_browser.py`, `installer/catalog_tui.py`,
+`installer/ui_common.py`, `installer/deps.py`, `tests/test_wizard_app.py`, `.planning/ROADMAP.md`)
+and against the two PLAN.md files. This session independently re-derived the same evidence before
+dispatching the reviewer (the `tests/test_wizard_app.py` press-key distribution was recounted by
+hand — 2×key-1, 11×key-2, 22×key-3, 8×key-4, 43 total, matching both the plan's claimed
+distribution and the reviewer's count; the `^ *mmdc `/`^ *claude ` detail-bar-only regex claim was
+independently traced through `_detail_text` and the `Sel`-column-first `_COLUMNS` order; the pinned
+notice/prompt wording was traced from each plan's `<action>` to the corresponding tmux grep target;
+ROADMAP.md:98 was read directly and confirmed to name `rg`/`fd`/`jq`) — the reviewer's findings and
+this session's own verification agree on all four items.
+
+### Agreed Strengths
+Not applicable — only one reviewer ran.
+
+### Agreed Concerns
+Not applicable — only one reviewer ran.
+
+### Divergent Views
+Not applicable — only one reviewer ran.
+
+## OpenCode Review (opencode-plan-review) — Cycle 3
+
+I'll verify the four cycle-2 fixes against the live plans and repository, starting with dispositions and the source they depend on.
+Plans aren't executed yet — I'll locate the planning artifacts and check the live fixtures the cycle-2 fixes depend on.
+The key-count matches the plan. Next I'll check registry fixtures, ROADMAP SC#4, and whether the tmux regexes actually hit the detail bar.
+
+### Summary
+
+All four cycle-2 fixes hold up against the current PLAN.md text and live source. The tmux
+retargets match how the detail bar and table rows actually render, the `mmdc`→`pnpm` and
+`rg`/`fd`/`jq` fixtures exist as claimed, and the number-key work list matches
+`tests/test_wizard_app.py` exactly. No new HIGH or MEDIUM. Residual execute-time flake
+(sleep/tmux) is unchanged and not a plan defect.
+
+### Disposition Verification
+
+1. **MEDIUM — 02-02 tmux script marked the AI view's first row, not `claude` — RESOLVED.**
+   Plan text is in place: `02-02-PLAN.md:856` walks `Down` until `^ *claude `, then captures
+   before `Space`, after `Space`, and after `d`. It greps `press r` absent → `rg, fd, jq - press r`
+   present → `press r` absent. Live mechanism: the detail bar is `#browser-detail`
+   (`installer/tool_browser.py:87`, `padding: 0 1`), filled from `_detail_text` which starts
+   `[bold]{tool.id}[/] — ` (`installer/catalog_tui.py:198-208`); the rendered pane line is
+   ` claude — …`, so `^ *claude ` matches the detail bar. Table rows start with `mark()` →
+   `[ ]`/`[x]` (`installer/ui_common.py:29-31`) and cannot satisfy `^ *claude `.
+   `_first_selectable_row` (`installer/tool_browser.py:142-144, 182-186`) skips section headers,
+   so the original "row 0 is a header" premise was wrong; the plan's note at
+   `02-02-PLAN.md:318-324` is correct. Today the AI view's first selectable *is* `claude`
+   (`installer/registry.toml:1182-1188`), but the `Down` loop no longer depends on that. The
+   prompt fragment is pinned in Task 1 (`claude pairs well with rg, fd, jq - press r`) and is
+   distinct from Task 2's detail-bar `pairs well with` clause, which has no `press r`.
+2. **MEDIUM — 02-01 step 6 claimed an `mmdc`/`pnpm` notice the only script never raised —
+   RESOLVED.** Plan text is in place: Task 3 has two gating scripts (`02-01-PLAN.md:911`
+   `gsd-p2-nav`, `:922` `gsd-p2-req`); plan-level step 6 (`:1005-1016`) names both and says
+   neither substitutes. Live mechanism: the sole cross-tier `requires` edge is `mmdc` (user) →
+   `pnpm` (system) (`installer/registry.toml:1641-1649`, `:1442-1448`; `claude.requires == ()`).
+   `gsd-p2-req` opens User (`2`), walks until `^ *mmdc `, asserts `also needs` absent before
+   `Space` and `mmdc also needs pnpm` plus `added automatically at install time` after. That
+   sentence is pinned in Task 3 `<action>` (`02-01-PLAN.md:852-854`) and in
+   `test_dependency_notice_does_not_promise_availability`. User-view first selectable is `jq`
+   (category `data`), not `mmdc` (category `diagram`) — the 60-iteration bound is enough. The
+   detail bar already shows `requires pnpm`, and the script correctly requires the fuller
+   `mmdc also needs pnpm` match rather than a bare `pnpm` substring.
+3. **LOW — ROADMAP SC#4 still named `codegraph`/`graphify`/`rtk` — RESOLVED.**
+   `.planning/ROADMAP.md:98` now names `rg`, `fd`, `jq`. All three exist
+   (`installer/registry.toml:78`, `:164`, `:116`); `codegraph`/`graphify`/`rtk` are absent from
+   the catalog. Phase 8 SC#4 (`ROADMAP.md:191`) still owns the real companion set.
+4. **LOW — Task 2 number-key recipe named 5 of ~20 `press("3")` sites — RESOLVED.**
+   `<action>` (`02-01-PLAN.md:622-637`) uses `grep -nE 'press\("[1-9]"\)' tests/test_wizard_app.py`,
+   states 43 sites (2×1, 11×2, 22×3, 8×4), a descending rewrite, and a re-grep between passes.
+   `<verify>` bounds `press("[23]")` occurrences and acceptance criteria require all 41 shifted
+   sites. Live count in `tests/test_wizard_app.py` is exactly that: 2 / 11 / 22 / 8. `_app`'s
+   default is still `"catalog"` at `:94` — the sentinel the sweep is meant to catch.
+
+### New/Carried Concerns
+
+None. All four cycle-2 fixes are present in the plans and mechanically valid against live source.
+
+### Risk Assessment
+
+**LOW.** Architecture and fixtures are consistent with the tree. Remaining risk is execute-time
+(tmux paint/`sleep 8`, the 60-iteration `Down` walk), not an unbacked verify claim or a false
+catalog edge.
+
+## Cycle 3 Verdict
+
+**No HIGH-severity concerns remain, and all four cycle-2 actionable findings are confirmed
+RESOLVED against live source with no new findings raised.** This is the final cycle
+(max-cycles=3); the plans have converged.
+
+CYCLE_SUMMARY: current_high=0 current_actionable=0
+
 ## Current HIGH Concerns
 
 None.
 
 ## Current Actionable Non-HIGH Concerns
 
-- **MEDIUM** — 02-02's gating `tmux` script (`02-02-PLAN.md:824`) presses `Space` on the AI view's row 0, which is a Category section header, not `rg` (the actual first AI-tier tool per `installer/registry.toml:78-84`); the `recommends` prompt grep will never match. Needs: retarget the script (switch to Table grouping, or add enough arrow-key navigation to land on `claude`) before marking Rule 8 verification as satisfied.
-- **MEDIUM** — 02-01's plan-level step 6 verify (`02-01-PLAN.md:910-916`) asserts marking `mmdc` demonstrates the SC#2 `pnpm` drag-in, but Task 3's own tmux script (`:846`) never marks `mmdc` — it only checks nav tokens. Needs: align step 6 with what Task 3 actually scripts, or add a second script that opens the User view, marks `mmdc`, and greps for `pnpm`.
-- **LOW** — ROADMAP.md SC#4 (`:98`) still names `codegraph`/`graphify`/`rtk` as the illustrative `recommends` example; those are Phase 8 catalog entries that don't exist yet in Phase 2's registry state. Needs: reword the parenthetical to `rg`/`fd`/`jq` (the tools this phase's fixtures actually use) or explicitly note the example is forward-looking to Phase 8.
-- **LOW** — 02-01 Task 2's number-key migration recipe (`tests/test_wizard_app.py` call sites `:336/:352/:376/:393/:414`) lists only 5 of roughly 20 `press("3")`-shaped sites that need shifting to `press("4")`. Needs: either enumerate the full site list or replace the enumerated list with a `grep -n` command so the executor can't stop at the 5 named lines.
+None.
