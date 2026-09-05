@@ -38,7 +38,7 @@ from installer.render import render_troubleshooting
 from installer.selection import Choice
 from installer.shellrc import collect_bin_dirs, has_managed_block
 from installer.status import is_installed
-from installer.tweaks import applicable_bundles
+from installer.tweaks import BUNDLES, applicable_bundles
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import (
     SweepResult,
@@ -159,6 +159,12 @@ def _build_app(
         reverse_deps=reverse_dependencies(tools),
     )
     ban_names = [name for name, active in status.items() if active]
+    # The Policies view offers what applies HERE; the teardown sweeps every
+    # bundle. A bundle whose `platforms` tuple changed between installer
+    # versions, or an rc file carried between machines, would otherwise leave a
+    # block and a helper on disk with nothing reporting them.
+    # tweak_present/tweak_executables_present already answer False for anything
+    # not on disk, so the total sweep costs nothing.
     bundles = applicable_bundles(platform)
 
     def _do_uninstall(decision: UninstallDecision) -> SweepResult:
@@ -170,7 +176,7 @@ def _build_app(
             bin_dir=_DEFAULT_BIN_DIR,
             myshellrc_path=_MYSHELLRC,
             rc_paths=_RC_PATHS,
-            bundles=bundles,
+            bundles=BUNDLES,
             zshrc_path=_ZSHRC,
         )
 
@@ -182,7 +188,7 @@ def _build_app(
         # The predicate, not its result: the Policies view toggles these live in
         # the same session, so the Uninstall view re-evaluates it on entry.
         tweak_ids=lambda: active_tweak_ids(
-            bundles, rc_path=_MYSHELLRC, bin_dir=_DEFAULT_BIN_DIR, zshrc_path=_ZSHRC
+            BUNDLES, rc_path=_MYSHELLRC, bin_dir=_DEFAULT_BIN_DIR, zshrc_path=_ZSHRC
         ),
     )
     policy_inputs = PolicyInputs(
@@ -320,7 +326,9 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
         myshellrc_path=_MYSHELLRC,
         rc_paths=_RC_PATHS,
         confirm=confirm,
-        bundles=applicable_bundles(platform),
+        # Every bundle, not just the ones applicable here: a teardown must be
+        # total (see _build_app).
+        bundles=BUNDLES,
         zshrc_path=_ZSHRC,
     )
     return 0

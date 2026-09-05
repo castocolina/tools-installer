@@ -88,14 +88,17 @@ def test_run_uninstall_is_wired_with_bundles_and_zshrc() -> None:
     `_run_uninstall` closes over import-time Path.home() constants and is a
     private composition-root helper, so calling it from tests trips pyright
     (private usage) and would be unsafe against the real home. The wire is
-    the `bundles=applicable_bundles(platform)` and `zshrc_path=_ZSHRC` kwargs
-    on the non-TTY `run_uninstall(` call.
+    the `bundles=BUNDLES` and `zshrc_path=_ZSHRC` kwargs on the non-TTY
+    `run_uninstall(` call. BUNDLES, not applicable_bundles(platform): a
+    teardown is total, so a bundle that no longer applies on this platform is
+    still swept off disk.
     """
     src = (Path(__file__).resolve().parent.parent / "setup.py").read_text()
     body = src[src.index("def _run_uninstall") :]
     body = body[: body.index("def _run_guard")]
     assert "platform = detect()" in body
-    assert "bundles=applicable_bundles(platform)" in body
+    assert "bundles=BUNDLES" in body
+    assert "applicable_bundles" not in body
     assert "zshrc_path=_ZSHRC" in body
 
 
@@ -113,7 +116,7 @@ def test_perform_uninstall_is_wired_with_bundles_and_zshrc() -> None:
     body = src[src.index("def _do_uninstall") :]
     body = body[: body.index("uninstall_inputs =")]
     assert "return perform_uninstall(" in body
-    assert "bundles=bundles" in body
+    assert "bundles=BUNDLES" in body
     assert "zshrc_path=_ZSHRC" in body
 
 
