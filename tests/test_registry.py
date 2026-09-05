@@ -51,6 +51,7 @@ def test_registry_includes_requested_installable_entries() -> None:
         "springbootcli",
         "gradle",
         "maven",
+        "volta",
     } <= ids
 
 
@@ -265,6 +266,20 @@ def test_eza_resolves_to_download_on_linux_and_brew_only_on_macos() -> None:
     assert [m.kind for m in resolve_methods(eza, macos)] == ["brew"]
 
 
+def test_volta_resolves_to_script_on_linux_and_brew_on_macos() -> None:
+    volta = next(t for t in load_tools(REGISTRY) if t.id == "volta")
+    assert volta.tier == "system"
+    assert volta.category == "pkg-mgr"
+    assert volta.cmd == "volta"
+    assert volta.audience == "both"
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    assert [m.kind for m in resolve_methods(volta, macos)][0] == "brew"
+    for platform_os in ("debian", "arch", "fedora"):
+        linux = Platform(os=platform_os, arch="amd64", immutable=False, has_brew=True)
+        assert [m.kind for m in resolve_methods(volta, linux)][0] == "script"
+    assert all(m.params.get("bin_dir") == "~/.volta/bin" for m in volta.methods)
+
+
 def test_gh_uses_nested_member_on_linux_and_brew_only_on_macos() -> None:
     gh = next(t for t in load_tools(REGISTRY) if t.id == "gh")
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
@@ -418,7 +433,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     # (ROADMAP Phases 7 and 8 both will) must update these counts in the same
     # commit that changes the catalog.
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
-        "system": 21,
+        "system": 22,
         "ai": 9,
         "user": 35,
     }

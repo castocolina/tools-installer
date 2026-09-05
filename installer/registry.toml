@@ -1470,6 +1470,36 @@ kind = "brew"
 formula = "pnpm"
 
 [[tool]]
+id = "volta"
+name = "Volta"
+category = "pkg-mgr"
+cmd = "volta"
+priority = "P2"
+audience = "both"
+tier = "system"
+desc = "Node toolchain manager; owns globally installed Node CLIs in its own shim dir"
+# No macOS script fallback: volta's published macOS path is Homebrew only.
+# A Mac with no Homebrew cannot install the redirect target; plan 04-03 gates
+# the redirect on volta resolving, so such a machine keeps today's npm hard
+# block. The remedy is to install brew. Do not invent an unpublished macOS
+# script URL.
+# ~/.volta/bin may not exist yet right after installing volta.
+# collect_bin_dirs only wires a declared bin_dir when the directory already
+# exists, and a brew-installed volta may not create its shim dir until the
+# first `volta install` (or `volta setup`) runs. PATH repair is then a second
+# step (make fix / Doctor apply) rather than special-casing collect_bin_dirs.
+[[tool.method]]
+kind = "script"
+os = ["debian", "arch", "fedora"]
+url = "https://get.volta.sh"
+shell = "bash"
+bin_dir = "~/.volta/bin"
+[[tool.method]]
+kind = "brew"
+formula = "volta"
+bin_dir = "~/.volta/bin"
+
+[[tool]]
 id = "fnm"
 name = "fnm"
 category = "runtime"
