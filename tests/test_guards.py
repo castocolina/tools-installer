@@ -1,3 +1,5 @@
+import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -5,12 +7,17 @@ from installer.guards import (
     BAN_BEGIN,
     BAN_END,
     BANNED,
+    REDIRECT_SENTINEL,
+    REDIRECTED,
     SHIM_SENTINEL,
     ban_alias_block,
     guard_path_warning,
     guard_status,
+    install_redirect_shims,
     install_shims,
     is_our_shim,
+    real_binary,
+    redirect_shim_script,
     remove_ban_aliases,
     remove_shims,
     shim_script,
@@ -171,3 +178,125 @@ def test_guard_path_warning_none_when_real_tool_not_on_path_dirs(tmp_path: Path)
         which=lambda name: "/opt/local/bin/pip" if name == "pip" else str(tmp_path / name),
     )
     assert warning is None
+
+
+def test_redirect_shim_script_is_posix_exec_through():
+    script = redirect_shim_script("npx", "/fake/bin/pnpm")
+    lines = script.splitlines()
+    assert lines[0] == "#!/bin/sh"
+    assert lines[1] == REDIRECT_SENTINEL
+    assert lines[-1] == (f'exec {shlex.quote("/fake/bin/pnpm")} {shlex.quote("dlx")} "$@"')
+    assert REDIRECTED["npx"].target == "pnpm"
+    assert REDIRECTED["npx"].args == ("dlx",)
+
+
+def test_redirect_shim_script_is_valid_posix_sh(tmp_path: Path):
+    shim = tmp_path / "npx"
+    shim.write_text(redirect_shim_script("npx", "/fake/bin/pnpm"))
+    result = subprocess.run(["sh", "-n", str(shim)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_is_our_shim_true_for_redirect_sentinel_only(tmp_path: Path):
+    path = tmp_path / "npx"
+    path.write_text(f"{REDIRECT_SENTINEL}\n")
+    assert is_our_shim(path) is True
+
+
+def test_is_our_shim_true_for_ban_sentinel_only(tmp_path: Path):
+    path = tmp_path / "pip"
+    path.write_text(f"{SHIM_SENTINEL}\n")
+    assert is_our_shim(path) is True
+
+
+def test_real_binary_skips_shim_dir(tmp_path: Path):
+    shim_dir = tmp_path / "shims"
+    real_dir = tmp_path / "real"
+    shim_dir.mkdir()
+    real_dir.mkdir()
+
+    def lookup(name: str, path: str) -> str | None:
+        for directory in path.split(os.pathsep):
+            candidate = Path(directory) / name
+            if candidate.exists():
+                return str(candidate)
+        return None
+
+    (shim_dir / "pnpm").write_text("shim\n")
+    (real_dir / "pnpm").write_text("real\n")
+    found = real_binary(
+        "pnpm",
+        shim_dir=shim_dir,
+        path_value=f"{shim_dir}{os.pathsep}{real_dir}",
+        lookup=lookup,
+    )
+    assert found == str(real_dir / "pnpm")
+
+
+def test_real_binary_rejects_sentinel_match(tmp_path: Path):
+    shim_dir = tmp_path / "shims"
+    other = tmp_path / "other"
+    shim_dir.mkdir()
+    other.mkdir()
+    fake = other / "pnpm"
+    fake.write_text(f"#!/bin/sh\n{REDIRECT_SENTINEL}\n")
+
+    def lookup(_name: str, _path: str) -> str | None:
+        return str(fake)
+
+    assert (
+        real_binary(
+            "pnpm",
+            shim_dir=shim_dir,
+            path_value=str(other),
+            lookup=lookup,
+        )
+        is None
+    )
+
+
+def test_install_redirect_shims_creates_then_refreshes(tmp_path: Path):
+    real_dir = tmp_path / "real"
+    shim_dir = tmp_path / "shims"
+    real_dir.mkdir()
+    pnpm = real_dir / "pnpm"
+    pnpm.write_text("#!/bin/sh\n")
+    pnpm.chmod(0o755)
+
+    def lookup(name: str, _path: str) -> str | None:
+        return str(pnpm) if name == "pnpm" else None
+
+    path_value = f"{shim_dir}{os.pathsep}{real_dir}"
+    first = install_redirect_shims(shim_dir, path_value=path_value, lookup=lookup)
+    assert first == {"npx": "created"}
+    shim = shim_dir / "npx"
+    assert shim.stat().st_mode & 0o111
+    assert REDIRECT_SENTINEL in shim.read_text()
+    second = install_redirect_shims(shim_dir, path_value=path_value, lookup=lookup)
+    assert second == {"npx": "refreshed"}
+
+
+def test_npx_redirect_shim_execs_into_pnpm_dlx_with_real_exit_code(tmp_path: Path):
+    real_dir = tmp_path / "real"
+    shim_dir = tmp_path / "shims"
+    real_dir.mkdir()
+    pnpm = real_dir / "pnpm"
+    pnpm.write_text('#!/bin/sh\necho "$@"\nexit 3\n')
+    pnpm.chmod(0o755)
+
+    def lookup(name: str, _path: str) -> str | None:
+        return str(pnpm) if name == "pnpm" else None
+
+    install_redirect_shims(
+        shim_dir,
+        path_value=f"{shim_dir}{os.pathsep}{real_dir}",
+        lookup=lookup,
+    )
+    result = subprocess.run(
+        [str(shim_dir / "npx"), "a", "b"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 3
+    assert "dlx a b" in result.stdout

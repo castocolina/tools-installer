@@ -12,7 +12,10 @@ real npm/pip earlier on PATH wins. guard_path_warning flags the PATH-order case.
 """
 
 import os
+import shlex
+import shutil
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from installer.shellrc import apply_block, strip_block
@@ -22,10 +25,24 @@ BANNED: dict[str, str] = {
     "pip": "uv (uv pip install / uv add)",
     "pip3": "uv (uv pip install / uv add)",
 }
+
+
+@dataclass(frozen=True)
+class Redirect:
+    target: str
+    args: tuple[str, ...]
+    label: str
+
+
+REDIRECTED: dict[str, Redirect] = {
+    "npx": Redirect(target="pnpm", args=("dlx",), label="redirected to pnpm dlx"),
+}
 EXIT_CODE = 127  # non-zero so the caller sees a hard failure
 SHIM_SENTINEL = "# tools-installer-ban-shim"
+REDIRECT_SENTINEL: str = "# tools-installer-redirect-shim"
 BAN_BEGIN = "# >>> tools-installer ban >>>"
 BAN_END = "# <<< tools-installer ban <<<"
+PathLookup = Callable[[str, str], str | None]
 
 
 def shim_script(name: str) -> str:
@@ -39,12 +56,78 @@ def shim_script(name: str) -> str:
     )
 
 
+def redirect_shim_script(name: str, target_path: str) -> str:
+    """POSIX-sh shim that execs into the redirect target, preserving exit code."""
+    spec = REDIRECTED[name]
+    quoted_args = " ".join(shlex.quote(arg) for arg in spec.args)
+    return f'#!/bin/sh\n{REDIRECT_SENTINEL}\nexec {shlex.quote(target_path)} {quoted_args} "$@"\n'
+
+
 def is_our_shim(path: Path) -> bool:
     """True only for a readable file carrying our sentinel; never a real binary."""
     try:
-        return SHIM_SENTINEL in path.read_text()
+        text = path.read_text()
     except (OSError, UnicodeDecodeError):
         return False
+    return SHIM_SENTINEL in text or REDIRECT_SENTINEL in text
+
+
+def which_in_path(name: str, path: str) -> str | None:
+    return shutil.which(name, path=path)
+
+
+def real_binary(
+    name: str,
+    *,
+    shim_dir: Path,
+    path_value: str,
+    lookup: PathLookup = which_in_path,
+) -> str | None:
+    """Resolve `name` from PATH, never the managed shim.
+
+    Re-resolving the target through the live PATH is how a shim finds itself
+    (04-RESEARCH Pitfall 3), so the search path never contains the shim dir and
+    a sentinel-carrying result is refused.
+    """
+    search_dirs = [
+        entry for entry in path_value.split(os.pathsep) if entry and entry != str(shim_dir)
+    ]
+    found = lookup(name, os.pathsep.join(search_dirs))
+    if found is None or is_our_shim(Path(found)):
+        return None
+    return found
+
+
+def install_redirect_shims(
+    shim_dir: Path,
+    *,
+    path_value: str,
+    lookup: PathLookup = which_in_path,
+) -> dict[str, str]:
+    """Write redirect shims into shim_dir (mode 0o755). Idempotent.
+
+    Never overwrites a real binary already living there (sentinel check).
+    When the redirect target is unresolvable, writes the hard-block body
+    instead of a shim that execs into a missing command.
+    """
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    results: dict[str, str] = {}
+    for name, spec in REDIRECTED.items():
+        target = shim_dir / name
+        if target.exists() and not is_our_shim(target):
+            results[name] = "skipped (real binary here)"
+            continue
+        had = target.exists()
+        resolved = real_binary(spec.target, shim_dir=shim_dir, path_value=path_value, lookup=lookup)
+        if resolved is None:
+            target.write_text(shim_script(name))
+            target.chmod(0o755)
+            results[name] = "blocked (pnpm not found)"
+            continue
+        target.write_text(redirect_shim_script(name, resolved))
+        target.chmod(0o755)
+        results[name] = "refreshed" if had else "created"
+    return results
 
 
 def install_shims(shim_dir: Path) -> dict[str, str]:
