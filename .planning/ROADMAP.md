@@ -158,7 +158,7 @@ Plans:
 
   1. `codegraph` installs via `kind="github_release"`, not `pnpm add -g`.
   2. `mmdc`'s install method (pnpm-with-mitigation, brew, or volta) is decided explicitly after real research — not left ambiguous — with the decision recorded alongside why (postinstall-script security vs. the known pnpm global-install bug), reusing Phase 4's volta-internals research rather than re-deriving it.
-  3. `puppeteer` and `chrome-headless-shell` exist as their own catalog entries; `mmdc.requires` includes `puppeteer` so it drags in automatically; whether this dependency applies identically on macOS and Linux is verified, not assumed.
+  3. `puppeteer` exists as its own catalog entry, and `chrome-headless-shell` is resolved as needing none, with that reason recorded on the entry and guarded by a test; `mmdc.requires` includes `puppeteer` so it drags in automatically; whether this dependency applies identically on macOS and Linux is verified, not assumed. *(Rewritten 2026-09-05 during plan-review convergence: this criterion previously required `puppeteer` AND `chrome-headless-shell` to "exist as their own catalog entries". Phase 5's research established that puppeteer's own `postinstall` (`node install.mjs`) downloads `chrome-headless-shell` into `~/.cache/puppeteer`, so it has no independent install path for a second entry to model — a `chrome-headless-shell` entry could only ever be a decorative duplicate. 05-CONTEXT.md's Claude's-Discretion clause explicitly delegated this call, and plan 05-03 adds a test asserting no such entry exists so the resolution cannot be silently undone. The literal wording is amended here so an end-of-phase verifier reading the numbered criteria in isolation does not register the justified design as a miss.)*
 
 **Note (2026-09-04):** `REQ-pnpm-global-reinstall-mitigation` moved to Phase 4 — it's now resolved there via the Volta redirect (root-cause fix) rather than deferred to this phase's batch-5/7 dependency.
 **Note (2026-09-05):** `REQ-pnpm-global-reinstall-mitigation` is Partial: the Volta redirect removes user-typed global installs, Phase 4 ships the snapshot-reinstall mechanism, the audit and a manual trigger only for the residual set, and Phase 12 still owes the automatic post-pnpm-update trigger.
@@ -169,9 +169,11 @@ Plans:
 Plans:
 
 - [ ] 05-01-PLAN.md — Tracer: container-verified `mmdc` render, then the `co_install`/`allow_build` node-method mechanism in `model.py`/`executors.py` (wave 1)
-- [ ] 05-02-PLAN.md — `codegraph` as a checksum-verified `kind="github_release"` entry, with the live GitHub-API verification recorded on it (wave 1)
-- [ ] 05-03-PLAN.md — `puppeteer` entry, `mmdc.requires`/`co_install` wiring, and the pnpm-not-brew-not-Volta decision recorded in the registry and PROJECT.md (wave 2)
-- [ ] 05-04-PLAN.md — Group-aware pnpm-globals replay, so the Doctor reinstall cannot re-split the `mmdc` + `puppeteer` install group (wave 3)
+- [ ] 05-02-PLAN.md — `codegraph` as a checksum-verified `kind="github_release"` entry, with the live GitHub-API verification recorded on it (wave 2)
+- [ ] 05-03-PLAN.md — `puppeteer` entry, `mmdc.requires`/`co_install` wiring, and the pnpm-not-brew-not-Volta decision recorded in the registry and PROJECT.md (wave 3)
+- [ ] 05-04-PLAN.md — Group-aware pnpm-globals replay, so the Doctor reinstall cannot re-split the `mmdc` + `puppeteer` install group (wave 4)
+
+**Wave note (2026-09-05, plan-review convergence):** 05-02 was originally wave 1 alongside 05-01. The two share no `files_modified`, but CLAUDE.md requires the repo-wide `make validate && make test` on the exact tree before every commit, and both plans spend most of their execution in a TDD red phase — so run in parallel in one tree, each plan's mandatory gate would intermittently fail on the other's in-flight failing tests with no clean attribution. 05-02 now depends on 05-01, and 05-03/05-04 shift to waves 3 and 4 accordingly. The phase runs fully sequentially.
 
 ### Phase 6: SDKMAN Hardening & Registry-Authoring Guidelines
 
