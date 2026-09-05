@@ -34,6 +34,7 @@ from installer.guards import (
     redirect_shim_script,
     remove_ban_aliases,
     remove_shims,
+    shell_path,
     shim_script,
     write_ban_aliases,
 )
@@ -910,6 +911,34 @@ def test_exec_targets_reads_the_baked_paths(tmp_path: Path):
     )
     assert exec_targets(body) == ("/v/volta", "/r/bin/pnpm")
     assert exec_targets(shim_script("npm")) == ()
+
+
+def test_guard_redirect_warning_reports_unresolvable_pnpm_when_the_dir_is_empty(tmp_path: Path):
+    # No pnpm anywhere and nothing occupying the shim dir: the remedy really is
+    # "install pnpm and re-apply" (contrast the foreign-binary case above).
+    shim_dir, volta, _pnpm = _plant_volta_pnpm(tmp_path)
+    install_global_redirect_shims(
+        shim_dir,
+        path_value=f"{shim_dir}{os.pathsep}{volta.parent}",
+        lookup=_volta_pnpm_lookup(volta, None),
+    )
+    warning = guard_redirect_warning(shim_dir)
+    assert warning is not None
+    assert "'pnpm' is not redirected" in warning
+    assert "not resolvable" in warning
+    assert "non-managed" not in warning
+
+
+def test_exec_targets_skips_an_unparseable_exec_line():
+    assert exec_targets('exec \'/unbalanced "$@"\n') == ()
+
+
+def test_shell_path_accepts_explicit_arguments():
+    shim_dir = Path("/home/u/.local/bin")
+    path_value = os.pathsep.join([str(shim_dir), "/usr/bin"])
+    assert shell_path(shim_dir=shim_dir, path_value=path_value) == os.pathsep.join(
+        ["/usr/bin", str(shim_dir)]
+    )
 
 
 def test_guard_redirect_warning_none_when_all_global_redirects_live(tmp_path: Path):
