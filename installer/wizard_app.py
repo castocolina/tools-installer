@@ -82,6 +82,11 @@ class PolicyInputs:
 
 
 _NOTHING_TO_REINSTALL = "Nothing to reinstall — pnpm manages no globals here."
+# Distinct from _NOTHING_TO_REINSTALL on purpose: an unanswered `pnpm list -g`
+# is not an empty global set, and the machine whose pnpm has just replaced
+# itself is exactly the one that must not be told there is nothing to restore.
+_GLOBALS_UNKNOWN = "pnpm's global set could not be read — install or repair pnpm, then retry."
+_GLOBALS_UNKNOWN_COUNT = "pnpm's global set could not be read (pnpm missing, or the query failed)."
 
 
 class GlobalsReinstalled(Message):
@@ -220,11 +225,17 @@ class DoctorScreen(AppScreen):
         text.append("\n\npnpm-managed globals\n", style="bold")
         # Both counts come from pnpm's own global list, never from the catalog:
         # a registry entry declares that a tool CAN install this way, which is
-        # not evidence that it did.
-        text.append(
-            f"{len(report.managed)} package(s) in pnpm's global set, "
-            f"{len(report.entries)} of them catalog tool(s).\n"
-        )
+        # not evidence that it did. A count is only printable when the list was
+        # actually read: report.known False means every field is empty because
+        # nothing was learned, and "0 package(s)" would state that unknown as a
+        # fact.
+        if report.known:
+            text.append(
+                f"{len(report.managed)} package(s) in pnpm's global set, "
+                f"{len(report.entries)} of them catalog tool(s).\n"
+            )
+        else:
+            text.append(f"{_GLOBALS_UNKNOWN_COUNT}\n", style="yellow")
         # Print the core's preview string verbatim. Do not call reinstall_argv
         # here: a non-empty set with no resolvable pnpm is a returned string,
         # never an argv and never an exception (architecture rule 3).
@@ -281,10 +292,13 @@ class DoctorScreen(AppScreen):
         # line, so a repeat press is answered by what is on screen.
         if self.globals_done or self.globals_running:
             return
-        if not self._node_globals().managed:
+        report = self._node_globals()
+        if not report.known or not report.managed:
             # The footer advertises `r` (ui_common.VIEWS), so a keypress that
-            # changes nothing on screen reads as a broken binding.
-            self.globals_note = _NOTHING_TO_REINSTALL
+            # changes nothing on screen reads as a broken binding. The two
+            # answers are not interchangeable: one is a fact about the machine,
+            # the other is an admission that the machine was not readable.
+            self.globals_note = _NOTHING_TO_REINSTALL if report.known else _GLOBALS_UNKNOWN
             self._refresh_body()
             return
         self.globals_note = None

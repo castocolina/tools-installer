@@ -9,7 +9,7 @@ from textual.widgets import DataTable, Static
 from installer.app import UninstallDecision
 from installer.doctor import DoctorReport
 from installer.model import Method, Tool
-from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
+from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport, reinstall_preview
 from installer.policy import Policy, PolicyLayer, PolicyResult
 from installer.run import CommandError
 from installer.ui_common import BASE_VIEW
@@ -1481,6 +1481,52 @@ async def test_doctor_r_empty_set_says_so_instead_of_swallowing_the_key() -> Non
         # A no-op is not a failure.
         assert screen.globals_error is None
         assert "Reinstall failed" not in body
+
+
+async def test_doctor_reports_an_unreadable_global_set_as_unknown_not_as_zero() -> None:
+    # `pnpm list -g --json` went unanswered: every field is empty because
+    # nothing was learned. Rendering "0 package(s)" states that unknown as a
+    # fact, on the machine whose pnpm has just replaced itself.
+    calls: list[str] = []
+    unknown = NodeGlobalsReport(entries=(), missing=(), managed=(), known=False)
+    app = _app(
+        node_globals=lambda: unknown,
+        globals_preview=lambda: reinstall_preview((), known=False),
+        reinstall_globals=lambda: calls.append("r") or (),
+        initial_view="doctor",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, DoctorScreen)
+        screen = app.screen
+        body = str(screen.query_one("#doctor-body", Static).render())
+        assert "0 package(s)" not in body
+        assert "could not be read" in body
+        assert "nothing pnpm-managed to reinstall" not in body
+        await pilot.press("r")
+        await _settle(app, pilot)
+        assert calls == []
+        body = str(screen.query_one("#doctor-body", Static).render())
+        assert "pnpm manages no globals here" not in body
+        assert "could not be read" in body
+        assert screen.globals_error is None
+
+
+async def test_doctor_still_reports_a_genuinely_empty_global_set_as_zero() -> None:
+    empty = NodeGlobalsReport(entries=(), missing=(), managed=())
+    app = _app(
+        node_globals=lambda: empty,
+        globals_preview=lambda: reinstall_preview(()),
+        initial_view="doctor",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, DoctorScreen)
+        screen = app.screen
+        await pilot.press("r")
+        await _settle(app, pilot)
+        body = str(screen.query_one("#doctor-body", Static).render())
+        assert "0 package(s) in pnpm's global set" in body
+        assert "pnpm manages no globals here" in body
+        assert "could not be read" not in body
 
 
 async def test_doctor_enter_then_r_both_run() -> None:

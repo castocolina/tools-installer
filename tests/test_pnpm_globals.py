@@ -194,7 +194,31 @@ def test_audit_healthy_when_command_resolves() -> None:
 
 def test_audit_claims_nothing_when_pnpm_cannot_be_asked() -> None:
     report = audit_node_globals([_mmdc()], which=lambda _n: None, managed=lambda: None)
-    assert report == NodeGlobalsReport(entries=(), missing=(), managed=())
+    assert report == NodeGlobalsReport(entries=(), missing=(), managed=(), known=False)
+
+
+def test_audit_distinguishes_unknown_from_a_genuinely_empty_global_set() -> None:
+    # The two used to be byte-identical, so no consumer could tell "pnpm manages
+    # nothing" from "pnpm could not be asked" — and the Doctor stated the second
+    # as the first.
+    unknown = audit_node_globals([_mmdc()], which=lambda _n: None, managed=lambda: None)
+    empty = audit_node_globals([_mmdc()], which=lambda _n: None, managed=_managed())
+    assert unknown.known is False
+    assert empty.known is True
+    assert unknown != empty
+    assert (unknown.entries, unknown.missing, unknown.managed) == (
+        empty.entries,
+        empty.missing,
+        empty.managed,
+    )
+
+
+def test_preview_of_an_unknown_set_does_not_borrow_the_empty_sets_wording() -> None:
+    empty = reinstall_preview((), known=True, resolve_pnpm=lambda: "/real/bin/pnpm")
+    unknown = reinstall_preview((), known=False, resolve_pnpm=lambda: "/real/bin/pnpm")
+    assert empty == "nothing pnpm-managed to reinstall"
+    assert unknown != empty
+    assert "could not be read" in unknown
 
 
 def test_audit_keeps_non_catalog_globals_in_the_managed_set() -> None:

@@ -42,7 +42,8 @@ from installer.model import Tool
 from installer.run import CommandError, OutputRunner, Runner, run_captured, run_output
 
 _EMPTY_PREVIEW = "nothing pnpm-managed to reinstall"
-_UNRESOLVABLE_PREVIEW = "pnpm not found on PATH - cannot preview the reinstall."
+_UNRESOLVABLE_PREVIEW = "pnpm not found on PATH — cannot preview the reinstall."
+_UNKNOWN_PREVIEW = "pnpm's global set could not be read — cannot preview the reinstall."
 _DEPENDENCY_GROUPS = ("dependencies", "devDependencies", "optionalDependencies")
 
 
@@ -72,11 +73,20 @@ class NodeGlobalsReport:
     `entries` is the part of it the catalog recognises — the only part whose
     command name is known and therefore checkable. `missing` names the entries
     whose command no longer resolves on PATH.
+
+    `known` is the third state the other three fields cannot express: False
+    means pnpm could not be asked, so every other field is empty because
+    nothing was learned, NOT because pnpm manages nothing. Without it an
+    unanswered query is byte-identical to an empty global set, and a consumer
+    that renders counts states an unknown as a fact — "0 package(s) in pnpm's
+    global set" on the machine whose pnpm has just replaced itself, which is
+    the exact machine this module exists for.
     """
 
     entries: tuple[NodeGlobal, ...]
     missing: tuple[str, ...]
     managed: tuple[str, ...]
+    known: bool = True
 
 
 def node_globals(tools: Iterable[Tool]) -> tuple[NodeGlobal, ...]:
@@ -152,7 +162,10 @@ def audit_node_globals(
     """Report pnpm's live global set, and the catalog commands in it that are broken."""
     packages = managed()
     if packages is None:
-        return NodeGlobalsReport(entries=(), missing=(), managed=())
+        # Carry the unknown through rather than collapsing it into an empty
+        # report: the empty report is a CLAIM about the user's machine, and
+        # this branch is precisely the case where nothing is known.
+        return NodeGlobalsReport(entries=(), missing=(), managed=(), known=False)
     entries = tuple(entry for entry in node_globals(tools) if entry.npm_pkg in packages)
     missing = tuple(entry.tool_id for entry in entries if which(entry.cmd) is None)
     return NodeGlobalsReport(entries=entries, missing=missing, managed=packages)
@@ -200,8 +213,17 @@ def reinstall_node_globals(
 def reinstall_preview(
     packages: Sequence[str],
     *,
+    known: bool = True,
     resolve_pnpm: Callable[[], str | None] = real_pnpm,
 ) -> str:
+    """The command line a reinstall would run, or why there is none to show.
+
+    `known` is NodeGlobalsReport.known: an unknown global set has no preview and
+    must not borrow the empty set's, which tells the user there is nothing to
+    reinstall on the one machine where that is the open question.
+    """
+    if not known:
+        return _UNKNOWN_PREVIEW
     if not packages:
         return _EMPTY_PREVIEW
     resolved = resolve_pnpm()

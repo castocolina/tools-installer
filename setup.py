@@ -260,7 +260,10 @@ def _build_app(
         return cached_globals
 
     def _globals_preview() -> str:
-        return pnpm_globals.reinstall_preview(_node_globals_report().managed)
+        report = _node_globals_report()
+        # `known` travels with the set: an unreadable global set has no preview,
+        # and must not borrow the empty set's "nothing to reinstall".
+        return pnpm_globals.reinstall_preview(report.managed, known=report.known)
 
     def _reinstall_globals() -> tuple[str, ...]:
         nonlocal cached_globals
