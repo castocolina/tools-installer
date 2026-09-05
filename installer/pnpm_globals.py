@@ -39,7 +39,7 @@ from typing import cast
 
 from installer.guards import real_pnpm
 from installer.model import Tool
-from installer.run import CommandError, OutputRunner, Runner, run_command, run_output
+from installer.run import CommandError, OutputRunner, Runner, run_captured, run_output
 
 _EMPTY_PREVIEW = "nothing pnpm-managed to reinstall"
 _UNRESOLVABLE_PREVIEW = "pnpm not found on PATH - cannot preview the reinstall."
@@ -177,9 +177,16 @@ def reinstall_argv(packages: Sequence[str], *, pnpm: str) -> list[str]:
 def reinstall_node_globals(
     packages: Sequence[str],
     *,
-    runner: Runner = run_command,
+    runner: Runner = run_captured,
     resolve_pnpm: Callable[[], str | None] = real_pnpm,
 ) -> tuple[str, ...]:
+    """Replay pnpm's global set in one invocation.
+
+    The runner captures by default because the only caller is the Doctor
+    screen's `r` action, which runs while Textual owns the terminal: an
+    inherited-stdio child writes `pnpm add -g`'s progress bars straight into
+    the rendered frame.
+    """
     if not packages:
         return ()
     resolved = resolve_pnpm()

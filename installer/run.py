@@ -45,3 +45,13 @@ def run_output(cmd: list[str]) -> str:
     except OSError as exc:
         raise CommandError(cmd, 127) from exc
     return completed.stdout
+
+
+def run_captured(cmd: list[str]) -> None:
+    """Runner that keeps the child's stdio out of the caller's terminal.
+
+    For side effects started while Textual owns the terminal: a child that
+    inherits stdout/stderr writes its progress bars and postinstall output
+    straight into the rendered frame.
+    """
+    run_output(cmd)

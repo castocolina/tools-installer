@@ -1,7 +1,9 @@
+import threading
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
+from textual.pilot import Pilot
 from textual.widgets import DataTable, Static
 
 from installer.app import UninstallDecision
@@ -154,6 +156,16 @@ def _app(
         reinstall_globals=reinstall_globals,
         initial_view=initial_view,
     )
+
+
+async def _settle(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> None:
+    """Wait for the Doctor reinstall worker, which runs off the event loop."""
+    for _ in range(200):
+        screen = app.screen
+        if not isinstance(screen, DoctorScreen) or not screen.globals_running:
+            break
+        await pilot.pause()
+    await pilot.pause()
 
 
 def _mmdc_report(*, missing: tuple[str, ...] = ("mmdc",)) -> NodeGlobalsReport:
@@ -1339,6 +1351,7 @@ async def test_doctor_r_reinstalls_once_and_reports_success() -> None:
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("r")
+        await _settle(app, pilot)
         assert calls == ["r"]
         assert isinstance(app.screen, DoctorScreen)
         screen = app.screen
@@ -1347,7 +1360,66 @@ async def test_doctor_r_reinstalls_once_and_reports_success() -> None:
         body = str(screen.query_one("#doctor-body", Static).render())
         assert "pnpm globals reinstalled" in body
         await pilot.press("r")
+        await _settle(app, pilot)
         assert calls == ["r"]
+
+
+async def test_doctor_r_runs_the_reinstall_off_the_event_loop() -> None:
+    # The only subprocess a view starts. Run synchronously it froze every frame
+    # for the length of a `pnpm add -g` (minutes for a Puppeteer-carrying
+    # package), with no spinner and no way to cancel.
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow() -> tuple[str, ...]:
+        started.set()
+        assert release.wait(timeout=5)
+        return ("@mermaid-js/mermaid-cli",)
+
+    app = _app(
+        node_globals=lambda: _mmdc_report(missing=()),
+        reinstall_globals=slow,
+        initial_view="doctor",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("r")
+        assert started.wait(timeout=5)
+        assert isinstance(app.screen, DoctorScreen)
+        screen = app.screen
+        assert screen.globals_running is True
+        # The loop is still painting while the child runs.
+        assert "Reinstalling" in str(screen.query_one("#doctor-body", Static).render())
+        # A second press must not stack a concurrent install.
+        await pilot.press("r")
+        release.set()
+        await _settle(app, pilot)
+        assert screen.globals_running is False
+        assert screen.globals_done is True
+
+
+async def test_doctor_r_clears_the_stale_missing_globals_warning() -> None:
+    # The globals audit is a live probe whose answer the action just changed,
+    # so the screen must not render "went missing" above "reinstalled".
+    missing = ["mmdc"]
+
+    def read() -> NodeGlobalsReport:
+        return _mmdc_report(missing=tuple(missing))
+
+    def reinstall() -> tuple[str, ...]:
+        missing.clear()
+        return ("@mermaid-js/mermaid-cli",)
+
+    app = _app(node_globals=read, reinstall_globals=reinstall, initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, DoctorScreen)
+        screen = app.screen
+        assert any("pnpm-managed global set" in item.title for item in screen.guidance)
+        await pilot.press("r")
+        await _settle(app, pilot)
+        assert all("pnpm-managed global set" not in item.title for item in screen.guidance)
+        body = str(screen.query_one("#doctor-body", Static).render())
+        assert "pnpm globals reinstalled" in body
+        assert "went missing" not in body
 
 
 async def test_doctor_r_commanderror_leaves_screen_usable() -> None:
@@ -1361,6 +1433,7 @@ async def test_doctor_r_commanderror_leaves_screen_usable() -> None:
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("r")
+        await _settle(app, pilot)
         assert isinstance(app.screen, DoctorScreen)
         screen = app.screen
         assert screen.globals_done is False
@@ -1380,6 +1453,7 @@ async def test_doctor_r_empty_set_is_noop() -> None:
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("r")
+        await _settle(app, pilot)
         assert calls == []
         assert isinstance(app.screen, DoctorScreen)
         body = str(app.screen.query_one("#doctor-body", Static).render())
@@ -1398,6 +1472,7 @@ async def test_doctor_enter_then_r_both_run() -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("enter")
         await pilot.press("r")
+        await _settle(app, pilot)
         assert fix_calls == ["fix"]
         assert reinstall_calls == ["r"]
         assert isinstance(app.screen, DoctorScreen)
@@ -1420,6 +1495,7 @@ async def test_doctor_r_then_enter_both_run() -> None:
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("r")
+        await _settle(app, pilot)
         await pilot.press("enter")
         assert reinstall_calls == ["r"]
         assert fix_calls == ["fix"]

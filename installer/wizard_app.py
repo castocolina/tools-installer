@@ -18,8 +18,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
+from textual.message import Message
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
@@ -77,6 +79,18 @@ class PolicyInputs:
     apply/remove closures. The composition root builds these from the pure core."""
 
     policies: list[Policy]
+
+
+class GlobalsReinstalled(Message):
+    """The threaded pnpm-globals reinstall finished; `error` is None on success.
+
+    post_message is Textual's thread-safe hand-off back to the event loop, so
+    the worker never touches a widget from its own thread.
+    """
+
+    def __init__(self, error: str | None) -> None:
+        self.error = error
+        super().__init__()
 
 
 class _BodyStatic(Static):
@@ -144,6 +158,12 @@ class DoctorScreen(AppScreen):
         # silently suppress the other and each section render the other's outcome.
         self.globals_done = False
         self.globals_error: str | None = None
+        # The reinstall is the only subprocess a view starts, and `pnpm add -g`
+        # of a Puppeteer-carrying package is minutes, not seconds. It runs in a
+        # thread worker so the event loop keeps painting; this flag is what the
+        # body renders while it does, and what stops a second `r` stacking a
+        # concurrent install.
+        self.globals_running = False
 
     def compose_body(self) -> ComposeResult:
         yield _BodyStatic(id="doctor-body")
@@ -204,7 +224,10 @@ class DoctorScreen(AppScreen):
         # never an argv and never an exception (architecture rule 3).
         text.append(self._globals_preview())
         text.append("\n")
-        if self.globals_done:
+        if self.globals_running:
+            text.append("Reinstalling the pnpm global set...", style="yellow")
+            text.append("\nOutput is captured; this can take several minutes.")
+        elif self.globals_done:
             text.append("pnpm globals reinstalled.", style="green")
         elif self.globals_error is not None:
             text.append("Reinstall failed.", style="red")
@@ -246,12 +269,36 @@ class DoctorScreen(AppScreen):
         self._refresh_body()
 
     def action_reinstall_globals(self) -> None:
-        if self.globals_done:
+        # globals_done needs no message: the body already renders the success
+        # line, so a repeat press is answered by what is on screen.
+        if self.globals_done or self.globals_running:
             return
-        if not self._node_globals().entries:
+        if not self._node_globals().managed:
             return
-        _, self.globals_error = run_live(self._reinstall_globals)
-        self.globals_done = self.globals_error is None
+        self.globals_running = True
+        self._refresh_body()
+        self._reinstall_globals_worker()
+
+    @work(thread=True, exclusive=True)
+    def _reinstall_globals_worker(self) -> None:
+        """Run the reinstall off the event loop, then hand the outcome back to it.
+
+        A synchronous subprocess here would freeze every frame for the length of
+        a `pnpm add -g`. Widgets may only be touched from the app's own thread,
+        hence a posted message rather than a direct refresh.
+        """
+        _, error = run_live(self._reinstall_globals)
+        self.post_message(GlobalsReinstalled(error))
+
+    def on_globals_reinstalled(self, message: GlobalsReinstalled) -> None:
+        self.globals_running = False
+        self.globals_error = message.error
+        self.globals_done = message.error is None
+        # The globals audit is a live `shutil.which` probe whose answer this
+        # action just tried to change — unlike the PATH audit, which is a
+        # deliberate snapshot. Without this the screen renders "mmdc went
+        # missing" directly above "pnpm globals reinstalled."
+        self._refresh_guidance()
         self._refresh_body()
 
 
