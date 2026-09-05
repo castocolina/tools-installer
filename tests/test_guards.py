@@ -11,8 +11,11 @@ from installer.guards import (
     REDIRECTED,
     SHIM_SENTINEL,
     ban_alias_block,
+    guard_label,
     guard_path_warning,
+    guard_redirect_warning,
     guard_status,
+    guarded_names,
     install_redirect_shims,
     install_shims,
     is_our_shim,
@@ -92,10 +95,37 @@ def test_remove_shims_removes_only_ours(tmp_path: Path):
     assert not (tmp_path / "pip").exists()
 
 
+def test_remove_shims_removes_npx_after_ban_and_redirect_install(tmp_path: Path):
+    real_dir = tmp_path / "real"
+    shim_dir = tmp_path / "shims"
+    real_dir.mkdir()
+    pnpm = real_dir / "pnpm"
+    pnpm.write_text("#!/bin/sh\n")
+    pnpm.chmod(0o755)
+
+    def lookup(name: str, _path: str) -> str | None:
+        return str(pnpm) if name == "pnpm" else None
+
+    install_shims(shim_dir)
+    install_redirect_shims(
+        shim_dir,
+        path_value=f"{shim_dir}{os.pathsep}{real_dir}",
+        lookup=lookup,
+    )
+    actions = remove_shims(shim_dir)
+    assert actions["npx"] == "removed"
+    assert actions["npm"] == "removed"
+    assert actions["pip"] == "removed"
+    assert actions["pip3"] == "removed"
+    assert not (shim_dir / "npx").exists()
+
+
 def test_guard_status_reports_installed_ours(tmp_path: Path):
     install_shims(tmp_path)
     (tmp_path / "pip").unlink()
     status = guard_status(tmp_path)
+    assert set(status) == set(guarded_names())
+    assert all(isinstance(value, bool) for value in status.values())
     assert status["npm"] is True
     assert status["pip"] is False
 
@@ -106,6 +136,11 @@ def test_ban_alias_block_aliases_each_banned_command():
     assert block.rstrip().endswith(BAN_END)
     for name in BANNED:
         assert f"alias {name}=" in block
+    assert "alias npx='pnpm dlx'" in block
+    assert "alias pip=" in block
+    npx_lines = [line for line in block.splitlines() if line.startswith("alias npx=")]
+    assert npx_lines == ["alias npx='pnpm dlx'"]
+    assert "banned" in block
 
 
 def test_write_ban_aliases_is_idempotent(tmp_path: Path):
@@ -274,6 +309,61 @@ def test_install_redirect_shims_creates_then_refreshes(tmp_path: Path):
     assert REDIRECT_SENTINEL in shim.read_text()
     second = install_redirect_shims(shim_dir, path_value=path_value, lookup=lookup)
     assert second == {"npx": "refreshed"}
+
+
+def test_shim_script_npx_is_valid_and_exits_127(tmp_path: Path):
+    shim = tmp_path / "npx"
+    shim.write_text(shim_script("npx"))
+    shim.chmod(0o755)
+    syntax = subprocess.run(["sh", "-n", str(shim)], capture_output=True, text=True, check=False)
+    assert syntax.returncode == 0, syntax.stderr
+    result = subprocess.run([str(shim)], capture_output=True, text=True, check=False)
+    assert result.returncode == 127
+    assert "pnpm" in result.stderr
+
+
+def test_guarded_names_is_stable_and_deduplicated():
+    assert guarded_names() == ("npm", "pip", "pip3", "npx")
+    assert len(guarded_names()) == 4
+
+
+def test_guard_label_distinguishes_redirect_from_block():
+    assert guard_label("npx") == "redirected to pnpm dlx"
+    assert guard_label("pip") == "blocked"
+    assert guard_label("npm") == "blocked"
+
+
+def test_guard_path_warning_when_real_npx_resolves_first(tmp_path: Path):
+    path_value = f"/usr/bin:{tmp_path}"
+    warning = guard_path_warning(
+        tmp_path,
+        path_value=path_value,
+        which=lambda name: "/usr/bin/npx" if name == "npx" else None,
+    )
+    assert warning is not None
+    assert "/usr/bin/npx" in warning
+
+
+def test_guard_redirect_warning_none_when_redirect_live(tmp_path: Path):
+    (tmp_path / "npx").write_text(redirect_shim_script("npx", "/x/pnpm"))
+    assert guard_redirect_warning(tmp_path) is None
+
+
+def test_guard_redirect_warning_when_hard_block_fallback(tmp_path: Path):
+    (tmp_path / "npx").write_text(shim_script("npx"))
+    warning = guard_redirect_warning(tmp_path)
+    assert warning is not None
+    assert "npx" in warning
+    assert "pnpm" in warning
+
+
+def test_install_redirect_shims_falls_back_to_hard_block_when_pnpm_missing(tmp_path: Path):
+    shim_dir = tmp_path / "shims"
+    results = install_redirect_shims(shim_dir, path_value=str(shim_dir), lookup=lambda _n, _p: None)
+    assert results == {"npx": "blocked (pnpm not found)"}
+    text = (shim_dir / "npx").read_text()
+    assert SHIM_SENTINEL in text
+    assert REDIRECT_SENTINEL not in text
 
 
 def test_npx_redirect_shim_execs_into_pnpm_dlx_with_real_exit_code(tmp_path: Path):
