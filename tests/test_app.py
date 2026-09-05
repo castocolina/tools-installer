@@ -355,6 +355,8 @@ def test_run_uninstall_removes_when_confirmed(tmp_path: Path, monkeypatch: pytes
         myshellrc_path=myshellrc,
         rc_paths=[],
         confirm=lambda _m: True,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
     )
     assert set(removed) == {opt, bin_dir / "fd"}
     assert not opt.exists()
@@ -388,6 +390,8 @@ def test_run_uninstall_aborts_when_declined(tmp_path: Path, monkeypatch: pytest.
         myshellrc_path=tmp_path / ".myshellrc",
         rc_paths=[],
         confirm=lambda _m: False,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
     )
     assert removed == []
     assert opt.exists()  # nothing removed
@@ -555,6 +559,8 @@ def test_run_uninstall_nothing_to_remove_skips_confirm(
         myshellrc_path=tmp_path / ".myshellrc",
         rc_paths=[],
         confirm=fail_confirm,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
     )
     assert removed == []
 
@@ -851,6 +857,8 @@ def test_run_uninstall_also_removes_guard_artifacts(tmp_path: Path):
         myshellrc_path=myshellrc,
         rc_paths=[rc],
         confirm=lambda _m: True,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
     )
     assert not (shim_dir / "pip").exists()
     assert "tools-installer ban" not in myshellrc.read_text()
@@ -875,7 +883,14 @@ def test_perform_uninstall_removes_only_chosen_levers(tmp_path: Path) -> None:
 
     # Only the artifact is selected; ban + path-block left intact.
     decision = UninstallDecision(paths=(artifact,), remove_ban=False, remove_path_block=False)
-    perform_uninstall(decision, bin_dir=bin_dir, myshellrc_path=myshellrc, rc_paths=[])
+    perform_uninstall(
+        decision,
+        bin_dir=bin_dir,
+        myshellrc_path=myshellrc,
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+    )
 
     assert not artifact.exists()
     assert "tools-installer path" in myshellrc.read_text()  # block preserved
@@ -891,7 +906,14 @@ def test_perform_uninstall_removes_path_block_when_chosen(tmp_path: Path) -> Non
     write_myshellrc([bin_dir], myshellrc)
 
     decision = UninstallDecision(paths=(), remove_ban=True, remove_path_block=True)
-    perform_uninstall(decision, bin_dir=bin_dir, myshellrc_path=myshellrc, rc_paths=[myshellrc])
+    perform_uninstall(
+        decision,
+        bin_dir=bin_dir,
+        myshellrc_path=myshellrc,
+        rc_paths=[myshellrc],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+    )
 
     assert "tools-installer path" not in myshellrc.read_text()  # block stripped
 
@@ -957,7 +979,14 @@ def test_perform_uninstall_ban_lever_removes_shims_and_aliases(tmp_path: Path) -
     assert any(guard_status(bin_dir).values())  # precondition: ban is active
 
     decision = UninstallDecision(paths=(), remove_ban=True, remove_path_block=False)
-    perform_uninstall(decision, bin_dir=bin_dir, myshellrc_path=myshellrc, rc_paths=[rc])
+    perform_uninstall(
+        decision,
+        bin_dir=bin_dir,
+        myshellrc_path=myshellrc,
+        rc_paths=[rc],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+    )
 
     assert all(active is False for active in guard_status(bin_dir).values())  # shims gone
     assert "alias" not in myshellrc.read_text()  # alias block stripped from myshellrc
@@ -993,6 +1022,7 @@ def test_run_uninstall_previews_and_sweeps_active_tweaks(
         rc_paths=[],
         confirm=lambda _m: True,
         bundles=BUNDLES,
+        zshrc_path=tmp_path / ".zshrc",
     )
     out = buf.getvalue()
     assert "countdown" in out
@@ -1020,6 +1050,7 @@ def test_run_uninstall_reports_nothing_to_uninstall_only_when_truly_empty(
         rc_paths=[],
         confirm=lambda _m: True,
         bundles=BUNDLES,
+        zshrc_path=tmp_path / ".zshrc",
     )
     assert "Nothing to uninstall" in buf.getvalue()
 
@@ -1033,6 +1064,7 @@ def test_run_uninstall_reports_nothing_to_uninstall_only_when_truly_empty(
         rc_paths=[],
         confirm=lambda _m: False,
         bundles=BUNDLES,
+        zshrc_path=tmp_path / ".zshrc",
     )
     assert "Nothing to uninstall" not in buf.getvalue()
     assert "countdown" in buf.getvalue()
@@ -1055,6 +1087,7 @@ def test_run_uninstall_declined_removes_nothing(
         rc_paths=[],
         confirm=lambda _m: False,
         bundles=BUNDLES,
+        zshrc_path=tmp_path / ".zshrc",
     )
     assert helper.exists()
     assert "wait_time()" in rc_path.read_text()
@@ -1075,6 +1108,8 @@ def test_run_uninstall_without_bundles_sweeps_nothing(
         myshellrc_path=rc_path,
         rc_paths=[],
         confirm=lambda _m: True,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
     )
     assert helper.exists()
     assert "wait_time()" in rc_path.read_text()
@@ -1159,6 +1194,7 @@ def test_run_uninstall_reports_what_the_sweep_did_not_what_it_previewed(
         rc_paths=[],
         confirm=lambda _m: True,
         bundles=BUNDLES,
+        zshrc_path=tmp_path / ".zshrc",
     )
     assert "Shell tweaks disabled: tweak:countdown." in buf.getvalue()
 
@@ -1185,6 +1221,7 @@ def test_run_uninstall_names_the_tweaks_it_could_not_disable(
         rc_paths=[],
         confirm=lambda _m: True,
         bundles=BUNDLES,
+        zshrc_path=tmp_path / ".zshrc",
     )
     out = buf.getvalue()
     assert "Could not disable: tweak:countdown." in out

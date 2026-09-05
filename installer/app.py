@@ -303,14 +303,20 @@ def run_uninstall(
     myshellrc_path: Path,
     rc_paths: list[Path],
     confirm: Callable[[str], bool],
-    bundles: tuple[TweakBundle, ...] = (),
-    zshrc_path: Path | None = None,
+    bundles: tuple[TweakBundle, ...],
+    zshrc_path: Path,
 ) -> list[Path]:
     """Preview userspace artifacts, confirm, then remove them, the PATH block,
     any pip/npm-ban artifacts (shims + alias blocks), and still-enabled shell
     tweaks.
 
     Returns the removed download/app paths ([] if nothing to remove or declined).
+
+    `bundles` and `zshrc_path` are required, unlike on the uninstall primitives
+    they forward to. There the defaults are a test affordance; here a dropped
+    kwarg would type-check, pass the suite, and silently sweep nothing while
+    reporting success — a user-visible data-integrity regression that nothing
+    else can catch.
     """
     paths = plan_uninstall(tools, default_bin_dir)
     shimmed = [name for name, installed in guard_status(default_bin_dir).items() if installed]
@@ -331,10 +337,9 @@ def run_uninstall(
         # Name the plugins and the file: .zshrc is the one file in the sweep the
         # installer does not own, so "omz-plugins" alone is not enough for the
         # user to consent to what happens to it.
-        if zshrc_path is not None:
-            detail = omz_removal_detail(zshrc_path=zshrc_path, state_path=myshellrc_path)
-            if detail is not None:
-                console.print(f"  omz-plugins {detail}.")
+        detail = omz_removal_detail(zshrc_path=zshrc_path, state_path=myshellrc_path)
+        if detail is not None:
+            console.print(f"  omz-plugins {detail}.")
     if not confirm("Remove these artifacts?"):
         return []
     remove_paths(paths)
@@ -375,8 +380,8 @@ def perform_uninstall(
     bin_dir: Path,
     myshellrc_path: Path,
     rc_paths: list[Path],
-    bundles: tuple[TweakBundle, ...] = (),
-    zshrc_path: Path | None = None,
+    bundles: tuple[TweakBundle, ...],
+    zshrc_path: Path,
 ) -> SweepResult:
     """Apply exactly the levers the view chose, composing the existing core
     removers. Unlike `run_uninstall`, nothing is removed all-or-nothing: a
@@ -384,7 +389,11 @@ def perform_uninstall(
 
     Returns what the tweak sweep actually did, so the view reports its effect
     rather than the snapshot it rendered its rows from. Empty when the sweep
-    lever was not selected."""
+    lever was not selected.
+
+    `bundles` and `zshrc_path` are required for the same reason they are on
+    `run_uninstall`: this is a composition-root entry point, and a dropped
+    kwarg here silently narrows a teardown instead of narrowing a test."""
     remove_paths(list(decision.paths))
     if decision.remove_ban:
         remove_shims(bin_dir)

@@ -51,7 +51,12 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
 
     def _remove(decision: UninstallDecision) -> SweepResult:
         return perform_uninstall(
-            decision, bin_dir=bin_dir, myshellrc_path=myshellrc, rc_paths=[myshellrc]
+            decision,
+            bin_dir=bin_dir,
+            myshellrc_path=myshellrc,
+            rc_paths=[myshellrc],
+            bundles=(),
+            zshrc_path=home / ".zshrc",
         )
 
     inputs = UninstallInputs(

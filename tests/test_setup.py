@@ -99,6 +99,24 @@ def test_run_uninstall_is_wired_with_bundles_and_zshrc() -> None:
     assert "zshrc_path=_ZSHRC" in body
 
 
+def test_perform_uninstall_is_wired_with_bundles_and_zshrc() -> None:
+    """Assert wiring by reading setup.py source.
+
+    `bundles` and `zshrc_path` are required keyword arguments on
+    `perform_uninstall`, so `installer/` cannot drop them without pyright
+    catching it — but setup.py is deliberately outside pyright (the untyped
+    questionary boundary). This is the guard for the one call site pyright
+    does not see; dropping either kwarg here would silently sweep nothing
+    while the Uninstall view reported success.
+    """
+    src = (Path(__file__).resolve().parent.parent / "setup.py").read_text()
+    body = src[src.index("def _do_uninstall") :]
+    body = body[: body.index("uninstall_inputs =")]
+    assert "return perform_uninstall(" in body
+    assert "bundles=bundles" in body
+    assert "zshrc_path=_ZSHRC" in body
+
+
 def test_zshrc_constant_is_resolved_through_the_zdotdir_aware_helper() -> None:
     """Assert wiring by reading setup.py source.
 
