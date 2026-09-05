@@ -54,7 +54,7 @@ waiting on this Phase 12 mechanism — see Phase 4's scope note.
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 1: Catalog Tier Foundation** - Add the `tier` field to the Tool model/registry and prove the existing resolver already carries hard dependencies across tier boundaries (completed 2026-09-04)
-- [ ] **Phase 2: Tier-Scoped Catalog Views & Recommends** - Split Catalog into System/User/AI top-level views and add the `recommends` soft-dependency surfacing
+- [x] **Phase 2: Tier-Scoped Catalog Views & Recommends** - Split Catalog into System/User/AI top-level views and add the `recommends` soft-dependency surfacing (completed 2026-09-05)
 - [ ] **Phase 3: Install/Uninstall & Tweak Lifecycle Hardening** - Skip dependents after a failed prerequisite, sweep tweak-managed executables on uninstall, and enable Oh-My-Zsh's bundled plugins
 - [ ] **Phase 4: npm/npx Ban Extension & Redirect Policy** - Extend the ban to `npx` and redirect it to `pnpm dlx`, leaving `npm` hard-blocked pending its own subcommand-allowlist decision
 - [ ] **Phase 5: Registry Method Corrections (codegraph/mmdc/puppeteer)** - Move `codegraph` to `kind="github_release"`, resolve `mmdc`'s install method with real research, and give `puppeteer`/`chrome-headless-shell` their own catalog entries
@@ -100,8 +100,8 @@ Plans:
 **Plans**: 2 plans
 Plans:
 
-- [ ] 02-01-PLAN.md — Three tier-scoped catalog views (System/User/AI) over one shared staged selection, plus cross-tier `requires` visibility
-- [ ] 02-02-PLAN.md — `Tool.recommends` soft-dependency field and the one-action, non-blocking selection-time prompt
+- [x] 02-01-PLAN.md — Three tier-scoped catalog views (System/User/AI) over one shared staged selection, plus cross-tier `requires` visibility
+- [x] 02-02-PLAN.md — `Tool.recommends` soft-dependency field and the one-action, non-blocking selection-time prompt
 
 **UI hint**: yes
 
@@ -260,7 +260,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Catalog Tier Foundation | 1/1 | Complete    | 2026-09-04 |
-| 2. Tier-Scoped Catalog Views & Recommends | 0/2 | Not started | - |
+| 2. Tier-Scoped Catalog Views & Recommends | 2/2 | Complete    | 2026-09-05 |
 | 3. Install/Uninstall & Tweak Lifecycle Hardening | 0/TBD | Not started | - |
 | 4. npm/npx Ban Extension & Redirect Policy | 0/TBD | Not started | - |
 | 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 0/TBD | Not started | - |
