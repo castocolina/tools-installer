@@ -81,6 +81,9 @@ class PolicyInputs:
     policies: list[Policy]
 
 
+_NOTHING_TO_REINSTALL = "Nothing to reinstall — pnpm manages no globals here."
+
+
 class GlobalsReinstalled(Message):
     """The threaded pnpm-globals reinstall finished; `error` is None on success.
 
@@ -164,6 +167,9 @@ class DoctorScreen(AppScreen):
         # body renders while it does, and what stops a second `r` stacking a
         # concurrent install.
         self.globals_running = False
+        # Not globals_error: "nothing to reinstall" is not a failure, and the
+        # error branch renders "Reinstall failed." in red.
+        self.globals_note: str | None = None
 
     def compose_body(self) -> ComposeResult:
         yield _BodyStatic(id="doctor-body")
@@ -232,6 +238,8 @@ class DoctorScreen(AppScreen):
         elif self.globals_error is not None:
             text.append("Reinstall failed.", style="red")
             text.append(f"\n{self.globals_error}")
+        elif self.globals_note is not None:
+            text.append(self.globals_note, style="yellow")
         else:
             text.append("Press r to reinstall the pnpm-managed global set.", style="yellow")
         body.update(text)
@@ -274,7 +282,12 @@ class DoctorScreen(AppScreen):
         if self.globals_done or self.globals_running:
             return
         if not self._node_globals().managed:
+            # The footer advertises `r` (ui_common.VIEWS), so a keypress that
+            # changes nothing on screen reads as a broken binding.
+            self.globals_note = _NOTHING_TO_REINSTALL
+            self._refresh_body()
             return
+        self.globals_note = None
         self.globals_running = True
         self._refresh_body()
         self._reinstall_globals_worker()

@@ -1445,19 +1445,29 @@ async def test_doctor_r_commanderror_leaves_screen_usable() -> None:
         assert app.is_running
 
 
-async def test_doctor_r_empty_set_is_noop() -> None:
+async def test_doctor_r_empty_set_says_so_instead_of_swallowing_the_key() -> None:
+    # The footer advertises `r`, so a keypress that changes nothing on screen
+    # reads as a broken binding.
     calls: list[str] = []
     app = _app(
         reinstall_globals=lambda: calls.append("r") or (),
         initial_view="doctor",
     )
     async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, DoctorScreen)
+        screen = app.screen
+        before = str(screen.query_one("#doctor-body", Static).render())
+        assert screen.globals_note is None
         await pilot.press("r")
         await _settle(app, pilot)
         assert calls == []
-        assert isinstance(app.screen, DoctorScreen)
-        body = str(app.screen.query_one("#doctor-body", Static).render())
+        body = str(screen.query_one("#doctor-body", Static).render())
+        assert body != before
+        assert "Nothing to reinstall" in body
         assert "nothing pnpm-managed to reinstall" in body
+        # A no-op is not a failure.
+        assert screen.globals_error is None
+        assert "Reinstall failed" not in body
 
 
 async def test_doctor_enter_then_r_both_run() -> None:
