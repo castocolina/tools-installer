@@ -529,6 +529,15 @@ class PoliciesScreen(AppScreen):
                 "Keeps the command narrower than a broad apt upgrade flow.",
                 "Offered on Linux only; it is harmless until run on an apt-based distro.",
             ),
+            "omz-plugins": (
+                "Adds Oh-My-Zsh's bundled git and docker plugins to the"
+                " plugins=(...) array in ~/.zshrc.",
+                "Disabling removes both names from that array, including one that"
+                " was already there before this was enabled.",
+                "Needs Oh-My-Zsh installed; only the single-line plugins=(...) form is edited.",
+                "Reads ON only when both plugins are in the array, so removing one"
+                " by hand afterwards shows the row as OFF while the other is still loaded.",
+            ),
         }
         lines = [f"{policy.label} — {policy.description}"]
         if policy.missing_requires:

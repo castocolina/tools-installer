@@ -30,8 +30,9 @@ from installer.app import (
 from installer.cli import parse_args
 from installer.locations import all_ban_rc_paths, ban_rc_paths, rc_paths_for_mode
 from installer.model import Tool, load_categories, load_tools
+from installer.omz import omz_present
 from installer.platform import Platform, detect
-from installer.policy import ban_policy, tweak_policy
+from installer.policy import ban_policy, omz_plugins_policy, tweak_policy
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.selection import Choice
@@ -184,6 +185,10 @@ def _build_app(
                     installed_tools=installed,
                 )
                 for bundle in applicable_bundles(platform)
+            ),
+            omz_plugins_policy(
+                zshrc_path=Path.home() / ".zshrc",
+                present=omz_present(Path.home(), os.environ),
             ),
         ]
     )

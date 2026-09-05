@@ -10,7 +10,7 @@ import pytest
 from installer.doctor import DoctorReport
 from installer.guards import guard_status
 from installer.model import Method, Tool
-from installer.policy import ban_policy, tweak_policy
+from installer.policy import ban_policy, omz_plugins_policy, tweak_policy
 from installer.tweaks import BUNDLES, TweakBundle
 from installer.wizard_app import (
     PoliciesScreen,
@@ -150,3 +150,52 @@ def test_real_home_rc_files_are_untouched(tmp_path: Path, monkeypatch: pytest.Mo
     assert bin_dir.is_relative_to(tmp_path)
     assert rc.is_relative_to(tmp_path)
     assert bin_dir.exists()  # the one on-disk write so far landed in the sandbox
+
+
+_ZSHRC_OMZ = (
+    'export ZSH="$HOME/.oh-my-zsh"\n'
+    'ZSH_THEME="robbyrussell"\n'
+    "plugins=(z sudo)\n"
+    "source $ZSH/oh-my-zsh.sh\n"
+)
+
+
+async def test_policies_screen_toggles_omz_plugins_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text(_ZSHRC_OMZ)
+    (tmp_path / ".oh-my-zsh").mkdir()
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    policy = omz_plugins_policy(zshrc_path=zshrc, present=True)
+    app = UnifiedApp(
+        [_tool()],
+        {"rg": True},
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_status=guard_status(bin_dir),
+        guard_warning=None,
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=UninstallInputs(
+            rows=[], ban_names=[], has_path_block=False, remove=lambda _d: None
+        ),
+        policies=PolicyInputs(policies=[policy]),
+        initial_view="policies",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, PoliciesScreen)
+        assert app.screen.active_state["omz-plugins"] is False
+        await pilot.press("space")
+        await pilot.pause()
+        assert isinstance(app.screen, PoliciesScreen)
+        assert app.screen.active_state["omz-plugins"] is True
+        assert "plugins=(z sudo git docker)" in zshrc.read_text()
+        await pilot.press("space")
+        await pilot.pause()
+        assert isinstance(app.screen, PoliciesScreen)
+        assert app.screen.active_state["omz-plugins"] is False
+        assert zshrc.read_text() == _ZSHRC_OMZ
