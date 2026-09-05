@@ -56,7 +56,7 @@ waiting on this Phase 12 mechanism — see Phase 4's scope note.
 - [x] **Phase 1: Catalog Tier Foundation** - Add the `tier` field to the Tool model/registry and prove the existing resolver already carries hard dependencies across tier boundaries (completed 2026-09-04)
 - [x] **Phase 2: Tier-Scoped Catalog Views & Recommends** - Split Catalog into System/User/AI top-level views and add the `recommends` soft-dependency surfacing (completed 2026-09-05)
 - [x] **Phase 3: Install/Uninstall & Tweak Lifecycle Hardening** - Skip dependents after a failed prerequisite, sweep tweak-managed executables on uninstall, and enable Oh-My-Zsh's bundled plugins (completed 2026-09-05)
-- [ ] **Phase 4: npm/npx Ban Extension & Redirect Policy** - Extend the ban to `npx` and redirect it to `pnpm dlx`, leaving `npm` hard-blocked pending its own subcommand-allowlist decision
+- [x] **Phase 4: npm/npx Ban Extension & Redirect Policy** - Extend the ban to `npx` and redirect it to `pnpm dlx`, leaving `npm` hard-blocked pending its own subcommand-allowlist decision (completed 2026-09-05)
 - [ ] **Phase 5: Registry Method Corrections (codegraph/mmdc/puppeteer)** - Move `codegraph` to `kind="github_release"`, resolve `mmdc`'s install method with real research, and give `puppeteer`/`chrome-headless-shell` their own catalog entries
 - [ ] **Phase 6: SDKMAN Hardening & Registry-Authoring Guidelines** - Verify and harden the already-shipped SDKMAN-exclusivity work, and document the per-tool verification checklist and brew-preference guideline
 - [ ] **Phase 7: System & User Tier Catalog Expansion** - Add zsh, oh-my-zsh, gnu-bash, Apple Containers (system tier) and kitty, wezterm (user tier), with real Linux/Bazzite parity
@@ -163,7 +163,15 @@ Plans:
 **Note (2026-09-04):** `REQ-pnpm-global-reinstall-mitigation` moved to Phase 4 — it's now resolved there via the Volta redirect (root-cause fix) rather than deferred to this phase's batch-5/7 dependency.
 **Note (2026-09-05):** `REQ-pnpm-global-reinstall-mitigation` is Partial: the Volta redirect removes user-typed global installs, Phase 4 ships the snapshot-reinstall mechanism, the audit and a manual trigger only for the residual set, and Phase 12 still owes the automatic post-pnpm-update trigger.
 
-**Plans**: TBD
+**Planning note (2026-09-05):** Phase 5's research overturned CONTEXT D-01's soft lean toward Homebrew for `mmdc` — upstream mermaid-cli deprecates the brew path and issue #1122 records it failing at runtime — so `mmdc` stays on pnpm. Research also found that `mmdc.requires = ["puppeteer"]` alone satisfies install ORDER but not Node's module resolution, because pnpm isolates each global install invocation; the fix is a new `co_install`/`allow_build` pair on the `kind="node"` method. `chrome-headless-shell` gets no separate entry (puppeteer's own postinstall downloads it), so SC#3's "`puppeteer` and `chrome-headless-shell` exist as their own catalog entries" is satisfied by one entry plus a recorded, test-guarded reason for the other.
+
+**Plans**: 4 plans
+Plans:
+
+- [ ] 05-01-PLAN.md — Tracer: container-verified `mmdc` render, then the `co_install`/`allow_build` node-method mechanism in `model.py`/`executors.py` (wave 1)
+- [ ] 05-02-PLAN.md — `codegraph` as a checksum-verified `kind="github_release"` entry, with the live GitHub-API verification recorded on it (wave 1)
+- [ ] 05-03-PLAN.md — `puppeteer` entry, `mmdc.requires`/`co_install` wiring, and the pnpm-not-brew-not-Volta decision recorded in the registry and PROJECT.md (wave 2)
+- [ ] 05-04-PLAN.md — Group-aware pnpm-globals replay, so the Doctor reinstall cannot re-split the `mmdc` + `puppeteer` install group (wave 3)
 
 ### Phase 6: SDKMAN Hardening & Registry-Authoring Guidelines
 
@@ -278,8 +286,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 1. Catalog Tier Foundation | 1/1 | Complete    | 2026-09-04 |
 | 2. Tier-Scoped Catalog Views & Recommends | 2/2 | Complete    | 2026-09-05 |
 | 3. Install/Uninstall & Tweak Lifecycle Hardening | 3/3 | Complete    | 2026-09-05 |
-| 4. npm/npx Ban Extension & Redirect Policy | 5/5 | In Progress|  |
-| 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 0/TBD | Not started | - |
+| 4. npm/npx Ban Extension & Redirect Policy | 5/5 | Complete    | 2026-09-05 |
+| 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 0/4 | Planned | - |
 | 6. SDKMAN Hardening & Registry-Authoring Guidelines | 0/TBD | Not started | - |
 | 7. System & User Tier Catalog Expansion | 0/TBD | Not started | - |
 | 8. AI Tier Catalog Expansion & uv-tool Executor | 0/TBD | Not started | - |
