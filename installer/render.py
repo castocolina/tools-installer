@@ -150,7 +150,9 @@ def render_verification(outcomes: list[InstallOutcome], console: Console) -> Non
     brew/native/script installs are omitted — those channels run their own
     integrity checks, so an 'unverified' label there would mislead. Outcomes
     with other statuses (failed, already-installed) are omitted too: no
-    verification step ran for them.
+    verification step ran for them. Outcomes carrying method_kind=None,
+    dependency-failed among them, are omitted because no verification step ran
+    for them.
     """
     for outcome in outcomes:
         if outcome.method_kind not in DOWNLOAD_KINDS:

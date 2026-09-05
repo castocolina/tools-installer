@@ -12,6 +12,7 @@ from installer.render import (
     render_dependency_notice,
     render_guard,
     render_guard_status,
+    render_skipped,
     render_summary,
     render_verification,
 )
@@ -59,6 +60,75 @@ def test_render_summary_handles_empty() -> None:
     render_summary(Summary(installed=(), already=(), failed=(), no_method=()), console)
     out = buf.getvalue()
     assert "Installed: 0" in out
+
+
+def test_render_summary_counts_and_lists_dependency_failed() -> None:
+    summary = Summary(
+        installed=("rg",),
+        already=(),
+        failed=("sdkman",),
+        no_method=(),
+        dependency_failed=("java", "gradle"),
+    )
+    console, buf = _console()
+    render_summary(summary, console)
+    out = buf.getvalue()
+    assert "Dependency failed: 2" in out
+    assert "java" in out and "gradle" in out
+    assert "Installed:" in out
+    assert "Failed:" in out
+
+
+def test_render_summary_still_reports_zero_when_nothing_was_skipped() -> None:
+    console, buf = _console()
+    render_summary(Summary(installed=(), already=(), failed=(), no_method=()), console)
+    assert "Dependency failed: 0" in buf.getvalue()
+
+
+def test_render_skipped_names_the_tool_and_its_blockers() -> None:
+    console, buf = _console()
+    render_skipped(
+        [
+            InstallOutcome("sdkman", "failed"),
+            InstallOutcome("java", "dependency-failed", blocked_by=("sdkman",)),
+        ],
+        console,
+    )
+    out = buf.getvalue()
+    assert "java skipped — dependency failed: sdkman" in out
+    skip_lines = [line for line in out.splitlines() if "skipped" in line]
+    assert len(skip_lines) == 1
+    assert "java" in skip_lines[0]
+
+
+def test_render_skipped_joins_multiple_blockers() -> None:
+    console, buf = _console()
+    render_skipped(
+        [InstallOutcome("java", "dependency-failed", blocked_by=("sdkman", "uv"))],
+        console,
+    )
+    assert "dependency failed: sdkman, uv" in buf.getvalue()
+
+
+def test_render_skipped_is_silent_when_nothing_was_skipped() -> None:
+    console, buf = _console()
+    render_skipped(
+        [
+            InstallOutcome("rg", "installed", method_kind="brew"),
+            InstallOutcome("fd", "failed"),
+        ],
+        console,
+    )
+    assert buf.getvalue() == ""
+
+
+def test_render_skipped_still_names_the_tool_without_blockers() -> None:
+    console, buf = _console()
+    render_skipped([InstallOutcome("java", "dependency-failed")], console)
+    out = buf.getvalue()
+    assert "java" in out
+    assert "an earlier failure" in out
+    assert "skipped — dependency failed: an earlier failure" in out
 
 
 def test_render_doctor_prints_findings_with_meaning_and_next_step() -> None:
