@@ -42,8 +42,9 @@ postinstall-hooks mechanism itself proven via codegraph's MCP registration.
 other) added Phases 10-12**: permissive-mode shell aliases and a durable
 cursor-agent default-model wrapper, a macOS-only LaunchAgent wrapping the
 existing tmpdir-prune script, and version-aware status plus a manager-delegated
-update action — which also unblocks Phase 5's `REQ-pnpm-global-reinstall-mitigation`,
-previously blocked on this exact mechanism not existing yet.
+update action. **Note (2026-09-04):** `REQ-pnpm-global-reinstall-mitigation` moved
+to Phase 4, resolved there via a Volta redirect (root-cause fix) instead of
+waiting on this Phase 12 mechanism — see Phase 4's scope note.
 
 ## Phases
 
@@ -112,31 +113,35 @@ Plans:
 
 **Plans**: TBD
 
-### Phase 4: npm/npx Ban Extension & Redirect Policy
+### Phase 4: Package Manager Redirect Policy
 
-**Goal**: `npx` is banned/redirected the same disciplined way `npm`/`pip`/`pip3` already are, without silently masking a real underlying failure.
+**Goal**: Every banned command that has a safe, argv-compatible managed-toolchain equivalent transparently redirects to it instead of hard-blocking, without silently masking a real underlying failure or losing pnpm's gated-postinstall security where it matters.
 **Depends on**: Nothing — extends the existing `installer/guards.py` ban mechanism, independent of Phases 1-3
-**Requirements**: REQ-npx-ban, REQ-npm-npx-redirect-policy
+**Requirements**: REQ-npx-ban, REQ-npm-npx-redirect-policy, REQ-npm-global-volta-redirect, REQ-pnpm-global-reinstall-mitigation
+**Scope note (expanded 2026-09-04 discuss-phase):** originally npx-only; the user asked to fold in the already-open pip/pip3 redirect question and the Volta global-install split, since both live in the same `installer/guards.py` mechanism this phase touches, and the Volta redirect directly resolves `REQ-pnpm-global-reinstall-mitigation` (re-pointed here from Phase 5/after-Phase-12).
 **Success Criteria** (what must be TRUE):
 
-  1. `npx` is banned/shimmed identically to the existing three banned commands (same removability, same opt-in nature, same PATH-order warning logic).
-  2. Running `npx <pkg>` transparently redirects to `pnpm dlx <pkg>` (or `pnpx`), preserving the underlying command's real exit code and stdout/stderr.
-  3. `npm` itself remains hard-blocked (no redirect) until its own subcommand-allowlist decision is made separately.
-  4. Doctor/guard status reporting covers `npx` the same way it covers the other three banned commands.
+  1. `npx` is redirected via a new `REDIRECTED` shim mechanism, parallel to (not a generalization of) the existing `BANNED` hard-block dict; `npm` (non-global) and any tool for which redirect research finds no safe target stay on the original hard-block path — same removability, same opt-in nature, same PATH-order warning logic either way.
+  2. Running `npx <pkg>` transparently execs into `pnpm dlx "$@"`, preserving the underlying command's real exit code and stdout/stderr.
+  3. Research determines whether `uv pip <subcommand>` (install/uninstall/list/show/freeze/compile) is a safe drop-in for `pip`/`pip3`; if yes, they redirect the same way `npx` does in this phase — if the research finds a gap, they stay hard-blocked and the gap is documented, not papered over.
+  4. Research determines whether `volta install` shells out to npm internally (losing pnpm's gated-postinstall security) before `npm install -g`/`npm add -g` (and `pnpm add -g` itself) redirect to `volta install <pkg>`; a non-global `npm install`/`npx` invocation still redirects to plain `pnpm`/`pnpm dlx`. This split resolves `REQ-pnpm-global-reinstall-mitigation`'s root cause for anything moved to Volta — Phase 4 must determine whether any catalog tool still needs `pnpm add -g` after the split, and if so, implement the original snapshot-reinstall mitigation for that residual set.
+  5. `npm` itself (non-global invocations) remains hard-blocked until its own subcommand-allowlist decision is made separately — this phase does not resolve that.
+  6. Doctor/guard status reporting covers every tool this phase touches (npx, pip, pip3, npm-global) with the same boolean "shim installed" shape `guard_status()` already returns for npm/pip/pip3; per-tool label text in the doctor UI distinguishes "redirected to X" from "blocked".
 
 **Plans**: TBD
 
 ### Phase 5: Registry Method Corrections (codegraph/mmdc/puppeteer)
 
 **Goal**: `codegraph`, `mmdc`, and the puppeteer/chrome-headless-shell chain mmdc actually depends on all have explicit, researched, correctly-recorded install methods — no tool silently depends on npm/pnpm underneath a method that looks like it doesn't.
-**Depends on**: Nothing structurally, but REQ-pnpm-global-reinstall-mitigation within this phase is blocked on the not-yet-ingested `live-package-management` PRD (batch 5/7)'s update mechanism
-**Requirements**: REQ-codegraph-github-release, REQ-mmdc-install-decision, REQ-puppeteer-catalog-entries, REQ-pnpm-global-reinstall-mitigation
+**Depends on**: Phase 4's Volta-viability research (mmdc's method decision below draws on the same volta-internals finding Phase 4 produces)
+**Requirements**: REQ-codegraph-github-release, REQ-mmdc-install-decision, REQ-puppeteer-catalog-entries
 **Success Criteria** (what must be TRUE):
 
   1. `codegraph` installs via `kind="github_release"`, not `pnpm add -g`.
-  2. `mmdc`'s install method (pnpm-with-mitigation, brew, or volta) is decided explicitly after real research — not left ambiguous — with the decision recorded alongside why (postinstall-script security vs. the known pnpm global-install bug), and whether `volta` is actually a viable global-CLI installer (not just a Node runtime manager) verified rather than assumed.
+  2. `mmdc`'s install method (pnpm-with-mitigation, brew, or volta) is decided explicitly after real research — not left ambiguous — with the decision recorded alongside why (postinstall-script security vs. the known pnpm global-install bug), reusing Phase 4's volta-internals research rather than re-deriving it.
   3. `puppeteer` and `chrome-headless-shell` exist as their own catalog entries; `mmdc.requires` includes `puppeteer` so it drags in automatically; whether this dependency applies identically on macOS and Linux is verified, not assumed.
-  4. (Blocked until batch 5/7 lands) any tool still on `pnpm add -g` can have its whole pnpm-managed global set snapshotted and reinstalled together after a `pnpm` update.
+
+**Note (2026-09-04):** `REQ-pnpm-global-reinstall-mitigation` moved to Phase 4 — it's now resolved there via the Volta redirect (root-cause fix) rather than deferred to this phase's batch-5/7 dependency.
 
 **Plans**: TBD
 
@@ -227,8 +232,8 @@ Plans:
 
 ### Phase 12: Version-Aware Status & Update Action
 
-**Goal**: The catalog can answer "what's out of date" and act on it through the tool's own real manager, not just "is it installed" — and this becomes the mechanism Phase 5's pnpm-reinstall mitigation was waiting on.
-**Depends on**: Nothing structurally for pieces #1-#4; piece #5 (the update action) is what Phase 5's `REQ-pnpm-global-reinstall-mitigation` sequences after
+**Goal**: The catalog can answer "what's out of date" and act on it through the tool's own real manager, not just "is it installed".
+**Depends on**: Nothing structurally. (Note 2026-09-04: `REQ-pnpm-global-reinstall-mitigation` no longer sequences after this phase — it moved to Phase 4, resolved there via a Volta redirect.)
 **Requirements**: REQ-version-aware-status-github, REQ-cached-timestamped-version-state, REQ-background-version-refresh-worker, REQ-manager-version-resolution, REQ-update-action-manager-delegation, REQ-manager-drift-alerting
 **Success Criteria** (what must be TRUE):
 
