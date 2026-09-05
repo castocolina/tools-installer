@@ -685,6 +685,30 @@ def test_shipped_registry_requires_all_resolve() -> None:
     assert requires_integrity_errors(tools) == []
 
 
+def test_shipped_registry_recommends_all_resolve() -> None:
+    tools = load_tools(REGISTRY)
+    known = {tool.id for tool in tools}
+    errors = [
+        f"{tool.id} recommends unknown id '{rec_id}'"
+        for tool in tools
+        for rec_id in tool.recommends
+        if rec_id not in known
+    ]
+    assert errors == []
+
+
+def test_agent_hosts_recommend_existing_catalog_tools() -> None:
+    # Do not assert the two lists are equal: Phase 8 D-01 specifies per-host
+    # membership, so an equality check would be mandatory churn when the real
+    # companion data lands.
+    tools = _tools_by_id()
+    ids = set(tools)
+    for host_id in ("claude", "opencode"):
+        recommends = tools[host_id].recommends
+        assert recommends, f"{host_id} must declare a non-empty recommends list"
+        assert set(recommends) <= ids, f"{host_id} recommends unknown ids"
+
+
 def test_shipped_node_tools_require_pnpm() -> None:
     tools = load_tools(REGISTRY)
     for tool in tools:

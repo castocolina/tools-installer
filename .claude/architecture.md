@@ -48,3 +48,27 @@ The in-view notice states that unavailable dependencies are reported when the
 installer runs; the availability VERDICT stays with `resolve_dependencies` +
 `render_dependency_notice` on the post-TUI path, because a screen with no
 `Platform` must not make a judgement it cannot make correctly.
+
+`Tool.requires` is a hard dependency resolved by
+`installer/deps.py::resolve_dependencies`. `Tool.recommends` is a soft one that
+is never resolved, never ordered, never expanded transitively, and never
+installed on its own — the two fields share a shape and share nothing else.
+
+The only code that reads `recommends` is
+`installer/selection.py::unstaged_recommends`, a flat one-hop lookup that
+deliberately does not live beside the resolver, and
+`installer/catalog_tui.py`'s selection-time prompt that consumes it.
+
+An id from a `recommends` list enters the staged batch only through an
+explicit keypress on that prompt, which performs exactly the mutation a
+space-mark performs — so a recommendation the user accepted is
+indistinguishable downstream from a row they marked themselves, and nothing
+else in the codebase may add one.
+
+The prompt is transient and keeps no per-session state; it reappears on any
+fresh mark that still has unstaged, uninstalled recommendations, and accepting
+is what stops it recurring.
+
+Phase 2 ships illustrative `recommends` data on `claude` and `opencode` drawn
+from tools already in the catalog per CONTEXT D-02; Phase 8 replaces it with
+the real companion set once those tools exist.

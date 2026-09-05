@@ -1208,6 +1208,9 @@ priority = "P0"
 audience = "human"
 tier = "ai"
 desc = "Open source coding agent for the user, useful when teams want provider-flexible terminal workflows."
+# Phase 2 illustrative ids from tools already in this catalog (CONTEXT D-02).
+# Phase 8's REQ-recommends-wiring-agent-hosts is where the real companion set lands.
+recommends = ["rg", "fd", "jq"]
 [[tool.method]]
 kind = "script"
 url = "https://opencode.ai/install"
