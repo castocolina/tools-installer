@@ -600,6 +600,87 @@ async def test_pressing_r_with_no_pending_prompt_changes_nothing() -> None:
         assert app.catalog.status_text == ""
 
 
+async def test_leaving_the_view_clears_the_prompt_and_the_requires_notice() -> None:
+    """Both lines describe one selection moment, and navigating away ends it
+    (.claude/architecture.md: the prompt "is transient and keeps no per-session
+    state"). Regression: they used to survive every view switch, leaving `r`
+    armed for a row the cursor and the detail bar no longer described."""
+    tools = [
+        _tool("pnpm", category="pkg-mgr", priority="P0", tier="system"),
+        _tool("jq", category="data", priority="P1", tier="user"),
+        _tool(
+            "agent",
+            category="ai",
+            priority="P0",
+            tier="ai",
+            requires=("pnpm",),
+            recommends=("jq",),
+        ),
+    ]
+    installed = {tool.id: False for tool in tools}
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        screen = app.catalog_for("ai")
+        assert "agent also needs pnpm" in screen.status_text
+        assert "agent pairs well with jq" in screen.recommends_text
+        await pilot.press("2")  # away to the User view
+        await pilot.pause()
+        await pilot.press("3")  # and back
+        await pilot.pause()
+        assert screen.status_text == ""
+        assert screen.recommends_text == ""
+        # Disarmed, not merely blanked: a stray r must not stage anything.
+        await pilot.press("r")
+        await pilot.pause()
+        assert screen.selected == {"agent"}
+
+
+async def test_accept_names_only_the_ids_it_actually_added() -> None:
+    """The pending ids are captured when the prompt is raised; the shared staged
+    set can move before the accept, so the confirmation must report the delta."""
+    tools = [
+        _tool("pnpm", category="pkg-mgr", priority="P0", tier="system"),
+        _tool("jq", category="data", priority="P1", tier="user"),
+        _tool("agent", category="ai", priority="P0", tier="ai", recommends=("jq", "pnpm")),
+    ]
+    installed = {tool.id: False for tool in tools}
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        await pilot.press("space")  # mark agent: the prompt offers jq and pnpm
+        await pilot.pause()
+        screen = app.catalog_for("ai")
+        assert "pairs well with jq, pnpm" in screen.recommends_text
+        screen.selected.add("jq")  # staged another way while the prompt is armed
+        await pilot.press("r")
+        await pilot.pause()
+        assert screen.selected == {"agent", "jq", "pnpm"}
+        assert screen.status_text == "added pnpm to your selection."
+
+
+async def test_accept_claims_nothing_when_the_recommendation_is_already_staged() -> None:
+    tools, installed = _recommends_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        screen = app.catalog_for("ai")
+        assert "pairs well with jq" in screen.recommends_text
+        screen.selected.add("jq")
+        await pilot.press("r")
+        await pilot.pause()
+        assert screen.selected == {"agent", "jq"}
+        assert screen.recommends_text == ""
+        assert screen.status_text == ""
+
+
 async def test_accepted_cross_tier_recommendation_shows_marked_on_returning_to_its_tier_view() -> (
     None
 ):

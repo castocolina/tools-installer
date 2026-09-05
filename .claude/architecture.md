@@ -65,9 +65,12 @@ space-mark performs — so a recommendation the user accepted is
 indistinguishable downstream from a row they marked themselves, and nothing
 else in the codebase may add one.
 
-The prompt is transient and keeps no per-session state; it reappears on any
-fresh mark that still has unstaged, uninstalled recommendations, and accepting
-is what stops it recurring.
+The prompt is transient and keeps no per-session state: it and the requires
+notice describe one selection moment, so leaving the view clears both and
+disarms the pending ids. It reappears on any fresh mark that still has
+unstaged, uninstalled recommendations, and accepting is what stops it
+recurring. Accepting stages and names only the ids that were not already in
+the shared batch, since that batch can move between the offer and the accept.
 
 Phase 2 ships illustrative `recommends` data on `claude` and `opencode` drawn
 from tools already in the catalog per CONTEXT D-02; Phase 8 replaces it with

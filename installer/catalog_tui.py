@@ -269,9 +269,7 @@ class CatalogScreen(AppScreen):
     def on_tool_browser_selection_changed(self, event: ToolBrowser.SelectionChanged) -> None:
         # Clear the "select at least one" warning the moment the user selects.
         event.stop()
-        self.status.clear()
-        self.recommends_line.clear()
-        self._pending_recommends = ()
+        self._clear_transient()
         if event.item_id is None or not event.selected:
             return
         tool = self._by_id.get(event.item_id)
@@ -282,6 +280,15 @@ class CatalogScreen(AppScreen):
         # recommendation and neither may hide the other.
         self._announce_requires(tool)
         self._offer_recommends(tool)
+
+    def _clear_transient(self) -> None:
+        # The requires notice, the recommends prompt and the pending ids behind
+        # it all describe one selection moment. Anything that ends that moment
+        # clears all three together, so a stale prompt can never stay armed over
+        # a row it no longer describes.
+        self._pending_recommends = ()
+        self.recommends_line.clear()
+        self.status.clear()
 
     def _announce_requires(self, tool: Tool) -> None:
         missing = missing_requires(
@@ -315,18 +322,34 @@ class CatalogScreen(AppScreen):
         # Never calls resolve_dependencies, never touches an executor, and
         # never installs. The confirmation overwrites any requires notice on
         # the status line on purpose, because the accept is the newer fact.
-        pending = self._pending_recommends
-        if not pending:
-            return
-        self._staged.update(pending)
-        self._browser.refresh_marks()
+        #
+        # The pending ids were computed when the prompt was raised; the shared
+        # staged set may have moved since, so they are re-filtered here and only
+        # the real delta is added and named. Reporting the captured tuple would
+        # claim to have added ids that were already in the batch.
+        added = tuple(rec for rec in self._pending_recommends if rec not in self._staged)
         self._pending_recommends = ()
         self.recommends_line.clear()
-        self.status.set(f"added {', '.join(pending)} to your selection.", "ok")
+        if not added:
+            return
+        self._staged.update(added)
+        self._browser.refresh_marks()
+        self.status.set(f"added {', '.join(added)} to your selection.", "ok")
 
     def action_dismiss_recommends(self) -> None:
+        # Narrower than _clear_transient on purpose: d dismisses the prompt, and
+        # a requires notice for the same mark is a separate fact that survives it.
         self._pending_recommends = ()
         self.recommends_line.clear()
+
+    def on_screen_suspend(self) -> None:
+        # Leaving the view ends the selection moment the prompt and the requires
+        # notice describe (.claude/architecture.md: the prompt "is transient and
+        # keeps no per-session state"). Clearing on the way out rather than on
+        # the way back in means the screen is never left holding a prompt armed
+        # for a mark the user made an arbitrary number of navigations ago, and
+        # re-marking the tool raises both again with freshly computed content.
+        self._clear_transient()
 
     def on_screen_resume(self) -> None:
         # The staged set is shared by all three tier screens (plan 02-01), and
