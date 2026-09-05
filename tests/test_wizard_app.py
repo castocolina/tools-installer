@@ -809,6 +809,19 @@ async def test_policy_state_cell_carries_glyph_for_on_and_off() -> None:
         assert table.get_cell("ban", "state").plain == "● [on]"
 
 
+async def test_policy_detail_panel_describes_the_ban_as_it_behaves_now() -> None:
+    # Enabling the ban wraps the user's own pnpm binary and gives up pnpm's
+    # gated postinstalls for global installs. The detail said none of that.
+    app = _app(policies=_policy_inputs([_fake_policy()]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("6")
+        assert isinstance(app.screen, PoliciesScreen)
+        detail = app.screen.detail_text
+        assert "volta install" in detail
+        assert "pnpm" in detail
+        assert "install scripts" in detail
+
+
 async def test_policy_detail_panel_explains_tweak_rules() -> None:
     policies = [
         Policy(

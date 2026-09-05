@@ -742,7 +742,12 @@ class PoliciesScreen(AppScreen):
     def _policy_detail(self, policy: Policy) -> str:
         details = {
             "ban": (
-                "Blocks bare pip, pip3, npm, and npx so installs route through uv/pnpm.",
+                "Blocks bare pip and pip3, redirects npx to pnpm dlx, and routes"
+                " npm/pnpm global installs to volta install.",
+                "Wraps your pnpm binary with a PATH shim: only global adds are"
+                " rerouted, every other pnpm command passes straight through.",
+                "Global installs then run npm's install scripts unrestricted, which"
+                " pnpm gates — keep untrusted packages on a project-local pnpm add.",
                 "Writes PATH shims plus interactive aliases, then asks for a shell reload.",
                 "Use when humans or agents keep reaching for unmanaged package installers.",
             ),

@@ -41,6 +41,14 @@ def test_ban_policy_metadata(tmp_path: Path) -> None:
     assert "npx" in policy.description and "pnpm dlx" in policy.description
 
 
+def test_ban_policy_description_names_the_pnpm_wrap_and_volta_reroute(tmp_path: Path) -> None:
+    # The user consents to this string; it described the pre-phase-4 behaviour.
+    description = _ban(tmp_path).description
+    assert "pnpm" in description
+    assert "volta install" in description
+    assert "global" in description
+
+
 def test_ban_policy_inactive_on_clean_dir(tmp_path: Path) -> None:
     assert _ban(tmp_path).active is False
 

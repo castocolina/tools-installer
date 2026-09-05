@@ -138,8 +138,8 @@ def ban_policy(
         id="ban",
         label="pip/npm ban",
         description=(
-            "blocks bare pip/npm and redirects npx to pnpm dlx so installs go "
-            "through uv/pnpm (shims + aliases)"
+            "blocks bare pip/pip3, redirects npx to pnpm dlx, and wraps npm/pnpm "
+            "so global installs run volta install instead (shims + aliases)"
         ),
         active=any(guard_status(shim_dir).values()),
         apply=_apply,

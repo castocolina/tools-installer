@@ -317,6 +317,15 @@ def run_guard(
     """
     targets = ", ".join(str(rc_path) for rc_path in rc_paths)
     verb = "Remove" if remove else "Install"
+    if not remove:
+        # The consent has to name what installing actually does now: it wraps
+        # the user's own pnpm binary and gives up pnpm's gated postinstalls for
+        # global installs (registry.toml's volta entry, D-06/D-08).
+        console.print(
+            "This wraps npm and pnpm so global installs run `volta install`, which runs "
+            "npm's install scripts unrestricted — keep untrusted packages on a "
+            "project-local `pnpm add`."
+        )
     if not confirm(f"{verb} the pip/npm ban (shims in {shim_dir} + aliases in {targets})?"):
         return False
     if remove:

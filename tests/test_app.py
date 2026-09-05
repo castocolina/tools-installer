@@ -798,6 +798,49 @@ def test_run_guard_reports_the_redirect_degradation_not_just_path_order(tmp_path
     assert "volta" in output
 
 
+def test_run_guard_states_the_volta_tradeoff_before_asking(tmp_path: Path):
+    # The confirm prompt is the CLI's consent moment: it must say that
+    # installing wraps npm/pnpm and gives up pnpm's gated postinstalls.
+    shim_dir = tmp_path / "bin"
+    buf = io.StringIO()
+    console = Console(file=buf, width=100, no_color=True)
+    asked: list[str] = []
+
+    def confirm(message: str) -> bool:
+        asked.append(buf.getvalue())
+        return False
+
+    run_guard(
+        remove=False,
+        shim_dir=shim_dir,
+        rc_paths=[tmp_path / ".myshellrc"],
+        path_value="",
+        console=console,
+        confirm=confirm,
+        which=lambda _n: None,
+    )
+    assert len(asked) == 1
+    shown = asked[0]
+    assert "volta install" in shown
+    assert "install scripts" in shown
+
+
+def test_run_guard_remove_does_not_repeat_the_install_tradeoff(tmp_path: Path):
+    shim_dir = tmp_path / "bin"
+    buf = io.StringIO()
+    console = Console(file=buf, width=100, no_color=True)
+    run_guard(
+        remove=True,
+        shim_dir=shim_dir,
+        rc_paths=[tmp_path / ".myshellrc"],
+        path_value="",
+        console=console,
+        confirm=lambda _m: False,
+        which=lambda _n: None,
+    )
+    assert "install scripts" not in buf.getvalue()
+
+
 def test_run_guard_declined_does_nothing(tmp_path: Path):
     shim_dir = tmp_path / "bin"
     buf = io.StringIO()
