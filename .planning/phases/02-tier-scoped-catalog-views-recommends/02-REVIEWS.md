@@ -143,3 +143,107 @@ This is the cleaner half. Mirroring `requires` on `Tool` / `load_tools` (`instal
 | SC#4 recommends prompt, never auto-install | Achieved by 02-02 if accept is the only writer |
 
 **Overall phase risk: MEDIUM** — 02-01 test/sentinel migration and the SC#2 wording gap, not the shared-set or recommends designs.
+
+---
+
+# Cycle 2 Review — 2026-09-05T03:10:25Z
+
+**Reviewers this cycle:** `opencode-plan-review` (OpenCode adapter, `xai/grok-4.6`, `reasoning=high`, resolved via `pinned` model source — same configured `review.default_reviewers` instance as cycle 1). No other lane was configured or detected as a default this cycle either; single-reviewer, so the plan-review-convergence consensus gate does not engage.
+
+**Scope:** this cycle re-reads the cycle-1 dispositions the planner recorded in commit `a858310` (the `<review_dispositions>` tables added to `02-01-PLAN.md` and `02-02-PLAN.md`, plus the ROADMAP.md SC#2 rewrite) and verifies each disposition against the CURRENT plan text and the live repo, rather than re-litigating cycle 1's findings from scratch.
+
+## Consensus Summary
+
+Single reviewer again this cycle — no cross-reviewer synthesis is possible. The reviewer's verdict is source-grounded (every claim below cites `path:line` against the real tree: `installer/registry.toml`, `installer/tool_browser.py`, `installer/catalog_tui.py`, `installer/deps.py`, `installer/model.py`, `installer/ui_common.py`, `tests/test_wizard_app.py`, and the two PLAN.md files themselves).
+
+### Agreed Strengths
+Not applicable — only one reviewer ran.
+
+### Agreed Concerns
+Not applicable — only one reviewer ran.
+
+### Divergent Views
+Not applicable — only one reviewer ran.
+
+## OpenCode Review (opencode-plan-review) — Cycle 2
+
+I'll verify the cycle-1 dispositions against the current plans and the real source they cite.
+Source confirms today's catalog is still a single `catalog` view. Next I'll check the cited constructors, tests, and registry edges the dispositions rely on.
+The `CatalogScreen` constructor is about to gain required kwargs. I'll check every call site and the registry edges the plans treat as proof.
+Cycle-1 dispositions largely hold. Two gating tmux scripts overclaim what they actually press.
+
+### Summary
+
+Cycle-1's nine dispositions are present in the plan text and match the current tree: the HIGH `"catalog"` sweep is a line-by-line Task 2 recipe against real sentinels (`tests/test_wizard_app.py:94`, `:885`, and the rest), ROADMAP SC#2 now names the real `mmdc`→`pnpm` edge (`installer/registry.toml:1641-1649`, `:1442-1448`) instead of `claude` (`:1182-1197`, no `requires`), and the resume test is the falsifiable `2`→`3`→`space`→`r`→`2` sequence. The shared-selection seam, `missing_requires` preview, and `recommends`/`resolve_dependencies` split are source-grounded. Two new problems come from making Rule 8 gating: 02-01's plan-level step 6 asks to mark `mmdc` but Task 3's script never presses `space`, and 02-02's gating `tmux` presses `3` then `Space` on a view whose first AI tool is `rg` (`registry.toml:78-84`), so the prompt grep will fail.
+
+### Disposition Verification
+
+**02-01**
+- HIGH `"catalog"` sentinels — **RESOLVED.** Task 2 enumerates `_app` `:94`, `test_esc_on_catalog_is_inert` `:885`, `VIEW_ORDER` `:118`, `current_view` `:124/:138/:256/:283/:305/:879/:888/:925`, comment `:929`, tuple `:951`, plus `tests/test_ui_common.py:104/:144/:154/:178/:207` and `tests/test_setup.py:43`. Those lines still hold those literals. Negative grep `'"catalog"'` is a RED gate.
+- MEDIUM SC#2 `claude`→`pnpm` — **RESOLVED.** `.planning/ROADMAP.md:96` names `mmdc` (user) → `pnpm` (system) plus an ai→system fixture. `claude` has script/cask and no `requires` (`registry.toml:1182-1197`). Only cross-view `requires` is `mmdc`→`pnpm` (`:1649`); `java`/`gradle`/…→`sdkman` are all `tier = "system"` (`:1255-1333`).
+- MEDIUM SC#3 unavailable notice in-view — **RESOLVED** as claimed (partial + explicit reject). Task 3 pins caveat wording; availability stays on `resolve_dependencies` + `render_dependency_notice` (`installer/app.py:119-125`). `CatalogScreen` has no `Platform` (`installer/catalog_tui.py:150-161`).
+- MEDIUM tracer too large — **RESOLVED.** Three commit-safe tasks; Task 1 leaves `VIEWS` as the single `catalog` row (`installer/ui_common.py:101-111`).
+- MEDIUM ONESHOT Rule 8 optional — **RESOLVED** (now gating). **NEW ISSUE** below: plan-level step 6 vs Task 3 script.
+- LOW `installed.get` — **RESOLVED.** Task 3 mandates `.get` + partial-map RED test.
+- LOW `SelectionChanged.__init__`/`super()` — **RESOLVED.** Copies `Accepted` (`installer/tool_browser.py:76-78`); current `SelectionChanged` is a bare `Message` (`:80-83`).
+- LOW `tests/test_tool_browser.py` missing from pytest — **RESOLVED.** In Task 1 files + verify.
+
+**02-02**
+- MEDIUM resume sequence — **RESOLVED.** Task 2 is `2`→`3`→`space`→`r`→`2` (`02-02-PLAN.md:608-668`) with a rename-to-disable falsifiability script (`:709-718`). `refresh_marks` is still `_refresh_marks` and iterates only own rows (`installer/tool_browser.py:189-209`).
+- MEDIUM no engine-side `recommends` pin — **RESOLVED.** Task 2 adds `test_resolve_dependencies_does_not_drag_in_recommends` plus `assert 'recommends' not in src`. Resolver walks only `tool.requires` (`installer/deps.py:63, 93, 126`).
+- MEDIUM ONESHOT Rule 8 optional — **PARTIALLY RESOLVED / NEW ISSUE INTRODUCED.** Gating `tmux` exists (`02-02-PLAN.md:824`) but will not hit a `recommends` row (below).
+- LOW equal-lists assertion — **RESOLVED.** Non-empty + subset only.
+- LOW stray `r` — **RESOLVED** as accepted. `a`/`i` are unbound on `DataTable` and bound on `ToolBrowser` without `priority=True` (`installer/tool_browser.py:95-96`); `r`/`d` on `CatalogScreen` should bubble the same way. Fallback `priority=True` is in Task 1 verify.
+- LOW empty second `StatusLine` — **RESOLVED** as accepted. `height: auto` is real (`installer/ui_common.py:64`).
+
+### Strengths
+
+- Shared `set[str]` plus in-place `|=`/`^=` matches today's rebind: `action_select_all` currently replaces the set (`installer/tool_browser.py:222-227`); Uninstall keeps its own set (`installer/wizard_app.py:225`).
+- `CatalogScreen` already takes an arbitrary `tools` list (`:150-161`); three filtered instances is the existing constructor, not a new widget.
+- `Tier` values are already `system`/`user`/`ai` in nav order (`installer/enums.py:23-28`), so view names need no second map.
+- `recommends` stays out of `deps.py`. `unstaged_recommends` in `selection.py` next to `select_tools` (`installer/selection.py:81-84`) is the right negative analog.
+- Demo data is real: `rg`/`fd` are `tier = "ai"` (`registry.toml:84, :170`), `jq` is `tier = "user"` (`:122`) — the cross-tier accept case is not synthetic.
+- Rule 7: no new `kind=`/executor. `missing_requires` and `unstaged_recommends` ship with tests in the same task.
+
+### Concerns
+
+- **MEDIUM — 02-02 gating `tmux` will not show the prompt.** Script: `3`, `Space`, grep `pairs well with` (`02-02-PLAN.md:824`). First AI-tier tool in catalog order is `rg` (`registry.toml:78-84`); default grouping is Category (`installer/catalog_tui.py:90`) so row 0 is a section (`installer/tool_browser.py:134-138`) and `space` is inert (`:212-214`). Headless Task 1 uses `get_row_index("claude")`; the gating check does not. `fails_when` says to arrow around, which is not in the command.
+- **MEDIUM — 02-01 plan-level verify overclaims Task 3's script.** Step 6 wants marking `mmdc` so `pnpm` appears (`02-01-PLAN.md:910-916`). Task 3's script presses `2` then `q` and only greps nav tokens (`:846`). `mmdc` is the last registry entry (`:1641`); User-view `space` will not land on it.
+- **LOW — ROADMAP SC#4 still parenthesizes `codegraph`/`graphify`/`rtk`** (`ROADMAP.md:98`). Phase 2 will name `rg`/`fd`/`jq`. Core claim holds; the examples do not until Phase 8.
+- **LOW — Task 2 number-key recipe lists five `press("3")` sites** (`:336/:352/:376/:393/:414`) **but `tests/test_wizard_app.py` has ~20.** Prose says shift every key descending; pytest is the backstop. An executor who only touches enumerated lines leaves most nav tests red.
+
+### Suggestions
+
+- Point 02-02's `tmux` at a host the way Task 1 does: switch grouping to Table, or send enough arrows that `claude` is highlighted, then `space`. Keep `d`/`q`; never `enter`.
+- Make 02-01 step 6 match Task 3's script (nav tokens only), or add a second script that opens User, finds `mmdc`, and greps `pnpm`.
+- In Task 2, replace "five uninstall tests" with `grep -n 'press("2"|"3"|"4")' tests/test_wizard_app.py` as the work list.
+- Pin 02-02's real-registry e2e installed map as `{t.id: False for t in tools}` — `_row_cells` indexes `self._installed[tool.id]` (`installer/catalog_tui.py:182`).
+- Soften SC#4's e.g. list to `rg`/`fd`/`jq` until Phase 8.
+
+### Risk Assessment
+
+**LOW.** Cycle-1 HIGH is actually in Task 2 against the live sentinels; SC#2 matches the registry; the resume test is now falsifiable; hard/soft dependency split is pinned at the engine. Remaining risk is executor-facing verify scripts, not a wrong architecture. Fix the two `tmux` recipes before execute so a gating Rule 8 check cannot fail on `rg` or a section row.
+
+## Cycle 2 Verdict
+
+**No HIGH-severity concerns remain.** All 9 cycle-1 findings (1 HIGH + 8 actionable) are confirmed RESOLVED in the current plan text against live source. The disposition process introduced two NEW MEDIUM findings and reaffirmed two pre-existing LOW findings as still-open in their current (not-yet-updated) form:
+
+1. **MEDIUM (new)** — 02-02's gating `tmux` verification script (`02-02-PLAN.md:824`) presses `Space` on the AI view's first row, which is a section header (`rg` is the first actual tool), so the `recommends` prompt will never appear and the gating check will spuriously fail at execute-time.
+2. **MEDIUM (new)** — 02-01's plan-level step 6 verify (`02-01-PLAN.md:910-916`) claims marking `mmdc` proves the `pnpm` drag-in notice, but Task 3's actual tmux script (`:846`) never navigates to or marks `mmdc` — it only greps nav tokens after pressing `2` then `q`.
+3. **LOW (carried, not yet incorporated)** — ROADMAP SC#4 (`ROADMAP.md:98`) still parenthesizes `codegraph`/`graphify`/`rtk` as the recommends example, which are Phase 8 tools; Phase 2's actual fixtures are `rg`/`fd`/`jq`.
+4. **LOW (carried, not yet incorporated)** — 02-01 Task 2's number-key recipe explicitly enumerates only 5 of the ~20 `press("3")`-style call sites in `tests/test_wizard_app.py` that need shifting; an executor following only the enumerated list will leave most nav tests red.
+
+None of these four are HIGH: they are executor-facing verification-script precision issues and a roadmap wording softening, not architecture defects — Rule 7 (test coverage for new registry mechanisms) is confirmed satisfied with no new `kind`/executor/resolver added this phase.
+
+CYCLE_SUMMARY: current_high=0 current_actionable=4
+
+## Current HIGH Concerns
+
+None.
+
+## Current Actionable Non-HIGH Concerns
+
+- **MEDIUM** — 02-02's gating `tmux` script (`02-02-PLAN.md:824`) presses `Space` on the AI view's row 0, which is a Category section header, not `rg` (the actual first AI-tier tool per `installer/registry.toml:78-84`); the `recommends` prompt grep will never match. Needs: retarget the script (switch to Table grouping, or add enough arrow-key navigation to land on `claude`) before marking Rule 8 verification as satisfied.
+- **MEDIUM** — 02-01's plan-level step 6 verify (`02-01-PLAN.md:910-916`) asserts marking `mmdc` demonstrates the SC#2 `pnpm` drag-in, but Task 3's own tmux script (`:846`) never marks `mmdc` — it only checks nav tokens. Needs: align step 6 with what Task 3 actually scripts, or add a second script that opens the User view, marks `mmdc`, and greps for `pnpm`.
+- **LOW** — ROADMAP.md SC#4 (`:98`) still names `codegraph`/`graphify`/`rtk` as the illustrative `recommends` example; those are Phase 8 catalog entries that don't exist yet in Phase 2's registry state. Needs: reword the parenthetical to `rg`/`fd`/`jq` (the tools this phase's fixtures actually use) or explicitly note the example is forward-looking to Phase 8.
+- **LOW** — 02-01 Task 2's number-key migration recipe (`tests/test_wizard_app.py` call sites `:336/:352/:376/:393/:414`) lists only 5 of roughly 20 `press("3")`-shaped sites that need shifting to `press("4")`. Needs: either enumerate the full site list or replace the enumerated list with a `grep -n` command so the executor can't stop at the 5 named lines.
