@@ -338,6 +338,12 @@ def test_codegraph_methods_are_github_release_only() -> None:
     assert {m.kind for m in codegraph.methods} == {"github_release"}
 
 
+def test_codegraph_entry_records_the_no_brew_formula_finding() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    assert "colbymchenry/codegraph" in text
+    assert "v1.6.0" in text
+
+
 def test_yq_resolves_to_a_raw_download_on_every_os() -> None:
     yq = next(t for t in load_tools(REGISTRY) if t.id == "yq")
     for platform_os in ("debian", "macos"):

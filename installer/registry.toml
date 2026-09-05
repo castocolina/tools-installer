@@ -1222,6 +1222,23 @@ package = "opencode"
 kind = "brew"
 formula = "anomalyco/tap/opencode"
 
+# Verified 2026-09-05 against release tag v1.6.0 via the GitHub Releases API
+# (repos/colbymchenry/codegraph/releases/latest): the release publishes
+# codegraph-{darwin,linux}-{arm64,x64}.tar.gz plus a SHA256SUMS file, and
+# upstream's own install.sh states "No Node.js, no build tools, no npm
+# required" — the tarball vendors its own node runtime beside bin/codegraph.
+# The archive's top level is a single codegraph-<os>-<arch>/ directory, which
+# is why strip = 1 with member = "bin/codegraph" reproduces upstream's own
+# layout.
+# There is no Homebrew formula for this tool as of that date, so github_release
+# is the only rung on this ladder: a checksum mismatch or a network failure
+# has no fallback method, unlike every other download-kind entry in this file
+# that pairs with brew. A checksum mismatch deliberately halts the ladder
+# rather than falling through (installer/engine.py's checksum_policy="fail"
+# default), so on this entry a mismatch is terminal by design.
+# Re-verify the asset names and the SHA256SUMS presence if this entry is
+# revisited after 2026-10-05, since the asset naming is upstream's
+# release-workflow convention rather than a published contract.
 [[tool]]
 id = "codegraph"
 name = "CodeGraph"
