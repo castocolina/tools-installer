@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 current_phase: 04
 current_phase_name: Package Manager Redirect Policy
 status: executing
-stopped_at: Completed 04-04-PLAN.md
-last_updated: "2026-09-05T14:52:19Z"
+stopped_at: Completed 04-05-PLAN.md
+last_updated: "2026-09-05T15:23:35Z"
 last_activity: 2026-09-05
-last_activity_desc: Completed 04-04-PLAN.md — per-command doctor labels and volta tradeoff copy
-state_head: 10827a3bd06a76eee5d8588b6ebac86ed9331075
+last_activity_desc: Completed 04-05-PLAN.md — pnpm-global snapshot-reinstall Doctor remediation
+state_head: 7094faf
 progress:
   total_phases: 12
   completed_phases: 3
   total_plans: 11
-  completed_plans: 9
-  percent: 35
+  completed_plans: 10
+  percent: 40
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 04 (Package Manager Redirect Policy) — EXECUTING
-Plan: 4 of 5
-Status: Executing Phase 04
-Last activity: 2026-09-05 — Completed 04-04-PLAN.md (doctor per-command labels)
+Plan: 5 of 5
+Status: Executing Phase 04 (all plans summarized)
+Last activity: 2026-09-05 — Completed 04-05-PLAN.md (pnpm-global snapshot-reinstall)
 
-Progress: [████░░░░░░] 60%
+Progress: [█████░░░░░] 83%
 
 ## Performance Metrics
 
@@ -70,6 +70,7 @@ Recent decisions affecting current work:
 - [04-02, 2026-09-05]: volta is a `tier="system"` catalog tool (Linux script + macOS brew, `~/.volta/bin` on both methods); D-07 recorded on the entry — volta install runs ungated npm postinstall scripts
 - [04-03, 2026-09-05]: npm/pnpm global install/add/i exec volta install via an argv-conditional PATH shim; _node uses real_pnpm() absolute path so the wrapper cannot intercept catalog installs
 - [04-04, 2026-09-05]: doctor copy distinguishes redirect from block via per-command labels; volta install-scripts tradeoff is a Severity.OK note gated on a live pnpm shim
+- [04-05, 2026-09-05]: residual kind=node set is mmdc; snapshot-reinstall is a manual Doctor r action through real_pnpm; automatic post-pnpm-update trigger is Phase 12 (R-03)
 
 ### Pending Todos
 
@@ -92,6 +93,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-05T14:52:19Z
-Stopped at: Completed 04-04-PLAN.md
+Last session: 2026-09-05T15:23:35Z
+Stopped at: Completed 04-05-PLAN.md
 Resume file: None

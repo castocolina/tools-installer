@@ -140,14 +140,14 @@ Plans:
   5. `npm` itself (non-global invocations) remains hard-blocked until its own subcommand-allowlist decision is made separately — this phase does not resolve that.
   6. Doctor/guard status reporting covers every tool this phase touches (npx, pip, pip3, npm-global) with the same boolean "shim installed" shape `guard_status()` already returns for npm/pip/pip3; per-tool label text in the doctor UI distinguishes "redirected to X" from "blocked".
 
-**Plans**: 4/5 plans executed
+**Plans**: 5/5 plans executed
 Plans:
 
 - [x] 04-01-PLAN.md — `REDIRECTED` mechanism parallel to `BANNED`; npx execs into `pnpm dlx` end to end; pip/pip3 stay hard-blocked with the uv-pip gap recorded (wave 1)
 - [x] 04-02-PLAN.md — `volta` as a system-tier registry entry (brew on macOS, official script on Linux) with the shells-out-to-npm finding recorded on it (wave 1)
 - [x] 04-03-PLAN.md — argv-conditional global redirect: `npm install -g` / `pnpm add -g` reach `volta install`, everything else keeps today's behaviour, gated on volta being resolvable; the installer's own `kind="node"` install resolves real pnpm by absolute path so the wrapper cannot intercept it (wave 2)
 - [x] 04-04-PLAN.md — per-command doctor label text distinguishing "redirected to X" from "blocked", plus the volta tradeoff in the UI copy (wave 3)
-- [ ] 04-05-PLAN.md — registry-derived pnpm-global snapshot and one-invocation reinstall, exposed as an explicit Doctor remediation for the residual `mmdc` set; widens `run_live` to catch `CommandError`; records R-03's manual-trigger-only scope in REQUIREMENTS.md/ROADMAP.md (wave 4)
+- [x] 04-05-PLAN.md — registry-derived pnpm-global snapshot and one-invocation reinstall, exposed as an explicit Doctor remediation for the residual `mmdc` set; widens `run_live` to catch `CommandError`; records R-03's manual-trigger-only scope in REQUIREMENTS.md/ROADMAP.md (wave 4)
 
 ### Phase 5: Registry Method Corrections (codegraph/mmdc/puppeteer)
 
@@ -278,7 +278,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 1. Catalog Tier Foundation | 1/1 | Complete    | 2026-09-04 |
 | 2. Tier-Scoped Catalog Views & Recommends | 2/2 | Complete    | 2026-09-05 |
 | 3. Install/Uninstall & Tweak Lifecycle Hardening | 3/3 | Complete    | 2026-09-05 |
-| 4. npm/npx Ban Extension & Redirect Policy | 4/5 | In Progress|  |
+| 4. npm/npx Ban Extension & Redirect Policy | 5/5 | Complete    | 2026-09-05 |
 | 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 0/TBD | Not started | - |
 | 6. SDKMAN Hardening & Registry-Authoring Guidelines | 0/TBD | Not started | - |
 | 7. System & User Tier Catalog Expansion | 0/TBD | Not started | - |
