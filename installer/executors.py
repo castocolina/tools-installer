@@ -35,6 +35,42 @@ def require_str(method: Method, key: str) -> str:
     return value
 
 
+def _opt_pkg_list(method: Method, key: str) -> tuple[str, ...]:
+    raw = method.params.get(key)
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ExecutorError(f"method '{method.kind}' param '{key}' must be a list of package names")
+    items = cast(list[object], raw)
+    names: list[str] = []
+    for item in items:
+        if not isinstance(item, str):
+            raise ExecutorError(
+                f"method '{method.kind}' param '{key}' must be a list of package names"
+            )
+        names.append(item)
+    return tuple(names)
+
+
+def _opt_version_map(method: Method, key: str) -> dict[str, str]:
+    raw = method.params.get(key)
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ExecutorError(
+            f"method '{method.kind}' param '{key}' must be a table of package names to ranges"
+        )
+    table = cast(dict[object, object], raw)
+    out: dict[str, str] = {}
+    for name, range_ in table.items():
+        if not isinstance(name, str) or not isinstance(range_, str):
+            raise ExecutorError(
+                f"method '{method.kind}' param '{key}' keys and values must be strings"
+            )
+        out[name] = range_
+    return out
+
+
 def _env_prefix(method: Method) -> str:
     """Shell-quoted `KEY=value` assignments for the script shell, sorted by key.
 
@@ -91,7 +127,22 @@ def _node(method: Method, runner: Runner) -> None:
             "pnpm not found on PATH — install pnpm (or, if this installer's pnpm wrapper "
             "is the only pnpm on PATH, re-apply the package-manager policy)"
         )
-    runner([pnpm, "add", "-g", require_str(method, "npm_pkg")])
+    npm_pkg = require_str(method, "npm_pkg")
+    co_install = _opt_pkg_list(method, "co_install")
+    allow_build = _opt_pkg_list(method, "allow_build")
+    versions = _opt_version_map(method, "versions")
+    # A space-separated list would give each package its own isolated node_modules
+    # and lockfile (pnpm Global Packages documentation) — which is the failure
+    # mode this exists to prevent, not a stylistic difference.
+    members = list(dict.fromkeys([npm_pkg, *co_install]))
+    group = ",".join(f"{name}@{versions[name]}" if name in versions else name for name in members)
+    # pnpm blocks a dependency's postinstall by default and reports it as a
+    # warning rather than an error, so an install that needs its postinstall
+    # must name it here or it succeeds while doing nothing. The same flag, per
+    # pnpm's documentation, also persists the permission for future versions of
+    # that package, which is why the name set is constrained at load time.
+    allowances = [f"--allow-build={name}" for name in dict.fromkeys(allow_build)]
+    runner([pnpm, "add", "-g", *allowances, group])
 
 
 def _sdkman(method: Method, runner: Runner) -> None:

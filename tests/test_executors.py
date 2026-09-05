@@ -228,6 +228,132 @@ def test_node_without_npm_pkg_raises_executor_error():
         execute(Method(kind="node", params={}), lambda _cmd: None)
 
 
+def _plant_pnpm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    fake_pnpm = _plant_executable(tmp_path / "bin", "pnpm", body="#!/bin/sh\necho 11.9.0\n")
+    monkeypatch.setenv("PATH", str(fake_pnpm.parent))
+    return fake_pnpm
+
+
+def test_node_co_install_emits_one_comma_joined_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    calls: list[list[str]] = []
+    execute(
+        Method(
+            kind="node",
+            params={"npm_pkg": "@mermaid-js/mermaid-cli", "co_install": ["puppeteer"]},
+        ),
+        calls.append,
+    )
+    assert calls == [[str(pnpm), "add", "-g", "@mermaid-js/mermaid-cli,puppeteer"]]
+
+
+def test_node_allow_build_emits_flag_before_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    calls: list[list[str]] = []
+    execute(
+        Method(kind="node", params={"npm_pkg": "puppeteer", "allow_build": ["puppeteer"]}),
+        calls.append,
+    )
+    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
+
+
+def test_node_versions_pin_group_member(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    calls: list[list[str]] = []
+    execute(
+        Method(
+            kind="node",
+            params={
+                "npm_pkg": "puppeteer",
+                "allow_build": ["puppeteer"],
+                "versions": {"puppeteer": "^25"},
+            },
+        ),
+        calls.append,
+    )
+    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer@^25"]]
+
+
+def test_node_grouped_pinned_allowed_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    calls: list[list[str]] = []
+    execute(
+        Method(
+            kind="node",
+            params={
+                "npm_pkg": "@mermaid-js/mermaid-cli",
+                "co_install": ["puppeteer"],
+                "allow_build": ["puppeteer"],
+                "versions": {"puppeteer": "^25"},
+            },
+        ),
+        calls.append,
+    )
+    assert calls == [
+        [
+            str(pnpm),
+            "add",
+            "-g",
+            "--allow-build=puppeteer",
+            "@mermaid-js/mermaid-cli,puppeteer@^25",
+        ]
+    ]
+
+
+def test_node_co_install_does_not_duplicate_own_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    calls: list[list[str]] = []
+    execute(
+        Method(kind="node", params={"npm_pkg": "puppeteer", "co_install": ["puppeteer"]}),
+        calls.append,
+    )
+    assert calls == [[str(pnpm), "add", "-g", "puppeteer"]]
+
+
+def test_node_bare_string_co_install_raises_not_iterated() -> None:
+    calls: list[list[str]] = []
+    with pytest.raises(ExecutorError, match="co_install"):
+        execute(
+            Method(kind="node", params={"npm_pkg": "x", "co_install": "puppeteer"}),
+            calls.append,
+        )
+    assert calls == []
+
+
+def test_node_non_string_co_install_element_raises() -> None:
+    with pytest.raises(ExecutorError, match="co_install"):
+        execute(Method(kind="node", params={"npm_pkg": "x", "co_install": [1]}), lambda _cmd: None)
+
+
+def test_node_versions_bare_string_raises() -> None:
+    with pytest.raises(ExecutorError, match="versions"):
+        execute(Method(kind="node", params={"npm_pkg": "x", "versions": "nope"}), lambda _cmd: None)
+
+
+def test_node_smoke_does_not_change_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    calls: list[list[str]] = []
+    execute(
+        Method(
+            kind="node",
+            params={
+                "npm_pkg": "puppeteer",
+                "allow_build": ["puppeteer"],
+                "smoke": "puppeteer-browser",
+            },
+        ),
+        calls.append,
+    )
+    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
+
+
 def test_sdkman_sources_init_script_then_installs_candidate():
     calls, runner = _record()
     execute(Method(kind="sdkman", params={"candidate": "java"}), runner)

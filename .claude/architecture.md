@@ -54,6 +54,20 @@ installer runs; the availability VERDICT stays with `resolve_dependencies` +
 is never resolved, never ordered, never expanded transitively, and never
 installed on its own — the two fields share a shape and share nothing else.
 
+`Tool.requires` remains the sole mechanism that determines install ORDER; a
+node method's `co_install` shapes only the pnpm INVOCATION and never adds,
+reorders or implies a dependency edge. A package named in `co_install` must
+independently be a catalog tool that the declaring tool already lists in
+`requires`, and a registry test enforces that. `allow_build` may only name
+packages the same invocation installs, so the registry cannot widen pnpm's
+build-script gate beyond its own install group; the grant pnpm records for
+such a package is persistent and package-level rather than per-invocation,
+and no version pin this project declares constrains it. `versions` pins group
+members so a peer-dependency pair cannot drift apart silently in the commands
+THIS project generates. `smoke` names one post-install check from a closed,
+code-owned set: the registry selects a check by name and can never supply a
+command, so a registry edit cannot introduce arbitrary post-install execution.
+
 The only code that reads `recommends` is
 `installer/selection.py::unstaged_recommends`, a flat one-hop lookup that
 deliberately does not live beside the resolver, and
