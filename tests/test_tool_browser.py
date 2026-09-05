@@ -293,7 +293,7 @@ async def test_invert_skips_non_selectable_rows() -> None:
         assert browser.selected == {"one"}
 
 
-async def testrefresh_marks_leaves_non_selectable_cell_untouched() -> None:
+async def test_refresh_marks_leaves_non_selectable_cell_untouched() -> None:
     # alpha's row_cells render a distinctive sel cell; refresh_marks (run on
     # select-all) must not overwrite it, since alpha is non-selectable.
     def cells(item: _Item) -> list[Text]:
@@ -321,7 +321,7 @@ async def test_view_switch_repaints_cells_at_full_width() -> None:
         assert "a very long description that needs full column width here" in _screen_text(app)
 
 
-async def testrefresh_marks_tolerates_a_cleared_table() -> None:
+async def test_refresh_marks_tolerates_a_cleared_table() -> None:
     """Regression: refresh_marks is scheduled via call_after_refresh; under the
     real Textual driver a second _rebuild (the single-tab activation / a resize)
     clears the table before the pending callback fires. It must not raise
@@ -336,7 +336,7 @@ async def testrefresh_marks_tolerates_a_cleared_table() -> None:
         browser.refresh_marks()  # must not raise CellDoesNotExist
 
 
-async def testrefresh_marks_tolerates_a_removed_table() -> None:
+async def test_refresh_marks_tolerates_a_removed_table() -> None:
     """Regression: when the browser's screen is popped before the pending
     call_after_refresh fires, the DataTable child is removed outright (not just
     cleared) while the browser still reports is_mounted. The stale callback must
