@@ -12,6 +12,11 @@ whose parentheses span a newline. The newline exclusion is how the multi-line fo
 is refused rather than half-parsed. Both are deliberate: zsh plugin arrays are flat
 lists of bare names, so nesting has no legitimate form to support, and a rewrite that
 could match across lines is the defect most likely to corrupt a real .zshrc.
+
+Refusal is by *final* assignment, not by "no parseable line anywhere": a
+multi-line array after a single-line one is the array zsh honors, so the
+single-line one above it is dead and editing it would report success while
+loading nothing. That case refuses too.
 """
 
 import re
@@ -41,39 +46,60 @@ _PLUGINS_LINE = re.compile(
     r"^(?P<indent>[ \t]*)plugins=\((?P<body>[^()\n]*)\)(?P<trailer>[ \t]*(?:#.*)?)$"
 )
 
+# Any line that OPENS a plugins array, including the multi-line form
+# _PLUGINS_LINE deliberately refuses. Used to detect an assignment this module
+# cannot edit but zsh still honors.
+_ANY_PLUGINS_OPEN = re.compile(r"^[ \t]*plugins=\(")
+
 _NO_ARRAY = "No single-line plugins=(...) array to edit; only the single-line form is supported"
+_SHADOWED = (
+    "The last plugins=(...) array in this file is the multi-line form, which would "
+    "override any single-line array above it; only the single-line form is supported"
+)
 
 
-def _locate(lines: list[str]) -> int | None:
-    # Last-match-wins mirrors the documented last-begin pairing rule used for
-    # marker blocks, and matches zsh, where the final assignment before oh-my-zsh
-    # is sourced is the one that takes effect.
-    index: int | None = None
+def _locate(lines: list[str]) -> tuple[int, re.Match[str]] | None:
+    """The single-line plugins=(...) array zsh actually honors, with its match.
+
+    Last-match-wins mirrors the documented last-begin pairing rule used for
+    marker blocks, and matches zsh, where the final assignment before oh-my-zsh
+    is sourced is the one that takes effect. An array this module cannot parse
+    (the multi-line form) is one of those assignments, so it *invalidates* any
+    single-line match above it rather than being ignored — editing a line a
+    later array overwrites would report success while changing nothing zsh
+    loads. Returning the match, not just the index, means callers consume a
+    proven match and never re-derive one that cannot fail.
+    """
+    found: tuple[int, re.Match[str]] | None = None
     for i, line in enumerate(lines):
-        if _PLUGINS_LINE.match(line):
-            index = i
-    return index
+        match = _PLUGINS_LINE.match(line)
+        if match is not None:
+            found = (i, match)
+        elif _ANY_PLUGINS_OPEN.match(line):
+            found = None
+    return found
+
+
+def _refusal(content: str) -> str:
+    """Why there is nothing editable: a shadowing multi-line array, or no array."""
+    if any(_ANY_PLUGINS_OPEN.match(line) for line in content.split("\n")):
+        return _SHADOWED
+    return _NO_ARRAY
 
 
 def _names_in(content: str) -> list[str] | None:
-    lines = content.split("\n")
-    index = _locate(lines)
-    if index is None:
+    found = _locate(content.split("\n"))
+    if found is None:
         return None
-    match = _PLUGINS_LINE.match(lines[index])
-    if match is None:
-        return None
-    return match.group("body").split()
+    return found[1].group("body").split()
 
 
 def _rewrite(content: str, plugins: tuple[str, ...], *, enable: bool) -> str | None:
     lines = content.split("\n")
-    index = _locate(lines)
-    if index is None:
+    found = _locate(lines)
+    if found is None:
         return None
-    match = _PLUGINS_LINE.match(lines[index])
-    if match is None:
-        return None
+    index, match = found
     existing = match.group("body").split()
     if enable:
         names = existing + [name for name in plugins if name not in existing]
@@ -90,11 +116,12 @@ def enable_plugins(content: str, plugins: tuple[str, ...] = MANAGED_PLUGINS) -> 
     """Add missing plugin names to the last single-line plugins=(...) array.
 
     Enabling and silently doing nothing would let the toggle claim success while
-    nothing changed, so a missing array raises rather than returning unchanged.
+    nothing changed, so a missing — or shadowed — array raises rather than
+    returning unchanged.
     """
     rewritten = _rewrite(content, plugins, enable=True)
     if rewritten is None:
-        raise OmzPluginsError(_NO_ARRAY)
+        raise OmzPluginsError(_refusal(content))
     return rewritten
 
 

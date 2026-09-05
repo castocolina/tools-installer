@@ -171,3 +171,34 @@ def test_omz_present_accepts_a_valid_zsh_env_var(
     assert omz_present(tmp_path, {"ZSH": str(custom)}) is True
     assert omz_present(tmp_path, {"ZSH": str(tmp_path / "missing")}) is False
     assert omz_present(tmp_path, {"ZSH": ""}) is False
+
+
+def test_a_multi_line_array_after_a_single_line_one_is_refused_not_silently_edited() -> None:
+    # zsh honors the LAST assignment. Editing the single-line array above a
+    # multi-line one would report success while loading nothing.
+    src = "plugins=(git)\n# later\nplugins=(\n  zsh-autosuggestions\n)\n"
+    with pytest.raises(OmzPluginsError, match="multi-line"):
+        enable_plugins(src)
+    assert disable_plugins(src) == src
+    assert plugins_enabled("plugins=(git docker)\n# later\nplugins=(\n  z\n)\n") is False
+
+
+def test_a_single_line_array_after_a_multi_line_one_is_still_editable() -> None:
+    # The reverse order is fine: the single-line array is the final assignment.
+    src = "plugins=(\n  z\n)\nplugins=(git)\n"
+    assert enable_plugins(src) == "plugins=(\n  z\n)\nplugins=(git docker)\n"
+
+
+def test_write_refuses_a_shadowed_array_and_leaves_the_file_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc = tmp_path / ".zshrc"
+    shadowed = "plugins=(git)\nplugins=(\n  z\n)\n"
+    zshrc.write_text(shadowed)
+    with pytest.raises(OmzPluginsError, match="multi-line"):
+        write_plugins(zshrc)
+    assert zshrc.read_text() == shadowed
+    assert plugins_present(zshrc) is False
+    assert remove_plugins(zshrc) == ()
+    assert zshrc.read_text() == shadowed
