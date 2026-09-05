@@ -29,6 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import installer.locations
 from installer.shellrc import apply_block, strip_block
 
 BANNED: dict[str, str] = {
@@ -108,6 +109,26 @@ def real_binary(
     if found is None or is_our_shim(Path(found)):
         return None
     return found
+
+
+def real_pnpm(
+    *,
+    shim_dir: Path | None = None,
+    path_value: str | None = None,
+    lookup: PathLookup = which_in_path,
+) -> str | None:
+    """Resolve real pnpm, never this installer's wrapper.
+
+    installer/run.py::run_command is subprocess.run(cmd), which resolves a
+    bare program name through the live PATH, so once this installer owns a
+    pnpm entry in the managed bin dir every internal invocation must carry
+    an absolute path or it will call our own wrapper instead of pnpm.
+    """
+    if shim_dir is None:
+        shim_dir = installer.locations.bin_dir(None)
+    if path_value is None:
+        path_value = os.environ.get("PATH", "")
+    return real_binary("pnpm", shim_dir=shim_dir, path_value=path_value, lookup=lookup)
 
 
 def install_redirect_shims(

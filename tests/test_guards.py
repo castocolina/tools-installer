@@ -3,6 +3,8 @@ import shlex
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from installer.guards import (
     BAN_BEGIN,
     BAN_END,
@@ -20,6 +22,7 @@ from installer.guards import (
     install_shims,
     is_our_shim,
     real_binary,
+    real_pnpm,
     redirect_shim_script,
     remove_ban_aliases,
     remove_shims,
@@ -266,6 +269,64 @@ def test_real_binary_skips_shim_dir(tmp_path: Path):
         lookup=lookup,
     )
     assert found == str(real_dir / "pnpm")
+
+
+def _lookup_existing(name: str, path: str) -> str | None:
+    for directory in path.split(os.pathsep):
+        candidate = Path(directory) / name
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def test_real_pnpm_skips_shim_dir(tmp_path: Path):
+    shim_dir = tmp_path / "shims"
+    real_dir = tmp_path / "real"
+    shim_dir.mkdir()
+    real_dir.mkdir()
+    (shim_dir / "pnpm").write_text("shim\n")
+    (real_dir / "pnpm").write_text("real\n")
+    found = real_pnpm(
+        shim_dir=shim_dir,
+        path_value=f"{shim_dir}{os.pathsep}{real_dir}",
+        lookup=_lookup_existing,
+    )
+    assert found == str(real_dir / "pnpm")
+
+
+def test_real_pnpm_rejects_sentinel_match(tmp_path: Path):
+    shim_dir = tmp_path / "shims"
+    other = tmp_path / "other"
+    shim_dir.mkdir()
+    other.mkdir()
+    fake = other / "pnpm"
+
+    def lookup(_name: str, _path: str) -> str | None:
+        return str(fake)
+
+    for sentinel in (SHIM_SENTINEL, REDIRECT_SENTINEL):
+        fake.write_text(f"#!/bin/sh\n{sentinel}\n")
+        assert real_pnpm(shim_dir=shim_dir, path_value=str(other), lookup=lookup) is None
+
+
+def test_real_pnpm_none_when_nothing_resolves(tmp_path: Path):
+    assert real_pnpm(shim_dir=tmp_path, path_value="", lookup=lambda _n, _p: None) is None
+
+
+def test_real_pnpm_defaults_read_home_and_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    shim_dir = tmp_path / ".local" / "bin"
+    real_dir = tmp_path / "real"
+    shim_dir.mkdir(parents=True)
+    real_dir.mkdir()
+    wrapper = shim_dir / "pnpm"
+    wrapper.write_text(f"#!/bin/sh\n{REDIRECT_SENTINEL}\n")
+    wrapper.chmod(0o755)
+    real = real_dir / "pnpm"
+    real.write_text("#!/bin/sh\n")
+    real.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shim_dir}{os.pathsep}{real_dir}")
+    assert real_pnpm() == str(real)
 
 
 def test_real_binary_rejects_sentinel_match(tmp_path: Path):

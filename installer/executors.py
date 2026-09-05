@@ -8,6 +8,7 @@ import shlex
 from collections.abc import Callable
 from typing import cast
 
+from installer.guards import real_pnpm
 from installer.locations import applications_dir
 from installer.model import Method
 from installer.run import Runner
@@ -70,8 +71,14 @@ def _brew(method: Method, runner: Runner) -> None:
 
 
 def _node(method: Method, runner: Runner) -> None:
-    # pnpm only — bare npm is banned. `add -g` installs the package's CLI globally.
-    runner(["pnpm", "add", "-g", require_str(method, "npm_pkg")])
+    # pnpm is invoked by absolute path because the managed bin dir may hold this
+    # installer's own argv-conditional pnpm wrapper, and a global install
+    # performed by this installer must reach real pnpm so its gated postinstall
+    # model still applies.
+    pnpm = real_pnpm()
+    if pnpm is None:
+        raise ExecutorError("pnpm not found (managed shim dir excluded from the search)")
+    runner([pnpm, "add", "-g", require_str(method, "npm_pkg")])
 
 
 def _sdkman(method: Method, runner: Runner) -> None:

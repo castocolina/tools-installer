@@ -29,6 +29,12 @@ def test_installing_mmdc_runs_pnpm_add_global_no_bare_npm(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    pnpm = real_dir / "pnpm"
+    pnpm.write_text("#!/bin/sh\n")
+    pnpm.chmod(0o755)
+    monkeypatch.setenv("PATH", str(real_dir))
     calls: list[list[str]] = []
 
     def not_installed(tool: Tool) -> bool:
@@ -37,5 +43,11 @@ def test_installing_mmdc_runs_pnpm_add_global_no_bare_npm(
     monkeypatch.setattr(engine, "is_installed", not_installed)
     outcome = install_tool(_by_id("mmdc"), _platform(), runner=calls.append)
     assert outcome.status == "installed"
-    assert ["pnpm", "add", "-g", "@mermaid-js/mermaid-cli"] in calls
+    matching = [call for call in calls if call[-3:] == ["add", "-g", "@mermaid-js/mermaid-cli"]]
+    assert matching
+    argv0 = matching[0][0]
+    assert argv0 == str(pnpm)
+    assert Path(argv0).is_absolute()
+    assert argv0.endswith("pnpm")
     assert not any(call[:1] == ["npm"] for call in calls)
+    assert not any(call[:1] == ["pnpm"] for call in calls)

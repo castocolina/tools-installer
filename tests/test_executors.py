@@ -1,8 +1,10 @@
+import os
 from pathlib import Path
 
 import pytest
 
 from installer.executors import EXECUTORS, ExecutorError, execute
+from installer.guards import REDIRECT_SENTINEL
 from installer.model import Method
 from installer.run import Runner
 
@@ -121,12 +123,50 @@ def test_cask_missing_param_raises():
     assert calls == []
 
 
-def test_node_runs_pnpm_add_global_never_bare_npm():
+def _plant_executable(directory: Path, name: str, body: str = "#!/bin/sh\n") -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_text(body)
+    path.chmod(0o755)
+    return path
+
+
+def test_node_runs_pnpm_add_global_never_bare_npm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    fake_pnpm = _plant_executable(tmp_path / "bin", "pnpm")
+    monkeypatch.setenv("PATH", str(fake_pnpm.parent))
     calls: list[list[str]] = []
     method = Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"})
     execute(method, calls.append)
-    assert calls == [["pnpm", "add", "-g", "@mermaid-js/mermaid-cli"]]
+    assert calls == [[str(fake_pnpm), "add", "-g", "@mermaid-js/mermaid-cli"]]
     assert all(call[0] != "npm" for call in calls)
+    assert all(call[0] != "pnpm" for call in calls)
+
+
+def test_node_raises_when_real_pnpm_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    calls: list[list[str]] = []
+    method = Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"})
+    with pytest.raises(ExecutorError, match="pnpm") as exc_info:
+        execute(method, calls.append)
+    assert "managed shim dir" in str(exc_info.value)
+    assert calls == []
+
+
+def test_node_skips_wrapper_first_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    wrapper = _plant_executable(
+        tmp_path / ".local" / "bin",
+        "pnpm",
+        body=f"#!/bin/sh\n{REDIRECT_SENTINEL}\n",
+    )
+    real = _plant_executable(tmp_path / "real", "pnpm")
+    monkeypatch.setenv("PATH", f"{wrapper.parent}{os.pathsep}{real.parent}")
+    calls: list[list[str]] = []
+    method = Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"})
+    execute(method, calls.append)
+    assert calls == [[str(real), "add", "-g", "@mermaid-js/mermaid-cli"]]
 
 
 def test_node_without_npm_pkg_raises_executor_error():
