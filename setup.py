@@ -409,7 +409,11 @@ def main(argv: list[str]) -> int:
         link_mode=link_mode,
     )
     _verify_and_clean(console, tools, platform, assume_yes=options.yes)
-    if summary.failed or summary.mismatched:
+    # dependency_failed counts as a failed run: the tool was wanted, was
+    # installable on this platform, and was skipped only because something it
+    # requires failed. (no_method is deliberately excluded — a tool that has no
+    # method here was never installable, which is not an error.)
+    if summary.failed or summary.mismatched or summary.dependency_failed:
         render_troubleshooting(console)
         return 1
     return 0
