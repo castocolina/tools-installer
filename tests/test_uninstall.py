@@ -567,7 +567,7 @@ def test_active_tweak_ids_reports_an_enabled_bundle(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     rc_path, bin_dir = _enabled_countdown(tmp_path)
-    assert "countdown" in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
+    assert "tweak:countdown" in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
     assert (
         active_tweak_ids(BUNDLES, rc_path=tmp_path / "clean-rc", bin_dir=tmp_path / "clean-bin")
         == ()
@@ -582,7 +582,7 @@ def test_sweep_tweaks_disables_every_active_tweak(
     helper = bin_dir / "tools-installer-wait-time"
     assert helper.exists()
     assert "wait_time()" in rc_path.read_text()
-    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ("countdown",)
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ("tweak:countdown",)
     assert "wait_time()" not in rc_path.read_text()
     assert not helper.exists()
     assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ()
@@ -659,8 +659,8 @@ def test_orphaned_executable_is_swept_without_its_block(
     helper = bin_dir / "tools-installer-wait-time"
     rc_path.write_text("# leftover user content\n")
     assert helper.exists()
-    assert "countdown" in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
-    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ("countdown",)
+    assert "tweak:countdown" in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ("tweak:countdown",)
     assert not helper.exists()
 
 
@@ -671,8 +671,8 @@ def test_block_without_its_executable_is_still_swept(
     rc_path, bin_dir = _enabled_countdown(tmp_path)
     helper = bin_dir / "tools-installer-wait-time"
     helper.unlink()
-    assert "countdown" in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
-    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ("countdown",)
+    assert "tweak:countdown" in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ("tweak:countdown",)
     assert "wait_time()" not in rc_path.read_text()
 
 
@@ -689,7 +689,7 @@ def test_sweep_never_deletes_a_file_it_does_not_own(
     stranger = bin_dir / "my-script"
     stranger_text = "#!/bin/sh\necho hello\n"
     stranger.write_text(stranger_text)
-    assert "countdown" not in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
+    assert "tweak:countdown" not in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
     assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ()
     assert impostor.exists() and impostor.read_text() == impostor_text
     assert stranger.exists() and stranger.read_text() == stranger_text
@@ -704,5 +704,22 @@ def test_preview_equals_effect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     previewed = active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc)
     swept = sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc)
     assert previewed == swept
-    assert "countdown" in previewed
+    assert "tweak:countdown" in previewed
     assert "omz-plugins" in previewed
+
+
+def test_reported_ids_are_namespaced_policy_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Policies view addresses a bundle as `tweak:<id>`; the preview, the
+    Uninstall row and the sweep must name the same object the same way, and the
+    namespace is what stops a future bundle id colliding with a Policy id."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc_path, bin_dir = _enabled_countdown(tmp_path)
+    zshrc, _rc, _bin = _enabled_omz(tmp_path)
+    ids = active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc)
+    countdown = next(bundle for bundle in BUNDLES if bundle.id == "countdown")
+    assert tweak_policy(countdown, rc_path=rc_path, bin_dir=bin_dir).id in ids
+    assert "countdown" not in ids
+    # The .zshrc policy is deliberately un-namespaced: it is not a TweakBundle.
+    assert "omz-plugins" in ids

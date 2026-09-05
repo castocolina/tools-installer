@@ -270,6 +270,13 @@ def active_tweak_ids(
     because .zshrc's plugins=(...) array and a same-named file in bin_dir are
     both things a user can have without this installer ever running.
 
+    The ids are Policy ids, never raw TweakBundle ids: `tweak_policy` namespaces
+    a bundle as `tweak:<id>` precisely so it cannot collide with the ban or with
+    another policy, and returning the bare id would both throw that away — the
+    Policies view would list `tweak:docker` while the Uninstall row said
+    `docker` — and let a future bundle named `omz-plugins` make the two arms
+    below fire off one another's entry in a flat set.
+
     The None default on zshrc_path exists for unit tests and any caller working
     only with bundles; production callers MUST pass the real path, because
     omitting it silently narrows the sweep to bundles and leaves the Oh-My-Zsh
@@ -278,7 +285,7 @@ def active_tweak_ids(
     ids: list[str] = []
     for bundle in bundles:
         if tweak_present(bundle, rc_path) or tweak_executables_present(bundle, bin_dir):
-            ids.append(bundle.id)
+            ids.append(tweak_policy(bundle, rc_path=rc_path, bin_dir=bin_dir).id)
     if zshrc_path is not None:
         policy = _omz_policy(zshrc_path, rc_path)
         if policy.active:
@@ -311,8 +318,11 @@ def sweep_tweaks(
     ids = active_tweak_ids(bundles, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc_path)
     active = set(ids)
     for bundle in bundles:
-        if bundle.id in active:
-            tweak_policy(bundle, rc_path=rc_path, bin_dir=bin_dir).remove()
+        # Dispatch on the same namespaced Policy id active_tweak_ids reports,
+        # so the two arms below cannot match off one another's entry.
+        policy = tweak_policy(bundle, rc_path=rc_path, bin_dir=bin_dir)
+        if policy.id in active:
+            policy.remove()
     if zshrc_path is not None:
         policy = _omz_policy(zshrc_path, rc_path)
         if policy.id in active:
