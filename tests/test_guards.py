@@ -537,7 +537,8 @@ def _run_shim(shim: Path, *argv: str) -> subprocess.CompletedProcess[str]:
         (("install", "-g", "typescript"), "VOLTA install typescript\n"),
         (("add", "-g", "@scope/pkg"), "VOLTA install @scope/pkg\n"),
         (("i", "-g", "a", "b"), "VOLTA install a b\n"),
-        (("install", "-g", "typescript", "--loglevel=warn"), "VOLTA install typescript\n"),
+        # A whitelisted boolean in attached form is still droppable.
+        (("install", "-g", "typescript", "--save-dev=true"), "VOLTA install typescript\n"),
         (("i", "-gD", "typescript"), "VOLTA install typescript\n"),
     ],
 )
@@ -592,6 +593,37 @@ def test_npm_unhonourable_option_never_reaches_volta(tmp_path: Path, argv: tuple
     assert result.returncode == 127
     assert result.stdout == ""
     assert "banned" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        # Dropping a pinned registry re-resolves the package from npmjs.com:
+        # a dependency-confusion setup built by the tool meant to prevent one.
+        ("i", "-g", "--registry=https://npm.internal.test", "mypkg"),
+        ("i", "-g", "--prefix=/opt/x", "mypkg"),
+        ("i", "-g", "--loglevel=warn", "typescript"),
+        ("i", "-g", "--ignore-scripts=true", "typescript"),
+        # --global's value is what decides global-ness, and the loop is only
+        # allowed to read the option's name.
+        ("i", "--global=true", "typescript"),
+    ],
+)
+def test_npm_attached_option_value_is_whitelisted_by_name(tmp_path: Path, argv: tuple[str, ...]):
+    # The attached --opt=value form consumes no following token, which makes it
+    # parseable — not droppable. Only a whitelisted boolean name may be dropped.
+    npm_shim, _pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(npm_shim, *argv)
+    assert result.returncode == 127
+    assert result.stdout == ""
+    assert "banned" in result.stderr
+
+
+def test_pnpm_attached_registry_passes_through_with_the_registry_intact(tmp_path: Path):
+    _npm_shim, pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(pnpm_shim, "add", "-g", "--registry=https://npm.internal.test", "mypkg")
+    assert result.returncode == 0
+    assert result.stdout == "PNPM add -g --registry=https://npm.internal.test mypkg\n"
 
 
 @pytest.mark.parametrize(

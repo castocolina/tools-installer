@@ -152,9 +152,11 @@ def global_redirect_shim_script(name: str, *, volta_path: str, passthrough_path:
     """Argv-conditional wrapper: global install/add/i execs volta, else fallback.
 
     The wrapper redirects only argv it fully understands. Every option token is
-    matched against BOOLEAN_LONG_OPTIONS / BOOLEAN_SHORT_FLAGS (plus the
-    attached `--opt=value` form, which consumes no following token); anything
-    else clears the `known` flag and the volta branch is skipped entirely.
+    matched against BOOLEAN_LONG_OPTIONS / BOOLEAN_SHORT_FLAGS — the attached
+    `--opt=value` form by its NAME, against the same whitelist, because
+    consuming no following token makes the form parseable but does not make the
+    option droppable; anything else clears the `known` flag and the volta branch
+    is skipped entirely.
     Without that flag the wrapper would treat a separated option value as a
     package name — `npm i -g --loglevel warn typescript` would run
     `volta install warn typescript`, installing a real, unrelated package from
@@ -200,8 +202,16 @@ def global_redirect_shim_script(name: str, *, volta_path: str, passthrough_path:
     #    package names.
     # 3. `known` is the guard that makes rule 2 sound: the rewrite may only
     #    assume "non-flag token = package name" when every option in argv is a
-    #    boolean (or the attached --opt=value form). One unrecognised option
-    #    clears it and the whole volta branch is skipped.
+    #    whitelisted boolean. One unrecognised option clears it and the whole
+    #    volta branch is skipped. The attached --opt=value form is checked
+    #    against the SAME whitelist, on its name alone: consuming no following
+    #    token is what makes the form parseable, not what makes the option
+    #    droppable. A blanket accept there let `--registry=https://internal`
+    #    vanish and re-resolved the package from the public registry — a
+    #    dependency-confusion setup built by the tool meant to prevent one —
+    #    and did the same to `--prefix=`. `--global=` is excluded on purpose
+    #    (long_booleans drops it): its value is what decides global-ness, and
+    #    the loop cannot read a value it is only allowed to see the name of.
     # 4. A POSIX case pattern matches a WHOLE token, so -g|--global alone never
     #    fires for a packed cluster like -gD. -*[!<booleans>]* catches a cluster
     #    holding anything but known boolean letters — an attached short value
@@ -223,7 +233,7 @@ def global_redirect_shim_script(name: str, *, volta_path: str, passthrough_path:
         "known=1\n"
         'for arg in "$@"; do\n'
         '  case "$arg" in\n'
-        "    --*=*) ;;\n"
+        f'    --*=*) case "${{arg%%=*}}" in {long_booleans}) ;; *) known=0 ;; esac ;;\n'
         "    -g|--global) is_global=1 ;;\n"
         f"    {long_booleans}) ;;\n"
         "    --*) known=0 ;;\n"
