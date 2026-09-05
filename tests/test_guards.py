@@ -568,6 +568,56 @@ def test_npm_separated_option_value_never_reaches_volta(tmp_path: Path, argv: tu
     assert "banned" in result.stderr
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        # An option volta cannot honour must degrade, not be dropped: volta runs
+        # a real `npm install --global`, so redirecting these would run the
+        # install with scripts enabled / resolution forced / the network live
+        # after the user typed the option that says otherwise.
+        ("i", "-g", "--ignore-scripts", "typescript"),
+        ("i", "-g", "--force", "typescript"),
+        ("i", "-g", "--offline", "typescript"),
+        ("i", "-g", "--prefer-offline", "typescript"),
+        # nopt's explicit-value form for a Boolean: `false` is the option's
+        # value, so redirecting would run `volta install false typescript`.
+        ("i", "-g", "--ignore-scripts", "false", "typescript"),
+        ("i", "-g", "--save-dev", "true", "typescript"),
+        ("i", "--global", "false", "typescript"),
+    ],
+)
+def test_npm_unhonourable_option_never_reaches_volta(tmp_path: Path, argv: tuple[str, ...]):
+    npm_shim, _pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(npm_shim, *argv)
+    assert result.returncode == 127
+    assert result.stdout == ""
+    assert "banned" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (
+            ("add", "-g", "--ignore-scripts", "typescript"),
+            "PNPM add -g --ignore-scripts typescript\n",
+        ),
+        (
+            ("add", "-g", "--ignore-scripts", "false", "typescript"),
+            "PNPM add -g --ignore-scripts false typescript\n",
+        ),
+    ],
+)
+def test_pnpm_unhonourable_option_passes_through_unmodified(
+    tmp_path: Path, argv: tuple[str, ...], expected: str
+):
+    # pnpm's degrade path keeps the option the user typed, under pnpm's own
+    # gated-postinstall model — the safe direction in both dimensions.
+    _npm_shim, pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(pnpm_shim, *argv)
+    assert result.returncode == 0
+    assert result.stdout == expected
+
+
 def test_pnpm_separated_option_value_passes_through_to_real_pnpm(tmp_path: Path):
     _npm_shim, pnpm_shim = _global_shims(tmp_path)
     result = _run_shim(pnpm_shim, "add", "-g", "--dir", "/tmp", "typescript")
@@ -593,6 +643,15 @@ def test_boolean_option_whitelists_hold_only_valueless_options():
     assert "g" in BOOLEAN_SHORT_FLAGS
     for taker in ("C", "F", "w"):
         assert taker not in BOOLEAN_SHORT_FLAGS
+
+
+def test_boolean_option_whitelist_excludes_options_volta_cannot_honour():
+    # Valueless is necessary but not sufficient: a whitelisted option is
+    # DROPPED, and `volta install` runs a real `npm install --global`, so
+    # dropping any of these would silently run the install under weaker rules
+    # than the user typed.
+    for unhonourable in ("--ignore-scripts", "--force", "--offline", "--prefer-offline"):
+        assert unhonourable not in BOOLEAN_LONG_OPTIONS
 
 
 def test_pnpm_add_gd_redirects_to_volta(tmp_path: Path):

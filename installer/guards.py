@@ -64,13 +64,26 @@ class GlobalRedirect:
 
 
 VOLTA: str = "volta"
-# Options that consume no following token, so whatever comes after one of them
-# is a real package name. This is deliberately a whitelist of BOOLEANS rather
-# than a table of value-taking options: an option this list is missing degrades
-# to the wrapper's fallback (npm's hard block, pnpm's pass-through), while a
-# value-taking option a blocklist missed would hand its VALUE to `volta install`
-# as a package name. Being incomplete is therefore safe by construction, which
-# is what keeps this out of 04-RESEARCH.md's "Don't Hand-Roll" territory.
+# Options that consume no following token AND whose loss cannot change what gets
+# installed or how. Two independent conditions, both required, because a
+# whitelisted option is not forwarded to volta — it is DROPPED:
+#
+# 1. Valueless. This is deliberately a whitelist of BOOLEANS rather than a table
+#    of value-taking options: an option this list is missing degrades to the
+#    wrapper's fallback (npm's hard block, pnpm's pass-through), while a
+#    value-taking option a blocklist missed would hand its VALUE to
+#    `volta install` as a package name.
+# 2. Inert for a global install. `volta install` has no way to forward an
+#    option, so an option that survives only as an assumption is an option the
+#    wrapper silently overrides. --ignore-scripts, --force, --offline and
+#    --prefer-offline all fail this: volta runs a real `npm install --global`
+#    with install scripts enabled, resolution unforced and the network
+#    available, so dropping them inverts a decision the user typed. They are
+#    absent on purpose and reach the `--*) known=0` arm, which degrades.
+#
+# Being incomplete is therefore safe by construction, which is what keeps this
+# out of 04-RESEARCH.md's "Don't Hand-Roll" territory. Being over-complete is
+# not, which is why membership is argued per entry rather than assumed.
 BOOLEAN_LONG_OPTIONS: tuple[str, ...] = (
     "--global",
     "--save",
@@ -79,12 +92,8 @@ BOOLEAN_LONG_OPTIONS: tuple[str, ...] = (
     "--save-prod",
     "--save-optional",
     "--no-save",
-    "--force",
-    "--ignore-scripts",
     "--recursive",
     "--workspace-root",
-    "--offline",
-    "--prefer-offline",
     "--silent",
     "--verbose",
 )
@@ -152,12 +161,17 @@ def global_redirect_shim_script(name: str, *, volta_path: str, passthrough_path:
     the public registry through the very path that trades pnpm's gated
     postinstalls for volta's ungated `npm install --global`.
 
-    Two shapes therefore degrade instead of redirecting: a value-taking option
+    Four shapes therefore degrade instead of redirecting: a value-taking option
     anywhere in argv (before the subcommand it also corrupts subcommand
-    detection: `npm --prefix <path> install -g <pkg>`), and a short cluster
+    detection: `npm --prefix <path> install -g <pkg>`), a short cluster
     carrying an attached value (`pnpm -Cmy-gadget add x`, whose `g` would
     otherwise flip is_global and turn a workspace-scoped add into a global
-    install). npm degrades to its hard block — safe, the user sees the ban
+    install), a boolean given nopt's explicit-value form (`--ignore-scripts
+    false <pkg>`, whose `false` is a value and not a package name), and an
+    option whose effect volta cannot honour (`--ignore-scripts`, `--force`,
+    `--offline`, `--prefer-offline`: see BOOLEAN_LONG_OPTIONS — redirecting
+    those would run the install under weaker rules than the user asked for).
+    npm degrades to its hard block — safe, the user sees the ban
     message and retypes. pnpm degrades to an un-redirected pass-through to real
     pnpm: a genuine redirect bypass, but no security loss, since the install
     still runs under pnpm's gated-postinstall model.
@@ -194,6 +208,13 @@ def global_redirect_shim_script(name: str, *, volta_path: str, passthrough_path:
     #    (-Cmy-gadget) included — and -*g* then flips is_global for what is left.
     #    A token beginning with -- is consumed by the arms above it, so
     #    --filter=-g cannot reach either.
+    # 5. npm's option parser (nopt) accepts an explicit value for a Boolean
+    #    option — `--save-dev false` is the flag set to false, not the flag
+    #    followed by a package named `false`. The whitelist consumes the option
+    #    but cannot consume its value, so a bare true/false token anywhere in
+    #    argv clears `known` and the whole volta branch is skipped. Degrading
+    #    also costs nothing real: `volta install true` is the only alternative
+    #    reading, and it is never what the user meant.
     return (
         "#!/bin/sh\n"
         f"{REDIRECT_SENTINEL}\n"
@@ -209,6 +230,7 @@ def global_redirect_shim_script(name: str, *, volta_path: str, passthrough_path:
         f"    -*[!{BOOLEAN_SHORT_FLAGS}]*) known=0 ;;\n"
         "    -*g*) is_global=1 ;;\n"
         "    -*) ;;\n"
+        "    true|false) known=0 ;;\n"
         '    *) if [ -z "$subcmd" ]; then subcmd="$arg"; fi ;;\n'
         "  esac\n"
         "done\n"
