@@ -15,7 +15,7 @@ from installer.session import (
 from installer.versions import TagResolver
 
 
-def _tool(tool_id: str, priority: str = "P3") -> Tool:
+def _tool(tool_id: str, priority: str = "P3", *, requires: tuple[str, ...] = ()) -> Tool:
     return Tool(
         id=tool_id,
         name=tool_id,
@@ -23,6 +23,7 @@ def _tool(tool_id: str, priority: str = "P3") -> Tool:
         cmd=tool_id,
         methods=(Method(kind="brew", params={"formula": tool_id}),),
         priority=priority,
+        requires=requires,
     )
 
 
@@ -186,3 +187,42 @@ def test_summarize_buckets_checksum_mismatch() -> None:
     summary = summarize(outcomes)
     assert summary.installed == ("rg",)
     assert summary.mismatched == ("fd",)
+
+
+def test_dependent_is_skipped_when_its_dependency_failed() -> None:
+    called: list[str] = []
+
+    def fake_install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+    ) -> InstallOutcome:
+        called.append(tool.id)
+        return InstallOutcome(tool.id, "failed")
+
+    outcomes = run_installs(
+        [_tool("sdkman"), _tool("java", requires=("sdkman",))],
+        _platform(),
+        lambda cmd: None,
+        lambda repo: "1.0.0",
+        fake_install,
+    )
+    assert [(o.tool_id, str(o.status)) for o in outcomes] == [
+        ("sdkman", "failed"),
+        ("java", "dependency-failed"),
+    ]
+    assert outcomes[1].blocked_by == ("sdkman",)
+    assert called == ["sdkman"]
+
+
+def test_summarize_buckets_dependency_failed() -> None:
+    outcomes = [
+        InstallOutcome("sdkman", "failed"),
+        InstallOutcome("java", "dependency-failed", blocked_by=("sdkman",)),
+    ]
+    summary = summarize(outcomes)
+    assert summary.failed == ("sdkman",)
+    assert summary.dependency_failed == ("java",)

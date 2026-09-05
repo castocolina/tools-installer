@@ -31,6 +31,7 @@ from installer.render import (
     render_guard,
     render_guard_status,
     render_rc_duplicates,
+    render_skipped,
     render_summary,
     render_uninstall,
     render_verification,
@@ -138,6 +139,8 @@ def run_wizard(
     )
     summary = summarize(outcomes)
     render_summary(summary, console)
+    # Summary gives the counts; this gives the reasons, so a skipped dependent is never a bare id.
+    render_skipped(outcomes, console)
     render_verification(outcomes, console)
     return summary
 

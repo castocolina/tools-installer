@@ -50,6 +50,7 @@ def render_summary(summary: Summary, console: Console) -> None:
         f"Installed: {len(summary.installed)}  "
         f"Already: {len(summary.already)}  "
         f"Failed: {len(summary.failed)}  "
+        f"Dependency failed: {len(summary.dependency_failed)}  "
         f"Checksum mismatch: {len(summary.mismatched)}  "
         f"No method: {len(summary.no_method)}"
     )
@@ -57,11 +58,26 @@ def render_summary(summary: Summary, console: Console) -> None:
         ("installed", summary.installed),
         ("already installed", summary.already),
         ("failed", summary.failed),
+        ("dependency failed", summary.dependency_failed),
         ("checksum mismatch", summary.mismatched),
         ("no method", summary.no_method),
     ):
         if ids:
             console.print(f"  {label}: {', '.join(ids)}")
+
+
+def render_skipped(outcomes: list[InstallOutcome], console: Console) -> None:
+    """Name every tool the run deliberately did not attempt and why.
+
+    Silent when nothing was skipped (the common case prints nothing,
+    matching render_dependency_notice). Counts live in render_summary;
+    reasons live here.
+    """
+    for outcome in outcomes:
+        if outcome.status is not InstallStatus.DEPENDENCY_FAILED:
+            continue
+        blockers = ", ".join(outcome.blocked_by) or "an earlier failure"
+        console.print(f"[yellow]⚠ {outcome.tool_id} skipped — dependency failed: {blockers}[/]")
 
 
 def render_troubleshooting(console: Console) -> None:

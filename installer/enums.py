@@ -58,6 +58,9 @@ class InstallStatus(StrEnum):
     NO_METHOD = "no-method"
     FAILED = "failed"
     CHECKSUM_MISMATCH = "checksum-mismatch"
+    # Not attempted: a required tool did not resolve earlier in this run.
+    # Distinct from FAILED, which means it WAS attempted and every method lost.
+    DEPENDENCY_FAILED = "dependency-failed"
 
 
 class UninstallState(StrEnum):

@@ -17,6 +17,17 @@ MismatchChoice = Literal["retry", "skip", "fallback"]
 OnMismatch = Callable[[str], MismatchChoice]
 
 _PRIORITY_RANK = {Priority.P0: 0, Priority.P1: 1, Priority.P2: 2, Priority.P3: 3}
+# Statuses meaning this tool is not on the machine after this run.
+# DEPENDENCY_FAILED is a member of its own set on purpose: that membership,
+# and nothing else, is what carries a failure down a multi-link requires chain.
+_UNRESOLVED: frozenset[InstallStatus] = frozenset(
+    {
+        InstallStatus.FAILED,
+        InstallStatus.NO_METHOD,
+        InstallStatus.CHECKSUM_MISMATCH,
+        InstallStatus.DEPENDENCY_FAILED,
+    }
+)
 
 
 class Install(Protocol):
@@ -40,6 +51,7 @@ class Summary:
     failed: tuple[str, ...]
     no_method: tuple[str, ...]
     mismatched: tuple[str, ...] = ()
+    dependency_failed: tuple[str, ...] = ()
 
 
 def order_for_install(tools: list[Tool]) -> list[Tool]:
@@ -61,9 +73,28 @@ def run_installs(
     the install once, fallback re-runs it letting the ladder continue past
     the mismatch, skip keeps the mismatch outcome. No callback = unattended
     mode: the hard-fail outcome stands.
+
+    A tool whose requires names anything unresolved earlier in THIS call is
+    reported dependency-failed and never attempted. This is a single forward
+    pass, correct because the caller is expected to pass the
+    deps-first topological order resolve_dependencies produces, so a
+    dependency is always visited before anything requiring it. run_installs
+    does not sort and must not start sorting — requires plus
+    resolve_dependencies remains the only ordering mechanism. When that
+    invariant is violated, dependents of failed tools are
+    attempted rather than skipped, which is the behaviour this function had
+    before this change and is never a crash.
     """
     outcomes: list[InstallOutcome] = []
+    unresolved: set[str] = set()
     for tool in tools:
+        blocked = tuple(dep_id for dep_id in dict.fromkeys(tool.requires) if dep_id in unresolved)
+        if blocked:
+            unresolved.add(tool.id)
+            outcomes.append(
+                InstallOutcome(tool.id, InstallStatus.DEPENDENCY_FAILED, blocked_by=blocked)
+            )
+            continue
         outcome = install(tool, platform, runner, resolve_tag)
         if outcome.status == InstallStatus.CHECKSUM_MISMATCH and on_mismatch is not None:
             choice = on_mismatch(tool.id)
@@ -71,6 +102,8 @@ def run_installs(
                 outcome = install(tool, platform, runner, resolve_tag)
             elif choice == "fallback":
                 outcome = install(tool, platform, runner, resolve_tag, checksum_policy="continue")
+        if outcome.status in _UNRESOLVED:
+            unresolved.add(tool.id)
         outcomes.append(outcome)
     return outcomes
 
@@ -88,6 +121,7 @@ def summarize(outcomes: list[InstallOutcome]) -> Summary:
         InstallStatus.FAILED: [],
         InstallStatus.NO_METHOD: [],
         InstallStatus.CHECKSUM_MISMATCH: [],
+        InstallStatus.DEPENDENCY_FAILED: [],
     }
     for outcome in outcomes:
         buckets[outcome.status].append(outcome.tool_id)
@@ -97,4 +131,5 @@ def summarize(outcomes: list[InstallOutcome]) -> Summary:
         failed=tuple(buckets[InstallStatus.FAILED]),
         no_method=tuple(buckets[InstallStatus.NO_METHOD]),
         mismatched=tuple(buckets[InstallStatus.CHECKSUM_MISMATCH]),
+        dependency_failed=tuple(buckets[InstallStatus.DEPENDENCY_FAILED]),
     )

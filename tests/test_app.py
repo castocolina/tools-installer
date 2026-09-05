@@ -16,13 +16,14 @@ from installer.session import Install, MismatchChoice, Summary
 from installer.versions import TagResolver
 
 
-def _tool(tool_id: str, category: str) -> Tool:
+def _tool(tool_id: str, category: str, *, requires: tuple[str, ...] = ()) -> Tool:
     return Tool(
         id=tool_id,
         name=tool_id,
         category=category,
         cmd=tool_id,
         methods=(Method(kind="brew", params={"formula": tool_id}),),
+        requires=requires,
     )
 
 
@@ -133,6 +134,40 @@ def test_failed_install_surfaces_in_summary_without_crashing():
     assert summary is not None
     assert summary.failed == ("rg",)
     assert summary.installed == ()
+
+
+def test_run_wizard_reports_a_skipped_dependent_with_its_reason() -> None:
+    called: list[str] = []
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+    ) -> InstallOutcome:
+        called.append(tool.id)
+        if tool.id == "sdkman":
+            return InstallOutcome(tool.id, "failed")
+        return InstallOutcome(tool.id, "installed", method_kind="brew")
+
+    console, buf = _console()
+    summary = run_wizard(
+        [_tool("sdkman", "pkg-mgr"), _tool("java", "dev", requires=("sdkman",))],
+        _platform(),
+        FakePrompter(categories=[], tools=[], confirm=True),
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        installed=_never_installed,
+    )
+    assert summary is not None
+    assert summary.dependency_failed == ("java",)
+    assert "java skipped — dependency failed: sdkman" in buf.getvalue()
+    assert called == ["sdkman"]
 
 
 def test_categories_flag_filters_tools():

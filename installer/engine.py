@@ -25,6 +25,9 @@ class InstallOutcome:
     method_kind: str | None = None
     errors: tuple[Exception, ...] = ()
     verified: bool = False
+    # Only on DEPENDENCY_FAILED: the dependency ids that did not resolve.
+    # install_tool never sets it — the engine installs one tool, not a run.
+    blocked_by: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -33,12 +36,14 @@ class InstallOutcome:
         method_kind: str | None = None,
         errors: tuple[Exception, ...] = (),
         verified: bool = False,
+        blocked_by: tuple[str, ...] = (),
     ) -> None:
         object.__setattr__(self, "tool_id", tool_id)
         object.__setattr__(self, "status", InstallStatus(status))
         object.__setattr__(self, "method_kind", method_kind)
         object.__setattr__(self, "errors", errors)
         object.__setattr__(self, "verified", verified)
+        object.__setattr__(self, "blocked_by", blocked_by)
 
 
 def _perform(method: Method, ctx: ExecContext) -> bool:
