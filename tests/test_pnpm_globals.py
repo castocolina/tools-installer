@@ -10,6 +10,7 @@ from installer.model import Method, Tool, load_tools
 from installer.pnpm_globals import (
     NodeGlobal,
     NodeGlobalsReport,
+    PnpmUnavailable,
     audit_node_globals,
     node_globals,
     parse_global_packages,
@@ -19,6 +20,7 @@ from installer.pnpm_globals import (
     reinstall_preview,
 )
 from installer.run import CommandError
+from installer.ui_common import run_live
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -249,9 +251,24 @@ def test_reinstall_node_globals_empty_is_noop() -> None:
 
 def test_reinstall_node_globals_unresolvable_pnpm_raises_without_running() -> None:
     calls: list[list[str]] = []
-    with pytest.raises(CommandError):
+    with pytest.raises(PnpmUnavailable) as exc_info:
         reinstall_node_globals([MMDC_PKG], runner=calls.append, resolve_pnpm=lambda: None)
     assert calls == []
+    # No command ran, so the message must not claim one failed.
+    message = str(exc_info.value)
+    assert "command failed" not in message
+    assert "install pnpm" in message
+
+
+def test_pnpm_unavailable_reaches_run_live_without_a_screen_level_except() -> None:
+    # Architecture rule 3: a screen supplies the closure, never its own except.
+    def boom() -> tuple[str, ...]:
+        return reinstall_node_globals([MMDC_PKG], resolve_pnpm=lambda: None)
+
+    result, error = run_live(boom)
+    assert result is None
+    assert error is not None
+    assert "install pnpm" in error
 
 
 def test_reinstall_skips_wrapper_first_on_path(

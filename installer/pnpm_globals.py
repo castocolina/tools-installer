@@ -46,6 +46,17 @@ _UNRESOLVABLE_PREVIEW = "pnpm not found on PATH - cannot preview the reinstall."
 _DEPENDENCY_GROUPS = ("dependencies", "devDependencies", "optionalDependencies")
 
 
+class PnpmUnavailable(OSError):
+    """No real pnpm could be resolved, so nothing was executed.
+
+    Subclasses OSError for the reason OmzPluginsError does: ui_common.run_live
+    surfaces it under architecture rule 3 with no screen adding an except. A
+    CommandError here would render as "command failed (127): pnpm add -g",
+    naming a command that never ran — in the bare argv form this module exists
+    to avoid.
+    """
+
+
 @dataclass(frozen=True)
 class NodeGlobal:
     tool_id: str
@@ -173,7 +184,7 @@ def reinstall_node_globals(
         return ()
     resolved = resolve_pnpm()
     if resolved is None:
-        raise CommandError(["pnpm", "add", "-g"], 127)
+        raise PnpmUnavailable("pnpm not found on PATH — install pnpm, then retry the reinstall.")
     argv = reinstall_argv(packages, pnpm=resolved)
     runner(argv)
     return tuple(argv[3:])
