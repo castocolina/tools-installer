@@ -579,3 +579,196 @@ kind = "sdkman"
     )
     with pytest.raises(ValueError, match="sdkman.*candidate"):
         load_tools(manifest)
+
+
+def _node_registry(tmp_path: Path, method_extra: str, npm_pkg: str = "puppeteer") -> Path:
+    return _write(
+        tmp_path,
+        f"""
+[[tool]]
+id = "demo"
+category = "diagram"
+cmd = "demo"
+tier = "user"
+[[tool.method]]
+kind = "node"
+npm_pkg = "{npm_pkg}"
+{method_extra}
+""",
+    )
+
+
+def test_node_method_parses_co_install(tmp_path: Path) -> None:
+    tools = load_tools(_node_registry(tmp_path, 'co_install = ["puppeteer"]', npm_pkg="cli"))
+    assert tools[0].methods[0].params["co_install"] == ["puppeteer"]
+
+
+def test_node_method_parses_allow_build_in_group(tmp_path: Path) -> None:
+    tools = load_tools(_node_registry(tmp_path, 'allow_build = ["puppeteer"]'))
+    assert tools[0].methods[0].params["allow_build"] == ["puppeteer"]
+
+
+def test_node_method_parses_versions_table(tmp_path: Path) -> None:
+    tools = load_tools(_node_registry(tmp_path, 'versions = {puppeteer = "^25"}'))
+    assert tools[0].methods[0].params["versions"] == {"puppeteer": "^25"}
+
+
+def test_node_method_parses_min_node(tmp_path: Path) -> None:
+    tools = load_tools(_node_registry(tmp_path, 'min_node = "22.12.0"'))
+    assert tools[0].methods[0].params["min_node"] == "22.12.0"
+
+
+def test_node_method_parses_smoke(tmp_path: Path) -> None:
+    tools = load_tools(_node_registry(tmp_path, 'smoke = "puppeteer-browser"'))
+    assert tools[0].methods[0].params["smoke"] == "puppeteer-browser"
+
+
+def test_node_method_without_new_params_omits_them(tmp_path: Path) -> None:
+    tools = load_tools(_node_registry(tmp_path, ""))
+    params = tools[0].methods[0].params
+    assert "co_install" not in params
+    assert "allow_build" not in params
+    assert "versions" not in params
+    assert "min_node" not in params
+    assert "smoke" not in params
+
+
+def test_node_method_rejects_co_install_bare_string(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="co_install"):
+        load_tools(_node_registry(tmp_path, 'co_install = "puppeteer"'))
+
+
+def test_node_method_rejects_co_install_non_string_element(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="co_install"):
+        load_tools(_node_registry(tmp_path, "co_install = [1]"))
+
+
+def test_node_method_rejects_co_install_empty_name(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="co_install"):
+        load_tools(_node_registry(tmp_path, 'co_install = [""]'))
+
+
+def test_node_method_rejects_co_install_comma_in_name(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="co_install"):
+        load_tools(_node_registry(tmp_path, 'co_install = ["a,b"]'))
+
+
+def test_node_method_rejects_comma_in_npm_pkg(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="npm_pkg"):
+        load_tools(_node_registry(tmp_path, "", npm_pkg="a,b"))
+
+
+def test_node_method_rejects_allow_build_bare_string(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="allow_build"):
+        load_tools(_node_registry(tmp_path, 'allow_build = "puppeteer"'))
+
+
+def test_node_method_rejects_allow_build_non_string_element(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="allow_build"):
+        load_tools(_node_registry(tmp_path, "allow_build = [1]"))
+
+
+def test_node_method_rejects_allow_build_empty_name(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="allow_build"):
+        load_tools(_node_registry(tmp_path, 'allow_build = [""]'))
+
+
+def test_node_method_rejects_allow_build_comma_in_name(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="allow_build"):
+        load_tools(_node_registry(tmp_path, 'allow_build = ["a,b"]'))
+
+
+def test_node_method_rejects_allow_build_outside_install_group(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="allow_build.*sharp"):
+        load_tools(_node_registry(tmp_path, 'allow_build = ["sharp"]'))
+
+
+def test_node_method_rejects_versions_key_outside_install_group(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="versions.*sharp"):
+        load_tools(_node_registry(tmp_path, 'versions = {sharp = "^1"}'))
+
+
+def test_node_method_rejects_versions_bare_string(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="versions"):
+        load_tools(_node_registry(tmp_path, 'versions = "puppeteer"'))
+
+
+def test_node_method_rejects_versions_non_string_value(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="versions"):
+        load_tools(_node_registry(tmp_path, "versions = {puppeteer = 25}"))
+
+
+def test_node_method_rejects_versions_empty_value(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="versions"):
+        load_tools(_node_registry(tmp_path, 'versions = {puppeteer = ""}'))
+
+
+def test_node_method_rejects_versions_comma_in_value(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="versions"):
+        load_tools(_node_registry(tmp_path, 'versions = {puppeteer = "1,2"}'))
+
+
+def test_node_method_rejects_min_node_non_string(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="min_node"):
+        load_tools(_node_registry(tmp_path, "min_node = 22"))
+
+
+def test_node_method_rejects_min_node_empty_string(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="min_node"):
+        load_tools(_node_registry(tmp_path, 'min_node = ""'))
+
+
+def test_node_method_rejects_min_node_malformed_floor(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="min_node.*22.bad"):
+        load_tools(_node_registry(tmp_path, 'min_node = "22.bad"'))
+
+
+def test_node_method_rejects_min_node_range_and_latest(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="min_node"):
+        load_tools(_node_registry(tmp_path, 'min_node = "^25"'))
+    with pytest.raises(ValueError, match="min_node"):
+        load_tools(_node_registry(tmp_path, 'min_node = "latest"'))
+    with pytest.raises(ValueError, match="min_node"):
+        load_tools(_node_registry(tmp_path, 'min_node = "not.a.version"'))
+
+
+def test_node_method_rejects_unknown_smoke(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="smoke.*not-a-check"):
+        load_tools(_node_registry(tmp_path, 'smoke = "not-a-check"'))
+
+
+def test_node_method_rejects_smoke_non_string(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="smoke"):
+        load_tools(_node_registry(tmp_path, "smoke = 1"))
+
+
+def test_node_method_rejects_smoke_empty_string(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="smoke"):
+        load_tools(_node_registry(tmp_path, 'smoke = ""'))
+
+
+def test_non_node_method_leaves_new_keys_untouched(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "rg"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "brew"
+formula = "ripgrep"
+co_install = "not-validated"
+allow_build = 1
+versions = "nope"
+min_node = 22
+smoke = "not-a-check"
+""",
+    )
+    tools = load_tools(manifest)
+    params = tools[0].methods[0].params
+    assert params["co_install"] == "not-validated"
+    assert params["allow_build"] == 1
+    assert params["versions"] == "nope"
+    assert params["min_node"] == 22
+    assert params["smoke"] == "not-a-check"

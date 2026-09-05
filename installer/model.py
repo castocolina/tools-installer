@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import TypeVar, cast
 
 from installer.enums import Audience, Category, Priority, Tier
+from installer.versions import parse_declared_version
+
+SMOKE_CHECK_NAMES: frozenset[str] = frozenset({"puppeteer-browser"})
 
 METHOD_KINDS = (
     "script",
@@ -62,6 +65,49 @@ def _parse_id_list(raw: object, field: str, context: str) -> tuple[str, ...]:
             raise ValueError(f"{context}: '{field}' must be a list of tool ids")
         ids.append(item)
     return tuple(ids)
+
+
+def _parse_pkg_list(raw: object, field: str, context: str) -> tuple[str, ...]:
+    """Validate npm package names destined for a pnpm install-group spec.
+
+    An empty element would produce a dangling separator in the joined spec, and a
+    name that already contains a separator would silently create an install group
+    nobody declared.
+    """
+    if not isinstance(raw, list):
+        raise ValueError(f"{context}: '{field}' must be a list of package names")
+    items = cast(list[object], raw)
+    names: list[str] = []
+    for item in items:
+        if not isinstance(item, str):
+            raise ValueError(f"{context}: '{field}' must be a list of package names")
+        if not item or "," in item:
+            raise ValueError(
+                f"{context}: '{field}' contains an empty or comma-bearing package name"
+            )
+        names.append(item)
+    return tuple(names)
+
+
+def _parse_version_map(raw: object, field: str, context: str) -> dict[str, str]:
+    """Validate a package-name -> semver-range table for a pnpm install group.
+
+    Both halves end up on either side of an `@` inside a comma-joined group
+    element, so an empty value or a comma would smuggle extra packages.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError(f"{context}: '{field}' must be a table of package names to version ranges")
+    table = cast(dict[object, object], raw)
+    out: dict[str, str] = {}
+    for key, value in table.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ValueError(f"{context}: '{field}' keys and values must be strings")
+        if not key or not value or "," in key or "," in value:
+            raise ValueError(
+                f"{context}: '{field}' contains an empty or comma-bearing package name or range"
+            )
+        out[key] = value
+    return out
 
 
 @dataclass(frozen=True)
@@ -157,6 +203,58 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
                     raise ValueError(
                         f"tool '{row['id']}': method 'node' requires a non-empty 'npm_pkg'"
                     )
+                if "," in npm_pkg:
+                    raise ValueError(
+                        f"tool '{row['id']}': method 'node' 'npm_pkg' must not contain a comma"
+                    )
+                context = f"tool '{row['id']}'"
+                co_install: tuple[str, ...] = ()
+                if "co_install" in params:
+                    co_install = _parse_pkg_list(params["co_install"], "co_install", context)
+                install_group = {npm_pkg, *co_install}
+                if "allow_build" in params:
+                    allow_build = _parse_pkg_list(params["allow_build"], "allow_build", context)
+                    # An allow-build entry permits arbitrary code execution during
+                    # install AND, per pnpm's own add documentation, persists that
+                    # permission into pnpm's build-allowance configuration so future
+                    # versions of the same package run their scripts unprompted — so
+                    # it may only ever name a package this very invocation installs.
+                    for name in allow_build:
+                        if name not in install_group:
+                            raise ValueError(
+                                f"{context}: allow_build names '{name}' "
+                                "which is not in the install group"
+                            )
+                if "versions" in params:
+                    versions = _parse_version_map(params["versions"], "versions", context)
+                    # A version pin for a package the invocation does not install is
+                    # dead data that would read as a guarantee.
+                    for name in versions:
+                        if name not in install_group:
+                            raise ValueError(
+                                f"{context}: versions names '{name}' "
+                                "which is not in the install group"
+                            )
+                if "min_node" in params:
+                    min_node = params["min_node"]
+                    if not isinstance(min_node, str) or not min_node:
+                        raise ValueError(f"{context}: min_node must be a non-empty string")
+                    if parse_declared_version(min_node) is None:
+                        raise ValueError(
+                            f"{context}: min_node '{min_node}' is not a concrete version"
+                        )
+                if "smoke" in params:
+                    smoke = params["smoke"]
+                    # A registry-supplied COMMAND would be arbitrary code execution
+                    # declared by data; a registry-supplied NAME selects between
+                    # implementations this repository reviews and tests.
+                    if not isinstance(smoke, str) or not smoke:
+                        raise ValueError(f"{context}: smoke must be a non-empty string")
+                    if smoke not in SMOKE_CHECK_NAMES:
+                        known = ", ".join(sorted(SMOKE_CHECK_NAMES))
+                        raise ValueError(
+                            f"{context}: unknown smoke '{smoke}' (expected one of: {known})"
+                        )
             if kind == "sdkman":
                 candidate = params.get("candidate")
                 if not isinstance(candidate, str) or not candidate:
