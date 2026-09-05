@@ -33,6 +33,16 @@ fixed:
   info: 0
 fix_pass: 2026-09-05
 fix_scope: critical_warning
+re_review:
+  reviewed: 2026-09-05
+  depth: deep
+  verified_resolved: [WR-01, WR-02, WR-03, WR-04, WR-05]
+  new_findings:
+    critical: 0
+    warning: 2
+    info: 3
+    total: 5
+  status: issues_found
 ---
 
 # Phase 2: Code Review Report
@@ -488,6 +498,276 @@ it to a file-header note.
 
 ---
 
+# Re-review (2026-09-05, deep)
+
+**Scope:** `cc76510..0b5b29c` — the four fix commits (`8d660ed`, `d8a8dfa`,
+`756b5f0`, `178894c`) plus the docs commit `0b5b29c`. Verified against live
+source and a running app, not against the fix commits' own claims.
+
+**Verdict: 0 Critical / 2 Warning / 3 Info.** All five original WARNINGs are
+genuinely resolved. The fix pass introduced two new WARNINGs, both of them
+collateral rather than logic defects, and neither blocks verification.
+
+**Gates re-run on the exact committed tree** (not taken on trust from the fix
+pass): `make validate` — ruff check, `ruff format --check` (83 files), pyright
+strict `0 errors, 0 warnings`, bandit, vulture, shellcheck — all clean.
+`make test` — 738 passed, `installer/` at 99% line coverage (3 missed
+statements total: `catalog_tui.py:277`, which is the known IN-07 defensive
+branch, and `model.py:34`, which predates this phase — see RI-03).
+
+## Verification of the five fixed WARNINGs
+
+### WR-01 — RESOLVED (verified independently, not by re-running the fix's own test)
+
+The fix clears on `ScreenSuspend` instead of the originally suggested
+`ScreenResume`. I traced the real Textual 8.2.7 event flow rather than accepting
+the claim:
+
+- `App.push_screen` (`textual/app.py:2942-2946`): `if screen_stack and
+  screen_stack[-1].is_active: mode_screen.post_message(events.ScreenSuspend())`.
+- `App.pop_screen` (`textual/app.py:3109-3121`) schedules `_replace_screen(previous_screen)`,
+  and `_replace_screen` (`textual/app.py:2852-2870`) posts `ScreenSuspend()` to the
+  popped screen before the install check that would otherwise remove it.
+
+`UnifiedApp.show_view` (`installer/wizard_app.py:754-764`) is `pop_screen` then
+`push_screen`, both awaited. Every leg therefore delivers a `ScreenSuspend` to
+the screen that stops being on top:
+
+| transition | who gets ScreenSuspend |
+| --- | --- |
+| base → non-base | base (push path) |
+| non-base X → non-base Y | X (pop path), then base (push path) |
+| non-base X → base | X (pop path) |
+
+Messages land on the target screen's own FIFO queue, so a later `SelectionChanged`
+for a fresh mark can never be processed ahead of a pending Suspend. The handler
+name is correct for the event class (`ScreenSuspend` → `on_screen_suspend`), and
+not calling `super()` is right: Textual dispatches the framework's `_on_*` and the
+user's `on_*` independently.
+
+Confirmed empirically with a throwaway probe (since deleted) that does **not**
+reuse the fix's own test — mark `jq` on the User view, hop AI → System → User,
+then press a stray `r`:
+
+```
+PROBE marked status='jq also needs pnpm - added automatically at install time; …'
+PROBE marked rec   ='jq pairs well with rg - press r to add them to your selection, d to dismiss.'
+PROBE returned status=''
+PROBE returned rec   =''
+PROBE staged after stray r={'jq'}
+```
+
+Both lines cleared and the pending ids genuinely disarmed. The deviation from the
+suggested fix is the better call: clearing on the way out means the screen is
+never left holding an armed prompt while inactive.
+
+### WR-02 — RESOLVED
+
+`action_accept_recommends` (`installer/catalog_tui.py:330-337`) now recomputes
+`added` against the live `_staged` set. I checked the aliasing the filter depends
+on: `ToolBrowser.__init__` (`installer/tool_browser.py:116`) stores the passed set
+by reference (`self.selected = set() if selected is None else selected`) and every
+writer mutates in place, so `screen.selected`, `screen._staged` and the app's
+`self._staged` are one object — the delta filter reads live truth. Probe:
+
+```
+PROBE accept status='added jq to your selection.' staged={'jq', 'agent'}
+```
+
+and the empty-delta branch returns without a status claim. No false "added" text
+remains.
+
+### WR-03 — RESOLVED, with new collateral (see RR-01)
+
+`_refresh_marks` is gone from `installer/tool_browser.py`; `grep -rn "_refresh_marks"`
+over `installer/`, `tests/` and `setup.py` returns nothing (only stale
+`.planning/graphs/*.json` index entries and historical plan prose). Both isolation
+tests call `browser.refresh_marks()` directly and the two `# noqa: B009`
+suppressions are gone. The rename, however, was applied as a blind textual
+replace — see RR-01.
+
+### WR-04 — RESOLVED
+
+`installer/model.py:44-64` adds `_parse_id_list(raw, field, context)`, called for
+both `requires` and `recommends` at `model.py:165-167`. It rejects a non-list
+(subsuming the old bare-string case with identical error text, so the two existing
+string-form tests still pass) and then every non-string element. The `Any` from
+`tomllib` is typed at the boundary with `cast(list[object], raw)` — no
+`# type: ignore` — and pyright strict reports **0 errors** on the live tree, so the
+declared `tuple[str, ...]` is now enforced rather than promised. Cross-checked that
+this closes the whole boundary: `grep -rn "Tool(" installer/*.py` finds exactly one
+production construction site, `model.py:171`, inside `load_tools`. Both new
+negative tests exist and are collected.
+
+### WR-05 — RESOLVED
+
+`tests/test_deps.py:176-185` now calls
+`missing_requires(mmdc, [mmdc, pnpm, node], staged=empty, installed={"pnpm": True})`
+against a tool requiring both ids and asserts `== ("node",)`. That distinguishes a
+present-and-`True` entry from a key absent from the map — the
+`installed.get(dep_id, False)` default the test name claims — and is no longer a
+copy of the test above it.
+
+## New findings
+
+### RR-01 (WARNING): the WR-03 rename mangled three test function names
+
+**File:** `tests/test_tool_browser.py:296`, `:324`, `:339`
+
+**Issue:** `d8a8dfa` replaced the string `_refresh_marks` with `refresh_marks`
+everywhere, including inside the test function names themselves:
+
+```
+- async def test_refresh_marks_leaves_non_selectable_cell_untouched() -> None:
++ async def testrefresh_marks_leaves_non_selectable_cell_untouched() -> None:
+```
+
+All three `test_refresh_marks_*` names lost the underscore. `grep -rnE "^(async )?def test[^_]" tests/`
+returns exactly these three and nothing else, confirming they are collateral from
+this commit and not a pre-existing convention.
+
+They still run today — pytest's default `python_functions = ["test"]` is a prefix
+match and the project does not override it in `pyproject.toml:46-49`, and I
+confirmed collection:
+
+```
+tests/test_tool_browser.py::testrefresh_marks_leaves_non_selectable_cell_untouched
+tests/test_tool_browser.py::testrefresh_marks_tolerates_a_cleared_table
+tests/test_tool_browser.py::testrefresh_marks_tolerates_a_removed_table
+```
+
+That is why no gate caught it: ruff has no test-naming rule, and the suite count
+is unchanged. The risk is latent rather than present — the moment anyone tightens
+`python_functions` to `test_*` (a common hardening), three regression tests
+silently disappear, and two of them guard a crash that actually shipped
+(`"this crashed the real Uninstall view on make setup"`, `test_tool_browser.py:325-328`;
+the `NoMatches`-on-popped-screen case at `:339`). Losing them without a failing
+run is exactly the failure mode `.claude/testing.md` forbids.
+
+**Fix:** restore the underscore in the three `def` lines (comments and docstrings
+inside them are already correct):
+
+```python
+async def test_refresh_marks_leaves_non_selectable_cell_untouched() -> None: ...
+async def test_refresh_marks_tolerates_a_cleared_table() -> None: ...
+async def test_refresh_marks_tolerates_a_removed_table() -> None: ...
+```
+
+### RR-02 (WARNING): clearing on `ScreenSuspend` also fires for a modal push, so opening and cancelling the nav palette silently wipes the prompt and the accept-guard warning
+
+**File:** `installer/catalog_tui.py:345-352`, `installer/wizard_app.py:791-794`,
+`.claude/architecture.md:71-73`
+
+**Issue:** `ScreenSuspend` is not "the user left the view" — it is "this screen is
+no longer the top of the stack". `UnifiedApp.action_open_nav` pushes `NavScreen`
+onto the current catalog screen, which fires `ScreenSuspend` on it
+(`textual/app.py:2942-2946`). Cancelling the palette with `escape` calls
+`_navigate(None)`, which does nothing, so the user ends up on the same view with
+the same cursor on the same row — but `_clear_transient` has already run.
+
+Proven with a probe (since deleted); `ctrl+p` then `escape`, never leaving the AI
+view:
+
+```
+PROBE nav-palette: view='ai'
+PROBE before='agent pairs well with jq - press r to add them to your selection, d to dismiss.'
+PROBE after =''
+PROBE staged after stray r={'agent'}
+```
+
+The same probe shows the collateral I consider the worse half — the accept guard's
+own message is wiped by an unrelated cancelled palette open:
+
+```
+PROBE warn before='Select at least one tool, or press q to quit.'
+PROBE warn after =''
+```
+
+That warning is set by `on_tool_browser_accepted` (`catalog_tui.py:368`) precisely
+to tell a user who pressed `enter` with an empty batch what to do next. Pre-fix it
+survived a palette open/cancel, because `on_screen_resume` never touched
+`status`; post-fix it does not. This is a behaviour regression introduced by the
+fix pass, and no test covers either case.
+
+It also makes `.claude/architecture.md:71-73` — rewritten by the same commit —
+inaccurate: *"leaving the view clears both and disarms the pending ids"* under-describes
+what the code does, and rule 2's "one navigation path" framing makes the palette
+look like a non-event when it is not one.
+
+**Fix:** gate the clear on an actual view change rather than on stack position, so
+a cancelled palette is inert. `show_view` is already the single navigation path
+(`.claude/architecture.md` rule 2), so it is the right seam:
+
+```python
+# installer/wizard_app.py
+async def show_view(self, name: str) -> None:
+    if name == self.current_view:
+        return
+    leaving = self._catalogs.get(self.current_view)
+    if leaving is not None:
+        leaving.clear_transient()          # rename _clear_transient -> public seam
+    ...
+```
+
+If the broader `ScreenSuspend` semantics are wanted instead, keep the handler but
+narrow it to the recommends prompt (`_pending_recommends` + `recommends_line`),
+leave `status` alone, and correct the architecture paragraph to say "any time the
+screen stops being on top", so the doc stops describing behaviour the code does
+not have. Either way, add a test for `ctrl+p` → `escape`.
+
+### RI-01 (INFO): the deliberate `d`-keeps-the-requires-notice asymmetry is asserted nowhere
+
+**File:** `installer/catalog_tui.py:339-343`, `tests/test_catalog_tui.py:535-547`
+**Issue:** `action_dismiss_recommends` carries a new comment stating it is
+"narrower than `_clear_transient` on purpose … a requires notice for the same mark
+is a separate fact that survives it". The only dismiss test is
+`test_dismissing_the_prompt_leaves_the_selection_untouched`, and its fixture
+`_recommends_catalog()` (`test_catalog_tui.py:526-532`) gives `agent` no
+`requires` at all, so the asymmetry is unobservable there. A future edit that
+swaps the narrow clear for `_clear_transient` would pass the whole suite.
+**Fix:** extend the dismiss test (or add one) over a tool with both `requires` and
+`recommends`, asserting `recommends_text == ""` and `status_text != ""` after `d`.
+
+### RI-02 (INFO): `r` with an empty delta is a silent no-op
+
+**File:** `installer/catalog_tui.py:333-334`
+**Issue:** When every pending id was already staged, `action_accept_recommends`
+clears the prompt line and returns with no message. The user cannot distinguish
+"already in your batch" from "the prompt expired". This matches the fix the
+original review suggested, so it is a deliberate choice rather than a slip, but it
+is the one branch of the accept that gives no feedback.
+**Fix:** set an informational status such as
+`f"{', '.join(self._pending_recommends)} already staged."` before returning, or
+note in the comment why silence is preferred.
+
+### RI-03 (INFO): `_parse_id_list`'s twin, `_parse_enum`, still has an uncovered guard
+
+**File:** `installer/model.py:33-34`
+**Issue:** `model.py:34` is the only missed statement in the module. `_parse_id_list`
+was explicitly "shaped like the existing `_parse_enum` so the two validators read
+alike", and it ships with two negative tests; its model has none for the non-string
+branch. Pre-existing — `git log -S "must be a string"` puts it in `581c097`, an
+ancestor of this phase's base `437776a` — so it is out of Phase 2's scope, but the
+twinning makes the gap newly visible.
+**Fix:** one test writing `category = 1` in a manifest and asserting
+`ValueError("'category' must be a string")`, or drop the guard and let
+`_parse_enum`'s existing `enum_type(value)` raise.
+
+## Conclusion
+
+The five WARNINGs are closed against live source and a running app, and no
+Critical-tier defect exists in the phase. The two new WARNINGs are both narrow:
+RR-01 is a three-line rename with no present behavioural effect, and RR-02 is a
+UX regression on a cancelled-palette path that no user flow depends on for
+correctness. Neither risks data loss, a wrong install batch, or a crash.
+
+**The phase is clean enough to proceed to verification**, provided RR-01 and RR-02
+are carried forward as follow-ups rather than dropped — RR-02 in particular
+because the architecture doc currently describes behaviour the code does not have,
+and that document is the contract later phases will read.
+
+---
+
 _Reviewed: 2026-09-05_
 _Reviewer: Claude (gsd-code-reviewer)_
-_Depth: deep_
+_Depth: deep (Textual event-flow trace + running probes + independent gate re-run)_
