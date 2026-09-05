@@ -6,6 +6,7 @@ from installer.omz import (
     OmzPluginsError,
     disable_plugins,
     enable_plugins,
+    omz_present,
     plugins_enabled,
     plugins_present,
     remove_plugins,
@@ -83,6 +84,7 @@ def test_missing_file_raises_on_write_and_no_ops_on_remove(
     with pytest.raises(OmzPluginsError, match=r"plugins=\("):
         write_plugins(missing)
     assert not missing.exists()
+    assert plugins_present(missing) is False
     assert remove_plugins(missing) == ()
     assert not missing.exists()
 
@@ -149,3 +151,23 @@ def test_write_does_not_touch_the_file_when_nothing_changes(
     assert write_plugins(zshrc) == ()
     assert zshrc.read_text() == enabled
     assert zshrc.stat().st_mtime_ns == mtime
+
+
+def test_omz_present_detects_the_home_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert omz_present(tmp_path, {}) is False
+    (tmp_path / ".oh-my-zsh").mkdir()
+    assert omz_present(tmp_path, {}) is True
+
+
+def test_omz_present_accepts_a_valid_zsh_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    custom = tmp_path / "custom-omz"
+    custom.mkdir()
+    assert omz_present(tmp_path, {"ZSH": str(custom)}) is True
+    assert omz_present(tmp_path, {"ZSH": str(tmp_path / "missing")}) is False
+    assert omz_present(tmp_path, {"ZSH": ""}) is False

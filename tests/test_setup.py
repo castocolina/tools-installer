@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 
 import pytest
 from rich.console import Console
@@ -62,3 +63,19 @@ def test_main_fix_interactive_without_link_mode_opens_doctor(
 
     assert setup.main(["--fix"]) == 0
     assert build_calls == [{"initial_view": "doctor", "link_mode": "single"}]
+
+
+def test_build_app_includes_the_omz_policy_after_the_tweaks() -> None:
+    """Assert wiring by reading setup.py source.
+
+    `_build_app` closes over import-time Path.home() constants and is a private
+    composition-root helper, so calling it from tests trips pyright (private
+    usage) and would be unsafe against the real home. The wire is the
+    `omz_plugins_policy(` call after the tweak_policy generator.
+    """
+    src = (Path(__file__).resolve().parent.parent / "setup.py").read_text()
+    body = src[src.index("def _build_app") :]
+    ban = body.index("ban_policy(")
+    tweak = body.index("tweak_policy(")
+    omz = body.index("omz_plugins_policy(")
+    assert ban < tweak < omz

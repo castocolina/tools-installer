@@ -448,7 +448,7 @@ class PoliciesScreen(AppScreen):
     ]
     DEFAULT_CSS = """
     PoliciesScreen DataTable { height: 1fr; }
-    PoliciesScreen #policy-detail { height: 5; padding: 0 1; background: $surface; }
+    PoliciesScreen #policy-detail { height: 7; padding: 0 1; background: $surface; }
     """
 
     def __init__(self, inputs: PolicyInputs) -> None:

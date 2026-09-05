@@ -199,3 +199,73 @@ async def test_policies_screen_toggles_omz_plugins_live(
         assert isinstance(app.screen, PoliciesScreen)
         assert app.screen.active_state["omz-plugins"] is False
         assert zshrc.read_text() == _ZSHRC_OMZ
+
+
+def _omz_app(home: Path, *, present: bool, zshrc_text: str) -> tuple[UnifiedApp, Path]:
+    zshrc = home / ".zshrc"
+    zshrc.write_text(zshrc_text)
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    policy = omz_plugins_policy(zshrc_path=zshrc, present=present)
+    app = UnifiedApp(
+        [_tool()],
+        {"rg": True},
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_status=guard_status(bin_dir),
+        guard_warning=None,
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=UninstallInputs(
+            rows=[], ban_names=[], has_path_block=False, remove=lambda _d: None
+        ),
+        policies=PolicyInputs(policies=[policy]),
+        initial_view="policies",
+    )
+    return app, zshrc
+
+
+async def test_policies_screen_refuses_omz_toggle_without_oh_my_zsh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    app, zshrc = _omz_app(tmp_path, present=False, zshrc_text=_ZSHRC_OMZ)
+    before = zshrc.read_text()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, PoliciesScreen)
+        await pilot.press("space")
+        await pilot.pause()
+        assert isinstance(app.screen, PoliciesScreen)
+        assert app.screen.active_state["omz-plugins"] is False
+        assert "oh-my-zsh" in app.screen.status.text
+        assert zshrc.read_text() == before
+
+
+async def test_policies_screen_surfaces_an_unusable_zshrc_as_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    multi = "plugins=(\n  git\n  z\n)\nsource x\n"
+    app, zshrc = _omz_app(tmp_path, present=True, zshrc_text=multi)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, PoliciesScreen)
+        await pilot.press("space")
+        await pilot.pause()
+        assert isinstance(app.screen, PoliciesScreen)
+        assert app.screen.active_state["omz-plugins"] is False
+        assert app.screen.error is not None
+        assert zshrc.read_text() == multi
+
+
+async def test_policy_detail_discloses_the_partial_state_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    app, _zshrc = _omz_app(tmp_path, present=True, zshrc_text=_ZSHRC_OMZ)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, PoliciesScreen)
+        assert "Disabling removes" in app.screen.detail_text
+        assert "Reads ON only when" in app.screen.detail_text
