@@ -111,8 +111,18 @@ def test_guard_guidance_volta_note_follows_guards_when_pnpm_is_live() -> None:
     assert "pnpm add" in volta.next_step
 
 
-def test_guard_guidance_volta_note_absent_when_pnpm_is_not_live() -> None:
+def test_guard_guidance_volta_note_shown_when_only_the_npm_wrapper_is_live() -> None:
+    # install_global_redirect_shims writes the npm wrapper whenever volta
+    # resolves, pnpm or no pnpm — and `npm i -g pnpm` is itself redirected now,
+    # so volta-with-no-pnpm is a normal machine, not an edge case.
     items = guard_guidance({"npm": True, "pnpm": False}, None)
+    volta = next(i for i in items if "volta" in i.title.lower())
+    assert "npm install --global" in volta.meaning
+    assert "pnpm add" in volta.next_step
+
+
+def test_guard_guidance_volta_note_absent_when_no_redirect_name_is_live() -> None:
+    items = guard_guidance({"pip": True, "npm": False, "pnpm": False}, None)
     assert not [i for i in items if "volta" in i.title.lower()]
 
 

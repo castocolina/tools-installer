@@ -103,11 +103,20 @@ def guard_guidance(status: dict[str, bool], warning: str | None) -> list[Guidanc
                 severity=Severity.OK,
             )
         )
-    # plan 04-03's install_global_redirect_shims writes the pnpm wrapper only
-    # when volta actually resolved, so a live pnpm shim is the one honest
-    # on-disk signal that global installs are being routed to volta rather
-    # than falling back to the hard block.
-    if status.get("pnpm", False):
+    # Either global-redirect name being installed routes global installs to
+    # volta. Gating on pnpm alone missed the normal machine that has volta but
+    # no pnpm — `npm i -g pnpm` is itself redirected now — where the npm wrapper
+    # is written and `npm i -g <pkg>` runs volta's ungated install scripts with
+    # the user told nothing.
+    #
+    # This reads the same bool dict guard_label does, so like guard_label it
+    # describes the CONFIGURED redirect: on a machine where volta was
+    # unresolvable at apply time, npm carries the hard-block body instead and
+    # guard_redirect_warning says so in the warning below. That split is D-02's
+    # "no status enum" cost, and the note above already cross-references it. Do
+    # not read the shim bodies from here: this is the wording layer, not an IO
+    # layer.
+    if status.get("pnpm", False) or status.get("npm", False):
         items.append(
             Guidance(
                 title="Volta global installs run npm install scripts",
