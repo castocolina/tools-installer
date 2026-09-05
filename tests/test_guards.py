@@ -17,6 +17,7 @@ from installer.guards import (
     REDIRECTED,
     SHIM_SENTINEL,
     ban_alias_block,
+    ban_body,
     global_redirect_shim_script,
     guard_label,
     guard_path_warning,
@@ -682,6 +683,19 @@ def test_pnpm_wrapper_requires_passthrough_path():
         global_redirect_shim_script("pnpm", volta_path="/v/volta", passthrough_path=None)
 
 
+def test_ban_body_without_hint_raises_valueerror_not_keyerror():
+    # A future GLOBAL_REDIRECTED entry with no pass-through and no BANNED hint
+    # must fail with an explanation, not a bare dict miss.
+    with pytest.raises(ValueError, match="BANNED hint"):
+        ban_body("yarn")
+
+
+def test_hard_block_fallback_reuses_the_ban_shim_body():
+    body = global_redirect_shim_script("npm", volta_path="/v/volta", passthrough_path=None)
+    assert body.endswith(ban_body("npm"))
+    assert shim_script("npm").endswith(ban_body("npm"))
+
+
 def test_global_redirect_constants():
     assert GLOBAL_SUBCOMMANDS == ("install", "add", "i")
     assert GLOBAL_REDIRECTED["npm"].passthrough is None
@@ -750,6 +764,18 @@ def test_install_global_redirect_shims_volta_missing_leaves_ban(tmp_path: Path):
     assert results == {"npm": "blocked (volta not found)", "pnpm": "absent (volta not found)"}
     assert not (shim_dir / "pnpm").exists()
     assert (shim_dir / "npm").read_text() == before
+
+
+def test_install_global_redirect_shims_writes_the_block_it_reports(tmp_path: Path):
+    # Called on its own — no install_shims first — "blocked" must be true on disk.
+    shim_dir = tmp_path / "shims"
+    results = install_global_redirect_shims(
+        shim_dir, path_value=str(shim_dir), lookup=lambda _n, _p: None
+    )
+    assert results["npm"] == "blocked (volta not found)"
+    npm_shim = shim_dir / "npm"
+    assert npm_shim.read_text() == shim_script("npm")
+    assert npm_shim.stat().st_mode & 0o111
 
 
 def test_install_global_redirect_shims_removes_pnpm_when_volta_vanishes(tmp_path: Path):

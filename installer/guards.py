@@ -106,15 +106,26 @@ BAN_END = "# <<< tools-installer ban <<<"
 PathLookup = Callable[[str, str], str | None]
 
 
-def shim_script(name: str) -> str:
-    """A 4-line POSIX-sh shim that explains the ban and exits non-zero."""
-    hint = BANNED[name]
+def ban_body(name: str) -> str:
+    """The two lines that explain the ban and exit non-zero (no shebang, no sentinel).
+
+    Shared by the stand-alone hard-block shim and by the global-redirect
+    wrapper's fallback, so the two bodies cannot drift apart. Raises rather than
+    KeyError-ing so a future BANNED-less name fails with an explanation instead
+    of a bare dict miss from inside a shim generator.
+    """
+    hint = BANNED.get(name)
+    if hint is None:
+        raise ValueError(f"'{name}' has no BANNED hint to build a hard block from")
     return (
-        "#!/bin/sh\n"
-        f"{SHIM_SENTINEL}\n"
         f"echo \"tools-installer: '{name}' is banned on this machine — use {hint}.\" >&2\n"
         f"exit {EXIT_CODE}\n"
     )
+
+
+def shim_script(name: str) -> str:
+    """A 4-line POSIX-sh shim that explains the ban and exits non-zero."""
+    return f"#!/bin/sh\n{SHIM_SENTINEL}\n{ban_body(name)}"
 
 
 def redirect_shim_script(name: str, target_path: str) -> str:
@@ -157,11 +168,7 @@ def global_redirect_shim_script(name: str, *, volta_path: str, passthrough_path:
             )
         fallback = f'exec {shlex.quote(passthrough_path)} "$@"\n'
     else:
-        hint = BANNED[name]
-        fallback = (
-            f"echo \"tools-installer: '{name}' is banned on this machine — use {hint}.\" >&2\n"
-            f"exit {EXIT_CODE}\n"
-        )
+        fallback = ban_body(name)
     long_booleans = "|".join(name for name in BOOLEAN_LONG_OPTIONS if name != "--global")
     # Four structural rules the body depends on:
     # 1. The first loop only READS "$@"; the second loop rewrites it with the
@@ -336,6 +343,13 @@ def install_global_redirect_shims(
             continue
         if volta_path is None:
             if spec.passthrough is None:
+                # Write the block rather than assume install_shims ran first:
+                # both production callers do call it, but nothing enforces that,
+                # and reporting a block that is not on disk is a lie. The body is
+                # byte-identical to install_shims', so writing it twice is
+                # idempotent.
+                target.write_text(shim_script(name))
+                target.chmod(0o755)
                 results[name] = "blocked (volta not found)"
                 continue
             if target.exists() and is_our_shim(target):
