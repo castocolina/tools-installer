@@ -143,6 +143,10 @@ VIEWS: tuple[View, ...] = (
 
 VIEW_ORDER: tuple[str, ...] = tuple(view.name for view in VIEWS)
 VIEW_BY_NAME: dict[str, View] = {view.name: view for view in VIEWS}
+# First registered view is the app's base screen (a Textual app has exactly one);
+# every other view is installed and pushed on top of it, so reordering VIEWS
+# moves the base screen with it and no call site needs editing.
+BASE_VIEW: str = VIEW_ORDER[0]
 
 
 def _view_key(index: int) -> str:

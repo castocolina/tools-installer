@@ -38,6 +38,7 @@ from installer.selection import Choice
 from installer.shellrc import collect_bin_dirs, has_managed_block
 from installer.status import is_installed
 from installer.tweaks import applicable_bundles
+from installer.ui_common import BASE_VIEW
 from installer.uninstall import classify_tools, reverse_dependencies
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 
@@ -129,7 +130,7 @@ def _build_app(
     tools: list[Tool],
     platform: Platform,
     *,
-    initial_view: str = "catalog",
+    initial_view: str = BASE_VIEW,
     link_mode: str = "centralized",
 ) -> UnifiedApp:
     installed = {tool.id: is_installed(tool) for tool in tools}

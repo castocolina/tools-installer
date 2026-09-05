@@ -376,3 +376,55 @@ async def test_section_header_shows_member_count() -> None:
         table = app.query_one(ToolBrowser[_Item]).query_one(DataTable[Any])
         section = table.get_cell("#letters", "sel").plain
         assert "letters" in section and "(2)" in section
+
+
+class _SharedHost(App[None]):
+    def __init__(self, adapter: BrowserAdapter[_Item], selected: set[str] | None = None) -> None:
+        super().__init__()
+        self._adapter = adapter
+        self._selected = selected
+        self.changes: list[ToolBrowser.SelectionChanged] = []
+
+    def compose(self) -> ComposeResult:
+        yield ToolBrowser(self._adapter, selected=self._selected)
+
+    def on_tool_browser_selection_changed(self, event: ToolBrowser.SelectionChanged) -> None:
+        self.changes.append(event)
+
+
+async def test_browser_adopts_an_injected_selection_set() -> None:
+    shared: set[str] = set()
+    app = _SharedHost(_adapter(), selected=shared)
+    async with app.run_test(size=(80, 20)) as pilot:
+        browser = app.query_one(ToolBrowser[_Item])
+        assert browser.selected is shared
+        await pilot.press("space")
+        assert "alpha" in shared
+
+
+async def test_bulk_actions_never_rebind_the_selection_set() -> None:
+    shared: set[str] = {"foreign"}
+    app = _SharedHost(_adapter(), selected=shared)
+    async with app.run_test(size=(80, 20)) as pilot:
+        browser = app.query_one(ToolBrowser[_Item])
+        identity = id(browser.selected)
+        await pilot.press("a")
+        assert id(browser.selected) == identity
+        await pilot.press("i")
+        assert id(browser.selected) == identity
+        assert "foreign" in browser.selected
+
+
+async def test_selection_changed_carries_the_toggled_row() -> None:
+    app = _SharedHost(_adapter())
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("space")
+        await pilot.pause()
+        assert app.changes[-1].item_id == "alpha"
+        assert app.changes[-1].selected is True
+        await pilot.press("a")
+        await pilot.pause()
+        assert app.changes[-1].item_id is None
+        await pilot.press("i")
+        await pilot.pause()
+        assert app.changes[-1].item_id is None

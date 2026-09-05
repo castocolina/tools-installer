@@ -79,7 +79,17 @@ class ToolBrowser(Widget, Generic[T]):
 
     class SelectionChanged(Message):
         """The selection set changed via toggle/select-all/invert. Hosts use it
-        to clear a stale "select at least one" warning once the user acts."""
+        to clear a stale "select at least one" warning once the user acts.
+
+        `item_id` names the single row a space toggle changed and `selected`
+        whether it is now marked. Bulk actions leave both at their defaults
+        because they change many rows at once.
+        """
+
+        def __init__(self, item_id: str | None = None, selected: bool = False) -> None:
+            super().__init__()
+            self.item_id = item_id
+            self.selected = selected
 
     DEFAULT_CSS = """
     ToolBrowser { layout: vertical; height: 1fr; }
@@ -97,12 +107,13 @@ class ToolBrowser(Widget, Generic[T]):
         Binding("enter", "accept", "accept", priority=True),
     ]
 
-    def __init__(self, adapter: BrowserAdapter[T]) -> None:
+    def __init__(self, adapter: BrowserAdapter[T], *, selected: set[str] | None = None) -> None:
         super().__init__()
         self._adapter = adapter
         self._view_names = tuple(name for name, _ in adapter.views)
         self.view = self._view_names[0]
-        self.selected: set[str] = set()
+        # Several browsers may share one set, so the two bulk actions must never rebind it.
+        self.selected: set[str] = set() if selected is None else selected
         self.detail_text = ""
         # str | None keys keep RowKey lookups branchless (RowKey.value is
         # str | None; our keys are always item ids or "#title").
@@ -146,7 +157,7 @@ class ToolBrowser(Widget, Generic[T]):
         # widths after clear(columns=True); a cell mutation arriving in a later
         # render cycle flushes them (textual 8.2.7), so re-mark every row once
         # the rebuilt table has painted.
-        table.call_after_refresh(self._refresh_marks)
+        table.call_after_refresh(self.refresh_marks)
 
     # -- view switching ----------------------------------------------------
     def _switch_view(self, step: int) -> None:
@@ -186,7 +197,7 @@ class ToolBrowser(Widget, Generic[T]):
                 return index
         return None
 
-    def _refresh_marks(self) -> None:
+    def refresh_marks(self) -> None:
         # Scheduled via call_after_refresh, so by the time it fires under the real
         # driver the DataTable may be gone or cleared. Gone: rapid navigation can
         # pop this browser's screen (e.g. the Uninstall view) before the deferred
@@ -208,6 +219,9 @@ class ToolBrowser(Widget, Generic[T]):
             item_id = self._adapter.item_id(item)
             table.update_cell(item_id, "sel", mark(item_id in self.selected))
 
+    # Isolation tests getattr the former private name; keep it bound to the public method.
+    _refresh_marks = refresh_marks
+
     def action_toggle_selected(self) -> None:
         item = self._highlighted_item()
         if item is None:  # empty table or a section row
@@ -217,24 +231,31 @@ class ToolBrowser(Widget, Generic[T]):
         item_id = self._adapter.item_id(item)
         self.selected.symmetric_difference_update({item_id})
         self.query_one(DataTable[Any]).update_cell(item_id, "sel", mark(item_id in self.selected))
-        self.post_message(self.SelectionChanged())
+        self.post_message(self.SelectionChanged(item_id, item_id in self.selected))
 
     def action_select_all(self) -> None:
-        self.selected = {
+        # In-place union: for a browser that owns its whole set, selected is always
+        # a subset of that browser's selectable ids, so union collapses to the old
+        # assignment. A shared set keeps foreign ids.
+        selectable = {
             self._adapter.item_id(item)
             for item in self._adapter.items
             if self._adapter.selectable(item)
         }
-        self._refresh_marks()
+        self.selected |= selectable
+        self.refresh_marks()
         self.post_message(self.SelectionChanged())
 
     def action_invert(self) -> None:
-        self.selected = {
+        # In-place symmetric difference: for a browser that owns its whole set,
+        # this collapses to the old set-difference. A shared set keeps foreign ids.
+        selectable = {
             self._adapter.item_id(item)
             for item in self._adapter.items
             if self._adapter.selectable(item)
-        } - self.selected
-        self._refresh_marks()
+        }
+        self.selected ^= selectable
+        self.refresh_marks()
         self.post_message(self.SelectionChanged())
 
     def selected_ids(self) -> list[str]:

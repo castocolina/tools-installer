@@ -17,6 +17,7 @@ from textual.widgets import DataTable
 
 from installer.enums import Audience, Priority
 from installer.model import Tool
+from installer.selection import select_tools
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import AppScreen, mark
 
@@ -133,10 +134,11 @@ class CatalogScreen(AppScreen):
     """Single-screen tool picker; ←/→ or clicking the tabs switches the grouping.
 
     Mounted as the unified app's base screen. Accept/abort post a `Decided`
-    message carrying the selected ids in catalog order (or None on abort); the
-    host app turns that into its run() result. State the tests assert on (view,
-    table_sort, selected, detail_text, status_text) is delegated to the embedded
-    `ToolBrowser` (or the screen's StatusLine) and exposed as public properties.
+    message carrying the whole staged batch in full-catalog order regardless of
+    which instance posted it (or None on abort); the host app turns that into
+    its run() result. State the tests assert on (view, table_sort, selected,
+    detail_text, status_text) is delegated to the embedded `ToolBrowser` (or the
+    screen's StatusLine) and exposed as public properties.
     """
 
     class Decided(Message):
@@ -152,13 +154,19 @@ class CatalogScreen(AppScreen):
         tools: list[Tool],
         installed: Mapping[str, bool],
         blurbs: Mapping[str, str],
+        *,
+        view: str,
+        catalog: list[Tool],
+        staged: set[str],
     ) -> None:
-        super().__init__(view="catalog")
+        super().__init__(view=view)
         self.tools = list(tools)
         self.table_sort: TableSortKey = "priority"
         self._installed = dict(installed)
         self._blurbs = dict(blurbs)
-        self._browser: ToolBrowser[Tool] = ToolBrowser(self._adapter())
+        self._catalog = list(catalog)
+        self._staged = staged
+        self._browser: ToolBrowser[Tool] = ToolBrowser(self._adapter(), selected=staged)
 
     def _adapter(self) -> BrowserAdapter[Tool]:
         return BrowserAdapter(
@@ -244,8 +252,9 @@ class CatalogScreen(AppScreen):
 
     def on_tool_browser_accepted(self, event: ToolBrowser.Accepted) -> None:
         event.stop()
-        if not event.ids:
+        ids = [tool.id for tool in select_tools(self._catalog, list(self._staged))]
+        if not ids:
             self.status.set("Select at least one tool, or press q to quit.", "warn")
             return
         self.status.clear()
-        self.post_message(self.Decided(event.ids))
+        self.post_message(self.Decided(ids))

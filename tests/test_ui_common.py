@@ -213,3 +213,10 @@ def test_mode_badge_staged_and_apply_strings() -> None:
     doctor = ModeBadge(VIEW_BY_NAME["doctor"]).render_text().plain
     assert "[AUDIT + APPLY]" in doctor
     assert ">" in doctor
+
+
+def test_base_view_is_the_first_registered_view() -> None:
+    from installer.ui_common import BASE_VIEW, VIEW_BY_NAME, VIEW_ORDER
+
+    assert VIEW_ORDER[0] == BASE_VIEW
+    assert BASE_VIEW in VIEW_BY_NAME

@@ -33,6 +33,7 @@ from installer.policy import Policy, PolicyResult
 from installer.render import guidance_text
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import (
+    BASE_VIEW,
     VIEW_ORDER,
     VIEWS,
     AppScreen,
@@ -684,10 +685,13 @@ class UnifiedApp(App[list[str] | None]):
         fix: Callable[[], None],
         uninstall: UninstallInputs,
         policies: PolicyInputs,
-        initial_view: str = "catalog",
+        initial_view: str = BASE_VIEW,
     ) -> None:
         super().__init__()
-        self._catalog = CatalogScreen(tools, installed, blurbs)
+        self._staged: set[str] = set()
+        self._catalog = CatalogScreen(
+            tools, installed, blurbs, view=BASE_VIEW, catalog=list(tools), staged=self._staged
+        )
         # Non-catalog views, installed on mount and pushed by value.
         self._views: dict[str, Screen[None]] = {
             "doctor": DoctorScreen(report, guard_status, guard_warning, fix_preview, fix),
@@ -695,7 +699,7 @@ class UnifiedApp(App[list[str] | None]):
             "policies": PoliciesScreen(policies),
         }
         self._initial_view = initial_view
-        self.current_view = "catalog"
+        self.current_view = BASE_VIEW
 
     # Textual annotates install_screen with a bare (unparameterized) Screen, which
     # pyright-strict reports as partially unknown at the call site. Re-declare it
@@ -716,7 +720,7 @@ class UnifiedApp(App[list[str] | None]):
         # needs no install: it is the base screen and is never popped.
         for name, screen in self._views.items():
             self.install_screen(screen, name)
-        if self._initial_view != "catalog":
+        if self._initial_view != BASE_VIEW:
             await self.show_view(self._initial_view)
 
     @property
@@ -735,9 +739,9 @@ class UnifiedApp(App[list[str] | None]):
         # in-flight stack and breaking the [catalog] / [catalog, <view>] invariant.
         if name == self.current_view:
             return
-        if self.current_view != "catalog":
+        if self.current_view != BASE_VIEW:
             await self.pop_screen()
-        if name != "catalog":
+        if name != BASE_VIEW:
             await self.push_screen(self._views[name])
         self.current_view = name
 
@@ -763,8 +767,8 @@ class UnifiedApp(App[list[str] | None]):
         # One-deep stack: from a pushed view, esc goes home to the catalog; on the
         # catalog itself there is nowhere further back, so esc is inert. async to
         # match App.action_back's signature (pyright-strict rejects a sync override).
-        if self._navigable() and self.current_view != "catalog":
-            await self.show_view("catalog")
+        if self._navigable() and self.current_view != BASE_VIEW:
+            await self.show_view(BASE_VIEW)
 
     def action_open_nav(self) -> None:
         if not self._navigable():
