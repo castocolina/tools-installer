@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 current_phase: 05
 current_phase_name: Registry Method Corrections (codegraph/mmdc/puppeteer)
-status: planning
-stopped_at: Phase 4 complete, ready to plan Phase 05
-last_updated: "2026-09-05T18:54:22.264Z"
+status: executing
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-09-05T23:05:44Z"
 last_activity: 2026-09-05
-last_activity_desc: Phase 4 complete, transitioned to Phase 05
+last_activity_desc: Executed 05-01 node co-install mechanism
 state_head: 2fa65eb9be91eba25fe30f037ef90fd756fbe638
 progress:
   total_phases: 12
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-04)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 04 — Package Manager Redirect Policy
+**Current focus:** Phase 05 — Registry Method Corrections (codegraph/mmdc/puppeteer)
 
 ## Current Position
 
 Phase: 05 — Registry Method Corrections (codegraph/mmdc/puppeteer)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-09-05 — Phase 4 complete, transitioned to Phase 05
+Plan: 01 complete, ready for 05-02
+Status: Executing
+Last activity: 2026-09-05 — 05-01 node co-install / allow_build / smoke mechanism shipped
 
 Progress: [█████░░░░░] 83%
 
@@ -72,6 +72,7 @@ Recent decisions affecting current work:
 - [04-03, 2026-09-05]: npm/pnpm global install/add/i exec volta install via an argv-conditional PATH shim; _node uses real_pnpm() absolute path so the wrapper cannot intercept catalog installs
 - [04-04, 2026-09-05]: doctor copy distinguishes redirect from block via per-command labels; volta install-scripts tradeoff is a Severity.OK note gated on a live pnpm shim
 - [04-05, 2026-09-05]: residual kind=node set is mmdc; snapshot-reinstall is a manual Doctor r action through real_pnpm; automatic post-pnpm-update trigger is Phase 12 (R-03)
+- [05-01, 2026-09-05]: GROUP_PIN=ok on pnpm 12.3.4; clean two-invocation path ends as ONE group; allowBuilds is name-only; LIBCHECK=fail without shared libs; BROWNFIELD_BEFORE=ok on this pnpm
 
 ### Pending Todos
 
@@ -94,6 +95,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-05T15:23:35Z
-Stopped at: Phase 4 complete, ready to plan Phase 05
+Last session: 2026-09-05T23:05:44Z
+Stopped at: Completed 05-01-PLAN.md
 Resume file: None
