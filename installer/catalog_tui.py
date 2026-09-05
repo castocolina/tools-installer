@@ -15,6 +15,7 @@ from textual.app import ComposeResult
 from textual.message import Message
 from textual.widgets import DataTable
 
+from installer.deps import missing_requires
 from installer.enums import Audience, Priority
 from installer.model import Tool
 from installer.selection import select_tools
@@ -167,6 +168,7 @@ class CatalogScreen(AppScreen):
         self._blurbs = dict(blurbs)
         self._catalog = list(catalog)
         self._staged = staged
+        self._by_id = {tool.id: tool for tool in self._catalog}
         self._browser: ToolBrowser[Tool] = ToolBrowser(self._adapter(), selected=staged)
 
     def _adapter(self) -> BrowserAdapter[Tool]:
@@ -250,6 +252,21 @@ class CatalogScreen(AppScreen):
         # Clear the "select at least one" warning the moment the user selects.
         event.stop()
         self.status.clear()
+        if event.item_id is None or not event.selected:
+            return
+        tool = self._by_id.get(event.item_id)
+        if tool is None:
+            return
+        missing = missing_requires(
+            tool, self._catalog, staged=self._staged, installed=self._installed
+        )
+        if missing:
+            self.status.set(
+                f"{tool.id} also needs {', '.join(missing)} - added automatically at "
+                "install time; any not available on this platform are reported when "
+                "the installer runs.",
+                "ok",
+            )
 
     def on_tool_browser_accepted(self, event: ToolBrowser.Accepted) -> None:
         event.stop()

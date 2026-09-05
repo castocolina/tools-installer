@@ -27,8 +27,24 @@ state, not the churn.
 ## Tier is a browsing label
 
 `Tool.tier` (`system` / `user` / `ai`) is a browsing/grouping label only —
-which top-level catalog view a tool appears under (Phase 2 wires this).
+which of the three top-level catalog views a tool is listed under. The three
+views are three `CatalogScreen` instances over one shared staged selection, so
+a batch assembled across tiers commits once. The tier filter narrows what is
+DISPLAYED and never what is resolved: the ids a view returns are resolved
+against the whole catalog by `resolve_dependencies`. `deps.missing_requires` is
+a read-only preview of that resolution, never a second ordering mechanism.
+
 `Tool.requires`, resolved by `installer/deps.py::resolve_dependencies`, remains
 the sole mechanism that determines install order. A `requires` edge that
 crosses tiers drags in its dependency exactly like a same-tier one; the
 resolver has no tier-aware branching.
+
+ROADMAP SC#2's original illustrative `claude` -> `pnpm` pair was rewritten
+during plan-review convergence and is proved with the real `mmdc` -> `pnpm`
+user->system edge, because `claude` installs via its own script/cask and
+declares no dependency on `pnpm`.
+
+The in-view notice states that unavailable dependencies are reported when the
+installer runs; the availability VERDICT stays with `resolve_dependencies` +
+`render_dependency_notice` on the post-TUI path, because a screen with no
+`Platform` must not make a judgement it cannot make correctly.

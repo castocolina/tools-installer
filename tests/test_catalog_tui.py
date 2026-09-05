@@ -8,9 +8,11 @@ from textual.widgets import DataTable
 from textual.widgets.data_table import ColumnKey
 
 from installer.catalog_tui import AUDIENCE_LABEL, group_tools, sort_for_table
+from installer.deps import resolve_dependencies
 from installer.doctor import DoctorReport
 from installer.enums import Audience
 from installer.model import Method, Tool
+from installer.selection import select_tools
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 
 
@@ -44,6 +46,7 @@ def _tool(
     audience: str = "both",
     desc: str = "",
     tier: str = "system",
+    requires: tuple[str, ...] = (),
 ) -> Tool:
     return Tool(
         id=tool_id,
@@ -55,6 +58,7 @@ def _tool(
         audience=audience,
         desc=desc,
         tier=tier,
+        requires=requires,
     )
 
 
@@ -422,3 +426,73 @@ async def test_tier_view_keeps_the_five_grouping_tabs() -> None:
         assert screen.view == "table"
         await pilot.press("right")
         assert screen.view == "category"
+
+
+def _cross_tier_catalog() -> tuple[list[Tool], dict[str, bool]]:
+    tools = [
+        _tool("pnpm", category="pkg-mgr", priority="P0", tier="system"),
+        _tool("agent", category="ai", priority="P0", tier="ai", requires=("pnpm",)),
+    ]
+    return tools, {tool.id: False for tool in tools}
+
+
+async def test_system_tier_dependency_is_announced_from_the_ai_view() -> None:
+    tools, installed = _cross_tier_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("3")  # AI view, never visit System
+        await pilot.press("space")
+        assert "pnpm" in app.catalog_for("ai").status_text
+
+
+async def test_unmarking_a_tool_clears_the_dependency_notice() -> None:
+    tools, installed = _cross_tier_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("3")
+        await pilot.press("space")
+        await pilot.press("space")
+        assert app.catalog_for("ai").status_text == ""
+
+
+async def test_already_staged_dependency_is_not_re_announced() -> None:
+    tools, installed = _cross_tier_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("space")  # System: mark pnpm
+        await pilot.press("3")  # AI view
+        await pilot.press("space")  # mark agent
+        assert app.catalog_for("ai").status_text == ""
+
+
+async def test_dependency_notice_does_not_promise_availability() -> None:
+    tools, installed = _cross_tier_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("3")
+        await pilot.press("space")
+        notice = app.catalog_for("ai").status_text
+        assert "agent also needs pnpm" in notice
+        assert "added automatically at install time" in notice
+        assert "reported when the installer runs" in notice
+
+
+async def test_selection_made_in_one_tier_view_resolves_against_the_whole_catalog() -> None:
+    tools, installed = _cross_tier_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("3")
+        await pilot.press("space")
+        await pilot.press("enter")
+    ids = app.return_value
+    assert ids is not None
+    assert ids == ["agent"]
+    selected = select_tools(tools, ids)
+    result = resolve_dependencies(
+        selected,
+        tools,
+        available=lambda _tool: True,
+        is_installed=lambda _tool: False,
+    )
+    assert result.dragged_in == ("pnpm",)
+    assert [tool.id for tool in result.order] == ["pnpm", "agent"]

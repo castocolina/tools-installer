@@ -5,6 +5,7 @@ import pytest
 from installer.deps import (
     DependencyCycleError,
     Resolution,
+    missing_requires,
     requires_integrity_errors,
     resolve_dependencies,
 )
@@ -150,3 +151,55 @@ def test_real_registry_cross_tier_and_same_tier_requires_edges_resolve_unchanged
     assert "pnpm" in mmdc_result.dragged_in
     java_result = _resolve([java], catalog)
     assert "sdkman" in java_result.dragged_in
+
+
+def test_missing_requires_names_unstaged_uninstalled_dependencies() -> None:
+    pnpm = _tool("pnpm")
+    mmdc = _tool("mmdc", "pnpm")
+    empty: set[str] = set()
+    assert missing_requires(mmdc, [mmdc, pnpm], staged=empty, installed={}) == ("pnpm",)
+
+
+def test_missing_requires_skips_staged_and_installed_dependencies() -> None:
+    pnpm = _tool("pnpm")
+    mmdc = _tool("mmdc", "pnpm")
+    catalog = [mmdc, pnpm]
+    empty: set[str] = set()
+    assert missing_requires(mmdc, catalog, staged={"pnpm"}, installed={}) == ()
+    assert missing_requires(mmdc, catalog, staged=empty, installed={"pnpm": True}) == ()
+
+
+def test_missing_requires_tolerates_a_partial_installed_map() -> None:
+    pnpm = _tool("pnpm")
+    mmdc = _tool("mmdc", "pnpm")
+    empty: set[str] = set()
+    assert missing_requires(mmdc, [mmdc, pnpm], staged=empty, installed={}) == ("pnpm",)
+
+
+def test_missing_requires_is_transitive_and_cycle_safe() -> None:
+    a = _tool("a", "b")
+    b = _tool("b", "c")
+    c = _tool("c")
+    empty: set[str] = set()
+    assert missing_requires(a, [a, b, c], staged=empty, installed={}) == ("b", "c")
+    loop_a = _tool("a", "b")
+    loop_b = _tool("b", "a")
+    assert missing_requires(loop_a, [loop_a, loop_b], staged=empty, installed={}) == ("b",)
+
+
+def test_missing_requires_ignores_ids_absent_from_the_catalog() -> None:
+    user = _tool("user", "ghost")
+    empty: set[str] = set()
+    assert missing_requires(user, [user], staged=empty, installed={}) == ()
+
+
+def test_missing_requires_matches_the_real_registry_cross_tier_edge() -> None:
+    registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+    catalog = load_tools(registry)
+    by_id = {tool.id: tool for tool in catalog}
+    mmdc = by_id["mmdc"]
+    pnpm = by_id["pnpm"]
+    installed = {tool.id: False for tool in catalog}
+    empty: set[str] = set()
+    assert missing_requires(mmdc, catalog, staged=empty, installed=installed) == ("pnpm",)
+    assert mmdc.tier != pnpm.tier

@@ -8,7 +8,8 @@ needs it. Availability and install-state are injected so the module stays pure
 and terminal-free.
 """
 
-from collections.abc import Callable
+from collections import deque
+from collections.abc import Callable, Container, Mapping
 from dataclasses import dataclass
 
 from installer.model import Tool
@@ -148,3 +149,36 @@ def requires_integrity_errors(catalog: list[Tool]) -> list[str]:
             if dep_id not in ids:
                 errors.append(f"tool '{tool.id}' requires unknown tool '{dep_id}'")
     return errors
+
+
+def missing_requires(
+    tool: Tool,
+    catalog: list[Tool],
+    *,
+    staged: Container[str],
+    installed: Mapping[str, bool],
+) -> tuple[str, ...]:
+    """Name what `resolve_dependencies` will drag in, so a tier-scoped view can
+    show a cross-tier dependency at mark time.
+
+    This is a read-only preview: it performs no ordering, makes no availability
+    judgement, raises no cycle error, and drags nothing in.
+    `resolve_dependencies` remains the single mechanism that decides what
+    installs and in what order, per `.claude/architecture.md`'s tier rule.
+    """
+    by_id = {entry.id: entry for entry in catalog}
+    seen: set[str] = {tool.id}
+    missing: list[str] = []
+    queue: deque[str] = deque(tool.requires)
+    while queue:
+        dep_id = queue.popleft()
+        if dep_id in seen:
+            continue
+        seen.add(dep_id)
+        dep = by_id.get(dep_id)
+        if dep is None:
+            continue
+        if dep_id not in staged and not installed.get(dep_id, False):
+            missing.append(dep_id)
+        queue.extend(dep.requires)
+    return tuple(missing)
