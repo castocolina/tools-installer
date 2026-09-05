@@ -1476,6 +1476,56 @@ async def test_doctor_audit_that_cannot_run_renders_as_unknown_not_as_zero() -> 
         assert app.is_running
 
 
+async def test_doctor_audit_survives_a_raising_preview_closure() -> None:
+    # WR-02 (cycle-3 review): self._globals_preview also resolves pnpm and
+    # can raise OSError for the same reason the audit itself can (real_pnpm
+    # -> Path.home()), but only the audit call was inside run_live's guard.
+    # Verified live pre-fix: an OSError here was NOT caught by run_live at
+    # all (only self._node_globals's call was wrapped) and crashed the
+    # worker with textual.worker.WorkerFailed.
+    def raising_preview(_report: NodeGlobalsReport) -> str:
+        raise OSError("pnpm resolution blew up")
+
+    app = _app(
+        node_globals=lambda: _mmdc_report(missing=()),
+        globals_preview=raising_preview,
+        initial_view="doctor",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert app.is_running
+        assert isinstance(app.screen, DoctorScreen)
+        body = str(app.screen.query_one("#doctor-body", Static).render())
+        assert "could not be read" in body
+
+
+async def test_doctor_r_retries_the_audit_when_it_could_not_be_read() -> None:
+    # WR-03 (cycle-3 review): a known=False report left `r` refusing forever
+    # with no way back to a readable state short of leaving the screen.
+    attempts = 0
+
+    def flaky() -> NodeGlobalsReport:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("pnpm store is locked")
+        return _mmdc_report(missing=())
+
+    app = _app(node_globals=flaky, initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert attempts == 1
+        body = str(app.screen.query_one("#doctor-body", Static).render())
+        assert "could not be read" in body
+
+        await pilot.press("r")
+        await _settle(app, pilot)
+        assert attempts == 2
+        body = str(app.screen.query_one("#doctor-body", Static).render())
+        assert "could not be read" not in body
+        assert "mmdc" not in body
+
+
 async def test_doctor_reinstall_refuses_a_stale_report_while_reauditing() -> None:
     # A cycle-3 review finding: only the FIRST-ever audit (report is None)
     # was refused. A SUBSEQUENT audit -- triggered here by re-entering the

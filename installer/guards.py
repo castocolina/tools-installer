@@ -190,7 +190,7 @@ def global_redirect_shim_script(name: str, *, volta_path: str, passthrough_path:
     else:
         fallback = ban_body(name)
     long_booleans = "|".join(name for name in BOOLEAN_LONG_OPTIONS if name != "--global")
-    # Four structural rules the body depends on:
+    # Five structural rules the body depends on:
     # 1. The first loop only READS "$@"; the second loop rewrites it with the
     #    standard POSIX rotate idiom (take $1, shift, append the keepers).
     #    Because the rotate loop mangles "$@", the branch it lives in always

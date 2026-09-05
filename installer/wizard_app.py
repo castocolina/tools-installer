@@ -92,6 +92,10 @@ _GLOBALS_UNKNOWN_YET = "Still checking pnpm's global set — press r again in a 
 # An audit that could not run answers the same question as a pnpm that could not
 # be asked: nothing was learned. One shape, so no consumer has to handle two.
 _GLOBALS_UNREADABLE = NodeGlobalsReport(entries=(), missing=(), managed=(), known=False)
+# A plain constant, never a second call to the injected preview closure: that
+# closure is exactly what may have just raised inside the guarded audit call,
+# so calling it again for the fallback path would reopen the same hazard.
+_GLOBALS_UNREADABLE_PREVIEW = _GLOBALS_UNKNOWN_COUNT
 
 
 class GlobalsReinstalled(Message):
@@ -319,7 +323,11 @@ class DoctorScreen(AppScreen):
         # worker. Do not call reinstall_argv here: a non-empty set with no
         # resolvable pnpm is a returned string, never an argv and never an
         # exception (architecture rule 3).
-        text.append(self._globals_preview_text)
+        # Skipped when the count line above already said the same thing: a
+        # known=False preview is the identical "could not be read" sentence
+        # with only the tail changed, and printing both reads like a stutter.
+        if report is None or report.known:
+            text.append(self._globals_preview_text)
         text.append("\n")
         if self.globals_running:
             text.append("Reinstalling the pnpm global set...", style="yellow")
@@ -393,8 +401,16 @@ class DoctorScreen(AppScreen):
         # changes nothing on screen reads as a broken binding. The two
         # answers are not interchangeable: one is a fact about the machine,
         # the other is an admission that the machine was not readable.
-        if not report.known or not report.managed:
-            self.globals_note = _NOTHING_TO_REINSTALL if report.known else _GLOBALS_UNKNOWN
+        if not report.known:
+            # There is nothing to retry a fixed message against: the last
+            # read simply failed, and the only screen action that changes
+            # that is asking again.
+            self.globals_note = _GLOBALS_UNKNOWN
+            self._refresh_body()
+            self._start_globals_audit()
+            return
+        if not report.managed:
+            self.globals_note = _NOTHING_TO_REINSTALL
             self._refresh_body()
             return
         self.globals_note = None
@@ -432,10 +448,23 @@ class DoctorScreen(AppScreen):
         the same way. `generation` travels with the result so a superseded
         worker's answer can be told apart from the one anyone is waiting on.
         """
-        report, error = run_live(self._node_globals)
-        if report is None:
-            report = _GLOBALS_UNREADABLE
-        self.post_message(GlobalsAudited(report, self._globals_preview(report), error, generation))
+        # Both the audit and the preview it feeds must sit inside the SAME
+        # guarded call: self._globals_preview also resolves pnpm (real_pnpm ->
+        # Path.home()), so it can raise for the same reasons _node_globals
+        # can. Guarding only the first left the second free to turn a
+        # resolver failure into an uncaught WorkerFailed that kills the app,
+        # rather than the "could not be read" text this worker exists to
+        # show instead.
+        outcome, error = run_live(self._audit_globals)
+        if outcome is None:
+            report, preview = _GLOBALS_UNREADABLE, _GLOBALS_UNREADABLE_PREVIEW
+        else:
+            report, preview = outcome
+        self.post_message(GlobalsAudited(report, preview, error, generation))
+
+    def _audit_globals(self) -> tuple[NodeGlobalsReport, str]:
+        report = self._node_globals()
+        return report, self._globals_preview(report)
 
     def on_globals_audited(self, message: GlobalsAudited) -> None:
         if message.generation != self._globals_audit_generation:
@@ -447,8 +476,13 @@ class DoctorScreen(AppScreen):
         self.globals_auditing = False
         self._globals_report = message.report
         self._globals_preview_text = message.preview
-        if self.globals_note == _GLOBALS_UNKNOWN_YET:
-            # That note asked the user to wait for exactly this message.
+        # Any note naming the audit itself (waiting for it, or the previous
+        # one having failed) is answered by this landing one way or another:
+        # the fresh report is what the screen now shows instead. A note
+        # about the REINSTALL's own outcome is a different lifecycle
+        # (globals_done/globals_error), never written here, so this cannot
+        # clear one of those by mistake.
+        if self.globals_note in (_GLOBALS_UNKNOWN_YET, _GLOBALS_UNKNOWN):
             self.globals_note = None
         self._refresh_guidance()
         self._refresh_body()
