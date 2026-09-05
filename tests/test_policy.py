@@ -57,7 +57,12 @@ def test_apply_writes_both_layers_and_returns_result(tmp_path: Path) -> None:
     result = _ban(tmp_path, apply_to=[rc]).apply()
     shim_dir = tmp_path / ".local" / "bin"
     # Both layers really happened on disk.
-    assert all(active for active in guard_status(shim_dir).values())
+    status = guard_status(shim_dir)
+    assert status["npm"] is True
+    assert status["pip"] is True
+    assert status["pip3"] is True
+    assert status["npx"] is True
+    assert status["pnpm"] is False
     assert "alias" in rc.read_text()
     # Structured result: two named layers + a reload hint.
     names = [layer.name for layer in result.layers]

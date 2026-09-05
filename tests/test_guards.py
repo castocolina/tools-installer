@@ -21,6 +21,7 @@ from installer.guards import (
     guard_redirect_warning,
     guard_status,
     guarded_names,
+    install_global_redirect_shims,
     install_redirect_shims,
     install_shims,
     is_our_shim,
@@ -140,10 +141,11 @@ def test_ban_alias_block_aliases_each_banned_command():
     block = ban_alias_block()
     assert block.startswith(BAN_BEGIN)
     assert block.rstrip().endswith(BAN_END)
-    for name in BANNED:
-        assert f"alias {name}=" in block
-    assert "alias npx='pnpm dlx'" in block
+    assert "alias npm=" not in block
+    assert "alias pnpm=" not in block
     assert "alias pip=" in block
+    assert "alias pip3=" in block
+    assert "alias npx='pnpm dlx'" in block
     npx_lines = [line for line in block.splitlines() if line.startswith("alias npx=")]
     assert npx_lines == ["alias npx='pnpm dlx'"]
     assert "banned" in block
@@ -188,6 +190,7 @@ def test_guard_path_warning_when_shim_dir_not_on_path(tmp_path: Path):
 
 def test_guard_path_warning_when_real_tool_resolves_first(tmp_path: Path):
     # shim dir is on PATH but AFTER /usr/bin, where a real pip lives.
+    install_shims(tmp_path)
     path_value = f"/usr/bin:{tmp_path}"
     warning = guard_path_warning(
         tmp_path,
@@ -196,6 +199,16 @@ def test_guard_path_warning_when_real_tool_resolves_first(tmp_path: Path):
     )
     assert warning is not None
     assert "/usr/bin/pip" in warning
+
+
+def test_guard_path_warning_none_when_shim_is_not_ours(tmp_path: Path):
+    path_value = f"/usr/bin:{tmp_path}"
+    warning = guard_path_warning(
+        tmp_path,
+        path_value=path_value,
+        which=lambda name: "/usr/bin/pnpm" if name == "pnpm" else None,
+    )
+    assert warning is None
 
 
 def test_guard_path_warning_none_when_healthy(tmp_path: Path):
@@ -387,17 +400,21 @@ def test_shim_script_npx_is_valid_and_exits_127(tmp_path: Path):
 
 
 def test_guarded_names_is_stable_and_deduplicated():
-    assert guarded_names() == ("npm", "pip", "pip3", "npx")
-    assert len(guarded_names()) == 4
+    assert guarded_names() == ("npm", "pip", "pip3", "npx", "pnpm")
+    assert len(guarded_names()) == 5
 
 
 def test_guard_label_distinguishes_redirect_from_block():
     assert guard_label("npx") == "redirected to pnpm dlx"
     assert guard_label("pip") == "blocked"
-    assert guard_label("npm") == "blocked"
+    assert (
+        guard_label("npm") == "global installs redirected to volta install, other npm use blocked"
+    )
+    assert guard_label("pnpm") == "global adds redirected to volta install"
 
 
 def test_guard_path_warning_when_real_npx_resolves_first(tmp_path: Path):
+    install_shims(tmp_path)
     path_value = f"/usr/bin:{tmp_path}"
     warning = guard_path_warning(
         tmp_path,
@@ -636,3 +653,116 @@ def test_pnpm_filter_before_subcommand_passes_through(tmp_path: Path):
     result = _run_shim(pnpm_shim, "--filter", "web", "add", "-g", "typescript")
     assert result.returncode == 0
     assert result.stdout == "PNPM --filter web add -g typescript\n"
+
+
+def _volta_pnpm_lookup(volta: Path, pnpm: Path | None):
+    def lookup(name: str, _path: str) -> str | None:
+        if name == "volta":
+            return str(volta)
+        if name == "pnpm" and pnpm is not None:
+            return str(pnpm)
+        return None
+
+    return lookup
+
+
+def _plant_volta_pnpm(tmp_path: Path) -> tuple[Path, Path, Path]:
+    real_dir = tmp_path / "real"
+    shim_dir = tmp_path / "shims"
+    real_dir.mkdir()
+    volta = real_dir / "volta"
+    volta.write_text("#!/bin/sh\n")
+    volta.chmod(0o755)
+    pnpm = real_dir / "pnpm"
+    pnpm.write_text("#!/bin/sh\n")
+    pnpm.chmod(0o755)
+    return shim_dir, volta, pnpm
+
+
+def test_install_global_redirect_shims_creates_then_refreshes(tmp_path: Path):
+    shim_dir, volta, pnpm = _plant_volta_pnpm(tmp_path)
+    lookup = _volta_pnpm_lookup(volta, pnpm)
+    path_value = f"{shim_dir}{os.pathsep}{volta.parent}"
+    first = install_global_redirect_shims(shim_dir, path_value=path_value, lookup=lookup)
+    assert first == {"npm": "created", "pnpm": "created"}
+    for name in ("npm", "pnpm"):
+        shim = shim_dir / name
+        assert shim.stat().st_mode & 0o111
+        assert REDIRECT_SENTINEL in shim.read_text()
+    second = install_global_redirect_shims(shim_dir, path_value=path_value, lookup=lookup)
+    assert second == {"npm": "refreshed", "pnpm": "refreshed"}
+
+
+def test_install_global_redirect_shims_volta_missing_leaves_ban(tmp_path: Path):
+    shim_dir = tmp_path / "shims"
+    install_shims(shim_dir)
+    before = (shim_dir / "npm").read_text()
+    results = install_global_redirect_shims(
+        shim_dir, path_value=str(shim_dir), lookup=lambda _n, _p: None
+    )
+    assert results == {"npm": "blocked (volta not found)", "pnpm": "absent (volta not found)"}
+    assert not (shim_dir / "pnpm").exists()
+    assert (shim_dir / "npm").read_text() == before
+
+
+def test_install_global_redirect_shims_removes_pnpm_when_volta_vanishes(tmp_path: Path):
+    shim_dir, volta, pnpm = _plant_volta_pnpm(tmp_path)
+    path_value = f"{shim_dir}{os.pathsep}{volta.parent}"
+    install_global_redirect_shims(
+        shim_dir, path_value=path_value, lookup=_volta_pnpm_lookup(volta, pnpm)
+    )
+    results = install_global_redirect_shims(
+        shim_dir, path_value=path_value, lookup=lambda _n, _p: None
+    )
+    assert results["pnpm"] == "removed (volta not found)"
+    assert not (shim_dir / "pnpm").exists()
+
+
+def test_install_global_redirect_shims_skips_pnpm_when_real_pnpm_missing(tmp_path: Path):
+    shim_dir, volta, _pnpm = _plant_volta_pnpm(tmp_path)
+    results = install_global_redirect_shims(
+        shim_dir,
+        path_value=f"{shim_dir}{os.pathsep}{volta.parent}",
+        lookup=_volta_pnpm_lookup(volta, None),
+    )
+    assert results["pnpm"] == "skipped (real pnpm not found)"
+    assert not (shim_dir / "pnpm").exists()
+
+
+def test_install_global_redirect_shims_skips_foreign_pnpm(tmp_path: Path):
+    shim_dir, volta, pnpm = _plant_volta_pnpm(tmp_path)
+    shim_dir.mkdir()
+    foreign = shim_dir / "pnpm"
+    foreign.write_text("#!/bin/sh\necho real pnpm\n")
+    results = install_global_redirect_shims(
+        shim_dir,
+        path_value=f"{shim_dir}{os.pathsep}{volta.parent}",
+        lookup=_volta_pnpm_lookup(volta, pnpm),
+    )
+    assert results["pnpm"] == "skipped (real binary here)"
+    assert foreign.read_text() == "#!/bin/sh\necho real pnpm\n"
+
+
+def test_guard_status_includes_pnpm(tmp_path: Path):
+    status = guard_status(tmp_path)
+    assert "pnpm" in status
+    assert status["pnpm"] is False
+
+
+def test_guard_redirect_warning_names_npm_and_volta_when_ban_body(tmp_path: Path):
+    (tmp_path / "npm").write_text(shim_script("npm"))
+    warning = guard_redirect_warning(tmp_path)
+    assert warning is not None
+    assert "npm" in warning
+    assert "volta" in warning
+
+
+def test_guard_redirect_warning_none_when_all_global_redirects_live(tmp_path: Path):
+    shim_dir, volta, pnpm = _plant_volta_pnpm(tmp_path)
+    install_global_redirect_shims(
+        shim_dir,
+        path_value=f"{shim_dir}{os.pathsep}{volta.parent}",
+        lookup=_volta_pnpm_lookup(volta, pnpm),
+    )
+    (shim_dir / "npx").write_text(redirect_shim_script("npx", str(pnpm)))
+    assert guard_redirect_warning(shim_dir) is None

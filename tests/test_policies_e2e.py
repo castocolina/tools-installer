@@ -80,7 +80,12 @@ async def test_policies_e2e_toggle_round_trip_against_sandbox(
         await pilot.press("space")  # enable: writes shims + aliases live
         assert isinstance(app.screen, PoliciesScreen)
         assert app.screen.active_state["ban"] is True
-        assert all(guard_status(bin_dir).values())
+        status = guard_status(bin_dir)
+        assert status["npm"] is True
+        assert status["pip"] is True
+        assert status["pip3"] is True
+        assert status["npx"] is True
+        assert status["pnpm"] is False
         assert (bin_dir / "npx").exists()
         assert "alias" in rc.read_text()
         _snapshot(app, "02-enabled.svg")

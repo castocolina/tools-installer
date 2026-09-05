@@ -267,6 +267,59 @@ def install_redirect_shims(
     return results
 
 
+def install_global_redirect_shims(
+    shim_dir: Path,
+    *,
+    path_value: str,
+    lookup: PathLookup = which_in_path,
+) -> dict[str, str]:
+    """Write argv-conditional global-redirect shims, gated on volta.
+
+    The redirect is enabled only when volta resolves, mirroring how
+    omz_plugins_policy gates on omz_present — a missing target degrades to
+    the existing behaviour, never to a broken command (R-02).
+    """
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    volta_path = real_binary(VOLTA, shim_dir=shim_dir, path_value=path_value, lookup=lookup)
+    results: dict[str, str] = {}
+    for name, spec in GLOBAL_REDIRECTED.items():
+        target = shim_dir / name
+        if target.exists() and not is_our_shim(target):
+            results[name] = "skipped (real binary here)"
+            continue
+        if volta_path is None:
+            if spec.passthrough is None:
+                results[name] = "blocked (volta not found)"
+                continue
+            if target.exists() and is_our_shim(target):
+                target.unlink()
+                results[name] = "removed (volta not found)"
+            else:
+                results[name] = "absent (volta not found)"
+            continue
+        passthrough_path: str | None = None
+        if spec.passthrough is not None:
+            passthrough_path = real_binary(
+                spec.passthrough, shim_dir=shim_dir, path_value=path_value, lookup=lookup
+            )
+            if passthrough_path is None:
+                if target.exists() and is_our_shim(target):
+                    target.unlink()
+                    results[name] = "removed (real pnpm not found)"
+                else:
+                    results[name] = "skipped (real pnpm not found)"
+                continue
+        had = target.exists()
+        target.write_text(
+            global_redirect_shim_script(
+                name, volta_path=volta_path, passthrough_path=passthrough_path
+            )
+        )
+        target.chmod(0o755)
+        results[name] = "refreshed" if had else "created"
+    return results
+
+
 def install_shims(shim_dir: Path) -> dict[str, str]:
     """Write npm/pip/pip3 shims into shim_dir (mode 0o755). Idempotent.
 
@@ -293,7 +346,7 @@ def guarded_names() -> tuple[str, ...]:
     Deduplicated because a name may appear in both dicts (its redirect body
     supersedes its hard-block body on disk).
     """
-    return tuple(dict.fromkeys((*BANNED, *REDIRECTED)))
+    return tuple(dict.fromkeys((*BANNED, *REDIRECTED, *GLOBAL_REDIRECTED)))
 
 
 def remove_shims(shim_dir: Path) -> dict[str, str]:
@@ -320,6 +373,8 @@ def guard_status(shim_dir: Path) -> dict[str, bool]:
 
 def guard_label(name: str) -> str:
     """Per-command doctor text: redirect label, or 'blocked'."""
+    if name in GLOBAL_REDIRECTED:
+        return GLOBAL_REDIRECTED[name].label
     if name in REDIRECTED:
         return REDIRECTED[name].label
     return "blocked"
@@ -335,9 +390,17 @@ def ban_alias_block() -> str:
     own PATH. That is intended — an alias must keep working after the target
     moves — and it stays harmless after plan 04-03 wraps pnpm, because dlx is
     not one of GLOBAL_SUBCOMMANDS and therefore never reaches the volta branch.
+
+    Names in GLOBAL_REDIRECTED are skipped: a one-line alias cannot reproduce
+    the argv branch, so an npm alias would claim the command is blocked while
+    the PATH shim was redirecting its global form, and any pnpm alias risks
+    breaking a sanctioned tool in interactive shells. For these two, the PATH
+    shim is the only layer.
     """
     lines = [BAN_BEGIN]
     for name, hint in BANNED.items():
+        if name in GLOBAL_REDIRECTED:
+            continue
         if name in REDIRECTED:
             spec = REDIRECTED[name]
             tokens = " ".join((spec.target, *spec.args))
@@ -385,6 +448,8 @@ def guard_path_warning(
         )
     shim_index = path_dirs.index(target)
     for name in guarded_names():
+        if not is_our_shim(shim_dir / name):
+            continue
         real = which(name)
         if real and not is_our_shim(Path(real)):
             real_dir = str(Path(real).parent)
@@ -413,4 +478,25 @@ def guard_redirect_warning(shim_dir: Path) -> str | None:
             "resolvable when the policy was applied; install "
             f"{spec.target} and re-apply."
         )
+    npm_path = shim_dir / "npm"
+    npm_redirect_live = is_our_shim(npm_path) and REDIRECT_SENTINEL in npm_path.read_text()
+    for name, spec in GLOBAL_REDIRECTED.items():
+        path = shim_dir / name
+        if spec.passthrough is None:
+            if not is_our_shim(path):
+                continue
+            if REDIRECT_SENTINEL in path.read_text():
+                continue
+            messages.append(
+                f"'{name}' is hard-blocked because '{VOLTA}' was not "
+                "resolvable when the policy was applied; install "
+                f"{VOLTA} and re-apply."
+            )
+            continue
+        if npm_redirect_live and not is_our_shim(path):
+            messages.append(
+                f"'{name}' is not redirected because a real '{spec.passthrough}' "
+                "was not resolvable when the policy was applied; install "
+                f"{spec.passthrough} and re-apply."
+            )
     return " ".join(messages) if messages else None
