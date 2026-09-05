@@ -226,12 +226,14 @@ Plans:
 **Goal**: The existing, already-safe `scripts/prune-user-tmpdir.sh` becomes a set-and-forget background policy, toggleable the same way every other Policies entry already is, with a real audit trail instead of silent background deletion.
 **Depends on**: Nothing — new `daemon_policy` factory parallel to existing `Policy` factories, independent of Phases 1-10
 **Requirements**: REQ-launchd-prune-policy, REQ-daemon-log-diagnostics, REQ-daemon-dependency-gating
+**Scope note (expanded 2026-09-04 discuss-phase)**: The policy is ON by default on macOS (not opt-in), and its detail panel gains a time-of-day picker for the daily `StartCalendarInterval` run (recurrence itself stays fixed at daily — no weekly/custom-interval control this phase).
 **Success Criteria** (what must be TRUE):
 
-  1. The Policies view offers a macOS-only toggle that installs/removes a LaunchAgent running the existing prune script daily (`--days 3` default, unchanged script logic/safety checks).
+  1. The Policies view offers a macOS-only toggle that installs/removes a LaunchAgent running the existing prune script daily (`--days 3` default, unchanged script logic/safety checks); the policy is ON by default on a fresh macOS install.
   2. The policy is invisible/inert on Linux.
   3. `fd`/`rg` show as recommended-but-optional; the daemon still runs correctly (via the script's own find/grep fallback) without them.
   4. Scheduled runs write an inspectable log, surfaced via the Policies detail panel for this one policy — no new top-level Diagnostics view.
+  5. The policy's detail panel offers a time-of-day picker controlling the LaunchAgent's `StartCalendarInterval` hour/minute; recurrence itself remains fixed at daily.
 
 **Plans**: TBD
 
@@ -246,7 +248,7 @@ Plans:
   2. Version checks are cached with a `checked_at` timestamp; entries older than 7 days show stale and trigger a background re-check, not a full refetch every session.
   3. Version checks run via a Textual `Worker` without blocking first paint or keypresses; network failures degrade to "unknown," never crash.
   4. An "update" action exists and delegates to the tool's actual owning manager (brew/pnpm/uv tool/this installer's own path) — not assumed to always be this installer's executor.
-  5. (Stretch, deferred/non-MVP) A tool installed via pnpm/npm with a newer version available via brew surfaces a distinct manager-drift alert.
+  5. (Stretch, deferred/non-MVP; attempt a minimal version if scope allows per 2026-09-04 discuss-phase) A tool installed via pnpm/npm with a newer version available via brew surfaces a distinct manager-drift alert.
 
 **Plans**: TBD
 
