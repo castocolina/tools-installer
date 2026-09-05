@@ -1469,6 +1469,22 @@ bin_dir = "~/Library/pnpm"
 kind = "brew"
 formula = "pnpm"
 
+# volta install <pkg> runs a real `npm install --global --loglevel=warn
+# --no-update-notifier --no-audit <pkg>` subprocess, with no flag that disables
+# install scripts — verified by reading Volta's own source,
+# crates/volta-core/src/tool/package/install.rs, function run_global_install
+# (github.com/volta-cli/volta, fetched 2026-09-05).
+# Consequence: anything installed through volta runs npm's preinstall/install/
+# postinstall scripts unrestricted, which pnpm has gated behind an opt-in
+# allowlist since pnpm v10 (pnpm.io/supply-chain-security). Routing global
+# installs to volta is therefore a security-for-stability tradeoff the user
+# accepted in D-06/D-08 to fix pnpm's global-package loss on self-update —
+# it is not a clean win.
+# Version caveat: npm v12 flips install scripts to opt-in
+# (github.blog/changelog/2026-06-09-upcoming-breaking-changes-for-npm-v12/).
+# The finding above holds for the npm versions Volta pins today and should be
+# re-verified with `volta run --node <pinned-version> npm --version` if this
+# entry is revisited after 2026-10-05.
 [[tool]]
 id = "volta"
 name = "Volta"

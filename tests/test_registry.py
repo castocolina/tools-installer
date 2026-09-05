@@ -280,6 +280,11 @@ def test_volta_resolves_to_script_on_linux_and_brew_on_macos() -> None:
     assert all(m.params.get("bin_dir") == "~/.volta/bin" for m in volta.methods)
 
 
+def test_volta_entry_records_the_npm_postinstall_finding() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    assert "run_global_install" in text
+
+
 def test_gh_uses_nested_member_on_linux_and_brew_only_on_macos() -> None:
     gh = next(t for t in load_tools(REGISTRY) if t.id == "gh")
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
