@@ -278,7 +278,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 1. Catalog Tier Foundation | 1/1 | Complete    | 2026-09-04 |
 | 2. Tier-Scoped Catalog Views & Recommends | 2/2 | Complete    | 2026-09-05 |
 | 3. Install/Uninstall & Tweak Lifecycle Hardening | 3/3 | Complete    | 2026-09-05 |
-| 4. npm/npx Ban Extension & Redirect Policy | 5/5 | Complete    | 2026-09-05 |
+| 4. npm/npx Ban Extension & Redirect Policy | 5/5 | In Progress|  |
 | 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 0/TBD | Not started | - |
 | 6. SDKMAN Hardening & Registry-Authoring Guidelines | 0/TBD | Not started | - |
 | 7. System & User Tier Catalog Expansion | 0/TBD | Not started | - |
