@@ -106,3 +106,27 @@ def test_unstaged_recommends_names_uninstalled_unstaged_ids() -> None:
     catalog = [_tool("rg", "search"), _tool("fd", "search"), _tool("jq", "data")]
     tool = _tool("claude", "ai", recommends=("rg", "fd", "jq"))
     assert unstaged_recommends(tool, catalog, staged=set[str](), installed={}) == ("rg", "fd", "jq")
+
+
+def test_unstaged_recommends_skips_staged_installed_and_unknown() -> None:
+    catalog = [_tool("rg", "search"), _tool("fd", "search"), _tool("jq", "data")]
+    tool = _tool("claude", "ai", recommends=("rg", "fd", "jq", "ghost"))
+    assert unstaged_recommends(tool, catalog, staged={"rg"}, installed={"jq": True}) == ("fd",)
+    assert (
+        unstaged_recommends(tool, catalog, staged={"rg", "fd", "jq"}, installed=dict[str, bool]())
+        == ()
+    )
+
+
+def test_unstaged_recommends_is_flat_one_hop() -> None:
+    a = _tool("a", "x", recommends=("b",))
+    b = _tool("b", "x", recommends=("c",))
+    c = _tool("c", "x")
+    catalog = [a, b, c]
+    assert unstaged_recommends(a, catalog, staged=set[str](), installed={}) == ("b",)
+
+
+def test_unstaged_recommends_dedupes_preserving_declared_order() -> None:
+    catalog = [_tool("rg", "search"), _tool("jq", "data")]
+    tool = _tool("claude", "ai", recommends=("jq", "rg", "jq"))
+    assert unstaged_recommends(tool, catalog, staged=set[str](), installed={}) == ("jq", "rg")

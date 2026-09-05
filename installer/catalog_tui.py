@@ -226,6 +226,11 @@ class CatalogScreen(AppScreen):
         # layout is unchanged for the common no-requires case.
         if tool.requires:
             detail += f"  |  requires {', '.join(tool.requires)}"
+        # The detail bar describes the tool, which is a stable fact; the prompt
+        # describes this moment's selection, which is not. Show the raw declared
+        # list, not the filtered one — the two lists differing is correct.
+        if tool.recommends:
+            detail += f"  |  pairs well with {', '.join(tool.recommends)}"
         return detail
 
     def _sort(self, column_key: str) -> None:
@@ -322,6 +327,16 @@ class CatalogScreen(AppScreen):
     def action_dismiss_recommends(self) -> None:
         self._pending_recommends = ()
         self.recommends_line.clear()
+
+    def on_screen_resume(self) -> None:
+        # The staged set is shared by all three tier screens (plan 02-01), and
+        # action_accept_recommends is the only writer that can add an id on
+        # behalf of a screen that is not active; that screen's DataTable was
+        # already built and stamped, so without a re-stamp on resume it would
+        # show an unmarked checkbox for a tool that is genuinely in the batch.
+        # refresh_marks iterates only its own rows and skips ids it does not
+        # own, so this is inert for every other case.
+        self._browser.refresh_marks()
 
     def on_tool_browser_accepted(self, event: ToolBrowser.Accepted) -> None:
         event.stop()

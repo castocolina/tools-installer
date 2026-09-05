@@ -12,7 +12,9 @@ from installer.deps import (
 from installer.model import Method, Tool, load_tools
 
 
-def _tool(tool_id: str, *requires: str, tier: str = "user") -> Tool:
+def _tool(
+    tool_id: str, *requires: str, tier: str = "user", recommends: tuple[str, ...] = ()
+) -> Tool:
     return Tool(
         id=tool_id,
         name=tool_id,
@@ -21,6 +23,7 @@ def _tool(tool_id: str, *requires: str, tier: str = "user") -> Tool:
         methods=(Method(kind="node", params={"npm_pkg": f"@x/{tool_id}"}),),
         requires=tuple(requires),
         tier=tier,
+        recommends=recommends,
     )
 
 
@@ -203,3 +206,16 @@ def test_missing_requires_matches_the_real_registry_cross_tier_edge() -> None:
     empty: set[str] = set()
     assert missing_requires(mmdc, catalog, staged=empty, installed=installed) == ("pnpm",)
     assert mmdc.tier != pnpm.tier
+
+
+def test_resolve_dependencies_does_not_drag_in_recommends() -> None:
+    jq = _tool("jq")
+    agent = _tool("agent", recommends=("jq",))
+    result = _resolve([agent], [agent, jq])
+    assert result.dragged_in == ()
+    assert "jq" not in [tool.id for tool in result.order]
+
+    pnpm = _tool("pnpm")
+    agent_with_req = _tool("agent", "pnpm", recommends=("jq",))
+    result = _resolve([agent_with_req], [agent_with_req, pnpm, jq])
+    assert result.dragged_in == ("pnpm",)

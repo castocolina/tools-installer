@@ -246,6 +246,22 @@ def test_load_tools_rejects_requires_as_a_string(tmp_path: Path) -> None:
         load_tools(manifest)
 
 
+def test_load_tools_rejects_recommends_as_a_string(tmp_path: Path) -> None:
+    manifest = tmp_path / "registry.toml"
+    manifest.write_text(
+        "[[tool]]\n"
+        'id = "demo"\n'
+        'category = "search"\n'
+        'tier = "user"\n'
+        'recommends = "rg"\n'  # must be a list, not a string
+        "[[tool.method]]\n"
+        'kind = "script"\n'
+        'url = "https://example.test/i.sh"\n'
+    )
+    with pytest.raises(ValueError, match="'recommends' must be a list"):
+        load_tools(manifest)
+
+
 def test_load_tools_rejects_unknown_category(tmp_path: Path) -> None:
     manifest = _write(
         tmp_path,

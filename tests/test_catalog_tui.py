@@ -521,3 +521,118 @@ async def test_marking_claude_in_the_ai_view_offers_its_recommends_and_r_stages_
         await pilot.pause()
         assert screen.selected == {"claude", "rg", "fd", "jq"}
         assert screen.recommends_text == ""
+
+
+def _recommends_catalog() -> tuple[list[Tool], dict[str, bool]]:
+    tools = [
+        _tool("pnpm", category="pkg-mgr", priority="P0", tier="system"),
+        _tool("jq", category="data", priority="P1", tier="user"),
+        _tool("agent", category="ai", priority="P0", tier="ai", recommends=("jq",)),
+    ]
+    return tools, {tool.id: False for tool in tools}
+
+
+async def test_dismissing_the_prompt_leaves_the_selection_untouched() -> None:
+    tools, installed = _recommends_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+        screen = app.catalog_for("ai")
+        assert screen.recommends_text == ""
+        assert screen.selected == {"agent"}
+
+
+async def test_unmarking_the_tool_clears_the_recommends_prompt() -> None:
+    tools, installed = _recommends_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        screen = app.catalog_for("ai")
+        assert screen.recommends_text == ""
+        assert screen.selected == set()
+
+
+async def test_bulk_select_all_opens_no_recommends_prompt() -> None:
+    tools, installed = _recommends_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        assert "agent" in app.catalog.selected
+        assert app.catalog_for("ai").recommends_text == ""
+
+
+async def test_prompt_is_suppressed_when_every_recommendation_is_already_staged() -> None:
+    tools, installed = _recommends_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        await pilot.press("3")
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        assert app.catalog_for("ai").recommends_text == ""
+
+
+async def test_pressing_r_with_no_pending_prompt_changes_nothing() -> None:
+    tools, installed = _recommends_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("r")
+        await pilot.pause()
+        assert app.catalog.selected == set()
+        assert app.catalog.recommends_text == ""
+        assert app.catalog.status_text == ""
+
+
+async def test_accepted_cross_tier_recommendation_shows_marked_on_returning_to_its_tier_view() -> (
+    None
+):
+    # The opening `2` is load-bearing: it forces the User screen to be built
+    # and stamped while jq is NOT staged. Without it the User screen's FIRST
+    # mount happens after the accept and _row_cells paints [x] from the
+    # already-populated shared set, so the test would pass with
+    # on_screen_resume deleted.
+    tools, installed = _recommends_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.press("3")
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        await pilot.press("r")
+        await pilot.pause()
+        await pilot.press("2")
+        await pilot.pause()
+        assert "jq" in app.catalog.selected
+        user_table = app.catalog_for("user").query_one(DataTable[Any])
+        assert user_table.get_cell("jq", "sel").plain == "[x]"
+
+
+async def test_detail_bar_shows_recommends_when_declared() -> None:
+    tools = [
+        _tool("claude", recommends=("rg", "fd"), desc="agent"),
+        _tool("rg", desc="fast grep"),
+    ]
+    app = _unified_app(tools, {"claude": False, "rg": False}, _BLURBS)
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert "pairs well with rg, fd" in app.catalog.detail_text
+        await pilot.press("down")
+        assert "pairs well with" not in app.catalog.detail_text
