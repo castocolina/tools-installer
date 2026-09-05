@@ -9,6 +9,8 @@ from installer.guards import (
     BAN_BEGIN,
     BAN_END,
     BANNED,
+    BOOLEAN_LONG_OPTIONS,
+    BOOLEAN_SHORT_FLAGS,
     GLOBAL_REDIRECTED,
     GLOBAL_SUBCOMMANDS,
     REDIRECT_SENTINEL,
@@ -520,6 +522,51 @@ def test_npm_global_install_redirects_to_volta(
     result = _run_shim(npm_shim, *argv)
     assert result.returncode == 0
     assert result.stdout == expected
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("install", "-g", "--loglevel", "warn", "typescript"),
+        ("i", "-g", "--registry", "https://r.example.test", "p"),
+        ("install", "--prefix", "/tmp", "-g", "typescript"),
+    ],
+)
+def test_npm_separated_option_value_never_reaches_volta(tmp_path: Path, argv: tuple[str, ...]):
+    # A separated option value is not a package name: redirecting `--loglevel
+    # warn typescript` would install the real npm package `warn`.
+    npm_shim, _pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(npm_shim, *argv)
+    assert result.returncode == 127
+    assert result.stdout == ""
+    assert "banned" in result.stderr
+
+
+def test_pnpm_separated_option_value_passes_through_to_real_pnpm(tmp_path: Path):
+    _npm_shim, pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(pnpm_shim, "add", "-g", "--dir", "/tmp", "typescript")
+    assert result.returncode == 0
+    assert result.stdout == "PNPM add -g --dir /tmp typescript\n"
+
+
+def test_pnpm_attached_short_value_carrying_g_is_not_global(tmp_path: Path):
+    # -Cmy-gadget is `-C my-gadget`, not a boolean cluster: its `g` must not
+    # turn a workspace-scoped add into a global install.
+    _npm_shim, pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(pnpm_shim, "-Cmy-gadget", "add", "x")
+    assert result.returncode == 0
+    assert result.stdout == "PNPM -Cmy-gadget add x\n"
+
+
+def test_boolean_option_whitelists_hold_only_valueless_options():
+    assert "--global" in BOOLEAN_LONG_OPTIONS
+    # Options that take a value must never be whitelisted, or their value is
+    # forwarded to `volta install` as a package name.
+    for taker in ("--loglevel", "--registry", "--prefix", "--dir", "--filter", "--workspace"):
+        assert taker not in BOOLEAN_LONG_OPTIONS
+    assert "g" in BOOLEAN_SHORT_FLAGS
+    for taker in ("C", "F", "w"):
+        assert taker not in BOOLEAN_SHORT_FLAGS
 
 
 def test_pnpm_add_gd_redirects_to_volta(tmp_path: Path):

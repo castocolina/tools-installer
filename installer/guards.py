@@ -60,6 +60,34 @@ class GlobalRedirect:
 
 
 VOLTA: str = "volta"
+# Options that consume no following token, so whatever comes after one of them
+# is a real package name. This is deliberately a whitelist of BOOLEANS rather
+# than a table of value-taking options: an option this list is missing degrades
+# to the wrapper's fallback (npm's hard block, pnpm's pass-through), while a
+# value-taking option a blocklist missed would hand its VALUE to `volta install`
+# as a package name. Being incomplete is therefore safe by construction, which
+# is what keeps this out of 04-RESEARCH.md's "Don't Hand-Roll" territory.
+BOOLEAN_LONG_OPTIONS: tuple[str, ...] = (
+    "--global",
+    "--save",
+    "--save-dev",
+    "--save-exact",
+    "--save-prod",
+    "--save-optional",
+    "--no-save",
+    "--force",
+    "--ignore-scripts",
+    "--recursive",
+    "--workspace-root",
+    "--offline",
+    "--prefer-offline",
+    "--silent",
+    "--verbose",
+)
+# Short flags that are boolean in BOTH npm and pnpm, so a cluster built only
+# from them (-gD) carries no value. `w`, `C` and `F` are excluded on purpose:
+# npm's -w and -C, and pnpm's -C and -F, all take one.
+BOOLEAN_SHORT_FLAGS: str = "gDEPOSB"
 GLOBAL_REDIRECTED: dict[str, GlobalRedirect] = {
     "npm": GlobalRedirect(
         passthrough=None,
@@ -99,16 +127,25 @@ def redirect_shim_script(name: str, target_path: str) -> str:
 def global_redirect_shim_script(name: str, *, volta_path: str, passthrough_path: str | None) -> str:
     """Argv-conditional wrapper: global install/add/i execs volta, else fallback.
 
-    A value-taking option placed BEFORE the subcommand makes that option's
-    value look like the first non-flag token, so `npm --prefix <path> install
-    -g <pkg>` and `pnpm --filter <ws> add -g <pkg>` both mis-read the
-    subcommand. Closing it properly would require a per-binary table of which
-    options consume a following value — that is hand-rolling npm's and pnpm's
-    CLI grammars, which 04-RESEARCH.md's "Don't Hand-Roll" row rules out.
-    npm degrades to its hard block (safe — the user sees the ban message and
-    retypes). pnpm degrades to an un-redirected pass-through to real pnpm (a
-    genuine redirect bypass, but no security loss — the install still runs
-    under pnpm's gated-postinstall model).
+    The wrapper redirects only argv it fully understands. Every option token is
+    matched against BOOLEAN_LONG_OPTIONS / BOOLEAN_SHORT_FLAGS (plus the
+    attached `--opt=value` form, which consumes no following token); anything
+    else clears the `known` flag and the volta branch is skipped entirely.
+    Without that flag the wrapper would treat a separated option value as a
+    package name — `npm i -g --loglevel warn typescript` would run
+    `volta install warn typescript`, installing a real, unrelated package from
+    the public registry through the very path that trades pnpm's gated
+    postinstalls for volta's ungated `npm install --global`.
+
+    Two shapes therefore degrade instead of redirecting: a value-taking option
+    anywhere in argv (before the subcommand it also corrupts subcommand
+    detection: `npm --prefix <path> install -g <pkg>`), and a short cluster
+    carrying an attached value (`pnpm -Cmy-gadget add x`, whose `g` would
+    otherwise flip is_global and turn a workspace-scoped add into a global
+    install). npm degrades to its hard block — safe, the user sees the ban
+    message and retypes. pnpm degrades to an un-redirected pass-through to real
+    pnpm: a genuine redirect bypass, but no security loss, since the install
+    still runs under pnpm's gated-postinstall model.
     """
     spec = GLOBAL_REDIRECTED[name]
     volta = shlex.quote(volta_path)
@@ -125,7 +162,8 @@ def global_redirect_shim_script(name: str, *, volta_path: str, passthrough_path:
             f"echo \"tools-installer: '{name}' is banned on this machine — use {hint}.\" >&2\n"
             f"exit {EXIT_CODE}\n"
         )
-    # Three structural rules the body depends on:
+    long_booleans = "|".join(name for name in BOOLEAN_LONG_OPTIONS if name != "--global")
+    # Four structural rules the body depends on:
     # 1. The first loop only READS "$@"; the second loop rewrites it with the
     #    standard POSIX rotate idiom (take $1, shift, append the keepers).
     #    Because the rotate loop mangles "$@", the branch it lives in always
@@ -135,26 +173,35 @@ def global_redirect_shim_script(name: str, *, volta_path: str, passthrough_path:
     #    later non-flag token is a package name and is kept. Every flag,
     #    -g/--global included, is dropped, because volta install takes bare
     #    package names.
-    # 3. The -[!-]* arm is the combined-short-flag rule: a POSIX case pattern
-    #    matches a WHOLE token, so -g|--global alone never fires for a packed
-    #    cluster like -gD. The arm matches a single-dash cluster and re-tests
-    #    it for a g. A token beginning with -- never reaches it, so
-    #    --filter=-g and any other long option carrying -g in its value cannot
-    #    trigger it.
+    # 3. `known` is the guard that makes rule 2 sound: the rewrite may only
+    #    assume "non-flag token = package name" when every option in argv is a
+    #    boolean (or the attached --opt=value form). One unrecognised option
+    #    clears it and the whole volta branch is skipped.
+    # 4. A POSIX case pattern matches a WHOLE token, so -g|--global alone never
+    #    fires for a packed cluster like -gD. -*[!<booleans>]* catches a cluster
+    #    holding anything but known boolean letters — an attached short value
+    #    (-Cmy-gadget) included — and -*g* then flips is_global for what is left.
+    #    A token beginning with -- is consumed by the arms above it, so
+    #    --filter=-g cannot reach either.
     return (
         "#!/bin/sh\n"
         f"{REDIRECT_SENTINEL}\n"
         "subcmd=''\n"
         "is_global=0\n"
+        "known=1\n"
         'for arg in "$@"; do\n'
         '  case "$arg" in\n'
+        "    --*=*) ;;\n"
         "    -g|--global) is_global=1 ;;\n"
-        '    -[!-]*) case "$arg" in *g*) is_global=1 ;; esac ;;\n'
+        f"    {long_booleans}) ;;\n"
+        "    --*) known=0 ;;\n"
+        f"    -*[!{BOOLEAN_SHORT_FLAGS}]*) known=0 ;;\n"
+        "    -*g*) is_global=1 ;;\n"
         "    -*) ;;\n"
         '    *) if [ -z "$subcmd" ]; then subcmd="$arg"; fi ;;\n'
         "  esac\n"
         "done\n"
-        'if [ "$is_global" -eq 1 ]; then\n'
+        'if [ "$is_global" -eq 1 ] && [ "$known" -eq 1 ]; then\n'
         '  case "$subcmd" in\n'
         f"    {subcmds})\n"
         "      argc=$#\n"
