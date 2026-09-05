@@ -1,22 +1,250 @@
 ---
 phase: 5
-reviewers: [opencode-plan-review]
-reviewed_at: 2026-09-05T00:00:00Z
-review_cycle: 2
+reviewers: [opencode-plan-review, opencode-sol]
+reviewed_at: 2026-09-05T21:05:00Z
+review_cycle: 3
 plans_reviewed: [05-01-PLAN.md, 05-02-PLAN.md, 05-03-PLAN.md, 05-04-PLAN.md]
-plans_revision: 07873a1
+plans_revision: d2ce2d3
 models:
-  opencode-plan-review: "router-env/my-plan-review"
+  opencode-plan-review: "router-env/my-plan-review (reasoning=high)"
+  opencode-sol: "openai/gpt-5.6-sol (reasoning=high)"
 model_sources:
   opencode-plan-review: "pinned"
+  opencode-sol: "pinned"
 prior_cycles:
   1:
     reviewers: [opencode-sol]
     models:
       opencode-sol: "openai/gpt-5.6-sol (reasoning=high)"
+  2:
+    reviewers: [opencode-plan-review]
+    models:
+      opencode-plan-review: "router-env/my-plan-review"
 ---
 
-# Cross-AI Plan Review — Phase 5 (Cycle 2)
+# Cross-AI Plan Review — Phase 5 (Cycle 3, final convergence cycle)
+
+> Note: `opencode-plan-review` and `opencode-sol` share the `opencode` adapter; their agreement
+> is cross-model, not cross-tool.
+
+> **Reviewer-availability note.** The project's configured default reviewer
+> `opencode-plan-review` (`router-env/my-plan-review`) probed healthy before the run and produced
+> a source-grounded pass over all eight cycle-2 findings, but its router dropped mid-run
+> (`Model claude/claude-opus-5 is unavailable`) before it emitted its final formatted review, and
+> stayed hard-down across four subsequent probes. The run therefore fell back to the project's
+> other configured instance, `opencode-sol` (`openai/gpt-5.6-sol`), which confirmed the same
+> principal finding and then hit a provider usage limit (`The usage limit has been reached`)
+> before emitting its table; `codex-sol-high` was probed as a third option and returned the same
+> provider usage-limit error. **Both sections below are therefore PARTIAL** — they carry real,
+> file-cited verdicts, not empty stubs, but neither reviewer emitted its full formatted review.
+> The lane runner's automatic `[reviewed-without-source-citations]` marker was stamped from each
+> lane's FIRST emission; the resumed `opencode-plan-review` output cites `file:line` evidence
+> throughout, so that marker is recorded here but is not applied at face value. The
+> source-grounding pass below carries the corroboration weight this cycle.
+
+Plans reviewed at revision `d2ce2d3` ("docs(05): revise phase 5 plans for cross-AI review cycle
+2"), which claims to resolve all 3 HIGH and 5 actionable non-HIGH findings from cycle 2
+(preserved verbatim below under "Cycle 2").
+
+## OpenCode Review (opencode-plan-review) — PARTIAL
+
+Verdicts as emitted before the router dropped. Line citations are the reviewer's own.
+
+| # | Cycle-2 finding | Verdict | Evidence and mechanism |
+|---|---|---|---|
+| HIGH-1 | Brownfield users never routed to the fix | **PARTIALLY RESOLVED** | TUI policy/detection/reinstall routing is planned, but console `run_doctor` receives no policy and cannot detect split groups. `05-04-PLAN.md:348-352`, `05-04-PLAN.md:411-419`, `05-04-PLAN.md:433`, `05-04-PLAN.md:512-522`, `05-04-PLAN.md:549`; current `installer/wizard_app.py:422`, `installer/wizard_app.py:435`. |
+| HIGH-2 | Linux amd64 false success | **RESOLVED** | The browser smoke check raises `ExecutorError`; `_perform` propagates it and `install_tool` maps it to `InstallStatus.FAILED`. `05-01-PLAN.md:757-774`, `installer/engine.py:61`, `installer/engine.py:89-103`. |
+| HIGH-3 | Persistent `--allow-build` trust misstated | **RESOLVED** | Plans now consistently state the persistent grant is package-name keyed, version-unbounded, and NOT constrained by `^25`. `05-01-PLAN.md:832`, `05-03-PLAN.md:598-614`, `05-03-PLAN.md:737`, `05-03-PLAN.md:764-765`, `05-04-PLAN.md:576`. |
+| MEDIUM-A | Inverted task dependency | **RESOLVED** | 05-01 Task 2 owns `installer/versions.py` and the parser tests; Task 4 consumes the helpers. `05-01-PLAN.md:393-403`, `05-01-PLAN.md:433-462`, `05-01-PLAN.md:650-652`, `05-01-PLAN.md:677-706`. |
+| MEDIUM-B | Tracer gate vs fallback branch | **RESOLVED** | `GROUP_PIN=fail` is tracer DATA, not task failure, and falls back to the unversioned group. `05-01-PLAN.md:370-380`, `05-03-PLAN.md:399-417`. |
+| MEDIUM-C | Tolerant parser accepts malformed floors | **RESOLVED** | Observed versions use tolerant `parse_version`; declared floors use strict `parse_declared_version`; malformed `22.bad` fails closed and is explicitly tested. `05-01-PLAN.md:405-411`, `05-01-PLAN.md:439-462`, `05-01-PLAN.md:527-540`. |
+| MEDIUM-D | Double install measured but not decided | **RESOLVED** | The disposition must be decided from measured group membership, browser-cache delta and shim ownership, with the bounded redundancy explicitly accepted or disproved. `05-03-PLAN.md:648-670`, `05-03-PLAN.md:703-706`. |
+| MEDIUM-E | Legitimacy evidence unbound | **RESOLVED** | The gate records the highest stable `25.x.y` selected by `^25` and its `dist.integrity`, and requires both in the SUMMARY. `05-03-PLAN.md:193-201`, `05-03-PLAN.md:257`, `05-03-PLAN.md:263-264`. |
+
+**Principal remaining issue as stated by the reviewer:** "`HIGH-1` remains the principal
+convergence issue: `05-04-PLAN.md:412` omits `installer/app.py` from Task 3's files, while
+`05-04-PLAN.md:418-419` explicitly says current `run_doctor` passes no policy and
+`installer/app.py` is not in the file set."
+
+The reviewer also flagged, as a standing conditional risk, that 05-04 Task 3's Branch B — taken
+if real `pnpm list -g --json` cannot express group membership — would leave HIGH-1 unresolved
+despite honest prose. That branch is a documented, honest fallback, not a defect; it is recorded
+here because it means HIGH-1's resolution is contingent on evidence plan 05-01 Task 1 has not yet
+produced.
+
+Call paths the reviewer inspected in source before dropping: `audit_node_globals` in
+`installer/pnpm_globals.py`; console `run_doctor` → `render_node_globals` in `installer/app.py`;
+TUI construction in `setup.py` and Doctor behaviour in `installer/wizard_app.py`;
+`node_globals_guidance` shared by `installer/render.py` and `installer/wizard_app.py`;
+`action_reinstall_globals` → `_refresh_body` → `_tui_guidance` in `installer/wizard_app.py`.
+
+## OpenCode Review (opencode-sol) — PARTIAL
+
+Emitted before the provider usage limit stopped the run:
+
+> "The revised Doctor design has a material wiring inconsistency: the plan adds the registry
+> policy only to `_build_app` for the TUI, while explicitly leaving `installer.app.run_doctor` on
+> the default empty policy. I am checking the remaining plan contracts for similar branch and
+> execution-path gaps before assigning final verdicts."
+
+This is an independent arrival at the same HIGH-1 residual, from a different model, before any
+adjudication was shared with it.
+
+---
+
+## Source-Grounding Pass — Cycle 3
+
+Independent verification against this repository at revision `d2ce2d3`.
+
+### Cycle-2 findings verified as RESOLVED
+
+| Finding | Mechanism verified |
+|---------|--------------------|
+| HIGH-2 Linux amd64 false success | Real and code-owned. `05-01-PLAN.md:757-774` specifies `_puppeteer_cache_dir`, `_puppeteer_browser` and `_smoke_puppeteer_browser` in `installer/executors.py`, a closed `SMOKE_CHECKS` dict whose key set is asserted equal to `installer.model.SMOKE_CHECK_NAMES` (`05-01-PLAN.md:769-770`, criterion at `05-01-PLAN.md:801`), and a call site in `_node` AFTER `runner(argv)` (`05-01-PLAN.md:771-774`). The registry can only SELECT a check by name, never supply a command (`05-01-PLAN.md:628-630`), so a registry edit cannot introduce arbitrary post-install execution. The failure genuinely becomes a FAILED outcome: `installer/engine.py:100-102` catches `executors.ExecutorError` and falls through to `InstallStatus.FAILED` at `installer/engine.py:103`. Two executable acceptance criteria assert both failure modes end-to-end through `execute()` with the install invocation still recorded exactly once (`05-01-PLAN.md:802-803`). |
+| HIGH-3 persistent trust boundary | Corrected everywhere and guarded. All three registers restate it accurately: `05-01-PLAN.md:832` (T-05-01), `05-03-PLAN.md:764` (T-05-09), `05-04-PLAN.md:576` (T-05-14), each stating explicitly that the `^25` pin does NOT bound the grant and is a compatibility control only. `05-03-PLAN.md:598-614` writes the accurate statement plus a revocation path onto the registry entry, and `05-03-PLAN.md:737` adds two NEGATIVE grep criteria (`bounds the pre-authorised` = 0, `bounded only by the` = 0) so the retracted wording cannot reach committed registry text. `05-03-PLAN.md:707-715` adds the matching two-halved text test. |
+| MEDIUM-A file ownership | `05-01-PLAN.md:395` — Task 2's `<files>` is now `installer/versions.py, installer/model.py, tests/test_versions.py, tests/test_model.py`; Task 4 (`05-01-PLAN.md:650`) consumes the helpers and is told explicitly not to re-implement them (`05-01-PLAN.md:677-680`). No task instructs work outside its own file scope. |
+| MEDIUM-B tracer/fallback reachability | `05-01-PLAN.md:370` — the grouped probe is now an `if … then echo GROUP_PIN=ok … else echo GROUP_PIN=fail; …retry unversioned…; fi`, so `set -eu` cannot abort on a rejected specifier. `05-01-PLAN.md:371` names `GROUP_PIN=fail` as one of four outcomes that "are DATA and must never be treated as task failures", and `05-01-PLAN.md:375` requires exactly one of the two markers without either failing the task. 05-03's branch at `05-03-PLAN.md:399-409` is therefore reachable, and `05-03-PLAN.md:491` makes the two branches mutually exclusive and evidence-keyed. |
+| MEDIUM-C strict vs tolerant parsing | `05-01-PLAN.md:439` keeps `parse_version` as the TOLERANT parser for OBSERVED tool output; `05-01-PLAN.md:446-449` adds a STRICT `parse_declared_version` returning `None` for `22.bad`, `22.` and `^25`; `05-01-PLAN.md:502-505` routes registry-declared `min_node` through the strict parser. Behaviour cases at `05-01-PLAN.md:408-409` and `05-01-PLAN.md:428`, with criteria at `05-01-PLAN.md:533`, `05-01-PLAN.md:539` (`grep -c '22.bad' tests/test_model.py` ≥ 1) and `05-01-PLAN.md:540`. Specified AND tested. |
+| MEDIUM-D double-install decision | `05-03-PLAN.md:648-670` is a real decision paragraph, not a deferral: it is keyed to the group count, per-group membership and the `CACHE_BEFORE_B`/`CACHE_AFTER_B` readings `05-01-PLAN.md:249-254` and `05-01-PLAN.md:380` now capture, with both branches written out and an explicit ACCEPTED disposition plus its reason. `05-01-PLAN.md:260-265` adds the lifecycle probe (idempotent re-run, then `pnpm remove -g puppeteer` and a re-render) that cycle 2 asked for, recorded and NOT gated. Pinned by a text test at `05-03-PLAN.md:703-706` / `05-03-PLAN.md:734`. |
+| MEDIUM-E legitimacy binding | `05-03-PLAN.md:257` — the gate command now computes `resolved` as the highest stable version matching the `^25` major line and prints `pinned_resolved=` and `pinned_integrity=` beside `latest_integrity=`; `05-03-PLAN.md:258` makes `pinned_resolved= None` a hard failure ("the pin itself would be wrong"). `05-03-PLAN.md:264` requires the resolved version and its integrity in the SUMMARY as "the artifact the phase reasoned about", and `05-03-PLAN.md:266` requires a paragraph stating this is IDENTITY AND OWNERSHIP ONLY, a point-in-time forensic record and not artifact approval. Both halves of the cycle-2 suggestion are taken. |
+
+Also confirmed resolved: both LOW findings the cycle-2 source-grounding pass added. The brownfield
+remedy is no longer registry-comment-only (05-04 Task 3), and the `is_blocked` installed-short-circuit
+interaction with the arm64 gate is now recorded as an explicit residual at `05-03-PLAN.md:769`
+(T-05-12, residual (b)) and on the registry entry via `05-03-PLAN.md:671`.
+
+### HIGH-1 — verified PARTIALLY RESOLVED
+
+The detection mechanism is genuine, and the TUI routing is real:
+
+- `installer/wizard_app.py:280-283` — `_refresh_guidance` already folds
+  `node_globals_guidance(globals_report)` into `self.guidance`.
+- `installer/wizard_app.py:360-364` — `_tui_guidance` already rewrites any item whose `next_step`
+  starts with the literal ``Run `make setup``` to `"Press r to reinstall the pnpm-managed global
+  set."`. 05-04 Task 3 requires exactly that prefix (`05-04-PLAN.md:506-509`) and pins the rewrite's
+  continued existence with an executable criterion (`05-04-PLAN.md:547`). The remedy the item points
+  at is the same one 05-04 Task 2 proves repairs the split.
+- `installer/pnpm_globals.py:88` — `known: bool = True` is the last field of `NodeGlobalsReport`, so
+  appending a defaulted `split_groups` (`05-04-PLAN.md:493-495`) is valid and leaves every existing
+  construction compiling.
+- Detection is decided against real captured data, not an assumed shape: `05-04-PLAN.md:446-460`
+  makes STEP 0 read `SPLIT_STATE_JSON` from 05-01's container and branch honestly, and
+  `05-04-PLAN.md:414` and `05-04-PLAN.md:531-534` forbid a hand-invented fixture.
+
+**The residual: the `make doctor` console path can never detect the condition, and the plan says
+it can.** `setup.py:314` → `installer/app.py:266` calls
+`audit_node_globals(tools, which=which, managed=managed_globals)` with no policy. 05-04 Task 3
+deliberately keeps it that way — `installer/app.py` is excluded from Task 3's `<files>`
+(`05-04-PLAN.md:412`), the behaviour case at `05-04-PLAN.md:433` states that a policy-less call
+"returns `split_groups == ()`", the action says "Do NOT edit `installer/app.py`"
+(`05-04-PLAN.md:513-515`), and an acceptance criterion enforces it
+(`05-04-PLAN.md:549`: `assert 'policy' not in src`). `installer/render.py:148-152` would render a
+split item, but the console audit never produces one.
+
+Three places state the opposite, and the plan instructs the false version to be committed:
+
+1. `05-04-PLAN.md:38` (a must-be-true item): reported "as a named WARN item **on both the
+   `make doctor` console path and the TUI Doctor screen**".
+2. `05-04-PLAN.md:515-517`: "record in the SUMMARY that the new condition reaches the user on both
+   paths without a UI change".
+3. `05-04-PLAN.md:558` (`<done>`): "told so by name, **on both the console and TUI paths**".
+
+This is the same defect class cycle 2 rated HIGH for `--allow-build`: an inaccurate claim that a
+task's own instructions transcribe into a SUMMARY as verified evidence. The user-facing half is
+smaller than cycle 2's original HIGH — a TUI Doctor user IS now told and IS routed to the `r`
+action — but a `make doctor` user is not, and the plan asserts they are.
+
+### Findings the reviewers did not raise
+
+- **MEDIUM — the smoke check advertises a remedy that does not satisfy it.**
+  `05-01-PLAN.md:757-768` has `_smoke_puppeteer_browser` resolve the browser strictly from
+  `_puppeteer_cache_dir()` (`PUPPETEER_CACHE_DIR`, else `~/.cache/puppeteer`), and on probe failure
+  raise an `ExecutorError` naming "both remedies puppeteer's own troubleshooting documentation
+  gives — install the platform's headless-Chrome shared libraries, or point puppeteer at an
+  existing browser with `PUPPETEER_EXECUTABLE_PATH`". The check never consults
+  `PUPPETEER_EXECUTABLE_PATH`. A user who follows the second advertised remedy re-runs the install
+  and gets the identical `ExecutorError`, because the cached browser still cannot start. The same
+  applies to a machine where `PUPPETEER_SKIP_DOWNLOAD` is set: a working configuration is reported
+  FAILED. The behaviour case at `05-01-PLAN.md:670` pins the message text, so this ships as
+  specified.
+- **LOW — a stale cached browser can pass the smoke check.** `05-01-PLAN.md:747-749` and the
+  behaviour case at `05-01-PLAN.md:675` make `_puppeteer_browser` return "the last match in sorted
+  order (the highest version directory)" across the whole cache. On a machine that already had a
+  working browser from an earlier puppeteer, an install whose postinstall silently failed to
+  download the new one still finds a startable binary and reports INSTALLED — the exact
+  false-success shape HIGH-2 exists to remove, in its narrower brownfield form. Nothing binds the
+  found browser to the install that just ran.
+- **LOW — an acceptance criterion is weaker than the property it guards.**
+  `05-04-PLAN.md:546` asserts only `it.next_step.startswith('Run ')` and `'make setup' in
+  it.next_step`, while the load-bearing property (`05-04-PLAN.md:506-508`) is that the step starts
+  with the exact literal ``Run `make setup``` that `installer/wizard_app.py:360` matches. A step
+  reading `Run the setup wizard and make setup will…` passes the criterion and silently loses the
+  TUI rewrite. The `<fails_when>` at `05-04-PLAN.md:540` states the property correctly; the
+  executable criterion does not.
+
+## Consensus Summary — Cycle 3
+
+Two reviewer instances ran, both on the `opencode` adapter, and both were cut short by provider
+availability rather than by finishing. Both nevertheless converged, independently, on the same
+single residual: the Doctor split-group detection reaches the TUI but not the `make doctor`
+console path, while the plan claims both. The source-grounding pass confirms that residual in
+source (`installer/app.py:266`, `setup.py:314`, `05-04-PLAN.md:412`/`433`/`549` versus
+`05-04-PLAN.md:38`/`515-517`/`558`) and independently confirms all seven other cycle-2 findings as
+resolved by real mechanisms.
+
+**Verdict: 7 of 8 cycle-2 findings fully resolved (HIGH-2, HIGH-3, MEDIUM-A through MEDIUM-E);
+1 partially resolved (HIGH-1).**
+
+### Agreed Strengths
+
+- The post-install browser smoke check is a genuine, code-owned mechanism, not documentation: the
+  registry can only select a check from a closed name set, the check runs after the install
+  runner, and its `ExecutorError` reaches `installer/engine.py:100-103` as a FAILED outcome with
+  the install invocation still recorded.
+- The persistent `--allow-build` grant is now stated correctly in all three threat registers and
+  on the registry entry, with a revocation path — and two negative grep guards make the retracted
+  wording unable to reach committed registry text.
+- Split-group detection reuses surfaces that already exist (`NodeGlobalsReport`,
+  `node_globals_guidance`, the `_tui_guidance` rewrite table) and adds no UI code, and its STEP 0
+  branch refuses to ship a detector that cannot fire.
+- Every cycle-2 MEDIUM is closed by a specified AND tested mechanism, not by prose: strict/tolerant
+  parser split with a `22.bad` case, an if/else tracer that makes the fallback reachable, a
+  double-install disposition keyed to measurements the tracer now takes, and a legitimacy gate that
+  resolves `^25` to a concrete version and records its integrity while disclaiming enforcement.
+
+### Agreed Concerns (still open after the revision)
+
+1. Split-group detection reaches the TUI Doctor only. `installer/app.py::run_doctor` passes no
+   policy and is contractually frozen that way by `05-04-PLAN.md:549`, yet `05-04-PLAN.md:38`,
+   `05-04-PLAN.md:515-517` and `05-04-PLAN.md:558` claim both surfaces — and the middle one
+   instructs that claim into `05-04-SUMMARY.md`.
+
+### Divergent Views
+
+None. Both reviewers reached the same residual; neither contradicted the other, and neither
+contradicted the source-grounding pass. Both sections are partial, so their silence on the other
+seven findings is absence of evidence rather than agreement — the source-grounding pass carries
+those verdicts.
+
+### Suggested plan changes
+
+- Either add `installer/app.py` to 05-04 Task 3's `<files>` and pass the policy into `run_doctor`
+  (making the both-surfaces claim true), or restate `05-04-PLAN.md:38`, `05-04-PLAN.md:515-517`
+  and `05-04-PLAN.md:558` as TUI-only detection with the console limitation recorded as a bounded
+  residual on T-05-27, and drop the criterion at `05-04-PLAN.md:549` or reword it to match.
+- Make `_smoke_puppeteer_browser` honour `PUPPETEER_EXECUTABLE_PATH` — probe that binary when set,
+  and skip the cache search — or remove it from the error message and name only the remedy the
+  check actually accepts.
+- Bind the smoke check to the install that just ran (restrict the search to browsers newer than
+  the invocation, or record the pre-install cache listing), or record the stale-browser case as an
+  accepted residual on T-05-12/T-05-26.
+- Tighten `05-04-PLAN.md:546` to assert the exact literal prefix ``Run `make setup``` that
+  `installer/wizard_app.py:360` matches.
+
+---
+
+
+# Cycle 2
 
 > **Reviewer note — no substitution this cycle.** The project's configured default reviewer
 > `opencode-plan-review` (`review.reviewer_instances.opencode-plan-review`, model
