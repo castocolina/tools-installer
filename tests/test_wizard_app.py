@@ -8,6 +8,7 @@ from installer.app import UninstallDecision
 from installer.doctor import DoctorReport
 from installer.model import Method, Tool
 from installer.policy import Policy, PolicyLayer, PolicyResult
+from installer.ui_common import BASE_VIEW
 from installer.uninstall import ToolRow
 from installer.wizard_app import (
     VIEW_ORDER,
@@ -31,6 +32,7 @@ def _tool(tool_id: str) -> Tool:
         methods=(Method(kind="brew", params={"formula": tool_id}),),
         priority="P1",
         audience="both",
+        tier="system",
         desc="",
     )
 
@@ -91,7 +93,7 @@ def _app(
     fix: Callable[[], None] = lambda: None,
     uninstall: UninstallInputs | None = None,
     policies: PolicyInputs | None = None,
-    initial_view: str = "catalog",
+    initial_view: str = BASE_VIEW,
 ) -> UnifiedApp:
     tools = [_tool("rg"), _tool("fd")]
     installed: Mapping[str, bool] = {"rg": True, "fd": False}
@@ -115,33 +117,37 @@ def test_default_palette_is_disabled() -> None:
 
 
 def test_view_order_lists_every_view() -> None:
-    assert VIEW_ORDER == ("catalog", "doctor", "uninstall", "policies")
+    assert VIEW_ORDER == ("system", "user", "ai", "doctor", "uninstall", "policies")
 
 
-async def test_starts_on_the_catalog_view() -> None:
+async def test_starts_on_the_system_view() -> None:
     app = _app()
     async with app.run_test(size=(100, 30)):
-        assert app.current_view == "catalog"
+        assert app.current_view == "system"
 
 
 async def test_number_key_navigates_to_each_view() -> None:
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("2")
+        assert app.current_view == "user"
+        await pilot.press("3")
+        assert app.current_view == "ai"
+        await pilot.press("4")
         assert app.current_view == "doctor"
         assert isinstance(app.screen, DoctorScreen)
-        await pilot.press("3")
+        await pilot.press("5")
         assert app.current_view == "uninstall"
-        await pilot.press("4")
+        await pilot.press("6")
         assert app.current_view == "policies"
         await pilot.press("1")
-        assert app.current_view == "catalog"
+        assert app.current_view == "system"
 
 
 async def test_uninstall_view_is_reachable() -> None:
     app = _app(uninstall=_uninstall_inputs(rows=[_removable_row(_tool("rg"), [Path("/opt/rg")])]))
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         assert app.current_view == "uninstall"
         assert isinstance(app.screen, UninstallScreen)
 
@@ -149,7 +155,7 @@ async def test_uninstall_view_is_reachable() -> None:
 async def test_doctor_screen_renders_guidance() -> None:
     app = _app(report=DoctorReport(missing=(Path("/a/bin"),), broken=(), duplicated=()))
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("2")
+        await pilot.press("4")
         assert isinstance(app.screen, DoctorScreen)
         text = "".join(g.title + g.meaning + g.next_step for g in app.screen.guidance)
         assert "/a/bin" in text
@@ -179,7 +185,7 @@ async def test_opening_doctor_does_not_apply_fix() -> None:
     app = _app(fix=lambda: calls.append("fix"))
 
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("2")
+        await pilot.press("4")
         assert isinstance(app.screen, DoctorScreen)
         screen = app.screen
         assert calls == []
@@ -192,7 +198,7 @@ async def test_doctor_enter_applies_fix_once() -> None:
     app = _app(fix=lambda: calls.append("fix"))
 
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("2")
+        await pilot.press("4")
         await pilot.press("enter")
         assert calls == ["fix"]
         assert isinstance(app.screen, DoctorScreen)
@@ -208,7 +214,7 @@ async def test_doctor_hidden_a_alias_applies_fix() -> None:
     app = _app(fix=lambda: calls.append("fix"))
 
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("2")
+        await pilot.press("4")
         await pilot.press("a")
         assert calls == ["fix"]
         assert isinstance(app.screen, DoctorScreen)
@@ -228,7 +234,7 @@ async def test_doctor_apply_failure_shows_error_and_allows_retry() -> None:
     app = _app(fix=fix)
 
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("2")
+        await pilot.press("4")
         await pilot.press("enter")
         assert isinstance(app.screen, DoctorScreen)
         screen = app.screen
@@ -252,8 +258,8 @@ async def test_initial_view_opens_on_that_view() -> None:
 async def test_navigating_to_the_current_view_is_a_no_op() -> None:
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("1")  # already on catalog
-        assert app.current_view == "catalog"
+        await pilot.press("1")  # already on the system view
+        assert app.current_view == "system"
         assert app.is_running
 
 
@@ -261,7 +267,7 @@ async def test_palette_and_key_resolve_to_the_same_view() -> None:
     # Direct key route.
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("2")
+        await pilot.press("4")
         assert app.current_view == "doctor"
     by_key = app.current_view
     # Palette route: open Ctrl+P, pick the "doctor" item.
@@ -269,7 +275,7 @@ async def test_palette_and_key_resolve_to_the_same_view() -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("ctrl+p")
         assert isinstance(app.screen, NavScreen)
-        await pilot.press("down", "enter")  # first item is catalog; second is doctor
+        await pilot.press("down", "down", "down", "enter")  # 4th item is doctor
         assert app.current_view == "doctor"
     assert app.current_view == by_key
 
@@ -280,14 +286,14 @@ async def test_palette_escape_does_not_navigate() -> None:
         await pilot.press("ctrl+p")
         assert isinstance(app.screen, NavScreen)
         await pilot.press("escape")
-        assert app.current_view == "catalog"
+        assert app.current_view == "system"
         assert not isinstance(app.screen, NavScreen)
 
 
 async def test_ctrl_c_aborts_from_a_placeholder_view() -> None:
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("2")  # navigate onto the doctor placeholder
+        await pilot.press("4")  # navigate onto the doctor placeholder
         assert app.current_view == "doctor"
         await pilot.press("ctrl+c")  # abort must work from any view
         assert not app.is_running
@@ -300,9 +306,9 @@ async def test_number_keys_are_inert_while_the_palette_is_open() -> None:
         await pilot.press("ctrl+p")
         assert isinstance(app.screen, NavScreen)
         depth = len(app.screen_stack)
-        await pilot.press("2")  # must NOT navigate underneath the modal
+        await pilot.press("4")  # must NOT navigate underneath the modal
         assert isinstance(app.screen, NavScreen)
-        assert app.current_view == "catalog"
+        assert app.current_view == "system"
         assert len(app.screen_stack) == depth  # no extra push
 
 
@@ -333,7 +339,7 @@ def _unavailable_row(tool: Tool) -> ToolRow:
 async def test_uninstall_toggle_selects_highlighted_tool() -> None:
     app = _app(uninstall=_uninstall_inputs(rows=[_removable_row(_tool("rg"), [Path("/opt/rg")])]))
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
         await pilot.press("space")
         assert app.screen.selected == {"rg"}
@@ -349,7 +355,7 @@ async def test_uninstall_select_all_includes_ban_and_block() -> None:
     )
     app = _app(uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
         await pilot.press("a")
         assert app.screen.selected == {"rg"}
@@ -373,7 +379,7 @@ async def test_uninstall_lists_all_tools_with_their_states() -> None:
     )
     app = _app(uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
         table = app.screen.query_one(DataTable[Any])
         keys = {row.value for row in table.rows}
@@ -390,7 +396,7 @@ async def test_uninstall_non_selectable_rows_are_inert() -> None:
     )
     app = _app(uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
         await pilot.press("a")  # select-all over selectable only
         assert app.screen.selected == {"rg"}  # jq never enters
@@ -411,7 +417,7 @@ async def test_uninstall_apply_calls_remove_and_flips_applied() -> None:
     rows = [_removable_row(_tool("rg"), [Path("/opt/rg")])]
     app = _app(uninstall=_uninstall_inputs(rows=rows, remove=captured.append))
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         await pilot.press("space")  # select rg
@@ -429,7 +435,7 @@ async def test_uninstall_empty_selection_refuses() -> None:
     )
     app = _app(uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         await pilot.press("enter")  # nothing selected
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is False
@@ -444,7 +450,7 @@ async def test_uninstall_apply_error_surfaces_and_does_not_crash() -> None:
     inputs = _uninstall_inputs(rows=[_removable_row(_tool("rg"), [Path("/opt/rg")])], remove=boom)
     app = _app(uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         await pilot.press("space")  # select rg
         await pilot.press("enter")  # accept → confirmation modal
         await pilot.press("enter")  # confirm → _apply_removal raises OSError
@@ -480,7 +486,7 @@ async def test_uninstall_initial_view_opens_on_uninstall() -> None:
 async def test_uninstall_empty_state_shows_nothing_line() -> None:
     app = _app(uninstall=_uninstall_inputs())  # no rows, no ban, no block
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         await pilot.press("enter")  # no-op
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is False
@@ -490,7 +496,7 @@ async def test_uninstall_empty_state_shows_nothing_line() -> None:
 async def test_ctrl_c_aborts_from_uninstall_view() -> None:
     app = _app(uninstall=_uninstall_inputs(rows=[_removable_row(_tool("rg"), [Path("/opt/rg")])]))
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         await pilot.press("ctrl+c")
     assert app.return_value is None
 
@@ -499,7 +505,7 @@ async def test_uninstall_empty_table_toggle_noop() -> None:
     """Space on an empty uninstall table is a no-op."""
     app = _app(uninstall=_uninstall_inputs())
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
         await pilot.press("space")
         assert app.screen.selected == set()
@@ -518,7 +524,7 @@ async def test_uninstall_partial_selection_apply() -> None:
     )
     app = _app(uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
         # Cursor starts on row 0 (rg); space selects only that one.
         await pilot.press("space")
@@ -544,7 +550,7 @@ async def test_uninstall_applied_summary_ban_and_path() -> None:
     )
     app = _app(uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         await pilot.press("a")  # select all: tool + ban + path block
@@ -568,7 +574,7 @@ async def test_uninstall_applied_summary_omits_tool_line_when_no_tool() -> None:
     )
     app = _app(uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         # rows: [#removable, rg, #environment, #ban] — step past the section header.
@@ -590,7 +596,7 @@ async def test_uninstall_cancel_modal_removes_nothing() -> None:
     rows = [_removable_row(_tool("rg"), [Path("/opt/rg")])]
     app = _app(uninstall=_uninstall_inputs(rows=rows, remove=captured.append))
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         await pilot.press("space")
@@ -605,7 +611,7 @@ async def test_uninstall_confirm_modal_shows_artifact_count() -> None:
     rows = [_removable_row(_tool("rg"), [Path("/opt/rg")])]
     app = _app(uninstall=_uninstall_inputs(rows=rows))
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         await pilot.press("space")
         await pilot.press("enter")  # accept → modal
         await pilot.pause()
@@ -617,7 +623,7 @@ async def test_uninstall_toggle_clears_stale_validation_toast() -> None:
     """A refusal toast must not linger once the selection changes."""
     app = _app(uninstall=_uninstall_inputs(rows=[_removable_row(_tool("rg"), [Path("/opt/rg")])]))
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("3")
+        await pilot.press("5")
         await pilot.press("enter")  # nothing selected → refusal toast
         assert isinstance(app.screen, UninstallScreen)
         assert "at least one" in app.screen.status.text
@@ -629,12 +635,12 @@ async def test_uninstall_toggle_clears_stale_validation_toast() -> None:
 async def test_palette_from_placeholder_navigates_without_desync() -> None:
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("2")  # -> doctor view
+        await pilot.press("4")  # -> doctor view
         assert app.current_view == "doctor"
         await pilot.press("ctrl+p")
         assert isinstance(app.screen, NavScreen)
-        # ListView starts on catalog(0); step to policies(3): catalog,doctor,uninstall,policies
-        await pilot.press("down", "down", "down", "enter")
+        # ListView starts on system(0); step to policies(5)
+        await pilot.press("down", "down", "down", "down", "down", "enter")
         assert app.current_view == "policies"
         assert not isinstance(app.screen, NavScreen)
         assert isinstance(app.screen, PoliciesScreen)
@@ -643,7 +649,7 @@ async def test_palette_from_placeholder_navigates_without_desync() -> None:
 async def test_policies_view_is_reachable() -> None:
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("4")
+        await pilot.press("6")
         assert app.current_view == "policies"
         assert isinstance(app.screen, PoliciesScreen)
 
@@ -664,7 +670,7 @@ async def test_policies_reachable_via_palette() -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("ctrl+p")
         assert isinstance(app.screen, NavScreen)
-        await pilot.press("down", "down", "down", "enter")  # 4th item: policies
+        await pilot.press("down", "down", "down", "down", "down", "enter")  # 6th item: policies
         assert app.current_view == "policies"
         assert isinstance(app.screen, PoliciesScreen)
 
@@ -680,7 +686,7 @@ async def test_policy_toggle_enables_inactive_policy() -> None:
     policy = _fake_policy(active=False, apply=lambda: (calls.append("apply"), _ok_result())[1])
     app = _app(policies=_policy_inputs([policy]))
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("4")
+        await pilot.press("6")
         await pilot.press("space")
         assert isinstance(app.screen, PoliciesScreen)
         assert calls == ["apply"]
@@ -774,7 +780,7 @@ async def test_policy_toggle_disables_active_policy() -> None:
     policy = _fake_policy(active=True, remove=lambda: (calls.append("remove"), _ok_result())[1])
     app = _app(policies=_policy_inputs([policy]))
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("4")
+        await pilot.press("6")
         await pilot.press("space")
         assert isinstance(app.screen, PoliciesScreen)
         assert calls == ["remove"]
@@ -788,7 +794,7 @@ async def test_policy_toggle_error_surfaces_and_does_not_crash() -> None:
 
     app = _app(policies=_policy_inputs([_fake_policy(active=False, apply=boom)]))
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("4")
+        await pilot.press("6")
         await pilot.press("space")
         assert isinstance(app.screen, PoliciesScreen)
         assert app.screen.active_state["ban"] is False  # unchanged on failure
@@ -801,7 +807,7 @@ async def test_policy_toggle_noop_on_empty_table() -> None:
     row_count==0 and the action_toggle_policy policy-is-None guard)."""
     app = _app(policies=_policy_inputs([]))
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("4")
+        await pilot.press("6")
         assert isinstance(app.screen, PoliciesScreen)
         await pilot.press("space")
         assert app.screen.status.text == ""
@@ -822,7 +828,7 @@ async def test_policy_summary_includes_warning_when_set() -> None:
     policy = _fake_policy(active=False, apply=apply_with_warning)
     app = _app(policies=_policy_inputs([policy]))
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("4")
+        await pilot.press("6")
         await pilot.press("space")
         assert isinstance(app.screen, PoliciesScreen)
         assert app.screen.active_state["ban"] is True
@@ -848,20 +854,20 @@ async def test_doctor_uninstall_and_policies_render_a_footer() -> None:
 
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("2")
+        await pilot.press("4")
         assert isinstance(app.screen, DoctorScreen)
         assert len(app.screen.query(FooterBar)) == 1
-        await pilot.press("3")
+        await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
         assert len(app.screen.query(FooterBar)) == 1
-        await pilot.press("4")
+        await pilot.press("6")
         assert isinstance(app.screen, PoliciesScreen)
         assert len(app.screen.query(FooterBar)) == 1
 
 
 async def test_q_quits_from_every_pushed_view() -> None:
-    """q must quit from any view, not just the catalog (regression: q was
-    bound only on CatalogScreen, so non-catalog views had no working quit)."""
+    """q must quit from any view, not just the base view (regression: q was
+    bound only on CatalogScreen, so other views had no working quit)."""
     for view in ("doctor", "uninstall", "policies"):
         app = _app(initial_view=view)
         async with app.run_test(size=(100, 30)) as pilot:
@@ -870,28 +876,28 @@ async def test_q_quits_from_every_pushed_view() -> None:
         assert app.return_value is None
 
 
-async def test_esc_returns_to_catalog_from_a_pushed_view() -> None:
-    """esc is the one-deep 'back': from any sub-view it pops to the catalog."""
+async def test_esc_returns_to_system_from_a_pushed_view() -> None:
+    """esc is the one-deep 'back': from any sub-view it pops to the system view."""
     app = _app(initial_view="doctor")
     async with app.run_test(size=(100, 30)) as pilot:
         assert app.current_view == "doctor"
         await pilot.press("escape")
-        assert app.current_view == "catalog"
+        assert app.current_view == "system"
         assert app.is_running  # esc goes back, does not quit
 
 
-async def test_esc_on_catalog_is_inert() -> None:
-    """On the base catalog there is nowhere to go back to; esc must not quit."""
-    app = _app(initial_view="catalog")
+async def test_esc_on_system_is_inert() -> None:
+    """On the base system view there is nowhere to go back to; esc must not quit."""
+    app = _app(initial_view="system")
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("escape")
-        assert app.current_view == "catalog"
+        assert app.current_view == "system"
         assert app.is_running
 
 
 async def test_q_does_not_quit_while_nav_palette_open() -> None:
     """q is a priority App binding, so it DOES reach action_abort even with the
-    Ctrl+P palette open — the _navigable() guard (palette is neither catalog nor
+    Ctrl+P palette open — the _navigable() guard (palette is neither the base view nor
     a pushed view) is what makes it inert there, not the modal swallowing it."""
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
@@ -915,21 +921,21 @@ async def test_ctrl_c_hard_aborts_even_while_palette_open() -> None:
 
 
 async def test_rapid_view_switching_keeps_stack_one_deep() -> None:
-    """Rapid 1-4 presses must not corrupt the [catalog] / [catalog, <view>]
+    """Rapid number-key presses must not corrupt the [base] / [base, <view>]
     stack invariant or wedge navigation (the 'keys stop responding' bug)."""
     from installer.catalog_tui import CatalogScreen
 
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("2", "3", "4", "1")
-        assert app.current_view == "catalog"
+        await pilot.press("4", "5", "6", "1")
+        assert app.current_view == "system"
         assert isinstance(app.screen, CatalogScreen)
-        # The catalog is the app's base screen (get_default_screen), so it is
+        # The system view is the app's base screen (get_default_screen), so it is
         # never pushed or popped — it is always the permanent bottom of the stack.
-        # After navigating back to "catalog", the stack is [catalog] (depth 1).
-        assert len(app.screen_stack) == 1  # back to just the catalog base
+        # After navigating back to the system view, the stack is [base] (depth 1).
+        assert len(app.screen_stack) == 1  # back to just the base screen
         # not wedged: a subsequent press still navigates
-        await pilot.press("3")
+        await pilot.press("5")
         assert app.current_view == "uninstall"
         assert len(app.screen_stack) == 2
 
@@ -948,11 +954,11 @@ async def test_rapid_switch_away_from_uninstall_does_not_wedge() -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         # uninstall is the ToolBrowser view; each following action leaves the
         # previous view before its deferred refresh has settled.
-        for name in ("doctor", "uninstall", "policies", "uninstall", "catalog"):
+        for name in ("doctor", "uninstall", "policies", "uninstall", "system"):
             await app.run_action(f"show('{name}')")
         await pilot.pause()
         # Not wedged: navigation still works and no exception was stored.
-        await pilot.press("3")
+        await pilot.press("5")
         assert app.current_view == "uninstall"
 
 
@@ -974,7 +980,7 @@ async def test_unsettled_key_burst_lands_on_the_last_key_pressed() -> None:
 
     app = _app()
     async with app.run_test(size=(100, 30)) as pilot:
-        for key in "52452152":  # ends on 2: the user's "come back to Doctor" step
+        for key in "74674174":  # ends on doctor
             event = events.Key(key, key)
             event.set_sender(app)
             app.post_message(event)
@@ -982,5 +988,5 @@ async def test_unsettled_key_burst_lands_on_the_last_key_pressed() -> None:
         await pilot.pause()
         assert app.current_view == "doctor"
         # and the keys still work afterwards
-        await pilot.press("3")
+        await pilot.press("5")
         assert app.current_view == "uninstall"

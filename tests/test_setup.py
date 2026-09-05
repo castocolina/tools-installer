@@ -40,7 +40,7 @@ def test_main_fix_interactive_without_link_mode_opens_doctor(
         tools: list[Tool],
         platform: Platform,
         *,
-        initial_view: str = "catalog",
+        initial_view: str = "system",
         link_mode: str = "centralized",
     ) -> _DummyApp:
         build_calls.append(

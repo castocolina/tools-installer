@@ -83,7 +83,7 @@ async def test_status_line_set_and_clear() -> None:
 
 
 async def test_wayfinding_header_highlights_active_view() -> None:
-    """The header numbers every view ([1]–[4]) and marks the active one accent-bold."""
+    """The header numbers every view ([1]–[N]) and marks the active one accent-bold."""
     from installer.ui_common import WayfindingHeader
 
     class _Host(App[None]):
@@ -93,15 +93,15 @@ async def test_wayfinding_header_highlights_active_view() -> None:
     app = _Host()
     async with app.run_test(size=(100, 5)):
         markup = app.query_one(WayfindingHeader).render_markup()
-        assert "[bold $accent]\\[2] Doctor[/]" in markup
-        assert "[bold $accent]\\[1] Catalog[/]" not in markup
-        assert "[dim]\\[1] Catalog[/]" in markup
+        assert "[bold $accent]\\[4] Doctor[/]" in markup
+        assert "[bold $accent]\\[1] System[/]" not in markup
+        assert "[dim]\\[1] System[/]" in markup
 
 
 def test_wayfinding_header_numbers_each_view_in_order() -> None:
     from installer.ui_common import VIEWS, WayfindingHeader
 
-    markup = WayfindingHeader(active="catalog").render_markup()
+    markup = WayfindingHeader(active="system").render_markup()
     for index, view in enumerate(VIEWS):
         # The bracket is escaped in the content markup so it renders literally.
         assert f"\\[{index + 1}] {view.label}" in markup
@@ -141,7 +141,7 @@ def test_view_registry_is_complete_and_consistent() -> None:
     derive from the same table, so they can never drift apart."""
     from installer.ui_common import VIEW_BY_NAME, VIEW_ORDER, VIEWS
 
-    assert VIEW_ORDER == ("catalog", "doctor", "uninstall", "policies")
+    assert VIEW_ORDER == ("system", "user", "ai", "doctor", "uninstall", "policies")
     assert set(VIEW_BY_NAME) == set(VIEW_ORDER)
     for view in VIEWS:
         assert view.label and view.palette and view.mode and view.glyph and view.hint
@@ -151,7 +151,7 @@ def test_view_registry_is_complete_and_consistent() -> None:
 def test_view_order_collapses_fix_into_doctor() -> None:
     from installer.ui_common import VIEW_BY_NAME, VIEW_ORDER
 
-    assert VIEW_ORDER == ("catalog", "doctor", "uninstall", "policies")
+    assert VIEW_ORDER == ("system", "user", "ai", "doctor", "uninstall", "policies")
     assert "fix" not in VIEW_BY_NAME
 
 
@@ -166,21 +166,21 @@ def test_doctor_view_advertises_audit_and_apply() -> None:
     assert doctor.actions == "enter apply"
 
 
-def test_global_nav_names_four_views() -> None:
+def test_global_nav_names_every_view() -> None:
     from installer.ui_common import GLOBAL_NAV
 
-    assert GLOBAL_NAV == "1-4 views | ^p nav | esc back | q quit"
+    assert GLOBAL_NAV == "1-6 views | ^p nav | esc back | q quit"
 
 
 def test_footer_bar_shows_actions_then_global_nav() -> None:
     from installer.ui_common import FooterBar
 
-    text = FooterBar("catalog").render_text().plain
+    text = FooterBar("system").render_text().plain
     assert "space toggle" in text and "enter install" in text
     assert "│" in text  # zone separator
-    assert "1-4 views" in text and "^p nav" in text and "q quit" in text
+    assert "1-6 views" in text and "^p nav" in text and "q quit" in text
     # the action zone is left of the separator; global nav is right of it
-    assert text.index("space toggle") < text.index("│") < text.index("1-4 views")
+    assert text.index("space toggle") < text.index("│") < text.index("1-6 views")
 
 
 def test_footer_bar_doctor_shows_apply_actions() -> None:
@@ -204,7 +204,7 @@ def test_mode_badge_renders_label_glyph_and_hint() -> None:
 def test_mode_badge_staged_and_apply_strings() -> None:
     from installer.ui_common import VIEW_BY_NAME, ModeBadge
 
-    catalog_badge = ModeBadge(VIEW_BY_NAME["catalog"])
+    catalog_badge = ModeBadge(VIEW_BY_NAME["system"])
     assert "[STAGED]" in catalog_badge.render_text().plain
     assert "o" in catalog_badge.render_text().plain
     uninstall = ModeBadge(VIEW_BY_NAME["uninstall"]).render_text().plain
@@ -220,3 +220,13 @@ def test_base_view_is_the_first_registered_view() -> None:
 
     assert VIEW_ORDER[0] == BASE_VIEW
     assert BASE_VIEW in VIEW_BY_NAME
+
+
+def test_tier_views_lead_the_nav_and_match_the_tier_enum() -> None:
+    from installer.enums import Tier
+    from installer.ui_common import BASE_VIEW, VIEW_BY_NAME, VIEW_ORDER
+
+    assert VIEW_ORDER == ("system", "user", "ai", "doctor", "uninstall", "policies")
+    assert VIEW_ORDER[:3] == tuple(tier.value for tier in Tier)
+    assert BASE_VIEW == "system"
+    assert set(VIEW_BY_NAME) == set(VIEW_ORDER)

@@ -1,15 +1,15 @@
 """Unified Textual shell hosting the wizard views behind one app.
 
-The app owns navigation and the screen stack. Catalog, doctor, uninstall, and
-policies are all functional views. Execution stays behind the pure
+The app owns navigation and the screen stack. The base view, doctor, uninstall,
+and policies are all functional views. Execution stays behind the pure
 `installer/` core invoked from `setup.py`, with one deliberate exception: the
 doctor, uninstall, and policies views apply their changes live through
 injected closures. The app's run value stays the catalog decision
 (`list[str] | None`).
 
-The catalog is the base screen (`get_default_screen`); it cannot be switched
-out. Navigation is therefore a stack with the catalog at the bottom: the stack
-is always `[catalog]` or `[catalog, <one other view>]`.
+The first registered view is the base screen (`get_default_screen`); it cannot
+be switched out. Navigation is therefore a stack with the base view at the
+bottom: the stack is always `[base]` or `[base, <one other view>]`.
 """
 
 from collections.abc import Callable, Mapping
@@ -26,7 +26,7 @@ from textual.widgets import DataTable, Label, ListItem, ListView, Static
 from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
-from installer.enums import UninstallState
+from installer.enums import Tier, UninstallState
 from installer.guidance import Guidance, doctor_guidance, guard_guidance
 from installer.model import Tool
 from installer.policy import Policy, PolicyResult
@@ -689,15 +689,28 @@ class UnifiedApp(App[list[str] | None]):
     ) -> None:
         super().__init__()
         self._staged: set[str] = set()
-        self._catalog = CatalogScreen(
-            tools, installed, blurbs, view=BASE_VIEW, catalog=list(tools), staged=self._staged
-        )
-        # Non-catalog views, installed on mount and pushed by value.
-        self._views: dict[str, Screen[None]] = {
-            "doctor": DoctorScreen(report, guard_status, guard_warning, fix_preview, fix),
-            "uninstall": UninstallScreen(uninstall),
-            "policies": PoliciesScreen(policies),
+        self._catalogs: dict[str, CatalogScreen] = {
+            tier.value: CatalogScreen(
+                [tool for tool in tools if tool.tier == tier],
+                installed,
+                blurbs,
+                view=tier.value,
+                catalog=list(tools),
+                staged=self._staged,
+            )
+            for tier in Tier
         }
+        # Non-base views, installed on mount and pushed by value.
+        self._views: dict[str, Screen[None]] = {
+            name: screen for name, screen in self._catalogs.items() if name != BASE_VIEW
+        }
+        self._views.update(
+            {
+                "doctor": DoctorScreen(report, guard_status, guard_warning, fix_preview, fix),
+                "uninstall": UninstallScreen(uninstall),
+                "policies": PoliciesScreen(policies),
+            }
+        )
         self._initial_view = initial_view
         self.current_view = BASE_VIEW
 
@@ -725,13 +738,18 @@ class UnifiedApp(App[list[str] | None]):
 
     @property
     def catalog(self) -> CatalogScreen:
-        return self._catalog
+        """The base (first-registered tier) screen."""
+        return self._catalogs[BASE_VIEW]
+
+    def catalog_for(self, view: str) -> CatalogScreen:
+        """Headless-test seam for the two non-base tier screens."""
+        return self._catalogs[view]
 
     def get_default_screen(self) -> CatalogScreen:
-        # The catalog is the app's base screen, so App-level queries (the tests'
-        # app.query_one) resolve against it. It reports its decision via the
-        # Decided message rather than dismissing the only screen on the stack.
-        return self._catalog
+        # The first registered tier is the app's base screen, so App-level queries
+        # (the tests' app.query_one) resolve against it. It reports its decision
+        # via the Decided message rather than dismissing the only screen on the stack.
+        return self._catalogs[BASE_VIEW]
 
     async def show_view(self, name: str) -> None:
         # Await each stack mutation so a transition fully settles before the next
@@ -751,7 +769,7 @@ class UnifiedApp(App[list[str] | None]):
         # placeholder is the active screen — never on top of the palette, which
         # would push onto a live modal and break the [catalog] / [catalog, <view>]
         # stack invariant.
-        return self.screen is self._catalog or self.screen in self._views.values()
+        return self.screen is self._catalogs[BASE_VIEW] or self.screen in self._views.values()
 
     async def action_show(self, name: str) -> None:
         if not self._navigable():

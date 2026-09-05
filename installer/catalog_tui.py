@@ -133,12 +133,13 @@ _LEGEND = (
 class CatalogScreen(AppScreen):
     """Single-screen tool picker; ←/→ or clicking the tabs switches the grouping.
 
-    Mounted as the unified app's base screen. Accept/abort post a `Decided`
-    message carrying the whole staged batch in full-catalog order regardless of
-    which instance posted it (or None on abort); the host app turns that into
-    its run() result. State the tests assert on (view, table_sort, selected,
-    detail_text, status_text) is delegated to the embedded `ToolBrowser` (or the
-    screen's StatusLine) and exposed as public properties.
+    One tier-scoped instance per `Tier`; the base screen is whichever tier is
+    first in `VIEW_ORDER`. Accept/abort post a `Decided` message carrying the
+    whole staged batch in full-catalog order regardless of which instance posted
+    it (or None on abort); the host app turns that into its run() result. State
+    the tests assert on (view, table_sort, selected, detail_text, status_text)
+    is delegated to the embedded `ToolBrowser` (or the screen's StatusLine) and
+    exposed as public properties.
     """
 
     class Decided(Message):

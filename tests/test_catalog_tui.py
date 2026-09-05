@@ -43,6 +43,7 @@ def _tool(
     priority: str = "P1",
     audience: str = "both",
     desc: str = "",
+    tier: str = "system",
 ) -> Tool:
     return Tool(
         id=tool_id,
@@ -53,6 +54,7 @@ def _tool(
         priority=priority,
         audience=audience,
         desc=desc,
+        tier=tier,
     )
 
 
@@ -258,6 +260,7 @@ async def test_detail_bar_shows_requires_when_declared():
         category="search",
         cmd="mmdc",
         methods=(Method(kind="brew", params={"formula": "mmdc"}),),
+        tier="system",
         requires=("pnpm", "node"),
     )
     app = _unified_app(tools, {"mmdc": False}, _BLURBS)
@@ -357,3 +360,65 @@ async def test_empty_catalog_enter_is_blocked_then_aborts():
         assert app.is_running
         await pilot.press("q")
     assert app.return_value is None
+
+
+def _tiered_catalog() -> tuple[list[Tool], dict[str, bool]]:
+    tools = [
+        _tool("pnpm", category="pkg-mgr", priority="P0", tier="system"),
+        _tool("jq", category="data", priority="P1", tier="user"),
+        _tool("claude", category="ai", priority="P0", tier="ai"),
+    ]
+    return tools, {tool.id: False for tool in tools}
+
+
+def test_each_tier_view_lists_only_its_own_tier() -> None:
+    tools, installed = _tiered_catalog()
+    app = _unified_app(tools, installed, {})
+    assert [t.id for t in app.catalog_for("system").tools] == ["pnpm"]
+    assert [t.id for t in app.catalog_for("user").tools] == ["jq"]
+    assert [t.id for t in app.catalog_for("ai").tools] == ["claude"]
+    listed = [t.id for name in ("system", "user", "ai") for t in app.catalog_for(name).tools]
+    assert listed == [t.id for t in tools]
+    assert len(listed) == len(set(listed))
+
+
+async def test_staging_spans_tier_views_and_commits_from_any_of_them() -> None:
+    tools, installed = _tiered_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("space")  # System view: marks pnpm
+        await pilot.press("3")  # AI view
+        await pilot.press("space")  # marks claude
+        await pilot.press("enter")
+    assert app.return_value == ["pnpm", "claude"]
+
+
+async def test_select_all_is_scoped_to_the_active_tier_view() -> None:
+    tools, installed = _tiered_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("space")  # System: mark pnpm
+        await pilot.press("2")  # User view
+        await pilot.press("a")
+        assert app.catalog.selected == {"pnpm", "jq"}
+        await pilot.press("i")
+        assert app.catalog.selected == {"pnpm"}
+
+
+async def test_tier_view_keeps_the_five_grouping_tabs() -> None:
+    tools, installed = _tiered_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("2")  # User view
+        screen = app.catalog_for("user")
+        assert screen.view == "category"
+        await pilot.press("right")
+        assert screen.view == "priority"
+        await pilot.press("right")
+        assert screen.view == "audience"
+        await pilot.press("right")
+        assert screen.view == "status"
+        await pilot.press("right")
+        assert screen.view == "table"
+        await pilot.press("right")
+        assert screen.view == "category"

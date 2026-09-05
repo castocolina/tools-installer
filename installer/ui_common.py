@@ -99,14 +99,36 @@ class View:
 # number key that navigates to the view). Hints name the keys finalized per view;
 # Doctor's action zone is an explicit token, not an empty gap.
 VIEWS: tuple[View, ...] = (
+    # These three names are the three Tier member values, so UnifiedApp can
+    # build one screen per tier without a second lookup table.
     View(
-        name="catalog",
-        label="Catalog",
-        palette="Catalog - pick tools to install",
+        name="system",
+        label="System",
+        palette="System - prerequisites a fresh machine needs first",
         mode="STAGED",
         glyph="o",
         style="cyan",
-        hint="space marks a tool; enter installs your selection",
+        hint="space marks a tool; enter installs everything you staged",
+        actions="space toggle | enter install | a all | i invert",
+    ),
+    View(
+        name="user",
+        label="User",
+        palette="User - your personal picks",
+        mode="STAGED",
+        glyph="o",
+        style="cyan",
+        hint="space marks a tool; enter installs everything you staged",
+        actions="space toggle | enter install | a all | i invert",
+    ),
+    View(
+        name="ai",
+        label="AI",
+        palette="AI - tooling for coding agents",
+        mode="STAGED",
+        glyph="o",
+        style="cyan",
+        hint="space marks a tool; enter installs everything you staged",
         actions="space toggle | enter install | a all | i invert",
     ),
     View(
@@ -150,7 +172,7 @@ BASE_VIEW: str = VIEW_ORDER[0]
 
 
 def _view_key(index: int) -> str:
-    """The bracketed nav key for the view at `index` ([1] … [4]), matching the
+    """The bracketed nav key for the view at `index` ([1] … [N] from VIEWS), matching the
     1-based number key that navigates to it. Full-size digits stay legible where
     the old circled glyphs (❶❷…) rendered too small in many terminal fonts. The
     leading bracket is escaped so Textual content markup renders it literally
@@ -161,7 +183,7 @@ def _view_key(index: int) -> str:
 # The always-available navigation, shown dim on every view so the user learns one
 # rule: the dim cluster right of the separator is global nav; everything left is
 # what this screen does.
-GLOBAL_NAV: str = "1-4 views | ^p nav | esc back | q quit"
+GLOBAL_NAV: str = f"1-{len(VIEWS)} views | ^p nav | esc back | q quit"
 
 
 class FooterBar(Static):
@@ -187,7 +209,7 @@ class FooterBar(Static):
 
 
 class WayfindingHeader(Horizontal):
-    """Docked-top breadcrumb of the four views; the active one is accent-bold,
+    """Docked-top breadcrumb of every view in VIEWS; the active one is accent-bold,
     the rest dim. Accent recolors per screen (e.g. destructive red on uninstall)."""
 
     class Navigate(Message):
