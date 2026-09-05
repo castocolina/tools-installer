@@ -772,6 +772,7 @@ def test_run_guard_install_writes_shims_and_aliases_and_returns_true(tmp_path: P
     assert acted is True
     assert (shim_dir / "pip").exists()
     assert (shim_dir / "npx").exists()
+    assert not (shim_dir / "pnpm").exists()
     assert "tools-installer ban" in rc.read_text()
     assert "Installing the pip/npm ban" in buf.getvalue()
 
@@ -847,6 +848,48 @@ def test_run_guard_shim_dir_matches_ban_policy_apply(tmp_path: Path) -> None:
         confirm=lambda _m: True,
         which=lambda _n: None,
     )
+    names = sorted(path.name for path in policy_dir.iterdir())
+    assert names == sorted(path.name for path in guard_dir.iterdir())
+    for name in names:
+        assert (policy_dir / name).read_text() == (guard_dir / name).read_text()
+
+
+def test_run_guard_with_volta_matches_ban_policy_five_shims(tmp_path: Path) -> None:
+    from installer.guards import REDIRECT_SENTINEL, SHIM_SENTINEL, guard_status
+    from installer.policy import ban_policy
+
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    for name in ("volta", "pnpm"):
+        binary = real_dir / name
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o755)
+    policy_dir = tmp_path / "policy-bin"
+    guard_dir = tmp_path / "guard-bin"
+    ban_policy(
+        shim_dir=policy_dir,
+        apply_rc_paths=[tmp_path / "policy.rc"],
+        remove_rc_paths=[tmp_path / "policy.rc"],
+        path_value=f"{policy_dir}:{real_dir}",
+        which=lambda _n: None,
+    ).apply()
+    run_guard(
+        remove=False,
+        shim_dir=guard_dir,
+        rc_paths=[tmp_path / "guard.rc"],
+        path_value=f"{guard_dir}:{real_dir}",
+        console=Console(file=io.StringIO(), width=100),
+        confirm=lambda _m: True,
+        which=lambda _n: None,
+    )
+    for directory in (policy_dir, guard_dir):
+        status = guard_status(directory)
+        assert status == {"npm": True, "pip": True, "pip3": True, "npx": True, "pnpm": True}
+        assert REDIRECT_SENTINEL in (directory / "npm").read_text()
+        assert REDIRECT_SENTINEL in (directory / "pnpm").read_text()
+        assert REDIRECT_SENTINEL in (directory / "npx").read_text()
+        assert SHIM_SENTINEL in (directory / "pip").read_text()
+        assert SHIM_SENTINEL in (directory / "pip3").read_text()
     names = sorted(path.name for path in policy_dir.iterdir())
     assert names == sorted(path.name for path in guard_dir.iterdir())
     for name in names:

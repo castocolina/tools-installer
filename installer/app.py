@@ -16,6 +16,7 @@ from installer.guards import (
     guard_path_warning,
     guard_redirect_warning,
     guard_status,
+    install_global_redirect_shims,
     install_redirect_shims,
     install_shims,
     remove_ban_aliases,
@@ -317,6 +318,7 @@ def run_guard(
         return True
     actions = install_shims(shim_dir)
     actions.update(install_redirect_shims(shim_dir, path_value=path_value))
+    actions.update(install_global_redirect_shims(shim_dir, path_value=path_value))
     for rc_path in rc_paths:
         write_ban_aliases(rc_path)
     render_guard(actions, guard_path_warning(shim_dir, path_value, which), console, removing=False)

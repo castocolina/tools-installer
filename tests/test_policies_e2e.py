@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from installer.doctor import DoctorReport
-from installer.guards import guard_status
+from installer.guards import REDIRECT_SENTINEL, SHIM_SENTINEL, guard_status
 from installer.model import Method, Tool
 from installer.policy import ban_policy, omz_plugins_policy, tweak_policy
 from installer.tweaks import BUNDLES, TweakBundle
@@ -34,7 +34,17 @@ def _tool() -> Tool:
     )
 
 
-def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path]:
+def _plant_volta_and_pnpm(home: Path) -> Path:
+    real_dir = home / "real"
+    real_dir.mkdir()
+    for name in ("volta", "pnpm"):
+        binary = real_dir / name
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o755)
+    return real_dir
+
+
+def _build_real_app(home: Path, *, path_value: str | None = None) -> tuple[UnifiedApp, Path, Path]:
     bin_dir = home / ".local" / "bin"
     bin_dir.mkdir(parents=True)
     rc = home / ".myshellrc"
@@ -42,7 +52,7 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path]:
         shim_dir=bin_dir,
         apply_rc_paths=[rc],
         remove_rc_paths=[rc],
-        path_value=str(bin_dir),  # shim dir on PATH -> no spurious warning
+        path_value=path_value if path_value is not None else str(bin_dir),
         which=lambda _name: None,
     )
     app = UnifiedApp(
@@ -74,19 +84,22 @@ async def test_policies_e2e_toggle_round_trip_against_sandbox(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    app, bin_dir, rc = _build_real_app(Path.home())
+    home = Path.home()
+    real_dir = _plant_volta_and_pnpm(home)
+    bin_dir = home / ".local" / "bin"
+    app, bin_dir, rc = _build_real_app(home, path_value=f"{bin_dir}:{real_dir}")
     async with app.run_test(size=(100, 30)) as pilot:
         _snapshot(app, "01-open.svg")
         await pilot.press("space")  # enable: writes shims + aliases live
         assert isinstance(app.screen, PoliciesScreen)
         assert app.screen.active_state["ban"] is True
         status = guard_status(bin_dir)
-        assert status["npm"] is True
-        assert status["pip"] is True
-        assert status["pip3"] is True
-        assert status["npx"] is True
-        assert status["pnpm"] is False
-        assert (bin_dir / "npx").exists()
+        assert status == {"npm": True, "pip": True, "pip3": True, "npx": True, "pnpm": True}
+        assert REDIRECT_SENTINEL in (bin_dir / "npm").read_text()
+        assert REDIRECT_SENTINEL in (bin_dir / "pnpm").read_text()
+        assert REDIRECT_SENTINEL in (bin_dir / "npx").read_text()
+        assert SHIM_SENTINEL in (bin_dir / "pip").read_text()
+        assert SHIM_SENTINEL in (bin_dir / "pip3").read_text()
         assert "alias" in rc.read_text()
         _snapshot(app, "02-enabled.svg")
         await pilot.press("space")  # disable: clears both layers
@@ -96,6 +109,29 @@ async def test_policies_e2e_toggle_round_trip_against_sandbox(
 
     assert all(active is False for active in guard_status(bin_dir).values())
     assert not (bin_dir / "npx").exists()
+    assert not (bin_dir / "pnpm").exists()
+    assert "alias" not in rc.read_text()
+
+
+async def test_policies_e2e_volta_absent_leaves_pnpm_unshimmed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    app, bin_dir, rc = _build_real_app(Path.home())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("space")
+        assert isinstance(app.screen, PoliciesScreen)
+        status = guard_status(bin_dir)
+        assert status["npm"] is True
+        assert status["pip"] is True
+        assert status["pip3"] is True
+        assert status["npx"] is True
+        assert status["pnpm"] is False
+        assert SHIM_SENTINEL in (bin_dir / "npm").read_text()
+        assert not (bin_dir / "pnpm").exists()
+        await pilot.press("space")
+
+    assert all(active is False for active in guard_status(bin_dir).values())
     assert "alias" not in rc.read_text()
 
 

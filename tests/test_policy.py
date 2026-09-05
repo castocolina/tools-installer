@@ -52,25 +52,58 @@ def test_ban_policy_active_when_shims_present(tmp_path: Path) -> None:
     assert _ban(tmp_path).active is True
 
 
+def _plant_volta_and_pnpm(tmp_path: Path) -> Path:
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    for name in ("volta", "pnpm"):
+        binary = real_dir / name
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o755)
+    return real_dir
+
+
 def test_apply_writes_both_layers_and_returns_result(tmp_path: Path) -> None:
     rc = tmp_path / ".myshellrc"
     result = _ban(tmp_path, apply_to=[rc]).apply()
     shim_dir = tmp_path / ".local" / "bin"
-    # Both layers really happened on disk.
     status = guard_status(shim_dir)
     assert status["npm"] is True
     assert status["pip"] is True
     assert status["pip3"] is True
     assert status["npx"] is True
     assert status["pnpm"] is False
+    assert not (shim_dir / "pnpm").exists()
+    assert SHIM_SENTINEL in (shim_dir / "npm").read_text()
+    assert SHIM_SENTINEL in (shim_dir / "pip").read_text()
+    assert SHIM_SENTINEL in (shim_dir / "pip3").read_text()
+    assert SHIM_SENTINEL in (shim_dir / "npx").read_text()
     assert "alias" in rc.read_text()
-    # Structured result: two named layers + a reload hint.
     names = [layer.name for layer in result.layers]
     assert names == ["Shims", "Aliases"]
     assert "4 active" in result.layers[0].detail
+    assert "blocked (volta not found)" in result.layers[0].detail
     assert "blocked (pnpm not found)" in result.layers[0].detail
+    assert "absent (volta not found)" in result.layers[0].detail
     assert str(rc) in result.layers[1].detail
     assert result.reload_hint is not None and "hash -r" in result.reload_hint
+
+
+def test_apply_with_volta_writes_five_shims(tmp_path: Path) -> None:
+    rc = tmp_path / ".myshellrc"
+    real_dir = _plant_volta_and_pnpm(tmp_path)
+    shim_dir = tmp_path / ".local" / "bin"
+    result = _ban(tmp_path, apply_to=[rc], path_value=f"{shim_dir}{os.pathsep}{real_dir}").apply()
+    status = guard_status(shim_dir)
+    assert status == {"npm": True, "pip": True, "pip3": True, "npx": True, "pnpm": True}
+    assert REDIRECT_SENTINEL in (shim_dir / "npm").read_text()
+    assert REDIRECT_SENTINEL in (shim_dir / "pnpm").read_text()
+    assert REDIRECT_SENTINEL in (shim_dir / "npx").read_text()
+    assert SHIM_SENTINEL in (shim_dir / "pip").read_text()
+    assert SHIM_SENTINEL in (shim_dir / "pip3").read_text()
+    assert "5 active" in result.layers[0].detail
+    assert "blocked" not in result.layers[0].detail
+    assert "skipped" not in result.layers[0].detail
+    assert "absent" not in result.layers[0].detail
 
 
 def test_apply_collapses_home_paths_to_tilde(
@@ -112,7 +145,8 @@ def test_remove_clears_both_layers(tmp_path: Path) -> None:
     result = policy.remove()
     shim_dir = tmp_path / ".local" / "bin"
     assert all(active is False for active in guard_status(shim_dir).values())
-    assert not (shim_dir / "npx").exists()
+    for name in ("npm", "pip", "pip3", "npx", "pnpm"):
+        assert not (shim_dir / name).exists()
     assert "alias" not in rc.read_text()
     assert [layer.name for layer in result.layers] == ["Shims", "Aliases"]
     assert "removed" in result.layers[0].detail

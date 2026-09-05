@@ -15,6 +15,7 @@ from pathlib import Path
 from installer.guards import (
     guard_path_warning,
     guard_status,
+    install_global_redirect_shims,
     install_redirect_shims,
     install_shims,
     remove_ban_aliases,
@@ -91,21 +92,26 @@ def ban_policy(
     """
 
     def _apply() -> PolicyResult:
-        # Hard-block bodies first, redirect bodies second: a name in both dicts
-        # ends up with its redirect body, and a name whose redirect target is
-        # unresolvable keeps the hard block.
+        # Hard blocks first, unconditional redirects second, argv-conditional
+        # redirects third; each later writer owns the names it declares and
+        # leaves the earlier, safer body in place whenever its own target is
+        # unresolvable.
         shim_results = install_shims(shim_dir)
         shim_results.update(install_redirect_shims(shim_dir, path_value=path_value))
-        active = sum(1 for state in shim_results.values() if not state.startswith("skipped"))
-        skipped = sum(1 for state in shim_results.values() if state.startswith("skipped"))
+        shim_results.update(install_global_redirect_shims(shim_dir, path_value=path_value))
+        active = sum(
+            1
+            for state in shim_results.values()
+            if state.startswith(("created", "refreshed", "blocked"))
+        )
         shim_detail = f"{active} active in {_display_path(shim_dir)}"
-        if skipped:
-            shim_detail += f" ({skipped} skipped — real binary present)"
-        blocked = [
-            f"{name} {state}" for name, state in shim_results.items() if state.startswith("blocked")
+        degraded = [
+            f"{name} {state}"
+            for name, state in shim_results.items()
+            if not state.startswith(("created", "refreshed"))
         ]
-        if blocked:
-            shim_detail += f" ({'; '.join(blocked)})"
+        if degraded:
+            shim_detail += f" ({'; '.join(degraded)})"
         for rc_path in apply_rc_paths:
             write_ban_aliases(rc_path)
         alias_detail = "written to " + ", ".join(_display_path(p) for p in apply_rc_paths)
