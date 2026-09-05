@@ -114,3 +114,49 @@ def test_all_ban_rc_paths_cover_every_mode(monkeypatch: pytest.MonkeyPatch, tmp_
         tmp_path / ".zshrc",
         tmp_path / ".bashrc",
     ]
+
+
+def test_zshrc_path_defaults_to_home_when_zdotdir_is_unset(tmp_path: Path) -> None:
+    from installer.locations import zshrc_path
+
+    assert zshrc_path(tmp_path, {}) == tmp_path / ".zshrc"
+    assert zshrc_path(tmp_path, {"ZDOTDIR": ""}) == tmp_path / ".zshrc"
+
+
+def test_zshrc_path_follows_an_existing_zdotdir(tmp_path: Path) -> None:
+    from installer.locations import zshrc_path
+
+    zdotdir = tmp_path / "config" / "zsh"
+    zdotdir.mkdir(parents=True)
+    assert zshrc_path(tmp_path, {"ZDOTDIR": str(zdotdir)}) == zdotdir / ".zshrc"
+
+
+def test_zshrc_path_ignores_a_zdotdir_that_is_not_a_directory(tmp_path: Path) -> None:
+    from installer.locations import zshrc_path
+
+    # A stale or typo'd ZDOTDIR must not point writes at a path that does not
+    # exist; fall back to the file zsh would read without it.
+    assert zshrc_path(tmp_path, {"ZDOTDIR": str(tmp_path / "gone")}) == tmp_path / ".zshrc"
+
+
+def test_rc_paths_and_ban_sweep_follow_zdotdir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.locations import all_ban_rc_paths, ban_rc_paths, rc_paths_for_mode
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zdotdir = tmp_path / "zsh"
+    zdotdir.mkdir()
+    monkeypatch.setenv("ZDOTDIR", str(zdotdir))
+    # The ban aliases and the plugins edit must agree on which .zshrc is real.
+    assert rc_paths_for_mode("centralized", "/bin/zsh") == [
+        zdotdir / ".zshrc",
+        tmp_path / ".bashrc",
+    ]
+    assert rc_paths_for_mode("single", "/bin/zsh") == [zdotdir / ".zshrc"]
+    assert ban_rc_paths("split", "/bin/zsh") == [zdotdir / ".zshrc", tmp_path / ".bashrc"]
+    assert all_ban_rc_paths() == [
+        tmp_path / ".myshellrc",
+        zdotdir / ".zshrc",
+        tmp_path / ".bashrc",
+    ]

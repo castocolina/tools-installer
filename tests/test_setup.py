@@ -99,6 +99,20 @@ def test_run_uninstall_is_wired_with_bundles_and_zshrc() -> None:
     assert "zshrc_path=_ZSHRC" in body
 
 
+def test_zshrc_constant_is_resolved_through_the_zdotdir_aware_helper() -> None:
+    """Assert wiring by reading setup.py source.
+
+    `_ZSHRC` is an import-time constant closed over by every uninstall/policy
+    wire, so it cannot be re-resolved from a test. The wire is that it comes
+    from `installer.locations.zshrc_path` — never a hardcoded `~/.zshrc` — and
+    that `_RC_PATHS` reuses it, so the ban aliases and the Oh-My-Zsh plugins
+    edit agree on which .zshrc is real.
+    """
+    src = (Path(__file__).resolve().parent.parent / "setup.py").read_text()
+    assert "_ZSHRC = zshrc_path(Path.home(), os.environ)" in src
+    assert '_RC_PATHS = [_ZSHRC, Path.home() / ".bashrc"]' in src
+
+
 def _stub_install_run(monkeypatch: pytest.MonkeyPatch, summary: Summary) -> list[str]:
     """Drive setup.main through a full (stubbed) install run and record whether
     the troubleshooting pointer was rendered."""

@@ -1,7 +1,28 @@
 """Userspace install-location policy: binaries land under ~/.local/bin, no sudo."""
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
+
+
+def zshrc_path(home: Path, environ: Mapping[str, str]) -> Path:
+    """The .zshrc zsh actually reads: $ZDOTDIR/.zshrc when ZDOTDIR names an
+    existing directory, else ~/.zshrc.
+
+    Mirrors omz.omz_present's $ZSH-awareness. The two must agree: a ZDOTDIR
+    setup where the detection predicate reads the environment but the write
+    target does not is one that enables the Oh-My-Zsh policy and then edits a
+    file zsh never sources. The is_dir() guard keeps a stale or typo'd ZDOTDIR
+    from pointing writes at a directory that does not exist.
+    """
+    zdotdir = environ.get("ZDOTDIR")
+    if zdotdir and Path(zdotdir).is_dir():
+        return Path(zdotdir) / ".zshrc"
+    return home / ".zshrc"
+
+
+def _zshrc() -> Path:
+    return zshrc_path(Path.home(), os.environ)
 
 
 def bin_dir(declared: str | None) -> Path:
@@ -26,11 +47,11 @@ def rc_paths_for_mode(link_mode: str, shell: str) -> list[Path]:
     and split wire both defaults; single wires only the rc of `shell` — both
     when the shell is undetectable."""
     home = Path.home()
-    both = [home / ".zshrc", home / ".bashrc"]
+    both = [_zshrc(), home / ".bashrc"]
     if link_mode != "single":
         return both
     if shell.endswith("zsh"):
-        return [home / ".zshrc"]
+        return [_zshrc()]
     if shell.endswith("bash"):
         return [home / ".bashrc"]
     return both  # undetectable shell -> wire both
@@ -50,7 +71,7 @@ def all_ban_rc_paths() -> list[Path]:
     absent, so removal needs no link-mode guess (which would otherwise strand
     aliases when the user picks a different mode than they installed with)."""
     home = Path.home()
-    return [home / ".myshellrc", home / ".zshrc", home / ".bashrc"]
+    return [home / ".myshellrc", _zshrc(), home / ".bashrc"]
 
 
 def ensure_dir(directory: Path) -> Path:

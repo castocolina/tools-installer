@@ -28,7 +28,7 @@ from installer.app import (
     run_wizard,
 )
 from installer.cli import parse_args
-from installer.locations import all_ban_rc_paths, ban_rc_paths, rc_paths_for_mode
+from installer.locations import all_ban_rc_paths, ban_rc_paths, rc_paths_for_mode, zshrc_path
 from installer.model import Tool, load_categories, load_tools
 from installer.omz import omz_present
 from installer.platform import Platform, detect
@@ -46,8 +46,10 @@ from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 _REGISTRY = Path(__file__).parent / "installer" / "registry.toml"
 _DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
 _MYSHELLRC = Path.home() / ".myshellrc"
-_ZSHRC = Path.home() / ".zshrc"
-_RC_PATHS = [Path.home() / ".zshrc", Path.home() / ".bashrc"]
+# $ZDOTDIR-aware, so the file the installer edits is the one zsh actually reads
+# and agrees with omz_present's own environment-aware detection.
+_ZSHRC = zshrc_path(Path.home(), os.environ)
+_RC_PATHS = [_ZSHRC, Path.home() / ".bashrc"]
 _SHELL = os.environ.get("SHELL", "")
 
 _STYLE = questionary.Style(
