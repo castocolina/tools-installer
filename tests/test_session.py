@@ -226,3 +226,156 @@ def test_summarize_buckets_dependency_failed() -> None:
     summary = summarize(outcomes)
     assert summary.failed == ("sdkman",)
     assert summary.dependency_failed == ("java",)
+
+
+def _failing_install(*failed_ids: str, status: str = "failed") -> tuple[list[str], Install]:
+    calls: list[str] = []
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+    ) -> InstallOutcome:
+        calls.append(tool.id)
+        if tool.id in failed_ids:
+            return InstallOutcome(tool.id, status)
+        return InstallOutcome(tool.id, "installed", method_kind="brew")
+
+    return calls, install
+
+
+def test_dependency_failure_propagates_down_a_chain() -> None:
+    calls, install = _failing_install("a")
+    outcomes = run_installs(
+        [_tool("a"), _tool("b", requires=("a",)), _tool("c", requires=("b",))],
+        _platform(),
+        lambda cmd: None,
+        lambda repo: "1.0.0",
+        install,
+    )
+    assert [o.tool_id for o in outcomes] == ["a", "b", "c"]
+    assert outcomes[0].status == "failed"
+    assert outcomes[1].status == "dependency-failed"
+    assert outcomes[2].status == "dependency-failed"
+    assert outcomes[1].blocked_by == ("a",)
+    assert outcomes[2].blocked_by == ("b",)
+    assert calls == ["a"]
+
+
+@pytest.mark.parametrize("status", ["failed", "no-method", "checksum-mismatch"])
+def test_every_unresolved_status_blocks_a_dependent(status: str) -> None:
+    calls, install = _failing_install("dep", status=status)
+    outcomes = run_installs(
+        [_tool("dep"), _tool("user", requires=("dep",))],
+        _platform(),
+        lambda cmd: None,
+        lambda repo: "1.0.0",
+        install,
+    )
+    assert calls == ["dep"]
+    assert outcomes[1].status == "dependency-failed"
+    assert outcomes[1].blocked_by == ("dep",)
+
+
+@pytest.mark.parametrize("status", ["installed", "already-installed"])
+def test_successful_statuses_never_block_a_dependent(status: str) -> None:
+    calls: list[str] = []
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+    ) -> InstallOutcome:
+        calls.append(tool.id)
+        return InstallOutcome(tool.id, status, method_kind="brew")
+
+    outcomes = run_installs(
+        [_tool("dep"), _tool("user", requires=("dep",))],
+        _platform(),
+        lambda cmd: None,
+        lambda repo: "1.0.0",
+        install,
+    )
+    assert calls == ["dep", "user"]
+    assert outcomes[0].status == status
+    assert outcomes[1].status == status
+    assert outcomes[1].blocked_by == ()
+
+
+def test_an_unrelated_tool_still_installs_after_a_failure() -> None:
+    calls, install = _failing_install("a")
+    outcomes = run_installs(
+        [_tool("a"), _tool("b", requires=("a",)), _tool("rg")],
+        _platform(),
+        lambda cmd: None,
+        lambda repo: "1.0.0",
+        install,
+    )
+    assert calls == ["a", "rg"]
+    assert outcomes[2].status == "installed"
+    assert outcomes[2].blocked_by == ()
+
+
+def test_only_the_matching_requires_ids_are_reported_as_blockers() -> None:
+    calls, install = _failing_install("a")
+    outcomes = run_installs(
+        [_tool("a"), _tool("user", requires=("a", "uv"))],
+        _platform(),
+        lambda cmd: None,
+        lambda repo: "1.0.0",
+        install,
+    )
+    assert calls == ["a"]
+    assert outcomes[1].blocked_by == ("a",)
+
+    calls_dup, install_dup = _failing_install("a")
+    outcomes_dup = run_installs(
+        [_tool("a"), _tool("user", requires=("a", "a"))],
+        _platform(),
+        lambda cmd: None,
+        lambda repo: "1.0.0",
+        install_dup,
+    )
+    assert calls_dup == ["a"]
+    assert outcomes_dup[1].blocked_by == ("a",)
+
+
+def test_a_retried_mismatch_does_not_block_its_dependents() -> None:
+    seen, install = _mismatch_then_install()
+
+    def on_mismatch(tool_id: str) -> MismatchChoice:
+        return "retry"
+
+    outcomes = run_installs(
+        [_tool("dep"), _tool("user", requires=("dep",))],
+        _platform(),
+        lambda cmd: None,
+        lambda repo: "1.0.0",
+        install,
+        on_mismatch,
+    )
+    assert [entry[0] for entry in seen] == ["dep", "dep", "user", "user"]
+    assert outcomes[0].status == "installed"
+    assert outcomes[1].status == "installed"
+    assert outcomes[1].blocked_by == ()
+
+
+def test_a_dependent_listed_before_its_dependency_is_still_attempted() -> None:
+    calls, install = _failing_install("a")
+    outcomes = run_installs(
+        [_tool("b", requires=("a",)), _tool("a")],
+        _platform(),
+        lambda cmd: None,
+        lambda repo: "1.0.0",
+        install,
+    )
+    assert calls == ["b", "a"]
+    assert outcomes[0].status == "installed"
+    assert outcomes[1].status == "failed"
+    assert outcomes[0].blocked_by == ()
