@@ -116,7 +116,14 @@ Plans:
   2. Running a full uninstall removes every tweak-managed executable (e.g. `tools-installer-wait-time`), not only `Tool`-shaped artifacts.
   3. Toggling the Oh-My-Zsh plugins tweak in Policies enables the bundled `git` and `docker` plugins by editing the `plugins=(...)` array in `.zshrc`, with no separate catalog entry required.
 
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+
+- [ ] 03-01-PLAN.md — Skip a dependent whose prerequisite failed earlier in the run: `InstallStatus.DEPENDENCY_FAILED`, `InstallOutcome.blocked_by`, and the summary/reason reporting (wave 1)
+- [ ] 03-02-PLAN.md — Oh-My-Zsh bundled plugins as a Policy: the in-place `plugins=(...)` editor in a new `installer/omz.py` plus the presence-gated `omz_plugins_policy` (wave 1)
+- [ ] 03-03-PLAN.md — Symmetric uninstall teardown: sweep every enabled tweak's block, helper executable and plugins edit through the existing Policies disable path (wave 2, needs 03-02)
+
+**UI hint**: yes — plans 03-02 (Policies row) and 03-03 (Uninstall row) each carry a gating `tmux` structural check; 03-01 touches no Textual surface.
 
 ### Phase 4: Package Manager Redirect Policy
 
@@ -261,7 +268,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 |-------|----------------|--------|-----------|
 | 1. Catalog Tier Foundation | 1/1 | Complete    | 2026-09-04 |
 | 2. Tier-Scoped Catalog Views & Recommends | 2/2 | Complete    | 2026-09-05 |
-| 3. Install/Uninstall & Tweak Lifecycle Hardening | 0/TBD | Not started | - |
+| 3. Install/Uninstall & Tweak Lifecycle Hardening | 0/3 | Planned | - |
 | 4. npm/npx Ban Extension & Redirect Policy | 0/TBD | Not started | - |
 | 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 0/TBD | Not started | - |
 | 6. SDKMAN Hardening & Registry-Authoring Guidelines | 0/TBD | Not started | - |
