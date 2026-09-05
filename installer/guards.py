@@ -12,6 +12,10 @@ Two removable, idempotent layers steer callers to the managed toolchain:
 
 Neither layer is hermetic: `python -m pip install` bypasses the pip shim, and a
 real npm/pip earlier on PATH wins. guard_path_warning flags the PATH-order case.
+A subprocess this installer spawns would inherit the shimmed PATH and hit its
+own guards from the inside; `shell_path` demotes the shim dir for the shells
+executors.py opens, the way `real_pnpm` resolves an absolute path for the two
+direct Python call sites.
 
 pip and pip3 stay hard-blocked because `uv pip` is not an argv-compatible drop-in
 for two of the six subcommands this shim would intercept — `uninstall` cascades
@@ -294,6 +298,37 @@ def real_pnpm(
     if path_value is None:
         path_value = os.environ.get("PATH", "")
     return real_binary("pnpm", shim_dir=shim_dir, path_value=path_value, lookup=lookup)
+
+
+def shell_path(
+    *,
+    shim_dir: Path | None = None,
+    path_value: str | None = None,
+) -> str:
+    """PATH for a shell this installer spawns, with the managed bin dir demoted last.
+
+    real_pnpm closes the two direct Python call sites, but executors._script and
+    executors._sdkman hand a command line to `sh -c`/`bash -c` and the child
+    inherits this process's PATH — whose FIRST entry is the managed bin dir when
+    the ban is active. A vendor install script's own `npm`/`npx` call would then
+    hit our hard-block shim and exit 127, and its `pnpm add -g` would be
+    rewritten to `volta install`, all inside an install the user explicitly
+    asked this installer to perform.
+
+    Demoting rather than dropping the directory is deliberate: it is also the
+    managed bin dir, so a script that legitimately needs a tool installed there
+    still finds it, while any real npm/pnpm elsewhere on PATH now wins.
+    """
+    if shim_dir is None:
+        shim_dir = installer.locations.bin_dir(None)
+    if path_value is None:
+        path_value = os.environ.get("PATH", "")
+    target = str(shim_dir)
+    entries = [entry for entry in path_value.split(os.pathsep) if entry]
+    rest = [entry for entry in entries if entry != target]
+    if len(rest) == len(entries):
+        return os.pathsep.join(entries)
+    return os.pathsep.join([*rest, target])
 
 
 def install_redirect_shims(

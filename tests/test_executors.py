@@ -1,4 +1,5 @@
 import os
+import shlex
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,20 @@ def _record() -> tuple[list[list[str]], Runner]:
         calls.append(cmd)
 
     return calls, runner
+
+
+def _script_of(calls: list[list[str]], shell: str = "sh") -> str:
+    """The shell script of a single `sh -c` call, minus the exported PATH prefix.
+
+    Every shell this installer opens exports a de-shimmed PATH first (WR-06);
+    the prefix is asserted on its own in the tests below, so the pipeline
+    assertions stay about the pipeline.
+    """
+    assert len(calls) == 1
+    assert calls[0][:2] == [shell, "-c"]
+    prefix, separator, rest = calls[0][2].partition("; export PATH; ")
+    assert prefix.startswith("PATH=") and separator
+    return rest
 
 
 def test_dnf_executor_builds_sudo_install():
@@ -48,19 +63,19 @@ def test_script_executor_pipes_curl_into_shell():
         Method(kind="script", params={"url": "https://astral.sh/uv/install.sh", "shell": "sh"}),
         runner,
     )
-    assert calls == [["sh", "-c", "curl -fsSL -- https://astral.sh/uv/install.sh | sh"]]
+    assert _script_of(calls) == "curl -fsSL -- https://astral.sh/uv/install.sh | sh"
 
 
 def test_script_executor_defaults_shell_to_sh():
     calls, runner = _record()
     execute(Method(kind="script", params={"url": "https://example.com/i.sh"}), runner)
-    assert calls == [["sh", "-c", "curl -fsSL -- https://example.com/i.sh | sh"]]
+    assert _script_of(calls) == "curl -fsSL -- https://example.com/i.sh | sh"
 
 
 def test_script_executor_quotes_url_with_special_chars():
     calls, runner = _record()
     execute(Method(kind="script", params={"url": "https://x.com/i.sh?a=b&c=d"}), runner)
-    assert calls == [["sh", "-c", "curl -fsSL -- 'https://x.com/i.sh?a=b&c=d' | sh"]]
+    assert _script_of(calls) == "curl -fsSL -- 'https://x.com/i.sh?a=b&c=d' | sh"
 
 
 def test_missing_required_param_raises():
@@ -93,16 +108,54 @@ def test_script_passes_env_assignments_to_the_shell() -> None:
         },
     )
     execute(method, runner)
-    assert calls == [
-        ["sh", "-c", "curl -fsSL -- https://example.test/install.sh | NONINTERACTIVE=1 bash"]
-    ]
+    assert (
+        _script_of(calls) == "curl -fsSL -- https://example.test/install.sh | NONINTERACTIVE=1 bash"
+    )
 
 
 def test_script_without_env_is_unchanged() -> None:
     calls, runner = _record()
     method = Method(kind="script", params={"url": "https://example.test/i.sh"})
     execute(method, runner)
-    assert calls == [["sh", "-c", "curl -fsSL -- https://example.test/i.sh | sh"]]
+    assert _script_of(calls) == "curl -fsSL -- https://example.test/i.sh | sh"
+
+
+@pytest.mark.parametrize(
+    ("method", "shell"),
+    [
+        (Method(kind="script", params={"url": "https://example.test/i.sh"}), "sh"),
+        (Method(kind="sdkman", params={"candidate": "java"}), "bash"),
+    ],
+)
+def test_spawned_shell_demotes_the_managed_shim_dir_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: Method, shell: str
+):
+    # A vendor install script piped to a shell inherits our PATH. With the ban
+    # active its own npm/npx call would hit our hard-block shim and its
+    # `pnpm add -g` would be rewritten to `volta install`.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    shim_dir = tmp_path / ".local" / "bin"
+    other = tmp_path / "usr" / "bin"
+    monkeypatch.setenv("PATH", f"{shim_dir}{os.pathsep}{other}")
+    calls, runner = _record()
+    execute(method, runner)
+    assert calls[0][0] == shell
+    exported = calls[0][2].split("; export PATH; ")[0].removeprefix("PATH=")
+    assert shlex.split(exported)[0].split(os.pathsep) == [str(other), str(shim_dir)]
+    # Demoted, never dropped: the shim dir is also the managed bin dir, so a
+    # script that legitimately needs a tool installed there must still find it.
+    assert str(shim_dir) in exported
+
+
+def test_spawned_shell_path_is_unchanged_without_the_shim_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", f"/usr/bin{os.pathsep}/bin")
+    calls, runner = _record()
+    execute(Method(kind="script", params={"url": "https://example.test/i.sh"}), runner)
+    exported = calls[0][2].split("; export PATH; ")[0].removeprefix("PATH=")
+    assert shlex.split(exported)[0] == f"/usr/bin{os.pathsep}/bin"
 
 
 def test_cask_executor_installs_into_user_applications(
@@ -178,7 +231,7 @@ def test_node_without_npm_pkg_raises_executor_error():
 def test_sdkman_sources_init_script_then_installs_candidate():
     calls, runner = _record()
     execute(Method(kind="sdkman", params={"candidate": "java"}), runner)
-    assert calls == [["bash", "-c", '. "$HOME/.sdkman/bin/sdkman-init.sh" && sdk install java']]
+    assert _script_of(calls, "bash") == '. "$HOME/.sdkman/bin/sdkman-init.sh" && sdk install java'
 
 
 def test_sdkman_appends_version_when_given():
@@ -187,13 +240,10 @@ def test_sdkman_appends_version_when_given():
         Method(kind="sdkman", params={"candidate": "java", "version": "21.0.4-tem"}),
         runner,
     )
-    assert calls == [
-        [
-            "bash",
-            "-c",
-            '. "$HOME/.sdkman/bin/sdkman-init.sh" && sdk install java 21.0.4-tem',
-        ]
-    ]
+    assert (
+        _script_of(calls, "bash")
+        == '. "$HOME/.sdkman/bin/sdkman-init.sh" && sdk install java 21.0.4-tem'
+    )
 
 
 def test_sdkman_without_candidate_raises_executor_error():

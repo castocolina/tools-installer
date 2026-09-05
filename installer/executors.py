@@ -8,7 +8,7 @@ import shlex
 from collections.abc import Callable
 from typing import cast
 
-from installer.guards import real_pnpm
+from installer.guards import real_pnpm, shell_path
 from installer.locations import applications_dir
 from installer.model import Method
 from installer.run import Runner
@@ -16,6 +16,16 @@ from installer.run import Runner
 
 class ExecutorError(RuntimeError):
     """A method could not be turned into a runnable command."""
+
+
+def _path_prefix() -> str:
+    """Export a de-shimmed PATH for the whole `sh -c` script.
+
+    The child would otherwise inherit a PATH whose first entry is the managed
+    bin dir, so a vendor install script's own npm/npx call would hit this
+    installer's hard-block shim (see guards.shell_path).
+    """
+    return f"PATH={shlex.quote(shell_path())}; export PATH; "
 
 
 def require_str(method: Method, key: str) -> str:
@@ -50,7 +60,7 @@ def _script(method: Method, runner: Runner) -> None:
     shell = shell if isinstance(shell, str) and shell else "sh"
     prefix = _env_prefix(method)
     invoke = f"{prefix} {shlex.quote(shell)}" if prefix else shlex.quote(shell)
-    pipeline = f"curl -fsSL -- {shlex.quote(url)} | {invoke}"
+    pipeline = f"{_path_prefix()}curl -fsSL -- {shlex.quote(url)} | {invoke}"
     runner(["sh", "-c", pipeline])
 
 
@@ -95,7 +105,7 @@ def _sdkman(method: Method, runner: Runner) -> None:
     install = ["sdk", "install", candidate]
     if isinstance(version, str) and version:
         install.append(version)
-    pipeline = f'. "$HOME/.sdkman/bin/sdkman-init.sh" && {shlex.join(install)}'
+    pipeline = f'{_path_prefix()}. "$HOME/.sdkman/bin/sdkman-init.sh" && {shlex.join(install)}'
     runner(["bash", "-c", pipeline])
 
 
