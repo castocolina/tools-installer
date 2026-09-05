@@ -20,8 +20,8 @@ Each maps to exactly one roadmap phase.
 
 ### Install/Uninstall Lifecycle
 
-- [ ] **REQ-install-failure-propagation**: `run_installs` tracks which tool ids failed during the current run and skips any subsequent tool whose `requires` intersects that failed set, emitting a distinct "dependency failed" outcome instead of letting the dependent run and fail with a confusing downstream error.
-- [ ] **REQ-uninstall-sweep-tweak-executables**: A full uninstall also removes tweak-managed executables (`installer/tweaks.py`'s `ManagedExecutable` artifacts, e.g. `tools-installer-wait-time`), not only `Tool`-shaped artifacts.
+- [x] **REQ-install-failure-propagation**: `run_installs` tracks which tool ids failed during the current run and skips any subsequent tool whose `requires` intersects that failed set, emitting a distinct "dependency failed" outcome instead of letting the dependent run and fail with a confusing downstream error.
+- [x] **REQ-uninstall-sweep-tweak-executables**: A full uninstall also removes tweak-managed executables (`installer/tweaks.py`'s `ManagedExecutable` artifacts, e.g. `tools-installer-wait-time`), not only `Tool`-shaped artifacts.
 
 ### Shell Tweaks
 
@@ -117,8 +117,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-dependency-chain-requires | Phase 1 | Complete |
 | REQ-catalog-tier-views | Phase 2 | Complete |
 | REQ-recommends-soft-dependency | Phase 2 | Complete |
-| REQ-install-failure-propagation | Phase 3 | Pending |
-| REQ-uninstall-sweep-tweak-executables | Phase 3 | Pending |
+| REQ-install-failure-propagation | Phase 3 | Complete |
+| REQ-uninstall-sweep-tweak-executables | Phase 3 | Complete |
 | REQ-oh-my-zsh-plugin-config | Phase 3 | Complete |
 | REQ-npx-ban | Phase 4 | Pending |
 | REQ-npm-npx-redirect-policy | Phase 4 | Pending (expanded 2026-09-04 to include pip/pip3, gated on uv-pip research) |
