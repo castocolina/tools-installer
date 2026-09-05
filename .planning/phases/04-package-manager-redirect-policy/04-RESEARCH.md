@@ -224,7 +224,7 @@ This is new territory relative to the existing `BANNED` shims (which are all unc
 ### Pitfall 4: Assuming `REQ-pnpm-global-reinstall-mitigation` is satisfied "by elimination" without checking `registry.toml`
 
 **What goes wrong:** Skipping the snapshot-reinstall mechanism because "Volta now handles global installs."
-**Why it happens:** D-06/D-08's framing could be read as "the split makes pnpm-global installs obsolete," but the Volta *redirect* only affects interactively-typed `npm install -g`/`pnpm add -g` commands intercepted by the shim layer — it does **not** change what `installer/executors.py`'s `kind="node"` executor does internally (`installer/executors.py:74`: `runner(["pnpm", "add", "-g", require_str(method, "npm_pkg")])`, a direct subprocess call, never routed through the shim/PATH-interception layer at all).
+**Why it happens:** D-06/D-08's framing could be read as "the split makes pnpm-global installs obsolete," but the Volta *redirect* is aimed at interactively-typed `npm install -g`/`pnpm add -g` commands — it does **not** change the fact that `installer/executors.py`'s `kind="node"` executor installs through pnpm by design (`installer/executors.py:74`: `runner(["pnpm", "add", "-g", require_str(method, "npm_pkg")])`), so every `kind="node"` tool remains a pnpm-managed global. **(Erratum 2026-09-05: an earlier version of this sentence added "never routed through the shim/PATH-interception layer at all" — that clause is false and has been removed; see the ERRATUM under "The internal executor call this redirect does NOT touch" below.)**
 **How to avoid:** Grep `registry.toml` for `kind = "node"` before declaring the residual set empty. As of this research, `mmdc` (`installer/registry.toml:1646-1658`, quoted: `[[tool]]\nid = "mmdc"\n...\nrequires = ["pnpm"]\n[[tool.method]]\nkind = "node"\nnpm_pkg = "@mermaid-js/mermaid-cli"`) is the only such tool, and Phase 5 (not Phase 4) owns the decision to move it off pnpm. The residual set is therefore non-empty *right now* — implement the snapshot-reinstall mechanism for `mmdc` in this phase.
 **Warning signs:** A plan that closes `REQ-pnpm-global-reinstall-mitigation` with "N/A — no tools remain on pnpm add -g" without having grepped `registry.toml` for `kind="node"` first.
 
@@ -291,14 +291,28 @@ npm_pkg = "@mermaid-js/mermaid-cli"
 ```
 `[VERIFIED: installer/registry.toml:1646-1658, read this session]`
 
-### The internal executor call this redirect does NOT touch
+### The internal executor call this redirect does NOT touch (title superseded — see ERRATUM below)
 
 ```python
 # installer/executors.py:73-74
 # pnpm only — bare npm is banned. `add -g` installs the package's CLI globally.
 runner(["pnpm", "add", "-g", require_str(method, "npm_pkg")])
 ```
-`[VERIFIED: installer/executors.py:73-74, read this session]` — this is a direct list-argv subprocess call through the project's own `Runner` seam, never resolved through the shell/PATH-shim layer `guards.py` governs. Phase 4's shim-level redirect work has zero effect on this call.
+`[VERIFIED: installer/executors.py:73-74, read this session]` — this is a direct list-argv subprocess call through the project's own `Runner` seam.
+
+> **ERRATUM (2026-09-05, cross-AI plan review cycle 1 — CRITICAL):** the sentence that
+> originally followed here, and the parallel claim in Pitfall 4 above, said this call is
+> "never resolved through the shell/PATH-shim layer" and that Phase 4's redirect work has
+> "zero effect" on it. **Both are wrong.** `installer/run.py:19-26`'s `run_command` is
+> `subprocess.run(cmd, check=True)`, and `subprocess.run` resolves a bare `argv[0]` through
+> the live `PATH` exactly as a shell does. Once Phase 4 writes an argv-conditional `pnpm`
+> wrapper into `~/.local/bin` — a directory the doctor insists is first on PATH — this call
+> hits that wrapper and a `kind="node"` catalog install silently becomes
+> `volta install <pkg>`, losing pnpm's gated postinstall. The fix lives in plan 04-03
+> Task 1 (`installer/guards.py::real_pnpm`, `_node` invoking an absolute path) and is reused
+> by plan 04-05's reinstall. Pitfall 4's conclusion — that the residual `kind="node"` set is
+> non-empty and still needs the snapshot-reinstall mechanism — is unaffected and still holds;
+> only its stated reason was wrong.
 
 ## State of the Art
 

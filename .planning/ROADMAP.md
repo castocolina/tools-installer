@@ -145,9 +145,9 @@ Plans:
 
 - [ ] 04-01-PLAN.md — `REDIRECTED` mechanism parallel to `BANNED`; npx execs into `pnpm dlx` end to end; pip/pip3 stay hard-blocked with the uv-pip gap recorded (wave 1)
 - [ ] 04-02-PLAN.md — `volta` as a system-tier registry entry (brew on macOS, official script on Linux) with the shells-out-to-npm finding recorded on it (wave 1)
-- [ ] 04-03-PLAN.md — argv-conditional global redirect: `npm install -g` / `pnpm add -g` reach `volta install`, everything else keeps today's behaviour, gated on volta being resolvable (wave 2)
+- [ ] 04-03-PLAN.md — argv-conditional global redirect: `npm install -g` / `pnpm add -g` reach `volta install`, everything else keeps today's behaviour, gated on volta being resolvable; the installer's own `kind="node"` install resolves real pnpm by absolute path so the wrapper cannot intercept it (wave 2)
 - [ ] 04-04-PLAN.md — per-command doctor label text distinguishing "redirected to X" from "blocked", plus the volta tradeoff in the UI copy (wave 3)
-- [ ] 04-05-PLAN.md — registry-derived pnpm-global snapshot and one-invocation reinstall, exposed as an explicit Doctor remediation for the residual `mmdc` set (wave 4)
+- [ ] 04-05-PLAN.md — registry-derived pnpm-global snapshot and one-invocation reinstall, exposed as an explicit Doctor remediation for the residual `mmdc` set; widens `run_live` to catch `CommandError`; records R-03's manual-trigger-only scope in REQUIREMENTS.md/ROADMAP.md (wave 4)
 
 ### Phase 5: Registry Method Corrections (codegraph/mmdc/puppeteer)
 
