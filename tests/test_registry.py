@@ -287,6 +287,38 @@ def test_volta_entry_records_the_npm_postinstall_finding() -> None:
     assert "run_global_install" in text
 
 
+def test_mmdc_entry_records_the_brew_rejection_finding() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    assert "1122" in text
+    assert "peerDependency" in text
+
+
+def test_puppeteer_entry_records_the_postinstall_and_arm64_caveats() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    assert "install.mjs" in text
+    assert "Linux arm64" in text
+    assert "PUPPETEER_EXECUTABLE_PATH" in text
+
+
+def test_mmdc_entry_records_the_brownfield_gap_and_group_coupling() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    assert "Brownfield" in text
+    assert "Doctor split-group detection:" in text
+    assert "pnpm remove -g" in text
+
+
+def test_puppeteer_entry_records_the_double_install_disposition() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    assert "Installed twice" in text
+
+
+def test_puppeteer_entry_states_the_persistent_grant_accurately() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    assert "always be allowed to run its scripts" in text
+    assert "bounds the pre-authorised" not in text
+    assert "bounded only by the" not in text
+
+
 def test_gh_uses_nested_member_on_linux_and_brew_only_on_macos() -> None:
     gh = next(t for t in load_tools(REGISTRY) if t.id == "gh")
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)

@@ -1732,6 +1732,67 @@ kind = "cask"
 os = ["macos"]
 cask = "sublime-text"
 
+# Install-method decision (2026-09-05, this phase's research): mmdc stays on
+# pnpm (`kind = "node"`). Homebrew is rejected because upstream mermaid-cli's
+# own README states that install path is "no longer supported", and GitHub
+# issue #1122 (closed "not planned") records a brew-installed mmdc failing at
+# runtime with a chrome-headless-shell error because the formula declares only
+# `node` as a dependency and does nothing about puppeteer or its browser. The
+# formula's version currency (`brew info mermaid-cli` showed `11.17.0`, matching
+# npm exactly on that date) was never the failure mode, so version parity is
+# not an argument for brew here.
+# Volta is rejected too, citing the finding already committed above the volta
+# entry in this same file — `volta install` shells out to a real
+# `npm install --global` with no flag that disables install scripts. Since
+# `@mermaid-js/mermaid-cli` declares no preinstall/install/postinstall script
+# of its own (verified via unpkg.com/@mermaid-js/mermaid-cli/package.json),
+# Volta's unrestricted-scripts tradeoff buys nothing for mmdc while giving up
+# pnpm's default-deny gate for puppeteer's postinstall, which is the one
+# script in this pair that matters.
+# Four criteria: stability — brew is a reproducing breakage, not a risk;
+# security — pnpm's scoped `--allow-build=puppeteer` versus Volta's blanket
+# unrestricted execution; simplicity — no migration, mmdc is already
+# `kind="node"`; maintainability — one manager owns mmdc and its peer, so the
+# pair can share a single pnpm install group.
+# Why `co_install`/`allow_build`/`versions` are on this method:
+# `@mermaid-js/mermaid-cli` declares puppeteer as a peerDependency
+# (`^23 || ^24 || ^25`), so it is deliberately not auto-installed; and pnpm's
+# Global Packages documentation states that packages installed in separate
+# invocations get isolated `node_modules` trees and only a comma-separated
+# group resolves peer dependencies against each other. `requires` alone would
+# order the install correctly and still leave mmdc unable to load puppeteer.
+# The `^25` pin exists because npm's current `latest` is already 25.10.0, at
+# the top of that peer range; it is a compatibility control on the argv this
+# project generates, not a limit on pnpm's persistent build allowance.
+# Brownfield: a machine that already has a standalone mmdc never runs the
+# grouped invocation. `installer/engine.py::install_tool` returns
+# ALREADY_INSTALLED before `resolve_methods` is ever consulted, and
+# `installer/deps.py` drops already-installed tools out of the returned order,
+# so the catalog installs only puppeteer and leaves the two packages in
+# separate isolated groups. Plan 05-01's Tier-3 container measured
+# BROWNFIELD_BEFORE=ok on pnpm 12.3.4 with default autoInstallPeers (render
+# succeeded after standalone mmdc + standalone allow-build puppeteer), while
+# SPLIT vs GROUPED path hashes still differed. Remedy: the Doctor's
+# pnpm-globals reinstall action (`r`), which after plan 05-04 replays the live
+# global set as one comma-joined, build-allowed group and repairs the split;
+# the same container run proved that remedy renders successfully afterwards.
+# Manual alternative: `pnpm remove -g @mermaid-js/mermaid-cli` followed by a
+# catalog install of mmdc. Automatic repair at INSTALL time — reconciling
+# group membership before install_tool's ALREADY_INSTALLED short-circuit — is
+# out of scope: that short-circuit is the installer's single "is it already
+# there?" rule for every tool and every method kind, and making it
+# manager-aware for one pnpm pair puts a second availability rule in the
+# engine. The Doctor is where an already-installed machine's state is audited,
+# so detection and repair belong there.
+# Doctor split-group detection: pending plan 05-04
+# Group coupling: pnpm's Global Packages documentation states that packages in
+# one comma group "are removed together" and that removing either member with
+# `pnpm remove -g` removes the WHOLE group. So a user who removes puppeteer by
+# hand also removes mmdc, and vice versa. `installer/uninstall.py` classifies
+# node tools as externally managed and non-selectable, so this installer never
+# performs that removal itself; the coupling is recorded here because it
+# changes what `_managed_hint` is telling the user and is the first thing a
+# future uninstall or Doctor-UX phase needs to know.
 [[tool]]
 id = "mmdc"
 name = "Mermaid CLI"
@@ -1751,6 +1812,75 @@ min_node = "22.12.0"
 smoke = "puppeteer-browser"
 versions = { puppeteer = "^25" }
 
+# Verified 2026-09-05: puppeteer declares `postinstall = "node install.mjs"`,
+# which downloads Chrome for Testing and chrome-headless-shell into
+# `~/.cache/puppeteer`. pnpm blocks that script by default and reports it as a
+# warning rather than an error, so `allow_build = ["puppeteer"]` on these
+# methods is what makes the browser actually arrive. Without it the install
+# reports success and the tool is broken.
+# The `--allow-build` grant is PERSISTENT and PACKAGE-LEVEL, not
+# per-invocation: pnpm's own `add` documentation records that the flag also
+# writes the package into pnpm's build allowance configuration, so that
+# package "will always be allowed to run its scripts in the future" on this
+# machine — including versions this installer never installs, from commands
+# this project never issues. `versions = { puppeteer = "^25" }` does not bound
+# that grant. The pin constrains only the commands this project generates, so
+# it keeps mmdc and puppeteer inside a working peer range and authorises
+# nothing. What does bound the grant: it names exactly one package and plan
+# 05-01's load-time rule forbids an allowance for any package outside the
+# invocation's own install group, so it can never become a blanket allowance;
+# it does nothing until that package is installed again; its identity was
+# checked against the canonical upstream repository before it was created
+# (plan 05-03 Task 1); and it is revocable. Revocation: remove the package's
+# entry from pnpm's build-allowance configuration (plan 05-01 recorded the
+# file as `/root/.local/share/pnpm/global/v11/pnpm-workspace.yaml` with
+# `allowBuilds: puppeteer: true`; on a user machine it is the same
+# `pnpm-workspace.yaml` under the global store). Removing that entry re-gates
+# the package.
+# chrome-headless-shell needs no entry of its own: it arrives with that same
+# postinstall, and it has no independent install path to model.
+# Linux-only prerequisite: the downloaded Chrome links against roughly thirty
+# system shared libraries that a minimal Linux install does not ship
+# (puppeteer's own troubleshooting documentation publishes an exact Debian
+# list). macOS needs no equivalent step — the frameworks are part of the OS.
+# This is recorded rather than automated: the exact Fedora and Arch package
+# names are not published by any authoritative source, and guessing a
+# translated list is precisely what this project's registry-authoring
+# discipline exists to prevent. The Tier-3 container verification for this
+# phase provisioned the libraries by installing the distro `chromium` package,
+# which pulls them transitively and by correct name.
+# Linux arm64: puppeteer's own troubleshooting documentation states Chrome
+# publishes no Linux arm64 binary, so the browser puppeteer downloads by
+# default cannot run there at all. This is NOT a caveat — it is why the Linux
+# method declares `arch = ["amd64"]`. The entry resolves no method on Linux
+# arm64, so `installer/deps.py` skips both puppeteer and mmdc there with a
+# dependency-unavailable warning instead of reporting a successful install of
+# a tool that cannot render. Documented workaround for a user who has a
+# distro-provided browser: point puppeteer at it via PUPPETEER_EXECUTABLE_PATH.
+# Supporting that path is out of this phase's scope.
+# `min_node = "22.12.0"` is puppeteer 25's own `engines.node` floor, and plan
+# 05-01's executor preflight refuses the install below it rather than letting
+# the postinstall fail obscurely.
+# `smoke = "puppeteer-browser"` is the post-install check plan 05-01 Task 4
+# ships: after `pnpm add -g` returns, the installer runs the browser that was
+# actually downloaded and fails the install when it is missing or cannot
+# start. A package manager's exit code proves a download succeeded, not that
+# the thing downloaded can run, and on Linux amd64 those two facts genuinely
+# come apart when the system shared libraries above are missing. The check
+# starts the browser; it does not render a page.
+# Installed twice by construction on a clean path (standalone puppeteer, then
+# again inside mmdc's comma group). Plan 05-01's Tier-3 tracer measured ONE
+# group afterwards: invocation B absorbed invocation A's standalone install
+# (both packages shared path hash `1525-...`; A's standalone hash was gone),
+# CACHE_BEFORE_B and CACHE_AFTER_B were both 652M with the same chrome /
+# chrome-headless-shell `linux-152.0.7977.75` listings, and the puppeteer shim
+# on PATH is `$PNPM_HOME/bin/puppeteer` from the grouped project. No
+# redundancy exists on this pnpm. Disposition: closed; do not re-open.
+# Linux arm64 limit of the gate: `installer/deps.py::is_blocked` treats any
+# tool `is_installed()` reports as satisfied, so on a Linux arm64 machine that
+# ALREADY has a standalone mmdc the skip warning is not emitted — the arm64
+# honesty guarantee holds for clean machines, and a pre-existing install is
+# left alone rather than re-reported.
 [[tool]]
 id = "puppeteer"
 name = "Puppeteer"
