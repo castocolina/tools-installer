@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 current_phase: 04
 current_phase_name: Package Manager Redirect Policy
 status: executing
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-09-05T13:36:24.069Z"
+stopped_at: Completed 04-02-PLAN.md
+last_updated: "2026-09-05T13:48:23Z"
 last_activity: 2026-09-05
-last_activity_desc: Phase 04 execution started
+last_activity_desc: Completed 04-02-PLAN.md — volta system-tier catalog entry
 state_head: cb2232951b36bb1a00c328a6d13b2554a7d64b3b
 progress:
   total_phases: 12
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 04 (Package Manager Redirect Policy) — EXECUTING
-Plan: 1 of 5
+Plan: 2 of 5
 Status: Executing Phase 04
-Last activity: 2026-09-05 — Phase 04 execution started
+Last activity: 2026-09-05 — Completed 04-02-PLAN.md (volta catalog entry)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██░░░░░░░░] 40%
 
 ## Performance Metrics
 
@@ -67,6 +67,7 @@ Recent decisions affecting current work:
 - [PRD, resolved 2026-09-04]: `recommends` is a separate, smaller mechanism from `requires` — never auto-installs
 - [PRD, resolved 2026-09-04]: Oh-My-Zsh's `git`/`docker` plugins are a config-array edit to `.zshrc`, not new `Tool` entries
 - [03-02, 2026-09-05]: Shipped as `omz_plugins_policy` (third Policy factory), in-place single-line editor in `installer/omz.py`, not `apply_block`/`strip_block`
+- [04-02, 2026-09-05]: volta is a `tier="system"` catalog tool (Linux script + macOS brew, `~/.volta/bin` on both methods); D-07 recorded on the entry — volta install runs ungated npm postinstall scripts
 
 ### Pending Todos
 
@@ -89,6 +90,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-05T07:40:07Z
-Stopped at: Completed 03-02-PLAN.md
+Last session: 2026-09-05T13:48:23Z
+Stopped at: Completed 04-02-PLAN.md
 Resume file: None
