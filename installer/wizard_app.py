@@ -50,12 +50,14 @@ from installer.uninstall import ToolRow
 class UninstallInputs:
     """Everything the UninstallScreen needs: every classified tool (catalog
     parity, not just the removable ones), the active ban names, whether a managed
-    PATH block exists, and the live removal closure bound by the composition root."""
+    PATH block exists, the active shell-tweak ids, and the live removal closure
+    bound by the composition root."""
 
     rows: list[ToolRow]
     ban_names: list[str]
     has_path_block: bool
     remove: Callable[[UninstallDecision], None]
+    tweak_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -169,14 +171,14 @@ class DoctorScreen(AppScreen):
 @dataclass(frozen=True)
 class _UninstallEntry:
     """A browsable uninstall row: either a classified tool or an environment
-    pseudo-row (the pip/npm ban or the managed PATH block).
+    pseudo-row (the pip/npm ban, the managed PATH block, or the shell tweaks).
 
-    `key` is the stable id (a tool id, or "#ban"/"#path-block"). `cells` are the
-    pre-rendered columns. `selectable` gates toggling (removable tools and the env
-    rows are selectable; managed/absent/unavailable tools are not). `detail` is
-    the detail-bar line. `paths` are the tool's removable artifacts (empty for env
-    rows). `is_ban`/`is_path_block` flag the env rows so a selection maps back to
-    the UninstallDecision levers."""
+    `key` is the stable id (a tool id, or "#ban"/"#path-block"/"#tweaks"). `cells`
+    are the pre-rendered columns. `selectable` gates toggling (removable tools and
+    the env rows are selectable; managed/absent/unavailable tools are not).
+    `detail` is the detail-bar line. `paths` are the tool's removable artifacts
+    (empty for env rows). `is_ban`/`is_path_block`/`is_tweaks` flag the env rows
+    so a selection maps back to the UninstallDecision levers."""
 
     key: str
     cells: list[Text]
@@ -185,6 +187,7 @@ class _UninstallEntry:
     paths: tuple[Path, ...]
     is_ban: bool
     is_path_block: bool
+    is_tweaks: bool = False
 
 
 # Section titles per state, in display order. The "environment" section holds the
@@ -197,6 +200,8 @@ _STATE_TITLES: tuple[tuple[UninstallState, str], ...] = (
 )
 _BAN_KEY = "#ban"
 _BLOCK_KEY = "#path-block"
+_TWEAK_KEY = "#tweaks"
+_ENV_KEYS = (_BAN_KEY, _BLOCK_KEY, _TWEAK_KEY)
 
 
 class UninstallScreen(AppScreen):
@@ -218,6 +223,7 @@ class UninstallScreen(AppScreen):
         self._rows = inputs.rows
         self._ban_names = inputs.ban_names
         self._has_path_block = inputs.has_path_block
+        self._tweak_ids = inputs.tweak_ids
         self._remove = inputs.remove
         self.applied = False
         self.error: str | None = None
@@ -232,6 +238,8 @@ class UninstallScreen(AppScreen):
             entries.append(self._ban_entry())
         if self._has_path_block:
             entries.append(self._block_entry())
+        if self._tweak_ids:
+            entries.append(self._tweak_entry())
         return entries
 
     def _tool_entry(self, row: ToolRow) -> _UninstallEntry:
@@ -303,6 +311,27 @@ class UninstallScreen(AppScreen):
             is_path_block=True,
         )
 
+    def _tweak_entry(self) -> _UninstallEntry:
+        return _UninstallEntry(
+            key=_TWEAK_KEY,
+            cells=[
+                mark(False),
+                Text("shell tweaks", style="bold yellow"),
+                Text("env", style="yellow"),
+                Text("shell config", style="dim"),
+                Text(f"blocks + helpers ({', '.join(self._tweak_ids)})", style="dim"),
+            ],
+            selectable=True,
+            detail=(
+                "Disables every enabled shell tweak — the ~/.myshellrc blocks, "
+                "the managed helper executables, and the Oh-My-Zsh plugins array"
+            ),
+            paths=(),
+            is_ban=False,
+            is_path_block=False,
+            is_tweaks=True,
+        )
+
     # -- browser adapter ---------------------------------------------------
     def _adapter(self) -> BrowserAdapter[_UninstallEntry]:
         return BrowserAdapter(
@@ -330,7 +359,11 @@ class UninstallScreen(AppScreen):
         sections: list[Section[_UninstallEntry]] = [
             (title, title, by_state[state]) for state, title in _STATE_TITLES if by_state.get(state)
         ]
-        env = [entry for entry in self._entries if entry.is_ban or entry.is_path_block]
+        env = [
+            entry
+            for entry in self._entries
+            if entry.is_ban or entry.is_path_block or entry.is_tweaks
+        ]
         if env:
             sections.append(("environment", "shell config the installer manages", env))
         return sections
@@ -346,7 +379,7 @@ class UninstallScreen(AppScreen):
     @property
     def selected(self) -> set[str]:
         """Selected *tool* ids (the env pseudo-rows are reported separately)."""
-        return {key for key in self._browser.selected if key not in (_BAN_KEY, _BLOCK_KEY)}
+        return {key for key in self._browser.selected if key not in _ENV_KEYS}
 
     @property
     def remove_ban(self) -> bool:
@@ -355,6 +388,10 @@ class UninstallScreen(AppScreen):
     @property
     def remove_path_block(self) -> bool:
         return _BLOCK_KEY in self._browser.selected
+
+    @property
+    def remove_tweaks(self) -> bool:
+        return _TWEAK_KEY in self._browser.selected
 
     @property
     def detail_text(self) -> str:
@@ -378,7 +415,7 @@ class UninstallScreen(AppScreen):
         )
 
     def _accept_summary(self, ids: list[str]) -> str:
-        tool_count = sum(1 for key in ids if key not in (_BAN_KEY, _BLOCK_KEY))
+        tool_count = sum(1 for key in ids if key not in _ENV_KEYS)
         parts: list[str] = []
         if tool_count:
             parts.append(f"{tool_count} tool(s)")
@@ -386,6 +423,8 @@ class UninstallScreen(AppScreen):
             parts.append("the pip/npm ban")
         if _BLOCK_KEY in ids:
             parts.append("the PATH wiring")
+        if _TWEAK_KEY in ids:
+            parts.append("the shell tweaks")
         return ", ".join(parts)
 
     def _on_confirm(self, ids: list[str]) -> Callable[[bool | None], None]:
@@ -406,6 +445,7 @@ class UninstallScreen(AppScreen):
             paths=tuple(paths),
             remove_ban=self.remove_ban,
             remove_path_block=self.remove_path_block,
+            remove_tweaks=self.remove_tweaks,
         )
         _, self.error = run_live(lambda: self._remove(decision))
         if self.error is not None:
@@ -415,7 +455,7 @@ class UninstallScreen(AppScreen):
             )
             return
         self.applied = True
-        tool_count = sum(1 for key in ids if key not in (_BAN_KEY, _BLOCK_KEY))
+        tool_count = sum(1 for key in ids if key not in _ENV_KEYS)
         self.status.set(self._applied_summary(tool_count), "ok")
 
     def _applied_summary(self, tool_count: int) -> str:
@@ -429,6 +469,11 @@ class UninstallScreen(AppScreen):
             )
         if self.remove_path_block:
             parts.append("PATH wiring removed — restart your shell to drop the managed dirs.")
+        if self.remove_tweaks:
+            parts.append(
+                f"shell tweaks disabled ({', '.join(self._tweak_ids)}) — open a new "
+                "shell so functions and aliases refresh."
+            )
         # One line per outcome: a single joined line overflows the terminal width and
         # truncates the reload guidance, so the "needs a new shell" steps go unseen.
         return multiline_summary(parts)

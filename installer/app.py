@@ -55,7 +55,8 @@ from installer.shellrc import (
     write_myshellrc,
 )
 from installer.status import is_installed
-from installer.uninstall import plan_uninstall, remove_paths
+from installer.tweaks import TweakBundle
+from installer.uninstall import plan_uninstall, remove_paths, sweep_tweaks
 from installer.versions import TagResolver, resolve_github_tag
 
 # Catalog selection seam: given the full catalog (platform applicability is
@@ -324,11 +325,13 @@ def run_uninstall(
 @dataclass(frozen=True)
 class UninstallDecision:
     """The levers the in-app uninstall view collected: selected artifact paths,
-    plus whether to also remove the pip/npm ban and the managed PATH block."""
+    plus whether to also remove the pip/npm ban, the managed PATH block, and
+    the still-enabled shell tweaks."""
 
     paths: tuple[Path, ...]
     remove_ban: bool
     remove_path_block: bool
+    remove_tweaks: bool = False
 
 
 def perform_uninstall(
@@ -337,6 +340,8 @@ def perform_uninstall(
     bin_dir: Path,
     myshellrc_path: Path,
     rc_paths: list[Path],
+    bundles: tuple[TweakBundle, ...] = (),
+    zshrc_path: Path | None = None,
 ) -> None:
     """Apply exactly the levers the view chose, composing the existing core
     removers. Unlike `run_uninstall`, nothing is removed all-or-nothing: a
@@ -349,3 +354,5 @@ def perform_uninstall(
             remove_ban_aliases(rc_path)
     if decision.remove_path_block:
         remove_managed_block(myshellrc_path)
+    if decision.remove_tweaks:
+        sweep_tweaks(bundles, rc_path=myshellrc_path, bin_dir=bin_dir, zshrc_path=zshrc_path)

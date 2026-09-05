@@ -16,6 +16,7 @@ from installer.tweaks import (
     remove_tweak,
     remove_tweak_executables,
     tweak_block,
+    tweak_executables_present,
     tweak_present,
     write_tweak,
 )
@@ -143,6 +144,29 @@ def test_countdown_removes_only_owned_executable(tmp_path: Path) -> None:
     target.write_text("user-owned helper")
     assert remove_tweak_executables(_bundle("countdown"), bin_dir) == ()
     assert target.exists()
+
+
+def test_tweak_executables_present_detects_an_owned_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / "bin"
+    countdown = _bundle("countdown")
+    install_tweak_executables(countdown, bin_dir)
+    assert tweak_executables_present(countdown, bin_dir) is True
+    assert tweak_executables_present(countdown, tmp_path / "empty-bin") is False
+    assert tweak_executables_present(_bundle("claude-skip"), bin_dir) is False
+    assert tweak_executables_present(_bundle("claude-skip"), tmp_path / "empty-bin") is False
+
+
+def test_tweak_executables_present_ignores_a_foreign_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "tools-installer-wait-time").write_text("user-owned helper")
+    assert tweak_executables_present(_bundle("countdown"), bin_dir) is False
 
 
 def test_install_executables_is_noop_for_a_bundle_without_any() -> None:

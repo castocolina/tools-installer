@@ -174,6 +174,22 @@ def remove_tweak_executables(bundle: TweakBundle, bin_dir: Path) -> tuple[Path, 
     return tuple(removed)
 
 
+def tweak_executables_present(bundle: TweakBundle, bin_dir: Path) -> bool:
+    """True when any helper this bundle owns is on disk in bin_dir.
+
+    Answers, for a helper, the same question tweak_present answers for the rc
+    block: is this bundle's footprint on this machine. Ownership is
+    sentinel-checked on purpose, so this can never promise to remove a
+    same-named file that remove_tweak_executables would correctly refuse to
+    delete. A bundle with no executables is always False.
+    """
+    for executable in bundle.executables:
+        target = bin_dir / executable.command
+        if target.exists() and _is_our_executable(target, executable.sentinel):
+            return True
+    return False
+
+
 def tweak_block(bundle: TweakBundle, bin_dir: Path | None = None) -> str:
     """Marker-delimited block (no trailing newline, like shellrc/guards blocks)."""
     begin, end = _markers(bundle.id)

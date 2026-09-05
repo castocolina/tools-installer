@@ -40,12 +40,13 @@ from installer.shellrc import collect_bin_dirs, has_managed_block
 from installer.status import is_installed
 from installer.tweaks import applicable_bundles
 from installer.ui_common import BASE_VIEW
-from installer.uninstall import classify_tools, reverse_dependencies
+from installer.uninstall import active_tweak_ids, classify_tools, reverse_dependencies
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 
 _REGISTRY = Path(__file__).parent / "installer" / "registry.toml"
 _DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
 _MYSHELLRC = Path.home() / ".myshellrc"
+_ZSHRC = Path.home() / ".zshrc"
 _RC_PATHS = [Path.home() / ".zshrc", Path.home() / ".bashrc"]
 _SHELL = os.environ.get("SHELL", "")
 
@@ -151,6 +152,7 @@ def _build_app(
         reverse_deps=reverse_dependencies(tools),
     )
     ban_names = [name for name, active in status.items() if active]
+    bundles = applicable_bundles(platform)
 
     def _do_uninstall(decision: UninstallDecision) -> None:
         # Runs live inside the UninstallScreen. rc_paths is the standard set so the
@@ -160,6 +162,8 @@ def _build_app(
             bin_dir=_DEFAULT_BIN_DIR,
             myshellrc_path=_MYSHELLRC,
             rc_paths=_RC_PATHS,
+            bundles=bundles,
+            zshrc_path=_ZSHRC,
         )
 
     uninstall_inputs = UninstallInputs(
@@ -167,6 +171,9 @@ def _build_app(
         ban_names=ban_names,
         has_path_block=has_managed_block(_MYSHELLRC),
         remove=_do_uninstall,
+        tweak_ids=active_tweak_ids(
+            bundles, rc_path=_MYSHELLRC, bin_dir=_DEFAULT_BIN_DIR, zshrc_path=_ZSHRC
+        ),
     )
     policy_inputs = PolicyInputs(
         policies=[
@@ -184,10 +191,10 @@ def _build_app(
                     bin_dir=_DEFAULT_BIN_DIR,
                     installed_tools=installed,
                 )
-                for bundle in applicable_bundles(platform)
+                for bundle in bundles
             ),
             omz_plugins_policy(
-                zshrc_path=Path.home() / ".zshrc",
+                zshrc_path=_ZSHRC,
                 present=omz_present(Path.home(), os.environ),
             ),
         ]

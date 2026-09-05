@@ -3,7 +3,9 @@ from pathlib import Path
 import pytest
 
 from installer.model import Method, Tool
-from installer.uninstall import plan_uninstall, remove_paths
+from installer.policy import tweak_policy
+from installer.tweaks import BUNDLES
+from installer.uninstall import active_tweak_ids, plan_uninstall, remove_paths, sweep_tweaks
 
 
 def _tool(method: Method, *, tool_id: str = "t", cmd: str = "t") -> Tool:
@@ -550,3 +552,60 @@ def test_classify_without_reverse_deps_leaves_hint_unchanged() -> None:
         which=lambda _cmd: None,
     )
     assert "required by" not in rows[0].hint
+
+
+def _enabled_countdown(tmp_path: Path) -> tuple[Path, Path]:
+    rc_path = tmp_path / ".myshellrc"
+    bin_dir = tmp_path / ".local" / "bin"
+    countdown = next(bundle for bundle in BUNDLES if bundle.id == "countdown")
+    tweak_policy(countdown, rc_path=rc_path, bin_dir=bin_dir).apply()
+    return rc_path, bin_dir
+
+
+def test_active_tweak_ids_reports_an_enabled_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc_path, bin_dir = _enabled_countdown(tmp_path)
+    assert "countdown" in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
+    assert (
+        active_tweak_ids(BUNDLES, rc_path=tmp_path / "clean-rc", bin_dir=tmp_path / "clean-bin")
+        == ()
+    )
+
+
+def test_sweep_tweaks_disables_every_active_tweak(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc_path, bin_dir = _enabled_countdown(tmp_path)
+    helper = bin_dir / "tools-installer-wait-time"
+    assert helper.exists()
+    assert "wait_time()" in rc_path.read_text()
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ("countdown",)
+    assert "wait_time()" not in rc_path.read_text()
+    assert not helper.exists()
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ()
+
+
+def test_sweep_tweaks_includes_the_omz_plugins_tweak(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text("plugins=(z git docker)\nsource $ZSH/oh-my-zsh.sh\n")
+    rc_path = tmp_path / ".myshellrc"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    assert "omz-plugins" in active_tweak_ids(
+        BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc
+    )
+    original = zshrc.read_text()
+    assert "omz-plugins" in sweep_tweaks(
+        BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc
+    )
+    assert zshrc.read_text().startswith("plugins=(z)\n")
+    zshrc.write_text(original)
+    assert "omz-plugins" not in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ()
+    assert zshrc.read_text() == original

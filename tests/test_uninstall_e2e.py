@@ -11,8 +11,10 @@ from installer.doctor import DoctorReport
 from installer.guards import guard_status, install_shims, write_ban_aliases
 from installer.model import Method, Tool
 from installer.platform import Platform
+from installer.policy import tweak_policy
 from installer.shellrc import has_managed_block, write_myshellrc
-from installer.uninstall import ToolRow, classify_tools
+from installer.tweaks import BUNDLES
+from installer.uninstall import ToolRow, active_tweak_ids, classify_tools
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs, UninstallScreen
 
 _LINUX = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
@@ -70,6 +72,58 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
         initial_view="uninstall",
     )
     return app, opt, bin_dir, myshellrc
+
+
+def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Path, Path]:
+    bin_dir = home / ".local" / "bin"
+    opt = home / ".local" / "opt" / "fd"
+    opt.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (opt / "fd").write_text("binary")
+    (bin_dir / "fd").symlink_to(opt / "fd")
+    myshellrc = home / ".myshellrc"
+    zshrc = home / ".zshrc"
+    install_shims(bin_dir)
+    write_ban_aliases(myshellrc)
+    write_myshellrc([bin_dir], myshellrc)
+    countdown = next(bundle for bundle in BUNDLES if bundle.id == "countdown")
+    tweak_policy(countdown, rc_path=myshellrc, bin_dir=bin_dir).apply()
+    zshrc.write_text("plugins=(z git docker)\nsource $ZSH/oh-my-zsh.sh\n")
+
+    rows = classify_tools([_dl_tool()], bin_dir, installed={"fd": True}, platform=_LINUX)
+    tweak_ids = active_tweak_ids(BUNDLES, rc_path=myshellrc, bin_dir=bin_dir, zshrc_path=zshrc)
+
+    def _remove(decision: UninstallDecision) -> None:
+        perform_uninstall(
+            decision,
+            bin_dir=bin_dir,
+            myshellrc_path=myshellrc,
+            rc_paths=[myshellrc],
+            bundles=BUNDLES,
+            zshrc_path=zshrc,
+        )
+
+    inputs = UninstallInputs(
+        rows=rows,
+        ban_names=[name for name, active in guard_status(bin_dir).items() if active],
+        has_path_block=has_managed_block(myshellrc),
+        remove=_remove,
+        tweak_ids=tweak_ids,
+    )
+    app = UnifiedApp(
+        [_dl_tool()],
+        {"fd": True},
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_status=guard_status(bin_dir),
+        guard_warning=None,
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=inputs,
+        policies=PolicyInputs(policies=[]),
+        initial_view="uninstall",
+    )
+    return app, opt, bin_dir, myshellrc, zshrc
 
 
 def _snapshot(app: UnifiedApp, name: str) -> None:
@@ -162,3 +216,28 @@ async def test_uninstall_ux_journey_captures_each_state(
         assert isinstance(err.screen, UninstallScreen)
         assert err.screen.error is not None
         _snapshot(err, "06-error.svg")
+
+
+async def test_uninstall_e2e_also_sweeps_tweaks_against_sandbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    app, opt, bin_dir, myshellrc, zshrc = _build_real_app_with_tweaks(Path.home())
+    helper = bin_dir / "tools-installer-wait-time"
+    assert helper.exists()
+    assert "wait_time()" in myshellrc.read_text()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("a")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.applied is True
+
+    assert not opt.exists()
+    assert not (bin_dir / "fd").exists()
+    assert not helper.exists()
+    assert "wait_time()" not in myshellrc.read_text()
+    plugins = zshrc.read_text().split("\n", 1)[0]
+    assert "git" not in plugins
+    assert "docker" not in plugins

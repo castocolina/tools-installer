@@ -1,5 +1,8 @@
 """Registry-driven uninstall: remove the userspace artifacts install_download
-and install_app create. Cask/brew/native-managed artifacts are left alone."""
+and install_app create, and — for a full uninstall — perform the symmetric
+teardown of every still-enabled shell tweak, reusing the same policy remove
+path the Policies view uses (CONTEXT D-04). Cask/brew/native-managed artifacts
+are left alone."""
 
 import shutil
 from collections.abc import Callable
@@ -13,7 +16,12 @@ from installer.executors import ExecutorError
 from installer.locations import applications_dir, opt_dir
 from installer.model import Method, Tool
 from installer.platform import Platform
+from installer.policy import Policy, omz_plugins_policy, tweak_policy
 from installer.resolve import resolve_methods
+from installer.tweaks import TweakBundle, tweak_executables_present, tweak_present
+
+# No import cycle: installer.policy imports guards, tweaks and omz, none of
+# which import uninstall.
 
 
 def _exists(path: Path) -> bool:
@@ -224,3 +232,79 @@ def remove_paths(paths: list[Path]) -> None:
             shutil.rmtree(path)
         elif path.exists():
             path.unlink()
+
+
+def _omz_policy(zshrc_path: Path) -> Policy:
+    # Per CONTEXT D-04/D-05/D-06: present drives missing_requires, which gates
+    # ENABLING the tweak (D-05/D-06); a teardown must never be gated on it,
+    # because a machine being uninstalled may have had oh-my-zsh removed already
+    # and refusing to undo our own .zshrc edit would strand exactly the stray
+    # state this module exists to remove (D-04's symmetric teardown). Removal is
+    # total regardless -- omz.remove_plugins no-ops on a missing file or missing
+    # array -- so present=True can never raise here.
+    return omz_plugins_policy(zshrc_path=zshrc_path, present=True)
+
+
+def active_tweak_ids(
+    bundles: tuple[TweakBundle, ...],
+    *,
+    rc_path: Path,
+    bin_dir: Path,
+    zshrc_path: Path | None = None,
+) -> tuple[str, ...]:
+    """Ids of tweaks still present on this machine.
+
+    A tweak is active when its rc block is present OR an owned helper
+    executable is on disk. The block alone misses a helper left behind after a
+    hand-edited rc file (the REQ's literal orphaned-executable case), and the
+    helper alone misses every bundle that has none. This is a read-only
+    predicate: it opens files but writes none.
+
+    The None default on zshrc_path exists for unit tests and any caller working
+    only with bundles; production callers MUST pass the real path, because
+    omitting it silently narrows the sweep to bundles and leaves the Oh-My-Zsh
+    plugins=(...) edit on the machine with nothing reporting it.
+    """
+    ids: list[str] = []
+    for bundle in bundles:
+        if tweak_present(bundle, rc_path) or tweak_executables_present(bundle, bin_dir):
+            ids.append(bundle.id)
+    if zshrc_path is not None:
+        policy = _omz_policy(zshrc_path)
+        if policy.active:
+            ids.append(policy.id)
+    return tuple(ids)
+
+
+def sweep_tweaks(
+    bundles: tuple[TweakBundle, ...],
+    *,
+    rc_path: Path,
+    bin_dir: Path,
+    zshrc_path: Path | None = None,
+) -> tuple[str, ...]:
+    """Disable every tweak active_tweak_ids reports, via Policy.remove.
+
+    This is D-04's symmetric teardown: it writes no removal logic of its own,
+    it calls the exact same Policy.remove closures the Policies view calls when
+    the user toggles a tweak off, so "full uninstall" and "toggle off" are the
+    same operation by construction. Because it reads active_tweak_ids rather
+    than re-deriving, the preview a caller printed and the effect this
+    performs cannot diverge. Idempotent: a second call finds nothing active
+    and returns an empty tuple.
+
+    The None default on zshrc_path exists for unit tests and any caller working
+    only with bundles; production callers MUST pass the real path, because
+    omitting it silently narrows the sweep to bundles and leaves the Oh-My-Zsh
+    plugins=(...) edit on the machine with nothing reporting it.
+    """
+    ids = active_tweak_ids(bundles, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc_path)
+    active = set(ids)
+    for bundle in bundles:
+        if bundle.id in active:
+            tweak_policy(bundle, rc_path=rc_path, bin_dir=bin_dir).remove()
+    if zshrc_path is not None:
+        policy = _omz_policy(zshrc_path)
+        if policy.id in active:
+            policy.remove()
+    return ids
