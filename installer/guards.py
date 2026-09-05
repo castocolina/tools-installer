@@ -1,14 +1,25 @@
-"""Environment policy: ban the unmanaged package installers (npm/pip/pip3).
+"""Environment policy: PATH shims and aliases for banned and redirected commands.
 
 Two removable, idempotent layers steer callers to the managed toolchain:
-1. PATH shims in the managed bin dir (~/.local/bin) — tiny POSIX-sh executables
-   that print the sanctioned tool and exit non-zero. They catch ANY caller that
-   resolves via PATH: you, an agent, a script, a non-interactive shell.
-2. Interactive-shell aliases — a faster, clearer message for interactive use,
-   written as a marker-delimited block (reusing shellrc's block machinery).
+1. PATH shims in the managed bin dir (~/.local/bin) — tiny POSIX-sh executables.
+   Hard-block shims print the sanctioned tool and exit non-zero. Redirect shims
+   exec into the managed equivalent, preserving the real exit code and streams.
+   They catch ANY caller that resolves via PATH: you, an agent, a script, a
+   non-interactive shell.
+2. Interactive-shell aliases — a faster path for interactive use, written as a
+   marker-delimited block (reusing shellrc's block machinery). A redirect alias
+   performs the redirect; a ban alias prints a message and fails.
 
 Neither layer is hermetic: `python -m pip install` bypasses the pip shim, and a
 real npm/pip earlier on PATH wins. guard_path_warning flags the PATH-order case.
+
+pip and pip3 stay hard-blocked because `uv pip` is not an argv-compatible drop-in
+for two of the six subcommands this shim would intercept — `uninstall` cascades
+to transitive dependencies pip leaves in place, and `compile` requires an
+explicit output file and applies a different extras-stripping default — so a
+blanket redirect would change behaviour silently. See
+https://docs.astral.sh/uv/pip/compatibility/ and
+.planning/phases/04-package-manager-redirect-policy/04-RESEARCH.md Pitfall 1.
 """
 
 import os

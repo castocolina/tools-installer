@@ -771,6 +771,7 @@ def test_run_guard_install_writes_shims_and_aliases_and_returns_true(tmp_path: P
     )
     assert acted is True
     assert (shim_dir / "pip").exists()
+    assert (shim_dir / "npx").exists()
     assert "tools-installer ban" in rc.read_text()
     assert "Installing the pip/npm ban" in buf.getvalue()
 
@@ -815,7 +816,77 @@ def test_run_guard_remove_strips_shims_and_aliases(tmp_path: Path):
         which=lambda _n: None,
     )
     assert not (shim_dir / "pip").exists()
+    assert not (shim_dir / "npx").exists()
     assert "tools-installer ban" not in rc.read_text()
+
+
+def test_run_guard_shim_dir_matches_ban_policy_apply(tmp_path: Path) -> None:
+    from installer.policy import ban_policy
+
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    pnpm = real_dir / "pnpm"
+    pnpm.write_text("#!/bin/sh\n")
+    pnpm.chmod(0o755)
+    policy_dir = tmp_path / "policy-bin"
+    guard_dir = tmp_path / "guard-bin"
+    path_value = f"{policy_dir}:{real_dir}"
+    ban_policy(
+        shim_dir=policy_dir,
+        apply_rc_paths=[tmp_path / "policy.rc"],
+        remove_rc_paths=[tmp_path / "policy.rc"],
+        path_value=path_value,
+        which=lambda _n: None,
+    ).apply()
+    run_guard(
+        remove=False,
+        shim_dir=guard_dir,
+        rc_paths=[tmp_path / "guard.rc"],
+        path_value=path_value,
+        console=Console(file=io.StringIO(), width=100),
+        confirm=lambda _m: True,
+        which=lambda _n: None,
+    )
+    names = sorted(path.name for path in policy_dir.iterdir())
+    assert names == sorted(path.name for path in guard_dir.iterdir())
+    for name in names:
+        assert (policy_dir / name).read_text() == (guard_dir / name).read_text()
+
+
+def test_guard_state_folds_redirect_warning(tmp_path: Path) -> None:
+    from installer.app import guard_state
+    from installer.guards import shim_script
+
+    shim_dir = tmp_path / "bin"
+    shim_dir.mkdir()
+    (shim_dir / "npx").write_text(shim_script("npx"))
+    result = guard_state(shim_dir, str(shim_dir), lambda _n: None)
+    assert isinstance(result, tuple) and len(result) == 2
+    status, warning = result
+    assert isinstance(status, dict)
+    assert all(isinstance(value, bool) for value in status.values())
+    assert warning is not None
+    assert "npx" in warning
+    assert "pnpm" in warning
+
+
+def test_guard_state_joins_path_and_redirect_warnings(tmp_path: Path) -> None:
+    from installer.app import guard_state
+    from installer.guards import install_shims
+
+    shim_dir = tmp_path / "bin"
+    install_shims(shim_dir)
+    result = guard_state(
+        shim_dir,
+        f"/usr/bin:{shim_dir}",
+        lambda name: "/usr/bin/pip" if name == "pip" else None,
+    )
+    assert isinstance(result, tuple) and len(result) == 2
+    _status, warning = result
+    assert warning is not None
+    assert "/usr/bin/pip" in warning
+    assert "npx" in warning
+    assert "pnpm" in warning
 
 
 def test_run_doctor_reports_active_ban(tmp_path: Path):

@@ -1,9 +1,15 @@
+import os
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-from installer.guards import guard_status, install_shims
+from installer.guards import (
+    REDIRECT_SENTINEL,
+    SHIM_SENTINEL,
+    guard_status,
+    install_shims,
+)
 from installer.policy import Policy, PolicyLayer, PolicyResult, ban_policy
 
 
@@ -32,6 +38,7 @@ def test_ban_policy_metadata(tmp_path: Path) -> None:
     assert policy.id == "ban"
     assert policy.label == "pip/npm ban"
     assert "pip" in policy.description and "npm" in policy.description
+    assert "npx" in policy.description and "pnpm dlx" in policy.description
 
 
 def test_ban_policy_inactive_on_clean_dir(tmp_path: Path) -> None:
@@ -55,7 +62,8 @@ def test_apply_writes_both_layers_and_returns_result(tmp_path: Path) -> None:
     # Structured result: two named layers + a reload hint.
     names = [layer.name for layer in result.layers]
     assert names == ["Shims", "Aliases"]
-    assert "3 active" in result.layers[0].detail
+    assert "4 active" in result.layers[0].detail
+    assert "blocked (pnpm not found)" in result.layers[0].detail
     assert str(rc) in result.layers[1].detail
     assert result.reload_hint is not None and "hash -r" in result.reload_hint
 
@@ -99,6 +107,7 @@ def test_remove_clears_both_layers(tmp_path: Path) -> None:
     result = policy.remove()
     shim_dir = tmp_path / ".local" / "bin"
     assert all(active is False for active in guard_status(shim_dir).values())
+    assert not (shim_dir / "npx").exists()
     assert "alias" not in rc.read_text()
     assert [layer.name for layer in result.layers] == ["Shims", "Aliases"]
     assert "removed" in result.layers[0].detail
@@ -112,6 +121,28 @@ def test_remove_is_idempotent(tmp_path: Path) -> None:
     result = policy.remove()
     assert isinstance(result, PolicyResult)
     assert result.reload_hint is not None
+
+
+def test_apply_writes_npx_redirect_when_pnpm_resolves(tmp_path: Path) -> None:
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    pnpm = real_dir / "pnpm"
+    pnpm.write_text("#!/bin/sh\n")
+    pnpm.chmod(0o755)
+    shim_dir = tmp_path / ".local" / "bin"
+    policy = _ban(tmp_path, path_value=f"{shim_dir}{os.pathsep}{real_dir}")
+    policy.apply()
+    text = (shim_dir / "npx").read_text()
+    assert REDIRECT_SENTINEL in text
+    assert SHIM_SENTINEL not in text
+
+
+def test_apply_writes_npx_hard_block_when_pnpm_missing(tmp_path: Path) -> None:
+    shim_dir = tmp_path / ".local" / "bin"
+    _ban(tmp_path, path_value=str(shim_dir)).apply()
+    text = (shim_dir / "npx").read_text()
+    assert SHIM_SENTINEL in text
+    assert REDIRECT_SENTINEL not in text
 
 
 def test_policy_layer_is_frozen() -> None:

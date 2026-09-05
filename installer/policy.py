@@ -15,6 +15,7 @@ from pathlib import Path
 from installer.guards import (
     guard_path_warning,
     guard_status,
+    install_redirect_shims,
     install_shims,
     remove_ban_aliases,
     remove_shims,
@@ -90,12 +91,21 @@ def ban_policy(
     """
 
     def _apply() -> PolicyResult:
+        # Hard-block bodies first, redirect bodies second: a name in both dicts
+        # ends up with its redirect body, and a name whose redirect target is
+        # unresolvable keeps the hard block.
         shim_results = install_shims(shim_dir)
-        active = sum(1 for state in shim_results.values() if state in ("created", "refreshed"))
+        shim_results.update(install_redirect_shims(shim_dir, path_value=path_value))
+        active = sum(1 for state in shim_results.values() if not state.startswith("skipped"))
         skipped = sum(1 for state in shim_results.values() if state.startswith("skipped"))
         shim_detail = f"{active} active in {_display_path(shim_dir)}"
         if skipped:
             shim_detail += f" ({skipped} skipped — real binary present)"
+        blocked = [
+            f"{name} {state}" for name, state in shim_results.items() if state.startswith("blocked")
+        ]
+        if blocked:
+            shim_detail += f" ({'; '.join(blocked)})"
         for rc_path in apply_rc_paths:
             write_ban_aliases(rc_path)
         alias_detail = "written to " + ", ".join(_display_path(p) for p in apply_rc_paths)
@@ -121,7 +131,10 @@ def ban_policy(
     return Policy(
         id="ban",
         label="pip/npm ban",
-        description="blocks bare pip/npm so installs go through uv/pnpm (shims + aliases)",
+        description=(
+            "blocks bare pip/npm and redirects npx to pnpm dlx so installs go "
+            "through uv/pnpm (shims + aliases)"
+        ),
         active=any(guard_status(shim_dir).values()),
         apply=_apply,
         remove=_remove,

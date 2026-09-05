@@ -81,6 +81,7 @@ async def test_policies_e2e_toggle_round_trip_against_sandbox(
         assert isinstance(app.screen, PoliciesScreen)
         assert app.screen.active_state["ban"] is True
         assert all(guard_status(bin_dir).values())
+        assert (bin_dir / "npx").exists()
         assert "alias" in rc.read_text()
         _snapshot(app, "02-enabled.svg")
         await pilot.press("space")  # disable: clears both layers
@@ -89,6 +90,7 @@ async def test_policies_e2e_toggle_round_trip_against_sandbox(
         _snapshot(app, "03-disabled.svg")
 
     assert all(active is False for active in guard_status(bin_dir).values())
+    assert not (bin_dir / "npx").exists()
     assert "alias" not in rc.read_text()
 
 

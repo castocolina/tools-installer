@@ -14,7 +14,9 @@ from installer.doctor import DoctorReport, audit_path
 from installer.engine import install_tool
 from installer.guards import (
     guard_path_warning,
+    guard_redirect_warning,
     guard_status,
+    install_redirect_shims,
     install_shims,
     remove_ban_aliases,
     remove_shims,
@@ -201,8 +203,14 @@ def guard_state(
     until the shell restarts, so re-auditing would only re-show "missing".
     """
     status = guard_status(default_bin_dir)
-    warning = (
+    path_warning = (
         guard_path_warning(default_bin_dir, path_value, which) if any(status.values()) else None
+    )
+    redirect_warning = guard_redirect_warning(default_bin_dir)
+    warning = (
+        f"{path_warning} {redirect_warning}"
+        if path_warning and redirect_warning
+        else path_warning or redirect_warning
     )
     return status, warning
 
@@ -308,6 +316,7 @@ def run_guard(
         render_guard(actions, None, console, removing=True)
         return True
     actions = install_shims(shim_dir)
+    actions.update(install_redirect_shims(shim_dir, path_value=path_value))
     for rc_path in rc_paths:
         write_ban_aliases(rc_path)
     render_guard(actions, guard_path_warning(shim_dir, path_value, which), console, removing=False)
