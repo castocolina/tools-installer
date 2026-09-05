@@ -173,10 +173,15 @@ def test_missing_requires_skips_staged_and_installed_dependencies() -> None:
 
 
 def test_missing_requires_tolerates_a_partial_installed_map() -> None:
+    """`installed` may omit ids entirely; an absent key means "not installed",
+    while a present-and-True one is honoured."""
     pnpm = _tool("pnpm")
-    mmdc = _tool("mmdc", "pnpm")
+    node = _tool("node")
+    mmdc = _tool("mmdc", "pnpm", "node")
     empty: set[str] = set()
-    assert missing_requires(mmdc, [mmdc, pnpm], staged=empty, installed={}) == ("pnpm",)
+    # pnpm is present and True; node is absent from the map entirely.
+    missing = missing_requires(mmdc, [mmdc, pnpm, node], staged=empty, installed={"pnpm": True})
+    assert missing == ("node",)
 
 
 def test_missing_requires_is_transitive_and_cycle_safe() -> None:
