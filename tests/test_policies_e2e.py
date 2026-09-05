@@ -280,3 +280,65 @@ async def test_policy_detail_discloses_the_partial_state_reading(
             app.screen.detail_text
         )
         assert "Reads ON only once this installer has enabled it" in app.screen.detail_text
+
+
+async def test_every_policy_detail_fits_the_panel_at_80_columns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The model string alone (asserted above) cannot catch a panel too short to
+    show it -- 03-VERIFICATION.md's gap: `1adcfe4` raised the panel 5->7 after a
+    tmux check caught this same clipping once, then `3d1ee1f` lengthened the
+    omz-plugins copy with no follow-up check, silently re-clipping it. This
+    checks Textual's own computed content height against the panel's real
+    allocated height at the narrowest supported terminal width, for every
+    policy row -- not just the one this regression happened to hit."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc = tmp_path / ".myshellrc"
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text(_ZSHRC_OMZ)
+    (tmp_path / ".oh-my-zsh").mkdir()
+    policies = [
+        tweak_policy(_countdown(), rc_path=rc, bin_dir=bin_dir, installed_tools={"uv": True}),
+        omz_plugins_policy(zshrc_path=zshrc, state_path=rc, present=True),
+    ]
+    app = UnifiedApp(
+        [_tool()],
+        {"rg": True},
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: (guard_status(bin_dir), None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=UninstallInputs(
+            rows=[],
+            ban_names=list,
+            has_path_block=lambda: False,
+            remove=lambda _d: SweepResult(),
+        ),
+        policies=PolicyInputs(policies=policies),
+        initial_view="policies",
+    )
+    async with app.run_test(size=(80, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        panel = screen.query_one("#policy-detail")
+        for _ in policies:
+            # get_content_height is Textual's own wrap calculation for this
+            # exact renderable at this exact width -- the true content height,
+            # independent of the box the CSS `height:` rule assigns it. This is
+            # what silently clips when it exceeds panel.size.height; a plain
+            # Static's `virtual_size` does NOT reflect this (confirmed: it
+            # still read the assigned box height even with the old, too-short
+            # `height: 7`, so it could not have caught this regression).
+            needed = panel.get_content_height(
+                panel.container_size, panel.container_size, panel.content_size.width
+            )
+            assert needed <= panel.size.height, (
+                f"{screen.detail_text!r} needs {needed} rows at 80 columns, "
+                f"panel only allocates {panel.size.height}"
+            )
+            await pilot.press("down")
+            await pilot.pause()
