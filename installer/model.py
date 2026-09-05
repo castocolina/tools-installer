@@ -3,7 +3,7 @@
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeVar
+from typing import TypeVar, cast
 
 from installer.enums import Audience, Category, Priority, Tier
 
@@ -39,6 +39,29 @@ def _parse_enum(enum_type: type[EnumValue], value: object, field: str, context: 
         raise ValueError(
             f"{context}: unknown {field} '{value}' (expected one of: {allowed})"
         ) from exc
+
+
+def _parse_id_list(raw: object, field: str, context: str) -> tuple[str, ...]:
+    """Validate a registry list-of-tool-ids field and freeze it.
+
+    Two shapes are rejected here rather than downstream: a bare string, because
+    tuple("pnpm") would silently become ('p','n','p','m'), and a non-string
+    element, because tomllib hands back `Any` and the declared
+    `tuple[str, ...]` would otherwise be a promise nothing enforces — the
+    failure would surface as a TypeError in the TUI's detail bar on an
+    unrelated keypress instead of a load-time error naming the tool.
+    """
+    if not isinstance(raw, list):
+        raise ValueError(f"{context}: '{field}' must be a list of tool ids")
+    # tomllib is the untyped boundary: it hands back `Any`, so the element type
+    # is typed here explicitly and then checked, rather than assumed.
+    items = cast(list[object], raw)
+    ids: list[str] = []
+    for item in items:
+        if not isinstance(item, str):
+            raise ValueError(f"{context}: '{field}' must be a list of tool ids")
+        ids.append(item)
+    return tuple(ids)
 
 
 @dataclass(frozen=True)
@@ -141,14 +164,9 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
                         f"tool '{row['id']}': method 'sdkman' requires a non-empty 'candidate'"
                     )
             methods.append(Method(kind=kind, params=params, os=os_targets, arch=arch_targets))
-        raw_requires = row.get("requires", [])
-        if isinstance(raw_requires, str):
-            # tuple("pnpm") would silently become ('p','n','p','m'); a list is required.
-            raise ValueError(f"tool '{row['id']}': 'requires' must be a list of tool ids")
-        raw_recommends = row.get("recommends", [])
-        if isinstance(raw_recommends, str):
-            # tuple("rg") would silently become ('r','g'); a list is required.
-            raise ValueError(f"tool '{row['id']}': 'recommends' must be a list of tool ids")
+        context = f"tool '{row['id']}'"
+        requires = _parse_id_list(row.get("requires", []), "requires", context)
+        recommends = _parse_id_list(row.get("recommends", []), "recommends", context)
         tools.append(
             Tool(
                 id=row["id"],
@@ -160,8 +178,8 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
                 audience=row.get("audience", "both"),
                 tier=row["tier"],
                 desc=row.get("desc", ""),
-                requires=tuple(raw_requires),
-                recommends=tuple(raw_recommends),
+                requires=requires,
+                recommends=recommends,
             )
         )
     return tools

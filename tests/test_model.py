@@ -262,6 +262,41 @@ def test_load_tools_rejects_recommends_as_a_string(tmp_path: Path) -> None:
         load_tools(manifest)
 
 
+def test_load_tools_rejects_a_non_string_recommends_element(tmp_path: Path) -> None:
+    """tomllib returns `Any`, so a list of non-ids would otherwise be stored
+    behind the declared `tuple[str, ...]` and only fail later, as a TypeError
+    inside the TUI's detail bar on cursor movement."""
+    manifest = tmp_path / "registry.toml"
+    manifest.write_text(
+        "[[tool]]\n"
+        'id = "demo"\n'
+        'category = "search"\n'
+        'tier = "user"\n'
+        "recommends = [1, 2]\n"  # ids, not integers
+        "[[tool.method]]\n"
+        'kind = "script"\n'
+        'url = "https://example.test/i.sh"\n'
+    )
+    with pytest.raises(ValueError, match="'recommends' must be a list of tool ids"):
+        load_tools(manifest)
+
+
+def test_load_tools_rejects_a_non_string_requires_element(tmp_path: Path) -> None:
+    manifest = tmp_path / "registry.toml"
+    manifest.write_text(
+        "[[tool]]\n"
+        'id = "demo"\n'
+        'category = "search"\n'
+        'tier = "user"\n'
+        'requires = [["pnpm"]]\n'  # a nested list, not an id
+        "[[tool.method]]\n"
+        'kind = "script"\n'
+        'url = "https://example.test/i.sh"\n'
+    )
+    with pytest.raises(ValueError, match="'requires' must be a list of tool ids"):
+        load_tools(manifest)
+
+
 def test_load_tools_rejects_unknown_category(tmp_path: Path) -> None:
     manifest = _write(
         tmp_path,
