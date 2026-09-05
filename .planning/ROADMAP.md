@@ -97,7 +97,12 @@ Plans:
   3. Opening the AI view first and selecting a tool with an unresolved system-tier dependency still makes the drag-in (or an unavailable-dependency notice) obvious, with no required visit order.
   4. Selecting `claude` or `opencode` surfaces a one-action prompt naming its `recommends` (e.g. `codegraph`, `graphify`, `rtk`) that the user can accept or dismiss — nothing in that list is ever installed automatically.
 
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+
+- [ ] 02-01-PLAN.md — Three tier-scoped catalog views (System/User/AI) over one shared staged selection, plus cross-tier `requires` visibility
+- [ ] 02-02-PLAN.md — `Tool.recommends` soft-dependency field and the one-action, non-blocking selection-time prompt
+
 **UI hint**: yes
 
 ### Phase 3: Install/Uninstall & Tweak Lifecycle Hardening
@@ -253,7 +258,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Catalog Tier Foundation | 1/1 | Complete    | 2026-09-04 |
-| 2. Tier-Scoped Catalog Views & Recommends | 0/TBD | Not started | - |
+| 2. Tier-Scoped Catalog Views & Recommends | 0/2 | Not started | - |
 | 3. Install/Uninstall & Tweak Lifecycle Hardening | 0/TBD | Not started | - |
 | 4. npm/npx Ban Extension & Redirect Policy | 0/TBD | Not started | - |
 | 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 0/TBD | Not started | - |
