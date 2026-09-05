@@ -1,13 +1,22 @@
+import importlib
 import io
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 from rich.console import Console
 
 import setup
+from installer.app import UninstallDecision
+from installer.guards import install_shims
 from installer.model import Tool
 from installer.platform import Platform
 from installer.session import Summary
+from installer.shellrc import write_myshellrc
+from installer.tweaks import BUNDLES
+from installer.uninstall import SweepResult
+from installer.wizard_app import PolicyInputs, UninstallInputs
 
 
 class _DummyApp:
@@ -66,72 +75,192 @@ def test_main_fix_interactive_without_link_mode_opens_doctor(
     assert build_calls == [{"initial_view": "doctor", "link_mode": "single"}]
 
 
-def test_build_app_includes_the_omz_policy_after_the_tweaks() -> None:
-    """Assert wiring by reading setup.py source.
+# -- composition-root wiring -------------------------------------------------
+#
+# These drive setup.main for real and observe what the wire hands the core.
+# Reading setup.py's own source instead is what the earlier version of this file
+# did, and it bought less than it looked like: a substring is satisfied by a
+# comment, `body.index(...)` raises instead of failing with a diagnosis, pinning
+# exact whitespace makes a `ruff format` change fail an unrelated test, and none
+# of it noticed `remove=_do_uninstall` being deleted outright — the one wire the
+# Uninstall view cannot work without. setup.py stays outside pyright and
+# coverage (the untyped questionary boundary), so behaviour through its public
+# entry point is the only guard it has.
 
-    `_build_app` closes over import-time Path.home() constants and is a private
-    composition-root helper, so calling it from tests trips pyright (private
-    usage) and would be unsafe against the real home. The wire is the
-    `omz_plugins_policy(` call after the tweak_policy generator.
+
+def _capture_app(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    """Stand in for UnifiedApp so _build_app runs for real without a terminal.
+
+    The captured kwargs are the wire under test: what the composition root
+    actually handed the views, not what its source text says it did.
     """
-    src = (Path(__file__).resolve().parent.parent / "setup.py").read_text()
-    body = src[src.index("def _build_app") :]
-    ban = body.index("ban_policy(")
-    tweak = body.index("tweak_policy(")
-    omz = body.index("omz_plugins_policy(")
-    assert ban < tweak < omz
+    seen: list[dict[str, object]] = []
+
+    class _App:
+        def __init__(self, *_args: object, **kwargs: object) -> None:
+            seen.append(dict(kwargs))
+
+        def run(self) -> None:
+            return None
+
+    monkeypatch.setattr(setup, "UnifiedApp", _App)
+    return seen
 
 
-def test_run_uninstall_is_wired_with_bundles_and_zshrc() -> None:
-    """Assert wiring by reading setup.py source.
+def _no_tools(_registry: object) -> list[Tool]:
+    return []
 
-    `_run_uninstall` closes over import-time Path.home() constants and is a
-    private composition-root helper, so calling it from tests trips pyright
-    (private usage) and would be unsafe against the real home. The wire is
-    the `bundles=BUNDLES` and `zshrc_path=_ZSHRC` kwargs on the non-TTY
-    `run_uninstall(` call. BUNDLES, not applicable_bundles(platform): a
-    teardown is total, so a bundle that no longer applies on this platform is
-    still swept off disk.
+
+def _no_categories(_registry: object) -> dict[str, str]:
+    return {}
+
+
+def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Point every import-time home constant at tmp_path, so the real
+    _build_app can run without touching the developer's shell files."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(setup, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
+    monkeypatch.setattr(setup, "_MYSHELLRC", tmp_path / ".myshellrc")
+    monkeypatch.setattr(setup, "_ZSHRC", tmp_path / ".zshrc")
+    monkeypatch.setattr(setup, "_RC_PATHS", [tmp_path / ".zshrc", tmp_path / ".bashrc"])
+    monkeypatch.setattr(setup, "load_tools", _no_tools)
+    monkeypatch.setattr(setup, "load_categories", _no_categories)
+    monkeypatch.setattr(setup, "detect", _platform)
+    monkeypatch.setattr(setup.sys, "stdin", _FakeStdin())
+
+
+def test_the_uninstall_view_is_wired_to_a_total_teardown_of_the_real_zshrc(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Drive the view's own removal closure and watch what reaches the core.
+
+    This covers both halves at once: that `remove` is wired to `_do_uninstall`
+    at all (deleting it makes UninstallInputs unconstructible, so the app never
+    builds), and that `_do_uninstall` forwards every bundle and the resolved
+    .zshrc. `bundles` is BUNDLES, not applicable_bundles(platform): a teardown
+    is total, so a bundle that no longer applies here is still swept off disk.
     """
-    src = (Path(__file__).resolve().parent.parent / "setup.py").read_text()
-    body = src[src.index("def _run_uninstall") :]
-    body = body[: body.index("def _run_guard")]
-    assert "platform = detect()" in body
-    assert "bundles=BUNDLES" in body
-    assert "applicable_bundles" not in body
-    assert "zshrc_path=_ZSHRC" in body
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    forwarded: list[dict[str, object]] = []
+
+    def fake_perform_uninstall(_decision: object, **kwargs: object) -> SweepResult:
+        forwarded.append(kwargs)
+        return SweepResult()
+
+    monkeypatch.setattr(setup, "perform_uninstall", fake_perform_uninstall)
+
+    assert setup.main(["--uninstall"]) == 0
+    inputs = seen[0]["uninstall"]
+    assert isinstance(inputs, UninstallInputs)
+
+    inputs.remove(
+        UninstallDecision(paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True)
+    )
+    assert forwarded[0]["bundles"] is BUNDLES
+    assert forwarded[0]["zshrc_path"] == tmp_path / ".zshrc"
+    assert forwarded[0]["myshellrc_path"] == tmp_path / ".myshellrc"
+    assert forwarded[0]["bin_dir"] == tmp_path / ".local" / "bin"
 
 
-def test_perform_uninstall_is_wired_with_bundles_and_zshrc() -> None:
-    """Assert wiring by reading setup.py source.
+def test_the_uninstall_view_reads_every_environment_row_live(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Each environment input must be a predicate the view can re-read, not a
+    value frozen when the app was built — the Policies and Doctor views change
+    all three while the Uninstall view is suspended."""
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--uninstall"]) == 0
+    inputs = seen[0]["uninstall"]
+    assert isinstance(inputs, UninstallInputs)
 
-    `bundles` and `zshrc_path` are required keyword arguments on
-    `perform_uninstall`, so `installer/` cannot drop them without pyright
-    catching it — but setup.py is deliberately outside pyright (the untyped
-    questionary boundary). This is the guard for the one call site pyright
-    does not see; dropping either kwarg here would silently sweep nothing
-    while the Uninstall view reported success.
+    assert inputs.ban_names() == []
+    assert inputs.has_path_block() is False
+    assert inputs.tweak_ids() == ()
+    # Enable the ban and the PATH block behind the view's back, exactly as the
+    # Policies and Doctor views do, and the same closures now report them.
+    bin_dir = tmp_path / ".local" / "bin"
+    install_shims(bin_dir)
+    write_myshellrc([bin_dir], tmp_path / ".myshellrc")
+    assert inputs.ban_names() != []
+    assert inputs.has_path_block() is True
+
+
+def test_the_policies_view_is_wired_ban_then_tweaks_then_omz(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The omz policy is offered last, after the platform's tweak bundles."""
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--uninstall"]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+
+    ids = [policy.id for policy in policies.policies]
+    assert ids[0] == "ban"
+    assert ids[-1] == "omz-plugins"
+    assert all(policy_id.startswith("tweak:") for policy_id in ids[1:-1])
+    assert len(ids) > 2
+
+
+def test_the_doctor_view_reads_the_ban_state_live(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The Doctor report's ban half is a predicate too: the Policies view
+    installs and removes the ban one nav step away."""
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--doctor"]) == 0
+    captured = seen[0]["guard_state"]
+    assert callable(captured)
+    read_guard = cast("Callable[[], tuple[dict[str, bool], str | None]]", captured)
+
+    assert not any(read_guard()[0].values())
+    install_shims(tmp_path / ".local" / "bin")
+    assert any(read_guard()[0].values())
+
+
+def test_the_cli_teardown_is_wired_to_a_total_sweep_of_the_zdotdir_aware_zshrc(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The non-TTY path, and the only way to observe the _ZSHRC/_RC_PATHS wire.
+
+    Both are import-time constants closed over by every uninstall and policy
+    wire, so the wire — that .zshrc comes from `installer.locations.zshrc_path`
+    rather than a hardcoded `~/.zshrc`, and that `_RC_PATHS` reuses it so the
+    ban aliases and the Oh-My-Zsh edit agree on which file is real — is only
+    visible by re-importing under a different environment.
     """
-    src = (Path(__file__).resolve().parent.parent / "setup.py").read_text()
-    body = src[src.index("def _do_uninstall") :]
-    body = body[: body.index("uninstall_inputs =")]
-    assert "return perform_uninstall(" in body
-    assert "bundles=BUNDLES" in body
-    assert "zshrc_path=_ZSHRC" in body
+    zdotdir = tmp_path / "zsh"
+    zdotdir.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ZDOTDIR", str(zdotdir))
+    importlib.reload(setup)
+    try:
+        forwarded: list[dict[str, object]] = []
 
+        def fake_run_uninstall(_tools: object, _console: object, **kwargs: object) -> list[Path]:
+            forwarded.append(kwargs)
+            return []
 
-def test_zshrc_constant_is_resolved_through_the_zdotdir_aware_helper() -> None:
-    """Assert wiring by reading setup.py source.
+        monkeypatch.setattr(setup, "load_tools", _no_tools)
+        monkeypatch.setattr(setup, "detect", _platform)
+        monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
+        console = Console(file=io.StringIO(), width=100, no_color=True)
+        monkeypatch.setattr(setup, "Console", lambda: console)
 
-    `_ZSHRC` is an import-time constant closed over by every uninstall/policy
-    wire, so it cannot be re-resolved from a test. The wire is that it comes
-    from `installer.locations.zshrc_path` — never a hardcoded `~/.zshrc` — and
-    that `_RC_PATHS` reuses it, so the ban aliases and the Oh-My-Zsh plugins
-    edit agree on which .zshrc is real.
-    """
-    src = (Path(__file__).resolve().parent.parent / "setup.py").read_text()
-    assert "_ZSHRC = zshrc_path(Path.home(), os.environ)" in src
-    assert '_RC_PATHS = [_ZSHRC, Path.home() / ".bashrc"]' in src
+        assert setup.main(["--uninstall", "--yes"]) == 0
+        assert forwarded[0]["bundles"] is BUNDLES
+        assert forwarded[0]["zshrc_path"] == zdotdir / ".zshrc"
+        assert forwarded[0]["rc_paths"] == [zdotdir / ".zshrc", tmp_path / ".bashrc"]
+    finally:
+        monkeypatch.undo()
+        # conftest clears $ZDOTDIR to keep the suite off the developer's own zsh
+        # setup; re-import under that same contract rather than whatever the
+        # developer's shell exports.
+        monkeypatch.delenv("ZDOTDIR", raising=False)
+        importlib.reload(setup)
 
 
 def _stub_install_run(monkeypatch: pytest.MonkeyPatch, summary: Summary) -> list[str]:
