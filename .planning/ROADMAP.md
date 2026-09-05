@@ -120,7 +120,7 @@ Plans:
 Plans:
 
 - [ ] 03-01-PLAN.md — Skip a dependent whose prerequisite failed earlier in the run: `InstallStatus.DEPENDENCY_FAILED`, `InstallOutcome.blocked_by`, and the summary/reason reporting (wave 1)
-- [ ] 03-02-PLAN.md — Oh-My-Zsh bundled plugins as a Policy: the in-place `plugins=(...)` editor in a new `installer/omz.py` plus the presence-gated `omz_plugins_policy` (wave 1)
+- [x] 03-02-PLAN.md — Oh-My-Zsh bundled plugins as a Policy: the in-place `plugins=(...)` editor in a new `installer/omz.py` plus the presence-gated `omz_plugins_policy` (wave 1)
 - [ ] 03-03-PLAN.md — Symmetric uninstall teardown: sweep every enabled tweak's block, helper executable and plugins edit through the existing Policies disable path (wave 2, needs 03-02)
 
 **UI hint**: yes — plans 03-02 (Policies row) and 03-03 (Uninstall row) each carry a gating `tmux` structural check; 03-01 touches no Textual surface.

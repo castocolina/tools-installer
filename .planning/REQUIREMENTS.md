@@ -25,7 +25,7 @@ Each maps to exactly one roadmap phase.
 
 ### Shell Tweaks
 
-- [ ] **REQ-oh-my-zsh-plugin-config**: Oh-My-Zsh's bundled `git`/`docker` plugins are enabled via a config-array edit to the `plugins=(...)` array in `.zshrc`, reusing the existing `apply_block`/`strip_block` tweak mechanism — not a separate `Tool`/`Method`/`requires` catalog entry.
+- [x] **REQ-oh-my-zsh-plugin-config**: Oh-My-Zsh's bundled `git`/`docker` plugins are enabled via a config-array edit to the `plugins=(...)` array in `.zshrc`, reusing the existing `apply_block`/`strip_block` tweak mechanism — not a separate `Tool`/`Method`/`requires` catalog entry.
 
 ### Package Manager Policy (ingest batch 2/7: `package-manager-policy`)
 
@@ -119,7 +119,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-recommends-soft-dependency | Phase 2 | Complete |
 | REQ-install-failure-propagation | Phase 3 | Pending |
 | REQ-uninstall-sweep-tweak-executables | Phase 3 | Pending |
-| REQ-oh-my-zsh-plugin-config | Phase 3 | Pending |
+| REQ-oh-my-zsh-plugin-config | Phase 3 | Complete |
 | REQ-npx-ban | Phase 4 | Pending |
 | REQ-npm-npx-redirect-policy | Phase 4 | Pending (expanded 2026-09-04 to include pip/pip3, gated on uv-pip research) |
 | REQ-npm-global-volta-redirect | Phase 4 | Pending (new 2026-09-04, gated on volta-internals research) |

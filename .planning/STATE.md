@@ -1,19 +1,19 @@
 ---
 gsd_state_version: 1.0
-current_phase: 2
+current_phase: 3
 status: executing
-stopped_at: Phase 01 complete, ready to plan Phase 02
-last_updated: "2026-09-05T05:49:07.752Z"
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-09-05T07:40:07Z"
 last_activity: 2026-09-05
-last_activity_desc: Phase 2 marked complete
-state_head: 9095ea9eed0e7a365701b7d82dbaa931606be04e
+last_activity_desc: Plan 03-02 Oh-My-Zsh plugins policy complete
+state_head: 1adcfe4fda8b122e70610d0af1ae9432922a1dfb
 progress:
   total_phases: 12
   completed_phases: 2
-  total_plans: 3
-  completed_plans: 3
+  total_plans: 5
+  completed_plans: 5
   percent: 17
-current_phase_name: Tier-Scoped Catalog Views & Recommends
+current_phase_name: Install/Uninstall & Tweak Lifecycle Hardening
 ---
 
 # Project State
@@ -23,14 +23,14 @@ current_phase_name: Tier-Scoped Catalog Views & Recommends
 See: .planning/PROJECT.md (updated 2026-09-04)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 01 — Catalog Tier Foundation
+**Current focus:** Phase 03 — Install/Uninstall & Tweak Lifecycle Hardening
 
 ## Current Position
 
-Phase: 2 — COMPLETE
-Plan: Not started
-Status: Phase 2 complete
-Last activity: 2026-09-05 — Phase 2 marked complete
+Phase: 3 — IN PROGRESS
+Plan: 02 complete, 03 remaining
+Status: 03-02 complete, ready for 03-03
+Last activity: 2026-09-05 — Oh-My-Zsh plugins policy shipped
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -66,6 +66,7 @@ Recent decisions affecting current work:
 - [PRD, resolved 2026-09-04]: `tier` is orthogonal to `Category`; `requires` remains the sole install-order mechanism, never `tier`
 - [PRD, resolved 2026-09-04]: `recommends` is a separate, smaller mechanism from `requires` — never auto-installs
 - [PRD, resolved 2026-09-04]: Oh-My-Zsh's `git`/`docker` plugins are a config-array edit to `.zshrc`, not new `Tool` entries
+- [03-02, 2026-09-05]: Shipped as `omz_plugins_policy` (third Policy factory), in-place single-line editor in `installer/omz.py`, not `apply_block`/`strip_block`
 
 ### Pending Todos
 
@@ -88,6 +89,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-04T20:06:59.921Z
-Stopped at: Phase 01 complete, ready to plan Phase 02
-Resume file: .planning/phases/03-install-uninstall-tweak-lifecycle-hardening/03-CONTEXT.md
+Last session: 2026-09-05T07:40:07Z
+Stopped at: Completed 03-02-PLAN.md
+Resume file: None
