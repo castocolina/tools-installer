@@ -49,6 +49,19 @@ re_review:
   fix_pass: 2026-09-05
   fix_scope: critical_warning
   fix_iteration: 2
+re_review_final:
+  reviewed: 2026-09-05
+  depth: deep
+  iteration: 3
+  verified_resolved: [RR-01, RR-02]
+  new_findings:
+    critical: 0
+    warning: 1
+    info: 1
+    total: 2
+  status: issues_found
+  blocking: false
+  recommendation: proceed_to_verification
 ---
 
 # Phase 2: Code Review Report
@@ -857,3 +870,256 @@ and that document is the contract later phases will read.
 _Reviewed: 2026-09-05_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: deep (Textual event-flow trace + running probes + independent gate re-run)_
+
+---
+
+# Iteration 3 (final re-review, 2026-09-05, deep)
+
+**Scope:** `84daa42..HEAD` — the two fix-pass-2 commits (`e8f9aee`, `4d285fc`)
+plus the review-bookkeeping commit `418a788`. The production surface of that
+range is 36 changed lines across `installer/catalog_tui.py` (+12 / −16),
+`installer/wizard_app.py` (+8 / −0) and `.claude/architecture.md` (+10 / −5),
+with 62 added test lines. Verified against live on-disk source and a running
+app; the fix commits' own messages and the fixer's resolution notes were treated
+as claims to disprove, not as evidence.
+
+**Verdict: 0 Critical / 1 Warning / 1 Info (new).** RR-01 and RR-02 are both
+genuinely resolved. The `clear_transient` seam introduced by the RR-02 fix is
+sound — no new correctness, safety or security defect. The one new WARNING is a
+missing regression test, not a misbehaviour.
+
+**Gates re-run on the exact committed tree:** `make validate` — ruff check,
+`ruff format --check` (83 files), pyright strict `0 errors, 0 warnings`, bandit,
+vulture, shellcheck — all clean. `make test` — **740 passed**, `installer/` at
+**99.81%** line coverage, 3 missed statements (`catalog_tui.py:277` = IN-07,
+`model.py:34` = RI-03, `wizard_app.py:74`) and one partial branch
+(`wizard_app.py:789->exit`, the `_navigable()` false leg of
+`on_wayfinding_header_navigate`, pre-existing and unrelated to this range). No
+branch was newly uncovered by fix pass 2.
+
+## Verification of RR-01 — RESOLVED
+
+`grep -rnE "^(async )?def test[^_]" tests/` returns **nothing** (exit 1). The
+three `def` lines in `tests/test_tool_browser.py` are back to
+`test_refresh_marks_leaves_non_selectable_cell_untouched` (`:296`),
+`test_refresh_marks_tolerates_a_cleared_table` (`:324`) and
+`test_refresh_marks_tolerates_a_removed_table` (`:339`).
+
+Checked beyond the reported symptom, because the root cause was a blind textual
+replace and one grep only proves the shape it looks for:
+
+- `git show e8f9aee` touches exactly three lines, all `def` lines, in one file —
+  no production code and no other identifier changed.
+- `grep -rn "testrefresh\|_refresh_marks" installer/ tests/ setup.py .claude/`
+  finds no remaining concatenation and no surviving reference to the deleted
+  private alias. The only `_refresh_marks` hits in the repo are two dated
+  `docs/superpowers/` records of the historical bug, which are describing the
+  past correctly and are outside this phase's changed-file set.
+- Scanned the whole suite for name shadowing that a rename could have created:
+  five duplicate test names exist repo-wide, and every pair is split across two
+  different modules (`test_catalog_tui` ↔ `test_tool_browser`, `test_download` ↔
+  `test_executors`), so none of them shadow. Pre-existing, not collateral.
+
+## Verification of RR-02 — RESOLVED
+
+**The handler is gone, not renamed.** `grep -rn "on_screen_suspend"` over
+`installer/`, `tests/` and `setup.py` returns nothing. The only surviving
+lifecycle handler on `CatalogScreen` is `on_screen_resume`
+(`installer/catalog_tui.py:350`), which still does only the mark re-stamp it
+always did.
+
+**The trigger is at the view-change seam, correctly guarded.**
+`UnifiedApp.show_view` (`installer/wizard_app.py:754-772`) reads:
+
+```python
+if name == self.current_view:
+    return
+leaving = self._catalogs.get(self.current_view)
+if leaving is not None:
+    leaving.clear_transient()
+if self.current_view != BASE_VIEW:
+    await self.pop_screen()
+```
+
+The early return precedes the clear, so a no-op navigation cannot wipe state;
+the clear precedes the pop, so the leaving screen is still mounted when its
+`StatusLine`s are cleared. `git show 4d285fc` confirms the early return is
+pre-existing and the commit added exactly the eight lines above.
+
+**`show_view` really is the only path.** `grep -rn
+"push_screen\|pop_screen\|switch_screen" installer/` yields four hits: the two
+inside `show_view`, `wizard_app.py:375` (the uninstall confirm modal, pushed
+from `UninstallScreen`, which has no transient state) and `wizard_app.py:802`
+(`NavScreen`, via the `push_screen(modal, callback)` form rule 2 mandates). So
+no navigation escapes the clear, and no modal now triggers it.
+
+**The regression tests were verified to fail against the pre-fix shape — not
+taken on trust.** I re-attached the deleted handler in a throwaway module
+(monkeypatching `CatalogScreen.on_screen_suspend = lambda self:
+self.clear_transient()`, since deleted) and replayed both scenarios:
+
+```
+PROBE prefix status= ''
+PROBE prefix rec   = ''
+PROBE prefix staged after r= {'agent'}      <- r disarmed; test expects {'agent','jq'}
+PROBE prefix warn after= ''                 <- test expects 'Select at least one tool'
+```
+
+Both new tests assert the exact opposite of every line above, so each genuinely
+fails against the pre-fix code. They also assert the *armed* state, not merely
+the rendered text (`press("r")` → `selected == {"agent", "jq"}`), which is the
+right assertion for this bug class.
+
+**Probed two paths the new tests do not cover, both hold:**
+
+```
+PROBE burst view= ai        (ctrl+p and escape sent as one unsettled burst)
+PROBE burst status= 'agent also needs pnpm - added automatically at install time; …'
+PROBE burst rec   = 'agent pairs well with jq - press r to add them …'
+
+PROBE repress view= ai      (press 3 while already on the AI view)
+PROBE repress status= 'agent also needs pnpm - …'
+PROBE repress rec   = 'agent pairs well with jq - …'
+```
+
+The burst case matters because `pilot.press` with a `pause` between keys masks
+the timing bugs this codebase has hit before; the transient lines survive
+unsettled input too.
+
+**The doc now matches the code.** `.claude/architecture.md:68-78` says
+"navigating to another view clears both", names `UnifiedApp.show_view` and the
+public `clear_transient` as the seam, and states why `ScreenSuspend` is the
+wrong event. Read against the implementation, every clause is true.
+
+## Assessment of the `clear_transient` cross-object seam
+
+The fixer flagged this as deliberate-but-debatable and asked for a second
+opinion. It is fine, and I could not construct a defect from it:
+
+- **Not an orphan under rule 5.** Two production callers —
+  `CatalogScreen.on_tool_browser_selection_changed` (`catalog_tui.py:272`) and
+  `UnifiedApp.show_view` (`wizard_app.py:767`). Rule 5 targets helpers with
+  *zero*.
+- **No new coupling direction.** `UnifiedApp.__init__` already constructs every
+  `CatalogScreen` and injects its `view`, `catalog` and shared `staged` set
+  (`wizard_app.py:692-702`). The app already owns these objects; one more
+  synchronous call on them adds no layer that did not exist.
+- **No lifecycle hazard.** The call happens before the pop, so the widget tree
+  is live. It also runs at mount time on the base screen when
+  `initial_view != BASE_VIEW` (`wizard_app.py:736-737`); that path is exercised
+  by a dozen existing tests (`initial_view="doctor" | "uninstall" | "policies"`),
+  all green, so clearing a freshly-composed `StatusLine` is safe in practice as
+  well as in theory.
+- **No state can leak past it.** A screen's transient state is only ever written
+  by its own key handlers (`on_tool_browser_selection_changed`,
+  `action_accept_recommends`, `on_tool_browser_accepted`), which require it to be
+  the active screen — so a screen can never acquire a prompt while inactive and
+  arrive holding one.
+- **Reversed direction checked too:** there is no way to leave a tier view
+  without passing through `show_view`, per the `push_screen`/`pop_screen` grep
+  above.
+
+## New findings
+
+### FR-01 (WARNING): the no-op-navigation guard the RR-02 fix depends on is asserted by no test
+
+**File:** `installer/wizard_app.py:758-759`, `tests/test_catalog_tui.py:648-688`
+
+**Issue:** The fix's correctness rests on two separate "this is not a view
+change" paths, and only one of them is pinned by a test.
+
+1. **Palette cancel** — `escape` on `NavScreen` → `_navigate(None)` → `show_view`
+   is *never called*. Covered by
+   `test_cancelling_the_nav_palette_keeps_the_prompt_and_the_requires_notice`.
+2. **Navigating to the view you are already on** — pressing `3` while on the AI
+   view, or picking the current view in the ctrl+p palette → `show_view` *is*
+   called and the `name == self.current_view` early return is what saves the
+   prompt. Covered by nothing.
+
+Because path 2 goes through a different mechanism than path 1, the palette test
+gives it no protection. I confirmed the behaviour is correct today (the
+`PROBE repress` output above), and coverage shows both legs of the early-return
+branch are executed by some test — but no test *asserts* the transient lines
+survive it. Moving `leaving.clear_transient()` three lines up, above the early
+return, reintroduces a variant of RR-02 (your own view's number key wipes your
+prompt) with all 740 tests green. That is the same "no failing run to warn you"
+failure mode `.claude/testing.md` forbids and the same shape as RR-01.
+
+**Fix:** one test, alongside the two palette ones:
+
+```python
+async def test_renavigating_to_the_current_view_keeps_the_prompt() -> None:
+    """`show_view` returns early when the view is unchanged, so re-pressing the
+    active view's number key (or picking it in the palette) is not a view exit."""
+    tools, installed = _both_lines_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        screen = app.catalog_for("ai")
+        await pilot.press("3")  # already here: a no-op navigation
+        await pilot.pause()
+        assert "agent pairs well with jq" in screen.recommends_text
+        await pilot.press("r")
+        await pilot.pause()
+        assert screen.selected == {"agent", "jq"}
+```
+
+**Blocking?** No. Present behaviour is correct and was verified empirically;
+this is a durability gap in the test suite, not a defect in shipped behaviour.
+
+### FR-02 (INFO): the clear is keyed on `_catalogs` membership, so a future screen with transient state is skipped silently
+
+**File:** `installer/wizard_app.py:765-767`
+
+**Issue:** `leaving = self._catalogs.get(self.current_view)` looks the leaving
+screen up in the tier-catalog dict only. `self._views` also holds
+`DoctorScreen`, `UninstallScreen` and `PoliciesScreen`, none of which have
+transient state today — which is exactly why the `.get` is correct and is
+documented as deliberate. The cost is that the rule encoded here is "clear tier
+screens" rather than "clear whatever can be cleared", so the day a fourth screen
+grows a transient line, `show_view` skips it with no error and no failing test.
+
+**Fix (optional):** key on capability instead of on the dict, e.g. a tiny
+`Transient` protocol or
+`leaving = self.screen_for(self.current_view); getattr(leaving, "clear_transient", noop)()`;
+or leave the code as is and note the invariant in the `View` registry docs so a
+new screen's author meets it. Low urgency — there is no fourth candidate in the
+roadmap.
+
+## Carried-open findings (unchanged, not re-litigated)
+
+Out of scope for both fix passes and still open: the eleven original INFOs
+(IN-01 … IN-11) and the three re-review INFOs (RI-01 `d`-keeps-the-notice
+asymmetry untested, RI-02 silent empty-delta accept, RI-03 `_parse_enum`'s
+uncovered guard). RI-01 is the most valuable of them — it and FR-01 are the same
+class of gap (a deliberate behavioural asymmetry with no test pinning it) and
+would make a natural single follow-up commit.
+
+## Final verdict
+
+**0 Critical / 1 Warning / 1 Info.**
+
+RR-01 and RR-02 are resolved against live source, with the RR-02 fix
+independently proven to change behaviour by replaying the pre-fix handler rather
+than by re-running the fixer's own tests. Fix pass 2 introduced **no** new
+correctness, security, data-loss or crash risk; the `clear_transient` seam it
+added is sound and consistent with the app's existing ownership of its screens.
+The gates pass on the exact committed tree.
+
+The one new WARNING (FR-01) is a missing regression test for behaviour that is
+correct today and was verified by probe. It is not functional, not a safety
+issue, and blocks nothing.
+
+**Phase 2 is clean enough to close out — proceed to verification.** No further
+fix iteration is warranted; FR-01 and FR-02 should be carried forward as
+follow-up notes (FR-01 ideally bundled with RI-01, which is the same one-test
+gap in a different place), not as blockers.
+
+---
+
+_Reviewed: 2026-09-05_
+_Reviewer: Claude (gsd-code-reviewer)_
+_Depth: deep (live-source trace + pre-fix-shape replay + unsettled-input probes + independent gate re-run)_
