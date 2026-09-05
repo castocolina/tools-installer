@@ -90,18 +90,17 @@ def run_installs(
     for tool in tools:
         blocked = tuple(dep_id for dep_id in dict.fromkeys(tool.requires) if dep_id in unresolved)
         if blocked:
-            unresolved.add(tool.id)
-            outcomes.append(
-                InstallOutcome(tool.id, InstallStatus.DEPENDENCY_FAILED, blocked_by=blocked)
-            )
-            continue
-        outcome = install(tool, platform, runner, resolve_tag)
-        if outcome.status == InstallStatus.CHECKSUM_MISMATCH and on_mismatch is not None:
-            choice = on_mismatch(tool.id)
-            if choice == "retry":
-                outcome = install(tool, platform, runner, resolve_tag)
-            elif choice == "fallback":
-                outcome = install(tool, platform, runner, resolve_tag, checksum_policy="continue")
+            outcome = InstallOutcome(tool.id, InstallStatus.DEPENDENCY_FAILED, blocked_by=blocked)
+        else:
+            outcome = install(tool, platform, runner, resolve_tag)
+            if outcome.status == InstallStatus.CHECKSUM_MISMATCH and on_mismatch is not None:
+                choice = on_mismatch(tool.id)
+                if choice == "retry":
+                    outcome = install(tool, platform, runner, resolve_tag)
+                elif choice == "fallback":
+                    outcome = install(
+                        tool, platform, runner, resolve_tag, checksum_policy="continue"
+                    )
         if outcome.status in _UNRESOLVED:
             unresolved.add(tool.id)
         outcomes.append(outcome)
