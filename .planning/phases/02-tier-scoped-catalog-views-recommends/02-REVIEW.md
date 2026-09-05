@@ -43,6 +43,12 @@ re_review:
     info: 3
     total: 5
   status: issues_found
+  fixed:
+    warning: 2
+    info: 0
+  fix_pass: 2026-09-05
+  fix_scope: critical_warning
+  fix_iteration: 2
 ---
 
 # Phase 2: Code Review Report
@@ -508,6 +514,10 @@ source and a running app, not against the fix commits' own claims.
 genuinely resolved. The fix pass introduced two new WARNINGs, both of them
 collateral rather than logic defects, and neither blocks verification.
 
+> **Fix pass 2 (2026-09-05):** both new WARNINGs are now fixed — see
+> [Fix pass 2](#fix-pass-2-2026-09-05) below. The three INFO findings
+> (RI-01, RI-02, RI-03) were out of scope for that pass and remain open.
+
 **Gates re-run on the exact committed tree** (not taken on trust from the fix
 pass): `make validate` — ruff check, `ruff format --check` (83 files), pyright
 strict `0 errors, 0 warnings`, bandit, vulture, shellcheck — all clean.
@@ -653,6 +663,15 @@ async def test_refresh_marks_tolerates_a_cleared_table() -> None: ...
 async def test_refresh_marks_tolerates_a_removed_table() -> None: ...
 ```
 
+**Resolution (fixed, `e8f9aee`):** applied as suggested — the three `def`
+lines got their underscore back and nothing else in the file changed, since
+`refresh_marks` is still exactly what all three assert on and the comments and
+docstrings inside them already read correctly. `grep -rnE "^(async )?def
+test[^_]" tests/` now returns nothing, so the mangling is gone rather than
+merely reduced, and the suite count is unchanged at the pre-fix 738 (the names
+were being collected before and still are — this closes the latent risk, not a
+present gap). No production code was touched.
+
 ### RR-02 (WARNING): clearing on `ScreenSuspend` also fires for a modal push, so opening and cancelling the nav palette silently wipes the prompt and the accept-guard warning
 
 **File:** `installer/catalog_tui.py:345-352`, `installer/wizard_app.py:791-794`,
@@ -715,6 +734,39 @@ leave `status` alone, and correct the architecture paragraph to say "any time th
 screen stops being on top", so the doc stops describing behaviour the code does
 not have. Either way, add a test for `ctrl+p` → `escape`.
 
+**Resolution (fixed, `4d285fc`):** took the first option — the trigger moved to
+the real view-change seam rather than narrowing what the wrong trigger clears.
+`on_screen_suspend` is deleted; `_clear_transient` is renamed to the public
+`CatalogScreen.clear_transient` and is now called from
+`UnifiedApp.show_view` (`installer/wizard_app.py:761-768`) on
+`self._catalogs.get(self.current_view)`, after the `name == self.current_view`
+early return so a no-op navigation stays a no-op. Because `show_view` is the
+single navigation path (architecture rule 2), every real tier switch — number
+key, wayfinding header, `escape`-to-base, palette selection, the initial-view
+hop on mount — still clears, while a push that is not a view change (the nav
+palette, and any future modal) is inert. The `.get` is deliberate: `show_view`
+also moves to and from the doctor/uninstall/policies screens, which have no
+transient state, so a non-catalog `current_view` simply has nothing to clear.
+`action_dismiss_recommends` keeps its narrower clear, unchanged.
+
+`.claude/architecture.md`'s transient-prompt paragraph now says "navigating to
+another view", names `show_view` + `clear_transient` as the seam, and states
+why a screen-suspend handler is the wrong one — so the doc describes the
+behaviour the code has, including the palette case that motivated the change.
+
+Two regression tests, each pinning one half of the reported damage:
+`test_cancelling_the_nav_palette_keeps_the_prompt_and_the_requires_notice`
+(ctrl+p → escape, then asserts both lines survive *and* that a following `r`
+still stages `jq` — armed, not merely rendered) and
+`test_cancelling_the_nav_palette_keeps_the_empty_selection_warning` (the
+`enter`-with-empty-batch guard message survives the same round trip). Both were
+verified to fail against the pre-fix `on_screen_suspend` handler — the first on
+the blanked status line, the second on `assert 'Select at least one tool' in ''`.
+The WR-01 test `test_leaving_the_view_clears_the_prompt_and_the_requires_notice`
+is kept and still passes on the narrower trigger, confirming a genuine tier
+switch clears as before; its inline fixture was extracted to
+`_both_lines_catalog()` and shared with the new palette test rather than copied.
+
 ### RI-01 (INFO): the deliberate `d`-keeps-the-requires-notice asymmetry is asserted nowhere
 
 **File:** `installer/catalog_tui.py:339-343`, `tests/test_catalog_tui.py:535-547`
@@ -753,6 +805,35 @@ twinning makes the gap newly visible.
 `ValueError("'category' must be a string")`, or drop the guard and let
 `_parse_enum`'s existing `enum_type(value)` raise.
 
+## Fix pass 2 (2026-09-05)
+
+Both new WARNINGs are resolved; the three INFO findings (RI-01, RI-02, RI-03)
+were out of scope for this pass and remain open. Gates were run in an isolated
+review-fix worktree with its own `uv sync`'d `.venv` — once on the RR-01-only
+tree and again on the final tree, so each commit was validated as the tree it
+introduces, not just the pair together.
+
+| ID | Resolution | Commit |
+| --- | --- | --- |
+| RR-01 | Fixed — the three `test_refresh_marks_*` names got their underscore back | `e8f9aee` |
+| RR-02 | Fixed — the transient clear moved from `ScreenSuspend` to `show_view` | `4d285fc` |
+
+`make validate`: ruff check, `ruff format --check` (83 files), pyright strict
+`0 errors, 0 warnings`, bandit, vulture, shellcheck — all clean.
+`make test`: 740 passed (738 + the two new palette regressions), `installer/`
+at 99.81% line coverage, the same 3 missed statements as the re-review found
+(`catalog_tui.py` IN-07 defensive branch, `model.py:34` RI-03, `wizard_app.py:74`),
+so no branch was newly uncovered.
+
+Each finding's resolution is recorded under its own heading above.
+
+**Follow-up for the next reviewer:** `CatalogScreen.clear_transient` is now
+public and has exactly one out-of-class caller (`UnifiedApp.show_view`). That
+is a deliberate cross-object seam, not an orphan helper under architecture
+rule 5 — the rule targets helpers with *zero* production callers — but it does
+mean the app now knows one thing about catalog-screen state, which is worth a
+second opinion.
+
 ## Conclusion
 
 The five WARNINGs are closed against live source and a running app, and no
@@ -765,6 +846,11 @@ correctness. Neither risks data loss, a wrong install batch, or a crash.
 are carried forward as follow-ups rather than dropped — RR-02 in particular
 because the architecture doc currently describes behaviour the code does not have,
 and that document is the contract later phases will read.
+
+> **Post-fix note (fix pass 2):** rather than being carried forward, both were
+> fixed in place — `e8f9aee` and `4d285fc`. The architecture doc no longer
+> describes behaviour the code does not have: its transient-prompt paragraph and
+> `UnifiedApp.show_view` were changed in the same commit.
 
 ---
 
