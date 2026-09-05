@@ -46,14 +46,14 @@
     "use_worktrees": true,
     "plan_review_convergence": true,
     "cross_ai_execution": true,
-    "cross_ai_command": "/usr/local/bin/opencode run --model xai/grok-4.6",
+    "cross_ai_command": "/usr/local/bin/opencode run --model router-env/my-coding",
     "cross_ai_timeout": 3600
   },
   "review": {
     "reviewer_instances": {
       "opencode-plan-review": {
         "cli": "opencode",
-        "model": "xai/grok-4.6"
+        "model": "router-env/my-plan-review"
       },
       "opencode-sol": {
         "cli": "opencode",
