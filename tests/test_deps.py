@@ -209,7 +209,10 @@ def test_missing_requires_matches_the_real_registry_cross_tier_edge() -> None:
     pnpm = by_id["pnpm"]
     installed = {tool.id: False for tool in catalog}
     empty: set[str] = set()
-    assert missing_requires(mmdc, catalog, staged=empty, installed=installed) == ("pnpm",)
+    assert missing_requires(mmdc, catalog, staged=empty, installed=installed) == (
+        "pnpm",
+        "puppeteer",
+    )
     assert mmdc.tier != pnpm.tier
 
 

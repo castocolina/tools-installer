@@ -1741,7 +1741,40 @@ priority = "P2"
 audience = "both"
 tier = "user"
 desc = "Render Mermaid diagrams to SVG/PNG/PDF from the command line"
-requires = ["pnpm"]
+requires = ["pnpm", "puppeteer"]
 [[tool.method]]
 kind = "node"
 npm_pkg = "@mermaid-js/mermaid-cli"
+co_install = ["puppeteer"]
+allow_build = ["puppeteer"]
+min_node = "22.12.0"
+smoke = "puppeteer-browser"
+versions = { puppeteer = "^25" }
+
+[[tool]]
+id = "puppeteer"
+name = "Puppeteer"
+category = "dev"
+cmd = "puppeteer"
+priority = "P3"
+audience = "both"
+tier = "user"
+desc = "Headless-Chrome automation library; downloads its own Chrome and chrome-headless-shell. Required at runtime by mmdc."
+requires = ["pnpm"]
+[[tool.method]]
+kind = "node"
+os = ["macos"]
+npm_pkg = "puppeteer"
+allow_build = ["puppeteer"]
+versions = { puppeteer = "^25" }
+min_node = "22.12.0"
+smoke = "puppeteer-browser"
+[[tool.method]]
+kind = "node"
+os = ["debian", "arch", "fedora"]
+arch = ["amd64"]
+npm_pkg = "puppeteer"
+allow_build = ["puppeteer"]
+versions = { puppeteer = "^25" }
+min_node = "22.12.0"
+smoke = "puppeteer-browser"

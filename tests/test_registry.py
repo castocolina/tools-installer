@@ -1,7 +1,8 @@
 from collections import Counter
 from pathlib import Path
+from typing import cast
 
-from installer.deps import requires_integrity_errors
+from installer.deps import requires_integrity_errors, resolve_dependencies
 from installer.model import Tool, load_categories, load_tools
 from installer.platform import Platform
 from installer.resolve import resolve_methods
@@ -389,6 +390,9 @@ def test_download_tools_resolve_github_release_then_brew_on_macos() -> None:
 # GUI apps with no Linux install method yet (VS Code tar.gz / Sublime tarball
 # are a future batch). Every other tool must resolve on every platform.
 MACOS_ONLY = {"vscode", "sublime", "jetbrains-toolbox"}
+# Membership means the tool provably cannot work on that platform+arch, not
+# that its packaging is inconvenient there.
+NO_LINUX_ARM64 = {"puppeteer"}
 
 
 def test_every_tool_resolves_at_least_one_method_on_each_platform() -> None:
@@ -398,7 +402,11 @@ def test_every_tool_resolves_at_least_one_method_on_each_platform() -> None:
     for platform_os in ("debian", "arch", "fedora", "macos"):
         for arch in ("amd64", "arm64"):
             platform = Platform(os=platform_os, arch=arch, immutable=False, has_brew=True)
-            allowed: set[str] = MACOS_ONLY if platform_os != "macos" else set()
+            allowed: set[str] = set()
+            if platform_os != "macos":
+                allowed |= MACOS_ONLY
+            if platform_os != "macos" and arch == "arm64":
+                allowed |= NO_LINUX_ARM64
             stranded = [
                 t.id for t in tools if not resolve_methods(t, platform) and t.id not in allowed
             ]
@@ -415,6 +423,145 @@ def test_macos_only_allowlist_stays_honest() -> None:
             assert resolve_methods(tools[tool_id], platform) == [], (
                 f"'{tool_id}' unexpectedly resolves on {platform_os}"
             )
+
+
+def test_no_linux_arm64_allowlist_stays_honest() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    for tool_id in sorted(NO_LINUX_ARM64):
+        assert tool_id in tools, f"NO_LINUX_ARM64 entry '{tool_id}' is not in the registry"
+        for platform_os in ("debian", "arch", "fedora"):
+            platform = Platform(os=platform_os, arch="arm64", immutable=False, has_brew=True)
+            assert resolve_methods(tools[tool_id], platform) == [], (
+                f"'{tool_id}' unexpectedly resolves on {platform_os}/arm64"
+            )
+        debian_amd64 = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+        macos_arm64 = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+        assert resolve_methods(tools[tool_id], debian_amd64), (
+            f"'{tool_id}' must still resolve on debian/amd64"
+        )
+        assert resolve_methods(tools[tool_id], macos_arm64), (
+            f"'{tool_id}' must still resolve on macos/arm64"
+        )
+
+
+def test_puppeteer_is_a_user_tier_node_tool_requiring_pnpm() -> None:
+    puppeteer = next(t for t in load_tools(REGISTRY) if t.id == "puppeteer")
+    assert (
+        puppeteer.name,
+        puppeteer.category,
+        puppeteer.cmd,
+        puppeteer.priority,
+        puppeteer.audience,
+        puppeteer.tier,
+    ) == ("Puppeteer", "dev", "puppeteer", "P3", "both", "user")
+    assert puppeteer.requires == ("pnpm",)
+    assert puppeteer.recommends == ()
+    assert len(puppeteer.methods) == 2
+    assert {m.kind for m in puppeteer.methods} == {"node"}
+    for method in puppeteer.methods:
+        assert method.params["npm_pkg"] == "puppeteer"
+        assert method.params["allow_build"] == ["puppeteer"]
+        assert method.params["versions"] == {"puppeteer": "^25"}
+        assert method.params["min_node"] == "22.12.0"
+        assert method.params["smoke"] == "puppeteer-browser"
+        assert "co_install" not in method.params
+    macos = next(m for m in puppeteer.methods if m.os == ("macos",))
+    assert macos.arch == ()
+    linux = next(m for m in puppeteer.methods if m.os == ("debian", "arch", "fedora"))
+    assert linux.arch == ("amd64",)
+    for arch in ("amd64", "arm64"):
+        macos_plat = Platform(os="macos", arch=arch, immutable=False, has_brew=True)
+        assert len(resolve_methods(puppeteer, macos_plat)) == 1
+    for platform_os in ("debian", "arch", "fedora"):
+        linux_amd64 = Platform(os=platform_os, arch="amd64", immutable=False, has_brew=True)
+        assert len(resolve_methods(puppeteer, linux_amd64)) == 1
+
+
+def test_puppeteer_resolves_no_method_on_linux_arm64_because_chrome_has_no_binary() -> None:
+    puppeteer = next(t for t in load_tools(REGISTRY) if t.id == "puppeteer")
+    for platform_os in ("debian", "arch", "fedora"):
+        platform = Platform(os=platform_os, arch="arm64", immutable=False, has_brew=False)
+        assert resolve_methods(puppeteer, platform) == []
+
+
+def test_mmdc_skips_on_linux_arm64_when_puppeteer_is_unavailable() -> None:
+    catalog = load_tools(REGISTRY)
+    by_id = {tool.id: tool for tool in catalog}
+    platform = Platform(os="debian", arch="arm64", immutable=False, has_brew=False)
+    result = resolve_dependencies(
+        [by_id["mmdc"]],
+        catalog,
+        available=lambda tool: bool(resolve_methods(tool, platform)),
+        is_installed=lambda _tool: False,
+    )
+    ids = [tool.id for tool in result.order]
+    assert "mmdc" not in ids
+    assert "puppeteer" not in ids
+    assert result.warnings
+    assert any("unavailable" in warning for warning in result.warnings)
+
+
+def test_selecting_mmdc_drags_in_pnpm_and_puppeteer_on_linux_amd64() -> None:
+    catalog = load_tools(REGISTRY)
+    by_id = {tool.id: tool for tool in catalog}
+    platform = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    result = resolve_dependencies(
+        [by_id["mmdc"]],
+        catalog,
+        available=lambda tool: bool(resolve_methods(tool, platform)),
+        is_installed=lambda _tool: False,
+    )
+    ids = [tool.id for tool in result.order]
+    assert ids.index("pnpm") < ids.index("puppeteer") < ids.index("mmdc")
+    assert "puppeteer" in result.dragged_in
+    assert "pnpm" in result.dragged_in
+
+
+def test_no_chrome_headless_shell_catalog_entry() -> None:
+    ids = {tool.id for tool in load_tools(REGISTRY)}
+    assert "chrome-headless-shell" not in ids
+
+
+def test_mmdc_requires_puppeteer_and_groups_the_node_install() -> None:
+    mmdc = next(t for t in load_tools(REGISTRY) if t.id == "mmdc")
+    assert mmdc.requires == ("pnpm", "puppeteer")
+    node = next(method for method in mmdc.methods if method.kind == "node")
+    assert node.params["npm_pkg"] == "@mermaid-js/mermaid-cli"
+    assert node.params["co_install"] == ["puppeteer"]
+    assert node.params["allow_build"] == ["puppeteer"]
+    assert node.params["min_node"] == "22.12.0"
+    assert node.params["smoke"] == "puppeteer-browser"
+    assert node.params["versions"] == {"puppeteer": "^25"}
+    assert node.os == ()
+    assert node.arch == ()
+
+
+def test_co_install_names_resolve_to_required_catalog_tools() -> None:
+    tools = load_tools(REGISTRY)
+    npm_pkg_owners: dict[str, list[str]] = {}
+    for tool in tools:
+        for method in tool.methods:
+            if method.kind != "node":
+                continue
+            pkg = method.params.get("npm_pkg")
+            if isinstance(pkg, str):
+                npm_pkg_owners.setdefault(pkg, []).append(tool.id)
+    for tool in tools:
+        for method in tool.methods:
+            if method.kind != "node" or "co_install" not in method.params:
+                continue
+            raw = method.params["co_install"]
+            assert isinstance(raw, list)
+            names: list[str] = []
+            for item in cast(list[object], raw):
+                assert isinstance(item, str)
+                names.append(item)
+            for name in names:
+                owners = npm_pkg_owners.get(name, [])
+                assert owners, f"{tool.id} co_install '{name}' is not any catalog tool's npm_pkg"
+                assert any(owner_id in tool.requires for owner_id in owners), (
+                    f"{tool.id} co_install '{name}' has no matching requires edge"
+                )
 
 
 def test_bottom_and_difftastic_cmd_differs_from_member_binary() -> None:
@@ -487,7 +634,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 22,
         "ai": 10,
-        "user": 35,
+        "user": 36,
     }
 
 
