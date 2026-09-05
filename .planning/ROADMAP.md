@@ -169,7 +169,7 @@ Plans:
 Plans:
 
 - [x] 05-01-PLAN.md — Tracer: container-verified `mmdc` render plus the brownfield gap, its remedy and the missing-shared-library case, then the `co_install`/`allow_build`/`versions`/`min_node`/`smoke` node-method mechanism with its fail-closed pnpm/node version preflight and its post-install browser check in `model.py`/`executors.py`/`versions.py` (wave 1)
-- [ ] 05-02-PLAN.md — `codegraph` as a checksum-verified `kind="github_release"` entry, with the live GitHub-API verification recorded on it and the tier tripwire moved (wave 2)
+- [x] 05-02-PLAN.md — `codegraph` as a checksum-verified `kind="github_release"` entry, with the live GitHub-API verification recorded on it and the tier tripwire moved (wave 2)
 - [ ] 05-03-PLAN.md — `puppeteer` entry with platform-conditional methods (Linux arm64 gated off), `mmdc.requires`/`co_install` wiring, and the pnpm-not-brew-not-Volta decision recorded in the registry and PROJECT.md (wave 3)
 - [ ] 05-04-PLAN.md — Group-aware, pin-aware pnpm-globals replay, so the Doctor reinstall cannot re-split the `mmdc` + `puppeteer` install group and instead repairs a brownfield split — plus Doctor detection that TELLS an affected user their group is split and which key repairs it (wave 4)
 
@@ -293,7 +293,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 2. Tier-Scoped Catalog Views & Recommends | 2/2 | Complete    | 2026-09-05 |
 | 3. Install/Uninstall & Tweak Lifecycle Hardening | 3/3 | Complete    | 2026-09-05 |
 | 4. npm/npx Ban Extension & Redirect Policy | 5/5 | Complete    | 2026-09-05 |
-| 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 0/4 | Planned | - |
+| 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 2/4 | In Progress | - |
 | 6. SDKMAN Hardening & Registry-Authoring Guidelines | 0/TBD | Not started | - |
 | 7. System & User Tier Catalog Expansion | 0/TBD | Not started | - |
 | 8. AI Tier Catalog Expansion & uv-tool Executor | 0/TBD | Not started | - |
