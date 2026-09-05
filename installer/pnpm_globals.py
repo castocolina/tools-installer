@@ -32,10 +32,7 @@ from installer.model import Tool
 from installer.run import CommandError, Runner, run_command
 
 _EMPTY_PREVIEW = "nothing pnpm-managed to reinstall"
-_UNRESOLVABLE_PREVIEW = (
-    "pnpm not found - cannot preview the reinstall "
-    "(the managed shim dir is excluded from the search)."
-)
+_UNRESOLVABLE_PREVIEW = "pnpm not found on PATH - cannot preview the reinstall."
 
 
 @dataclass(frozen=True)

@@ -257,13 +257,20 @@ def real_binary(
     """Resolve `name` from PATH, never the managed shim.
 
     Re-resolving the target through the live PATH is how a shim finds itself
-    (04-RESEARCH Pitfall 3), so the search path never contains the shim dir and
-    a sentinel-carrying result is refused.
+    (04-RESEARCH Pitfall 3), so a sentinel-carrying result is refused. The
+    sentinel — not the directory — is the guard: the shim dir IS the managed bin
+    dir (~/.local/bin), and a pnpm installed there (`npm i -g pnpm` with
+    prefix=~/.local, or `corepack enable --install-directory ~/.local/bin`) must
+    stay resolvable. Excluding the whole directory made those setups report
+    "pnpm not found" while `pnpm --version` worked fine.
+
+    The directory is dropped only for the retry, once our own shim has actually
+    won the lookup.
     """
-    search_dirs = [
-        entry for entry in path_value.split(os.pathsep) if entry and entry != str(shim_dir)
-    ]
-    found = lookup(name, os.pathsep.join(search_dirs))
+    found = lookup(name, path_value)
+    if found is None or is_our_shim(Path(found)):
+        rest = [entry for entry in path_value.split(os.pathsep) if entry and entry != str(shim_dir)]
+        found = lookup(name, os.pathsep.join(rest))
     if found is None or is_our_shim(Path(found)):
         return None
     return found

@@ -77,7 +77,10 @@ def _node(method: Method, runner: Runner) -> None:
     # model still applies.
     pnpm = real_pnpm()
     if pnpm is None:
-        raise ExecutorError("pnpm not found (managed shim dir excluded from the search)")
+        raise ExecutorError(
+            "pnpm not found on PATH — install pnpm (or, if this installer's pnpm wrapper "
+            "is the only pnpm on PATH, re-apply the package-manager policy)"
+        )
     runner([pnpm, "add", "-g", require_str(method, "npm_pkg")])
 
 

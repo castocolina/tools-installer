@@ -279,7 +279,7 @@ def test_real_binary_skips_shim_dir(tmp_path: Path):
                 return str(candidate)
         return None
 
-    (shim_dir / "pnpm").write_text("shim\n")
+    (shim_dir / "pnpm").write_text(f"#!/bin/sh\n{REDIRECT_SENTINEL}\n")
     (real_dir / "pnpm").write_text("real\n")
     found = real_binary(
         "pnpm",
@@ -288,6 +288,24 @@ def test_real_binary_skips_shim_dir(tmp_path: Path):
         lookup=lookup,
     )
     assert found == str(real_dir / "pnpm")
+
+
+def test_real_binary_finds_a_real_binary_living_in_the_shim_dir(tmp_path: Path):
+    # The shim dir IS the managed bin dir: `npm i -g pnpm --prefix ~/.local` and
+    # `corepack enable --install-directory ~/.local/bin` both land pnpm there,
+    # and excluding the directory made it permanently unresolvable.
+    shim_dir = tmp_path / "shims"
+    shim_dir.mkdir()
+    real = shim_dir / "pnpm"
+    real.write_text("#!/bin/sh\necho real pnpm\n")
+    real.chmod(0o755)
+    found = real_binary(
+        "pnpm",
+        shim_dir=shim_dir,
+        path_value=str(shim_dir),
+        lookup=_lookup_existing,
+    )
+    assert found == str(real)
 
 
 def _lookup_existing(name: str, path: str) -> str | None:
@@ -303,7 +321,7 @@ def test_real_pnpm_skips_shim_dir(tmp_path: Path):
     real_dir = tmp_path / "real"
     shim_dir.mkdir()
     real_dir.mkdir()
-    (shim_dir / "pnpm").write_text("shim\n")
+    (shim_dir / "pnpm").write_text(f"#!/bin/sh\n{REDIRECT_SENTINEL}\n")
     (real_dir / "pnpm").write_text("real\n")
     found = real_pnpm(
         shim_dir=shim_dir,

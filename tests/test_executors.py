@@ -150,7 +150,8 @@ def test_node_raises_when_real_pnpm_missing(tmp_path: Path, monkeypatch: pytest.
     method = Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"})
     with pytest.raises(ExecutorError, match="pnpm") as exc_info:
         execute(method, calls.append)
-    assert "managed shim dir" in str(exc_info.value)
+    # The message names what the user can act on, not an internal search rule.
+    assert "install pnpm" in str(exc_info.value)
     assert calls == []
 
 

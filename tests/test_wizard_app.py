@@ -1309,10 +1309,7 @@ async def test_doctor_screen_shows_missing_pnpm_globals_and_preview() -> None:
 
 
 async def test_doctor_screen_renders_unresolvable_pnpm_preview() -> None:
-    degraded = (
-        "pnpm not found - cannot preview the reinstall "
-        "(the managed shim dir is excluded from the search)."
-    )
+    degraded = "pnpm not found on PATH - cannot preview the reinstall."
     app = _app(
         node_globals=lambda: _mmdc_report(),
         globals_preview=lambda: degraded,
