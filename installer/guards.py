@@ -24,6 +24,7 @@ BANNED: dict[str, str] = {
     "npm": "pnpm (pnpm add -g <pkg>)",
     "pip": "uv (uv pip install / uv add)",
     "pip3": "uv (uv pip install / uv add)",
+    "npx": "pnpm (pnpm dlx <pkg>)",
 }
 
 
@@ -150,10 +151,23 @@ def install_shims(shim_dir: Path) -> dict[str, str]:
     return results
 
 
+def guarded_names() -> tuple[str, ...]:
+    """Every command name this installer shims, ban and redirect alike.
+
+    Deduplicated because a name may appear in both dicts (its redirect body
+    supersedes its hard-block body on disk).
+    """
+    return tuple(dict.fromkeys((*BANNED, *REDIRECTED)))
+
+
 def remove_shims(shim_dir: Path) -> dict[str, str]:
-    """Remove only the shims we created. Returns {name: 'removed' | 'absent'}."""
+    """Remove only the shims we created. Returns {name: 'removed' | 'absent'}.
+
+    One remover covers both bodies, so a redirect can never outlive the
+    policy's teardown (SC#1).
+    """
     results: dict[str, str] = {}
-    for name in BANNED:
+    for name in guarded_names():
         target = shim_dir / name
         if target.exists() and is_our_shim(target):
             target.unlink()
@@ -164,14 +178,35 @@ def remove_shims(shim_dir: Path) -> dict[str, str]:
 
 
 def guard_status(shim_dir: Path) -> dict[str, bool]:
-    """{name: our shim is installed} for each banned command."""
-    return {name: is_our_shim(shim_dir / name) for name in BANNED}
+    """{name: our shim is installed}."""
+    return {name: is_our_shim(shim_dir / name) for name in guarded_names()}
+
+
+def guard_label(name: str) -> str:
+    """Per-command doctor text: redirect label, or 'blocked'."""
+    if name in REDIRECTED:
+        return REDIRECTED[name].label
+    return "blocked"
 
 
 def ban_alias_block() -> str:
-    """Marker-delimited alias block (no trailing newline, like shellrc blocks)."""
+    """Marker-delimited alias block (no trailing newline, like shellrc blocks).
+
+    An interactive redirect alias must perform the redirect, not warn about it —
+    a redirect is meant to be transparent. The alias names the target by PATH
+    name while the installed shim bakes the real_binary-resolved absolute path,
+    so in an interactive shell the alias resolves the target through the user's
+    own PATH. That is intended — an alias must keep working after the target
+    moves — and it stays harmless after plan 04-03 wraps pnpm, because dlx is
+    not one of GLOBAL_SUBCOMMANDS and therefore never reaches the volta branch.
+    """
     lines = [BAN_BEGIN]
     for name, hint in BANNED.items():
+        if name in REDIRECTED:
+            spec = REDIRECTED[name]
+            tokens = " ".join((spec.target, *spec.args))
+            lines.append(f"alias {name}='{tokens}'")
+            continue
         lines.append(
             f"""alias {name}='echo "tools-installer: {name} is banned — use {hint}." >&2; false'"""
         )
@@ -213,7 +248,7 @@ def guard_path_warning(
             "non-interactive callers."
         )
     shim_index = path_dirs.index(target)
-    for name in BANNED:
+    for name in guarded_names():
         real = which(name)
         if real and not is_our_shim(Path(real)):
             real_dir = str(Path(real).parent)
@@ -223,3 +258,23 @@ def guard_path_warning(
                     f"put {target} earlier on PATH."
                 )
     return None
+
+
+def guard_redirect_warning(shim_dir: Path) -> str | None:
+    """Warn when a redirect name is installed as a hard block because its target
+    was unresolvable at apply time. Returns None when every redirect on disk is
+    live.
+    """
+    messages: list[str] = []
+    for name, spec in REDIRECTED.items():
+        path = shim_dir / name
+        if not is_our_shim(path):
+            continue
+        if REDIRECT_SENTINEL in path.read_text():
+            continue
+        messages.append(
+            f"'{name}' is hard-blocked because '{spec.target}' was not "
+            "resolvable when the policy was applied; install "
+            f"{spec.target} and re-apply."
+        )
+    return " ".join(messages) if messages else None
