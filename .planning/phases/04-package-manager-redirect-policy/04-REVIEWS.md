@@ -116,3 +116,89 @@ Only one reviewer lane (`opencode-plan-review`, backed by `xai/grok-4.6`) ran th
 
 ### Divergent Views
 None — single reviewer lane this cycle; no cross-reviewer disagreement to reconcile. The orchestrating session's independent source verification corroborates every CRITICAL/HIGH item rather than diverging from it.
+
+---
+
+# Cross-AI Plan Review — Phase 4 — Cycle 2 (post-fix verification)
+
+**Reviewed:** 2026-09-05 · **Reviewer:** `opencode-plan-review` (opencode CLI, model `xai/grok-4.6`) · **Plans reviewed:** 04-01-PLAN.md .. 04-05-PLAN.md, post-fix revision committed at `bbd44c1` (on top of cycle-1 review commit `c3211ba`).
+
+Cycle 1 found 2 CRITICAL and 6 HIGH concerns (see the "Cross-AI Plan Review — Phase 4" section above). A gsd-planner agent revised all 5 PLAN.md files to address each with mechanism-level changes. This cycle checks whether those fixes actually close the gaps, independently re-verified against live repo source by the orchestrating session (not just restated from the reviewer's own text).
+
+## OpenCode Review (opencode-plan-review)
+
+### Status: Approved — cycle-1 CRITICAL/HIGH closed; no new blockers
+
+### Cycle-1 CRITICAL/HIGH disposition
+
+| Finding | Verdict | Evidence |
+|---|---|---|
+| `_node` / 04-05 reinstall hit the pnpm wrapper via PATH | **FIXED** | 04-03 Task 1: `real_pnpm` + `_node` absolute path + `ExecutorError` on miss; 04-05 Task 1: `reinstall_argv` requires absolute `pnpm=`, default `resolve_pnpm=real_pnpm`. Live hole confirmed still present pre-fix at `installer/executors.py:74` + `installer/run.py:19-22` (`subprocess.run(cmd)`) — the only production `["pnpm", …]` call site. |
+| `run_live` misses `CommandError` | **FIXED** | `CommandError` is `RuntimeError` (`installer/run.py:10-16`), not `OSError`. `run_live` today is `except OSError` only (`installer/ui_common.py:40-48`) — confirmed live. 04-05 Task 3 widens to `except (OSError, CommandError)`; the Doctor regression test is required to raise `CommandError` specifically, not `OSError`. |
+| R-03 vs REQUIREMENTS.md "after pnpm updates" | **FIXED** | 04-05 Task 4 edits `REQUIREMENTS.md`'s body + Traceability row to `Partial` across Phase 4/12, and `ROADMAP.md` SC#4 states "manual trigger only" with Phase 12 named as owner of the automatic trigger. Confirmed REQUIREMENTS.md:40 still carries the un-narrowed text pre-fix (expected — task not yet executed). |
+| `UnifiedApp` required kwargs break 9 existing call sites | **FIXED** | 04-05 Task 3: the two new kwargs default to `None`, substituted with an empty report / no-op; `DoctorScreen` keeps them required; the three previously-omitted test files (`tests/test_catalog_tui.py`, `tests/test_uninstall_e2e.py`, `tests/test_policies_e2e.py`) stay unedited and an acceptance criterion runs them unmodified. |
+| `assert all(guard_status(...).values())` breaks once pnpm joins `guarded_names()` | **FIXED** | 04-03 Task 4 names `tests/test_policy.py:53` and `tests/test_policies_e2e.py:83` explicitly, replaces the blanket assertion with a two-sandbox (volta-present / volta-absent) case, and an acceptance criterion greps the blanket `all(...)` form out of both files. |
+| Stale `BANNED["npm"]` hint recommends an invocation this phase itself intercepts | **FIXED** | 04-03 Task 2 rewrites the hint in the same task that ships the wrapper fallback body; acceptance criterion asserts `'volta install' in hint` and `'add -g' not in hint`. Confirmed live text (`installer/guards.py:21`) still carries the stale form pre-fix. |
+
+### Mandatory focus questions
+
+**1. Does `real_pnpm`/`_node` close the self-interception hole?** Yes, for every installer-owned `pnpm add -g` call after this phase ships. Verified: today's only production bare-name call is `installer/executors.py:74`, routed through `subprocess.run(cmd)` (`installer/run.py:19-22`), which is PATH-resolved — confirming the cycle-1 CRITICAL premise was correct. After 04-03 Task 1, `_node` resolves `argv[0]` via `real_pnpm()`, whose default `shim_dir` is `installer.locations.bin_dir(None)` (`~/.local/bin`) — excluded from the search, with sentinel-carrying results refused regardless of shim state (not-yet-installed / installed / stale all resolve to either the real binary further down PATH, or `ExecutorError`/`CommandError` — never a silent bare-name fallback). 04-05's reinstall reuses the same resolver. No other `runner(["pnpm", ...])` call site exists in `installer/`.
+
+Caveat (MEDIUM, independently confirmed): the plan's Task 1 test-authoring instructions (04-03-PLAN.md lines 165-169) describe the wrapper-first regression case as building a `tmp_path` bin dir on `PATH`, without explicitly stating that `HOME` must also be monkeypatched so `bin_dir(None)` resolves to that same directory. Since `_node()` calls `real_pnpm()` with no explicit `shim_dir` override, a regression test that only manipulates `PATH` (without pointing `HOME` at the same tmp dir) would not actually exercise the production shim-exclusion default — the planted "wrapper" would just be found via ordinary PATH search, sentinel check never triggered. `tests/test_node_install_e2e.py:31` already monkeypatches `HOME` this way; `tests/test_executors.py`'s existing `test_node_runs_pnpm_add_global_never_bare_npm` (lines 124-128) does not. This is a test-specification ambiguity, not a mechanism defect — the design is sound, but the plan text should say explicitly to monkeypatch `HOME` for this specific regression case.
+
+**2. Is the `run_live`/`CommandError` fix correct?** Yes. Verified hierarchy: `class CommandError(RuntimeError)` (`installer/run.py:10`); `run_command` already converts a raw `OSError` into `CommandError` (`installer/run.py:25-26`), so today's `except OSError`-only `run_live` never actually sees a failed `Runner` call surfaced as `OSError` — confirming the cycle-1 CRITICAL premise. The plan's fix (`except (OSError, CommandError)`) is correct: the PATH-repair action still raises plain `OSError` from file I/O, while a failed reinstall raises `CommandError` — both paths now degrade gracefully instead of crashing the screen. The plan's regression test is specified to raise `CommandError` specifically (not `OSError`), which is the correct proof — an `OSError`-only test would have passed even against the unfixed code and proven nothing.
+
+**3. Does the pnpm argv-detection wrapper leave non-`-g`/`--global` invocations unmodified?** Yes for the full requested matrix, with two small, explicitly-documented and accepted gaps. POSIX `case` matching is whole-token, so `pnpm add typescript`, `pnpm add -D typescript`, `pnpm list -g`, `pnpm run build --watch`, and `pnpm add typescript --filter=-g` all pass through unmodified (no false positive on substring `-g`). `pnpm add -gD typescript` / `npm i -gD` correctly trigger the volta redirect via the added `-[!-]*` cluster-scan arm (closing the cycle-1 MEDIUM finding). Two accepted, explicitly-documented residual gaps: (a) `pnpm --filter <ws> add -g <pkg>` — a leading value-taking option before the subcommand causes a false negative (passthrough, bypassing the volta redirect) — accepted because it still keeps the install under pnpm's gated model, not a security regression; (b) any single-dash token containing the letter `g` as a substring (e.g. a hypothetical `-registry` flag) would set `is_global` via the same cluster-scan arm — a narrow false-positive surface, LOW severity, same family as the accepted leading-option gap. Neither is a HIGH-severity regression; both are pre-existing, catalogued MEDIUM/LOW items from cycle 1's own review, not new problems introduced by the fix.
+
+**4. Does R-03's manual-only scope match D-08?** Yes, faithfully. D-08's literal "after `pnpm` itself updates" automatic trigger is explicitly deferred to Phase 12, not silently dropped: 04-05 Task 4 writes the split into `REQUIREMENTS.md` (row becomes `Partial`, spanning Phase 4 + Phase 12) and `ROADMAP.md` (Phase 4 SC#4 states "manual trigger only"; Phase 12's section is extended to name the automatic trigger it still owes). The Traceability checkbox is deliberately left unchecked. This closes the gap cycle-1 flagged (the narrowing existed only in CONTEXT.md's R-03, not in the tracked requirement text) without overstating or understating D-08's actual scope.
+
+### Concerns
+
+#### CRITICAL
+None.
+
+#### HIGH
+None open. All six cycle-1 blocking items (2 CRITICAL + 4 HIGH... actually 2 CRITICAL + 4 HIGH per cycle-1's severity split, all 6 total) verified FIXED above.
+
+#### MEDIUM
+- **Test-authoring ambiguity for `_node`'s wrapper-first regression case (04-03 Task 1).** The plan's test-building instructions do not explicitly require monkeypatching `HOME` so the planted wrapper lands at `real_pnpm()`'s actual default `shim_dir` (`installer.locations.bin_dir(None)`). Without that, the regression test could be written in a way that never exercises the sentinel-exclusion logic it's meant to prove. Fix: state explicitly in Task 1's action text that the wrapper-first case must monkeypatch `HOME` to a `tmp_path`, mirroring `tests/test_node_install_e2e.py:31`.
+- **Doctor reinstall preview when `real_pnpm()` resolves to `None` is unspecified (04-05 Task 3, `_refresh_body`).** `reinstall_argv` requires `pnpm: str` (non-optional) and only raises `ValueError` on an empty entry set; the case of a non-empty residual set with no resolvable real pnpm is handled correctly for the actual keypress (raises `CommandError`, per Task 1), but the *preview* rendering path is not specified for this state — it's unclear whether `_refresh_body` would call `reinstall_argv(entries, pnpm=None)` (a type violation) or otherwise mishandle it. Fix: `_refresh_body` should show an explicit "pnpm not resolvable" line rather than calling `reinstall_argv` with a non-string value when `real_pnpm()` returns `None`.
+
+#### LOW
+- Two stale `ROADMAP.md` sentences that Task 4 does not touch: the Phase 12 list entry still says it "unblocks Phase 5's pnpm-reinstall mitigation" (`ROADMAP.md:67`, stale since the requirement moved to Phase 4), and the Phase 5 section's note still claims `REQ-pnpm-global-reinstall-mitigation` is "resolved there via the Volta redirect" (`ROADMAP.md:163`), which overstates the actual (partial, manual-trigger-only) outcome given the residual `mmdc` set (`installer/registry.toml:1646-1658`). Neither blocks execution; both are worth a follow-up edit alongside or shortly after Task 4.
+- `DoctorScreen`'s state-field naming for the reinstall action (separate `globals_done`/`globals_error` vs. reusing PATH-fix's `applied`/`error`) is under-specified; reuse would incorrectly block pressing `r` after a PATH-fix apply. Recommend explicit distinct field names in the plan text.
+- The `-[!-]*`/`*g*` cluster-scan false-positive surface (e.g. a hypothetical `-registry` flag) is the same accepted-risk family as the leading-option-value gap; no action required beyond what's already documented.
+
+### Suggestions
+- In 04-03 Task 1's action text, add `monkeypatch.setenv("HOME", str(tmp_path))` to the wrapper-first regression case so it exercises `real_pnpm()`'s actual default `shim_dir`.
+- In 04-05's `_refresh_body` spec, add an explicit branch for `real_pnpm() is None` with a non-empty residual set, showing a "pnpm not resolvable" line instead of calling `reinstall_argv` with a non-string value.
+- Name the Doctor reinstall's screen-state fields separately from the PATH-fix's `applied`/`error` (e.g. `globals_done`/`globals_error`).
+- Optionally, have Task 4 also correct the two stale `ROADMAP.md` sentences identified above while it's already editing that file.
+
+### Risk Assessment
+
+**LOW.** Cycle-1's HIGH overall risk was driven by the wrapper intercepting the installer's own `pnpm add -g` calls and a TUI crash on `CommandError` — both now designed against, and verified against, live source (`installer/run.py:10,19-26`, `installer/executors.py:74`, `installer/ui_common.py:40-48`). Residual risk is confined to two test/UI underspecifications (test-setup ambiguity, an unspecified preview-degradation branch) that do not reopen the security hole cycle-1 identified, plus minor stale-documentation cleanup.
+
+**Per plan:** 04-01 LOW · 04-02 LOW · 04-03 LOW-MEDIUM · 04-04 LOW · 04-05 LOW-MEDIUM
+
+---
+
+## Independent Verification Notes (orchestrating session)
+
+Every CRITICAL/HIGH disposition and both mandatory-focus-question caveats above were independently cross-checked directly against live repository source (not merely restated from the reviewer's text):
+- `installer/executors.py:74` — confirmed pre-fix bare `runner(["pnpm", "add", "-g", ...])`, the sole production call site.
+- `installer/run.py:10,19-26` — confirmed `CommandError(RuntimeError)` and `run_command`'s `subprocess.run`/PATH-resolution behavior, and that `run_command` converts a raw `OSError` into `CommandError` before it ever reaches `run_live`.
+- `installer/ui_common.py:40-48` — confirmed `run_live` catches `OSError` only, pre-fix.
+- `installer/guards.py:21` — confirmed stale `BANNED["npm"]` hint text, pre-fix.
+- `installer/locations.py:28-32` — confirmed `bin_dir(None)` default (`~/.local/bin`), the basis for the MEDIUM test-ambiguity finding.
+- `tests/test_executors.py:124-128` — confirmed the existing `test_node_runs_pnpm_add_global_never_bare_npm` predates the fix and does not itself monkeypatch `HOME`.
+- `.planning/REQUIREMENTS.md:40` and `.planning/ROADMAP.md:67,163` — confirmed current (pre-Task-4) text, and the two stale ROADMAP sentences the LOW finding names.
+- 04-03-PLAN.md and 04-05-PLAN.md task/action/acceptance-criteria text — confirmed each cycle-1 CRITICAL/HIGH finding maps to a real, specific task/test/acceptance-criterion change, not a documentation-only edit.
+
+No CRITICAL or HIGH concern remains open. Two MEDIUM and three LOW items are genuine, independently-confirmed, actionable-but-non-blocking gaps (test-authoring ambiguity, an unspecified UI-preview branch, and stale cross-references in ROADMAP.md).
+
+## Consensus Summary (Cycle 2)
+
+Single reviewer lane this cycle (`opencode-plan-review`, `xai/grok-4.6`), cross-verified by the orchestrating session as detailed above. All 2 CRITICAL and 6 HIGH concerns from cycle 1 are confirmed fixed with real mechanism changes (a shim-excluding `real_pnpm` resolver reused by both the catalog installer and the Doctor reinstall; a widened `run_live` exception boundary; explicit `UnifiedApp` keyword defaults; named, individually-replaced test assertions; a rewritten stale hint; and explicit partial-status tracking in REQUIREMENTS.md/ROADMAP.md for R-03). Two new MEDIUM findings and three LOW findings surfaced during this cycle's fix-verification pass — all are test-specification or documentation-completeness gaps, none reopen a security or correctness hole.
+
+CYCLE_SUMMARY: current_high=0 current_actionable=5
