@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 current_phase: 04
 current_phase_name: Package Manager Redirect Policy
 status: executing
-stopped_at: Completed 04-02-PLAN.md
-last_updated: "2026-09-05T13:48:23Z"
+stopped_at: Completed 04-03-PLAN.md
+last_updated: "2026-09-05T14:27:35Z"
 last_activity: 2026-09-05
-last_activity_desc: Completed 04-02-PLAN.md — volta system-tier catalog entry
-state_head: cb2232951b36bb1a00c328a6d13b2554a7d64b3b
+last_activity_desc: Completed 04-03-PLAN.md — argv-conditional npm/pnpm global redirect
+state_head: e51e8db5d0741be64ac0ed2ecccb5d55d0cbfadb
 progress:
   total_phases: 12
   completed_phases: 3
   total_plans: 11
-  completed_plans: 7
-  percent: 25
+  completed_plans: 8
+  percent: 30
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 04 (Package Manager Redirect Policy) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Executing Phase 04
-Last activity: 2026-09-05 — Completed 04-02-PLAN.md (volta catalog entry)
+Last activity: 2026-09-05 — Completed 04-03-PLAN.md (argv-conditional global redirect)
 
-Progress: [██░░░░░░░░] 40%
+Progress: [███░░░░░░░] 50%
 
 ## Performance Metrics
 
@@ -68,6 +68,7 @@ Recent decisions affecting current work:
 - [PRD, resolved 2026-09-04]: Oh-My-Zsh's `git`/`docker` plugins are a config-array edit to `.zshrc`, not new `Tool` entries
 - [03-02, 2026-09-05]: Shipped as `omz_plugins_policy` (third Policy factory), in-place single-line editor in `installer/omz.py`, not `apply_block`/`strip_block`
 - [04-02, 2026-09-05]: volta is a `tier="system"` catalog tool (Linux script + macOS brew, `~/.volta/bin` on both methods); D-07 recorded on the entry — volta install runs ungated npm postinstall scripts
+- [04-03, 2026-09-05]: npm/pnpm global install/add/i exec volta install via an argv-conditional PATH shim; _node uses real_pnpm() absolute path so the wrapper cannot intercept catalog installs
 
 ### Pending Todos
 
@@ -90,6 +91,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-05T13:48:23Z
-Stopped at: Completed 04-02-PLAN.md
+Last session: 2026-09-05T14:27:35Z
+Stopped at: Completed 04-03-PLAN.md
 Resume file: None
