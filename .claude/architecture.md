@@ -80,3 +80,43 @@ can move between the offer and the accept.
 Phase 2 ships illustrative `recommends` data on `claude` and `opencode` drawn
 from tools already in the catalog per CONTEXT D-02; Phase 8 replaces it with
 the real companion set once those tools exist.
+
+## Phase 3: install, uninstall, and tweak lifecycle
+
+`installer/deps.py::resolve_dependencies` decides install ORDER and drops a
+branch whose dependency is unavailable on this platform — a pre-flight
+judgement made from the registry before anything runs.
+`installer/session.py::run_installs` answers the different question of a
+dependency that was available and then FAILED while installing, which is
+knowable only mid-run. The two share no code and must not be merged: the
+resolver is pure and terminal-free, while the failure set exists only for the
+duration of one `run_installs` call. A skipped dependent is reported as
+`dependency-failed` with the blocking ids on `InstallOutcome.blocked_by`, is
+never handed to the install engine, and is always listed in the summary.
+`run_installs` is a single forward pass that relies on the resolver's
+deps-first order and deliberately does not sort, so `requires` plus
+`resolve_dependencies` remains the sole ordering mechanism.
+
+`installer/shellrc.py`'s `apply_block`/`strip_block` applies only to files this
+installer owns — `~/.myshellrc`, and the rc files it wires a `source` line into
+— and every `TweakBundle` uses it. Oh-My-Zsh's `plugins=(...)` array is the
+single exception, edited in place by `installer/omz.py`, because `.zshrc` and
+that line belong to the user's own oh-my-zsh install, so no tools-installer
+marker is ever written there. Only the single-line form is supported; the
+multi-line form raises `OmzPluginsError` rather than being parsed.
+`OmzPluginsError` subclasses `OSError` specifically so `ui_common.run_live`
+surfaces it under rule 3 without any screen adding an `except`. The feature is
+a `Policy` produced by `installer/policy.py::omz_plugins_policy` — not a `Tool`
+and not a `TweakBundle` — with its Oh-My-Zsh precondition carried by the
+`requires`/`missing_requires` fields `Policy` already has.
+
+A full uninstall disables every still-enabled tweak through the same
+`Policy.remove` closures the Policies view calls, via
+`installer/uninstall.py::sweep_tweaks`; it never reimplements removal, so
+"full uninstall" and "toggle off" are the same operation by construction. A
+tweak counts as active when its block is present OR an owned helper executable
+is on disk, and ownership means the sentinel check in `installer/tweaks.py`,
+never mere existence. `active_tweak_ids` is the single predicate the CLI
+preview, the Uninstall view's row and the removal all read, so a preview and
+its effect cannot diverge. `plan_uninstall` stays the `Tool`-shaped artifact
+walk and knows nothing about tweaks.

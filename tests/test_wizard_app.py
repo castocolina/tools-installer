@@ -47,12 +47,14 @@ def _uninstall_inputs(
     ban_names: list[str] | None = None,
     has_path_block: bool = False,
     remove: Callable[[UninstallDecision], None] = lambda _decision: None,
+    tweak_ids: tuple[str, ...] = (),
 ) -> UninstallInputs:
     return UninstallInputs(
         rows=rows if rows is not None else [],
         ban_names=ban_names if ban_names is not None else [],
         has_path_block=has_path_block,
         remove=remove,
+        tweak_ids=tweak_ids,
     )
 
 
@@ -617,6 +619,40 @@ async def test_uninstall_confirm_modal_shows_artifact_count() -> None:
         await pilot.pause()
         assert isinstance(app.screen, ConfirmUninstall)
         assert "1" in app.screen.summary  # one item to remove
+
+
+async def test_uninstall_screen_omits_the_tweaks_row_when_none_are_active() -> None:
+    app = _app(
+        uninstall=_uninstall_inputs(rows=[_removable_row(_tool("rg"), [Path("/opt/rg")])]),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        keys = {row.value for row in table.rows}
+        assert "#tweaks" not in keys
+        await pilot.press("a")
+        assert screen.remove_tweaks is False
+
+
+async def test_uninstall_screen_reports_the_tweaks_lever_in_its_summaries() -> None:
+    inputs = _uninstall_inputs(
+        tweak_ids=("countdown", "omz-plugins"),
+        remove=lambda _d: None,
+    )
+    app = _app(uninstall=inputs, initial_view="uninstall")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.pause()
+        assert "shell tweak" in screen.detail_text.lower()
+        await pilot.press("a")
+        assert screen.remove_tweaks is True
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmUninstall)
+        assert "the shell tweaks" in app.screen.summary
 
 
 async def test_uninstall_toggle_clears_stale_validation_toast() -> None:
