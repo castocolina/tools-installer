@@ -28,6 +28,11 @@ findings:
   info: 11
   total: 16
 status: issues_found
+fixed:
+  warning: 5
+  info: 0
+fix_pass: 2026-09-05
+fix_scope: critical_warning
 ---
 
 # Phase 2: Code Review Report
@@ -87,6 +92,24 @@ No BLOCKER-tier defect was found. Five WARNINGs follow, two of them proven with 
 running probe; the strongest are the prompt-lifetime pair (WR-01/WR-02), which
 contradict a contract this phase itself wrote into `.claude/architecture.md`.
 
+## Fix pass (2026-09-05)
+
+All five WARNINGs are resolved; the eleven INFO findings were out of scope for
+this pass and remain open. `make validate` and `make test` both pass on the
+fixed tree (738 tests, `installer/` at 99.81% line coverage), run in the
+isolated review-fix worktree with its own `uv sync`'d `.venv`, then re-checked
+after the branch fast-forwarded.
+
+| ID | Resolution | Commit |
+| --- | --- | --- |
+| WR-01 | Fixed — prompt/notice/pending ids cleared on view exit | `8d660ed` |
+| WR-02 | Fixed — accept re-filters and names only the delta | `8d660ed` |
+| WR-03 | Fixed — alias deleted, tests call `refresh_marks` | `d8a8dfa` |
+| WR-04 | Fixed — element types validated at load time | `756b5f0` |
+| WR-05 | Fixed — duplicate test now proves its own name | `178894c` |
+
+Each finding's resolution is recorded under its own heading below.
+
 ## Warnings
 
 ### WR-01: The recommends prompt and the requires notice survive view switches, contradicting the phase's own "transient, no per-session state" contract
@@ -141,6 +164,21 @@ def on_screen_resume(self) -> None:
 Add a regression test that marks a tool, navigates away and back, and asserts
 `recommends_text == ""` and `status_text == ""`.
 
+**Resolution (fixed, `8d660ed`):** the three clears moved into one
+`CatalogScreen._clear_transient` helper, called from both
+`on_tool_browser_selection_changed` and a new `on_screen_suspend`. Clearing on
+*suspend* rather than the suggested `on_screen_resume` was a deliberate
+deviation: `Screen.ScreenSuspend` fires on both legs of `show_view` (the
+`push_screen` and the `pop_screen`), so the screen is never left holding a
+prompt while inactive, instead of holding it until the user happens to come
+back. `action_dismiss_recommends` deliberately keeps its narrower clear — `d`
+dismisses the prompt, and a requires notice for the same mark survives it.
+Regression test: `test_leaving_the_view_clears_the_prompt_and_the_requires_notice`
+asserts both lines are empty after navigating away and back, then presses `r`
+to prove the pending ids are disarmed and not merely blanked. Verified to fail
+against the pre-fix handler. `.claude/architecture.md`'s transient-prompt
+paragraph now states the view-exit rule the code enforces.
+
 ### WR-02: The accept confirmation names ids that were already in the batch
 
 **File:** `installer/catalog_tui.py:311-325`
@@ -175,6 +213,16 @@ def action_accept_recommends(self) -> None:
     self.status.set(f"added {', '.join(added)} to your selection.", "ok")
 ```
 
+**Resolution (fixed, `8d660ed`):** applied as suggested — the accept re-filters
+`_pending_recommends` against the live `_staged` set, adds and names only the
+delta, and returns without a status claim when the delta is empty. Two
+regression tests, each proving a different branch:
+`test_accept_names_only_the_ids_it_actually_added` (one of two recommendations
+staged by hand while the prompt was armed, so the status names only the other)
+and `test_accept_claims_nothing_when_the_recommendation_is_already_staged`
+(empty delta, so no confirmation at all). Both verified to fail against the
+pre-fix accept.
+
 ### WR-03: A production alias in `ToolBrowser` exists only so two tests do not have to be renamed
 
 **File:** `installer/tool_browser.py:222-223`
@@ -206,6 +254,14 @@ literal inside `getattr`), so the gate passing is not evidence the alias is need
 which also removes two now-pointless `# noqa: B009` suppressions — a net reduction in
 both production code and suppressions, exactly the direction `.claude/architecture.md`
 asks for.
+
+**Resolution (fixed, `d8a8dfa`):** applied as suggested. Both test sites call
+`browser.refresh_marks()` directly and the two `# noqa: B009` suppressions are
+gone; the stale `_refresh_marks` mentions left in comments and docstrings in
+`tests/test_tool_browser.py` and `tests/test_wizard_app.py` were renamed to the
+public name so no prose points at a name that no longer exists. `grep` finds no
+remaining reference to the alias in `installer/`, `tests/`, or `setup.py`, and
+the two isolation tests still pass unchanged in substance.
 
 ### WR-04: `recommends` element types are never validated — a half-validation that a `tuple[str, ...]` annotation then lies about
 
@@ -246,6 +302,18 @@ for field_name in ("requires", "recommends"):
         raise ValueError(f"tool '{row['id']}': '{field_name}' must be a list of tool ids")
 ```
 
+**Resolution (fixed, `756b5f0`):** both fields now go through one
+`model._parse_id_list(raw, field, context)` helper, shaped like the existing
+`_parse_enum` so the two validators read alike. It rejects a non-list (which
+covers the old bare-string case, with the same error text, so the two existing
+string-form tests are untouched) and then every non-string element, raising the
+same `ValueError` the loader already uses. The `Any` from `tomllib` is typed at
+the boundary with an explicit `cast(list[object], raw)` rather than a
+`# type: ignore`, so pyright strict checks the loop. Two regression tests:
+`test_load_tools_rejects_a_non_string_recommends_element` (`recommends = [1, 2]`)
+and `test_load_tools_rejects_a_non_string_requires_element`
+(`requires = [["pnpm"]]`), both verified to fail against the pre-fix loader.
+
 ### WR-05: A new test is a byte-identical copy of the test above it and asserts nothing new
 
 **File:** `tests/test_deps.py:159-163` and `tests/test_deps.py:176-180`
@@ -284,6 +352,15 @@ def test_missing_requires_tolerates_a_partial_installed_map() -> None:
         mmdc, [mmdc, pnpm, node], staged=empty, installed={"pnpm": True}
     ) == ("node",)
 ```
+
+**Resolution (fixed, `178894c`):** applied as suggested (the cited line numbers
+still matched the tree). `test_missing_requires_tolerates_a_partial_installed_map`
+now passes `installed={"pnpm": True}` against a tool requiring both `pnpm` and
+`node`, so it distinguishes a present-and-True entry from a key absent from the
+map entirely — the `installed.get(dep_id, False)` default its name claims. The
+result is bound to a local before the assert to keep `ruff format` from wrapping
+the call into an unreadable shape. The first test
+(`test_missing_requires_names_unstaged_uninstalled_dependencies`) is unchanged.
 
 ## Info
 
