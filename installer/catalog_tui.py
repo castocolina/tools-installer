@@ -269,7 +269,7 @@ class CatalogScreen(AppScreen):
     def on_tool_browser_selection_changed(self, event: ToolBrowser.SelectionChanged) -> None:
         # Clear the "select at least one" warning the moment the user selects.
         event.stop()
-        self._clear_transient()
+        self.clear_transient()
         if event.item_id is None or not event.selected:
             return
         tool = self._by_id.get(event.item_id)
@@ -281,11 +281,16 @@ class CatalogScreen(AppScreen):
         self._announce_requires(tool)
         self._offer_recommends(tool)
 
-    def _clear_transient(self) -> None:
-        # The requires notice, the recommends prompt and the pending ids behind
-        # it all describe one selection moment. Anything that ends that moment
-        # clears all three together, so a stale prompt can never stay armed over
-        # a row it no longer describes.
+    def clear_transient(self) -> None:
+        """End the selection moment: drop the requires notice, the recommends
+        prompt and the pending ids behind it.
+
+        Public because `UnifiedApp.show_view` — the single navigation path
+        (`.claude/architecture.md` rule 2) — calls it on the screen being left.
+        A `ScreenSuspend` handler cannot do this job: that event fires whenever
+        the screen stops being the top of the stack, so opening and cancelling
+        the nav palette would wipe state for a view the user never left.
+        """
         self._pending_recommends = ()
         self.recommends_line.clear()
         self.status.clear()
@@ -337,19 +342,10 @@ class CatalogScreen(AppScreen):
         self.status.set(f"added {', '.join(added)} to your selection.", "ok")
 
     def action_dismiss_recommends(self) -> None:
-        # Narrower than _clear_transient on purpose: d dismisses the prompt, and
+        # Narrower than clear_transient on purpose: d dismisses the prompt, and
         # a requires notice for the same mark is a separate fact that survives it.
         self._pending_recommends = ()
         self.recommends_line.clear()
-
-    def on_screen_suspend(self) -> None:
-        # Leaving the view ends the selection moment the prompt and the requires
-        # notice describe (.claude/architecture.md: the prompt "is transient and
-        # keeps no per-session state"). Clearing on the way out rather than on
-        # the way back in means the screen is never left holding a prompt armed
-        # for a mark the user made an arbitrary number of navigations ago, and
-        # re-marking the tool raises both again with freshly computed content.
-        self._clear_transient()
 
     def on_screen_resume(self) -> None:
         # The staged set is shared by all three tier screens (plan 02-01), and

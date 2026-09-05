@@ -66,11 +66,16 @@ indistinguishable downstream from a row they marked themselves, and nothing
 else in the codebase may add one.
 
 The prompt is transient and keeps no per-session state: it and the requires
-notice describe one selection moment, so leaving the view clears both and
-disarms the pending ids. It reappears on any fresh mark that still has
-unstaged, uninstalled recommendations, and accepting is what stops it
-recurring. Accepting stages and names only the ids that were not already in
-the shared batch, since that batch can move between the offer and the accept.
+notice describe one selection moment, so navigating to another view clears
+both and disarms the pending ids. That clear hangs off `UnifiedApp.show_view`
+(rule 2's single navigation path) via the screen's public `clear_transient`,
+not off a screen-suspend handler — `ScreenSuspend` means "no longer top of the
+stack", which also covers pushing the nav palette, so it would wipe the state
+of a view the user opened a palette over and then cancelled out of. The prompt
+reappears on any fresh mark that still has unstaged, uninstalled
+recommendations, and accepting is what stops it recurring. Accepting stages and
+names only the ids that were not already in the shared batch, since that batch
+can move between the offer and the accept.
 
 Phase 2 ships illustrative `recommends` data on `claude` and `opencode` drawn
 from tools already in the catalog per CONTEXT D-02; Phase 8 replaces it with

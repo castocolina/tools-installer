@@ -532,6 +532,24 @@ def _recommends_catalog() -> tuple[list[Tool], dict[str, bool]]:
     return tools, {tool.id: False for tool in tools}
 
 
+def _both_lines_catalog() -> tuple[list[Tool], dict[str, bool]]:
+    """One mark on `agent` raises both transient lines: a requires notice for
+    `pnpm` and a recommends prompt for `jq`."""
+    tools = [
+        _tool("pnpm", category="pkg-mgr", priority="P0", tier="system"),
+        _tool("jq", category="data", priority="P1", tier="user"),
+        _tool(
+            "agent",
+            category="ai",
+            priority="P0",
+            tier="ai",
+            requires=("pnpm",),
+            recommends=("jq",),
+        ),
+    ]
+    return tools, {tool.id: False for tool in tools}
+
+
 async def test_dismissing_the_prompt_leaves_the_selection_untouched() -> None:
     tools, installed = _recommends_catalog()
     app = _unified_app(tools, installed, {})
@@ -605,19 +623,7 @@ async def test_leaving_the_view_clears_the_prompt_and_the_requires_notice() -> N
     (.claude/architecture.md: the prompt "is transient and keeps no per-session
     state"). Regression: they used to survive every view switch, leaving `r`
     armed for a row the cursor and the detail bar no longer described."""
-    tools = [
-        _tool("pnpm", category="pkg-mgr", priority="P0", tier="system"),
-        _tool("jq", category="data", priority="P1", tier="user"),
-        _tool(
-            "agent",
-            category="ai",
-            priority="P0",
-            tier="ai",
-            requires=("pnpm",),
-            recommends=("jq",),
-        ),
-    ]
-    installed = {tool.id: False for tool in tools}
+    tools, installed = _both_lines_catalog()
     app = _unified_app(tools, installed, {})
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("3")
@@ -637,6 +643,49 @@ async def test_leaving_the_view_clears_the_prompt_and_the_requires_notice() -> N
         await pilot.press("r")
         await pilot.pause()
         assert screen.selected == {"agent"}
+
+
+async def test_cancelling_the_nav_palette_keeps_the_prompt_and_the_requires_notice() -> None:
+    """Opening the palette and escaping out of it is not leaving the view: the
+    user ends up on the same view over the same row, so the selection moment
+    those two lines describe has not ended. Regression: the clear used to hang
+    off `ScreenSuspend`, which fires for a palette push too, so a cancelled
+    palette silently blanked both lines and disarmed `r`."""
+    tools, installed = _both_lines_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        screen = app.catalog_for("ai")
+        await pilot.press("ctrl+p")  # open the nav palette over the AI view
+        await pilot.pause()
+        await pilot.press("escape")  # and cancel it without navigating
+        await pilot.pause()
+        assert app.current_view == "ai"
+        assert "agent also needs pnpm" in screen.status_text
+        assert "agent pairs well with jq" in screen.recommends_text
+        # Still armed, not merely still rendered: r must stage the offer.
+        await pilot.press("r")
+        await pilot.pause()
+        assert screen.selected == {"agent", "jq"}
+
+
+async def test_cancelling_the_nav_palette_keeps_the_empty_selection_warning() -> None:
+    """The accept guard's message tells a user who pressed enter with an empty
+    batch what to do next; an unrelated palette open/cancel must not wipe it."""
+    tools, installed = _recommends_catalog()
+    app = _unified_app(tools, installed, {})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("enter")  # empty batch -> the guard warns
+        await pilot.pause()
+        assert "Select at least one tool" in app.catalog.status_text
+        await pilot.press("ctrl+p")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert "Select at least one tool" in app.catalog.status_text
 
 
 async def test_accept_names_only_the_ids_it_actually_added() -> None:

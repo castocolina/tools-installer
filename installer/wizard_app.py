@@ -757,6 +757,14 @@ class UnifiedApp(App[list[str] | None]):
         # in-flight stack and breaking the [catalog] / [catalog, <view>] invariant.
         if name == self.current_view:
             return
+        # An actual view change ends the selection moment the view being left was
+        # describing, so its transient prompt/notice go with it. This is the one
+        # navigation path (.claude/architecture.md rule 2), which makes it the only
+        # correct trigger: a screen-suspend handler would also fire for the nav
+        # palette opening on top, wiping state for a view the user never left.
+        leaving = self._catalogs.get(self.current_view)
+        if leaving is not None:
+            leaving.clear_transient()
         if self.current_view != BASE_VIEW:
             await self.pop_screen()
         if name != BASE_VIEW:
