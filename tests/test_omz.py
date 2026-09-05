@@ -476,3 +476,53 @@ def test_a_recorded_name_the_user_already_deleted_is_a_no_op(
     assert remove_plugins(zshrc, state) == ()
     assert zshrc.stat().st_mtime_ns == mtime
     assert plugins_owned(state) is False
+
+
+def test_removal_raises_rather_than_dropping_the_record_when_the_array_is_shadowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # CR-01: the user enables the policy, then converts their array to the
+    # multi-line form (oh-my-zsh's own idiom) -- the single-line array this
+    # module edited is now dead. disable_plugins is total and reports content
+    # unchanged for a shadowed array, which is indistinguishable from "found
+    # the array, nothing matched" -- clearing the record on that would report
+    # success while `git`/`docker` are still on disk with no record left to
+    # take them back out. Removal must raise and leave the record intact.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc, state = _sandbox(tmp_path, "plugins=(z)\nsource x\n")
+    assert write_plugins(zshrc, state) == ("git", "docker")
+    shadowed = "plugins=(z git docker)\nplugins=(\n  z\n)\n"
+    zshrc.write_text(shadowed)
+    with pytest.raises(OmzPluginsError, match="multi-line"):
+        remove_plugins(zshrc, state)
+    assert zshrc.read_text() == shadowed
+    assert plugins_owned(state) is True
+    assert owned_plugins(state) == ("git", "docker")
+    # A retry after the array is fixed recovers cleanly -- the record survived.
+    zshrc.write_text("plugins=(z git docker)\nsource x\n")
+    assert remove_plugins(zshrc, state) == ("git", "docker")
+    assert zshrc.read_text() == "plugins=(z)\nsource x\n"
+    assert plugins_owned(state) is False
+
+
+def test_atomic_write_replaces_a_symlinks_target_not_the_symlink_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # CR-02: a dotfile-manager setup commonly symlinks ~/.zshrc into a repo
+    # elsewhere. os.replace(tmp, path) renames OVER whatever `path` names --
+    # if `path` is the symlink itself, that deletes the symlink and leaves a
+    # plain file, silently falling out of sync with the repo it pointed at.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    repo_dir = tmp_path / "dotfiles"
+    repo_dir.mkdir()
+    real_zshrc = repo_dir / "zshrc"
+    real_zshrc.write_text("plugins=(z)\nsource x\n")
+    zshrc = tmp_path / ".zshrc"
+    zshrc.symlink_to(real_zshrc)
+    state = tmp_path / ".myshellrc"
+
+    assert write_plugins(zshrc, state) == ("git", "docker")
+
+    assert zshrc.is_symlink()
+    assert zshrc.resolve() == real_zshrc
+    assert real_zshrc.read_text() == "plugins=(z git docker)\nsource x\n"

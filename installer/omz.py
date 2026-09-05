@@ -200,13 +200,22 @@ def _atomic_write(path: Path, updated: str) -> None:
     way to clear it. Write a sibling temp file (same directory, so the rename
     cannot cross a filesystem), carry any existing mode over, then os.replace —
     which is atomic on POSIX.
+
+    When path is itself a symlink (a dotfile-manager setup that symlinks
+    ~/.zshrc to a repo elsewhere is common), os.replace(tmp, path) would rename
+    OVER the symlink, deleting it and leaving a plain file in its place — the
+    repo copy the symlink pointed at is left with the old content and silently
+    falls out of sync. Resolving to the real target first means the rename
+    replaces the file the symlink points to, and the symlink itself is never
+    touched.
     """
-    tmp = path.with_name(f"{path.name}.tools-installer.tmp")
+    target = path.resolve() if path.is_symlink() else path
+    tmp = target.with_name(f"{target.name}.tools-installer.tmp")
     try:
         tmp.write_text(updated)
-        if path.exists():
-            shutil.copymode(path, tmp)
-        os.replace(tmp, path)
+        if target.exists():
+            shutil.copymode(target, tmp)
+        os.replace(tmp, target)
     except OSError:
         # The original is still intact; drop the partial temp rather than
         # leaving a half-written file beside the user's own.
@@ -334,18 +343,28 @@ def remove_plugins(zshrc_path: Path, state_path: Path) -> tuple[str, ...]:
 
     Provenance, not content: a user who wrote `plugins=(git docker kubectl)`
     themselves has no record, so nothing is removed and .zshrc is not opened.
-    Stays total against the STATE of the machine — a missing record, a missing
-    .zshrc, or an array this module cannot parse all resolve to "nothing
-    removed" rather than raising, because the full-uninstall sweep calls this
-    against machines in any of those states. It is not total against a refused
-    WRITE: a read-only mount, an immutable .zshrc or a full disk raises OSError,
-    which `sweep_tweaks` catches and reports as a failed policy.
+    Stays total against the STATE of the machine when there is nothing of ours
+    left to undo — a missing record or a missing .zshrc both resolve to
+    "nothing removed" rather than raising, because the full-uninstall sweep
+    calls this against machines in either state.
+
+    It is NOT total against an array this module cannot parse. `disable_plugins`
+    is total on its own (it must be, since the sweep also calls it in contexts
+    with no record at all), but returning content unchanged there is
+    indistinguishable from "found the array, nothing in it matched" — and a
+    record we hold means real names of ours may still be on disk. Clearing the
+    record on that unverified "unchanged" would report success while a later
+    multi-line array (oh-my-zsh's own idiom) shadows the single-line one this
+    module edited, leaving `git`/`docker` in the file with no record and no way
+    back. So this calls `_rewrite` directly and raises when it cannot locate an
+    editable array, the same OmzPluginsError `sweep_tweaks` already catches and
+    reports as a failed policy for a refused WRITE.
 
     The record is therefore cleared LAST, and only once the file it describes
-    has actually changed. Clearing it first would make that OSError permanent:
-    the tool tells the user to fix permissions and re-run, but the re-run would
-    find no record, report "nothing to uninstall", and leave the names this
-    installer added in the user's .zshrc with no way to take them back out.
+    has actually changed (or is verifiably clean of every name it claims). A
+    refused write or an unlocatable array leaves the record in place: the tool
+    tells the user to fix the problem and re-run, and the re-run finds the same
+    record and can still act on it.
     """
     owned = owned_plugins(state_path)
     if not owned or not zshrc_path.exists():
@@ -353,11 +372,17 @@ def remove_plugins(zshrc_path: Path, state_path: Path) -> tuple[str, ...]:
         _clear_owned(state_path)
         return ()
     original = zshrc_path.read_text()
+    rewritten = _rewrite(original, owned, enable=False)
+    if rewritten is None:
+        # The array cannot be located (missing single-line form, or shadowed by
+        # a later multi-line one) even though a record claims plugins were
+        # added -- clearing the record here would report success while those
+        # names are still on disk with no way back.
+        raise OmzPluginsError(_refusal(original))
     current = plugins_in(original)
     removed = tuple(name for name in owned if name in current)
-    updated = disable_plugins(original, owned)
-    if updated != original:
-        _atomic_write(zshrc_path, updated)
+    if rewritten != original:
+        _atomic_write(zshrc_path, rewritten)
     _clear_owned(state_path)
     return removed
 
