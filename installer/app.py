@@ -25,6 +25,7 @@ from installer.guards import (
 )
 from installer.model import Tool
 from installer.platform import Platform
+from installer.pnpm_globals import audit_node_globals
 from installer.policy import omz_removal_detail
 from installer.prompt import Prompter
 from installer.rcclean import find_duplicate_path_lines, strip_lines
@@ -34,6 +35,7 @@ from installer.render import (
     render_doctor,
     render_guard,
     render_guard_status,
+    render_node_globals,
     render_rc_duplicates,
     render_skipped,
     render_summary,
@@ -255,6 +257,7 @@ def run_doctor(
     )
     render_doctor(report, console)
     render_guard_status(status, warning, console)
+    render_node_globals(audit_node_globals(tools, which=which), console)
     return report
 
 

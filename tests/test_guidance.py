@@ -1,7 +1,8 @@
 from pathlib import Path
 
 from installer.doctor import DoctorReport
-from installer.guidance import Guidance, doctor_guidance, guard_guidance
+from installer.guidance import Guidance, doctor_guidance, guard_guidance, node_globals_guidance
+from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 
 
 def test_healthy_report_yields_a_single_ok_item() -> None:
@@ -117,6 +118,26 @@ def test_guard_guidance_volta_note_absent_when_pnpm_is_not_live() -> None:
 
 def test_guard_guidance_volta_note_never_appears_alone() -> None:
     assert guard_guidance({"pip": False, "npm": False}, None) == []
+
+
+def test_node_globals_guidance_silent_when_empty() -> None:
+    assert node_globals_guidance(NodeGlobalsReport(entries=(), missing=())) == []
+
+
+def test_node_globals_guidance_silent_when_healthy() -> None:
+    entries = (NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),)
+    assert node_globals_guidance(NodeGlobalsReport(entries=entries, missing=())) == []
+
+
+def test_node_globals_guidance_warns_and_points_at_make_setup() -> None:
+    entries = (NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),)
+    items = node_globals_guidance(NodeGlobalsReport(entries=entries, missing=("mmdc",)))
+    assert len(items) == 1
+    item = items[0]
+    assert item.severity == "warn"
+    assert "mmdc" in item.meaning
+    assert "pnpm" in item.meaning.lower()
+    assert item.next_step.startswith("Run `make setup`")
 
 
 def test_guidance_is_frozen() -> None:

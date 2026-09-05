@@ -11,8 +11,9 @@ from installer.doctor import DoctorReport
 from installer.download import DOWNLOAD_KINDS
 from installer.engine import InstallOutcome
 from installer.enums import InstallStatus
-from installer.guidance import Guidance, doctor_guidance, guard_guidance
+from installer.guidance import Guidance, doctor_guidance, guard_guidance, node_globals_guidance
 from installer.links import TROUBLESHOOTING_URL
+from installer.pnpm_globals import NodeGlobalsReport
 from installer.session import Summary
 from installer.ui_common import SEVERITY_STYLE
 
@@ -140,6 +141,13 @@ def render_guard(
 def render_guard_status(status: dict[str, bool], warning: str | None, console: Console) -> None:
     """Read-only doctor lines: silent unless the ban is active or PATH order is off."""
     items = guard_guidance(status, warning)
+    if items:
+        console.print(guidance_text(items))
+
+
+def render_node_globals(report: NodeGlobalsReport, console: Console) -> None:
+    """Read-only doctor lines: silent unless a pnpm-managed global is missing."""
+    items = node_globals_guidance(report)
     if items:
         console.print(guidance_text(items))
 

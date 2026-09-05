@@ -954,6 +954,63 @@ def test_run_doctor_reports_active_ban(tmp_path: Path):
     assert "pip: blocked" in out
 
 
+def test_run_doctor_reports_missing_pnpm_globals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_doctor
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    mmdc = Tool(
+        id="mmdc",
+        name="mmdc",
+        category="diagram",
+        cmd="mmdc",
+        methods=(Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
+    )
+    bin_dir = tmp_path / "bin"
+    console, buf = _console()
+    run_doctor(
+        [mmdc],
+        console,
+        platform=_platform(),
+        default_bin_dir=bin_dir,
+        path_value=str(bin_dir),
+        exists=lambda _p: True,
+        which=lambda _n: None,
+    )
+    out = buf.getvalue()
+    assert "mmdc" in out
+    assert "make setup" in out
+
+
+def test_run_doctor_silent_on_healthy_pnpm_globals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_doctor
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    mmdc = Tool(
+        id="mmdc",
+        name="mmdc",
+        category="diagram",
+        cmd="mmdc",
+        methods=(Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
+    )
+    bin_dir = tmp_path / "bin"
+    console, buf = _console()
+    run_doctor(
+        [mmdc],
+        console,
+        platform=_platform(),
+        default_bin_dir=bin_dir,
+        path_value=str(bin_dir),
+        exists=lambda _p: True,
+        which=lambda name: "/x/mmdc" if name == "mmdc" else None,
+    )
+    out = buf.getvalue()
+    assert "pnpm-managed global set is incomplete" not in out
+
+
 def test_run_doctor_reports_npx_redirect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from installer.app import run_doctor
     from installer.guards import install_redirect_shims

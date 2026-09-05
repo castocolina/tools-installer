@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from installer.doctor import DoctorReport, has_problems
 from installer.enums import Severity
 from installer.guards import GLOBAL_REDIRECTED, REDIRECTED, guard_label, guarded_names
+from installer.pnpm_globals import NodeGlobalsReport
 
 
 @dataclass(frozen=True, init=False)
@@ -130,3 +131,27 @@ def guard_guidance(status: dict[str, bool], warning: str | None) -> list[Guidanc
             )
         )
     return items
+
+
+def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
+    """Warn when a pnpm-managed global command is missing; silent when healthy."""
+    if not report.missing:
+        return []
+    names = ", ".join(report.missing)
+    return [
+        Guidance(
+            title="pnpm-managed global set is incomplete",
+            meaning=(
+                f"{names} went missing from PATH. A pnpm self-update loses the "
+                "globals installed by earlier `pnpm add -g` invocations."
+            ),
+            # The prefix is load-bearing: DoctorScreen._tui_guidance rewrites a
+            # next_step only when it starts with a known literal prefix — today
+            # `Run `make fix`` — so a step written in TUI terms ("press `r`")
+            # would leak the keybinding into `make doctor`'s console output,
+            # where no key can be pressed, and a step with an unrecognised
+            # prefix would leak console instructions into the TUI.
+            next_step="Run `make setup` and open the Doctor view to reinstall the lost globals.",
+            severity=Severity.WARN,
+        )
+    ]

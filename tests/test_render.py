@@ -7,11 +7,13 @@ from installer.audit import ToolStatus
 from installer.checksums import ChecksumMismatch
 from installer.engine import InstallOutcome
 from installer.model import Method, Tool
+from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.render import (
     render_audit,
     render_dependency_notice,
     render_guard,
     render_guard_status,
+    render_node_globals,
     render_skipped,
     render_summary,
     render_verification,
@@ -302,6 +304,24 @@ def test_render_guard_status_active_shims_no_warning():
     assert "Package manager guards active" in out
     assert "pip: blocked" in out
     assert "guard warning" not in out
+
+
+def test_render_node_globals_silent_when_healthy() -> None:
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+    entries = (NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),)
+    render_node_globals(NodeGlobalsReport(entries=entries, missing=()), console)
+    assert buf.getvalue() == ""
+
+
+def test_render_node_globals_prints_finding() -> None:
+    buf = io.StringIO()
+    console = Console(file=buf, width=100)
+    entries = (NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),)
+    render_node_globals(NodeGlobalsReport(entries=entries, missing=("mmdc",)), console)
+    out = buf.getvalue()
+    assert "mmdc" in out
+    assert "make setup" in out
 
 
 def test_render_guard_status_includes_reload_next_step():
