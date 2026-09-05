@@ -202,3 +202,117 @@ No CRITICAL or HIGH concern remains open. Two MEDIUM and three LOW items are gen
 Single reviewer lane this cycle (`opencode-plan-review`, `xai/grok-4.6`), cross-verified by the orchestrating session as detailed above. All 2 CRITICAL and 6 HIGH concerns from cycle 1 are confirmed fixed with real mechanism changes (a shim-excluding `real_pnpm` resolver reused by both the catalog installer and the Doctor reinstall; a widened `run_live` exception boundary; explicit `UnifiedApp` keyword defaults; named, individually-replaced test assertions; a rewritten stale hint; and explicit partial-status tracking in REQUIREMENTS.md/ROADMAP.md for R-03). Two new MEDIUM findings and three LOW findings surfaced during this cycle's fix-verification pass — all are test-specification or documentation-completeness gaps, none reopen a security or correctness hole.
 
 CYCLE_SUMMARY: current_high=0 current_actionable=5
+
+---
+
+# Cross-AI Plan Review — Phase 4 — Cycle 3 (final, post cycle-2-fix verification)
+
+**Reviewed:** 2026-09-05 · **Reviewer:** `opencode-plan-review` (opencode CLI, model `xai/grok-4.6`) · **Plans reviewed:** 04-01-PLAN.md .. 04-05-PLAN.md, post cycle-2-fix revision committed at `c047b73` (on top of cycle-1 fix `bbd44c1` and cycle-2 review `0720581`).
+
+This is the final review cycle in the 3-cycle budget. Cycle 2 confirmed all 2 CRITICAL + 6 HIGH
+cycle-1 items closed and found 5 new non-blocking items (2 MEDIUM + 3 LOW), fixed in `c047b73`.
+This cycle checks whether those 5 fixes actually close the gaps with no new gap introduced by
+the fix itself, and whether anything genuinely new (not a restatement of an already-accepted
+tradeoff) would block execution.
+
+## OpenCode Review (opencode-plan-review)
+
+### Status: Approved — all cycle-2 items closed, no new blockers
+
+### Cycle-2 close-out disposition
+
+| Finding | Verdict | Evidence |
+|---|---|---|
+| 04-03 Task 1's wrapper-first regression test did not pin `HOME` | **Closed** | `installer/locations.py:28-32` confirmed `bin_dir(None) == Path.home() / ".local" / "bin"`. Pre-fix `tests/test_executors.py:124-128` (`test_node_runs_pnpm_add_global_never_bare_npm`) still asserts a bare `["pnpm", "add", "-g", ...]` and does not pin `HOME` — confirming the cycle-2 premise was live. The plan text now requires `monkeypatch.setenv("HOME", str(tmp_path))`, a wrapper planted at `tmp_path/.local/bin/pnpm`, and states `real_pnpm`'s defaults are resolved at call time — the production default `shim_dir` the sentinel-exclusion branch actually inspects. |
+| 04-05's preview path (`_refresh_body`) was unspecified when the residual set is non-empty and `real_pnpm()` returns `None` | **Closed** | `reinstall_argv` requires `pnpm: str`; calling it with `None` would be a type violation or print a bare name. 04-05-PLAN.md Task 1 step 7 adds `reinstall_preview`, a three-branch pure function (empty / unresolvable / resolvable) that always returns a string and never raises; Task 3 routes `_refresh_body` through a `globals_preview` seam and forbids `reinstall_argv` in the render path, checked by a comment-stripping acceptance criterion. Matches architecture rule 3 (`installer/ui_common.py:40-48` — screens carry no `try/except` of their own). |
+| Two stale `ROADMAP.md` sentences (line 67 Phase 12 bullet, line 163 Phase 5 note) | **Closed in plan text** | Confirmed still stale pre-execution: `.planning/ROADMAP.md:67` still reads `(unblocks Phase 5's pnpm-reinstall mitigation)`; the Phase 5 note still reads "resolved there via the Volta redirect." 04-05-PLAN.md Task 4 step 4 rewrites both, with acceptance criteria requiring `REQ-pnpm-global-reinstall-mitigation` + `automatic` on the Phase 12 bullet, `Partial` + `Phase 12` on the Phase 5 note, and a check that all twelve phases survive in both the list and detail sections (a sentence edit, not a restructure). |
+| `DoctorScreen` reinstall state-field naming vs. reusing `applied`/`error` | **Closed** | `installer/wizard_app.py:127-128` confirmed today's `self.applied` / `self.error`; `action_apply` (`:188-190`) opens with `if self.applied: return`. 04-05-PLAN.md Task 3 step 2 mandates distinct `globals_done` / `globals_error` fields and states explicitly why reuse is a bug in both directions (a successful reinstall would silently no-op the PATH fix and vice versa), pinned by a `<behavior>` case in both key orders and a grep-based acceptance criterion. |
+| Two already-accepted parse gaps (leading value-taking option before subcommand; `-[!-]*`/`*g*` cluster-scan false-positive) | **Correctly left unchanged** | Still documented in 04-03-PLAN.md Task 2 step 5, threat rows T-04-21/T-04-22, and the plan's own cycle-1/cycle-2 review-findings tables. Not re-opened, as instructed. |
+
+### Concerns
+
+#### CRITICAL / HIGH
+None.
+
+#### MEDIUM / LOW (actionable)
+None newly opened. One informational suggestion was raised and independently checked — it does
+not hold up as a real gap:
+
+- **04-01 Task 3's "4 active" test fixture uses a `which` that never resolves pnpm — reviewer
+  flagged this as a possible false pass, independently found to be a non-issue.** The reviewer
+  noted `tests/test_policy.py`'s `_ban` helper defaults `path_value=""` (confirmed at
+  `tests/test_policy.py:15`) and `which=lambda _name: None`, and suggested that without a fake
+  pnpm resolving, `install_redirect_shims` might degrade npx to a blocked state and the "4
+  active" assertion 04-01 Task 3 adds could pass without proving the redirect path. Checked
+  directly against 04-01-PLAN.md's own Task 2 action text: `install_redirect_shims` **always**
+  writes a shim for a name in `REDIRECTED` — the real redirect body when the target resolves,
+  or the `shim_script(name)` hard-block fallback body when it does not (reported as `"blocked
+  (pnpm not found)"`) — it never leaves the name unshimmed. Since `is_our_shim`/`guard_status`
+  treat any sentinel-carrying file as active regardless of which body it carries, the "4 active"
+  count holds whether or not pnpm resolves in that fixture. The reviewer's own text downgraded
+  this to "TDD will catch this; no plan edit needed," and independent verification confirms it
+  is not a live gap — no plan or test change is required.
+
+### Suggestions
+- None requiring a plan edit.
+
+### Risk Assessment
+
+**LOW.** All cycle-1 CRITICAL/HIGH and cycle-2 MEDIUM/LOW items are specified in the plan text
+against real file:line targets, with tests that would fail on the unfixed code (confirmed live:
+`installer/executors.py:72-74` and `installer/run.py:19-26` still show the pre-fix bare-`pnpm`
+call; `installer/run.py:10-16` and `installer/ui_common.py:40-48` still show the pre-fix
+`CommandError`/`run_live` mismatch; `installer/guards.py:21` still shows the stale npm hint;
+`.planning/ROADMAP.md:67,163` still show the two stale sentences — all expected, since these
+plans have not yet executed). Safe to execute.
+
+**Per plan:** 04-01 LOW · 04-02 LOW · 04-03 LOW (LOW-MEDIUM for the POSIX-sh argv matrix's
+inherent execution novelty, not for plan correctness) · 04-04 LOW · 04-05 LOW
+
+---
+
+## Independent Verification Notes (orchestrating session)
+
+Every claim above was independently cross-checked directly against live repository source
+(not merely restated from the reviewer's text):
+- `installer/locations.py:28-32` — confirmed `bin_dir(None) == Path.home() / ".local" / "bin"`.
+- `installer/executors.py:72-74` — confirmed pre-fix bare `runner(["pnpm", "add", "-g", ...])`.
+- `installer/run.py:1-26` — confirmed `CommandError(RuntimeError)` (not `OSError`) and
+  `run_command`'s `subprocess.run`/`CommandError`-wrapping behavior.
+- `installer/ui_common.py:35-48` — confirmed `run_live` catches `OSError` only, pre-fix.
+- `installer/wizard_app.py:120-135,188-193` — confirmed today's `self.applied`/`self.error`
+  fields and `action_apply`'s `if self.applied: return` early-return.
+- `installer/wizard_app.py` — confirmed no `r` binding exists yet (`Binding(` grep across the
+  file shows `enter`/`a`, `space`, `enter`/`y`/`escape`/`n`, `ctrl+c`/`q`/`escape`/`ctrl+p`/
+  digit bindings only) — `r` is free for 04-05 to claim.
+- `installer/registry.toml:1646-1658` — confirmed `mmdc` is `kind="node"`, the residual set.
+- `installer/guards.py:19-24` — confirmed stale `BANNED["npm"]` hint (`"pnpm (pnpm add -g
+  <pkg>)"`), pre-fix; confirmed `REDIRECTED` does not exist yet in this file (plans not yet
+  executed).
+- `.planning/ROADMAP.md:67` and the Phase 5 section note — confirmed both stale sentences the
+  cycle-2 LOW finding named are still present pre-fix, and that 04-05-PLAN.md Task 4 step 4
+  names both by line/content with a correction that matches what is actually stale.
+- `.planning/REQUIREMENTS.md:40` — confirmed the literal "after `pnpm` itself updates" text and
+  the existing re-pointed-to-Phase-4 note are consistent with what 04-05-PLAN.md Task 4 is
+  asked to extend.
+- `tests/test_executors.py:124-128`, `tests/test_policy.py:1-60`, `tests/test_policies_e2e.py:
+  78-88` — confirmed current (pre-fix) test bodies match what each plan's `<behavior>`/action
+  text says it will change.
+- `installer/registry.toml` — confirmed no `volta` entry exists yet (04-02 has not executed).
+- 04-01-PLAN.md Task 2's `install_redirect_shims` action text — confirmed it always writes a
+  shim (redirect body or hard-block fallback) for a name in `REDIRECTED`, which is what closes
+  out the reviewer's one informational suggestion as a non-issue (see above).
+
+No CRITICAL, HIGH, or actionable MEDIUM/LOW concern remains open. The single suggestion the
+reviewer raised was checked against the plan's own text and does not hold up as a real gap.
+
+## Consensus Summary (Cycle 3, final)
+
+Single reviewer lane this cycle (`opencode-plan-review`, `xai/grok-4.6`), cross-verified in full
+by the orchestrating session against live repository source as detailed above. All 5 cycle-2
+findings (2 MEDIUM + 3 LOW) are confirmed closed by `c047b73`'s plan-text changes, with no new
+gap introduced by any of the five fixes. No new CRITICAL, HIGH, or actionable MEDIUM/LOW concern
+was found. The 3-cycle review budget is exhausted with a clean result: the phase's 5 plans
+(04-01 through 04-05) are safe to execute as currently written.
+
+CYCLE_SUMMARY: current_high=0 current_actionable=0
