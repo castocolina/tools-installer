@@ -1,5 +1,6 @@
 """Turn the tool catalog and audit into selectable choices, and back to tools."""
 
+from collections.abc import Container, Mapping
 from dataclasses import dataclass, field
 
 from installer.audit import ToolStatus
@@ -82,3 +83,28 @@ def select_tools(tools: list[Tool], ids: list[str]) -> list[Tool]:
     """Tools whose id was selected, in catalog order; unknown ids are ignored."""
     wanted = set(ids)
     return [tool for tool in tools if tool.id in wanted]
+
+
+def unstaged_recommends(
+    tool: Tool,
+    catalog: list[Tool],
+    *,
+    staged: Container[str],
+    installed: Mapping[str, bool],
+) -> tuple[str, ...]:
+    """Complementary tools a freshly-marked tool declares that the user has not
+    already staged or installed, so the catalog can offer them.
+
+    Flat and one-hop by design: it never follows a recommendation's own
+    recommendations, never orders anything, never produces a warning, and never
+    adds anything to the selection. `installer/deps.py::resolve_dependencies`
+    remains the only mechanism that decides what installs and in what order,
+    per `.claude/architecture.md`. This function lives here rather than beside
+    the resolver precisely so it cannot drift into a second resolver.
+    """
+    known = {item.id for item in catalog}
+    return tuple(
+        rec_id
+        for rec_id in dict.fromkeys(tool.recommends)
+        if rec_id in known and rec_id not in staged and not installed.get(rec_id, False)
+    )

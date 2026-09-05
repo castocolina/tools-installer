@@ -7,10 +7,11 @@ from installer.selection import (
     select_tools,
     tool_choices,
     tools_in,
+    unstaged_recommends,
 )
 
 
-def _tool(tool_id: str, category: str, desc: str = "") -> Tool:
+def _tool(tool_id: str, category: str, desc: str = "", *, recommends: tuple[str, ...] = ()) -> Tool:
     return Tool(
         id=tool_id,
         name=tool_id,
@@ -18,6 +19,7 @@ def _tool(tool_id: str, category: str, desc: str = "") -> Tool:
         cmd=tool_id,
         methods=(Method(kind="brew", params={"formula": tool_id}),),
         desc=desc,
+        recommends=recommends,
     )
 
 
@@ -98,3 +100,9 @@ def test_choice_tag_and_description_default_empty() -> None:
 def test_select_tools_keeps_catalog_order_and_ignores_unknown_ids() -> None:
     tools = [_tool("rg", "search"), _tool("fd", "search"), _tool("jq", "data")]
     assert [t.id for t in select_tools(tools, ["jq", "rg", "ghost"])] == ["rg", "jq"]
+
+
+def test_unstaged_recommends_names_uninstalled_unstaged_ids() -> None:
+    catalog = [_tool("rg", "search"), _tool("fd", "search"), _tool("jq", "data")]
+    tool = _tool("claude", "ai", recommends=("rg", "fd", "jq"))
+    assert unstaged_recommends(tool, catalog, staged=set[str](), installed={}) == ("rg", "fd", "jq")

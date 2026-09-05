@@ -11,9 +11,10 @@ from installer.catalog_tui import AUDIENCE_LABEL, group_tools, sort_for_table
 from installer.deps import resolve_dependencies
 from installer.doctor import DoctorReport
 from installer.enums import Audience
-from installer.model import Method, Tool
+from installer.model import Method, Tool, load_categories, load_tools
 from installer.selection import select_tools
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
+from tests.test_registry import REGISTRY
 
 
 def _unified_app(
@@ -47,6 +48,7 @@ def _tool(
     desc: str = "",
     tier: str = "system",
     requires: tuple[str, ...] = (),
+    recommends: tuple[str, ...] = (),
 ) -> Tool:
     return Tool(
         id=tool_id,
@@ -59,6 +61,7 @@ def _tool(
         desc=desc,
         tier=tier,
         requires=requires,
+        recommends=recommends,
     )
 
 
@@ -496,3 +499,25 @@ async def test_selection_made_in_one_tier_view_resolves_against_the_whole_catalo
     )
     assert result.dragged_in == ("pnpm",)
     assert [tool.id for tool in result.order] == ["pnpm", "agent"]
+
+
+async def test_marking_claude_in_the_ai_view_offers_its_recommends_and_r_stages_them() -> None:
+    tools = load_tools(REGISTRY)
+    blurbs = load_categories(REGISTRY)
+    installed = {tool.id: False for tool in tools}
+    app = _unified_app(tools, installed, blurbs)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        screen = app.catalog_for("ai")
+        table = screen.query_one(DataTable[Any])
+        table.move_cursor(row=table.get_row_index("claude"))
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        assert "claude pairs well with rg, fd, jq - press r" in screen.recommends_text
+        assert screen.selected == {"claude"}
+        await pilot.press("r")
+        await pilot.pause()
+        assert screen.selected == {"claude", "rg", "fd", "jq"}
+        assert screen.recommends_text == ""

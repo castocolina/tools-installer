@@ -1187,6 +1187,9 @@ priority = "P0"
 audience = "human"
 tier = "ai"
 desc = "Anthropic coding agent for the user; complements Codex and needs clear install ownership."
+# Phase 2 illustrative ids from tools already in this catalog (CONTEXT D-02).
+# Phase 8's REQ-recommends-wiring-agent-hosts is where the real companion set lands.
+recommends = ["rg", "fd", "jq"]
 [[tool.method]]
 kind = "script"
 url = "https://claude.ai/install.sh"

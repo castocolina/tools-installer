@@ -8,19 +8,20 @@ reusable `ToolBrowser` widget; this screen wires the catalog's data into it.
 """
 
 from collections.abc import Mapping
-from typing import Literal
+from typing import ClassVar, Literal
 
 from rich.text import Text
 from textual.app import ComposeResult
+from textual.binding import Binding, BindingType
 from textual.message import Message
 from textual.widgets import DataTable
 
 from installer.deps import missing_requires
 from installer.enums import Audience, Priority
 from installer.model import Tool
-from installer.selection import select_tools
+from installer.selection import select_tools, unstaged_recommends
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
-from installer.ui_common import AppScreen, mark
+from installer.ui_common import AppScreen, StatusLine, mark
 
 TableSortKey = Literal["id", "category", "priority", "audience", "installed"]
 
@@ -151,6 +152,11 @@ class CatalogScreen(AppScreen):
             super().__init__()
             self.result = result
 
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("r", "accept_recommends", "add recommended", show=False),
+        Binding("d", "dismiss_recommends", "dismiss", show=False),
+    ]
+
     def __init__(
         self,
         tools: list[Tool],
@@ -170,6 +176,8 @@ class CatalogScreen(AppScreen):
         self._staged = staged
         self._by_id = {tool.id: tool for tool in self._catalog}
         self._browser: ToolBrowser[Tool] = ToolBrowser(self._adapter(), selected=staged)
+        self.recommends_line = StatusLine()
+        self._pending_recommends: tuple[str, ...] = ()
 
     def _adapter(self) -> BrowserAdapter[Tool]:
         return BrowserAdapter(
@@ -187,6 +195,7 @@ class CatalogScreen(AppScreen):
 
     def compose_body(self) -> ComposeResult:
         yield self._browser
+        yield self.recommends_line
 
     # -- catalog data wiring for the browser adapter -----------------------
     def _row_cells(self, tool: Tool) -> list[Text]:
@@ -242,6 +251,10 @@ class CatalogScreen(AppScreen):
     def status_text(self) -> str:
         return self.status.text
 
+    @property
+    def recommends_text(self) -> str:
+        return self.recommends_line.text
+
     def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
         # The catalog test drives header sort directly on the screen. Forward it
         # to the browser, which owns the table and the view-gated sort handling.
@@ -252,11 +265,20 @@ class CatalogScreen(AppScreen):
         # Clear the "select at least one" warning the moment the user selects.
         event.stop()
         self.status.clear()
+        self.recommends_line.clear()
+        self._pending_recommends = ()
         if event.item_id is None or not event.selected:
             return
         tool = self._by_id.get(event.item_id)
         if tool is None:
             return
+        # Both run for the same mark and write to two different lines on purpose:
+        # a tool can have both a missing prerequisite and an unstaged
+        # recommendation and neither may hide the other.
+        self._announce_requires(tool)
+        self._offer_recommends(tool)
+
+    def _announce_requires(self, tool: Tool) -> None:
         missing = missing_requires(
             tool, self._catalog, staged=self._staged, installed=self._installed
         )
@@ -267,6 +289,39 @@ class CatalogScreen(AppScreen):
                 "the installer runs.",
                 "ok",
             )
+
+    def _offer_recommends(self, tool: Tool) -> None:
+        pending = unstaged_recommends(
+            tool, self._catalog, staged=self._staged, installed=self._installed
+        )
+        if not pending:
+            return
+        self._pending_recommends = pending
+        self.recommends_line.set(
+            f"{tool.id} pairs well with {', '.join(pending)} - press r to add them "
+            "to your selection, d to dismiss.",
+            "ok",
+        )
+
+    def action_accept_recommends(self) -> None:
+        # Deliberately the same mutation a space-mark performs — the shared
+        # staged set, nothing else — so an accepted recommendation is
+        # indistinguishable from the user marking those rows by hand (D-05).
+        # Never calls resolve_dependencies, never touches an executor, and
+        # never installs. The confirmation overwrites any requires notice on
+        # the status line on purpose, because the accept is the newer fact.
+        pending = self._pending_recommends
+        if not pending:
+            return
+        self._staged.update(pending)
+        self._browser.refresh_marks()
+        self._pending_recommends = ()
+        self.recommends_line.clear()
+        self.status.set(f"added {', '.join(pending)} to your selection.", "ok")
+
+    def action_dismiss_recommends(self) -> None:
+        self._pending_recommends = ()
+        self.recommends_line.clear()
 
     def on_tool_browser_accepted(self, event: ToolBrowser.Accepted) -> None:
         event.stop()

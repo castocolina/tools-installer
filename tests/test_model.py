@@ -43,6 +43,37 @@ formula = "rg"
     assert all(isinstance(tool.requires, tuple) for tool in tools.values())
 
 
+def test_tool_recommends_defaults_empty_and_parses(tmp_path: Path) -> None:
+    """`recommends` is a soft-dependency seam: it defaults to an empty tuple
+    and parses a declared list into a tuple of ids."""
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "claude"
+category = "ai"
+tier = "ai"
+recommends = ["rg", "fd"]
+[[tool.method]]
+kind = "script"
+url = "https://example.test/i.sh"
+shell = "sh"
+
+[[tool]]
+id = "rg"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "brew"
+formula = "rg"
+""",
+    )
+    tools = {tool.id: tool for tool in load_tools(manifest)}
+    assert tools["claude"].recommends == ("rg", "fd")
+    assert tools["rg"].recommends == ()
+    assert all(isinstance(tool.recommends, tuple) for tool in tools.values())
+
+
 def test_load_single_tool_with_methods(tmp_path: Path):
     manifest = _write(
         tmp_path,

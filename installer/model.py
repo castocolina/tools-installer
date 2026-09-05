@@ -63,6 +63,11 @@ class Tool:
     # No-op dependency seam for the tool-dependencies PRD: ids this tool needs
     # at install time. Parsed and carried here; no resolution logic lives yet.
     requires: tuple[str, ...] = ()
+    # Soft-dependency seam for REQ-recommends-soft-dependency: ids this tool
+    # pairs well with but never auto-installs and never drags in, surfaced only
+    # as a selection-time prompt. Distinct from `requires`, which
+    # resolve_dependencies expands transitively.
+    recommends: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -76,6 +81,7 @@ class Tool:
         tier: str | Tier = Tier.USER,
         desc: str = "",
         requires: tuple[str, ...] = (),
+        recommends: tuple[str, ...] = (),
     ) -> None:
         object.__setattr__(self, "id", id)
         object.__setattr__(self, "name", name)
@@ -91,6 +97,7 @@ class Tool:
         object.__setattr__(self, "tier", _parse_enum(Tier, tier, "tier", f"tool '{id}'"))
         object.__setattr__(self, "desc", desc)
         object.__setattr__(self, "requires", requires)
+        object.__setattr__(self, "recommends", recommends)
 
 
 def load_tools(manifest_path: str | Path) -> list[Tool]:
@@ -138,6 +145,10 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
         if isinstance(raw_requires, str):
             # tuple("pnpm") would silently become ('p','n','p','m'); a list is required.
             raise ValueError(f"tool '{row['id']}': 'requires' must be a list of tool ids")
+        raw_recommends = row.get("recommends", [])
+        if isinstance(raw_recommends, str):
+            # tuple("rg") would silently become ('r','g'); a list is required.
+            raise ValueError(f"tool '{row['id']}': 'recommends' must be a list of tool ids")
         tools.append(
             Tool(
                 id=row["id"],
@@ -150,6 +161,7 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
                 tier=row["tier"],
                 desc=row.get("desc", ""),
                 requires=tuple(raw_requires),
+                recommends=tuple(raw_recommends),
             )
         )
     return tools
