@@ -1223,6 +1223,32 @@ kind = "brew"
 formula = "anomalyco/tap/opencode"
 
 [[tool]]
+id = "codegraph"
+name = "CodeGraph"
+category = "dev"
+cmd = "codegraph"
+priority = "P1"
+audience = "ai"
+tier = "ai"
+desc = "Local code-intelligence knowledge graph CLI and MCP server; ships its own Node runtime"
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "colbymchenry/codegraph"
+asset = "codegraph-darwin-{arch.x64}.tar.gz"
+checksum = "SHA256SUMS"
+member = "bin/codegraph"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "colbymchenry/codegraph"
+asset = "codegraph-linux-{arch.x64}.tar.gz"
+checksum = "SHA256SUMS"
+member = "bin/codegraph"
+strip = 1
+
+[[tool]]
 id = "deno"
 name = "Deno"
 category = "runtime"

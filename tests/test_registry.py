@@ -52,6 +52,7 @@ def test_registry_includes_requested_installable_entries() -> None:
         "gradle",
         "maven",
         "volta",
+        "codegraph",
     } <= ids
 
 
@@ -297,6 +298,46 @@ def test_gh_uses_nested_member_on_linux_and_brew_only_on_macos() -> None:
     assert [m.kind for m in resolve_methods(gh, macos)] == ["brew"]
 
 
+def test_codegraph_github_release_is_os_split_checksum_verified_and_nested() -> None:
+    codegraph = next(t for t in load_tools(REGISTRY) if t.id == "codegraph")
+    assert (
+        codegraph.name,
+        codegraph.category,
+        codegraph.cmd,
+        codegraph.priority,
+        codegraph.audience,
+        codegraph.tier,
+    ) == ("CodeGraph", "dev", "codegraph", "P1", "ai", "ai")
+    assert requires_integrity_errors(load_tools(REGISTRY)) == []
+    assert all(
+        m.params["repo"] == "colbymchenry/codegraph"
+        and m.params["checksum"] == "SHA256SUMS"
+        and m.params["member"] == "bin/codegraph"
+        and m.params["strip"] == 1
+        for m in codegraph.methods
+    )
+    for arch in ("amd64", "arm64"):
+        macos = Platform(os="macos", arch=arch, immutable=False, has_brew=True)
+        methods = resolve_methods(codegraph, macos)
+        assert len(methods) == 1
+        assert methods[0].params["asset"] == "codegraph-darwin-{arch.x64}.tar.gz"
+        macos_no_brew = Platform(os="macos", arch=arch, immutable=False, has_brew=False)
+        assert len(resolve_methods(codegraph, macos_no_brew)) == 1
+    for platform_os in ("debian", "arch", "fedora"):
+        for arch in ("amd64", "arm64"):
+            linux = Platform(os=platform_os, arch=arch, immutable=False, has_brew=True)
+            methods = resolve_methods(codegraph, linux)
+            assert len(methods) == 1
+            assert methods[0].params["asset"] == "codegraph-linux-{arch.x64}.tar.gz"
+            immutable = Platform(os=platform_os, arch=arch, immutable=True, has_brew=False)
+            assert len(resolve_methods(codegraph, immutable)) == 1
+
+
+def test_codegraph_methods_are_github_release_only() -> None:
+    codegraph = next(t for t in load_tools(REGISTRY) if t.id == "codegraph")
+    assert {m.kind for m in codegraph.methods} == {"github_release"}
+
+
 def test_yq_resolves_to_a_raw_download_on_every_os() -> None:
     yq = next(t for t in load_tools(REGISTRY) if t.id == "yq")
     for platform_os in ("debian", "macos"):
@@ -439,7 +480,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     # commit that changes the catalog.
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 22,
-        "ai": 9,
+        "ai": 10,
         "user": 35,
     }
 
