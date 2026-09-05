@@ -183,3 +183,126 @@ The reviewer's one **HIGH** finding: 03-03's precondition check for 03-02 having
 
 ### Divergent Views
 Not applicable — single reviewer this cycle.
+
+---
+
+# Cross-AI Plan Review — Phase 3, Cycle 2
+
+reviewed_at: "2026-09-05T06:59:46Z"
+reviewers: [opencode]
+models: {opencode: "opencode/nemotron-3-ultra-free"}
+model_sources: {opencode: "cli-flag"}
+plans_reviewed: [03-01-PLAN.md, 03-02-PLAN.md, 03-03-PLAN.md]
+
+Note on reviewer roster (unchanged from cycle 1): `codex` (gpt-5.6-sol) was probed
+first and again hit its usage quota (identical message: "try again at Sep 6th, 2026
+11:32 PM") before producing output — dropped, not counted. `agy` (Antigravity CLI)
+was probed and again requires interactive Google OAuth login that this session
+cannot complete non-interactively — dropped. `opencode/nemotron-3-ultra-free`
+succeeded and is the review below. Per the consensus gate: with exactly one reviewer
+completing (as in cycle 1), the 2+-reviewer consensus gate is skipped and this
+reviewer's findings count directly.
+
+This cycle's purpose is convergence verification, not a fresh review: cycle 1
+(this file, above) found 1 HIGH + 6 actionable MEDIUM/LOW concerns across the three
+plans. A replanning pass (commit `9a9b394`) then revised `03-01-PLAN.md`,
+`03-02-PLAN.md`, and `03-03-PLAN.md` in place, adding a `<review_dispositions>`
+table to each recording how every finding was resolved. The reviewer was instructed
+to verify each disposition actually lands correctly in the current plan text (not
+merely claims to), and to flag any newly introduced issues, rather than re-reviewing
+from a blank slate.
+
+## Opencode Review (nemotron-3-ultra-free) — Cycle 2
+
+### Summary
+All three plans for Phase 3 have properly incorporated every cycle-1 finding. Each
+of the 8 specific verification tasks given to the reviewer is **PASS** — the fixes
+are not merely claimed but are structurally present in the plan text with literal
+substring assertions in automated verify blocks that gate the build. The cycle-1
+HIGH finding (03-03's weak 03-02 precondition) has been replaced by a three-part
+structural gate verifying policy id, remove-closure wiring, and a real temp-file
+round-trip. Both MEDIUM latent-maintenance traps (optional `zshrc_path` default,
+unexplained `present=True`) are now documented with pinned sentences and
+source-level assertions. The two LOW docstring gaps (`run_installs` ordering
+assumption, `render_verification` omission rationale) are pinned with
+multi-substring checks each. The 03-02 partial-state disclosure and regex-limitation
+docstring are both gated. The D-02 falsifiability gate correctly uses
+`ast.get_docstring` stripping before the `apply_block`/`strip_block` absence check,
+so the required docstring naming the deliberately-not-reused mechanism does not trip
+the gate.
+
+### Cycle-2 Verification Table
+
+| # | Item | Status | Evidence (file:line) |
+|---|------|--------|---------------------|
+| 1 | 03-03's 03-02 precondition: three-part structural gate (id == 'omz-plugins', remove callable + references `remove_plugins`, real temp-file round-trip `plugins=(z git docker)` → `plugins=(z)`) | **PASS** | 03-03-PLAN.md:532-551 (precondition), 566-580 (first `<automated>` verify), 1008 (verification step 0) |
+| 2 | 03-01's `run_installs` docstring pins deps-first topological order assumption AND violation consequence (`attempted rather than skipped`) AND names `resolve_dependencies` | **PASS** | 03-01-PLAN.md:372-395 (action), 457-470 (verify asserts 3 substrings), 796-799 (success criteria) |
+| 3 | 03-01's `render_verification` docstring notes `method_kind=None` outcomes omitted (including `dependency-failed`) because `no verification step ran` | **PASS** | 03-01-PLAN.md:673-681 (action), 708-721 (verify asserts 3 substrings), 739-741 (acceptance criteria) |
+| 4 | 03-02's Policies detail-panel copy for `omz-plugins` discloses partial-state: `Reads ON only when` both plugins present | **PASS** | 03-02-PLAN.md:35, 485-492 (action), 573-575 (verify), 808-814 (Task 3 behavior test), 965 (verification step 5b) |
+| 5 | 03-02's `installer/omz.py` module docstring names regex limits: `nested parentheses` and `newline` (array spanning newline) | **PASS** | 03-02-PLAN.md:383-391 (action), 569-572 (verify), 965 (verification step 5b), 982-983 (success criteria) |
+| 6 | 03-03's `active_tweak_ids`/`sweep_tweaks` docstrings state `zshrc_path=None` is test-only; `production callers MUST pass the real path` | **PASS** | 03-03-PLAN.md:452-461, 473-476 (action), 619-635 (verify asserts on both `__doc__`), 1009 (verification step 0a) |
+| 7 | 03-03's `_omz_policy` comment cites CONTEXT decisions `D-04/D-05/D-06` verbatim | **PASS** | 03-03-PLAN.md:428-439 (action), 622-624 (verify), 1009 (verification step 0a), 1038-1040 (success criteria) |
+| 8 | 03-02's D-02 falsifiability gate strips docstrings via `ast.get_docstring` BEFORE asserting `apply_block`/`strip_block` absence | **PASS** | 03-02-PLAN.md:543-564 (verify block: `ast.walk(ast.parse(src))` → `ast.get_docstring(node)` → `code.replace(doc, '')` then substring check) |
+
+### Strengths
+- Every cycle-1 finding is closed with a gated, falsifiable check, not prose. The
+  review dispositions map 1:1 to verify commands that fail the build if the
+  incorporation is dropped or paraphrased.
+- 03-03's precondition is now a real integration gate — it catches a broken 03-02
+  landing (wrong id, wrong closure wiring, or a closure that doesn't actually
+  revert) before any 03-03 code runs, exactly as the HIGH finding demanded.
+- Latent maintenance traps are documented at the call site and asserted — both
+  `zshrc_path=None` default and `_omz_policy`'s unconditional `present=True` carry
+  pinned sentences with source checks, so a future reader cannot mistake them for
+  endorsed production shapes or bugs.
+- The D-02 falsifiability gate is correctly implemented — `ast.get_docstring`
+  stripping ensures the module docstring (which must name `apply_block`/
+  `strip_block` as deliberately-not-reused) does not false-fail the "must not
+  appear in code" check.
+- The consolidated architecture doc is gated with three independent greps (
+  `sweep_tweaks`, `omz_plugins_policy`, `run_installs`) so a section covering only
+  2 of 3 mechanisms fails the build.
+- Real-environment gates (tmux, container) are mandatory and verbatim — no manual
+  sanity, no shortened retypes; the executor runs them directly.
+
+### New Concerns (not raised in cycle 1)
+
+| Severity | Concern | Rationale |
+|----------|---------|-----------|
+| LOW | 03-02 Task 3's `tmux` check presses `Down` up to 20 times waiting for the detail panel; if the row position shifts (e.g. more policies added above), the bounded loop may miss the disclosure line and fail spuriously. | The loop bound and the detail-text match are fragile against row reordering. A more robust approach would search the captured pane for the disclosure text without depending on cursor position, or assert the row index directly. |
+| LOW | 03-03's `_omz_policy` builds `omz_plugins_policy(zshrc_path, present=True)`, but the policy's `active` property depends on `plugins_present(zshrc_path)`. If `.zshrc` exists but has no `plugins=(...)` line, `plugins_present` returns `False` and the sweep won't remove the (non-existent) edit — correct behavior, but the comment doesn't explain this interaction. | `present=True` only affects `missing_requires` (the enable gate), not `active` (which reads the file). The comment explains why `present=True` is safe for removal (`remove_plugins` no-ops), but not why `active` correctly reflects file state regardless. Minor traceability gap, not a defect. |
+| LOW | 03-01's `render_verification` docstring update couples the omission reason to `method_kind=None` rather than to the specific status; a future status carrying `method_kind=None` that *should* appear in verification would be silently dropped with a docstring that reads as already covering it. | Hypothetical future coupling, not a defect in the current plan; flagged for traceability only. |
+
+### Risk Assessment: **LOW**
+All cycle-1 findings, including the single HIGH, are resolved with structural,
+gated fixes verified against the actual (post-replan) plan text. The three plans
+are internally consistent, the integration dependency (03-03 → 03-02) is closed at
+a behavioral gate, latent foot-guns are documented and asserted, and
+real-environment verification stays mandatory. The three new concerns are all LOW
+and either test-fragility or traceability nits with no bearing on the correctness
+of the current deliverables. Independent orchestrator-side verification (source
+inspection of the actual docstrings pinned in 03-01/03-03 and the `ast`-stripping
+gate in 03-02) corroborates all 8 PASS verdicts and the "one pre-existing defect
+found and fixed" claim (the D-02 gate's docstring-stripping logic is new in this
+replanning pass, confirmed via `git diff 5d7ad83 9a9b394`).
+
+## Consensus Summary — Cycle 2
+
+Only one reviewer lane (`opencode`/nemotron-3-ultra-free) completed this cycle, as
+in cycle 1; `codex` failed on the same usage quota and `agy` again required
+interactive OAuth this session cannot complete. Per the consensus gate, a single
+completed reviewer's findings stand at full weight with no cross-reviewer
+corroboration this cycle — but the orchestrator independently re-verified all 8
+cycle-2 items and the D-02 gate claim by reading the actual plan text and diffing
+it against the pre-replan commit, and confirms the reviewer's PASS verdicts.
+
+### Agreed Strengths
+Not applicable — single reviewer this cycle. See above.
+
+### Agreed Concerns
+Not applicable — single reviewer this cycle. No HIGH or MEDIUM concerns remain: all
+7 cycle-1 findings are verified incorporated, and the 3 newly raised items are LOW
+severity (test fragility / traceability nits), not gating.
+
+### Divergent Views
+Not applicable — single reviewer this cycle.
