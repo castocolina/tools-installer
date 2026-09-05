@@ -293,8 +293,8 @@ async def test_invert_skips_non_selectable_rows() -> None:
         assert browser.selected == {"one"}
 
 
-async def test_refresh_marks_leaves_non_selectable_cell_untouched() -> None:
-    # alpha's row_cells render a distinctive sel cell; _refresh_marks (run on
+async def testrefresh_marks_leaves_non_selectable_cell_untouched() -> None:
+    # alpha's row_cells render a distinctive sel cell; refresh_marks (run on
     # select-all) must not overwrite it, since alpha is non-selectable.
     def cells(item: _Item) -> list[Text]:
         sel = Text("---") if item.id == "alpha" else Text("[ ]")
@@ -305,7 +305,7 @@ async def test_refresh_marks_leaves_non_selectable_cell_untouched() -> None:
     app = _Host(adapter)
     async with app.run_test(size=(80, 20)) as pilot:
         table = app.query_one(DataTable[Any])
-        await pilot.press("a")  # select-all triggers _refresh_marks
+        await pilot.press("a")  # select-all triggers refresh_marks
         assert table.get_cell("alpha", "sel").plain == "---"  # untouched
         assert table.get_cell("beta", "sel").plain == "[x]"  # marked
 
@@ -321,8 +321,8 @@ async def test_view_switch_repaints_cells_at_full_width() -> None:
         assert "a very long description that needs full column width here" in _screen_text(app)
 
 
-async def test_refresh_marks_tolerates_a_cleared_table() -> None:
-    """Regression: _refresh_marks is scheduled via call_after_refresh; under the
+async def testrefresh_marks_tolerates_a_cleared_table() -> None:
+    """Regression: refresh_marks is scheduled via call_after_refresh; under the
     real Textual driver a second _rebuild (the single-tab activation / a resize)
     clears the table before the pending callback fires. It must not raise
     CellDoesNotExist — this crashed the real Uninstall view on `make setup`."""
@@ -331,14 +331,12 @@ async def test_refresh_marks_tolerates_a_cleared_table() -> None:
         browser = app.query_one(ToolBrowser[_Item])
         table = browser.query_one(DataTable[Any])
         table.clear(columns=True)  # the transient state between a rebuild's clear and re-add
-        # getattr: invoke the internal flush dynamically (the production trigger is
-        # an internal call_after_refresh; this pins the same callback's robustness).
-        refresh_marks: object = getattr(browser, "_refresh_marks")  # noqa: B009
-        assert callable(refresh_marks)
-        refresh_marks()  # must not raise CellDoesNotExist
+        # Calling the flush directly stands in for the production trigger (an
+        # internal call_after_refresh); this pins the same callback's robustness.
+        browser.refresh_marks()  # must not raise CellDoesNotExist
 
 
-async def test_refresh_marks_tolerates_a_removed_table() -> None:
+async def testrefresh_marks_tolerates_a_removed_table() -> None:
     """Regression: when the browser's screen is popped before the pending
     call_after_refresh fires, the DataTable child is removed outright (not just
     cleared) while the browser still reports is_mounted. The stale callback must
@@ -350,11 +348,9 @@ async def test_refresh_marks_tolerates_a_removed_table() -> None:
     async with app.run_test():
         browser = app.query_one(ToolBrowser[_Item])
         await browser.query_one(DataTable[Any]).remove()
-        # getattr: invoke the internal flush dynamically (the production trigger is
-        # an internal call_after_refresh; this pins the same callback's robustness).
-        refresh_marks: object = getattr(browser, "_refresh_marks")  # noqa: B009
-        assert callable(refresh_marks)
-        refresh_marks()  # must not raise NoMatches
+        # Calling the flush directly stands in for the production trigger (an
+        # internal call_after_refresh); this pins the same callback's robustness.
+        browser.refresh_marks()  # must not raise NoMatches
 
 
 async def test_select_all_marks_all_rows_via_flush() -> None:
@@ -362,7 +358,7 @@ async def test_select_all_marks_all_rows_via_flush() -> None:
     [x] (exercises the flush's normal path: it re-stamps the rows that exist)."""
     app = _Host(_adapter())
     async with app.run_test() as pilot:
-        await pilot.press("a")  # select all -> _refresh_marks over the live rows
+        await pilot.press("a")  # select all -> refresh_marks over the live rows
         table = app.query_one(ToolBrowser[_Item]).query_one(DataTable[Any])
         assert table.get_cell("alpha", "sel").plain == "[x]"
         assert table.get_cell("one", "sel").plain == "[x]"

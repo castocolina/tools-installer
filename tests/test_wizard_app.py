@@ -942,7 +942,7 @@ async def test_rapid_view_switching_keeps_stack_one_deep() -> None:
 
 async def test_rapid_switch_away_from_uninstall_does_not_wedge() -> None:
     """Navigating away from Uninstall before its ToolBrowser's post-mount refresh
-    callback runs must not raise. The browser schedules _refresh_marks via
+    callback runs must not raise. The browser schedules refresh_marks via
     call_after_refresh; awaiting push_screen mounts the screen but does not drain
     that callback, so a subsequent navigation can pop the Uninstall screen and
     remove its DataTable while the refresh is still pending. If the callback then

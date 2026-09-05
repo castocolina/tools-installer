@@ -219,9 +219,6 @@ class ToolBrowser(Widget, Generic[T]):
             item_id = self._adapter.item_id(item)
             table.update_cell(item_id, "sel", mark(item_id in self.selected))
 
-    # Isolation tests getattr the former private name; keep it bound to the public method.
-    _refresh_marks = refresh_marks
-
     def action_toggle_selected(self) -> None:
         item = self._highlighted_item()
         if item is None:  # empty table or a section row
