@@ -197,6 +197,7 @@ def _build_app(
             ),
             omz_plugins_policy(
                 zshrc_path=_ZSHRC,
+                state_path=_MYSHELLRC,
                 present=omz_present(Path.home(), os.environ),
             ),
         ]

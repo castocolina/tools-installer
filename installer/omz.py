@@ -17,6 +17,15 @@ Refusal is by *final* assignment, not by "no parseable line anywhere": a
 multi-line array after a single-line one is the array zsh honors, so the
 single-line one above it is dead and editing it would report success while
 loading nothing. That case refuses too.
+
+Ownership is recorded, never inferred from content. `git` ships in Oh-My-Zsh's
+own default .zshrc and `docker` is its most common addition, so "both names are
+in the array" cannot distinguish a machine this installer edited from one the
+user wrote by hand — and removing on that guess destroys configuration the
+installer never created. Enabling therefore records the names it actually
+added, in a marker block inside the ~/.myshellrc this installer owns (the one
+place a marker may go; .zshrc never gets one), and disabling removes exactly
+those. A machine with no record is a machine this module will not touch.
 """
 
 import os
@@ -24,6 +33,8 @@ import re
 import shutil
 from collections.abc import Mapping
 from pathlib import Path
+
+from installer.shellrc import apply_block, strip_block
 
 # The only names this installer ever writes into a user's array. They are
 # Oh-My-Zsh's own bundled plugins, requiring no download. A module constant so no
@@ -55,6 +66,13 @@ _PLUGINS_LINE = re.compile(
 # _PLUGINS_LINE deliberately refuses. Used to detect an assignment this module
 # cannot edit but zsh still honors.
 _ANY_PLUGINS_OPEN = re.compile(r"^[ \t]*plugins=\(")
+
+# The ownership record. It lives in ~/.myshellrc — a file this installer
+# created — because .zshrc must never carry a tools-installer marker. The body
+# is comments only, so the block is inert wherever the rc file is sourced.
+_OWNED_BEGIN = "# >>> tools-installer omz-plugins >>>"
+_OWNED_END = "# <<< tools-installer omz-plugins <<<"
+_ADDED_PREFIX = "# added:"
 
 _NO_ARRAY = "No single-line plugins=(...) array to edit; only the single-line form is supported"
 _SHADOWED = (
@@ -102,14 +120,6 @@ def _bare(token: str) -> str:
     return token.strip("\"'")
 
 
-def _names_in(content: str) -> list[str] | None:
-    """The plugin names in the array zsh honors, unquoted, or None if there is none."""
-    found = _locate(content.split("\n"))
-    if found is None:
-        return None
-    return [_bare(token) for token in found[1].group("body").split()]
-
-
 def _rewrite(content: str, plugins: tuple[str, ...], *, enable: bool) -> str | None:
     lines = content.split("\n")
     found = _locate(lines)
@@ -155,13 +165,17 @@ def disable_plugins(content: str, plugins: tuple[str, ...] = MANAGED_PLUGINS) ->
     return content if rewritten is None else rewritten
 
 
-def plugins_enabled(content: str, plugins: tuple[str, ...] = MANAGED_PLUGINS) -> bool:
-    """True when a matching array exists and contains every requested name."""
-    names = _names_in(content)
-    if names is None:
-        return False
-    present = set(names)
-    return all(plugin in present for plugin in plugins)
+def plugins_in(content: str) -> tuple[str, ...]:
+    """The plugin names in the array zsh honors, unquoted; () when there is none.
+
+    Content, not ownership — this reports what the array holds and says nothing
+    about who put it there. `plugins_owned` answers that, and it is the
+    predicate every removal path reads.
+    """
+    found = _locate(content.split("\n"))
+    if found is None:
+        return ()
+    return tuple(_bare(token) for token in found[1].group("body").split())
 
 
 def _replace_content(zshrc_path: Path, updated: str) -> None:
@@ -185,37 +199,115 @@ def _replace_content(zshrc_path: Path, updated: str) -> None:
         raise
 
 
-def write_plugins(zshrc_path: Path, plugins: tuple[str, ...] = MANAGED_PLUGINS) -> tuple[str, ...]:
-    """Enable managed plugins in zshrc_path. Returns the names actually added."""
+def _owned_block(added: tuple[str, ...]) -> str:
+    return "\n".join(
+        (
+            _OWNED_BEGIN,
+            "# Oh-My-Zsh plugin names this installer added to .zshrc's plugins=(...)",
+            "# array. Disabling removes exactly these and nothing else. Comments only:",
+            "# nothing here is executed.",
+            f"{_ADDED_PREFIX} {' '.join(added)}".rstrip(),
+            _OWNED_END,
+        )
+    )
+
+
+def _record(state_path: Path) -> tuple[str, ...] | None:
+    """The recorded names, or None when this installer holds no record at all.
+
+    None and () are different answers: () means "we enabled the policy and the
+    array already had every name", which is still ours to switch off, while
+    None means "we never touched this machine".
+    """
+    if not state_path.exists():
+        return None
+    names: tuple[str, ...] | None = None
+    inside = False
+    for line in state_path.read_text().split("\n"):
+        if line == _OWNED_BEGIN:
+            inside, names = True, ()
+        elif line == _OWNED_END:
+            inside = False
+        elif inside and line.startswith(_ADDED_PREFIX):
+            names = tuple(line[len(_ADDED_PREFIX) :].split())
+    return names
+
+
+def owned_plugins(state_path: Path) -> tuple[str, ...]:
+    """The plugin names this installer added; () when it added none or never ran."""
+    return _record(state_path) or ()
+
+
+def plugins_owned(state_path: Path) -> bool:
+    """True when this installer enabled the policy on this machine.
+
+    The ownership predicate, deliberately not a content check: `git` ships in
+    Oh-My-Zsh's default .zshrc and `docker` is its commonest addition, so
+    reading the array would report a hand-authored `plugins=(git docker
+    kubectl)` as ours and offer to strip it.
+    """
+    return _record(state_path) is not None
+
+
+def _record_owned(state_path: Path, added: tuple[str, ...]) -> None:
+    existing = state_path.read_text() if state_path.exists() else ""
+    state_path.write_text(
+        apply_block(existing, _owned_block(added), begin=_OWNED_BEGIN, end=_OWNED_END)
+    )
+
+
+def _clear_owned(state_path: Path) -> None:
+    if not state_path.exists():
+        return
+    original = state_path.read_text()
+    stripped = strip_block(original, _OWNED_BEGIN, _OWNED_END)
+    if stripped != original:
+        state_path.write_text(stripped)
+
+
+def write_plugins(
+    zshrc_path: Path, state_path: Path, plugins: tuple[str, ...] = MANAGED_PLUGINS
+) -> tuple[str, ...]:
+    """Enable managed plugins in zshrc_path, recording what was added in state_path.
+
+    Returns the names actually added. The record is written only after the
+    .zshrc edit succeeds, so a refused array never leaves a claim of ownership
+    over a file this installer did not change.
+    """
     if not zshrc_path.exists():
         raise OmzPluginsError(_NO_ARRAY)
     original = zshrc_path.read_text()
-    current = _names_in(original) or []
+    current = plugins_in(original)
     added = tuple(name for name in plugins if name not in current)
     updated = enable_plugins(original, plugins)
     if updated != original:
         _replace_content(zshrc_path, updated)
+    owned = list(owned_plugins(state_path))
+    owned.extend(name for name in added if name not in owned)
+    _record_owned(state_path, tuple(owned))
     return added
 
 
-def remove_plugins(zshrc_path: Path, plugins: tuple[str, ...] = MANAGED_PLUGINS) -> tuple[str, ...]:
-    """Disable managed plugins in zshrc_path. A missing file is a no-op."""
-    if not zshrc_path.exists():
+def remove_plugins(zshrc_path: Path, state_path: Path) -> tuple[str, ...]:
+    """Remove exactly the plugin names this installer recorded, and drop the record.
+
+    Provenance, not content: a user who wrote `plugins=(git docker kubectl)`
+    themselves has no record, so nothing is removed and .zshrc is not opened.
+    Stays total — a missing record, a missing .zshrc, or an array this module
+    cannot parse all resolve to "nothing removed" rather than raising, because
+    the full-uninstall sweep calls this against machines in any of those states.
+    """
+    owned = owned_plugins(state_path)
+    _clear_owned(state_path)
+    if not owned or not zshrc_path.exists():
         return ()
     original = zshrc_path.read_text()
-    current = _names_in(original) or []
-    removed = tuple(name for name in plugins if name in current)
-    updated = disable_plugins(original, plugins)
+    current = plugins_in(original)
+    removed = tuple(name for name in owned if name in current)
+    updated = disable_plugins(original, owned)
     if updated != original:
         _replace_content(zshrc_path, updated)
     return removed
-
-
-def plugins_present(zshrc_path: Path, plugins: tuple[str, ...] = MANAGED_PLUGINS) -> bool:
-    """True when zshrc_path exists and its array contains every requested name."""
-    if not zshrc_path.exists():
-        return False
-    return plugins_enabled(zshrc_path.read_text(), plugins)
 
 
 def omz_present(home: Path, environ: Mapping[str, str]) -> bool:

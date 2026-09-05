@@ -324,7 +324,8 @@ class UninstallScreen(AppScreen):
             selectable=True,
             detail=(
                 "Disables every enabled shell tweak — the ~/.myshellrc blocks, "
-                "the managed helper executables, and the Oh-My-Zsh plugins array"
+                "the managed helper executables, and the Oh-My-Zsh plugin names "
+                "this installer added to .zshrc (never ones you added yourself)"
             ),
             paths=(),
             is_ban=False,
@@ -577,11 +578,11 @@ class PoliciesScreen(AppScreen):
             "omz-plugins": (
                 "Adds Oh-My-Zsh's bundled git and docker plugins to the"
                 " plugins=(...) array in ~/.zshrc.",
-                "Disabling removes both names from that array, including one that"
-                " was already there before this was enabled.",
+                "Disabling removes only the names this enable actually added — a"
+                " plugin you put in that array yourself is never touched.",
                 "Needs Oh-My-Zsh installed; only the single-line plugins=(...) form is edited.",
-                "Reads ON only when both plugins are in the array, so removing one"
-                " by hand afterwards shows the row as OFF while the other is still loaded.",
+                "Reads ON only once this installer has enabled it, so a"
+                " plugins=(git docker) you wrote by hand shows OFF and is left alone.",
             ),
         }
         lines = [f"{policy.label} — {policy.description}"]

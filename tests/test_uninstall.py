@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from installer.model import Method, Tool
-from installer.policy import tweak_policy
+from installer.policy import omz_plugins_policy, tweak_policy
 from installer.tweaks import BUNDLES
 from installer.uninstall import active_tweak_ids, plan_uninstall, remove_paths, sweep_tweaks
 
@@ -588,27 +588,67 @@ def test_sweep_tweaks_disables_every_active_tweak(
     assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ()
 
 
+def _enabled_omz(
+    tmp_path: Path, zshrc_text: str = "plugins=(z)\nsource omz\n"
+) -> tuple[Path, Path, Path]:
+    """Enable the Oh-My-Zsh policy for real, so the sweep sees a genuine record."""
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text(zshrc_text)
+    rc_path = tmp_path / ".myshellrc"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    omz_plugins_policy(zshrc_path=zshrc, state_path=rc_path, present=True).apply()
+    return zshrc, rc_path, bin_dir
+
+
 def test_sweep_tweaks_includes_the_omz_plugins_tweak(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    zshrc = tmp_path / ".zshrc"
-    zshrc.write_text("plugins=(z git docker)\nsource $ZSH/oh-my-zsh.sh\n")
-    rc_path = tmp_path / ".myshellrc"
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
+    zshrc, rc_path, bin_dir = _enabled_omz(tmp_path)
+    assert zshrc.read_text().startswith("plugins=(z git docker)\n")
     assert "omz-plugins" in active_tweak_ids(
         BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc
     )
-    original = zshrc.read_text()
     assert "omz-plugins" in sweep_tweaks(
         BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc
     )
     assert zshrc.read_text().startswith("plugins=(z)\n")
-    zshrc.write_text(original)
-    assert "omz-plugins" not in active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir)
-    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir) == ()
-    assert zshrc.read_text() == original
+    # Idempotent: the record is gone, so a second sweep reports and does nothing.
+    assert "omz-plugins" not in active_tweak_ids(
+        BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc
+    )
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc) == ()
+
+
+def test_sweep_leaves_a_hand_authored_plugins_array_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # CR-01: `git` ships in Oh-My-Zsh's default .zshrc and `docker` is its
+    # commonest addition, so a full uninstall must not read that array as ours.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc = tmp_path / ".zshrc"
+    hand_written = "plugins=(git docker kubectl)\nsource $ZSH/oh-my-zsh.sh\n"
+    zshrc.write_text(hand_written)
+    rc_path = tmp_path / ".myshellrc"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    assert active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc) == ()
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc) == ()
+    assert zshrc.read_text() == hand_written
+
+
+def test_sweep_removes_only_the_plugin_names_the_installer_added(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # The user already had `git`; only `docker` was ever ours.
+    zshrc, rc_path, bin_dir = _enabled_omz(tmp_path, "plugins=(git kubectl)\nsource omz\n")
+    assert zshrc.read_text() == "plugins=(git kubectl docker)\nsource omz\n"
+    assert "omz-plugins" in sweep_tweaks(
+        BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc
+    )
+    assert zshrc.read_text() == "plugins=(git kubectl)\nsource omz\n"
 
 
 def test_orphaned_executable_is_swept_without_its_block(
@@ -659,7 +699,8 @@ def test_preview_equals_effect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("HOME", str(tmp_path))
     rc_path, bin_dir = _enabled_countdown(tmp_path)
     zshrc = tmp_path / ".zshrc"
-    zshrc.write_text("plugins=(z git docker)\nsource $ZSH/oh-my-zsh.sh\n")
+    zshrc.write_text("plugins=(z)\nsource $ZSH/oh-my-zsh.sh\n")
+    omz_plugins_policy(zshrc_path=zshrc, state_path=rc_path, present=True).apply()
     previewed = active_tweak_ids(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc)
     swept = sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc)
     assert previewed == swept

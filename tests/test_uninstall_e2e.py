@@ -11,7 +11,7 @@ from installer.doctor import DoctorReport
 from installer.guards import guard_status, install_shims, write_ban_aliases
 from installer.model import Method, Tool
 from installer.platform import Platform
-from installer.policy import tweak_policy
+from installer.policy import omz_plugins_policy, tweak_policy
 from installer.shellrc import has_managed_block, write_myshellrc
 from installer.tweaks import BUNDLES
 from installer.uninstall import ToolRow, active_tweak_ids, classify_tools
@@ -88,7 +88,12 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
     write_myshellrc([bin_dir], myshellrc)
     countdown = next(bundle for bundle in BUNDLES if bundle.id == "countdown")
     tweak_policy(countdown, rc_path=myshellrc, bin_dir=bin_dir).apply()
-    zshrc.write_text("plugins=(z git docker)\nsource $ZSH/oh-my-zsh.sh\n")
+    # Enable the Oh-My-Zsh policy for real rather than seeding the array by
+    # hand: the sweep removes what this installer recorded adding, and a
+    # hand-seeded array is by definition not that (CR-01). `kubectl` is the
+    # user's own and must survive; `git` was already there and is not ours.
+    zshrc.write_text("plugins=(git kubectl)\nsource $ZSH/oh-my-zsh.sh\n")
+    omz_plugins_policy(zshrc_path=zshrc, state_path=myshellrc, present=True).apply()
 
     rows = classify_tools([_dl_tool()], bin_dir, installed={"fd": True}, platform=_LINUX)
     tweak_ids = active_tweak_ids(BUNDLES, rc_path=myshellrc, bin_dir=bin_dir, zshrc_path=zshrc)
@@ -239,5 +244,5 @@ async def test_uninstall_e2e_also_sweeps_tweaks_against_sandbox(
     assert not helper.exists()
     assert "wait_time()" not in myshellrc.read_text()
     plugins = zshrc.read_text().split("\n", 1)[0]
-    assert "git" not in plugins
-    assert "docker" not in plugins
+    # Only `docker` was ever ours; the names the user wrote are untouched.
+    assert plugins == "plugins=(git kubectl)"

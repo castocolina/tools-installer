@@ -22,6 +22,7 @@ from installer.guards import (
 )
 from installer.model import Tool
 from installer.platform import Platform
+from installer.policy import omz_removal_detail
 from installer.prompt import Prompter
 from installer.rcclean import find_duplicate_path_lines, strip_lines
 from installer.render import (
@@ -321,6 +322,13 @@ def run_uninstall(
         console.print(f"The pip/npm ban will also be removed ({', '.join(shimmed)}).")
     if tweaks:
         console.print(f"These shell tweaks will also be disabled ({', '.join(tweaks)}).")
+        # Name the plugins and the file: .zshrc is the one file in the sweep the
+        # installer does not own, so "omz-plugins" alone is not enough for the
+        # user to consent to what happens to it.
+        if zshrc_path is not None:
+            detail = omz_removal_detail(zshrc_path=zshrc_path, state_path=myshellrc_path)
+            if detail is not None:
+                console.print(f"  omz-plugins {detail}.")
     if not confirm("Remove these artifacts?"):
         return []
     remove_paths(paths)

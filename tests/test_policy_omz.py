@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from installer.omz import OmzPluginsError
-from installer.policy import Policy, PolicyResult, omz_plugins_policy
+from installer.policy import Policy, PolicyResult, omz_plugins_policy, omz_removal_detail
 
 _ZSHRC = (
     'export ZSH="$HOME/.oh-my-zsh"\n'
@@ -23,7 +23,9 @@ def test_policy_reports_missing_requires_when_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    policy = omz_plugins_policy(zshrc_path=_zshrc(tmp_path), present=False)
+    policy = omz_plugins_policy(
+        zshrc_path=_zshrc(tmp_path), state_path=tmp_path / ".myshellrc", present=False
+    )
     assert isinstance(policy, Policy)
     assert policy.missing_requires == ("oh-my-zsh",)
 
@@ -32,7 +34,9 @@ def test_policy_clears_requires_when_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    policy = omz_plugins_policy(zshrc_path=_zshrc(tmp_path), present=True)
+    policy = omz_plugins_policy(
+        zshrc_path=_zshrc(tmp_path), state_path=tmp_path / ".myshellrc", present=True
+    )
     assert policy.requires == ("oh-my-zsh",)
     assert policy.missing_requires == ()
 
@@ -42,7 +46,7 @@ def test_apply_and_remove_return_layered_results(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     zshrc = _zshrc(tmp_path)
-    policy = omz_plugins_policy(zshrc_path=zshrc, present=True)
+    policy = omz_plugins_policy(zshrc_path=zshrc, state_path=tmp_path / ".myshellrc", present=True)
     result = policy.apply()
     assert isinstance(result, PolicyResult)
     assert len(result.layers) == 1
@@ -55,14 +59,14 @@ def test_apply_and_remove_return_layered_results(
     assert "hash -r" not in result.reload_hint
     assert result.warning is None
     already = policy.apply()
-    assert "already enabled" in already.layers[0].detail
+    assert "nothing added" in already.layers[0].detail
     removed = policy.remove()
     assert removed.layers[0].name == "Oh-My-Zsh plugins"
     assert removed.reload_hint is not None
     assert "zsh" in removed.reload_hint.lower()
     assert "hash -r" not in removed.reload_hint
     already_off = policy.remove()
-    assert "already disabled" in already_off.layers[0].detail
+    assert "nothing to remove" in already_off.layers[0].detail
 
 
 def test_apply_on_a_zshrc_without_an_array_raises_os_error(
@@ -71,7 +75,7 @@ def test_apply_on_a_zshrc_without_an_array_raises_os_error(
     monkeypatch.setenv("HOME", str(tmp_path))
     zshrc = tmp_path / ".zshrc"
     zshrc.write_text('ZSH_THEME="robbyrussell"\n')
-    policy = omz_plugins_policy(zshrc_path=zshrc, present=True)
+    policy = omz_plugins_policy(zshrc_path=zshrc, state_path=tmp_path / ".myshellrc", present=True)
     try:
         policy.apply()
     except OSError as exc:
@@ -79,3 +83,20 @@ def test_apply_on_a_zshrc_without_an_array_raises_os_error(
         assert isinstance(exc, OmzPluginsError)
     else:
         raise AssertionError("apply() must raise OSError when there is no array")
+
+
+def test_removal_detail_names_the_plugins_and_the_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A preview that says only "omz-plugins" tells the user nothing about which
+    # names leave which file — the whole question for a file we do not own.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc = _zshrc(tmp_path)
+    state = tmp_path / ".myshellrc"
+    assert omz_removal_detail(zshrc_path=zshrc, state_path=state) is None
+    omz_plugins_policy(zshrc_path=zshrc, state_path=state, present=True).apply()
+    detail = omz_removal_detail(zshrc_path=zshrc, state_path=state)
+    assert detail is not None
+    assert "git, docker" in detail
+    assert "~/.zshrc" in detail
+    assert "plugins=(...)" in detail

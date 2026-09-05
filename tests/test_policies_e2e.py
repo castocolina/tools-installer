@@ -169,7 +169,7 @@ async def test_policies_screen_toggles_omz_plugins_live(
     (tmp_path / ".oh-my-zsh").mkdir()
     bin_dir = tmp_path / ".local" / "bin"
     bin_dir.mkdir(parents=True)
-    policy = omz_plugins_policy(zshrc_path=zshrc, present=True)
+    policy = omz_plugins_policy(zshrc_path=zshrc, state_path=tmp_path / ".myshellrc", present=True)
     app = UnifiedApp(
         [_tool()],
         {"rg": True},
@@ -206,7 +206,7 @@ def _omz_app(home: Path, *, present: bool, zshrc_text: str) -> tuple[UnifiedApp,
     zshrc.write_text(zshrc_text)
     bin_dir = home / ".local" / "bin"
     bin_dir.mkdir(parents=True)
-    policy = omz_plugins_policy(zshrc_path=zshrc, present=present)
+    policy = omz_plugins_policy(zshrc_path=zshrc, state_path=home / ".myshellrc", present=present)
     app = UnifiedApp(
         [_tool()],
         {"rg": True},
@@ -267,5 +267,7 @@ async def test_policy_detail_discloses_the_partial_state_reading(
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         assert isinstance(app.screen, PoliciesScreen)
-        assert "Disabling removes" in app.screen.detail_text
-        assert "Reads ON only when" in app.screen.detail_text
+        assert "Disabling removes only the names this enable actually added" in (
+            app.screen.detail_text
+        )
+        assert "Reads ON only once this installer has enabled it" in app.screen.detail_text

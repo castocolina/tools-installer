@@ -20,7 +20,7 @@ from installer.guards import (
     remove_shims,
     write_ban_aliases,
 )
-from installer.omz import plugins_present, remove_plugins, write_plugins
+from installer.omz import owned_plugins, plugins_owned, remove_plugins, write_plugins
 from installer.tweaks import (
     TweakBundle,
     install_tweak_executables,
@@ -203,10 +203,16 @@ def tweak_policy(
     )
 
 
-def omz_plugins_policy(*, zshrc_path: Path, present: bool) -> Policy:
+def omz_plugins_policy(*, zshrc_path: Path, state_path: Path, present: bool) -> Policy:
     """Oh-My-Zsh bundled git/docker plugins as a Policy, parallel to tweak_policy.
 
-    apply/remove edit the single-line plugins=(...) array in zshrc_path in place.
+    apply/remove edit the single-line plugins=(...) array in zshrc_path in place
+    and keep the ownership record in state_path (the ~/.myshellrc this installer
+    owns; .zshrc never carries a marker). `active` is that record, not the array
+    contents — the array cannot tell a machine this installer edited from one
+    where the user wrote `plugins=(git docker)` themselves, and only the record
+    can, which is what keeps remove from deleting names it never added.
+
     requires/missing_requires are the fields Policy already has and that
     PoliciesScreen already renders and enforces, so the detection predicate is
     new while the UX is not. The id is deliberately not namespaced tweak:
@@ -214,12 +220,12 @@ def omz_plugins_policy(*, zshrc_path: Path, present: bool) -> Policy:
     """
 
     def _apply() -> PolicyResult:
-        added = write_plugins(zshrc_path)
+        added = write_plugins(zshrc_path, state_path)
         display = _display_path(zshrc_path)
         if added:
             detail = f"added {' '.join(added)} to {display}"
         else:
-            detail = f"already enabled in {display}"
+            detail = f"already in {display} — nothing added, nothing to undo later"
         return PolicyResult(
             layers=(PolicyLayer("Oh-My-Zsh plugins", detail),),
             reload_hint=_ZSH_RELOAD_HINT,
@@ -227,12 +233,12 @@ def omz_plugins_policy(*, zshrc_path: Path, present: bool) -> Policy:
         )
 
     def _remove() -> PolicyResult:
-        removed = remove_plugins(zshrc_path)
+        removed = remove_plugins(zshrc_path, state_path)
         display = _display_path(zshrc_path)
         if removed:
             detail = f"removed {' '.join(removed)} from {display}"
         else:
-            detail = f"already disabled in {display}"
+            detail = f"nothing to remove — this installer added no plugins to {display}"
         return PolicyResult(
             layers=(PolicyLayer("Oh-My-Zsh plugins", detail),),
             reload_hint=_ZSH_RELOAD_HINT,
@@ -243,9 +249,22 @@ def omz_plugins_policy(*, zshrc_path: Path, present: bool) -> Policy:
         id="omz-plugins",
         label="Oh-My-Zsh plugins",
         description="enables the bundled git and docker plugins in .zshrc's plugins=(...) array",
-        active=plugins_present(zshrc_path),
+        active=plugins_owned(state_path),
         apply=_apply,
         remove=_remove,
         requires=("oh-my-zsh",),
         missing_requires=() if present else ("oh-my-zsh",),
     )
+
+
+def omz_removal_detail(*, zshrc_path: Path, state_path: Path) -> str | None:
+    """One line naming the plugins and the file a teardown would edit, or None.
+
+    A preview that says only "omz-plugins" tells the user nothing about which
+    names leave which file, which is the whole question when the file is one
+    the installer does not own. None when there is nothing of ours to remove.
+    """
+    owned = owned_plugins(state_path)
+    if not owned:
+        return None
+    return f"removes {', '.join(owned)} from the plugins=(...) array in {_display_path(zshrc_path)}"

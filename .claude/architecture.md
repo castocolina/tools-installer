@@ -103,7 +103,16 @@ installer owns — `~/.myshellrc`, and the rc files it wires a `source` line int
 single exception, edited in place by `installer/omz.py`, because `.zshrc` and
 that line belong to the user's own oh-my-zsh install, so no tools-installer
 marker is ever written there. Only the single-line form is supported; the
-multi-line form raises `OmzPluginsError` rather than being parsed.
+multi-line form raises `OmzPluginsError` rather than being parsed — including
+when a multi-line array *follows* a single-line one, since that later array is
+the assignment zsh honors and editing the dead line above it would report
+success while loading nothing. Because `.zshrc` carries no marker, ownership of
+the plugin names is recorded in a comment-only block inside `~/.myshellrc`:
+`omz.write_plugins` records exactly the names it added, `omz.remove_plugins`
+removes exactly those, and `omz.plugins_owned` — not the array's contents — is
+the policy's `active`. Content cannot prove ownership (`git` ships in
+Oh-My-Zsh's own default `.zshrc`), and a teardown that guessed from content
+would delete configuration the installer never wrote.
 `OmzPluginsError` subclasses `OSError` specifically so `ui_common.run_live`
 surfaces it under rule 3 without any screen adding an `except`. The feature is
 a `Policy` produced by `installer/policy.py::omz_plugins_policy` — not a `Tool`
@@ -115,8 +124,10 @@ A full uninstall disables every still-enabled tweak through the same
 `installer/uninstall.py::sweep_tweaks`; it never reimplements removal, so
 "full uninstall" and "toggle off" are the same operation by construction. A
 tweak counts as active when its block is present OR an owned helper executable
-is on disk, and ownership means the sentinel check in `installer/tweaks.py`,
-never mere existence. `active_tweak_ids` is the single predicate the CLI
+is on disk, and ownership means the sentinel check in `installer/tweaks.py` —
+or, for the `.zshrc` arm, the recorded-names check in `installer/omz.py` —
+never mere existence. Every arm of the sweep answers "is this ours", not "does
+this exist". `active_tweak_ids` is the single predicate the CLI
 preview, the Uninstall view's row and the removal all read, so a preview and
 its effect cannot diverge. `plan_uninstall` stays the `Tool`-shaped artifact
 walk and knows nothing about tweaks.

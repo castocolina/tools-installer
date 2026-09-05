@@ -1078,3 +1078,66 @@ def test_run_uninstall_without_bundles_sweeps_nothing(
     )
     assert helper.exists()
     assert "wait_time()" in rc_path.read_text()
+
+
+def test_run_uninstall_preview_names_the_plugins_and_the_zshrc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The .zshrc arm is the one the installer does not own, so the preview must
+    say which names leave which file before the single confirm covers it."""
+    from installer.app import run_uninstall
+    from installer.policy import omz_plugins_policy
+    from installer.tweaks import BUNDLES
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    rc_path = tmp_path / ".myshellrc"
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text("plugins=(z)\nsource $ZSH/oh-my-zsh.sh\n")
+    omz_plugins_policy(zshrc_path=zshrc, state_path=rc_path, present=True).apply()
+
+    console, buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=rc_path,
+        rc_paths=[],
+        confirm=lambda _m: False,
+        bundles=BUNDLES,
+        zshrc_path=zshrc,
+    )
+    out = buf.getvalue()
+    assert "omz-plugins" in out
+    assert "git, docker" in out
+    assert "~/.zshrc" in out
+    # Declined: nothing was touched.
+    assert zshrc.read_text().startswith("plugins=(z git docker)")
+
+
+def test_run_uninstall_preview_stays_silent_about_a_zshrc_it_does_not_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+    from installer.tweaks import BUNDLES
+
+    rc_path, bin_dir = _enable_countdown(tmp_path, monkeypatch)
+    zshrc = tmp_path / ".zshrc"
+    hand_written = "plugins=(git docker kubectl)\nsource $ZSH/oh-my-zsh.sh\n"
+    zshrc.write_text(hand_written)
+    console, buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=rc_path,
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=BUNDLES,
+        zshrc_path=zshrc,
+    )
+    out = buf.getvalue()
+    assert "countdown" in out
+    assert "omz-plugins" not in out
+    assert zshrc.read_text() == hand_written

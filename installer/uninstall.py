@@ -234,7 +234,7 @@ def remove_paths(paths: list[Path]) -> None:
             path.unlink()
 
 
-def _omz_policy(zshrc_path: Path) -> Policy:
+def _omz_policy(zshrc_path: Path, state_path: Path) -> Policy:
     # Per CONTEXT D-04/D-05/D-06: present drives missing_requires, which gates
     # ENABLING the tweak (D-05/D-06); a teardown must never be gated on it,
     # because a machine being uninstalled may have had oh-my-zsh removed already
@@ -242,7 +242,11 @@ def _omz_policy(zshrc_path: Path) -> Policy:
     # state this module exists to remove (D-04's symmetric teardown). Removal is
     # total regardless -- omz.remove_plugins no-ops on a missing file or missing
     # array -- so present=True can never raise here.
-    return omz_plugins_policy(zshrc_path=zshrc_path, present=True)
+    #
+    # state_path is the managed rc file: the sweep already binds it as rc_path,
+    # and it is where the enable path recorded which names it added. Reading it
+    # is what keeps the sweep off a .zshrc this installer never edited.
+    return omz_plugins_policy(zshrc_path=zshrc_path, state_path=state_path, present=True)
 
 
 def active_tweak_ids(
@@ -260,6 +264,12 @@ def active_tweak_ids(
     helper alone misses every bundle that has none. This is a read-only
     predicate: it opens files but writes none.
 
+    Every arm answers "is this ours", never "does this exist". The helper arm
+    proves it with tweaks._is_our_executable's sentinel; the Oh-My-Zsh arm with
+    the record the enable path wrote into rc_path. Neither reads mere presence,
+    because .zshrc's plugins=(...) array and a same-named file in bin_dir are
+    both things a user can have without this installer ever running.
+
     The None default on zshrc_path exists for unit tests and any caller working
     only with bundles; production callers MUST pass the real path, because
     omitting it silently narrows the sweep to bundles and leaves the Oh-My-Zsh
@@ -270,7 +280,7 @@ def active_tweak_ids(
         if tweak_present(bundle, rc_path) or tweak_executables_present(bundle, bin_dir):
             ids.append(bundle.id)
     if zshrc_path is not None:
-        policy = _omz_policy(zshrc_path)
+        policy = _omz_policy(zshrc_path, rc_path)
         if policy.active:
             ids.append(policy.id)
     return tuple(ids)
@@ -304,7 +314,7 @@ def sweep_tweaks(
         if bundle.id in active:
             tweak_policy(bundle, rc_path=rc_path, bin_dir=bin_dir).remove()
     if zshrc_path is not None:
-        policy = _omz_policy(zshrc_path)
+        policy = _omz_policy(zshrc_path, rc_path)
         if policy.id in active:
             policy.remove()
     return ids
