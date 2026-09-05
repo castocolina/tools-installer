@@ -9,10 +9,13 @@ from installer.guards import (
     BAN_BEGIN,
     BAN_END,
     BANNED,
+    GLOBAL_REDIRECTED,
+    GLOBAL_SUBCOMMANDS,
     REDIRECT_SENTINEL,
     REDIRECTED,
     SHIM_SENTINEL,
     ban_alias_block,
+    global_redirect_shim_script,
     guard_label,
     guard_path_warning,
     guard_redirect_warning,
@@ -451,3 +454,185 @@ def test_npx_redirect_shim_execs_into_pnpm_dlx_with_real_exit_code(tmp_path: Pat
     )
     assert result.returncode == 3
     assert "dlx a b" in result.stdout
+
+
+def test_banned_npm_hint_names_volta_not_global_add():
+    hint = BANNED["npm"]
+    assert "volta install" in hint
+    assert "add -g" not in hint
+
+
+def _global_shims(tmp_path: Path) -> tuple[Path, Path]:
+    volta = tmp_path / "volta"
+    volta.write_text('#!/bin/sh\necho "VOLTA $@"\n')
+    volta.chmod(0o755)
+    pnpm = tmp_path / "pnpm"
+    pnpm.write_text('#!/bin/sh\necho "PNPM $@"\n')
+    pnpm.chmod(0o755)
+    npm_shim = tmp_path / "npm"
+    npm_shim.write_text(
+        global_redirect_shim_script("npm", volta_path=str(volta), passthrough_path=None)
+    )
+    npm_shim.chmod(0o755)
+    pnpm_shim = tmp_path / "pnpm-shim"
+    pnpm_shim.write_text(
+        global_redirect_shim_script("pnpm", volta_path=str(volta), passthrough_path=str(pnpm))
+    )
+    pnpm_shim.chmod(0o755)
+    return npm_shim, pnpm_shim
+
+
+def _run_shim(shim: Path, *argv: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([str(shim), *argv], capture_output=True, text=True, check=False)
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (("install", "-g", "typescript"), "VOLTA install typescript\n"),
+        (("add", "-g", "@scope/pkg"), "VOLTA install @scope/pkg\n"),
+        (("i", "-g", "a", "b"), "VOLTA install a b\n"),
+        (("install", "-g", "typescript", "--loglevel=warn"), "VOLTA install typescript\n"),
+        (("i", "-gD", "typescript"), "VOLTA install typescript\n"),
+    ],
+)
+def test_npm_global_install_redirects_to_volta(
+    tmp_path: Path, argv: tuple[str, ...], expected: str
+):
+    npm_shim, _pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(npm_shim, *argv)
+    assert result.returncode == 0
+    assert result.stdout == expected
+
+
+def test_pnpm_add_gd_redirects_to_volta(tmp_path: Path):
+    _npm_shim, pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(pnpm_shim, "add", "-gD", "typescript")
+    assert result.returncode == 0
+    assert result.stdout == "VOLTA install typescript\n"
+
+
+def test_npm_install_d_without_g_is_banned(tmp_path: Path):
+    npm_shim, _pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(npm_shim, "install", "-D", "typescript")
+    assert result.returncode == 127
+    assert result.stdout == ""
+    assert "banned" in result.stderr
+
+
+def test_pnpm_add_d_passes_through(tmp_path: Path):
+    _npm_shim, pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(pnpm_shim, "add", "-D", "typescript")
+    assert result.returncode == 0
+    assert result.stdout == "PNPM add -D typescript\n"
+
+
+def test_pnpm_filter_equals_g_is_not_global(tmp_path: Path):
+    _npm_shim, pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(pnpm_shim, "add", "typescript", "--filter=-g")
+    assert result.returncode == 0
+    assert result.stdout == "PNPM add typescript --filter=-g\n"
+
+
+def test_npm_install_without_global_is_banned(tmp_path: Path):
+    npm_shim, _pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(npm_shim, "install", "typescript")
+    assert result.returncode == 127
+    assert result.stdout == ""
+    assert "banned" in result.stderr
+
+
+def test_npm_ls_g_is_banned(tmp_path: Path):
+    npm_shim, _pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(npm_shim, "ls", "-g")
+    assert result.returncode == 127
+
+
+def test_npm_install_g_without_package_names_missing_package(tmp_path: Path):
+    npm_shim, _pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(npm_shim, "install", "-g")
+    assert result.returncode == 127
+    assert "package name" in result.stderr
+
+
+def test_pnpm_add_g_redirects_to_volta(tmp_path: Path):
+    _npm_shim, pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(pnpm_shim, "add", "-g", "typescript")
+    assert result.returncode == 0
+    assert result.stdout == "VOLTA install typescript\n"
+
+
+def test_pnpm_add_without_global_passes_through_unmodified(tmp_path: Path):
+    _npm_shim, pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(pnpm_shim, "add", "typescript")
+    assert result.returncode == 0
+    assert result.stdout == "PNPM add typescript\n"
+
+
+def test_pnpm_list_g_passes_through_unmodified(tmp_path: Path):
+    _npm_shim, pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(pnpm_shim, "list", "-g")
+    assert result.returncode == 0
+    assert result.stdout == "PNPM list -g\n"
+
+
+def test_pnpm_run_build_watch_passes_through(tmp_path: Path):
+    _npm_shim, pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(pnpm_shim, "run", "build", "--watch")
+    assert result.returncode == 0
+    assert result.stdout == "PNPM run build --watch\n"
+
+
+def test_pnpm_passthrough_preserves_real_exit_code(tmp_path: Path):
+    volta = tmp_path / "volta"
+    volta.write_text("#!/bin/sh\n")
+    volta.chmod(0o755)
+    pnpm = tmp_path / "pnpm"
+    pnpm.write_text("#!/bin/sh\nexit 7\n")
+    pnpm.chmod(0o755)
+    shim = tmp_path / "pnpm-shim"
+    shim.write_text(
+        global_redirect_shim_script("pnpm", volta_path=str(volta), passthrough_path=str(pnpm))
+    )
+    shim.chmod(0o755)
+    result = _run_shim(shim, "run", "build")
+    assert result.returncode == 7
+
+
+def test_global_redirect_shim_is_valid_posix_sh(tmp_path: Path):
+    npm_shim, pnpm_shim = _global_shims(tmp_path)
+    for shim in (npm_shim, pnpm_shim):
+        syntax = subprocess.run(
+            ["sh", "-n", str(shim)], capture_output=True, text=True, check=False
+        )
+        assert syntax.returncode == 0, syntax.stderr
+
+
+def test_npm_global_fallback_matches_ban_shim_last_two_lines():
+    body = global_redirect_shim_script("npm", volta_path="/v/volta", passthrough_path=None)
+    assert body.splitlines()[-2:] == shim_script("npm").splitlines()[-2:]
+
+
+def test_pnpm_wrapper_requires_passthrough_path():
+    with pytest.raises(ValueError):
+        global_redirect_shim_script("pnpm", volta_path="/v/volta", passthrough_path=None)
+
+
+def test_global_redirect_constants():
+    assert GLOBAL_SUBCOMMANDS == ("install", "add", "i")
+    assert GLOBAL_REDIRECTED["npm"].passthrough is None
+    assert GLOBAL_REDIRECTED["pnpm"].passthrough == "pnpm"
+
+
+def test_npm_prefix_before_subcommand_fails_to_hard_block(tmp_path: Path):
+    npm_shim, _pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(npm_shim, "--prefix", "/tmp", "install", "-g", "typescript")
+    assert result.returncode == 127
+    assert "banned" in result.stderr
+
+
+def test_pnpm_filter_before_subcommand_passes_through(tmp_path: Path):
+    _npm_shim, pnpm_shim = _global_shims(tmp_path)
+    result = _run_shim(pnpm_shim, "--filter", "web", "add", "-g", "typescript")
+    assert result.returncode == 0
+    assert result.stdout == "PNPM --filter web add -g typescript\n"

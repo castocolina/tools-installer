@@ -33,7 +33,7 @@ import installer.locations
 from installer.shellrc import apply_block, strip_block
 
 BANNED: dict[str, str] = {
-    "npm": "pnpm (pnpm add -g <pkg>)",
+    "npm": "pnpm (local) or volta install <pkg> (global)",
     "pip": "uv (uv pip install / uv add)",
     "pip3": "uv (uv pip install / uv add)",
     "npx": "pnpm (pnpm dlx <pkg>)",
@@ -49,6 +49,26 @@ class Redirect:
 
 REDIRECTED: dict[str, Redirect] = {
     "npx": Redirect(target="pnpm", args=("dlx",), label="redirected to pnpm dlx"),
+}
+GLOBAL_SUBCOMMANDS: tuple[str, ...] = ("install", "add", "i")
+
+
+@dataclass(frozen=True)
+class GlobalRedirect:
+    passthrough: str | None
+    label: str
+
+
+VOLTA: str = "volta"
+GLOBAL_REDIRECTED: dict[str, GlobalRedirect] = {
+    "npm": GlobalRedirect(
+        passthrough=None,
+        label="global installs redirected to volta install, other npm use blocked",
+    ),
+    "pnpm": GlobalRedirect(
+        passthrough="pnpm",
+        label="global adds redirected to volta install",
+    ),
 }
 EXIT_CODE = 127  # non-zero so the caller sees a hard failure
 SHIM_SENTINEL = "# tools-installer-ban-shim"
@@ -74,6 +94,90 @@ def redirect_shim_script(name: str, target_path: str) -> str:
     spec = REDIRECTED[name]
     quoted_args = " ".join(shlex.quote(arg) for arg in spec.args)
     return f'#!/bin/sh\n{REDIRECT_SENTINEL}\nexec {shlex.quote(target_path)} {quoted_args} "$@"\n'
+
+
+def global_redirect_shim_script(name: str, *, volta_path: str, passthrough_path: str | None) -> str:
+    """Argv-conditional wrapper: global install/add/i execs volta, else fallback.
+
+    A value-taking option placed BEFORE the subcommand makes that option's
+    value look like the first non-flag token, so `npm --prefix <path> install
+    -g <pkg>` and `pnpm --filter <ws> add -g <pkg>` both mis-read the
+    subcommand. Closing it properly would require a per-binary table of which
+    options consume a following value — that is hand-rolling npm's and pnpm's
+    CLI grammars, which 04-RESEARCH.md's "Don't Hand-Roll" row rules out.
+    npm degrades to its hard block (safe — the user sees the ban message and
+    retypes). pnpm degrades to an un-redirected pass-through to real pnpm (a
+    genuine redirect bypass, but no security loss — the install still runs
+    under pnpm's gated-postinstall model).
+    """
+    spec = GLOBAL_REDIRECTED[name]
+    volta = shlex.quote(volta_path)
+    subcmds = "|".join(GLOBAL_SUBCOMMANDS)
+    if spec.passthrough is not None:
+        if passthrough_path is None:
+            raise ValueError(
+                "a pass-through wrapper with no resolved real binary must not be generated"
+            )
+        fallback = f'exec {shlex.quote(passthrough_path)} "$@"\n'
+    else:
+        hint = BANNED[name]
+        fallback = (
+            f"echo \"tools-installer: '{name}' is banned on this machine — use {hint}.\" >&2\n"
+            f"exit {EXIT_CODE}\n"
+        )
+    # Three structural rules the body depends on:
+    # 1. The first loop only READS "$@"; the second loop rewrites it with the
+    #    standard POSIX rotate idiom (take $1, shift, append the keepers).
+    #    Because the rotate loop mangles "$@", the branch it lives in always
+    #    ends in an exec or an exit — control never reaches the fallback with
+    #    a rewritten argv.
+    # 2. The first non-flag token is the subcommand and is dropped; every
+    #    later non-flag token is a package name and is kept. Every flag,
+    #    -g/--global included, is dropped, because volta install takes bare
+    #    package names.
+    # 3. The -[!-]* arm is the combined-short-flag rule: a POSIX case pattern
+    #    matches a WHOLE token, so -g|--global alone never fires for a packed
+    #    cluster like -gD. The arm matches a single-dash cluster and re-tests
+    #    it for a g. A token beginning with -- never reaches it, so
+    #    --filter=-g and any other long option carrying -g in its value cannot
+    #    trigger it.
+    return (
+        "#!/bin/sh\n"
+        f"{REDIRECT_SENTINEL}\n"
+        "subcmd=''\n"
+        "is_global=0\n"
+        'for arg in "$@"; do\n'
+        '  case "$arg" in\n'
+        "    -g|--global) is_global=1 ;;\n"
+        '    -[!-]*) case "$arg" in *g*) is_global=1 ;; esac ;;\n'
+        "    -*) ;;\n"
+        '    *) if [ -z "$subcmd" ]; then subcmd="$arg"; fi ;;\n'
+        "  esac\n"
+        "done\n"
+        'if [ "$is_global" -eq 1 ]; then\n'
+        '  case "$subcmd" in\n'
+        f"    {subcmds})\n"
+        "      argc=$#\n"
+        "      seen=0\n"
+        '      while [ "$argc" -gt 0 ]; do\n'
+        '        arg="$1"\n'
+        "        shift\n"
+        "        argc=$((argc - 1))\n"
+        '        case "$arg" in\n'
+        "          -*) ;;\n"
+        '          *) if [ "$seen" -eq 0 ]; then seen=1; else set -- "$@" "$arg"; fi ;;\n'
+        "        esac\n"
+        "      done\n"
+        '      if [ "$#" -gt 0 ]; then\n'
+        f'        exec {volta} install "$@"\n'
+        "      fi\n"
+        '      echo "tools-installer: a global install needs a package name." >&2\n'
+        f"      exit {EXIT_CODE}\n"
+        "      ;;\n"
+        "  esac\n"
+        "fi\n"
+        f"{fallback}"
+    )
 
 
 def is_our_shim(path: Path) -> bool:
