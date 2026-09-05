@@ -27,7 +27,8 @@ def test_multiline_summary_joins_one_line_per_part() -> None:
     assert multiline_summary([]) == ""
 
 
-def test_run_live_returns_result_or_oserror_message() -> None:
+def test_run_live_returns_result_or_error_message() -> None:
+    from installer.run import CommandError
     from installer.ui_common import run_live
 
     assert run_live(lambda: 42) == (42, None)
@@ -36,6 +37,12 @@ def test_run_live_returns_result_or_oserror_message() -> None:
         raise OSError("disk full")
 
     assert run_live(boom) == (None, "disk full")
+
+    def cmd_boom() -> int:
+        raise CommandError(["pnpm"], 1)
+
+    result, message = run_live(cmd_boom)
+    assert result is None and message
 
 
 class _TableHost(App[None]):
@@ -163,7 +170,7 @@ def test_doctor_view_advertises_audit_and_apply() -> None:
     assert doctor.palette == "Doctor - audit PATH and apply the safe fix"
     assert doctor.mode == "AUDIT + APPLY"
     assert doctor.hint == "audit report stays read-only until you press enter"
-    assert doctor.actions == "enter apply"
+    assert doctor.actions == "enter apply | r reinstall pnpm globals"
 
 
 def test_global_nav_names_every_view() -> None:
@@ -188,6 +195,7 @@ def test_footer_bar_doctor_shows_apply_actions() -> None:
 
     text = FooterBar("doctor").render_text().plain
     assert "enter apply" in text
+    assert "r reinstall pnpm globals" in text
     assert text.index("enter apply") < text.index("│")
 
 

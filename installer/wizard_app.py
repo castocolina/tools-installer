@@ -27,8 +27,9 @@ from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
 from installer.enums import Tier, UninstallState
-from installer.guidance import Guidance, doctor_guidance, guard_guidance
+from installer.guidance import Guidance, doctor_guidance, guard_guidance, node_globals_guidance
 from installer.model import Tool
+from installer.pnpm_globals import NodeGlobalsReport, reinstall_preview
 from installer.policy import Policy, PolicyResult
 from installer.render import guidance_text
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
@@ -92,6 +93,7 @@ class DoctorScreen(AppScreen):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "apply", "apply", show=True),
         Binding("a", "apply", "apply", show=False),
+        Binding("r", "reinstall_globals", "reinstall pnpm globals", show=True),
     ]
     DEFAULT_CSS = """
     DoctorScreen {
@@ -113,6 +115,10 @@ class DoctorScreen(AppScreen):
         guard_state: Callable[[], tuple[dict[str, bool], str | None]],
         fix_preview: str,
         fix: Callable[[], None],
+        *,
+        node_globals: Callable[[], NodeGlobalsReport],
+        globals_preview: Callable[[], str],
+        reinstall_globals: Callable[[], tuple[str, ...]],
     ) -> None:
         super().__init__(view="doctor")
         self._report = report
@@ -123,9 +129,21 @@ class DoctorScreen(AppScreen):
         self._guard_state = guard_state
         self._fix_preview = fix_preview
         self._fix = fix
+        # Same predicate rule as guard_state: this screen is installed once and
+        # suspended, so a snapshot taken at mount would go stale. globals_preview
+        # is a callable rather than the plain str that fix_preview is because the
+        # reinstall preview depends on whether a real pnpm currently resolves.
+        self._node_globals = node_globals
+        self._globals_preview = globals_preview
+        self._reinstall_globals = reinstall_globals
         self.guidance: list[Guidance] = []
         self.applied = False
         self.error: str | None = None
+        # Own flags, not a reuse of applied/error: action_apply opens with
+        # `if self.applied: return`, so sharing them would make each action
+        # silently suppress the other and each section render the other's outcome.
+        self.globals_done = False
+        self.globals_error: str | None = None
 
     def compose_body(self) -> ComposeResult:
         yield _BodyStatic(id="doctor-body")
@@ -147,7 +165,11 @@ class DoctorScreen(AppScreen):
 
     def _refresh_guidance(self) -> None:
         status, warning = self._guard_state()
-        self.guidance = doctor_guidance(self._report) + guard_guidance(status, warning)
+        self.guidance = (
+            doctor_guidance(self._report)
+            + guard_guidance(status, warning)
+            + node_globals_guidance(self._node_globals())
+        )
 
     def _refresh_body(self) -> None:
         body = self.query_one("#doctor-body", _BodyStatic)
@@ -168,28 +190,62 @@ class DoctorScreen(AppScreen):
         else:
             text.append("Press enter to wire the managed PATH into your shells.", style="yellow")
             text.append("\nViewing this screen did not change your shell files.")
+        report = self._node_globals()
+        text.append("\n\npnpm-managed globals\n", style="bold")
+        text.append(f"{len(report.entries)} catalog tool(s) installed via pnpm add -g.\n")
+        # Print the core's preview string verbatim. Do not call reinstall_argv
+        # here: a non-empty set with no resolvable pnpm is a returned string,
+        # never an argv and never an exception (architecture rule 3).
+        text.append(self._globals_preview())
+        text.append("\n")
+        if self.globals_done:
+            text.append("pnpm globals reinstalled.", style="green")
+        elif self.globals_error is not None:
+            text.append("Reinstall failed.", style="red")
+            text.append(f"\n{self.globals_error}")
+        else:
+            text.append("Press r to reinstall the pnpm-managed global set.", style="yellow")
         body.update(text)
 
     def _tui_guidance(self) -> list[Guidance]:
         """Keep CLI doctor wording unchanged while the TUI points to the live apply action."""
-        return [
-            replace(
-                item,
-                next_step=(
-                    "Press enter to apply the safe fix below, then open a new terminal "
-                    "(or `source ~/.myshellrc`)."
-                ),
-            )
-            if item.next_step.startswith("Run `make fix`")
-            else item
-            for item in self.guidance
-        ]
+        rewritten: list[Guidance] = []
+        for item in self.guidance:
+            if item.next_step.startswith("Run `make fix`"):
+                rewritten.append(
+                    replace(
+                        item,
+                        next_step=(
+                            "Press enter to apply the safe fix below, then open a new terminal "
+                            "(or `source ~/.myshellrc`)."
+                        ),
+                    )
+                )
+            elif item.next_step.startswith("Run `make setup`"):
+                rewritten.append(
+                    replace(
+                        item,
+                        next_step="Press r to reinstall the pnpm-managed global set.",
+                    )
+                )
+            else:
+                rewritten.append(item)
+        return rewritten
 
     def action_apply(self) -> None:
         if self.applied:
             return
         _, self.error = run_live(self._fix)
         self.applied = self.error is None
+        self._refresh_body()
+
+    def action_reinstall_globals(self) -> None:
+        if self.globals_done:
+            return
+        if not self._node_globals().entries:
+            return
+        _, self.globals_error = run_live(self._reinstall_globals)
+        self.globals_done = self.globals_error is None
         self._refresh_body()
 
 
@@ -810,6 +866,9 @@ class UnifiedApp(App[list[str] | None]):
         fix: Callable[[], None],
         uninstall: UninstallInputs,
         policies: PolicyInputs,
+        node_globals: Callable[[], NodeGlobalsReport] | None = None,
+        globals_preview: Callable[[], str] | None = None,
+        reinstall_globals: Callable[[], tuple[str, ...]] | None = None,
         initial_view: str = BASE_VIEW,
     ) -> None:
         super().__init__()
@@ -829,9 +888,31 @@ class UnifiedApp(App[list[str] | None]):
         self._views: dict[str, AppScreen] = {
             name: screen for name, screen in self._catalogs.items() if name != BASE_VIEW
         }
+        # Nine UnifiedApp(...) constructions exist outside setup.py. Required
+        # kwargs would TypeError at every one of them; those modules are
+        # deliberately not edited here. The cost of the default is that a
+        # UnifiedApp built without the closures silently reports a healthy set,
+        # so setup.py wiring is what makes the feature real in production.
+        read_node_globals = (
+            node_globals
+            if node_globals is not None
+            else (lambda: NodeGlobalsReport(entries=(), missing=()))
+        )
+        read_preview = (
+            globals_preview if globals_preview is not None else (lambda: reinstall_preview(()))
+        )
+        run_reinstall = reinstall_globals if reinstall_globals is not None else (lambda: ())
         self._views.update(
             {
-                "doctor": DoctorScreen(report, guard_state, fix_preview, fix),
+                "doctor": DoctorScreen(
+                    report,
+                    guard_state,
+                    fix_preview,
+                    fix,
+                    node_globals=read_node_globals,
+                    globals_preview=read_preview,
+                    reinstall_globals=run_reinstall,
+                ),
                 "uninstall": UninstallScreen(uninstall),
                 "policies": PoliciesScreen(policies),
             }

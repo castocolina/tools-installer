@@ -20,6 +20,7 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Rule, Static
 
 from installer.enums import Severity
+from installer.run import CommandError
 
 T = TypeVar("T")
 
@@ -39,12 +40,13 @@ def multiline_summary(parts: list[str]) -> str:
 
 def run_live(action: Callable[[], T]) -> tuple[T | None, str | None]:
     """Run a live core mutation from a screen: (result, None) on success,
-    (None, message) on OSError. The single apply workflow shared by the fix,
-    uninstall, and policies screens — a failed core action is surfaced, never a
-    silent crash (PRD), and no screen writes its own try/except for it."""
+    (None, message) on OSError or a failed command. The single apply workflow
+    shared by the fix, uninstall, policies, and pnpm-globals screens — a failed
+    core action is surfaced, never a silent crash (PRD), and no screen writes
+    its own try/except for it."""
     try:
         return action(), None
-    except OSError as exc:
+    except (OSError, CommandError) as exc:
         return None, str(exc)
 
 
@@ -139,7 +141,7 @@ VIEWS: tuple[View, ...] = (
         glyph=">",
         style="yellow",
         hint="audit report stays read-only until you press enter",
-        actions="enter apply",
+        actions="enter apply | r reinstall pnpm globals",
     ),
     View(
         name="uninstall",

@@ -16,6 +16,7 @@ from pathlib import Path
 import questionary
 from rich.console import Console
 
+from installer import pnpm_globals
 from installer.app import (
     UninstallDecision,
     clean_rc_duplicates,
@@ -246,6 +247,16 @@ def _build_app(
         f"{', '.join(str(p) for p in rc_paths)} (mode: {link_mode}).\n"
         'For a different layout, run `make fix ARGS="--link-mode=centralized|single|split"`.'
     )
+
+    def _node_globals_report() -> pnpm_globals.NodeGlobalsReport:
+        return pnpm_globals.audit_node_globals(tools)
+
+    def _globals_preview() -> str:
+        return pnpm_globals.reinstall_preview(pnpm_globals.node_globals(tools))
+
+    def _reinstall_globals() -> tuple[str, ...]:
+        return pnpm_globals.reinstall_node_globals(tools)
+
     return UnifiedApp(
         tools,
         installed,
@@ -256,6 +267,9 @@ def _build_app(
         fix=_apply_fix,
         uninstall=uninstall_inputs,
         policies=policy_inputs,
+        node_globals=_node_globals_report,
+        globals_preview=_globals_preview,
+        reinstall_globals=_reinstall_globals,
         initial_view=initial_view,
     )
 

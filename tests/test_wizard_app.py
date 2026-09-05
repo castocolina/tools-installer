@@ -7,7 +7,9 @@ from textual.widgets import DataTable, Static
 from installer.app import UninstallDecision
 from installer.doctor import DoctorReport
 from installer.model import Method, Tool
+from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.policy import Policy, PolicyLayer, PolicyResult
+from installer.run import CommandError
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, ToolRow
 from installer.wizard_app import (
@@ -129,6 +131,9 @@ def _app(
     fix: Callable[[], None] = lambda: None,
     uninstall: UninstallInputs | None = None,
     policies: PolicyInputs | None = None,
+    node_globals: Callable[[], NodeGlobalsReport] | None = None,
+    globals_preview: Callable[[], str] | None = None,
+    reinstall_globals: Callable[[], tuple[str, ...]] | None = None,
     initial_view: str = BASE_VIEW,
 ) -> UnifiedApp:
     tools = [_tool("rg"), _tool("fd")]
@@ -144,7 +149,17 @@ def _app(
         fix=fix,
         uninstall=uninstall or _uninstall_inputs(),
         policies=policies or _policy_inputs(),
+        node_globals=node_globals,
+        globals_preview=globals_preview,
+        reinstall_globals=reinstall_globals,
         initial_view=initial_view,
+    )
+
+
+def _mmdc_report(*, missing: tuple[str, ...] = ("mmdc",)) -> NodeGlobalsReport:
+    return NodeGlobalsReport(
+        entries=(NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),),
+        missing=missing,
     )
 
 
@@ -1275,3 +1290,191 @@ async def test_doctor_screen_shows_npx_redirect_label() -> None:
     async with app.run_test(size=(100, 30)):
         assert isinstance(app.screen, DoctorScreen)
         assert any("npx: redirected to pnpm dlx" in item.meaning for item in app.screen.guidance)
+
+
+async def test_doctor_screen_shows_missing_pnpm_globals_and_preview() -> None:
+    preview = "/real/bin/pnpm add -g @mermaid-js/mermaid-cli"
+    app = _app(
+        node_globals=lambda: _mmdc_report(),
+        globals_preview=lambda: preview,
+        initial_view="doctor",
+    )
+    async with app.run_test(size=(100, 30)):
+        assert isinstance(app.screen, DoctorScreen)
+        assert any("mmdc" in item.meaning for item in app.screen.guidance)
+        body = str(app.screen.query_one("#doctor-body", Static).render())
+        assert "mmdc" in body
+        assert preview in body
+        assert "pnpm-managed globals" in body
+
+
+async def test_doctor_screen_renders_unresolvable_pnpm_preview() -> None:
+    degraded = (
+        "pnpm not found - cannot preview the reinstall "
+        "(the managed shim dir is excluded from the search)."
+    )
+    app = _app(
+        node_globals=lambda: _mmdc_report(),
+        globals_preview=lambda: degraded,
+        initial_view="doctor",
+    )
+    async with app.run_test(size=(100, 30)):
+        assert isinstance(app.screen, DoctorScreen)
+        body = str(app.screen.query_one("#doctor-body", Static).render())
+        assert "pnpm-managed globals" in body
+        assert degraded in body
+        assert not any(line.strip().startswith("pnpm add") for line in body.splitlines())
+        assert body.strip() != ""
+
+
+async def test_doctor_r_reinstalls_once_and_reports_success() -> None:
+    calls: list[str] = []
+
+    def reinstall() -> tuple[str, ...]:
+        calls.append("r")
+        return ("@mermaid-js/mermaid-cli",)
+
+    app = _app(
+        node_globals=lambda: _mmdc_report(missing=()),
+        reinstall_globals=reinstall,
+        initial_view="doctor",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("r")
+        assert calls == ["r"]
+        assert isinstance(app.screen, DoctorScreen)
+        screen = app.screen
+        assert screen.globals_done is True
+        assert screen.globals_error is None
+        body = str(screen.query_one("#doctor-body", Static).render())
+        assert "pnpm globals reinstalled" in body
+        await pilot.press("r")
+        assert calls == ["r"]
+
+
+async def test_doctor_r_commanderror_leaves_screen_usable() -> None:
+    def boom() -> tuple[str, ...]:
+        raise CommandError(["pnpm", "add", "-g", "x"], 1)
+
+    app = _app(
+        node_globals=lambda: _mmdc_report(),
+        reinstall_globals=boom,
+        initial_view="doctor",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("r")
+        assert isinstance(app.screen, DoctorScreen)
+        screen = app.screen
+        assert screen.globals_done is False
+        assert screen.globals_error
+        body = str(screen.query_one("#doctor-body", Static).render())
+        assert "Reinstall failed" in body
+        assert screen.globals_error in body
+        await pilot.press("escape")
+        assert app.is_running
+
+
+async def test_doctor_r_empty_set_is_noop() -> None:
+    calls: list[str] = []
+    app = _app(
+        reinstall_globals=lambda: calls.append("r") or (),
+        initial_view="doctor",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("r")
+        assert calls == []
+        assert isinstance(app.screen, DoctorScreen)
+        body = str(app.screen.query_one("#doctor-body", Static).render())
+        assert "nothing pnpm-managed to reinstall" in body
+
+
+async def test_doctor_enter_then_r_both_run() -> None:
+    fix_calls: list[str] = []
+    reinstall_calls: list[str] = []
+    app = _app(
+        fix=lambda: fix_calls.append("fix"),
+        node_globals=lambda: _mmdc_report(missing=()),
+        reinstall_globals=lambda: reinstall_calls.append("r") or ("pkg",),
+        initial_view="doctor",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("enter")
+        await pilot.press("r")
+        assert fix_calls == ["fix"]
+        assert reinstall_calls == ["r"]
+        assert isinstance(app.screen, DoctorScreen)
+        screen = app.screen
+        assert screen.applied is True
+        assert screen.globals_done is True
+        body = str(screen.query_one("#doctor-body", Static).render())
+        assert "PATH wired" in body
+        assert "pnpm globals reinstalled" in body
+
+
+async def test_doctor_r_then_enter_both_run() -> None:
+    fix_calls: list[str] = []
+    reinstall_calls: list[str] = []
+    app = _app(
+        fix=lambda: fix_calls.append("fix"),
+        node_globals=lambda: _mmdc_report(missing=()),
+        reinstall_globals=lambda: reinstall_calls.append("r") or ("pkg",),
+        initial_view="doctor",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("r")
+        await pilot.press("enter")
+        assert reinstall_calls == ["r"]
+        assert fix_calls == ["fix"]
+        assert isinstance(app.screen, DoctorScreen)
+        screen = app.screen
+        assert screen.applied is True
+        assert screen.globals_done is True
+        body = str(screen.query_one("#doctor-body", Static).render())
+        assert "PATH wired" in body
+        assert "pnpm globals reinstalled" in body
+
+
+async def test_doctor_rereads_node_globals_on_enter_view() -> None:
+    missing: list[str] = []
+
+    def read() -> NodeGlobalsReport:
+        return NodeGlobalsReport(
+            entries=(NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),),
+            missing=tuple(missing),
+        )
+
+    app = _app(node_globals=read)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        assert isinstance(app.screen, DoctorScreen)
+        assert all("pnpm-managed global set" not in item.title for item in app.screen.guidance)
+        missing.append("mmdc")
+        await pilot.press("escape")
+        await pilot.press("4")
+        assert isinstance(app.screen, DoctorScreen)
+        assert any("pnpm-managed global set" in item.title for item in app.screen.guidance)
+
+
+async def test_doctor_tui_guidance_rewrites_make_setup_prefix() -> None:
+    app = _app(node_globals=lambda: _mmdc_report(), initial_view="doctor")
+    async with app.run_test(size=(100, 30)):
+        assert isinstance(app.screen, DoctorScreen)
+        assert any(item.next_step.startswith("Run `make setup`") for item in app.screen.guidance)
+        body = str(app.screen.query_one("#doctor-body", Static).render())
+        assert "Press r" in body
+        assert "Run `make setup`" not in body
+
+
+def test_unified_app_constructs_without_node_globals_closures() -> None:
+    tools = [_tool("rg")]
+    UnifiedApp(
+        tools,
+        {"rg": False},
+        {"search": "find things"},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: ({"pip": False}, None),
+        fix_preview="preview",
+        fix=lambda: None,
+        uninstall=_uninstall_inputs(),
+        policies=_policy_inputs(),
+    )
