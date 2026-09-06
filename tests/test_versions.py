@@ -71,20 +71,48 @@ def test_urlopen_fetch_reads_body(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_parse_version_strips_v_and_zero_fills() -> None:
-    assert parse_version("11.9.0") == (11, 9, 0)
-    assert parse_version("v22.12.0") == (22, 12, 0)
-    assert parse_version("10.4") == (10, 4, 0)
+    assert parse_version("11.9.0") == (11, 9, 0, 1)
+    assert parse_version("v22.12.0") == (22, 12, 0, 1)
+    assert parse_version("10.4") == (10, 4, 0, 1)
 
 
-def test_parse_version_cuts_prerelease_and_whitespace_suffix() -> None:
-    assert parse_version("25.10.0-rc.1") == (25, 10, 0)
-    assert parse_version("v24.4.0 (arm64)") == (24, 4, 0)
+def test_parse_version_reads_shapes_a_version_line_legitimately_has() -> None:
+    """Forgiving about SHAPE: a trailing note, build metadata, a fourth field."""
+    assert parse_version("v24.4.0 (arm64)") == (24, 4, 0, 1)
+    assert parse_version("1.2.3+build.5") == (1, 2, 3, 1)
+    assert parse_version("140.0.7339.16") == (140, 0, 7339, 1)
+
+
+def test_parse_version_ranks_a_prerelease_below_its_release() -> None:
+    """An rc of a release has not necessarily shipped that release's features.
+
+    Cutting the suffix off returned the bare core, which claimed the opposite.
+    """
+    assert parse_version("25.10.0-rc.1") == (25, 10, 0, 0)
+    assert parse_version("11.0.0-beta") == (11, 0, 0, 0)
+    prerelease = parse_version("11.0.0-rc.1")
+    release = parse_version("11.0.0")
+    assert prerelease is not None and release is not None
+    assert prerelease < release
 
 
 def test_parse_version_returns_none_for_unreadable_output() -> None:
     assert parse_version("") is None
+    assert parse_version("   ") is None
     assert parse_version("latest") is None
     assert parse_version("not.a.version") is None
+
+
+def test_parse_version_refuses_a_non_numeric_component_instead_of_zero_filling() -> None:
+    """`11.bad` parsed as `(11, 0, 0)` and then SATISFIED an `11.0.0` floor.
+
+    A component this parser cannot read is not a zero; treating it as one turned
+    unreadable output into a pass, which is the one answer the fail-closed
+    contract must never produce.
+    """
+    assert parse_version("11.bad") is None
+    assert parse_version("22.12.x") is None
+    assert parse_version("11.") is None
 
 
 def test_parse_declared_version_accepts_one_to_three_numeric_groups() -> None:
@@ -113,6 +141,29 @@ def test_meets_minimum_compares_tuples() -> None:
 def test_meets_minimum_is_fail_closed_on_either_side() -> None:
     assert meets_minimum("latest", "11.0.0") is False
     assert meets_minimum("99.0.0", "22.bad") is False
+
+
+def test_meets_minimum_refuses_malformed_observed_output() -> None:
+    """Observed `11.bad` used to clear an `11.0.0` floor by zero-filling."""
+    assert meets_minimum("11.bad", "11.0.0") is False
+    assert meets_minimum("22.12.x", "22.12.0") is False
+
+
+def test_meets_minimum_refuses_a_prerelease_of_the_required_release() -> None:
+    """An rc of the release that introduces a feature need not have shipped it."""
+    assert meets_minimum("11.0.0-rc.1", "11.0.0") is False
+    assert meets_minimum("22.12.0-rc.1", "22.12.0") is False
+    assert meets_minimum("11.1.0-rc.1", PNPM_CO_INSTALL_MIN) is False
+
+
+def test_meets_minimum_accepts_a_prerelease_that_is_past_the_floor() -> None:
+    """Ranked below its OWN release, not below every release.
+
+    Rejecting prereleases outright would refuse a machine that is genuinely
+    newer than the floor, which is a different wrong answer.
+    """
+    assert meets_minimum("12.0.0-rc.1", "11.1.0") is True
+    assert meets_minimum("11.2.0-rc.1", PNPM_CO_INSTALL_MIN) is True
 
 
 def test_pnpm_floors_match_documented_feature_versions() -> None:

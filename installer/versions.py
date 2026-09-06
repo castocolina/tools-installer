@@ -22,36 +22,59 @@ class VersionError(RuntimeError):
 
 _DECLARED_VERSION = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$")
 
+# The first whitespace-delimited token of a --version line, as semver reads it:
+# an optional `v`, a dotted all-numeric core, an optional `-prerelease`, and an
+# optional `+build`. A core component that is not a number makes the WHOLE token
+# unparseable, which is the point — see parse_version.
+_OBSERVED_VERSION = re.compile(r"^[vV]?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
 
-def parse_version(text: str) -> tuple[int, int, int] | None:
-    """Tolerant parser for versions this installer READS BACK from a --version call.
+# Rank of a final release, and of the prereleases that precede it. Semver orders
+# `11.0.0-rc.1` BELOW `11.0.0`, and this installer needs that order for a real
+# reason rather than a formal one: every caller is gating on a FEATURE, and an
+# rc build of the release that introduces it has not necessarily shipped it.
+_RELEASE = 1
+_PRERELEASE = 0
 
-    The shape of a tool's own --version output is not this installer's to dictate;
-    this parser is never used for a value this project's own registry declares.
+# (major, minor, patch, release rank). The rank is what lets a prerelease
+# compare below the release it precedes with a plain tuple comparison.
+Version = tuple[int, int, int, int]
+
+
+def parse_version(text: str) -> Version | None:
+    """Parser for versions this installer READS BACK from a --version call.
+
+    Forgiving about SHAPE, never about MEANING. The shape of a tool's own
+    --version output is not this installer's to dictate, so a trailing
+    `(arm64)`, a `+build` suffix, a missing patch component and a fourth
+    component (Chrome-style `140.0.7339.16`) are all read rather than refused.
+
+    But a component that is not a number is not a shape this parser can read at
+    all, and zero-filling it was a false PASS: `11.bad` parsed as `(11, 0, 0)`
+    and satisfied an `11.0.0` floor, which defeats the fail-closed contract
+    `meets_minimum` exists to keep. Unparseable input returns None so the caller
+    refuses, exactly as it does when the command could not be run.
+
+    A prerelease is parsed, not discarded: it returns the numeric core with
+    `_PRERELEASE` as its rank, so `11.0.0-rc.1` sorts BELOW `11.0.0` while
+    `12.0.0-rc.1` still clears an `11.1.0` floor. Cutting the suffix off and
+    returning the bare core — what this did before — claimed an rc had shipped
+    the feature set of the release it precedes.
+
+    Unlike `parse_declared_version`, this is not the strict parser: a value the
+    REGISTRY declares is a promise this project made and can fix, so it is held
+    to a stricter shape there.
     """
-    stripped = text.strip()
-    if stripped[:1] in ("v", "V"):
-        stripped = stripped[1:]
-    cut_at = len(stripped)
-    for index, char in enumerate(stripped):
-        if char in "-+ \t":
-            cut_at = index
-            break
-    stripped = stripped[:cut_at]
-    if not stripped:
+    token = text.strip().split(maxsplit=1)
+    if not token:
         return None
-    nums: list[int] = []
-    for part in stripped.split(".")[:3]:
-        if not part.isdigit():
-            if not nums:
-                return None
-            break
-        nums.append(int(part))
-    if not nums:
+    match = _OBSERVED_VERSION.fullmatch(token[0])
+    if match is None:
         return None
+    nums = [int(part) for part in match.group(1).split(".")[:3]]
     while len(nums) < 3:
         nums.append(0)
-    return (nums[0], nums[1], nums[2])
+    rank = _PRERELEASE if match.group(2) else _RELEASE
+    return (nums[0], nums[1], nums[2], rank)
 
 
 def parse_declared_version(text: str) -> tuple[int, int, int] | None:
@@ -72,12 +95,16 @@ def meets_minimum(observed: str, minimum: str) -> bool:
     """Fail-closed on both sides, because every caller is gating a mechanism that
     silently misbehaves rather than failing when its prerequisite is absent, and
     a floor nobody can read is not a floor.
+
+    A declared floor is always a final release — `parse_declared_version`
+    rejects a prerelease outright — so it is compared at `_RELEASE` rank, which
+    is what puts `11.0.0-rc.1` below an `11.0.0` floor.
     """
     got = parse_version(observed)
     need = parse_declared_version(minimum)
     if got is None or need is None:
         return False
-    return got >= need
+    return got >= (*need, _RELEASE)
 
 
 # A bound belongs on a query, never on the side-effecting install itself
