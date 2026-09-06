@@ -100,6 +100,41 @@ def _puppeteer_cache_dir() -> Path:
     return Path.home() / ".cache" / "puppeteer"
 
 
+def _build_version(path: Path) -> tuple[int, ...]:
+    """The build number of the puppeteer cache directory `path` sits under.
+
+    The layout is `<cache>/<browser>/<platform>-<build>/<browser>-<platform>/<binary>`,
+    so the build is the first parent segment whose text after the platform
+    prefix starts with a digit — scanned from the binary outwards rather than
+    indexed at a fixed depth, because macOS adds `<name>.app/Contents/MacOS/`
+    between the platform directory and the executable.
+
+    Returns an empty tuple when no segment parses, which sorts below every real
+    build rather than crashing on a layout puppeteer changes underneath us.
+    """
+    for part in reversed(path.parts[:-1]):
+        _, separator, build = part.partition("-")
+        if separator and build[:1].isdigit():
+            return tuple(int(number) for number in build.split(".") if number.isdigit())
+    return ()
+
+
+def _highest_build(paths: list[Path]) -> Path:
+    """The newest build among `paths`, compared as parsed version tuples.
+
+    A `sorted()` over the path STRINGS compares digits as text, which ranks
+    `linux-99.0.4844.51` above `linux-140.0.7339.16` and hands the smoke check
+    a browser six major versions older than the one the install just wrote. The
+    path string is the tiebreaker only, so the choice stays deterministic when
+    two directories carry the same build.
+    """
+    return max(paths, key=lambda path: (_build_version(path), str(path)))
+
+
+def _executables(cache_dir: Path, name: str) -> list[Path]:
+    return [path for path in cache_dir.rglob(name) if path.is_file() and os.access(path, os.X_OK)]
+
+
 def _puppeteer_browser(cache_dir: Path) -> Path | None:
     """Find a puppeteer-managed browser under cache_dir.
 
@@ -108,18 +143,12 @@ def _puppeteer_browser(cache_dir: Path) -> Path | None:
     reconstructed, because the build and platform segments are not this project's
     to predict.
     """
-    shells = sorted(
-        path
-        for path in cache_dir.rglob("chrome-headless-shell")
-        if path.is_file() and os.access(path, os.X_OK)
-    )
+    shells = _executables(cache_dir, "chrome-headless-shell")
     if shells:
-        return shells[-1]
-    chromes = sorted(
-        path for path in cache_dir.rglob("chrome") if path.is_file() and os.access(path, os.X_OK)
-    )
+        return _highest_build(shells)
+    chromes = _executables(cache_dir, "chrome")
     if chromes:
-        return chromes[-1]
+        return _highest_build(chromes)
     return None
 
 

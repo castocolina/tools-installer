@@ -625,13 +625,25 @@ def test_smoke_honours_puppeteer_executable_path(
     assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
 
 
+@pytest.mark.parametrize(
+    ("older_build", "newer_build"),
+    [
+        # Equal digit widths: lexicographic and numeric order coincide, so this
+        # pair passed even while the code sorted whole path STRINGS.
+        ("linux-140.0.0", "linux-152.0.0"),
+        # Real puppeteer build numbers of unequal width. "99" sorts AFTER "140"
+        # as text and BEFORE it as a number, so only a parsed comparison picks
+        # the right build.
+        ("linux-99.0.4844.51", "linux-140.0.7339.16"),
+    ],
+)
 def test_smoke_prefers_headless_shell_highest_version(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, older_build: str, newer_build: str
 ) -> None:
     _plant_pnpm(tmp_path, monkeypatch)
     cache = tmp_path / "cache"
-    _plant_browser(cache, "linux-140.0.0")
-    newer = _plant_browser(cache, "linux-152.0.0")
+    _plant_browser(cache, older_build)
+    newer = _plant_browser(cache, newer_build)
     monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
     seen: list[list[str]] = []
 
