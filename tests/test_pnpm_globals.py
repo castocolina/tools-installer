@@ -740,6 +740,8 @@ def test_audit_with_policy_detects_a_split_from_the_real_document() -> None:
         which=lambda _n: "/x/bin",
         grouped=lambda: parse_global_groups(_SPLIT_STATE_JSON),
         policy=policy,
+        # This case is about grouping; the smoke seam is exercised on its own.
+        smoke=lambda _n: None,
     )
     assert report.split_groups == ((MMDC_NPM, "puppeteer"),)
     assert MMDC_NPM in report.managed
@@ -753,6 +755,8 @@ def test_audit_with_policy_is_quiet_on_the_grouped_document() -> None:
         which=lambda _n: "/x/bin",
         grouped=lambda: parse_global_groups(_GROUPED_STATE_JSON),
         policy=policy,
+        # This case is about grouping; the smoke seam is exercised on its own.
+        smoke=lambda _n: None,
     )
     assert report.split_groups == ()
 
@@ -855,6 +859,8 @@ def test_audit_does_not_report_a_split_it_could_not_read() -> None:
         which=lambda _n: "/x/bin",
         grouped=lambda: parse_global_groups(_PATHLESS_STATE_JSON),
         policy=policy,
+        # This case is about grouping; the smoke seam is exercised on its own.
+        smoke=lambda _n: None,
     )
     assert report.split_groups == ()
     # The packages themselves were read fine, so they still belong in the set
@@ -989,3 +995,140 @@ def test_replay_completes_a_declared_group_pnpm_is_missing_a_member_of() -> None
         f"{MMDC_NPM},puppeteer@^25",
         "typescript",
     ]
+
+
+def _puppeteer_tool() -> Tool:
+    return Tool(
+        id="puppeteer",
+        name="Puppeteer",
+        category="dev",
+        cmd="puppeteer",
+        methods=(
+            Method(
+                kind="node",
+                params={"npm_pkg": "puppeteer", "smoke": "puppeteer-browser"},
+            ),
+        ),
+    )
+
+
+def test_node_globals_carries_the_declared_smoke_check() -> None:
+    assert node_globals([_puppeteer_tool()])[0].smoke == "puppeteer-browser"
+    assert node_globals([_mmdc()])[0].smoke is None
+
+
+def test_audit_re_runs_a_declared_smoke_check_for_an_installed_tool() -> None:
+    """A command on PATH is evidence a package manager ran, not that the tool works.
+
+    The smoke check fired once, at install time; `install_tool` then returned
+    ALREADY_INSTALLED on every later run, so a browser broken by an OS update
+    was reported as installed forever. The Doctor is where an already-installed
+    machine's state is audited, so it asks the question again here.
+    """
+    asked: list[str] = []
+
+    def smoke(name: str) -> str | None:
+        asked.append(name)
+        return "installed browser /x/chrome could not be started."
+
+    report = audit_node_globals(
+        [_puppeteer_tool()],
+        which=lambda _n: "/x/puppeteer",
+        managed=_managed("puppeteer"),
+        smoke=smoke,
+    )
+    assert asked == ["puppeteer-browser"]
+    assert report.missing == ()
+    assert report.unhealthy == (("puppeteer", "installed browser /x/chrome could not be started."),)
+
+
+def test_audit_is_quiet_when_the_smoke_check_passes() -> None:
+    report = audit_node_globals(
+        [_puppeteer_tool()],
+        which=lambda _n: "/x/puppeteer",
+        managed=_managed("puppeteer"),
+        smoke=lambda _n: None,
+    )
+    assert report.unhealthy == ()
+
+
+def test_audit_does_not_smoke_test_a_tool_whose_command_is_already_gone() -> None:
+    """`missing` already warns about it, and the check would fail for that reason."""
+
+    def never(_name: str) -> str | None:
+        raise AssertionError("must not smoke-test a tool that is not on PATH")
+
+    report = audit_node_globals(
+        [_puppeteer_tool()],
+        which=lambda _n: None,
+        managed=_managed("puppeteer"),
+        smoke=never,
+    )
+    assert report.missing == ("puppeteer",)
+    assert report.unhealthy == ()
+
+
+def test_audit_does_not_smoke_test_a_tool_that_declares_no_check() -> None:
+    def never(_name: str) -> str | None:
+        raise AssertionError("must not smoke-test a tool with no declared check")
+
+    report = audit_node_globals(
+        [_mmdc()], which=lambda _n: "/x/mmdc", managed=_managed(MMDC_PKG), smoke=never
+    )
+    assert report.unhealthy == ()
+
+
+def test_audit_re_runs_the_smoke_check_on_the_group_aware_path_too() -> None:
+    """The policy branch is the one the TUI Doctor uses; both must ask."""
+    asked: list[str] = []
+
+    def smoke(name: str) -> str | None:
+        asked.append(name)
+        return "browser is gone"
+
+    report = audit_node_globals(
+        [_puppeteer_tool()],
+        which=lambda _n: "/x/puppeteer",
+        grouped=lambda: pnpm_globals.GlobalGroups(groups=(("puppeteer",),)),
+        policy=_EXPLICIT_POLICY,
+        smoke=smoke,
+    )
+    assert asked == ["puppeteer-browser"]
+    assert report.unhealthy == (("puppeteer", "browser is gone"),)
+
+
+def test_audit_uses_the_real_smoke_dispatch_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end over the shipped registry, with no seam injected.
+
+    Proves the CR-02 wiring is live: the declared check really is dispatched
+    from the audit, and its verdict really does depend on the machine rather
+    than on whether an install once succeeded.
+    """
+    import installer.executors as executors
+
+    cache = tmp_path / "cache"
+    browser = (
+        cache
+        / "chrome-headless-shell"
+        / "mac_arm-140.0.7339.16"
+        / "shell"
+        / "chrome-headless-shell"
+    )
+    browser.parent.mkdir(parents=True)
+    browser.write_text("x")
+    browser.chmod(0o755)
+    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
+    monkeypatch.setattr(executors, "probe_version", _const_probe("140.0.7339.16"))
+    healthy = audit_node_globals(
+        load_tools(REGISTRY), which=lambda _n: "/x/bin", managed=_managed("puppeteer")
+    )
+    assert healthy.unhealthy == ()
+
+    monkeypatch.setattr(executors, "probe_version", _const_probe(None))
+    broken = audit_node_globals(
+        load_tools(REGISTRY), which=lambda _n: "/x/bin", managed=_managed("puppeteer")
+    )
+    assert [tool_id for tool_id, _reason in broken.unhealthy] == ["puppeteer"]
+    assert "could not be started" in broken.unhealthy[0][1]

@@ -1887,6 +1887,20 @@ versions = { puppeteer = "^25" }
 # the thing downloaded can run, and on Linux amd64 those two facts genuinely
 # come apart when the system shared libraries above are missing. The check
 # starts the browser; it does not render a page.
+# When it runs, and the gap that leaves: on the INSTALL path it fires exactly
+# once, after `pnpm add -g` has already returned — the packages stay installed
+# and the bin shim stays on PATH, so `installer/status.py::is_installed` (PATH
+# presence) makes `installer/engine.py::install_tool` return ALREADY_INSTALLED
+# on every later run and the executor is never reached again. A browser that
+# stops starting later (an OS update removing one of the shared libraries
+# above) would therefore have been reported as installed forever. The Doctor
+# closes that: `installer/pnpm_globals.py::audit_node_globals` re-runs this
+# check for every catalog tool pnpm still manages and reports a failure as a
+# WARN. Residual, accepted: the re-check lives on the Doctor, not in
+# `is_installed` — that function answers "is it here?" for every tool of every
+# kind on every catalog render, and spawning a browser to answer it would stop
+# it describing availability at all. So re-running the INSTALL alone still
+# short-circuits; the Doctor is the surface that re-asks.
 # Installed twice by construction on a clean path (standalone puppeteer, then
 # again inside mmdc's comma group). Plan 05-01's Tier-3 tracer measured ONE
 # group afterwards: invocation B absorbed invocation A's standalone install

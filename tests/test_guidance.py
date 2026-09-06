@@ -257,3 +257,27 @@ def test_guidance_is_frozen() -> None:
     except AttributeError:
         return
     raise AssertionError("Guidance should be frozen")
+
+
+def test_node_globals_guidance_warns_when_an_installed_tool_fails_its_smoke_check() -> None:
+    """CR-02: install-time success is not evidence of ongoing correctness.
+
+    The command still resolves, so `missing` is empty and every other surface
+    is quiet — this item is the only one that reports the tool as broken.
+    """
+    items = node_globals_guidance(
+        NodeGlobalsReport(
+            entries=(NodeGlobal("puppeteer", "puppeteer", "puppeteer", "puppeteer-browser"),),
+            missing=(),
+            managed=("puppeteer",),
+            unhealthy=(("puppeteer", "installed browser /x/chrome could not be started."),),
+        )
+    )
+    assert len(items) == 1
+    item = items[0]
+    assert item.severity == "warn"
+    assert "puppeteer" in item.meaning
+    assert "could not be started" in item.meaning
+    # `r` replays pnpm's global set; a missing shared library is not in it.
+    assert not item.next_step.startswith("Run `make setup`")
+    assert item.next_step

@@ -213,6 +213,26 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
                 severity=Severity.WARN,
             )
         )
+    for tool_id, reason in report.unhealthy:
+        items.append(
+            Guidance(
+                title=f"{tool_id} is installed but does not work",
+                meaning=(
+                    f"{tool_id}'s command resolves on PATH, but the check the catalog "
+                    f"declares for it fails right now: {reason}"
+                ),
+                # Deliberately NOT one of the two rewritten prefixes: `r` replays
+                # pnpm's global set, and a global set is not what is broken here.
+                # A shared library the OS update removed comes back from the OS,
+                # not from a reinstall, so the same sentence is the right one on
+                # both surfaces.
+                next_step=(
+                    "Restore the tool's runtime prerequisites (see its entry in "
+                    "installer/registry.toml), then reinstall it from the catalog."
+                ),
+                severity=Severity.WARN,
+            )
+        )
     for incomplete in report.incomplete_groups:
         items.append(
             Guidance(

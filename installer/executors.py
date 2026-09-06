@@ -225,6 +225,28 @@ SMOKE_CHECKS: dict[str, Callable[[], None]] = {
 }
 
 
+def run_smoke_check(name: str) -> str | None:
+    """Run a declared smoke check; return why it failed, or None when it passed.
+
+    The non-raising form of the dispatch above, for the Doctor's node-globals
+    audit. A failing check there is a FINDING to render, not an operation to
+    abort — the audit reports on a machine, it does not install anything.
+
+    An unknown name returns None. `installer/model.py::load_tools` validates
+    every `smoke` against the closed name set at load time, and an audit that
+    could not interpret a name must not invent a broken tool from it — the same
+    rule `NodeGlobalsReport.known` enforces for the query as a whole.
+    """
+    check = SMOKE_CHECKS.get(name)
+    if check is None:
+        return None
+    try:
+        check()
+    except ExecutorError as exc:
+        return str(exc)
+    return None
+
+
 def _env_prefix(method: Method) -> str:
     """Shell-quoted `KEY=value` assignments for the script shell, sorted by key.
 
@@ -315,6 +337,27 @@ def _node(method: Method, runner: Runner) -> None:
     # evidence that a DOWNLOAD succeeded, never evidence that the thing
     # downloaded can run. Accepted residual: the search covers the WHOLE
     # cache, not just what THIS install produced, so a stale browser can pass.
+    #
+    # THIS CHECK FIRES ONCE, ON THE INSTALL PATH ONLY, AND ONLY WHEN THE
+    # INSTALL PATH IS REACHED. It runs after `pnpm add -g` has already
+    # returned, so a failure here leaves the packages installed and pnpm's bin
+    # shim on PATH while the install reports FAILED — and nothing rolls that
+    # back, because a postinstall-driven download cannot be gated before the
+    # shim exists. `installer/status.py::is_installed` is PATH-presence-based,
+    # so `installer/engine.py::install_tool` returns ALREADY_INSTALLED on the
+    # next run and never reaches this executor again.
+    #
+    # The Doctor closes that gap rather than the engine:
+    # `installer/pnpm_globals.py::audit_node_globals` re-runs the declared
+    # check for every catalog tool pnpm still manages, so a browser broken
+    # later (an OS update removing a shared library) surfaces as a WARN there.
+    # Making `is_installed` itself run the check was rejected: it is called on
+    # every catalog render and for every tool of every kind, and spawning a
+    # browser per render to answer "is it here?" trades one wrong answer for a
+    # rule that no longer describes availability. So the residual that remains
+    # is narrow and known: a tool broken after install is reported by the
+    # Doctor, not by the install flow, and re-running the install alone will
+    # still short-circuit on ALREADY_INSTALLED.
     if smoke is not None:
         SMOKE_CHECKS[smoke]()
 

@@ -930,3 +930,27 @@ def test_sdkman_appends_version_when_given():
 def test_sdkman_without_candidate_raises_executor_error():
     with pytest.raises(ExecutorError, match="candidate"):
         execute(Method(kind="sdkman", params={}), lambda _cmd: None)
+
+
+def test_run_smoke_check_reports_the_failure_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom() -> None:
+        raise ExecutorError("browser could not be started")
+
+    monkeypatch.setitem(executors.SMOKE_CHECKS, "puppeteer-browser", boom)
+    assert executors.run_smoke_check("puppeteer-browser") == "browser could not be started"
+
+
+def test_run_smoke_check_returns_none_when_the_check_passes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(executors.SMOKE_CHECKS, "puppeteer-browser", lambda: None)
+    assert executors.run_smoke_check("puppeteer-browser") is None
+
+
+def test_run_smoke_check_invents_no_failure_from_a_name_it_cannot_interpret() -> None:
+    """`load_tools` is the gate for an unknown name; an audit must not guess.
+
+    Reporting a name it could not dispatch as a broken tool would state an
+    unknown as a fact, which is the rule NodeGlobalsReport.known enforces.
+    """
+    assert executors.run_smoke_check("not-a-check") is None

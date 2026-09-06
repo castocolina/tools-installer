@@ -965,3 +965,15 @@ def test_shipped_node_tools_require_pnpm() -> None:
     for tool in tools:
         if any(m.kind == "node" for m in tool.methods):
             assert "pnpm" in tool.requires, f"{tool.id}: node tool must require pnpm"
+
+
+def test_puppeteer_entry_records_when_the_smoke_check_does_not_re_run() -> None:
+    """CR-02: install-time success was implicitly treated as ongoing correctness.
+
+    The entry must say where the re-check lives and what the remaining gap is,
+    so a future maintainer does not read a passing install as a standing
+    guarantee.
+    """
+    text = REGISTRY.read_text(encoding="utf-8")
+    assert "ALREADY_INSTALLED" in text
+    assert "audit_node_globals" in text

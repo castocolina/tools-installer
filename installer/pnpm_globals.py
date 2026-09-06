@@ -59,6 +59,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import cast
 
+from installer.executors import run_smoke_check
 from installer.guards import real_pnpm
 from installer.model import Method, Tool
 from installer.run import CommandError, OutputRunner, Runner, run_captured, run_output
@@ -88,9 +89,18 @@ class PnpmUnavailable(OSError):
 
 @dataclass(frozen=True)
 class NodeGlobal:
+    """A catalog tool that declares a kind="node" install method.
+
+    `smoke` is the name of the post-install check the method declares, if any.
+    It travels with the entry because the check is the only evidence this
+    project has that an installed tool still WORKS — `cmd` on PATH proves a
+    package manager ran, and nothing more.
+    """
+
     tool_id: str
     npm_pkg: str
     cmd: str
+    smoke: str | None = None
 
 
 @dataclass(frozen=True)
@@ -147,6 +157,10 @@ class NodeGlobalsReport:
     separate machine states with separate remedies to explain: a split group
     has every member installed and pnpm keeping them apart; an incomplete
     group has a member pnpm never installed at all.
+
+    `unhealthy` pairs a tool id with why its declared smoke check failed just
+    now. `missing` answers "is the command there"; this answers "does the tool
+    work", which a command on PATH has never been evidence of.
     """
 
     entries: tuple[NodeGlobal, ...]
@@ -155,6 +169,7 @@ class NodeGlobalsReport:
     known: bool = True
     split_groups: tuple[tuple[str, ...], ...] = ()
     incomplete_groups: tuple["IncompleteGroup", ...] = ()
+    unhealthy: tuple[tuple[str, str], ...] = ()
 
 
 def node_globals(tools: Iterable[Tool]) -> tuple[NodeGlobal, ...]:
@@ -171,7 +186,15 @@ def node_globals(tools: Iterable[Tool]) -> tuple[NodeGlobal, ...]:
         pkg = method.params.get("npm_pkg")
         if not isinstance(pkg, str) or not pkg:
             continue
-        found.append(NodeGlobal(tool_id=tool.id, npm_pkg=pkg, cmd=tool.cmd))
+        smoke = method.params.get("smoke")
+        found.append(
+            NodeGlobal(
+                tool_id=tool.id,
+                npm_pkg=pkg,
+                cmd=tool.cmd,
+                smoke=smoke if isinstance(smoke, str) and smoke else None,
+            )
+        )
     return tuple(found)
 
 
@@ -480,6 +503,35 @@ def incomplete_install_groups(
     return tuple(found)
 
 
+def _unhealthy(
+    entries: tuple[NodeGlobal, ...],
+    missing: tuple[str, ...],
+    smoke: Callable[[str], str | None],
+) -> tuple[tuple[str, str], ...]:
+    """Re-run each present entry's declared smoke check and collect the failures.
+
+    A command on PATH is evidence a package manager ran, never evidence the
+    tool works. The check fires once on the install path and then never again:
+    `installer/engine.py::install_tool` short-circuits on ALREADY_INSTALLED,
+    which `installer/status.py::is_installed` answers from PATH presence. So a
+    browser that stopped starting after an OS update was reported as installed
+    forever, silently — the exact state the check exists to catch, one run
+    later. The Doctor is where an already-installed machine's state is audited,
+    so the question is asked again here.
+
+    Skips an entry already in `missing`: its command does not resolve, the
+    report already warns about it, and the check would fail for that reason.
+    """
+    condemned: list[tuple[str, str]] = []
+    for entry in entries:
+        if entry.smoke is None or entry.tool_id in missing:
+            continue
+        reason = smoke(entry.smoke)
+        if reason is not None:
+            condemned.append((entry.tool_id, reason))
+    return tuple(condemned)
+
+
 def audit_node_globals(
     tools: Iterable[Tool],
     *,
@@ -487,6 +539,7 @@ def audit_node_globals(
     managed: Callable[[], tuple[str, ...] | None] = pnpm_global_packages,
     grouped: Callable[[], GlobalGroups | None] = pnpm_global_groups,
     policy: NodeInstallPolicy = _EMPTY_POLICY,
+    smoke: Callable[[str], str | None] = run_smoke_check,
 ) -> NodeGlobalsReport:
     """Report pnpm's live global set, and the catalog commands in it that are broken."""
     if not policy.groups:
@@ -498,7 +551,12 @@ def audit_node_globals(
             return NodeGlobalsReport(entries=(), missing=(), managed=(), known=False)
         entries = tuple(entry for entry in node_globals(tools) if entry.npm_pkg in packages)
         missing = tuple(entry.tool_id for entry in entries if which(entry.cmd) is None)
-        return NodeGlobalsReport(entries=entries, missing=missing, managed=packages)
+        return NodeGlobalsReport(
+            entries=entries,
+            missing=missing,
+            managed=packages,
+            unhealthy=_unhealthy(entries, missing, smoke),
+        )
     # The two queries answer the same question at different resolutions, and
     # running both would double the Doctor's wait for no new information.
     live = grouped()
@@ -513,6 +571,7 @@ def audit_node_globals(
         managed=packages,
         split_groups=split_install_groups(policy, live),
         incomplete_groups=incomplete_install_groups(policy, live),
+        unhealthy=_unhealthy(entries, missing, smoke),
     )
 
 
