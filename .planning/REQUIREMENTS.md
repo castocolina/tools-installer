@@ -45,14 +45,14 @@ Each maps to exactly one roadmap phase.
 
 ### Catalog Expansion (ingest batch 3/7 part A: `catalog-expansion`)
 
-- [ ] **REQ-uv-tool-executor**: New `installer/executors.py` `kind="uv-tool"`, mirroring the existing `"node"` kind's shape (`uv tool install <pypi_pkg>` instead of `pnpm add -g <npm_pkg>`), using this project's already-trusted `uv` toolchain. `graphify`'s registry entry uses it (`kind="uv-tool"`, package `graphifyy` — double-y, note the PyPI package name differs from the CLI command `graphify`; `requires = ["uv"]`).
+- [x] **REQ-uv-tool-executor**: New `installer/executors.py` `kind="uv-tool"`, mirroring the existing `"node"` kind's shape (`uv tool install <pypi_pkg>` instead of `pnpm add -g <npm_pkg>`), using this project's already-trusted `uv` toolchain. `graphify`'s registry entry uses it (`kind="uv-tool"`, package `graphifyy` — double-y, note the PyPI package name differs from the CLI command `graphify`; `requires = ["uv"]`). Done: 08-01-PLAN.md/08-01-SUMMARY.md (also fixed a real `resolve.py` `_applies`/`_RANK` `KeyError` gap found during grounding).
 - [x] **REQ-system-tier-shell-container-entries**: New system-tier registry entries: `zsh`, `oh-my-zsh` (official install script, `requires = ["zsh"]` — verify its actual `.zshrc`-rewriting behavior before treating it as a safe reviewable `kind="script"` candidate), `gnu-bash` (macOS-only, brew), Apple Containers (macOS-only, native `container` CLI — may be a version-gate/doc entry with nothing to actually install on a current macOS).
   - status: whether there is anything to actually install for Apple Containers on a current macOS, or whether the entry is purely a doc/version-gate, is unresolved (Open Question 4).
 - [x] **REQ-terminal-emulator-entries**: `kitty`, `wezterm` as user-tier entries — brew on macOS (both in homebrew-core); Linux via distro package manager or the existing GitHub-release download path if no native package exists, verified live before adding (per this project's registry-authoring convention).
-- [ ] **REQ-agent-host-entries**: `antigravity`, `cursor-agent` as ai-tier entries via their verified official install method (not assumed); `codegraph` via `kind="github_release"` (per batch 2's `REQ-codegraph-github-release` finding, inherited not re-verified).
-  - status: `antigravity`/`cursor-agent`'s actual, current install methods are unverified as of this ingest — needs the same live-verification pass every prior registry batch did (Open Question 2). This is a genuine external-research gap, appropriate for GSD's research-capable agents (`gsd-phase-researcher` et al.) at planning time, not resolvable from the PRD alone.
-- [ ] **REQ-rtk-github-release**: `rtk` ("Rust Token Killer") registry entry, `kind="github_release"` from `rtk-ai/rtk` (confirmed via GitHub API: pure Rust, prebuilt per-platform tarballs, `checksums.txt` release asset usable with this project's existing checksum-verification feature). Default branch is `develop`, not `main` — only matters if anything references the branch directly.
-- [ ] **REQ-recommends-wiring-agent-hosts**: Instantiates batch 1's `REQ-recommends-soft-dependency` mechanism with concrete data — `claude`/`opencode`/`codex`/`cursor-agent`/`antigravity` each gain `recommends = ["codegraph", "graphify", "rtk"]` (adjusted per tool as appropriate).
+- [x] **REQ-agent-host-entries**: `antigravity`, `cursor-agent` as ai-tier entries via their verified official install method (not assumed); `codegraph` via `kind="github_release"` (per batch 2's `REQ-codegraph-github-release` finding, inherited not re-verified).
+  - status: resolved. `antigravity`/`cursor-agent`'s install methods were live-verified this milestone (each vendor's own curl|bash script, fetched and read verbatim). Done: 08-02-PLAN.md/08-02-SUMMARY.md.
+- [x] **REQ-rtk-github-release**: `rtk` ("Rust Token Killer") registry entry, `kind="github_release"` from `rtk-ai/rtk` (confirmed via GitHub API: pure Rust, prebuilt per-platform tarballs, `checksums.txt` release asset usable with this project's existing checksum-verification feature). Default branch is `develop`, not `main` — only matters if anything references the branch directly. Done: 08-03-PLAN.md/08-03-SUMMARY.md (real arch-gated musl/gnu Linux split, real Tier-3 container verification).
+- [x] **REQ-recommends-wiring-agent-hosts**: Instantiates batch 1's `REQ-recommends-soft-dependency` mechanism with concrete data — `claude`/`opencode`/`codex`/`cursor-agent`/`antigravity` each gain `recommends = ["codegraph", "graphify", "rtk"]` (adjusted per tool as appropriate). Done: 08-04-PLAN.md/08-04-SUMMARY.md — `claude`/`opencode`/`codex`/`cursor-agent` all carry the real researched set; `antigravity` intentionally stays unwired per CONTEXT.md D-01 (deferred, not dropped).
 - [x] **REQ-linux-bazzite-shell-parity**: New system-tier tools (`zsh`, `oh-my-zsh`) get a real Linux/Bazzite install path, not just macOS; reuses the existing `podman` catalog entry for the container-runtime story on Linux/Bazzite (Apple Containers is macOS-only). Corrects an earlier draft's claim that "brew doesn't need curl on Bazzite" — Homebrew's bootstrap is `curl|bash` on every platform including Linux; the real distinction is that Bazzite's base image already ships `curl`/`git`/build tooling, not that brew needs less there.
 
 ### Postinstall Hooks (ingest batch 3/7 part B: `postinstall-hooks`)
@@ -134,10 +134,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-system-tier-shell-container-entries | Phase 7 | Done |
 | REQ-terminal-emulator-entries | Phase 7 | Done |
 | REQ-linux-bazzite-shell-parity | Phase 7 | Done |
-| REQ-uv-tool-executor | Phase 8 | Pending |
-| REQ-agent-host-entries | Phase 8 | Pending (external research needed) |
-| REQ-rtk-github-release | Phase 8 | Pending |
-| REQ-recommends-wiring-agent-hosts | Phase 8 | Pending |
+| REQ-uv-tool-executor | Phase 8 | Done |
+| REQ-agent-host-entries | Phase 8 | Done |
+| REQ-rtk-github-release | Phase 8 | Done |
+| REQ-recommends-wiring-agent-hosts | Phase 8 | Done |
 | REQ-postinstall-field | Phase 9 | Pending |
 | REQ-postinstall-execution-timing | Phase 9 | Pending |
 | REQ-postinstall-idempotency-live-check | Phase 9 | Pending |

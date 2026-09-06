@@ -60,7 +60,7 @@ waiting on this Phase 12 mechanism — see Phase 4's scope note.
 - [x] **Phase 5: Registry Method Corrections (codegraph/mmdc/puppeteer)** - Move `codegraph` to `kind="github_release"`, resolve `mmdc`'s install method with real research, and give `puppeteer`/`chrome-headless-shell` their own catalog entries (completed 2026-09-06)
 - [x] **Phase 6: SDKMAN Hardening & Registry-Authoring Guidelines** - Verify and harden the already-shipped SDKMAN-exclusivity work, and document the per-tool verification checklist and brew-preference guideline (completed 2026-09-06)
 - [x] **Phase 7: System & User Tier Catalog Expansion** - Add zsh, oh-my-zsh, gnu-bash, Apple Containers (system tier) and kitty, wezterm (user tier), with real Linux/Bazzite parity
-- [ ] **Phase 8: AI Tier Catalog Expansion & uv-tool Executor** - Add the new `uv-tool` executor kind, antigravity, cursor-agent, rtk, and wire `recommends` for agent hosts
+- [x] **Phase 8: AI Tier Catalog Expansion & uv-tool Executor** - Add the new `uv-tool` executor kind, antigravity, cursor-agent, rtk, and wire `recommends` for agent hosts (completed 2026-09-06)
 - [ ] **Phase 9: Postinstall Hooks Mechanism** - Add the optional per-tool postinstall field/execution/idempotency mechanism, proven via codegraph's MCP registration
 - [ ] **Phase 10: Agent CLI Ergonomics** - Add `codex-skip`/`opencode-auto` tweaks and a durable, live-verified cursor-agent default-model wrapper
 - [ ] **Phase 11: Background Maintenance Daemon** - Wrap the existing tmpdir-prune script as a toggleable, macOS-only LaunchAgent with visible logs
@@ -230,10 +230,10 @@ Plans:
 **Plans**: 4 plans
 Plans:
 
-- [ ] 08-01-PLAN.md — `uv-tool` executor + resolver wiring, `graphifyy`'s legitimacy gate, and `graphify`'s registry entry, wired end-to-end (wave 1)
-- [ ] 08-02-PLAN.md — `cursor-agent` and `antigravity` registry entries via their verified official vendor scripts (wave 2, needs 08-01)
-- [ ] 08-03-PLAN.md — `rtk` registry entry: checksum-verified `github_release` ladder with an arch-gated Linux split and a brew fallback (wave 3, needs 08-02)
-- [ ] 08-04-PLAN.md — Real per-host `recommends` wiring (`claude`/`opencode`/`codex`/`cursor-agent`) and Phase 8 decision consolidation (wave 4, needs 08-03)
+- [x] 08-01-PLAN.md — `uv-tool` executor + resolver wiring, `graphifyy`'s legitimacy gate, and `graphify`'s registry entry, wired end-to-end (wave 1)
+- [x] 08-02-PLAN.md — `cursor-agent` and `antigravity` registry entries via their verified official vendor scripts (wave 2, needs 08-01)
+- [x] 08-03-PLAN.md — `rtk` registry entry: checksum-verified `github_release` ladder with an arch-gated Linux split and a brew fallback (wave 3, needs 08-02)
+- [x] 08-04-PLAN.md — Real per-host `recommends` wiring (`claude`/`opencode`/`codex`/`cursor-agent`) and Phase 8 decision consolidation (wave 4, needs 08-03)
 
 ### Phase 9: Postinstall Hooks Mechanism
 
@@ -310,7 +310,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 4/4 | Complete    | 2026-09-05 |
 | 6. SDKMAN Hardening & Registry-Authoring Guidelines | 1/1 | Complete    | 2026-09-06 |
 | 7. System & User Tier Catalog Expansion | 3/3 | Complete    | 2026-09-06 |
-| 8. AI Tier Catalog Expansion & uv-tool Executor | 0/4 | Not started | - |
+| 8. AI Tier Catalog Expansion & uv-tool Executor | 4/4 | Complete    | 2026-09-06 |
 | 9. Postinstall Hooks Mechanism | 0/TBD | Not started | - |
 | 10. Agent CLI Ergonomics | 0/TBD | Not started | - |
 | 11. Background Maintenance Daemon | 0/TBD | Not started | - |
