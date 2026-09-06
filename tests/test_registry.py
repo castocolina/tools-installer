@@ -54,6 +54,8 @@ def test_registry_includes_requested_installable_entries() -> None:
         "maven",
         "volta",
         "codegraph",
+        "zsh",
+        "oh-my-zsh",
     } <= ids
 
 
