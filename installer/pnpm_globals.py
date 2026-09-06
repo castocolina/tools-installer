@@ -22,12 +22,34 @@ registry catalog. A catalog entry is a DECLARATION that a tool CAN be installed
 this way, not evidence that it WAS: treating the catalog as the installed set
 told every user who had never installed mmdc that a pnpm self-update had
 destroyed their globals, and offered to "reinstall" a package they had never
-selected. The registry contributes one thing — the command name a package
-installs — which is what makes a still-tracked global checkable at all.
+selected. The registry contributes three things: the command name a package
+installs (which is what makes a still-tracked global checkable at all), how
+packages must be grouped and build-allowed when they are put back, and what
+version range they are pinned to.
 
-The reinstall replays pnpm's own set for the same reason. One `pnpm add -g`
-invocation supersedes whatever the global set currently holds, so an argv built
-from the registry would silently discard every global the user added by hand.
+The reinstall still replays pnpm's own live set, for the same reason an argv
+built from the registry would silently discard every global the user added by
+hand. Under pnpm v11's isolation model each package or comma-joined group is
+its own hash-keyed install and supersedes nothing else, so the replay puts
+each live name back rather than replacing the whole global set in one go.
+
+LIMITATIONS of a name-only snapshot:
+
+- `parse_global_packages` flattens pnpm's JSON to bare package NAMES, so the
+  replay knows neither the version a package was at nor which live group it
+  belonged to. A package the registry does not know is therefore reinstalled
+  at whatever the registry's dist-tag resolves to now, ungrouped — its
+  previous version and any hand-created group are not reconstructible from
+  the snapshot.
+- Consequently a hand-made group of packages this catalog does not declare is
+  replayed as separate isolated installs, which can break a peer relationship
+  the user set up themselves. This is a known limitation of replaying a
+  name-only snapshot, not an oversight; reconstructing it would require
+  reading pnpm's per-group project structure, which is out of this phase's
+  scope.
+- pnpm removes a whole comma group when either member is removed with
+  `pnpm remove -g`, so a group this replay creates is also a coupling the
+  user inherits.
 """
 
 import json
@@ -38,8 +60,14 @@ from dataclasses import dataclass
 from typing import cast
 
 from installer.guards import real_pnpm
-from installer.model import Tool
+from installer.model import Method, Tool
 from installer.run import CommandError, OutputRunner, Runner, run_captured, run_output
+from installer.versions import (
+    PNPM_ALLOW_BUILD_MIN,
+    PNPM_CO_INSTALL_MIN,
+    meets_minimum,
+    probe_version,
+)
 
 _EMPTY_PREVIEW = "nothing pnpm-managed to reinstall"
 _UNRESOLVABLE_PREVIEW = "pnpm not found on PATH — cannot preview the reinstall."
@@ -63,6 +91,23 @@ class NodeGlobal:
     tool_id: str
     npm_pkg: str
     cmd: str
+
+
+@dataclass(frozen=True)
+class NodeInstallPolicy:
+    """How the registry says node packages must be installed together.
+
+    A declaration, not an installation: intersected with pnpm's live set before
+    it affects any argv. `versions` is a tuple of pairs rather than a dict so
+    the whole value stays frozen, hashable and order-deterministic.
+    """
+
+    groups: tuple[tuple[str, ...], ...] = ()
+    allow_build: tuple[str, ...] = ()
+    versions: tuple[tuple[str, str], ...] = ()
+
+
+_EMPTY_POLICY = NodeInstallPolicy()
 
 
 @dataclass(frozen=True)
@@ -105,6 +150,69 @@ def node_globals(tools: Iterable[Tool]) -> tuple[NodeGlobal, ...]:
             continue
         found.append(NodeGlobal(tool_id=tool.id, npm_pkg=pkg, cmd=tool.cmd))
     return tuple(found)
+
+
+def _node_method(tool: Tool) -> Method | None:
+    return next((method for method in tool.methods if method.kind == "node"), None)
+
+
+def _param_pkg_list(method: Method, key: str) -> tuple[str, ...]:
+    raw = method.params.get(key)
+    if not isinstance(raw, list):
+        return ()
+    return tuple(item for item in cast(list[object], raw) if isinstance(item, str) and item)
+
+
+def _param_versions(method: Method) -> tuple[tuple[str, str], ...]:
+    raw = method.params.get("versions")
+    if not isinstance(raw, dict):
+        return ()
+    pairs: list[tuple[str, str]] = []
+    for name, range_ in cast(dict[object, object], raw).items():
+        if isinstance(name, str) and isinstance(range_, str) and name and range_:
+            pairs.append((name, range_))
+    return tuple(pairs)
+
+
+def node_install_policy(tools: Iterable[Tool]) -> NodeInstallPolicy:
+    """How the catalog DECLARES node packages must be installed together.
+
+    A declaration, not an installation: intersected with pnpm's live set before
+    it affects any argv. Walks the first kind="node" method per tool, the same
+    way `node_globals` does.
+
+    A group is the method's own `npm_pkg` followed by its `co_install` names,
+    emitted only when `co_install` is non-empty. Allowances and version pins
+    are concatenated across methods and de-duplicated with `dict.fromkeys`;
+    the first pin in catalog order wins. A registry integrity test is what
+    keeps a conflicting second declaration from ever reaching this function,
+    so it never silently arbitrates a real disagreement.
+    """
+    groups: list[tuple[str, ...]] = []
+    allowances: list[str] = []
+    pins: list[tuple[str, str]] = []
+    seen_pins: dict[str, str] = {}
+    for tool in tools:
+        method = _node_method(tool)
+        if method is None:
+            continue
+        pkg = method.params.get("npm_pkg")
+        if not isinstance(pkg, str) or not pkg:
+            continue
+        co_install = _param_pkg_list(method, "co_install")
+        if co_install:
+            groups.append(tuple(dict.fromkeys([pkg, *co_install])))
+        allowances.extend(_param_pkg_list(method, "allow_build"))
+        for name, range_ in _param_versions(method):
+            if name in seen_pins:
+                continue
+            seen_pins[name] = range_
+            pins.append((name, range_))
+    return NodeInstallPolicy(
+        groups=tuple(groups),
+        allow_build=tuple(dict.fromkeys(allowances)),
+        versions=tuple(pins),
+    )
 
 
 def parse_global_packages(raw: str) -> tuple[str, ...] | None:
@@ -188,12 +296,56 @@ def audit_node_globals(
     return NodeGlobalsReport(entries=entries, missing=missing, managed=packages)
 
 
-def reinstall_argv(packages: Sequence[str], *, pnpm: str) -> list[str]:
+def _render_spec(name: str, versions: dict[str, str]) -> str:
+    pinned = versions.get(name)
+    return f"{name}@{pinned}" if pinned is not None else name
+
+
+def _reinstall_parts(
+    packages: Sequence[str], policy: NodeInstallPolicy
+) -> tuple[list[str], list[str]]:
+    unique = list(dict.fromkeys(packages))
+    present = set(unique)
+    versions = dict(policy.versions)
+    owner: dict[str, tuple[str, ...]] = {}
+    for group in policy.groups:
+        for member in group:
+            owner.setdefault(member, group)
+    consumed: set[str] = set()
+    specs: list[str] = []
+    for package in unique:
+        if package in consumed:
+            continue
+        group = owner.get(package)
+        if group is None:
+            specs.append(_render_spec(package, versions))
+            consumed.add(package)
+            continue
+        # Comma versus space is not formatting: space-separated packages in one
+        # invocation each get their own isolated install (pnpm Global Packages
+        # documentation), which for a peer-dependency pair means the replay
+        # silently breaks the dependent.
+        members = [name for name in unique if name in group]
+        specs.append(",".join(_render_spec(name, versions) for name in members))
+        consumed.update(members)
+    flags = [
+        f"--allow-build={name}" for name in dict.fromkeys(policy.allow_build) if name in present
+    ]
+    return flags, specs
+
+
+def reinstall_argv(
+    packages: Sequence[str],
+    *,
+    pnpm: str,
+    policy: NodeInstallPolicy = _EMPTY_POLICY,
+) -> list[str]:
     """One invocation for the whole set: per-package calls recreate the isolation that loses them.
 
-    `packages` is pnpm's own global list, so the invocation that supersedes the
-    current global set puts back everything it held — including globals this
-    installer's registry knows nothing about.
+    `packages` is pnpm's own global list, so the invocation puts back everything
+    it held — including globals this installer's registry knows nothing about.
+    `policy` contributes grouping, pins and build allowances for the packages
+    the registry knows; an empty policy keeps today's space-separated argv.
 
     `pnpm` is a required keyword because argv[0] must be an absolute path — a bare
     program name would be resolved by subprocess.run through a PATH whose first
@@ -201,7 +353,16 @@ def reinstall_argv(packages: Sequence[str], *, pnpm: str) -> list[str]:
     """
     if not packages:
         raise ValueError(_EMPTY_PREVIEW)
-    return [pnpm, "add", "-g", *dict.fromkeys(packages)]
+    flags, specs = _reinstall_parts(packages, policy)
+    return [pnpm, "add", "-g", *flags, *specs]
+
+
+def _applicable_floor(flags: list[str], specs: list[str]) -> str | None:
+    if any("," in spec for spec in specs):
+        return PNPM_CO_INSTALL_MIN
+    if flags:
+        return PNPM_ALLOW_BUILD_MIN
+    return None
 
 
 def reinstall_node_globals(
@@ -209,22 +370,34 @@ def reinstall_node_globals(
     *,
     runner: Runner = run_captured,
     resolve_pnpm: Callable[[], str | None] = real_pnpm,
+    policy: NodeInstallPolicy = _EMPTY_POLICY,
 ) -> tuple[str, ...]:
     """Replay pnpm's global set in one invocation.
 
-    The runner captures by default because the only caller is the Doctor
-    screen's `r` action, which runs while Textual owns the terminal: an
-    inherited-stdio child writes `pnpm add -g`'s progress bars straight into
-    the rendered frame.
+    Returns the package-spec elements that were invoked, never the
+    `--allow-build=` flags. The runner captures by default because the only
+    caller is the Doctor screen's `r` action, which runs while Textual owns
+    the terminal: an inherited-stdio child writes `pnpm add -g`'s progress
+    bars straight into the rendered frame.
     """
     if not packages:
         return ()
     resolved = resolve_pnpm()
     if resolved is None:
         raise PnpmUnavailable("pnpm not found on PATH — install pnpm, then retry the reinstall.")
-    argv = reinstall_argv(packages, pnpm=resolved)
+    flags, specs = _reinstall_parts(packages, policy)
+    floor = _applicable_floor(flags, specs)
+    if floor is not None:
+        observed = probe_version([resolved, "--version"])
+        if observed is None or not meets_minimum(observed, floor):
+            shown = observed if observed is not None else "could not be read"
+            raise PnpmUnavailable(
+                f"pnpm {shown} does not meet the required minimum {floor}. "
+                f"Upgrade pnpm to {floor} or newer, then retry the reinstall."
+            )
+    argv = reinstall_argv(packages, pnpm=resolved, policy=policy)
     runner(argv)
-    return tuple(argv[3:])
+    return tuple(specs)
 
 
 def reinstall_preview(
@@ -232,12 +405,17 @@ def reinstall_preview(
     *,
     known: bool = True,
     resolve_pnpm: Callable[[], str | None] = real_pnpm,
+    policy: NodeInstallPolicy = _EMPTY_POLICY,
 ) -> str:
     """The command line a reinstall would run, or why there is none to show.
 
     `known` is NodeGlobalsReport.known: an unknown global set has no preview and
     must not borrow the empty set's, which tells the user there is nothing to
     reinstall on the one machine where that is the open question.
+
+    The preview shows the argv the reinstall builds and never probes pnpm: the
+    version floor is a precondition of running the command, not a different
+    command, so this path stays free of subprocesses.
     """
     if not known:
         return _UNKNOWN_PREVIEW
@@ -246,4 +424,4 @@ def reinstall_preview(
     resolved = resolve_pnpm()
     if resolved is None:
         return _UNRESOLVABLE_PREVIEW
-    return shlex.join(reinstall_argv(packages, pnpm=resolved))
+    return shlex.join(reinstall_argv(packages, pnpm=resolved, policy=policy))

@@ -2,6 +2,7 @@ import os
 import shlex
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -12,9 +13,11 @@ from installer.pnpm_globals import (
     LIST_TIMEOUT_SECONDS,
     NodeGlobal,
     NodeGlobalsReport,
+    NodeInstallPolicy,
     PnpmUnavailable,
     audit_node_globals,
     node_globals,
+    node_install_policy,
     parse_global_packages,
     pnpm_global_packages,
     reinstall_argv,
@@ -370,3 +373,247 @@ def test_real_registry_residual_set_contains_mmdc() -> None:
     entries = node_globals(load_tools(REGISTRY))
     assert entries
     assert "mmdc" in {e.tool_id for e in entries}
+
+
+MMDC_NPM = "@mermaid-js/mermaid-cli"
+_EXPLICIT_POLICY = NodeInstallPolicy(
+    groups=((MMDC_NPM, "puppeteer"),),
+    allow_build=("puppeteer",),
+    versions=(("puppeteer", "^25"),),
+)
+
+
+def test_node_install_policy_empty_inputs() -> None:
+    assert node_install_policy([]) == NodeInstallPolicy()
+    assert NodeInstallPolicy() == NodeInstallPolicy(groups=(), allow_build=(), versions=())
+
+
+def test_node_install_policy_from_shipped_registry() -> None:
+    policy = node_install_policy(load_tools(REGISTRY))
+    assert policy.groups == ((MMDC_NPM, "puppeteer"),)
+    assert policy.allow_build == ("puppeteer",)
+    assert policy.versions == (("puppeteer", "^25"),)
+
+
+def test_node_install_policy_explicit_fixture_matches_shipped_shape() -> None:
+    # Built by hand so a future registry edit cannot quietly turn the argv
+    # cases into a tautology against whatever the catalog happens to say.
+    assert _EXPLICIT_POLICY.groups == ((MMDC_NPM, "puppeteer"),)
+    assert _EXPLICIT_POLICY.allow_build == ("puppeteer",)
+    assert _EXPLICIT_POLICY.versions == (("puppeteer", "^25"),)
+
+
+def test_shipped_registry_declares_no_conflicting_version_pins() -> None:
+    seen: dict[str, str] = {}
+    for tool in load_tools(REGISTRY):
+        method = next((item for item in tool.methods if item.kind == "node"), None)
+        if method is None:
+            continue
+        raw = method.params.get("versions")
+        if not isinstance(raw, dict):
+            continue
+        table = cast(dict[object, object], raw)
+        for name, range_ in table.items():
+            assert isinstance(name, str) and isinstance(range_, str)
+            previous = seen.get(name)
+            assert previous is None or previous == range_, (
+                f"conflicting pins for {name}: {previous!r} vs {range_!r}"
+            )
+            seen[name] = range_
+
+
+def test_node_install_policy_skips_node_method_without_npm_pkg() -> None:
+    tool = _tool("broken", methods=(Method(kind="node", params={}),))
+    assert node_install_policy([tool]) == NodeInstallPolicy()
+
+
+def test_node_install_policy_first_pin_wins() -> None:
+    first = _tool(
+        "a",
+        methods=(
+            Method(
+                kind="node",
+                params={"npm_pkg": "alpha", "versions": {"alpha": "^1"}},
+            ),
+        ),
+    )
+    second = _tool(
+        "b",
+        methods=(
+            Method(
+                kind="node",
+                params={"npm_pkg": "beta", "versions": {"alpha": "^2", "beta": "^3"}},
+            ),
+        ),
+    )
+    policy = node_install_policy([first, second])
+    assert policy.versions == (("alpha", "^1"), ("beta", "^3"))
+
+
+def test_reinstall_argv_without_policy_is_byte_identical_to_today() -> None:
+    assert reinstall_argv(["a", "b"], pnpm="/x/pnpm") == ["/x/pnpm", "add", "-g", "a", "b"]
+
+
+def test_reinstall_argv_groups_pins_and_allows_the_declared_pair() -> None:
+    argv = reinstall_argv([MMDC_NPM, "puppeteer"], pnpm="/x/pnpm", policy=_EXPLICIT_POLICY)
+    assert argv == [
+        "/x/pnpm",
+        "add",
+        "-g",
+        "--allow-build=puppeteer",
+        f"{MMDC_NPM},puppeteer@^25",
+    ]
+
+
+def test_reinstall_argv_keeps_ungrouped_packages_as_their_own_elements() -> None:
+    argv = reinstall_argv(
+        ["typescript", MMDC_NPM, "puppeteer"],
+        pnpm="/x/pnpm",
+        policy=_EXPLICIT_POLICY,
+    )
+    assert argv[0:4] == ["/x/pnpm", "add", "-g", "--allow-build=puppeteer"]
+    assert "typescript" in argv
+    assert f"{MMDC_NPM},puppeteer@^25" in argv
+    assert argv.count("typescript") == 1
+    assert "typescript" not in f"{MMDC_NPM},puppeteer@^25"
+
+
+def test_reinstall_argv_partial_group_replays_only_what_is_present() -> None:
+    argv = reinstall_argv(["puppeteer", "typescript"], pnpm="/x/pnpm", policy=_EXPLICIT_POLICY)
+    joined = " ".join(argv)
+    assert "mermaid" not in joined
+    assert "typescript" in argv
+    assert "puppeteer@^25" in argv
+    assert not any("," in item for item in argv)
+
+
+def test_reinstall_argv_preserves_order_and_collapses_duplicates() -> None:
+    argv = reinstall_argv(
+        ["typescript", "typescript", MMDC_NPM, MMDC_NPM, "puppeteer"],
+        pnpm="/x/pnpm",
+        policy=_EXPLICIT_POLICY,
+    )
+    specs = [item for item in argv[3:] if not item.startswith("--allow-build=")]
+    assert specs == ["typescript", f"{MMDC_NPM},puppeteer@^25"]
+
+
+def test_reinstall_preview_equals_argv_when_policy_is_supplied() -> None:
+    pkgs = [MMDC_NPM, "puppeteer"]
+    preview = reinstall_preview(pkgs, policy=_EXPLICIT_POLICY, resolve_pnpm=lambda: "/x/pnpm")
+    assert preview == shlex.join(reinstall_argv(pkgs, pnpm="/x/pnpm", policy=_EXPLICIT_POLICY))
+
+
+def test_reinstall_preview_known_false_empty_and_unresolvable_ignore_policy() -> None:
+    def never() -> str | None:
+        raise AssertionError("resolver must not be called")
+
+    assert reinstall_preview((), known=False, policy=_EXPLICIT_POLICY, resolve_pnpm=never) == (
+        "pnpm's global set could not be read — cannot preview the reinstall."
+    )
+    assert reinstall_preview((), policy=_EXPLICIT_POLICY, resolve_pnpm=never) == (
+        "nothing pnpm-managed to reinstall"
+    )
+    text = reinstall_preview([MMDC_NPM], policy=_EXPLICIT_POLICY, resolve_pnpm=lambda: None)
+    assert "pnpm" in text
+    assert "add" not in text
+
+
+def _const_probe(result: str | None) -> Callable[[list[str]], str | None]:
+    def probe(_argv: list[str]) -> str | None:
+        return result
+
+    return probe
+
+
+def test_reinstall_node_globals_returns_specs_never_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pnpm_globals, "probe_version", _const_probe("11.9.0"))
+    calls: list[list[str]] = []
+    got = reinstall_node_globals(
+        [MMDC_NPM, "puppeteer"],
+        runner=calls.append,
+        resolve_pnpm=lambda: "/x/pnpm",
+        policy=_EXPLICIT_POLICY,
+    )
+    assert got == (f"{MMDC_NPM},puppeteer@^25",)
+    assert not any(item.startswith("--allow-build") for item in got)
+    assert calls == [
+        ["/x/pnpm", "add", "-g", "--allow-build=puppeteer", f"{MMDC_NPM},puppeteer@^25"]
+    ]
+
+
+def test_reinstall_node_globals_empty_policy_probes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[list[str]] = []
+
+    def capture(argv: list[str]) -> str:
+        seen.append(argv)
+        return "1.0.0"
+
+    monkeypatch.setattr(pnpm_globals, "probe_version", capture)
+    calls: list[list[str]] = []
+    got = reinstall_node_globals(
+        ["a", "b"],
+        runner=calls.append,
+        resolve_pnpm=lambda: "/x/pnpm",
+    )
+    assert seen == []
+    assert calls == [["/x/pnpm", "add", "-g", "a", "b"]]
+    assert got == ("a", "b")
+
+
+def test_reinstall_node_globals_refuses_grouped_form_on_old_pnpm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pnpm_globals, "probe_version", _const_probe("10.9.0"))
+    calls: list[list[str]] = []
+    with pytest.raises(PnpmUnavailable, match=r"(?s)(?=.*10[.]9[.]0)(?=.*11[.]0[.]0)"):
+        reinstall_node_globals(
+            [MMDC_NPM, "puppeteer"],
+            runner=calls.append,
+            resolve_pnpm=lambda: "/x/pnpm",
+            policy=_EXPLICIT_POLICY,
+        )
+    assert calls == []
+
+
+def test_reinstall_node_globals_allow_build_only_uses_allow_build_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = NodeInstallPolicy(allow_build=("puppeteer",), versions=(("puppeteer", "^25"),))
+    monkeypatch.setattr(pnpm_globals, "probe_version", _const_probe("10.3.0"))
+    calls: list[list[str]] = []
+    with pytest.raises(PnpmUnavailable, match=r"(?s)(?=.*10[.]3[.]0)(?=.*10[.]4[.]0)"):
+        reinstall_node_globals(
+            ["puppeteer"],
+            runner=calls.append,
+            resolve_pnpm=lambda: "/x/pnpm",
+            policy=policy,
+        )
+    assert calls == []
+    monkeypatch.setattr(pnpm_globals, "probe_version", _const_probe("10.9.0"))
+    got = reinstall_node_globals(
+        ["puppeteer"],
+        runner=calls.append,
+        resolve_pnpm=lambda: "/x/pnpm",
+        policy=policy,
+    )
+    assert got == ("puppeteer@^25",)
+    assert calls == [["/x/pnpm", "add", "-g", "--allow-build=puppeteer", "puppeteer@^25"]]
+
+
+def test_reinstall_node_globals_refuses_when_version_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pnpm_globals, "probe_version", _const_probe(None))
+    calls: list[list[str]] = []
+    with pytest.raises(PnpmUnavailable, match="could not be read"):
+        reinstall_node_globals(
+            [MMDC_NPM, "puppeteer"],
+            runner=calls.append,
+            resolve_pnpm=lambda: "/x/pnpm",
+            policy=_EXPLICIT_POLICY,
+        )
+    assert calls == []
