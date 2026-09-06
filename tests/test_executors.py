@@ -738,6 +738,109 @@ def test_smoke_falls_back_to_chrome_binary(tmp_path: Path, monkeypatch: pytest.M
     assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
 
 
+def test_smoke_falls_back_to_the_macos_full_chrome_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The registry declares this smoke check on the macOS methods too.
+
+    macOS installs the full browser as `Google Chrome for Testing` inside a
+    `.app` bundle, so a fallback that searches only for a file named `chrome`
+    finds nothing there — and the fallback is the whole check in the one
+    configuration that needs it (PUPPETEER_SKIP_CHROME_HEADLESS_SHELL_DOWNLOAD).
+    """
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    cache = tmp_path / "cache"
+    chrome = (
+        cache
+        / "chrome"
+        / "mac_arm-140.0.7339.16"
+        / "chrome-mac-arm64"
+        / "Google Chrome for Testing.app"
+        / "Contents"
+        / "MacOS"
+        / "Google Chrome for Testing"
+    )
+    chrome.parent.mkdir(parents=True)
+    chrome.write_text("x")
+    chrome.chmod(0o755)
+    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
+    seen: list[list[str]] = []
+
+    def fake_probe(argv: list[str]) -> str:
+        seen.append(argv)
+        return "99.0.0"
+
+    monkeypatch.setattr(executors, "probe_version", fake_probe)
+    calls: list[list[str]] = []
+    execute(
+        Method(
+            kind="node",
+            params={
+                "npm_pkg": "puppeteer",
+                "allow_build": ["puppeteer"],
+                "smoke": "puppeteer-browser",
+            },
+        ),
+        calls.append,
+    )
+    assert any(argv[0] == str(chrome) for argv in seen)
+    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
+
+
+def test_smoke_prefers_the_highest_build_across_macos_bundle_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The build segment sits three directories deeper inside a `.app` bundle.
+
+    Indexing it at a fixed depth from the binary would read `MacOS` as the
+    build and rank both bundles equal, so the outward scan is what keeps the
+    macOS layout comparable at all.
+    """
+    _plant_pnpm(tmp_path, monkeypatch)
+    cache = tmp_path / "cache"
+
+    def plant(build: str) -> Path:
+        binary = (
+            cache
+            / "chrome"
+            / build
+            / "chrome-mac-arm64"
+            / "Google Chrome for Testing.app"
+            / "Contents"
+            / "MacOS"
+            / "Google Chrome for Testing"
+        )
+        binary.parent.mkdir(parents=True)
+        binary.write_text("x")
+        binary.chmod(0o755)
+        return binary
+
+    plant("mac_arm-99.0.4844.51")
+    newer = plant("mac_arm-140.0.7339.16")
+    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
+    seen: list[list[str]] = []
+
+    def fake_probe(argv: list[str]) -> str:
+        seen.append(argv)
+        return "99.0.0"
+
+    monkeypatch.setattr(executors, "probe_version", fake_probe)
+    execute(
+        Method(
+            kind="node",
+            params={
+                "npm_pkg": "puppeteer",
+                "allow_build": ["puppeteer"],
+                "smoke": "puppeteer-browser",
+            },
+        ),
+        _record()[1],
+    )
+    browser_probes = [argv for argv in seen if "Google Chrome for Testing" in argv[0]]
+    assert browser_probes
+    assert browser_probes[-1][0] == str(newer)
+
+
 def test_smoke_executable_path_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pnpm = _plant_pnpm(tmp_path, monkeypatch)
     custom = tmp_path / "broken-chrome"

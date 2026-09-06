@@ -93,6 +93,17 @@ def _puppeteer_cache_dir() -> Path:
     """Puppeteer's own documented locations: PUPPETEER_CACHE_DIR, else ~/.cache/puppeteer.
 
     Reading the env var keeps the check correct for a user who moved the cache.
+
+    ACCEPTED RESIDUAL (WR-03): puppeteer also honours a `cacheDirectory` set in
+    a `.puppeteerrc.cjs` / `puppeteer.config.js` and in npm-config keys. Neither
+    is read here, so a user who moved the cache that way gets a false install
+    failure. Both are PROJECT-scoped configuration resolved from the directory
+    puppeteer is required from, and this is a GLOBAL install with no project
+    directory to resolve them against, so reading them correctly means
+    reimplementing puppeteer's own config resolution — out of proportion to the
+    failure it prevents, which is loud and self-describing rather than silent.
+    The documented escape hatch is PUPPETEER_EXECUTABLE_PATH, which the check
+    above honours before it looks at any cache at all.
     """
     env = os.environ.get("PUPPETEER_CACHE_DIR")
     if env:
@@ -131,6 +142,17 @@ def _highest_build(paths: list[Path]) -> Path:
     return max(paths, key=lambda path: (_build_version(path), str(path)))
 
 
+# The executable name of the FULL browser, per platform. macOS installs it as
+# `Google Chrome for Testing` inside a `.app` bundle, never as a file named
+# `chrome`, and the registry declares this smoke check on the macOS methods of
+# both puppeteer and mmdc — so a fallback that knows only the Linux name is a
+# fallback that cannot fire on half the platforms it ships to. Both names are
+# searched on both platforms: the cache directory is the user's, a macOS user
+# can hold a Linux build in it, and matching a name that is simply absent costs
+# one more glob.
+_FULL_CHROME_NAMES = ("chrome", "Google Chrome for Testing")
+
+
 def _executables(cache_dir: Path, name: str) -> list[Path]:
     return [path for path in cache_dir.rglob(name) if path.is_file() and os.access(path, os.X_OK)]
 
@@ -146,7 +168,7 @@ def _puppeteer_browser(cache_dir: Path) -> Path | None:
     shells = _executables(cache_dir, "chrome-headless-shell")
     if shells:
         return _highest_build(shells)
-    chromes = _executables(cache_dir, "chrome")
+    chromes = [path for name in _FULL_CHROME_NAMES for path in _executables(cache_dir, name)]
     if chromes:
         return _highest_build(chromes)
     return None
