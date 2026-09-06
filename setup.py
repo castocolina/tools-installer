@@ -254,6 +254,11 @@ def _build_app(
     # answer itself, which is why there is no cache here any more: the cache
     # existed because every render re-read the report, and a cell written by the
     # reinstall worker and read by the event loop was a race waiting to be lost.
+    # Preview and reinstall must receive the SAME policy object: the module's
+    # preview-equals-effect guarantee rests on both paths reaching one argv
+    # builder with one set of inputs.
+    policy = pnpm_globals.node_install_policy(tools)
+
     def _node_globals_report() -> pnpm_globals.NodeGlobalsReport:
         return pnpm_globals.audit_node_globals(tools)
 
@@ -262,12 +267,12 @@ def _build_app(
         # `pnpm list -g --json` back on whatever thread renders. `known` travels
         # with the set, so an unreadable global set has no preview and must not
         # borrow the empty set's "nothing to reinstall".
-        return pnpm_globals.reinstall_preview(report.managed, known=report.known)
+        return pnpm_globals.reinstall_preview(report.managed, known=report.known, policy=policy)
 
     def _reinstall_globals(packages: Sequence[str]) -> tuple[str, ...]:
         # The set to replay is the one the user saw and consented to, passed in
         # by the screen — not one re-derived here behind their back.
-        return pnpm_globals.reinstall_node_globals(packages)
+        return pnpm_globals.reinstall_node_globals(packages, policy=policy)
 
     return UnifiedApp(
         tools,

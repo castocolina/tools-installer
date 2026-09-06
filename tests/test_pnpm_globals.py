@@ -604,6 +604,20 @@ def test_reinstall_node_globals_allow_build_only_uses_allow_build_floor(
     assert calls == [["/x/pnpm", "add", "-g", "--allow-build=puppeteer", "puppeteer@^25"]]
 
 
+def test_replay_regroups_a_brownfield_split_mmdc_and_puppeteer() -> None:
+    """A machine that already had a standalone mmdc never runs the catalog's
+    grouped invocation, because installer/engine.py::install_tool returns
+    ALREADY_INSTALLED and installer/deps.py drops installed tools from the
+    order, so it ends up with the two packages in two isolated groups; this
+    replay is the documented remedy, and plan 05-01's Tier-3 container
+    measured it rendering successfully afterwards.
+    """
+    policy = node_install_policy(load_tools(REGISTRY))
+    argv = reinstall_argv([MMDC_NPM, "puppeteer"], pnpm="/x/pnpm", policy=policy)
+    specs = [item for item in argv[3:] if not item.startswith("--allow-build=")]
+    assert specs == [f"{MMDC_NPM},puppeteer@^25"]
+
+
 def test_reinstall_node_globals_refuses_when_version_cannot_be_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1,6 +1,6 @@
 import importlib
 import io
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -8,10 +8,12 @@ import pytest
 from rich.console import Console
 
 import setup
+from installer import pnpm_globals
 from installer.app import UninstallDecision
 from installer.guards import install_shims
 from installer.model import Tool
 from installer.platform import Platform
+from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
 from installer.session import Summary
 from installer.shellrc import write_myshellrc
 from installer.tweaks import BUNDLES
@@ -202,6 +204,61 @@ def test_the_policies_view_is_wired_ban_then_tweaks_then_omz(
     assert ids[-1] == "omz-plugins"
     assert all(policy_id.startswith("tweak:") for policy_id in ids[1:-1])
     assert len(ids) > 2
+
+
+def test_doctor_preview_carries_the_grouped_pinned_allowed_replay(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The preview closure is the closest seam _build_app exposes without a TUI.
+
+    UnifiedApp is replaced so the composition root still constructs the
+    closures; the captured `globals_preview` is then called with a report
+    whose managed set is the brownfield pair.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(setup, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
+    monkeypatch.setattr(setup, "_MYSHELLRC", tmp_path / ".myshellrc")
+    monkeypatch.setattr(setup, "_ZSHRC", tmp_path / ".zshrc")
+    monkeypatch.setattr(setup, "_RC_PATHS", [tmp_path / ".zshrc", tmp_path / ".bashrc"])
+    monkeypatch.setattr(setup, "load_categories", _no_categories)
+    monkeypatch.setattr(setup, "detect", _platform)
+
+    def never_installed(_tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(setup, "is_installed", never_installed)
+    monkeypatch.setattr(setup.sys, "stdin", _FakeStdin())
+    seen = _capture_app(monkeypatch)
+
+    original = pnpm_globals.reinstall_preview
+
+    def stubbed(
+        packages: Sequence[str],
+        *,
+        known: bool = True,
+        resolve_pnpm: Callable[[], str | None] | None = None,
+        policy: NodeInstallPolicy | None = None,
+    ) -> str:
+        del resolve_pnpm
+        return original(
+            packages,
+            known=known,
+            resolve_pnpm=lambda: "/x/pnpm",
+            policy=policy if policy is not None else NodeInstallPolicy(),
+        )
+
+    monkeypatch.setattr(pnpm_globals, "reinstall_preview", stubbed)
+    assert setup.main(["--doctor"]) == 0
+    preview = seen[0]["globals_preview"]
+    assert callable(preview)
+    report = NodeGlobalsReport(
+        entries=(),
+        missing=(),
+        managed=("@mermaid-js/mermaid-cli", "puppeteer"),
+    )
+    text = cast("Callable[[NodeGlobalsReport], str]", preview)(report)
+    assert "@mermaid-js/mermaid-cli,puppeteer@^25" in text
+    assert "--allow-build=puppeteer" in text
 
 
 def test_the_doctor_view_reads_the_ban_state_live(
