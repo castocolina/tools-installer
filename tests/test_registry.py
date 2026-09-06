@@ -303,8 +303,13 @@ def test_puppeteer_entry_records_the_postinstall_and_arm64_caveats() -> None:
 def test_mmdc_entry_records_the_brownfield_gap_and_group_coupling() -> None:
     text = REGISTRY.read_text(encoding="utf-8")
     assert "Brownfield" in text
-    assert "Doctor split-group detection:" in text
+    assert "Doctor group detection:" in text
     assert "pnpm remove -g" in text
+    # The comment must name BOTH brownfield shapes. Naming only the split one
+    # told a future maintainer that `r` repairs a machine it left untouched —
+    # the pre-phase-5 machine, which has no global puppeteer to put back.
+    assert "SPLIT:" in text
+    assert "INCOMPLETE:" in text
 
 
 def test_puppeteer_entry_records_the_double_install_disposition() -> None:

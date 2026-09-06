@@ -147,6 +147,17 @@ _REINSTALL_NEXT_STEP = (
 )
 
 
+def _join(names: tuple[str, ...]) -> str:
+    """`a`, `a and b`, `a, b and c` — never `a and b and c`.
+
+    Only two-member groups exist in the catalog today, but the wording layer is
+    the one place a three-member group would read as a sentence nobody wrote.
+    """
+    if len(names) < 2:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
 def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
     """Warn when a pnpm-managed global is missing or an install group is split."""
     items: list[Guidance] = []
@@ -174,7 +185,7 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
             )
         )
     for group in report.split_groups:
-        names = " and ".join(group)
+        names = _join(group)
         items.append(
             Guidance(
                 title="pnpm install group is split",
@@ -187,6 +198,25 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
                 # a next_step starting with `Run `make setup`` into
                 # `Press r to reinstall the pnpm-managed global set`. The console
                 # wording must stay runnable from a console.
+                next_step=_REINSTALL_NEXT_STEP,
+                severity=Severity.WARN,
+            )
+        )
+    for incomplete in report.incomplete_groups:
+        items.append(
+            Guidance(
+                title="pnpm install group is incomplete",
+                meaning=(
+                    f"pnpm manages {_join(incomplete.present)} globally but not "
+                    f"{_join(incomplete.missing)}, which the catalog declares as part of "
+                    "the same install group. Nothing the missing package's own install "
+                    "does on this machine has happened, and the dependent finds it at all "
+                    "only if pnpm's user-settable `auto-install-peers` pulled a copy into "
+                    "the dependent's own tree."
+                ),
+                # Same load-bearing prefix as the two items above: the reinstall
+                # replay now completes a declared group rather than replaying only
+                # the names pnpm already listed, so `r` really is the repair here.
                 next_step=_REINSTALL_NEXT_STEP,
                 severity=Severity.WARN,
             )

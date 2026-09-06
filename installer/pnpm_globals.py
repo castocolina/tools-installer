@@ -111,6 +111,19 @@ _EMPTY_POLICY = NodeInstallPolicy()
 
 
 @dataclass(frozen=True)
+class IncompleteGroup:
+    """A declared install group pnpm holds only part of.
+
+    `present` are the members pnpm manages globally; `missing` are the ones it
+    does not manage at all. This is NOT a split: pnpm is holding nothing apart,
+    the peer was never installed globally in the first place.
+    """
+
+    present: tuple[str, ...]
+    missing: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class NodeGlobalsReport:
     """What pnpm actually manages globally, and which of it stopped working.
 
@@ -127,9 +140,13 @@ class NodeGlobalsReport:
     global set" on the machine whose pnpm has just replaced itself, which is
     the exact machine this module exists for.
 
-    `split_groups` names declared install groups pnpm is holding apart. It is
-    a CONDITION, not a count, and it is empty both when the state is healthy
-    and when nothing could be learned.
+    `split_groups` names declared install groups pnpm is holding apart, and
+    `incomplete_groups` names declared groups pnpm holds only part of. Both are
+    CONDITIONS, not counts, and both are empty when the state is healthy and
+    when nothing could be learned. They are separate fields because they are
+    separate machine states with separate remedies to explain: a split group
+    has every member installed and pnpm keeping them apart; an incomplete
+    group has a member pnpm never installed at all.
     """
 
     entries: tuple[NodeGlobal, ...]
@@ -137,6 +154,7 @@ class NodeGlobalsReport:
     managed: tuple[str, ...]
     known: bool = True
     split_groups: tuple[tuple[str, ...], ...] = ()
+    incomplete_groups: tuple["IncompleteGroup", ...] = ()
 
 
 def node_globals(tools: Iterable[Tool]) -> tuple[NodeGlobal, ...]:
@@ -425,6 +443,43 @@ def split_install_groups(
     return tuple(found)
 
 
+def incomplete_install_groups(
+    policy: NodeInstallPolicy,
+    live: GlobalGroups,
+) -> tuple[IncompleteGroup, ...]:
+    """Declared groups whose dependent pnpm manages while a peer is absent entirely.
+
+    This is the brownfield state every machine that installed `mmdc` from this
+    catalog BEFORE phase 5 is in: `@mermaid-js/mermaid-cli` is a global,
+    `puppeteer` is not a global at all (at best `autoInstallPeers` pulled a copy
+    into mmdc's own tree), and no build allowance was ever granted — so the
+    browser was never downloaded and `mmdc` fails at render time.
+
+    `split_install_groups` cannot see it. A split needs two PRESENT members to
+    be held apart, and this machine has one, so the Doctor said nothing at all
+    to the exact population the split detection was written for.
+
+    Anchored on the group's FIRST member for the same reason `_formed_groups`
+    is: that member is the catalog's own `npm_pkg`. A lone PEER is the
+    hand-install shape, and calling it an incomplete group would push the user
+    at an action that installs a catalog tool they never asked for.
+
+    Membership is irrelevant here, so `live.unknown` is not consulted: this
+    asks only whether pnpm listed the package, which it either did or did not.
+    """
+    present_anywhere = set(live.packages)
+    found: list[IncompleteGroup] = []
+    for declared in policy.groups:
+        if not declared or declared[0] not in present_anywhere:
+            continue
+        missing = tuple(name for name in declared if name not in present_anywhere)
+        if not missing:
+            continue
+        present = tuple(name for name in declared if name in present_anywhere)
+        found.append(IncompleteGroup(present=present, missing=missing))
+    return tuple(found)
+
+
 def audit_node_globals(
     tools: Iterable[Tool],
     *,
@@ -457,6 +512,7 @@ def audit_node_globals(
         missing=missing,
         managed=packages,
         split_groups=split_install_groups(policy, live),
+        incomplete_groups=incomplete_install_groups(policy, live),
     )
 
 
@@ -525,9 +581,16 @@ def _reinstall_parts(
         # invocation each get their own isolated install (pnpm Global Packages
         # documentation), which for a peer-dependency pair means the replay
         # silently breaks the dependent.
-        members = [name for name in unique if name in group]
-        specs.append(",".join(_render_spec(name, versions) for name in members))
-        consumed.update(members)
+        #
+        # EVERY declared member, not just the live ones. Replaying only what
+        # pnpm already listed left the brownfield machine — dependent present,
+        # peer never installed — exactly as broken as it started, so the `r`
+        # action the Doctor points at repaired nothing for the population it
+        # was built for. It is also what keeps the allowance honest: the flag
+        # below names a member of this group, and this is the invocation that
+        # installs it.
+        specs.append(",".join(_render_spec(name, versions) for name in group))
+        consumed.update(group)
     flags = [
         f"--allow-build={name}" for name in dict.fromkeys(policy.allow_build) if name in granted
     ]

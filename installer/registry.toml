@@ -1776,6 +1776,18 @@ cask = "sublime-text"
 # pnpm-globals reinstall action (`r`), which after plan 05-04 replays the live
 # global set as one comma-joined, build-allowed group and repairs the split;
 # the same container run proved that remedy renders successfully afterwards.
+# TWO brownfield shapes, not one, and `r` repairs both:
+#  - SPLIT: both packages are globals in separate isolated installs. This is
+#    the shape a post-phase-5 catalog run creates on a machine that already
+#    had a standalone mmdc.
+#  - INCOMPLETE: mmdc is a global and puppeteer is not a global at ALL. This
+#    is every machine that installed mmdc from this catalog BEFORE phase 5,
+#    and it is the shape that matters most, because `~/.cache/puppeteer` is
+#    empty and mmdc fails at render time. `split_install_groups` cannot see it
+#    (a split needs two present members), so
+#    `installer/pnpm_globals.py::incomplete_install_groups` reports it, and the
+#    replay completes the declared group rather than putting back only the
+#    names pnpm already listed.
 # Manual alternative: `pnpm remove -g @mermaid-js/mermaid-cli` followed by a
 # catalog install of mmdc. Automatic repair at INSTALL time — reconciling
 # group membership before install_tool's ALREADY_INSTALLED short-circuit — is
@@ -1784,8 +1796,9 @@ cask = "sublime-text"
 # manager-aware for one pnpm pair puts a second availability rule in the
 # engine. The Doctor is where an already-installed machine's state is audited,
 # so detection and repair belong there.
-# Doctor split-group detection: the TUI Doctor reports a split as a warning
-# naming both packages and pointing at the `r` reinstall action.
+# Doctor group detection: the TUI Doctor reports a split group AND an
+# incomplete one as separate warnings, each naming the packages involved and
+# pointing at the `r` reinstall action.
 # Group coupling: pnpm's Global Packages documentation states that packages in
 # one comma group "are removed together" and that removing either member with
 # `pnpm remove -g` removes the WHOLE group. So a user who removes puppeteer by

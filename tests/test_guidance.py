@@ -2,7 +2,7 @@ from pathlib import Path
 
 from installer.doctor import DoctorReport
 from installer.guidance import Guidance, doctor_guidance, guard_guidance, node_globals_guidance
-from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
+from installer.pnpm_globals import IncompleteGroup, NodeGlobal, NodeGlobalsReport
 
 
 def test_healthy_report_yields_a_single_ok_item() -> None:
@@ -187,6 +187,44 @@ def test_node_globals_guidance_reports_missing_and_split_together() -> None:
     assert items[0].next_step.startswith("Run `make setup`")
     assert items[1].next_step.startswith("Run `make setup`")
     assert "puppeteer" in items[1].meaning
+
+
+def test_node_globals_guidance_warns_on_an_incomplete_install_group() -> None:
+    """The brownfield machine used to get NOTHING from the Doctor.
+
+    `mmdc` present, `puppeteer` never installed globally: no missing command
+    (mmdc resolves), no split (a split needs two present members), so every
+    surface was silent while the tool could not render.
+    """
+    items = node_globals_guidance(
+        NodeGlobalsReport(
+            entries=(NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),),
+            missing=(),
+            managed=("@mermaid-js/mermaid-cli",),
+            incomplete_groups=(
+                IncompleteGroup(present=("@mermaid-js/mermaid-cli",), missing=("puppeteer",)),
+            ),
+        )
+    )
+    assert len(items) == 1
+    item = items[0]
+    assert item.severity == "warn"
+    assert "@mermaid-js/mermaid-cli" in item.meaning
+    assert "puppeteer" in item.meaning
+    assert item.next_step.startswith("Run `make setup`")
+
+
+def test_group_members_are_joined_as_a_sentence_not_repeated_ands() -> None:
+    items = node_globals_guidance(
+        NodeGlobalsReport(
+            entries=(),
+            missing=(),
+            managed=("a", "b", "c"),
+            split_groups=(("a", "b", "c"),),
+        )
+    )
+    assert "a, b and c" in items[0].meaning
+    assert "a and b and c" not in items[0].meaning
 
 
 def test_guidance_is_frozen() -> None:

@@ -918,3 +918,74 @@ def test_replay_does_not_pin_an_ungrouped_package_either(
     )
     assert got == ("puppeteer",)
     assert calls == [["/x/pnpm", "add", "-g", "puppeteer"]]
+
+
+# The pre-Phase-5 brownfield shape, and the only one that exists on a machine
+# that installed mmdc from this catalog BEFORE puppeteer joined it: the
+# dependent is a global, the peer was never installed globally at all.
+_BROWNFIELD_LIVE = pnpm_globals.GlobalGroups(groups=((MMDC_NPM,), ("typescript",)))
+
+
+def test_a_missing_peer_is_not_a_split_and_split_detection_must_stay_quiet() -> None:
+    assert split_install_groups(_EXPLICIT_POLICY, _BROWNFIELD_LIVE) == ()
+
+
+def test_incomplete_install_groups_names_the_peer_pnpm_never_installed() -> None:
+    """The population 05-04 was written for, which the split detector cannot see.
+
+    `split_install_groups` needs two PRESENT members to report anything, so a
+    machine holding one of the two was told nothing at all — while its `mmdc`
+    could not render.
+    """
+    found = pnpm_globals.incomplete_install_groups(_EXPLICIT_POLICY, _BROWNFIELD_LIVE)
+    assert found == (pnpm_globals.IncompleteGroup(present=(MMDC_NPM,), missing=("puppeteer",)),)
+
+
+def test_incomplete_install_groups_is_quiet_on_a_complete_group() -> None:
+    live = pnpm_globals.GlobalGroups(groups=((MMDC_NPM, "puppeteer"),))
+    assert pnpm_globals.incomplete_install_groups(_EXPLICIT_POLICY, live) == ()
+    split = pnpm_globals.GlobalGroups(groups=((MMDC_NPM,), ("puppeteer",)))
+    assert pnpm_globals.incomplete_install_groups(_EXPLICIT_POLICY, split) == ()
+
+
+def test_incomplete_install_groups_is_quiet_when_only_the_peer_is_present() -> None:
+    """A lone peer is the hand-install shape, not a group missing its dependent.
+
+    Reporting it would push the user at an action that installs a catalog tool
+    they never asked for.
+    """
+    live = pnpm_globals.GlobalGroups(groups=(("puppeteer",),))
+    assert pnpm_globals.incomplete_install_groups(_EXPLICIT_POLICY, live) == ()
+
+
+def test_audit_reports_the_brownfield_shape_the_doctor_used_to_pass_in_silence() -> None:
+    policy = node_install_policy(load_tools(REGISTRY))
+    report = audit_node_globals(
+        load_tools(REGISTRY),
+        which=lambda _n: "/x/bin",
+        grouped=lambda: _BROWNFIELD_LIVE,
+        policy=policy,
+    )
+    assert report.split_groups == ()
+    assert report.missing == ()
+    assert report.incomplete_groups == (
+        pnpm_globals.IncompleteGroup(present=(MMDC_NPM,), missing=("puppeteer",)),
+    )
+
+
+def test_replay_completes_a_declared_group_pnpm_is_missing_a_member_of() -> None:
+    """The replay used to put back only what pnpm already listed.
+
+    That made the Doctor's `r` action a no-op for the brownfield machine even
+    once it was told something was wrong.
+    """
+    policy = node_install_policy(load_tools(REGISTRY))
+    argv = reinstall_argv([MMDC_NPM, "typescript"], pnpm="/x/pnpm", policy=policy)
+    assert argv == [
+        "/x/pnpm",
+        "add",
+        "-g",
+        "--allow-build=puppeteer",
+        f"{MMDC_NPM},puppeteer@^25",
+        "typescript",
+    ]
