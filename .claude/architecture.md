@@ -216,3 +216,54 @@ today. `test_java_tools_install_exclusively_through_sdkman`
 exactly one `sdkman`-kind method with no brew/native fallback. D-02 covers
 only the general brew-preference convention, not the carve-out.
 
+### Platform-unavailable catalog rows reuse the Uninstall view's dim/non-selectable pattern
+
+A registry entry whose `Method.os` / `Method.arch` / `min_os_version`
+restrictions leave it with no applicable method on the current machine is
+shown disabled in both places that already need to know this. On the
+CLI/install-time path, `installer/engine.py::install_tool` reports
+`NO_METHOD` — unchanged. On the catalog-browsing path,
+`setup.py::_build_app` computes `installer/resolve.py::platform_could_support`
+per tool, threads that boolean through `UnifiedApp` into `CatalogScreen`, and
+`CatalogScreen` reuses `BrowserAdapter.selectable` — an already-existing,
+already-generic `ToolBrowser` field `UninstallScreen._tool_entry` already
+exercises for its dim rows — to dim the row and make it non-selectable.
+
+`platform_could_support` is used instead of a bare `resolve_methods` check
+because it resolves against a hypothetical Homebrew-present platform. A
+machine that merely has not bootstrapped Homebrew yet is never wrongly marked
+disabled; only a genuine `os` / `arch` / macOS-version incompatibility is.
+This is related to, not identical with, `classify_tools`'s
+`UninstallState.UNAVAILABLE` branch, which answers a narrower
+Uninstall-specific question after excluding removable/managed/installed
+tools. Do not conflate the two.
+
+This reconciles, rather than contradicts, the "Tier is a browsing label"
+reasoning that "a screen with no `Platform` must not make a judgement it
+cannot make correctly." `CatalogScreen` no longer lacks `Platform`-derived
+data once `setup.py`'s composition root threads it through, the same way the
+Uninstall view already receives one. The principle was never "never give a
+screen this data"; it was "never judge without it."
+
+This convention is not new. `codegraph`'s Linux/macOS split and `puppeteer`'s
+Linux-arm64 gate already produce `NO_METHOD` on the CLI path. The worked
+example this phase adds is Apple Containers (`container`): one method with
+`os=["macos"]`, `arch=["arm64"]`, `min_os_version="26"` (D-01, Phase 7). The
+tool always appears in its tier view (never omitted) and, where genuinely
+unavailable, is dimmed and non-selectable while browsing, via the same
+mechanism the Uninstall view already shipped — zero new rendering
+primitives, only a new wire plus one new, tested predicate.
+
+This resolves 07-RESEARCH.md's Open Question 1 AND Pitfall 4. D-01's "reuse
+the existing unmet-requires/unavailable-dependency display pattern" language
+pointed at the Uninstall view's dim/non-selectable rows, not at `NO_METHOD`
+(a first-draft misreading) and not at inventing a new primitive. The
+macOS-version gap Pitfall 4 originally recommended leaving unbuilt was,
+after being flagged HIGH by cross-AI review in both cycle 1 and cycle 2 as
+"documented but unimplemented," genuinely implemented: a stdlib-only
+`Platform.os_version` field and a `Method`-level `min_os_version` gate,
+reusing the already-tested `installer/versions.py::meets_minimum`. No
+residual gap remains for the version case: a too-old-macOS Apple-Silicon Mac
+now resolves zero methods and is shown disabled, exactly like a wrong-`os` /
+wrong-`arch` machine.
+
