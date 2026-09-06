@@ -206,6 +206,74 @@ def test_the_policies_view_is_wired_ban_then_tweaks_then_omz(
     assert len(ids) > 2
 
 
+def test_the_policies_view_wires_split_mode_myshellrc_sourcing_for_every_tweak(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Enabling a tweak under split link mode also wires ~/.myshellrc sourcing
+    into the split rc files, via the --guard entry point."""
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--guard", "--link-mode", "split"]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    codex_skip = next(p for p in policies.policies if p.id == "tweak:codex-skip")
+    codex_skip.apply()
+    assert str(tmp_path / ".myshellrc") in (tmp_path / ".zshrc").read_text()
+    assert str(tmp_path / ".myshellrc") in (tmp_path / ".bashrc").read_text()
+
+
+def test_the_policies_view_does_not_wire_split_sourcing_under_centralized_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--guard"]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    codex_skip = next(p for p in policies.policies if p.id == "tweak:codex-skip")
+    codex_skip.apply()
+    assert not (tmp_path / ".bashrc").exists()
+
+
+def _fake_resolve_link_mode_split(_option: str | None) -> str:
+    return "split"
+
+
+def _fake_resolve_link_mode_centralized(_option: str | None) -> str:
+    return "centralized"
+
+
+def test_the_normal_interactive_flow_wires_split_mode_myshellrc_sourcing_before_catalog_opens(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The phase's own primary, most-used entry point (no flags at all) must
+    also thread the real link mode into the catalog/Policies UnifiedApp
+    instance BEFORE it opens — not only the --guard shortcut."""
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_split)
+    assert setup.main([]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    codex_skip = next(p for p in policies.policies if p.id == "tweak:codex-skip")
+    codex_skip.apply()
+    assert str(tmp_path / ".myshellrc") in (tmp_path / ".bashrc").read_text()
+
+
+def test_the_normal_interactive_flow_does_not_wire_split_sourcing_under_centralized_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
+    assert setup.main([]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    codex_skip = next(p for p in policies.policies if p.id == "tweak:codex-skip")
+    codex_skip.apply()
+    assert not (tmp_path / ".bashrc").exists()
+
+
 def test_doctor_preview_carries_the_grouped_pinned_allowed_replay(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -410,6 +478,7 @@ def test_build_app_hands_unavailable_from_platform_could_support(
     _sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(setup, "load_tools", fake_load_tools)
     monkeypatch.setattr(setup, "detect", fake_detect)
+    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
     seen = _capture_app(monkeypatch)
     assert setup.main([]) == 0
     unavailable = seen[0]["unavailable"]

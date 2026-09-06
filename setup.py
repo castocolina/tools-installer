@@ -219,6 +219,7 @@ def _build_app(
                     rc_path=_MYSHELLRC,
                     bin_dir=_DEFAULT_BIN_DIR,
                     installed_tools=installed,
+                    ensure_sourced_from=tuple(rc_paths) if link_mode == "split" else (),
                 )
                 for bundle in bundles
             ),
@@ -294,8 +295,8 @@ def _build_app(
     )
 
 
-def _select_catalog(tools: list[Tool]) -> list[str] | None:
-    return _build_app(tools, detect()).run()
+def _select_catalog(tools: list[Tool], *, link_mode: str = "centralized") -> list[str] | None:
+    return _build_app(tools, detect(), link_mode=link_mode).run()
 
 
 def _resolve_link_mode(link_mode_option: str | None) -> str:
@@ -446,6 +447,11 @@ def main(argv: list[str]) -> int:
     tools = load_tools(_REGISTRY)
     platform = detect()
     prompter = CallbackPrompter(ask_checkbox=_ask_checkbox, ask_confirm=_ask_confirm)
+    # Resolved once, before the catalog/Policies TUI opens: that same UnifiedApp
+    # instance's Policies screen is where a tweak could be toggled mid-session,
+    # so link_mode must be real BEFORE _select_catalog builds it, not only
+    # before the later configure_path call.
+    link_mode = _resolve_link_mode(options.link_mode)
     summary = run_wizard(
         tools,
         platform,
@@ -454,12 +460,11 @@ def main(argv: list[str]) -> int:
         options,
         on_mismatch=_ask_mismatch,
         category_blurbs=load_categories(_REGISTRY),
-        select_catalog=_select_catalog,
+        select_catalog=lambda catalog_tools: _select_catalog(catalog_tools, link_mode=link_mode),
     )
     if summary is None:
         console.print("Aborted.")
         return 0
-    link_mode = _resolve_link_mode(options.link_mode)
     configure_path(
         tools,
         console,

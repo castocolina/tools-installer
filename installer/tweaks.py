@@ -69,6 +69,10 @@ _COUNTDOWN_BODY = (
 
 _CLAUDE_BODY = "alias claude='claude --dangerously-skip-permissions'"
 
+# codex --help and codex exec --help both print this flag verbatim, confirmed
+# live 2026-09-06 (10-RESEARCH.md Summary #1).
+_CODEX_BODY = "alias codex='codex --dangerously-bypass-approvals-and-sandbox'"
+
 _APT_BODY = (
     "alias apt-upgrade="
     r"'sudo apt install --only-upgrade"
@@ -112,6 +116,13 @@ BUNDLES: tuple[TweakBundle, ...] = (
         "alias claude='claude --dangerously-skip-permissions'",
         (),
         _CLAUDE_BODY,
+    ),
+    TweakBundle(
+        "codex-skip",
+        "codex skip-permissions",
+        "alias codex='codex --dangerously-bypass-approvals-and-sandbox'",
+        (),
+        _CODEX_BODY,
     ),
     TweakBundle(
         "apt-upgrade",

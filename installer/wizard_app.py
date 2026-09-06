@@ -954,6 +954,12 @@ class PoliciesScreen(AppScreen):
                 " intentional noise.",
                 "Disable it when you need normal Claude Code permission prompts back.",
             ),
+            "tweak:codex-skip": (
+                "Aliases codex to codex --dangerously-bypass-approvals-and-sandbox.",
+                "Useful only in trusted, disposable workspaces where confirmation and sandbox"
+                " prompts are intentional noise.",
+                "Disable it when you need normal Codex confirmation/sandboxing prompts back.",
+            ),
             "tweak:apt-upgrade": (
                 "Adds apt-upgrade for upgrading only packages that already have updates.",
                 "Keeps the command narrower than a broad apt upgrade flow.",
@@ -978,6 +984,12 @@ class PoliciesScreen(AppScreen):
         elif policy.requires:
             lines.append(f"Required tool(s): {', '.join(policy.requires)}.")
         lines.extend(details.get(policy.id, ("Space toggles this reversible shell policy.",)))
+        if policy.id.startswith("tweak:"):
+            lines.append(
+                "This alias/function needs ~/.myshellrc to be sourced; in split PATH mode,"
+                " enabling this Policy also wires that sourcing into your rc files"
+                " automatically, so it still works after your next new shell."
+            )
         return "\n".join(lines)
 
     def _set_detail(self, policy: Policy | None) -> None:

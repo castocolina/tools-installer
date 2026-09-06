@@ -26,8 +26,22 @@ def _bundle(bundle_id: str) -> TweakBundle:
     return next(b for b in BUNDLES if b.id == bundle_id)
 
 
-def test_four_bundles_with_stable_ids() -> None:
-    assert [b.id for b in BUNDLES] == ["docker", "countdown", "claude-skip", "apt-upgrade"]
+def test_bundles_have_stable_ids_and_order() -> None:
+    assert [b.id for b in BUNDLES] == [
+        "docker",
+        "countdown",
+        "claude-skip",
+        "codex-skip",
+        "apt-upgrade",
+    ]
+
+
+def test_codex_skip_body_matches_the_verified_flag() -> None:
+    codex = _bundle("codex-skip")
+    assert codex.body == "alias codex='codex --dangerously-bypass-approvals-and-sandbox'"
+    assert codex.requires == ()
+    assert codex.executables == ()
+    assert codex.platforms == ()
 
 
 def test_block_is_marker_delimited_around_body() -> None:

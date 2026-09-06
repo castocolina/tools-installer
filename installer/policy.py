@@ -23,6 +23,7 @@ from installer.guards import (
     write_ban_aliases,
 )
 from installer.omz import owned_plugins, plugins_owned, remove_plugins, write_plugins
+from installer.shellrc import ensure_source
 from installer.tweaks import (
     TweakBundle,
     install_tweak_executables,
@@ -36,6 +37,22 @@ _RELOAD_HINT = "Open a new shell or run `hash -r` so cached command paths refres
 # hash -r is about cached command PATH lookups and says nothing useful about a
 # plugin array; a plugin change needs a new zsh or a sourced .zshrc.
 _ZSH_RELOAD_HINT = "Open a new zsh shell, or run `source ~/.zshrc`, so Oh-My-Zsh loads the plugins."
+# `hash -r` only refreshes cached PATH lookups; a freshly written alias or
+# shell function needs the rc file re-sourced (or a new shell) to be loaded at
+# all, so tweak_policy uses these two constants instead of _RELOAD_HINT, which
+# stays correct for ban_policy's own PATH shims. The disable hint deliberately
+# never contains the substring "source ~/.myshellrc": remove_tweak only
+# deletes rc-file text, it cannot un-define something already loaded into the
+# current shell, so re-sourcing is not valid advice after disabling — only a
+# fresh shell drops it.
+_TWEAK_ENABLE_HINT = (
+    "Open a new shell, or run `source ~/.myshellrc`, so the new alias or function is loaded."
+)
+_TWEAK_DISABLE_HINT = (
+    "Open a new shell so the disabled alias or function is no longer active in this "
+    "session (re-sourcing your shell config cannot undefine something already "
+    "loaded — you need a fresh shell, not a re-source)."
+)
 
 
 def _display_path(path: Path) -> str:
@@ -159,6 +176,7 @@ def tweak_policy(
     rc_path: Path,
     bin_dir: Path | None = None,
     installed_tools: Mapping[str, bool] | None = None,
+    ensure_sourced_from: tuple[Path, ...] = (),
 ) -> Policy:
     """A curated shell-tweak bundle as a Policy, parallel to ban_policy.
 
@@ -166,6 +184,13 @@ def tweak_policy(
     is "the bundle's block is present in rc_path". Idempotent (reuses tweaks'
     block machinery). The id is namespaced `tweak:<id>` so it never collides with
     the ban or another bundle in the Policies tab.
+
+    `ensure_sourced_from`, when non-empty, is the split-mode rc file list: apply
+    also wires each one to `source rc_path` via installer.shellrc.ensure_source —
+    the same idempotent primitive installer.app.configure_path already uses for
+    centralized/single mode — so the tweak actually reaches a real shell under
+    split PATH mode too. remove needs no symmetric undo: the harmless, idempotent
+    source line may still be load-bearing for another still-enabled tweak.
     """
 
     def _apply() -> PolicyResult:
@@ -180,9 +205,19 @@ def tweak_policy(
             layers.append(
                 PolicyLayer("Executable", f"installed {names} in {_display_path(target_bin_dir)}")
             )
+        if ensure_sourced_from:
+            for target in ensure_sourced_from:
+                ensure_source(target, rc_path)
+            wired = ", ".join(_display_path(p) for p in ensure_sourced_from)
+            layers.append(
+                PolicyLayer(
+                    "Split-mode sourcing",
+                    f"wired {wired} to source {_display_path(rc_path)}",
+                )
+            )
         return PolicyResult(
             layers=tuple(layers),
-            reload_hint=_RELOAD_HINT,
+            reload_hint=_TWEAK_ENABLE_HINT,
             warning=None,
         )
 
@@ -202,7 +237,7 @@ def tweak_policy(
             )
         return PolicyResult(
             layers=tuple(layers),
-            reload_hint=_RELOAD_HINT,
+            reload_hint=_TWEAK_DISABLE_HINT,
             warning=None,
         )
 

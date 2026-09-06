@@ -1,6 +1,8 @@
+import shutil
+import subprocess
 from pathlib import Path
 
-from installer.policy import Policy, PolicyResult, tweak_policy
+from installer.policy import Policy, PolicyResult, ban_policy, tweak_policy
 from installer.tweaks import BUNDLES
 
 
@@ -67,7 +69,9 @@ def test_apply_writes_block_and_returns_result(tmp_path: Path) -> None:
     assert str(rc) in result.layers[0].detail
     assert result.layers[1].name == "Executable"
     assert "tools-installer-wait-time" in result.layers[1].detail
-    assert result.reload_hint is not None and "hash -r" in result.reload_hint
+    assert result.reload_hint is not None
+    assert "source ~/.myshellrc" in result.reload_hint
+    assert "hash -r" not in result.reload_hint
     assert result.warning is None
 
 
@@ -106,3 +110,82 @@ def test_remove_cleans_countdown_managed_executable(tmp_path: Path) -> None:
     assert "wait_time()" not in rc.read_text()
     assert not helper.exists()
     assert result.layers[1].detail.startswith("1 removed")
+
+
+def test_codex_skip_policy_round_trips(tmp_path: Path) -> None:
+    rc = tmp_path / ".myshellrc"
+    policy = tweak_policy(_bundle("codex-skip"), rc_path=rc)
+    policy.apply()
+    assert "dangerously-bypass-approvals-and-sandbox" in rc.read_text()
+    result = policy.remove()
+    assert "dangerously-bypass-approvals-and-sandbox" not in rc.read_text()
+    assert "cleared" in result.layers[0].detail
+
+
+def test_tweak_policy_enable_hint_names_source_not_hash_r(tmp_path: Path) -> None:
+    rc = tmp_path / ".myshellrc"
+    result = tweak_policy(_bundle("countdown"), rc_path=rc, bin_dir=tmp_path / "bin").apply()
+    assert result.reload_hint is not None
+    assert "source ~/.myshellrc" in result.reload_hint
+    assert "hash -r" not in result.reload_hint
+
+    ban_rc = tmp_path / "ban.myshellrc"
+    ban_result = ban_policy(
+        shim_dir=tmp_path / "shim",
+        apply_rc_paths=[ban_rc],
+        remove_rc_paths=[ban_rc],
+        path_value="",
+        which=lambda _name: None,
+    ).apply()
+    assert ban_result.reload_hint is not None and "hash -r" in ban_result.reload_hint
+
+
+def test_tweak_policy_disable_hint_names_new_shell_not_source(tmp_path: Path) -> None:
+    rc = tmp_path / ".myshellrc"
+    policy = tweak_policy(_bundle("countdown"), rc_path=rc, bin_dir=tmp_path / "bin")
+    policy.apply()
+    result = policy.remove()
+    assert result.reload_hint is not None
+    assert "new shell" in result.reload_hint.lower()
+    assert "source ~/.myshellrc" not in result.reload_hint
+    assert "hash -r" not in result.reload_hint
+
+    ban_rc = tmp_path / "ban.myshellrc"
+    ban_result = ban_policy(
+        shim_dir=tmp_path / "shim",
+        apply_rc_paths=[ban_rc],
+        remove_rc_paths=[ban_rc],
+        path_value="",
+        which=lambda _name: None,
+    ).remove()
+    assert ban_result.reload_hint is not None and "hash -r" in ban_result.reload_hint
+
+
+def test_tweak_policy_ensure_sourced_from_wires_myshellrc_into_the_given_rc_path(
+    tmp_path: Path,
+) -> None:
+    myshellrc = tmp_path / ".myshellrc"
+    split_rc = tmp_path / ".bashrc"
+    other_rc = tmp_path / ".zshrc"
+
+    tweak_policy(_bundle("codex-skip"), rc_path=myshellrc, ensure_sourced_from=(split_rc,)).apply()
+    assert str(myshellrc) in split_rc.read_text()
+
+    tweak_policy(_bundle("codex-skip"), rc_path=myshellrc).apply()
+    assert not other_rc.exists()
+
+
+def test_tweak_policy_split_mode_alias_resolves_in_a_fresh_shell(tmp_path: Path) -> None:
+    bash = shutil.which("bash")
+    if bash is None:
+        return
+    myshellrc = tmp_path / ".myshellrc"
+    split_rc = tmp_path / ".bashrc"
+    tweak_policy(_bundle("codex-skip"), rc_path=myshellrc, ensure_sourced_from=(split_rc,)).apply()
+    result = subprocess.run(
+        [bash, "-c", f'source "{split_rc}" && alias codex'],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "dangerously-bypass-approvals-and-sandbox" in result.stdout

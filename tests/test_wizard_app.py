@@ -870,6 +870,54 @@ async def test_policy_detail_panel_explains_tweak_rules() -> None:
         assert "dangerously-skip-permissions" in screen.detail_text
 
 
+async def test_policy_detail_panel_explains_codex_skip() -> None:
+    policy = Policy(
+        id="tweak:codex-skip",
+        label="codex skip-permissions",
+        description="alias codex codex --dangerously-bypass-approvals-and-sandbox",
+        active=False,
+        apply=_ok_result,
+        remove=_ok_result,
+    )
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        del pilot
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert "dangerously-bypass-approvals-and-sandbox" in screen.detail_text
+        assert "trusted" in screen.detail_text.lower()
+
+
+async def test_policy_detail_panel_explains_myshellrc_sourcing_for_every_tweak() -> None:
+    policies = [
+        Policy(
+            id="tweak:claude-skip",
+            label="claude skip-permissions",
+            description="alias claude skip permissions",
+            active=False,
+            apply=_ok_result,
+            remove=_ok_result,
+        ),
+        Policy(
+            id="tweak:codex-skip",
+            label="codex skip-permissions",
+            description="alias codex codex --dangerously-bypass-approvals-and-sandbox",
+            active=False,
+            apply=_ok_result,
+            remove=_ok_result,
+        ),
+    ]
+    app = _app(policies=_policy_inputs(policies), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert "~/.myshellrc" in screen.detail_text
+        assert "split" in screen.detail_text.lower()
+        await pilot.press("down")
+        assert "~/.myshellrc" in screen.detail_text
+        assert "split" in screen.detail_text.lower()
+
+
 async def test_policy_missing_required_tool_blocks_enable() -> None:
     calls: list[str] = []
     policy = Policy(
