@@ -88,3 +88,40 @@ than a planner re-spawn, since each has a precise, mechanical fix. Proceeding to
 
 All 4 findings applied directly (Rule 10). No new findings contradict cycle 1's fixes — the
 checksum regression-set correction was independently confirmed correct. Proceeding to cycle 3.
+
+## Cycle 3 (codex-sol-high) — max-cycle cap
+
+**CYCLE_SUMMARY:** `current_high=2 current_actionable=2`
+
+Reviewer confirmed the rewritten Tier-3 recipe's production-call signatures are all valid
+(`load_tools`, `Platform(...)`, `install_tool(tool, platform)`) — no new HIGH on that front.
+
+### HIGH findings
+
+1. **08-04's Tier-3 recipe still couldn't capture the resolved RTK tag as evidence** —
+   `install_tool(rtk, platform)` succeeds or fails silently on the tag; neither
+   `resolve_github_tag` nor the download path logs it. Fix: pass a `logging_resolve_tag`
+   wrapper via `install_tool`'s injectable `resolve_tag` parameter that prints `RTK_TAG <repo>
+   <tag>` before returning, and record that line in the SUMMARY as the tag evidence.
+2. **08-04's recommends-comment locality test window still excluded its own target text** —
+   a fixed "10 lines" cap after `id = "..."` ends before `recommends`/the Codex caveat for a
+   tool block with several fields between `id` and the comment. Fix: replaced the fixed-line
+   cap with "extending through (but not past) that tool's first `[[tool.method]]` line" — no
+   arbitrary line-count ceiling.
+
+### MEDIUM findings
+
+3. **08-01 had an unclosed `<files>` tag** — missing `</files>`, which would make GSD's own
+   `task is-behavior-adding` classifier misclassify this task despite real source-file changes.
+   Fix: added the closing tag.
+4. **08-03 had a contradictory Darwin-arch claim** — `key_links` said the inspected Darwin
+   tarball was `aarch64`, but the action text and 08-RESEARCH.md both correctly cite
+   `x86_64-apple-darwin`. Fix: corrected the `key_links` typo to `x86_64 Darwin`, matching the
+   real evidence (no arm64 Darwin tarball was ever downloaded or needed).
+
+### Disposition
+
+All 4 findings applied directly (Rule 10). This is the configured max-cycles cap (3) — per
+ONESHOT-RULES Rule 10, proceeding directly to Phase 8 execution rather than dispatching a
+cycle 4, since every finding across all three cycles had a precise, mechanical, directly-applied
+fix and no cycle surfaced a structural/architectural objection requiring a planner re-spawn.
