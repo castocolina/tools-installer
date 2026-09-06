@@ -691,7 +691,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     # (ROADMAP Phases 7 and 8 both will) must update these counts in the same
     # commit that changes the catalog.
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
-        "system": 22,
+        "system": 24,
         "ai": 10,
         "user": 36,
     }
@@ -718,6 +718,100 @@ def test_miller_cmd_is_mlr_and_strips_nested_member() -> None:
     method = resolve_methods(miller, linux)[0]
     assert method.params["member"] == "mlr"
     assert method.params["strip"] == 1
+
+
+def test_zsh_resolves_across_platforms_with_immutable_brew_fallback() -> None:
+    zsh = _tools_by_id()["zsh"]
+    fedora = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+    bazzite = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    assert [m.kind for m in resolve_methods(zsh, fedora)] == ["dnf", "brew"]
+    assert [m.kind for m in resolve_methods(zsh, bazzite)] == ["brew"]
+    assert [m.kind for m in resolve_methods(zsh, macos)] == ["brew"]
+
+
+def test_oh_my_zsh_requires_zsh_and_sets_safe_env() -> None:
+    oh_my_zsh = _tools_by_id()["oh-my-zsh"]
+    assert oh_my_zsh.requires == ("zsh", "git")
+    assert oh_my_zsh.cmd == "omz"
+    method = oh_my_zsh.methods[0]
+    assert method.params["env"] == {"RUNZSH": "no", "CHSH": "no", "KEEP_ZSHRC": "yes"}
+    assert method.params["detect_path"] == "~/.oh-my-zsh/oh-my-zsh.sh"
+
+
+def test_selecting_oh_my_zsh_drags_in_zsh_and_git_in_deps_first_order() -> None:
+    catalog = load_tools(REGISTRY)
+    by_id = {tool.id: tool for tool in catalog}
+    platform = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    result = resolve_dependencies(
+        [by_id["oh-my-zsh"]],
+        catalog,
+        available=lambda tool: bool(resolve_methods(tool, platform)),
+        is_installed=lambda _tool: False,
+    )
+    ids = [tool.id for tool in result.order]
+    assert ids.index("zsh") < ids.index("oh-my-zsh")
+    assert ids.index("git") < ids.index("oh-my-zsh")
+    assert "zsh" in result.dragged_in
+    assert "git" in result.dragged_in
+
+
+def test_bazzite_zsh_and_podman_both_resolve_brew_only_no_new_entry() -> None:
+    tools = _tools_by_id()
+    platform = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+    assert [m.kind for m in resolve_methods(tools["zsh"], platform)] == ["brew"]
+    assert [m.kind for m in resolve_methods(tools["podman"], platform)] == ["brew"]
+    assert sum(1 for tool_id in {t.id for t in load_tools(REGISTRY)} if tool_id == "podman") == 1
+
+
+def test_oh_my_zsh_entry_records_the_keep_zshrc_finding() -> None:
+    lines = REGISTRY.read_text(encoding="utf-8").splitlines()
+    idx = next(i for i, line in enumerate(lines) if line == 'id = "oh-my-zsh"')
+    window = "\n".join(lines[max(0, idx - 50) : idx])
+    for needle in (
+        "KEEP_ZSHRC",
+        "RUNZSH",
+        "CHSH",
+        "OVERWRITE_CONFIRMATION",
+        "Tier-3 container",
+        "Bazzite",
+        "command_exists git",
+        "HEAD",
+    ):
+        assert needle in window, f'missing {needle!r} above id = "oh-my-zsh"'
+
+
+def test_zsh_entry_records_the_podman_pattern_reuse() -> None:
+    lines = REGISTRY.read_text(encoding="utf-8").splitlines()
+    idx = next(i for i, line in enumerate(lines) if line == 'id = "zsh"')
+    window = "\n".join(lines[max(0, idx - 15) : idx])
+    assert "podman" in window
+    assert "5.9.2" in window
+
+
+def test_fresh_bazzite_without_brew_has_no_method_for_zsh_or_podman_yet() -> None:
+    """zsh/oh-my-zsh have no method on a brew-less immutable Fedora because Homebrew
+    is not yet installed, not because Bazzite is unsupported. The fix is running
+    this installer once with only the registry's existing, unconditional brew
+    kind="script" Linux method selected (it applies regardless of has_brew), then
+    re-running the installer in a fresh process, which re-probes has_brew=True
+    and unblocks zsh/oh-my-zsh. This is how every brew-only Linux entry already
+    requires two runs on a truly bare machine — a pre-existing property of the
+    static per-run Platform snapshot, not something these two entries change.
+    """
+    catalog = load_tools(REGISTRY)
+    by_id = {tool.id: tool for tool in catalog}
+    platform = Platform(os="fedora", arch="amd64", immutable=True, has_brew=False)
+    assert resolve_methods(by_id["zsh"], platform) == []
+    assert resolve_methods(by_id["podman"], platform) == []
+    result = resolve_dependencies(
+        [by_id["oh-my-zsh"]],
+        catalog,
+        available=lambda tool: bool(resolve_methods(tool, platform)),
+        is_installed=lambda _tool: False,
+    )
+    assert result.order == ()
+    assert any("zsh" in warning and "not available" in warning for warning in result.warnings)
 
 
 def test_hexyl_linux_uses_gnu_and_strips() -> None:

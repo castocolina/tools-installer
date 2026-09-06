@@ -475,6 +475,69 @@ strip = 0
 kind = "brew"
 formula = "starship"
 
+# Verified 2026-09-06: the Homebrew formula `zsh` was confirmed live against
+# formulae.brew.sh/api/formula/zsh.json this session (stable 5.9.2, no caveats,
+# cross-platform bottle). The four-method shape is an exact mirror of the
+# already-shipped, already-tested podman entry, so the immutable-Linux-falls-
+# to-brew mechanism needs no new proof, only new data. Unlike gnu-bash
+# (07-02-PLAN.md), cmd = "zsh" needs no false-positive guard: macOS has shipped
+# zsh as its default login shell since Catalina, and that system zsh is a real,
+# sufficiently modern build that genuinely satisfies Oh-My-Zsh's own
+# command_exists zsh prerequisite check, so is_installed reporting "already
+# satisfied" on a stock Mac is correct, not a false positive.
+[[tool]]
+id = "zsh"
+name = "Zsh"
+category = "shell"
+cmd = "zsh"
+priority = "P1"
+audience = "both"
+tier = "system"
+desc = "Feature-rich shell; prerequisite for Oh-My-Zsh."
+[[tool.method]]
+kind = "dnf"
+package = "zsh"
+[[tool.method]]
+kind = "apt"
+package = "zsh"
+[[tool.method]]
+kind = "pacman"
+package = "zsh"
+[[tool.method]]
+kind = "brew"
+formula = "zsh"
+
+# Verified 2026-09-06: install.sh's non-TTY auto-detection sets RUNZSH=no /
+# CHSH=no / OVERWRITE_CONFIRMATION=no but leaves KEEP_ZSHRC at its unsafe
+# default no — OVERWRITE_CONFIRMATION=no means "skip the prompt and overwrite,"
+# not "don't overwrite" — so env sets all three explicitly. CHSH=no is also a
+# Bazzite correctness requirement (ublue-os/bazzite#4159 ties chsh-to-zsh to
+# KDE/SDDM login failures) — never relax it. This session's Tier-3 container
+# reproduction confirmed a pre-existing .zshrc survives byte-identical with no
+# backup, and a fresh-user .zshrc is created with an editable plugins=(...)
+# array — see 07-01-SUMMARY.md. detect_path short-circuits a second run to
+# ALREADY_INSTALLED, the same protection sdkman already relies on; re-check if
+# install.sh's version/logic changes materially. setup_ohmyzsh() hard-requires
+# git (command_exists git) and clones entirely via git — no non-git path —
+# which is why requires = ["zsh", "git"]. The unpinned master/HEAD URL matches
+# the already-accepted brew entry precedent (Homebrew/install/HEAD/install.sh).
+[[tool]]
+id = "oh-my-zsh"
+name = "Oh My Zsh"
+category = "shell"
+cmd = "omz"
+priority = "P2"
+audience = "both"
+tier = "system"
+requires = ["zsh", "git"]
+desc = "Zsh configuration framework; installs into ~/.oh-my-zsh and edits .zshrc, preserving it via KEEP_ZSHRC."
+[[tool.method]]
+kind = "script"
+url = "https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh"
+shell = "sh"
+env = { RUNZSH = "no", CHSH = "no", KEEP_ZSHRC = "yes" }
+detect_path = "~/.oh-my-zsh/oh-my-zsh.sh"
+
 [[tool]]
 id = "direnv"
 name = "direnv"
