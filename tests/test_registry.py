@@ -450,7 +450,10 @@ def test_download_tools_resolve_github_release_then_brew_on_macos() -> None:
 
 # GUI apps with no Linux install method yet (VS Code tar.gz / Sublime tarball
 # are a future batch). Every other tool must resolve on every platform.
-MACOS_ONLY = {"vscode", "sublime", "jetbrains-toolbox"}
+MACOS_ONLY = {"vscode", "sublime", "jetbrains-toolbox", "gnu-bash"}
+# Apple Containers: Homebrew itself requires macos>=26 and arch=arm64. Membership
+# means the tool cannot work on that platform+arch, not that packaging is inconvenient.
+MACOS_ARM64_ONLY = {"container"}
 # Membership means the tool provably cannot work on that platform+arch, not
 # that its packaging is inconvenient there.
 NO_LINUX_ARM64 = {"puppeteer"}
@@ -459,13 +462,24 @@ NO_LINUX_ARM64 = {"puppeteer"}
 def test_every_tool_resolves_at_least_one_method_on_each_platform() -> None:
     # A tool that resolves to nothing on a supported platform is silently
     # uninstallable there; this guards against an os/method misconfiguration.
+    # macOS fixtures carry a current-enough os_version so a min_os_version gate
+    # is evaluated on a capable Darwin, not fail-closed against os_version=None.
     tools = load_tools(REGISTRY)
     for platform_os in ("debian", "arch", "fedora", "macos"):
         for arch in ("amd64", "arm64"):
-            platform = Platform(os=platform_os, arch=arch, immutable=False, has_brew=True)
+            platform = Platform(
+                os=platform_os,
+                arch=arch,
+                immutable=False,
+                has_brew=True,
+                os_version="26.0" if platform_os == "macos" else None,
+            )
             allowed: set[str] = set()
             if platform_os != "macos":
                 allowed |= MACOS_ONLY
+                allowed |= MACOS_ARM64_ONLY
+            if platform_os == "macos" and arch != "arm64":
+                allowed |= MACOS_ARM64_ONLY
             if platform_os != "macos" and arch == "arm64":
                 allowed |= NO_LINUX_ARM64
             stranded = [
@@ -484,6 +498,22 @@ def test_macos_only_allowlist_stays_honest() -> None:
             assert resolve_methods(tools[tool_id], platform) == [], (
                 f"'{tool_id}' unexpectedly resolves on {platform_os}"
             )
+
+
+def test_macos_arm64_only_allowlist_stays_honest() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    for tool_id in sorted(MACOS_ARM64_ONLY):
+        assert tool_id in tools, f"MACOS_ARM64_ONLY entry '{tool_id}' is not in the registry"
+        intel = Platform(
+            os="macos", arch="amd64", immutable=False, has_brew=True, os_version="26.0"
+        )
+        assert resolve_methods(tools[tool_id], intel) == [], (
+            f"'{tool_id}' unexpectedly resolves on macos/amd64"
+        )
+        arm = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0")
+        assert resolve_methods(tools[tool_id], arm), (
+            f"'{tool_id}' must still resolve on macos/arm64"
+        )
 
 
 def test_no_linux_arm64_allowlist_stays_honest() -> None:
@@ -693,7 +723,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     # (ROADMAP Phases 7 and 8 both will) must update these counts in the same
     # commit that changes the catalog.
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
-        "system": 24,
+        "system": 26,
         "ai": 10,
         "user": 36,
     }
@@ -789,6 +819,73 @@ def test_zsh_entry_records_the_podman_pattern_reuse() -> None:
     window = "\n".join(lines[max(0, idx - 15) : idx])
     assert "podman" in window
     assert "5.9.2" in window
+
+
+def test_gnu_bash_avoids_system_bash_false_positive_via_detect_path() -> None:
+    gnu_bash = _tools_by_id()["gnu-bash"]
+    assert gnu_bash.cmd != "bash"
+    assert all(
+        method.kind == "brew" and method.params["formula"] == "bash" for method in gnu_bash.methods
+    )
+    by_arch = {method.arch: method for method in gnu_bash.methods}
+    assert by_arch[("arm64",)].params["detect_path"] == "/opt/homebrew/bin/bash"
+    assert by_arch[("amd64",)].params["detect_path"] == "/usr/local/bin/bash"
+
+
+def test_gnu_bash_only_resolves_on_macos() -> None:
+    gnu_bash = _tools_by_id()["gnu-bash"]
+    debian = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    assert resolve_methods(gnu_bash, debian) == []
+    methods = resolve_methods(gnu_bash, macos)
+    assert len(methods) == 1
+    assert methods[0].kind == "brew"
+
+
+def test_apple_containers_resolves_only_on_macos_arm64_with_a_new_enough_version() -> None:
+    container = _tools_by_id()["container"]
+    arm = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0")
+    intel = Platform(os="macos", arch="amd64", immutable=False, has_brew=True, os_version="26.0")
+    fedora = Platform(os="fedora", arch="arm64", immutable=False, has_brew=True, os_version=None)
+    assert [m.kind for m in resolve_methods(container, arm)] == ["brew"]
+    assert resolve_methods(container, intel) == []
+    assert resolve_methods(container, fedora) == []
+
+
+def test_apple_containers_blocks_a_too_old_macos_version() -> None:
+    container = _tools_by_id()["container"]
+    too_old = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="15.0")
+    unknown = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version=None)
+    assert resolve_methods(container, too_old) == []
+    assert resolve_methods(container, unknown) == []
+
+
+def test_apple_containers_always_appears_in_the_registry_regardless_of_platform() -> None:
+    assert "container" in {t.id for t in load_tools(REGISTRY)}
+
+
+def test_gnu_bash_entry_records_the_detection_fix() -> None:
+    lines = REGISTRY.read_text(encoding="utf-8").splitlines()
+    idx = next(i for i, line in enumerate(lines) if line == 'id = "gnu-bash"')
+    window = "\n".join(lines[max(0, idx - 50) : idx])
+    for needle in ("5.3.15", "DEFAULT_LOADABLE_BUILTINS_PATH", "sdkman"):
+        assert needle in window, f'missing {needle!r} above id = "gnu-bash"'
+
+
+def test_apple_containers_entry_records_the_disabled_state_resolution() -> None:
+    lines = REGISTRY.read_text(encoding="utf-8").splitlines()
+    idx = next(i for i, line in enumerate(lines) if line == 'id = "container"')
+    window = "\n".join(lines[max(0, idx - 50) : idx])
+    for needle in (
+        "NO_METHOD",
+        "macos",
+        "version",
+        "26",
+        "arm64",
+        "brew install container",
+        "min_os_version",
+    ):
+        assert needle in window, f'missing {needle!r} above id = "container"'
 
 
 def test_fresh_bazzite_without_brew_has_no_method_for_zsh_or_podman_yet() -> None:

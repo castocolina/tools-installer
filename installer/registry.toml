@@ -538,6 +538,51 @@ shell = "sh"
 env = { RUNZSH = "no", CHSH = "no", KEEP_ZSHRC = "yes" }
 detect_path = "~/.oh-my-zsh/oh-my-zsh.sh"
 
+# Verified 2026-09-06: the real Homebrew formula name is bash, not gnu-bash
+# (confirmed live, formulae.brew.sh/api/formula/bash.json, stable 5.3.15,
+# keg_only unset; the only caveat is DEFAULT_LOADABLE_BUILTINS_PATH — no
+# PATH-shadowing warning, because Homebrew's bash installs to its own prefix
+# (/opt/homebrew/bin/bash on Apple Silicon, /usr/local/bin/bash on Intel),
+# coexisting with macOS's SIP-protected /bin/bash rather than replacing it).
+# Detection design, load-bearing not stylistic: macOS ships /bin/bash
+# (ancient, always present) on every Mac; if cmd were the literal string
+# "bash", is_installed's unconditional shutil.which("bash") check would find
+# that system binary and report this entry ALREADY_INSTALLED on every Mac,
+# permanently, before Homebrew's build is ever installed — install_tool would
+# never even attempt brew install bash, on any machine, ever. cmd = "gnu-bash"
+# is a probe name no installer ever creates, so shutil.which correctly
+# returns None and is_installed falls through to each method's detect_path,
+# which checks Homebrew's real, absolute, prefix-specific install location —
+# the same two-step which()-then-detect_path mechanism sdkman's entry already
+# relies on for an analogous "the real command name is not reliably
+# which-able" reason, applied here to solve a same-named-binary collision
+# instead. Two brew methods are declared, split by arch, because
+# resolve_methods's arch gate must select only the one applicable install
+# method for THIS machine, while is_installed's detect_path loop (which does
+# not filter by arch) must still recognize either absolute path as a valid
+# "already installed" signal regardless of which method would resolve here.
+[[tool]]
+id = "gnu-bash"
+name = "GNU Bash"
+category = "shell"
+cmd = "gnu-bash"
+priority = "P2"
+audience = "both"
+tier = "system"
+desc = "Modern GNU Bash (5.x) installed alongside macOS's SIP-protected system bash 3.2, never replacing it."
+[[tool.method]]
+kind = "brew"
+formula = "bash"
+os = ["macos"]
+arch = ["arm64"]
+detect_path = "/opt/homebrew/bin/bash"
+[[tool.method]]
+kind = "brew"
+formula = "bash"
+os = ["macos"]
+arch = ["amd64"]
+detect_path = "/usr/local/bin/bash"
+
 [[tool]]
 id = "direnv"
 name = "direnv"
@@ -944,6 +989,44 @@ desc = "Runs container runtimes in a lightweight VM, giving macOS and Linux user
 [[tool.method]]
 kind = "brew"
 formula = "colima"
+
+# Verified 2026-09-06: this is a REAL install action, correcting
+# REQUIREMENTS.md's own speculative framing — confirmed live via
+# formulae.brew.sh/api/formula/container.json: a real formula named
+# container exists (homepage apple.github.io/container), with a declared
+# requirements array of {"name":"macos","version":"26"} and
+# {"name":"arch","version":"arm64"} — a present version-floor declaration,
+# not an absence; brew install container is the install action, not a
+# doc/version-gate no-op. Availability facts, now genuinely enforced: on any
+# non-macOS platform, an Intel Mac, OR now an Apple-Silicon Mac running a
+# macOS version below min_os_version = "26" (Platform.os_version plus
+# installer/resolve.py::_applies), resolve_methods returns an empty list for
+# this method and installer/engine.py::install_tool reports NO_METHOD on the
+# CLI/non-catalog install path — the exact same outcome every other
+# platform/arch-gated tool in this registry already produces (e.g. puppeteer
+# on Linux arm64, codegraph's Linux/macOS split), now also covering the
+# version case. This SAME resolve_methods result, via platform_could_support,
+# is also what the catalog UI uses so a browsing user sees this entry
+# disabled there too, per D-01. This closes the residual gap accepted in
+# cycle 1 and re-accepted (incorrectly) in the prior cycle-2 draft: a
+# too-old-macOS Apple-Silicon Mac now correctly resolves ZERO methods and is
+# shown unavailable, not merely documented as a known limitation. macOS 26
+# and arm64 are Homebrew's own formula requirements, mirrored here.
+[[tool]]
+id = "container"
+name = "Apple Containers"
+category = "docker"
+cmd = "container"
+priority = "P2"
+audience = "both"
+tier = "system"
+desc = "Apple's native container runtime; requires macOS 26+ and Apple Silicon, enforced by Homebrew's own formula requirements."
+[[tool.method]]
+kind = "brew"
+formula = "container"
+os = ["macos"]
+arch = ["arm64"]
+min_os_version = "26"
 
 [[tool]]
 id = "dive"

@@ -2,8 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from installer.model import Method, Tool
+from installer.model import Method, Tool, load_tools
 from installer.status import is_installed
+
+REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
 
 def _tool(cmd: str) -> Tool:
@@ -182,3 +184,39 @@ def test_detect_path_absent_is_not_installed(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(status.shutil, "which", which_none)
     missing = tmp_path / "sdkman-init.sh"
     assert is_installed(_detect_path_tool(str(missing))) is False
+
+
+def test_gnu_bash_status_is_not_fooled_by_macos_system_bash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import installer.status as status
+
+    def fake_which(cmd: str) -> str | None:
+        return "/bin/bash" if cmd == "bash" else None
+
+    monkeypatch.setattr(status.shutil, "which", fake_which)
+    gnu_bash = next(tool for tool in load_tools(REGISTRY) if tool.id == "gnu-bash")
+    swapped = tuple(
+        Method(
+            kind=method.kind,
+            params={
+                **method.params,
+                "detect_path": str(tmp_path / Path(str(method.params["detect_path"])).name),
+            },
+            os=method.os,
+            arch=method.arch,
+        )
+        for method in gnu_bash.methods
+    )
+    probed = Tool(
+        id=gnu_bash.id,
+        name=gnu_bash.name,
+        category=gnu_bash.category,
+        cmd=gnu_bash.cmd,
+        methods=swapped,
+        priority=gnu_bash.priority,
+        audience=gnu_bash.audience,
+        tier=gnu_bash.tier,
+        desc=gnu_bash.desc,
+    )
+    assert is_installed(probed) is False
