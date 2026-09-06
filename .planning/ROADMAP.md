@@ -285,7 +285,13 @@ Plans:
   4. Scheduled runs write an inspectable log, surfaced via the Policies detail panel for this one policy — no new top-level Diagnostics view.
   5. The policy's detail panel offers a time-of-day picker controlling the LaunchAgent's `StartCalendarInterval` hour/minute; recurrence itself remains fixed at daily.
 
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+
+- [ ] 11-01-PLAN.md — `installer/daemon.py` core mechanism: plist generation/parsing, real `launchctl bootstrap`/`bootout` round trip, the log-writing wrapper + truncation, the "decided" ownership marker (wave 1)
+- [ ] 11-02-PLAN.md — `Policy.hard_requires`/`log_path`/`set_schedule` fields, the `action_toggle_policy` gate fix, and the `daemon_policy` factory (wave 2, needs 11-01)
+- [ ] 11-03-PLAN.md — Policies detail-panel UI: "last run" line, log-view toggle, and the `TimePickerScreen` time-of-day picker (wave 3, needs 11-02)
+- [ ] 11-04-PLAN.md — `setup.py` composition-root wiring: macOS-only gating and on-by-default via `ensure_daemon_default`/`UnifiedApp.on_mount` (wave 4, needs 11-03)
 
 ### Phase 12: Version-Aware Status & Update Action
 
@@ -320,5 +326,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8. AI Tier Catalog Expansion & uv-tool Executor | 4/4 | Complete    | 2026-09-06 |
 | 9. Postinstall Hooks Mechanism | 2/2 | Complete    | 2026-09-06 |
 | 10. Agent CLI Ergonomics | 1/1 | Complete    | 2026-09-06 |
-| 11. Background Maintenance Daemon | 0/TBD | Not started | - |
+| 11. Background Maintenance Daemon | 0/4 | Not started | - |
 | 12. Version-Aware Status & Update Action | 0/TBD | Not started | - |
