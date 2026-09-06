@@ -156,6 +156,44 @@ with nothing in between. The Uninstall view is a separate case: it reads
 Policies view can change the answer while the screen is suspended (see the
 `enter_view` rule under rule 2).
 
+## Phase 9: postinstall hooks
+
+`Tool.postinstall: str | None` names a hook in
+`installer/postinstall.py::POSTINSTALL_HOOKS`, a closed, code-owned dispatch
+table mirroring the existing `smoke` param
+(`installer/model.py::POSTINSTALL_HOOK_NAMES` validates the name at load time
+exactly like `SMOKE_CHECK_NAMES`); the registry can never carry a literal
+postinstall command, only a hook NAME from a closed set, so a registry edit
+alone can never introduce arbitrary post-install execution — a deliberate
+departure from REQ-postinstall-field's literal "inline command string"
+framing, chosen because the one proving case (`codegraph`'s MCP registration)
+cannot be expressed as a static string: its `--target` value depends on which
+agent hosts are live on the machine at install time.
+
+`installer/engine.py::install_tool` dispatches a declared `postinstall` hook
+exactly once, immediately after the specific `Method` that just reported
+success, never on the `ALREADY_INSTALLED` early-return path — the structural
+reason D-01's "single-direction trigger, no re-trigger on a later unrelated
+event" is a property of the code, not a guard that could rot. A hook's
+failure is carried on `InstallOutcome.postinstall_warning` and never turns a
+successful install into a failed one.
+
+Idempotency is a live check only (`status.is_installed`, `guard_status`,
+`has_managed_block`'s existing convention): `codegraph`'s own hook calls
+`installer.status.is_installed` directly on the four agent-host catalog
+`Tool` objects (threaded through via `install_tool`'s `tools` parameter,
+never a hook-local `shutil.which` re-implementation of that seam), mapping
+`cursor-agent` to codegraph's own `cursor` target id — a real, live-verified
+id mismatch, not a naming choice — and NEVER passes `--target auto`, because
+codegraph's own `--target auto` resolution silently falls back to
+registering `claude` when it detects zero installed hosts.
+
+The dispatch call is Method-aware (receives the succeeded `Method`) and
+isolated in its own `try/except Exception` at the call site, structurally
+separate from the method ladder's own exception handling, so an unexpected
+hook exception can never be misattributed to the method's own execution or
+turn a completed install into `FAILED`.
+
 ## Registry-authoring guidelines
 
 ### Per-tool, per-OS verification checklist
