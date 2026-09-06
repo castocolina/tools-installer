@@ -1503,6 +1503,67 @@ desc = "Turns a codebase (plus docs, SQL schemas, configs, PDFs) into a queryabl
 kind = "uv-tool"
 pypi_pkg = "graphifyy"
 
+# Verified 2026-09-06: confirmed live via api.github.com/repos/rtk-ai/rtk/
+# releases/latest (tag v0.48.0 at research time) and by downloading and
+# reading checksums.txt directly -- the standard multi-line <hash>  <filename>
+# format this project's installer/checksums.py already parses, listing every
+# published asset. Upstream publishes a musl (static) build for amd64
+# (rtk-x86_64-unknown-linux-musl.tar.gz) but a gnu (dynamically-linked) build
+# for arm64 (rtk-aarch64-unknown-linux-gnu.tar.gz) -- a single unscoped asset
+# template would 404 on one architecture, hence two arch-gated Linux
+# methods. Each Linux tarball's top level is a bare rtk binary with no
+# wrapping directory (confirmed by downloading and running tar -tzf on all
+# three tarballs this session -- x86_64-musl, aarch64-gnu, and
+# x86_64-apple-darwin), hence member = "rtk", strip = 0 on every method --
+# no {ver} placeholder is needed in the asset names (upstream's own
+# convention omits it). The default branch is develop, not main --
+# informational only, since this project's own tag resolution always uses
+# the GitHub Releases API's "latest" endpoint, never a branch checkout. A
+# genuine Homebrew formula rtk (bare name, homebrew-core) was confirmed live
+# via formulae.brew.sh/api/formula/rtk.json to be the SAME upstream project
+# -- matching homepage, description, and the exact version 0.48.0, not a
+# name collision -- added here as a fallback AFTER the locked
+# github_release method, per this registry's dominant convention; it does
+# not replace REQ-rtk-github-release's checksum-verified mandate.
+[[tool]]
+id = "rtk"
+name = "RTK (Rust Token Killer)"
+category = "dev"
+cmd = "rtk"
+priority = "P1"
+audience = "ai"
+tier = "ai"
+desc = "CLI proxy that rewrites/compresses common dev-command output to cut LLM-visible token usage 60-90%."
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "rtk-ai/rtk"
+asset = "rtk-{arch.machine}-apple-darwin.tar.gz"
+checksum = "checksums.txt"
+member = "rtk"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+arch = ["amd64"]
+repo = "rtk-ai/rtk"
+asset = "rtk-{arch.machine}-unknown-linux-musl.tar.gz"
+checksum = "checksums.txt"
+member = "rtk"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+arch = ["arm64"]
+repo = "rtk-ai/rtk"
+asset = "rtk-{arch.machine}-unknown-linux-gnu.tar.gz"
+checksum = "checksums.txt"
+member = "rtk"
+strip = 0
+[[tool.method]]
+kind = "brew"
+formula = "rtk"
+
 [[tool]]
 id = "deno"
 name = "Deno"

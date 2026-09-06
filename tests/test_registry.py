@@ -55,6 +55,7 @@ def test_registry_includes_requested_installable_entries() -> None:
         "volta",
         "codegraph",
         "graphify",
+        "rtk",
         "cursor-agent",
         "antigravity",
         "zsh",
@@ -735,6 +736,67 @@ def test_cursor_agent_and_antigravity_entries_record_the_verification_findings()
         assert needle in window_ag, f"missing {needle!r} in antigravity's comment"
 
 
+def test_rtk_installs_via_checksum_verified_github_release_with_brew_fallback() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    rtk = tools["rtk"]
+    assert rtk.name == "RTK (Rust Token Killer)"
+    assert rtk.category == "dev"
+    assert rtk.cmd == "rtk"
+    assert rtk.priority == "P1"
+    assert rtk.audience == "ai"
+    assert rtk.tier == "ai"
+    assert rtk.recommends == ()
+    kinds = [m.kind for m in rtk.methods]
+    assert kinds == ["github_release", "github_release", "github_release", "brew"]
+    for method in rtk.methods:
+        if method.kind == "github_release":
+            assert method.params["repo"] == "rtk-ai/rtk"
+            assert method.params["checksum"] == "checksums.txt"
+            assert method.params["member"] == "rtk"
+            assert method.params["strip"] == 0
+    brew_method = next(m for m in rtk.methods if m.kind == "brew")
+    assert brew_method.params["formula"] == "rtk"
+    assert brew_method.os == ()
+
+
+def test_rtk_linux_methods_are_arch_gated_by_the_real_musl_gnu_asset_split() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    rtk = tools["rtk"]
+    for os_name in ("debian", "arch", "fedora"):
+        amd64 = Platform(os=os_name, arch="amd64", immutable=False, has_brew=True)
+        amd64_resolved = resolve_methods(rtk, amd64)
+        assert [m.kind for m in amd64_resolved] == ["github_release", "brew"]
+        assert amd64_resolved[0].params["asset"] == "rtk-{arch.machine}-unknown-linux-musl.tar.gz"
+
+        arm64 = Platform(os=os_name, arch="arm64", immutable=False, has_brew=True)
+        arm64_resolved = resolve_methods(rtk, arm64)
+        assert [m.kind for m in arm64_resolved] == ["github_release", "brew"]
+        assert arm64_resolved[0].params["asset"] == "rtk-{arch.machine}-unknown-linux-gnu.tar.gz"
+
+
+def test_rtk_macos_method_is_arch_unrestricted() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    rtk = tools["rtk"]
+    for arch in ("amd64", "arm64"):
+        platform = Platform(os="macos", arch=arch, immutable=False, has_brew=True)
+        assert [m.kind for m in resolve_methods(rtk, platform)] == ["github_release", "brew"]
+
+
+def test_rtk_resolves_via_download_and_brew_even_on_immutable_linux() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    rtk = tools["rtk"]
+    platform = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+    assert [m.kind for m in resolve_methods(rtk, platform)] == ["github_release", "brew"]
+
+
+def test_rtk_entry_records_the_musl_gnu_split_and_brew_confirmation() -> None:
+    text = REGISTRY.read_text()
+    idx = text.index('id = "rtk"')
+    window = text[max(0, idx - 2000) : idx]
+    for needle in ("checksums.txt", "musl", "gnu", "develop", "formulae.brew.sh", "0.48.0"):
+        assert needle in window, f"missing {needle!r} in rtk's comment"
+
+
 def test_no_chrome_headless_shell_catalog_entry() -> None:
     ids = {tool.id for tool in load_tools(REGISTRY)}
     assert "chrome-headless-shell" not in ids
@@ -851,7 +913,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     # commit that changes the catalog.
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 26,
-        "ai": 13,
+        "ai": 14,
         "user": 38,
     }
 
@@ -1262,6 +1324,7 @@ CHECKSUM_FILE_VERIFIED = {
     "gitleaks",
     "vale",
     "duf",
+    "rtk",
 }
 
 
