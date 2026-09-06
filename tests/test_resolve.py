@@ -1,6 +1,6 @@
 from installer.model import Method, Tool
 from installer.platform import Platform
-from installer.resolve import resolve_methods
+from installer.resolve import platform_could_support, resolve_methods
 
 
 def _tool(*kinds: str) -> Tool:
@@ -148,3 +148,70 @@ def test_sdkman_applies_on_every_platform_including_immutable():
         for immutable in (False, True):
             platform = Platform(os=os_name, arch="amd64", immutable=immutable, has_brew=False)
             assert [m.kind for m in resolve_methods(_tool("sdkman"), platform)] == ["sdkman"]
+
+
+def _macos_arm64_min_26_tool() -> Tool:
+    return Tool(
+        id="t",
+        name="t",
+        category="c",
+        cmd="t",
+        methods=(
+            Method(
+                kind="brew",
+                params={"formula": "x", "min_os_version": "26"},
+                os=("macos",),
+                arch=("arm64",),
+            ),
+        ),
+    )
+
+
+def test_min_os_version_gate_blocks_a_too_old_macos() -> None:
+    tool = _macos_arm64_min_26_tool()
+    method = tool.methods[0]
+    assert resolve_methods(
+        tool, Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0")
+    ) == [method]
+    assert resolve_methods(
+        tool, Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="27.1")
+    ) == [method]
+    assert (
+        resolve_methods(
+            tool,
+            Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="15.0"),
+        )
+        == []
+    )
+    assert (
+        resolve_methods(
+            tool,
+            Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version=None),
+        )
+        == []
+    )
+
+
+def test_platform_could_support_ignores_missing_brew_but_not_wrong_platform() -> None:
+    tool = _macos_arm64_min_26_tool()
+    assert (
+        platform_could_support(
+            tool,
+            Platform(os="macos", arch="arm64", immutable=False, has_brew=False, os_version="26.0"),
+        )
+        is True
+    )
+    assert (
+        platform_could_support(
+            tool,
+            Platform(os="debian", arch="amd64", immutable=False, has_brew=True, os_version=None),
+        )
+        is False
+    )
+    assert (
+        platform_could_support(
+            tool,
+            Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="15.0"),
+        )
+        is False
+    )

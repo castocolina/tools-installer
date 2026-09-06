@@ -72,3 +72,33 @@ def test_detect_uses_live_probes(monkeypatch: pytest.MonkeyPatch):
     assert result.arch == "amd64"
     assert result.has_brew is True
     assert result.immutable is False
+    assert result.os_version is None
+
+
+def test_detect_reads_macos_version_on_darwin(monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.platform as plat
+
+    def fake_which(cmd: str) -> str | None:
+        return "/opt/homebrew/bin/brew" if cmd == "brew" else None
+
+    monkeypatch.setattr(plat.stdlib_platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(plat.stdlib_platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(plat.stdlib_platform, "mac_ver", lambda: ("26.0.1", ("", "", ""), "arm64"))
+    monkeypatch.setattr(plat.shutil, "which", fake_which)
+    monkeypatch.setattr(plat, "detect_immutable", lambda: False)
+
+    assert detect().os_version == "26.0.1"
+
+
+def test_detect_leaves_os_version_none_off_darwin(monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.platform as plat
+
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/x" if cmd in ("dnf", "brew") else None
+
+    monkeypatch.setattr(plat.stdlib_platform, "system", lambda: "Linux")
+    monkeypatch.setattr(plat.stdlib_platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(plat.shutil, "which", fake_which)
+    monkeypatch.setattr(plat, "detect_immutable", lambda: False)
+
+    assert detect().os_version is None

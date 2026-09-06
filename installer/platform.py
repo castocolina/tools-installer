@@ -22,6 +22,10 @@ class Platform:
     arch: str  # "amd64" | "arm64" | raw machine string
     immutable: bool  # atomic/ostree filesystem (Bazzite, Silverblue)
     has_brew: bool
+    # Raw major[.minor[.patch]] string (e.g. "26.0.1"), populated only on Darwin.
+    # Sole consumer: a method's optional min_os_version gate in resolve._applies.
+    # Comparison is installer.versions.meets_minimum; this module does no parsing.
+    os_version: str | None = None
 
 
 def normalize_arch(machine: str) -> str:
@@ -56,9 +60,11 @@ def detect() -> Platform:
     def available(cmd: str) -> bool:
         return shutil.which(cmd) is not None
 
+    system = stdlib_platform.system()
     return Platform(
-        os=detect_os(stdlib_platform.system(), available),
+        os=detect_os(system, available),
         arch=normalize_arch(stdlib_platform.machine()),
         immutable=detect_immutable(),
         has_brew=available("brew"),
+        os_version=(stdlib_platform.mac_ver()[0] or None) if system == "Darwin" else None,
     )
