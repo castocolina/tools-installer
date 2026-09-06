@@ -116,9 +116,26 @@ def test_meets_minimum_is_fail_closed_on_either_side() -> None:
 
 
 def test_pnpm_floors_match_documented_feature_versions() -> None:
-    assert PNPM_CO_INSTALL_MIN == "11.0.0"
+    assert PNPM_CO_INSTALL_MIN == "11.1.0"
     assert PNPM_ALLOW_BUILD_MIN == "10.4.0"
     assert callable(probe_version)
+
+
+def test_co_install_floor_rejects_every_pnpm_11_0_patch() -> None:
+    """11.0.x has the hash-keyed global layout but not the shared install group.
+
+    The floor was 11.0.0, so a machine on 11.0.x passed the preflight and then
+    ran a comma spec pnpm does not group — the exact silent misbehaviour the
+    preflight is there to refuse.
+    """
+    assert meets_minimum("11.0.0", PNPM_CO_INSTALL_MIN) is False
+    assert meets_minimum("11.0.9", PNPM_CO_INSTALL_MIN) is False
+
+
+def test_co_install_floor_accepts_the_first_version_with_the_feature() -> None:
+    assert meets_minimum("11.1.0", PNPM_CO_INSTALL_MIN) is True
+    assert meets_minimum("11.9.0", PNPM_CO_INSTALL_MIN) is True
+    assert meets_minimum("12.0.0", PNPM_CO_INSTALL_MIN) is True
 
 
 def test_probe_version_returns_first_nonempty_line(monkeypatch: pytest.MonkeyPatch) -> None:

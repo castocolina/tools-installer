@@ -579,7 +579,27 @@ def test_reinstall_node_globals_refuses_grouped_form_on_old_pnpm(
 ) -> None:
     monkeypatch.setattr(pnpm_globals, "probe_version", _const_probe("10.9.0"))
     calls: list[list[str]] = []
-    with pytest.raises(PnpmUnavailable, match=r"(?s)(?=.*10[.]9[.]0)(?=.*11[.]0[.]0)"):
+    with pytest.raises(PnpmUnavailable, match=r"(?s)(?=.*10[.]9[.]0)(?=.*11[.]1[.]0)"):
+        reinstall_node_globals(
+            [MMDC_NPM, "puppeteer"],
+            runner=calls.append,
+            resolve_pnpm=lambda: "/x/pnpm",
+            policy=_EXPLICIT_POLICY,
+        )
+    assert calls == []
+
+
+def test_reinstall_node_globals_refuses_grouped_form_on_pnpm_11_0(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The replay's floor is the same constant, so it moved to 11.1 with it.
+
+    pnpm 11.0.x accepts `a,b` and does not group it, so the `r` action would
+    have reported a repair it did not perform.
+    """
+    monkeypatch.setattr(pnpm_globals, "probe_version", _const_probe("11.0.9"))
+    calls: list[list[str]] = []
+    with pytest.raises(PnpmUnavailable, match=r"(?s)(?=.*11[.]0[.]9)(?=.*11[.]1[.]0)"):
         reinstall_node_globals(
             [MMDC_NPM, "puppeteer"],
             runner=calls.append,

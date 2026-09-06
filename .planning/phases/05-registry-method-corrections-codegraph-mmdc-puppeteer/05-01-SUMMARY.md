@@ -391,7 +391,10 @@ This is the real-world proof that Task 4's post-install check fires on the exact
 - versions+allow_build: `[pnpm, add, -g, --allow-build=puppeteer, puppeteer@^25]`
 - all three: `[pnpm, add, -g, --allow-build=puppeteer, "@mermaid-js/mermaid-cli,puppeteer@^25"]`
 
-Floors: `PNPM_CO_INSTALL_MIN=11.0.0` (pnpm Global Packages v11 redesign), `PNPM_ALLOW_BUILD_MIN=10.4.0` (`--allow-build` added in 10.4.0). `parse_declared_version("22.bad")` is `None`, so `min_node = "22.bad"` is a load-time config error. `SMOKE_CHECK_NAMES = frozenset({"puppeteer-browser"})` lives in `installer/model.py`; `SMOKE_CHECKS` in `installer/executors.py` is keyed by exactly those names.
+Floors: `PNPM_CO_INSTALL_MIN=11.1.0`, `PNPM_ALLOW_BUILD_MIN=10.4.0` (`--allow-build` added in 10.4.0).
+
+> **Correction (second-pass review, finding H3).** This task shipped `PNPM_CO_INSTALL_MIN=11.0.0`, citing the pnpm Global Packages v11 redesign. That is the wrong version: 11.0 introduced the hash-keyed global layout, and the shared-install-group semantics for a comma-separated spec — the mechanism this phase actually depends on — arrived in 11.1. A pnpm 11.0.x machine therefore passed the preflight without the feature behind it. The constant is now `11.1.0`; see `installer/versions.py`.
+ `parse_declared_version("22.bad")` is `None`, so `min_node = "22.bad"` is a load-time config error. `SMOKE_CHECK_NAMES = frozenset({"puppeteer-browser"})` lives in `installer/model.py`; `SMOKE_CHECKS` in `installer/executors.py` is keyed by exactly those names.
 
 ## Self-Check: PASSED
 

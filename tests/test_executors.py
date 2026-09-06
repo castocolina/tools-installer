@@ -427,12 +427,46 @@ def test_node_co_install_refuses_pnpm_10(tmp_path: Path, monkeypatch: pytest.Mon
         _pnpm_or_node_probe(str(pnpm), "10.9.0", "v24.4.0"),
     )
     calls: list[list[str]] = []
-    with pytest.raises(ExecutorError, match="(?s)(?=.*10[.]9[.]0)(?=.*11[.]0[.]0)"):
+    with pytest.raises(ExecutorError, match="(?s)(?=.*10[.]9[.]0)(?=.*11[.]1[.]0)"):
         execute(
             Method(kind="node", params={"npm_pkg": "a", "co_install": ["b"]}),
             calls.append,
         )
     assert calls == []
+
+
+def test_node_co_install_refuses_pnpm_11_0(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """11.0.x accepts the comma spec and does not form a shared install group.
+
+    The grouping semantics arrived in 11.1, so this is the machine a floor of
+    11.0.0 waved through into an install that silently leaves the dependent
+    unable to resolve its peer.
+    """
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        executors,
+        "probe_version",
+        _pnpm_or_node_probe(str(pnpm), "11.0.9", "v24.4.0"),
+    )
+    calls: list[list[str]] = []
+    with pytest.raises(ExecutorError, match="(?s)(?=.*11[.]0[.]9)(?=.*11[.]1[.]0)"):
+        execute(
+            Method(kind="node", params={"npm_pkg": "a", "co_install": ["b"]}),
+            calls.append,
+        )
+    assert calls == []
+
+
+def test_node_co_install_accepts_pnpm_11_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        executors,
+        "probe_version",
+        _pnpm_or_node_probe(str(pnpm), "11.1.0", "v24.4.0"),
+    )
+    calls: list[list[str]] = []
+    execute(Method(kind="node", params={"npm_pkg": "a", "co_install": ["b"]}), calls.append)
+    assert calls == [[str(pnpm), "add", "-g", "a,b"]]
 
 
 def test_node_allow_build_floor_is_10_4(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -491,7 +525,7 @@ def test_node_unreadable_version_is_fail_closed(
     _plant_pnpm(tmp_path, monkeypatch)
     monkeypatch.setattr(executors, "probe_version", _const_probe(None))
     calls: list[list[str]] = []
-    with pytest.raises(ExecutorError, match="11.0.0"):
+    with pytest.raises(ExecutorError, match="11.1.0"):
         execute(
             Method(kind="node", params={"npm_pkg": "a", "co_install": ["b"]}),
             calls.append,

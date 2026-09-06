@@ -84,10 +84,19 @@ def meets_minimum(observed: str, minimum: str) -> bool:
 # (see installer.run.run_output).
 PROBE_VERSION_TIMEOUT = 5.0
 
-# The comma-joined group is part of the v11 global-package redesign, so on
-# pnpm 10 the same string is not a group — it is one package name containing
-# a comma (pnpm Global Packages documentation).
-PNPM_CO_INSTALL_MIN = "11.0.0"
+# The comma-joined group is what makes `pnpm add -g a,b` install BOTH packages
+# into ONE shared install group, which is the entire mechanism this project
+# relies on to let a dependent resolve its peer. pnpm shipped that grouping in
+# 11.1, NOT in the 11.0 global redesign — 11.0 introduced the hash-keyed global
+# layout, and the shared-install-group semantics for a comma-separated spec
+# arrived in the 11.1 release. On pnpm 10 the same string is not a group at all:
+# it is one package name containing a comma.
+#
+# The floor is therefore the version that HAS the feature, not the major it
+# arrived in. A floor of 11.0.0 let a pnpm 11.0.x machine pass this preflight
+# while lacking the grouping semantics behind it, which is precisely the silent
+# misbehaviour `meets_minimum`'s fail-closed contract exists to prevent.
+PNPM_CO_INSTALL_MIN = "11.1.0"
 
 # --allow-build was added in pnpm 10.4.0 (pnpm add documentation); on anything
 # older the flag is an unknown option.
