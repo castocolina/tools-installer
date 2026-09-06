@@ -224,3 +224,61 @@ calibration note; (2) the production-wiring test would not catch a regression to
 Homebrew-conflating expression; (3) browse-time and install-time availability can still
 disagree when Homebrew is missing; (4) the WezTerm Tier-3 AppImage test assumes Docker can
 run an AppImage directly without FUSE.
+
+## Cycle 3 direct-fix disposition (ONESHOT-RULES Rule 10, max cycles reached)
+
+Cycle 3's final `CYCLE_SUMMARY` (`current_high=2 current_actionable=9`) did not converge to
+zero within the 3-cycle cap, so per Rule 10 the orchestrator applied fixes directly rather
+than spawning a 4th planner cycle. Disposition:
+
+**HIGH #1** (07-02's `tests/test_setup.py` fixture could not distinguish the fixed
+`platform_could_support` expression from the pre-cycle-2 buggy `not resolve_methods(...)`
+one) — **fixed**: added a second, genuinely-differentiating `has_brew=False` fixture
+alongside the original wrong-OS one.
+
+**HIGH #2** (07-03's WezTerm Tier-3 AppImage verification would fail in a plain
+`python:3.13-slim` container with no FUSE) — **fixed**: split verification into a hard
+download/checksum gate plus a separately-classified `APPIMAGE_EXTRACT_AND_RUN=1` launch
+attempt, explicitly reclassifying a FUSE-unavailability failure as a known
+container-environment limitation, not a Rule 9 destructive anomaly.
+
+**MEDIUM** (browse-time vs. install-time `has_brew` snapshot disagreement) — **fixed** via
+new threat-register entry T-07-13 in `07-02-PLAN.md`: accepted as a pre-existing,
+out-of-scope contract this phase does not change.
+
+**MEDIUM** (`min_os_version` key-spelling not validated at registry-load time) — **fixed**
+via new threat-register entry T-07-14 in `07-02-PLAN.md`: accepted, covered by the existing
+Phase 6 registry-authoring verification checklist; a dedicated schema-validation pass is
+noted as future-phase follow-up.
+
+**MEDIUM** (07-01's two-run bootstrap on a truly fresh, brew-less Bazzite machine sits in
+tension with `PROJECT.md:12`'s "no manual ordering" value) — **fixed** via new
+threat-register entry T-07-15 in `07-01-PLAN.md`: accepted — this is the same generic,
+pre-existing limitation `tests/test_resolve.py::test_immutable_no_brew_native_only_returns_empty`
+already documents for every brew-dependent tool on immutable Linux, not something this phase
+introduces; a real fix (auto-chaining a second pass after Homebrew bootstraps, or mid-run
+`has_brew` refresh) is engine-level work for a future phase, not a Phase 7 catalog change.
+
+**Remaining LOW-severity findings — accepted as documented residuals, not individually
+patched** (consistent with this session's established practice: only Critical/High findings
+require a fix-or-explicit-deferral before proceeding; Low-severity polish items that don't
+change behavior or close a real gap are logged here instead of expanding scope further):
+- 07-01: registry-comment guard tests are coupled to exact substrings, making them brittle
+  to future prose edits — acceptable, since `tests/test_registry.py`'s existing pattern
+  (Phase 6) already accepts this tradeoff for the same reason (locality + presence over
+  paraphrase-tolerance).
+- 07-02: a non-Darwin platform-detection test's monkeypatch scope is narrower than
+  `tests/test_platform.py:58`'s fuller pattern — cosmetic test-hygiene gap, not a coverage
+  gap (the assertion itself is still correct).
+- 07-02: `cmd="gnu-bash"` naming leaves a naming-debt trail — explicitly flagged in-plan for
+  Phase 12 cleanup, not fixed now to avoid scope creep into unrelated registry ids.
+- 07-03: the executor-time conditional arm64 release-matrix check makes the final registry
+  shape resolve nondeterministically at install time rather than being pinned at
+  registry-authoring time — accepted, since the alternative (hardcoding a specific WezTerm
+  release asset name) would go stale faster than a live per-run check.
+- 07-03: registry comments remain narratively verbose rather than terse Phase-6-style
+  verified facts — cosmetic, does not affect correctness or the guard tests' assertions.
+
+All three Phase 7 plans re-verified for structural sanity (task-block counts,
+`cross_ai: true` frontmatter, matched `<threat_model>` tags) after these direct edits.
+Proceeding to cross-AI execution per the established pattern.
