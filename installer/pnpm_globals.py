@@ -465,16 +465,52 @@ def _render_spec(name: str, versions: dict[str, str]) -> str:
     return f"{name}@{pinned}" if pinned is not None else name
 
 
+def _formed_groups(policy: NodeInstallPolicy, present: set[str]) -> tuple[tuple[str, ...], ...]:
+    """Declared groups this replay is entitled to (re)form.
+
+    A group is formed when its FIRST member is in pnpm's live set. That member
+    is the catalog tool's own `npm_pkg` (`node_install_policy` builds a group as
+    `(npm_pkg, *co_install)`), so its presence is the only provenance signal
+    this module has: pnpm's flat name list carries none, and the catalog is
+    what puts that dependent on a machine.
+
+    A PEER on its own is not that signal — it is the hand-install shape. Gating
+    on live presence instead re-asserted the registry's `--allow-build` for a
+    `puppeteer` this installer never touched, and pnpm's own `add`
+    documentation records that flag as writing the package into pnpm's build
+    allowance configuration, so the package "will always be allowed to run its
+    scripts in the future". That is a persistent, package-level,
+    version-unbounded grant created by an action labelled "reinstall the
+    pnpm-managed global set", on a machine whose user had chosen the opposite
+    by never passing the flag. The version pin rode the same predicate and
+    moved a hand-held package across a major line.
+
+    RESIDUAL, accepted and bounded: a hand-installed DEPENDENT still lets the
+    replay grant its declared peer. Three things bound it — the allowance names
+    only a package this same invocation installs, into the group it is forming
+    (T-05-09's load-time rule keeps an allowance inside its own install group);
+    the Doctor has already told the user that group is split or incomplete, by
+    name; and the argv carrying the flag is the preview they pressed `r` on.
+    A machine that has NEITHER member is untouched, which is the population
+    CR-01 was about.
+    """
+    return tuple(group for group in policy.groups if group and group[0] in present)
+
+
 def _reinstall_parts(
     packages: Sequence[str], policy: NodeInstallPolicy
 ) -> tuple[list[str], list[str]]:
     unique = list(dict.fromkeys(packages))
     present = set(unique)
     versions = dict(policy.versions)
+    formed = _formed_groups(policy, present)
     owner: dict[str, tuple[str, ...]] = {}
-    for group in policy.groups:
+    for group in formed:
         for member in group:
             owner.setdefault(member, group)
+    # Pins and allowances are group-scoped authority, not name-scoped: both
+    # apply only to a member of a group this invocation is forming.
+    granted = {name for group in formed for name in group}
     consumed: set[str] = set()
     specs: list[str] = []
     for package in unique:
@@ -482,7 +518,7 @@ def _reinstall_parts(
             continue
         group = owner.get(package)
         if group is None:
-            specs.append(_render_spec(package, versions))
+            specs.append(package)
             consumed.add(package)
             continue
         # Comma versus space is not formatting: space-separated packages in one
@@ -493,7 +529,7 @@ def _reinstall_parts(
         specs.append(",".join(_render_spec(name, versions) for name in members))
         consumed.update(members)
     flags = [
-        f"--allow-build={name}" for name in dict.fromkeys(policy.allow_build) if name in present
+        f"--allow-build={name}" for name in dict.fromkeys(policy.allow_build) if name in granted
     ]
     return flags, specs
 

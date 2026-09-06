@@ -1830,6 +1830,11 @@ versions = { puppeteer = "^25" }
 # nothing. What does bound the grant: it names exactly one package and plan
 # 05-01's load-time rule forbids an allowance for any package outside the
 # invocation's own install group, so it can never become a blanket allowance;
+# the Doctor's reinstall replay emits it only for a member of a declared group
+# it is actually forming — a live `puppeteer` with no `@mermaid-js/mermaid-cli`
+# beside it is the hand-install shape, and the replay grants it nothing, so
+# pressing `r` to repair other globals cannot create this grant on a machine
+# that never had it (installer/pnpm_globals.py::_formed_groups);
 # it does nothing until that package is installed again; its identity was
 # checked against the canonical upstream repository before it was created
 # (plan 05-03 Task 1); and it is revocable. Revocation: remove the package's

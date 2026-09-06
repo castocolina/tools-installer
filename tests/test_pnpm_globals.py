@@ -481,12 +481,19 @@ def test_reinstall_argv_keeps_ungrouped_packages_as_their_own_elements() -> None
     assert "typescript" not in f"{MMDC_NPM},puppeteer@^25"
 
 
-def test_reinstall_argv_partial_group_replays_only_what_is_present() -> None:
+def test_reinstall_argv_never_forms_a_group_from_the_peer_alone() -> None:
+    """A live peer with no dependent beside it is not a group to (re)form.
+
+    It is the hand-install shape, so nothing about it may be pinned, grouped or
+    build-allowed — the replay puts back the bare name pnpm reported.
+    """
     argv = reinstall_argv(["puppeteer", "typescript"], pnpm="/x/pnpm", policy=_EXPLICIT_POLICY)
     joined = " ".join(argv)
     assert "mermaid" not in joined
+    assert "allow-build" not in joined
+    assert "@^25" not in joined
     assert "typescript" in argv
-    assert "puppeteer@^25" in argv
+    assert "puppeteer" in argv
     assert not any("," in item for item in argv)
 
 
@@ -585,7 +592,16 @@ def test_reinstall_node_globals_refuses_grouped_form_on_old_pnpm(
 def test_reinstall_node_globals_allow_build_only_uses_allow_build_floor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    policy = NodeInstallPolicy(allow_build=("puppeteer",), versions=(("puppeteer", "^25"),))
+    # A one-member group: the only policy shape that emits an allowance without
+    # also emitting a comma, and therefore the only one the --allow-build floor
+    # applies to on its own. The shipped registry cannot produce it —
+    # node_install_policy declares a group only when `co_install` is non-empty —
+    # so it is built by hand here rather than borrowed from the catalog.
+    policy = NodeInstallPolicy(
+        groups=(("puppeteer",),),
+        allow_build=("puppeteer",),
+        versions=(("puppeteer", "^25"),),
+    )
     monkeypatch.setattr(pnpm_globals, "probe_version", _const_probe("10.3.0"))
     calls: list[list[str]] = []
     with pytest.raises(PnpmUnavailable, match=r"(?s)(?=.*10[.]3[.]0)(?=.*10[.]4[.]0)"):
@@ -854,3 +870,51 @@ def test_a_single_unreadable_member_suppresses_the_whole_group_verdict() -> None
         unknown=("puppeteer",),
     )
     assert split_install_groups(_EXPLICIT_POLICY, live) == ()
+
+
+def test_replay_grants_no_build_allowance_to_a_lone_hand_installed_peer() -> None:
+    """`--allow-build` is a PERSISTENT, package-level grant (pnpm `add` docs).
+
+    A live `puppeteer` with no `@mermaid-js/mermaid-cli` beside it is the
+    hand-install shape: pnpm's default-deny gate blocked its postinstall, which
+    is what the user chose by not passing the flag. Deriving the grant from
+    pnpm's live set re-asserted it anyway, so pressing `r` to repair OTHER
+    globals created a script-execution grant on a machine that never had one —
+    and moved a deliberately held version across a major line with it.
+    """
+    policy = node_install_policy(load_tools(REGISTRY))
+    argv = reinstall_argv(["puppeteer", "typescript"], pnpm="/x/pnpm", policy=policy)
+    assert argv == ["/x/pnpm", "add", "-g", "puppeteer", "typescript"]
+
+
+def test_replay_still_grants_and_pins_when_the_declared_group_is_being_formed() -> None:
+    policy = node_install_policy(load_tools(REGISTRY))
+    argv = reinstall_argv([MMDC_NPM, "puppeteer"], pnpm="/x/pnpm", policy=policy)
+    assert argv == [
+        "/x/pnpm",
+        "add",
+        "-g",
+        "--allow-build=puppeteer",
+        f"{MMDC_NPM},puppeteer@^25",
+    ]
+
+
+def test_replay_does_not_pin_an_ungrouped_package_either(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-pinning is the same overreach as re-granting, minus the security half.
+
+    A user holding a hand-installed package at a version the registry does not
+    name must not be moved by an action labelled "reinstall the pnpm-managed
+    global set".
+    """
+    monkeypatch.setattr(pnpm_globals, "probe_version", _const_probe("11.9.0"))
+    calls: list[list[str]] = []
+    got = reinstall_node_globals(
+        ["puppeteer"],
+        runner=calls.append,
+        resolve_pnpm=lambda: "/x/pnpm",
+        policy=_EXPLICIT_POLICY,
+    )
+    assert got == ("puppeteer",)
+    assert calls == [["/x/pnpm", "add", "-g", "puppeteer"]]
