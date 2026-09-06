@@ -690,7 +690,7 @@ def test_cursor_agent_uses_the_legacy_collision_safe_cmd_name() -> None:
     assert cursor_agent.priority == "P0"
     assert cursor_agent.audience == "human"
     assert cursor_agent.tier == "ai"
-    assert cursor_agent.recommends == ()
+    assert cursor_agent.recommends == ("codegraph", "graphify", "rtk")
     assert len(cursor_agent.methods) == 1
     assert cursor_agent.methods[0].kind == "script"
     assert cursor_agent.methods[0].params["url"] == "https://cursor.com/install"
@@ -1436,10 +1436,32 @@ def test_agent_hosts_recommend_existing_catalog_tools() -> None:
     # companion data lands.
     tools = _tools_by_id()
     ids = set(tools)
-    for host_id in ("claude", "opencode"):
+    for host_id in ("claude", "opencode", "codex", "cursor-agent"):
         recommends = tools[host_id].recommends
         assert recommends, f"{host_id} must declare a non-empty recommends list"
         assert set(recommends) <= ids, f"{host_id} recommends unknown ids"
+
+
+def test_agent_host_recommends_match_the_researched_per_host_set() -> None:
+    tools = _tools_by_id()
+    want = ("codegraph", "graphify", "rtk")
+    assert tools["claude"].recommends == want
+    assert tools["opencode"].recommends == want
+    assert tools["codex"].recommends == want
+    assert tools["cursor-agent"].recommends == want
+    assert tools["antigravity"].recommends == ()
+
+
+def test_agent_host_recommends_entries_record_the_rtk_codex_caveat() -> None:
+    text = REGISTRY.read_text()
+    for host_id in ("claude", "opencode", "codex", "cursor-agent"):
+        idx = text.index(f'id = "{host_id}"')
+        next_method = text.index("[[tool.method]]", idx)
+        window = text[idx:next_method]
+        for needle in ("codegraph", "graphify", "rtk"):
+            assert needle in window, f"missing {needle!r} in {host_id}'s recommends window"
+        if host_id == "codex":
+            assert "instructions-based rather than a runtime hook" in window
 
 
 def test_shipped_node_tools_require_pnpm() -> None:

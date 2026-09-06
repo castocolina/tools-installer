@@ -1318,6 +1318,12 @@ priority = "P0"
 audience = "human"
 tier = "ai"
 desc = "OpenAI coding agent for the user; coordinates local coding sessions rather than serving as an agent subtool."
+# real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
+# codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
+# own README), rtk (native hook integration for this host -- see 08-RESEARCH.md's
+# per-host table for the one exception, codex, where rtk's integration is
+# instructions-based rather than a runtime hook).
+recommends = ["codegraph", "graphify", "rtk"]
 [[tool.method]]
 kind = "script"
 url = "https://chatgpt.com/codex/install.sh"
@@ -1336,9 +1342,12 @@ priority = "P0"
 audience = "human"
 tier = "ai"
 desc = "Anthropic coding agent for the user; complements Codex and needs clear install ownership."
-# Phase 2 illustrative ids from tools already in this catalog (CONTEXT D-02).
-# Phase 8's REQ-recommends-wiring-agent-hosts is where the real companion set lands.
-recommends = ["rg", "fd", "jq"]
+# real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
+# codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
+# own README), rtk (native hook integration for this host -- see 08-RESEARCH.md's
+# per-host table for the one exception, codex, where rtk's integration is
+# instructions-based rather than a runtime hook).
+recommends = ["codegraph", "graphify", "rtk"]
 [[tool.method]]
 kind = "script"
 url = "https://claude.ai/install.sh"
@@ -1357,9 +1366,12 @@ priority = "P0"
 audience = "human"
 tier = "ai"
 desc = "Open source coding agent for the user, useful when teams want provider-flexible terminal workflows."
-# Phase 2 illustrative ids from tools already in this catalog (CONTEXT D-02).
-# Phase 8's REQ-recommends-wiring-agent-hosts is where the real companion set lands.
-recommends = ["rg", "fd", "jq"]
+# real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
+# codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
+# own README), rtk (native hook integration for this host -- see 08-RESEARCH.md's
+# per-host table for the one exception, codex, where rtk's integration is
+# instructions-based rather than a runtime hook).
+recommends = ["codegraph", "graphify", "rtk"]
 [[tool.method]]
 kind = "script"
 url = "https://opencode.ai/install"
@@ -1396,6 +1408,12 @@ priority = "P0"
 audience = "human"
 tier = "ai"
 desc = "Cursor's terminal coding agent; installs via its own official curl|bash script, no brew/cask CLI equivalent exists."
+# real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
+# codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
+# own README), rtk (native hook integration for this host -- see 08-RESEARCH.md's
+# per-host table for the one exception, codex, where rtk's integration is
+# instructions-based rather than a runtime hook).
+recommends = ["codegraph", "graphify", "rtk"]
 [[tool.method]]
 kind = "script"
 url = "https://cursor.com/install"

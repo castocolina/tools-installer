@@ -524,11 +524,11 @@ async def test_marking_claude_in_the_ai_view_offers_its_recommends_and_r_stages_
         await pilot.pause()
         await pilot.press("space")
         await pilot.pause()
-        assert "claude pairs well with rg, fd, jq - press r" in screen.recommends_text
+        assert "claude pairs well with codegraph, graphify, rtk - press r" in screen.recommends_text
         assert screen.selected == {"claude"}
         await pilot.press("r")
         await pilot.pause()
-        assert screen.selected == {"claude", "rg", "fd", "jq"}
+        assert screen.selected == {"claude", "codegraph", "graphify", "rtk"}
         assert screen.recommends_text == ""
 
 
