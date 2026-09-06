@@ -223,11 +223,17 @@ Plans:
 **Success Criteria** (what must be TRUE):
 
   1. `installer/executors.py` has a working `kind="uv-tool"` executor (`uv tool install <pkg>`); `graphify` installs via it using the PyPI package `graphifyy`.
-  2. `antigravity` and `cursor-agent` install via a verified official method (not assumed) — the actual install method for both is unverified as of this ingest and needs GSD's own research pass first.
+  2. `antigravity` and `cursor-agent` install via a verified official method (not assumed) — both are live-fetched, vendor-provided curl|bash install scripts, confirmed by 08-RESEARCH.md's 2026-09-06 research pass. *(Amended during planning: the original text flagged this as unresolved pending research; that research is now complete — see 08-02-PLAN.md.)*
   3. `rtk` installs via `kind="github_release"` from `rtk-ai/rtk`, checksum-verified against its release's `checksums.txt`.
-  4. Selecting `claude`/`opencode`/`codex`/`cursor-agent`/`antigravity` surfaces its `recommends` list (`codegraph`, `graphify`, `rtk`) via the Phase 2 mechanism, without auto-installing anything.
+  4. Selecting `claude`/`opencode`/`codex`/`cursor-agent` surfaces its `recommends` list (`codegraph`, `graphify`, `rtk`) via the Phase 2 mechanism, without auto-installing anything. *(Amended during planning: the original text also named `antigravity` here, but 08-CONTEXT.md's locked D-01 explicitly excludes `antigravity` from this phase's `recommends` wiring — "You can deio antigravity for now" — deferred until its own companion-tool ecosystem is better understood, not dropped. This criterion is narrowed to the four hosts D-01 actually wires; see 08-04-PLAN.md.)*
 
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+
+- [ ] 08-01-PLAN.md — `uv-tool` executor + resolver wiring, `graphifyy`'s legitimacy gate, and `graphify`'s registry entry, wired end-to-end (wave 1)
+- [ ] 08-02-PLAN.md — `cursor-agent` and `antigravity` registry entries via their verified official vendor scripts (wave 2, needs 08-01)
+- [ ] 08-03-PLAN.md — `rtk` registry entry: checksum-verified `github_release` ladder with an arch-gated Linux split and a brew fallback (wave 3, needs 08-02)
+- [ ] 08-04-PLAN.md — Real per-host `recommends` wiring (`claude`/`opencode`/`codex`/`cursor-agent`) and Phase 8 decision consolidation (wave 4, needs 08-03)
 
 ### Phase 9: Postinstall Hooks Mechanism
 
@@ -304,7 +310,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 4/4 | Complete    | 2026-09-05 |
 | 6. SDKMAN Hardening & Registry-Authoring Guidelines | 1/1 | Complete    | 2026-09-06 |
 | 7. System & User Tier Catalog Expansion | 3/3 | Complete    | 2026-09-06 |
-| 8. AI Tier Catalog Expansion & uv-tool Executor | 0/TBD | Not started | - |
+| 8. AI Tier Catalog Expansion & uv-tool Executor | 0/4 | Not started | - |
 | 9. Postinstall Hooks Mechanism | 0/TBD | Not started | - |
 | 10. Agent CLI Ergonomics | 0/TBD | Not started | - |
 | 11. Background Maintenance Daemon | 0/TBD | Not started | - |
