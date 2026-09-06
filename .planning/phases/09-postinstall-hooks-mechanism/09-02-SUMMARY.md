@@ -114,6 +114,18 @@ requires. Verified present before proceeding.
 
 ## Tier-3 Container Transcript (verbatim, both cases)
 
+**Re-run note (2026-09-06, post dual-lane review):** the transcript originally recorded
+here was captured by this plan's own commit, BEFORE the dual-lane code review
+(`09-REVIEW.md`) added the `--no-permissions` flag to the composed argv in
+`installer/postinstall.py::_codegraph_mcp_register`. `gsd-verifier`'s goal-backward
+verification correctly flagged that the shipped invocation had therefore only ever been
+unit-tested against a mocked `Runner`, never proven against a real `codegraph` binary in a
+container. Re-ran the identical `tier3-verify.sh` script (recreated verbatim from this
+plan's own `<action>` block, with only its hardcoded expected-argv assertion updated to
+include `--no-permissions`, matching the code) against current `HEAD` (`c72aaeb`) with
+colima/docker already running. The transcript below is that fresh run's real output,
+replacing the pre-fix evidence.
+
 Command: `bash .planning/phases/09-postinstall-hooks-mechanism/tier3-verify.sh`
 
 Package-manager noise (`apt-get`/`debconf` output, identical in both runs) is elided below
@@ -134,8 +146,6 @@ Python 3.13.15
 │
 ◆  Claude Code: Created ~/.claude/settings.json
 │
-◆  Claude Code: Updated ~/.claude/settings.json
-│
 ◆  Claude Code: Created ~/.claude/CLAUDE.md
 │
 ◆  Cursor: Created ~/.cursor/mcp.json
@@ -155,12 +165,16 @@ codegraph collects anonymous usage stats (no code, paths, or names) — "codegra
 └  Done! Restart your agents to use CodeGraph.
 
 CODEGRAPH_OUTCOME[present] installed github_release True
-POSTINSTALL_ARGV[present] [['/root/.local/bin/codegraph', 'install', '--target', 'claude,cursor', '--location', 'global', '--yes']]
+POSTINSTALL_ARGV[present] [['/root/.local/bin/codegraph', 'install', '--target', 'claude,cursor', '--location', 'global', '--yes', '--no-permissions']]
 POSTINSTALL_WARNING[present] None
 CLAUDE_MCP_ENTRY[present] {'type': 'stdio', 'command': 'codegraph', 'args': ['serve', '--mcp']}
 CURSOR_MCP_ENTRY[present] [(PosixPath('/root/.cursor/mcp.json'), {'type': 'stdio', 'command': 'codegraph', 'args': ['serve', '--mcp', '--path', '${workspaceFolder}']})]
 TIER3_CASE_OK[present]
 ```
+
+`--no-permissions` is confirmed present in the real captured argv above — the exact
+invocation this codebase ships today (post dual-lane review) has now actually been proven
+against a real `codegraph` binary, not merely unit-tested against a mock.
 
 ### Case: `absent` (zero agent-host stubs planted)
 
