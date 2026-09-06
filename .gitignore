@@ -33,3 +33,7 @@ coverage.xml
 .codegraph/
 .planning/graphs/
 graphify-out/
+
+# GSD transient review/execution diagnostics (regenerated per cycle)
+.planning/phases/*/.review-diagnostics/
+.planning/state.json
