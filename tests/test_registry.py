@@ -457,6 +457,12 @@ MACOS_ARM64_ONLY = {"container"}
 # Membership means the tool provably cannot work on that platform+arch, not
 # that its packaging is inconvenient there.
 NO_LINUX_ARM64 = {"puppeteer"}
+# wezterm: Arch arm64 IS covered (its pacman method declares no arch list),
+# but Debian/Fedora arm64 have no path — this session's live check of
+# api.github.com/repos/wezterm/wezterm/releases/latest found only .deb arm64
+# variants, no arm64 AppImage. A gap bounded by upstream asset availability,
+# not a project scoping choice.
+NO_DEBIAN_FEDORA_ARM64 = {"wezterm"}
 
 
 def test_every_tool_resolves_at_least_one_method_on_each_platform() -> None:
@@ -482,6 +488,8 @@ def test_every_tool_resolves_at_least_one_method_on_each_platform() -> None:
                 allowed |= MACOS_ARM64_ONLY
             if platform_os != "macos" and arch == "arm64":
                 allowed |= NO_LINUX_ARM64
+            if platform_os in ("debian", "fedora") and arch == "arm64":
+                allowed |= NO_DEBIAN_FEDORA_ARM64
             stranded = [
                 t.id for t in tools if not resolve_methods(t, platform) and t.id not in allowed
             ]
@@ -532,6 +540,21 @@ def test_no_linux_arm64_allowlist_stays_honest() -> None:
         )
         assert resolve_methods(tools[tool_id], macos_arm64), (
             f"'{tool_id}' must still resolve on macos/arm64"
+        )
+
+
+def test_no_debian_fedora_arm64_allowlist_stays_honest() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    for tool_id in sorted(NO_DEBIAN_FEDORA_ARM64):
+        assert tool_id in tools, f"NO_DEBIAN_FEDORA_ARM64 entry '{tool_id}' is not in the registry"
+        for platform_os in ("debian", "fedora"):
+            platform = Platform(os=platform_os, arch="arm64", immutable=False, has_brew=True)
+            assert resolve_methods(tools[tool_id], platform) == [], (
+                f"'{tool_id}' unexpectedly resolves on {platform_os}/arm64"
+            )
+        arch_arm64 = Platform(os="arch", arch="arm64", immutable=False, has_brew=True)
+        assert resolve_methods(tools[tool_id], arch_arm64), (
+            f"'{tool_id}' must still resolve on arch/arm64"
         )
 
 
@@ -725,7 +748,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 26,
         "ai": 10,
-        "user": 36,
+        "user": 38,
     }
 
 
@@ -921,6 +944,66 @@ def test_hexyl_linux_uses_gnu_and_strips() -> None:
     assert method.params["strip"] == 1
 
 
+def test_kitty_has_no_linux_download_fallback() -> None:
+    kitty = _tools_by_id()["kitty"]
+    fedora = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+    bazzite = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    assert [m.kind for m in resolve_methods(kitty, fedora)] == ["dnf"]
+    assert resolve_methods(kitty, bazzite) == []
+    assert [m.kind for m in resolve_methods(kitty, macos)] == ["cask"]
+
+
+def test_wezterm_appimage_covers_bazzite_where_kitty_cannot() -> None:
+    wezterm = _tools_by_id()["wezterm"]
+    arch_amd64 = Platform(os="arch", arch="amd64", immutable=False, has_brew=True)
+    arch_arm64 = Platform(os="arch", arch="arm64", immutable=False, has_brew=True)
+    debian = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    bazzite = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    fedora_arm64 = Platform(os="fedora", arch="arm64", immutable=False, has_brew=True)
+
+    assert [m.kind for m in resolve_methods(wezterm, arch_amd64)] == ["pacman"]
+    assert [m.kind for m in resolve_methods(wezterm, arch_arm64)] == ["pacman"]
+    assert [m.kind for m in resolve_methods(wezterm, debian)] == ["github_release"]
+    assert [m.kind for m in resolve_methods(wezterm, bazzite)] == ["github_release"]
+    assert [m.kind for m in resolve_methods(wezterm, macos)] == ["cask"]
+
+    # Debian/Fedora arm64 has no path: this session's live check of
+    # api.github.com/repos/wezterm/wezterm/releases/latest found only .deb
+    # arm64 variants, no arm64 AppImage.
+    assert resolve_methods(wezterm, fedora_arm64) == []
+
+    method = resolve_methods(wezterm, debian)[0]
+    assert method.params["asset"] == "WezTerm-{ver}-Ubuntu20.04.AppImage"
+    assert method.params["checksum"] == "{asset}.sha256"
+    assert method.params["raw"] is True
+    assert method.params["member"] == "wezterm"
+    assert method.arch == ("amd64",)
+
+
+def test_kitty_entry_records_the_txz_extraction_gap() -> None:
+    lines = REGISTRY.read_text(encoding="utf-8").splitlines()
+    idx = next(i for i, line in enumerate(lines) if line == 'id = "kitty"')
+    window = "\n".join(lines[max(0, idx - 40) : idx])
+    for fragment in (
+        ".txz",
+        "tar -xzf",
+        "download.py",
+        "x86_64_linux",
+        'platform.os == "macos"',
+    ):
+        assert fragment in window, f'missing {fragment!r} above id = "kitty"'
+
+
+def test_wezterm_entry_records_the_checksum_sidecar_verification() -> None:
+    lines = REGISTRY.read_text(encoding="utf-8").splitlines()
+    idx = next(i for i, line in enumerate(lines) if line == 'id = "wezterm"')
+    window = "\n".join(lines[max(0, idx - 40) : idx])
+    for fragment in (".sha256", "arm64", "Bazzite"):
+        assert fragment in window, f'missing {fragment!r} above id = "wezterm"'
+
+
 def test_zip_runtime_and_tools_resolve_with_archive_zip() -> None:
     tools = {t.id: t for t in load_tools(REGISTRY)}
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
@@ -1031,7 +1114,7 @@ def test_checksum_param_only_on_github_release_methods() -> None:
                 assert method.kind == "github_release", tool.id
 
 
-SIDECAR_VERIFIED = {"rg", "starship", "ruff", "deno", "tealdeer"}
+SIDECAR_VERIFIED = {"rg", "starship", "ruff", "deno", "tealdeer", "wezterm"}
 
 
 def test_sidecar_verified_tools_declare_checksums() -> None:

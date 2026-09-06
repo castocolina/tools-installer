@@ -48,6 +48,7 @@ class Category(StrEnum):
     SECURITY = "security"
     EDITOR = "editor"
     DIAGRAM = "diagram"
+    TERMINAL = "terminal"
 
 
 class InstallStatus(StrEnum):
