@@ -191,7 +191,10 @@ Plans:
   3. A documented, mandatory per-tool per-OS verification step exists for future registry additions, with a defined recording mechanism.
   4. "Prefer brew over other userspace package managers, except SDKMAN for the Java toolchain" is written down as a registry-authoring guideline.
 
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+
+- [ ] 06-01-PLAN.md — Fresh Tier-3 verification of `sdk install java` (no pin needed) recorded as a guarded registry comment; the two registry-authoring guidelines (D-01 verification checklist, D-02 brew-preference) written into `.claude/architecture.md`
 
 ### Phase 7: System & User Tier Catalog Expansion
 
@@ -293,8 +296,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 2. Tier-Scoped Catalog Views & Recommends | 2/2 | Complete    | 2026-09-05 |
 | 3. Install/Uninstall & Tweak Lifecycle Hardening | 3/3 | Complete    | 2026-09-05 |
 | 4. npm/npx Ban Extension & Redirect Policy | 5/5 | Complete    | 2026-09-05 |
-| 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 3/4 | In Progress | - |
-| 6. SDKMAN Hardening & Registry-Authoring Guidelines | 0/TBD | Not started | - |
+| 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 4/4 | Complete    | 2026-09-05 |
+| 6. SDKMAN Hardening & Registry-Authoring Guidelines | 0/1 | Not started | - |
 | 7. System & User Tier Catalog Expansion | 0/TBD | Not started | - |
 | 8. AI Tier Catalog Expansion & uv-tool Executor | 0/TBD | Not started | - |
 | 9. Postinstall Hooks Mechanism | 0/TBD | Not started | - |
