@@ -18,11 +18,14 @@ from installer.pnpm_globals import (
     audit_node_globals,
     node_globals,
     node_install_policy,
+    parse_global_groups,
     parse_global_packages,
+    pnpm_global_groups,
     pnpm_global_packages,
     reinstall_argv,
     reinstall_node_globals,
     reinstall_preview,
+    split_install_groups,
 )
 from installer.run import TIMEOUT_CODE, CommandError
 from installer.ui_common import run_live
@@ -602,6 +605,165 @@ def test_reinstall_node_globals_allow_build_only_uses_allow_build_floor(
     )
     assert got == ("puppeteer@^25",)
     assert calls == [["/x/pnpm", "add", "-g", "--allow-build=puppeteer", "puppeteer@^25"]]
+
+
+# Captured in plan 05-01 Container C (`pnpm list -g --json` on pnpm 12.3.4).
+# Membership is the per-package path hash, not multiple project objects: both
+# documents are a single project object; mermaid-cli and puppeteer share a
+# hash only after the grouped remedy. Host prefix trimmed; hash directories
+# are verbatim.
+_SPLIT_STATE_JSON = """
+[
+  {
+    "path": "/root/.local/share/pnpm/global/v11",
+    "private": true,
+    "dependencies": {
+      "@mermaid-js/mermaid-cli": {
+        "from": "@mermaid-js/mermaid-cli",
+        "version": "11.17.0",
+        "path": "/g/v11/14f2-18d28dc072dbf202-0/node_modules/@mermaid-js/mermaid-cli"
+      },
+      "@pnpm/exe": {
+        "from": "@pnpm/exe",
+        "version": "12.3.4",
+        "path": "/g/v11/14d6-18d28dbf8bf82d48-0/node_modules/@pnpm/exe"
+      },
+      "puppeteer": {
+        "from": "puppeteer",
+        "version": "25.10.0",
+        "path": "/g/v11/151d-18d28dce58a8e9af-0/node_modules/puppeteer"
+      }
+    }
+  }
+]
+"""
+_GROUPED_STATE_JSON = """
+[
+  {
+    "path": "/root/.local/share/pnpm/global/v11",
+    "private": true,
+    "dependencies": {
+      "@mermaid-js/mermaid-cli": {
+        "from": "@mermaid-js/mermaid-cli",
+        "version": "11.17.0",
+        "path": "/g/v11/15c0-18d28df958d4debd-0/node_modules/@mermaid-js/mermaid-cli"
+      },
+      "@pnpm/exe": {
+        "from": "@pnpm/exe",
+        "version": "12.3.4",
+        "path": "/g/v11/14d6-18d28dbf8bf82d48-0/node_modules/@pnpm/exe"
+      },
+      "puppeteer": {
+        "from": "puppeteer",
+        "version": "25.10.0",
+        "path": "/g/v11/15c0-18d28df958d4debd-0/node_modules/puppeteer"
+      }
+    }
+  }
+]
+"""
+
+
+def _group_of(groups: tuple[tuple[str, ...], ...], name: str) -> tuple[str, ...]:
+    for group in groups:
+        if name in group:
+            return group
+    raise AssertionError(f"{name} not in {groups}")
+
+
+def test_parse_global_groups_split_state_holds_mmdc_and_puppeteer_apart() -> None:
+    groups = parse_global_groups(_SPLIT_STATE_JSON)
+    assert groups is not None
+    assert _group_of(groups, MMDC_NPM) != _group_of(groups, "puppeteer")
+
+
+def test_parse_global_groups_grouped_state_holds_mmdc_and_puppeteer_together() -> None:
+    groups = parse_global_groups(_GROUPED_STATE_JSON)
+    assert groups is not None
+    assert _group_of(groups, MMDC_NPM) == _group_of(groups, "puppeteer")
+    assert MMDC_NPM in _group_of(groups, "puppeteer")
+
+
+def test_parse_global_groups_unreadable_output_is_unknown() -> None:
+    assert parse_global_groups("not json") is None
+    assert parse_global_groups('"a string"') is None
+
+
+def test_split_install_groups_reports_present_members_held_apart() -> None:
+    policy = _EXPLICIT_POLICY
+    split = ((MMDC_NPM,), ("puppeteer",))
+    ok = ((MMDC_NPM, "puppeteer"),)
+    assert split_install_groups(policy, split) == ((MMDC_NPM, "puppeteer"),)
+    assert split_install_groups(policy, ok) == ()
+    assert split_install_groups(policy, (("puppeteer",),)) == ()
+    assert split_install_groups(NodeInstallPolicy(), split) == ()
+
+
+def test_audit_without_policy_skips_the_group_query_and_reports_no_split() -> None:
+    grouped_calls: list[int] = []
+
+    def grouped() -> tuple[tuple[str, ...], ...] | None:
+        grouped_calls.append(1)
+        return ((MMDC_NPM,), ("puppeteer",))
+
+    report = audit_node_globals(
+        [_mmdc()],
+        which=lambda _n: "/x/mmdc",
+        managed=_managed(MMDC_NPM, "puppeteer"),
+        grouped=grouped,
+    )
+    assert grouped_calls == []
+    assert report.split_groups == ()
+    assert report.managed == (MMDC_NPM, "puppeteer")
+
+
+def test_audit_with_policy_detects_a_split_from_the_real_document() -> None:
+    policy = node_install_policy(load_tools(REGISTRY))
+    report = audit_node_globals(
+        load_tools(REGISTRY),
+        which=lambda _n: "/x/bin",
+        grouped=lambda: parse_global_groups(_SPLIT_STATE_JSON),
+        policy=policy,
+    )
+    assert report.split_groups == ((MMDC_NPM, "puppeteer"),)
+    assert MMDC_NPM in report.managed
+    assert "puppeteer" in report.managed
+
+
+def test_audit_with_policy_is_quiet_on_the_grouped_document() -> None:
+    policy = node_install_policy(load_tools(REGISTRY))
+    report = audit_node_globals(
+        load_tools(REGISTRY),
+        which=lambda _n: "/x/bin",
+        grouped=lambda: parse_global_groups(_GROUPED_STATE_JSON),
+        policy=policy,
+    )
+    assert report.split_groups == ()
+
+
+def test_audit_with_policy_unknown_group_query_is_not_a_finding() -> None:
+    policy = node_install_policy(load_tools(REGISTRY))
+    report = audit_node_globals(
+        load_tools(REGISTRY),
+        which=lambda _n: None,
+        grouped=lambda: None,
+        policy=policy,
+    )
+    assert report == NodeGlobalsReport(entries=(), missing=(), managed=(), known=False)
+    assert report.split_groups == ()
+
+
+def test_pnpm_global_groups_asks_pnpm_by_absolute_path() -> None:
+    calls: list[list[str]] = []
+
+    def runner_out(cmd: list[str]) -> str:
+        calls.append(cmd)
+        return _SPLIT_STATE_JSON
+
+    groups = pnpm_global_groups(resolve_pnpm=lambda: "/real/bin/pnpm", runner_out=runner_out)
+    assert groups is not None
+    assert _group_of(groups, MMDC_NPM) != _group_of(groups, "puppeteer")
+    assert calls == [["/real/bin/pnpm", "list", "-g", "--json"]]
 
 
 def test_replay_regroups_a_brownfield_split_mmdc_and_puppeteer() -> None:

@@ -260,7 +260,7 @@ def _build_app(
     policy = pnpm_globals.node_install_policy(tools)
 
     def _node_globals_report() -> pnpm_globals.NodeGlobalsReport:
-        return pnpm_globals.audit_node_globals(tools)
+        return pnpm_globals.audit_node_globals(tools, policy=policy)
 
     def _globals_preview(report: pnpm_globals.NodeGlobalsReport) -> str:
         # Takes the audited report rather than fetching one: fetching would put

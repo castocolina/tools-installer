@@ -126,12 +126,17 @@ class NodeGlobalsReport:
     that renders counts states an unknown as a fact — "0 package(s) in pnpm's
     global set" on the machine whose pnpm has just replaced itself, which is
     the exact machine this module exists for.
+
+    `split_groups` names declared install groups pnpm is holding apart. It is
+    a CONDITION, not a count, and it is empty both when the state is healthy
+    and when nothing could be learned.
     """
 
     entries: tuple[NodeGlobal, ...]
     missing: tuple[str, ...]
     managed: tuple[str, ...]
     known: bool = True
+    split_groups: tuple[tuple[str, ...], ...] = ()
 
 
 def node_globals(tools: Iterable[Tool]) -> tuple[NodeGlobal, ...]:
@@ -215,20 +220,18 @@ def node_install_policy(tools: Iterable[Tool]) -> NodeInstallPolicy:
     )
 
 
-def parse_global_packages(raw: str) -> tuple[str, ...] | None:
-    """Package names in `pnpm list -g --json` output; None when it is unreadable.
-
-    pnpm prints an array of project objects (one global root), each carrying
-    its dependency groups as name -> details maps.
-    """
+def _load_projects(raw: str) -> list[object] | None:
     try:
         data: object = json.loads(raw)
     except ValueError:
         return None
     if not isinstance(data, (list, dict)):
         return None
-    projects = cast(list[object], data) if isinstance(data, list) else [cast(object, data)]
-    names: list[str] = []
+    return cast(list[object], data) if isinstance(data, list) else [cast(object, data)]
+
+
+def _iter_dependencies(projects: list[object]) -> list[tuple[str, object]]:
+    items: list[tuple[str, object]] = []
     for project in projects:
         if not isinstance(project, dict):
             continue
@@ -236,8 +239,58 @@ def parse_global_packages(raw: str) -> tuple[str, ...] | None:
         for group in _DEPENDENCY_GROUPS:
             block = groups.get(group)
             if isinstance(block, dict):
-                names.extend(cast(dict[str, object], block))
-    return tuple(dict.fromkeys(names))
+                items.extend(cast(dict[str, object], block).items())
+    return items
+
+
+def parse_global_packages(raw: str) -> tuple[str, ...] | None:
+    """Package names in `pnpm list -g --json` output; None when it is unreadable.
+
+    pnpm prints an array of project objects (one global root), each carrying
+    its dependency groups as name -> details maps.
+    """
+    projects = _load_projects(raw)
+    if projects is None:
+        return None
+    return tuple(dict.fromkeys(name for name, _details in _iter_dependencies(projects)))
+
+
+def _install_group_key(details: object, fallback: str) -> str:
+    if isinstance(details, dict):
+        path = cast(dict[str, object], details).get("path")
+        if isinstance(path, str) and path:
+            marker = "/node_modules/"
+            index = path.find(marker)
+            return path[:index] if index != -1 else path
+    return fallback
+
+
+def parse_global_groups(raw: str) -> tuple[tuple[str, ...], ...] | None:
+    """Install groups in `pnpm list -g --json`; None when unreadable.
+
+    pnpm v11 gives each global install invocation its own hash-keyed project
+    directory, so the project objects ARE the install groups on some pnpm
+    versions. On the pnpm this phase targets, `pnpm list -g --json` emits ONE
+    project object holding every global; group membership is the per-package
+    `path` hash (the directory above `node_modules`). That is the membership
+    `parse_global_packages` deliberately discards, and the reason that
+    function is not changed — its callers, including
+    `installer/app.py::run_doctor`, want the flat set.
+    """
+    projects = _load_projects(raw)
+    if projects is None:
+        return None
+    grouped: dict[str, list[str]] = {}
+    order: list[str] = []
+    for name, details in _iter_dependencies(projects):
+        key = _install_group_key(details, fallback=f"ungrouped:{name}")
+        members = grouped.get(key)
+        if members is None:
+            grouped[key] = [name]
+            order.append(key)
+        elif name not in members:
+            members.append(name)
+    return tuple(tuple(grouped[key]) for key in order)
 
 
 LIST_TIMEOUT_SECONDS = 20.0
@@ -278,22 +331,86 @@ def pnpm_global_packages(
     return parse_global_packages(raw)
 
 
+def pnpm_global_groups(
+    *,
+    resolve_pnpm: Callable[[], str | None] = real_pnpm,
+    runner_out: OutputRunner = _run_list,
+) -> tuple[tuple[str, ...], ...] | None:
+    """Install groups pnpm currently manages globally, or None when it cannot be asked.
+
+    Same bounded `pnpm list -g --json` query as `pnpm_global_packages`, parsed
+    with `parse_global_groups`.
+    """
+    pnpm = resolve_pnpm()
+    if pnpm is None:
+        return None
+    try:
+        raw = runner_out([pnpm, "list", "-g", "--json"])
+    except (OSError, CommandError):
+        return None
+    return parse_global_groups(raw)
+
+
+def split_install_groups(
+    policy: NodeInstallPolicy,
+    live: tuple[tuple[str, ...], ...],
+) -> tuple[tuple[str, ...], ...]:
+    """Declared groups whose present members pnpm is holding apart.
+
+    This is the brownfield state — the registry says these packages must share
+    one pnpm install group so the dependent can resolve its peer, and pnpm is
+    holding them apart, which is precisely the runtime failure 05-RESEARCH.md
+    Pitfall 1 describes.
+    """
+    live_sets = [set(group) for group in live]
+    present_anywhere: set[str] = set()
+    for group in live:
+        present_anywhere.update(group)
+    found: list[tuple[str, ...]] = []
+    for declared in policy.groups:
+        present = tuple(name for name in declared if name in present_anywhere)
+        if len(present) < 2:
+            continue
+        present_set = set(present)
+        if any(present_set <= group for group in live_sets):
+            continue
+        found.append(present)
+    return tuple(found)
+
+
 def audit_node_globals(
     tools: Iterable[Tool],
     *,
     which: Callable[[str], str | None] = shutil.which,
     managed: Callable[[], tuple[str, ...] | None] = pnpm_global_packages,
+    grouped: Callable[[], tuple[tuple[str, ...], ...] | None] = pnpm_global_groups,
+    policy: NodeInstallPolicy = _EMPTY_POLICY,
 ) -> NodeGlobalsReport:
     """Report pnpm's live global set, and the catalog commands in it that are broken."""
-    packages = managed()
-    if packages is None:
-        # Carry the unknown through rather than collapsing it into an empty
-        # report: the empty report is a CLAIM about the user's machine, and
-        # this branch is precisely the case where nothing is known.
+    if not policy.groups:
+        packages = managed()
+        if packages is None:
+            # Carry the unknown through rather than collapsing it into an empty
+            # report: the empty report is a CLAIM about the user's machine, and
+            # this branch is precisely the case where nothing is known.
+            return NodeGlobalsReport(entries=(), missing=(), managed=(), known=False)
+        entries = tuple(entry for entry in node_globals(tools) if entry.npm_pkg in packages)
+        missing = tuple(entry.tool_id for entry in entries if which(entry.cmd) is None)
+        return NodeGlobalsReport(entries=entries, missing=missing, managed=packages)
+    # The two queries answer the same question at different resolutions, and
+    # running both would double the Doctor's wait for no new information.
+    live = grouped()
+    if live is None:
         return NodeGlobalsReport(entries=(), missing=(), managed=(), known=False)
+    packages = tuple(dict.fromkeys(name for group in live for name in group))
     entries = tuple(entry for entry in node_globals(tools) if entry.npm_pkg in packages)
     missing = tuple(entry.tool_id for entry in entries if which(entry.cmd) is None)
-    return NodeGlobalsReport(entries=entries, missing=missing, managed=packages)
+    return NodeGlobalsReport(
+        entries=entries,
+        missing=missing,
+        managed=packages,
+        split_groups=split_install_groups(policy, live),
+    )
 
 
 def _render_spec(name: str, versions: dict[str, str]) -> str:

@@ -1784,7 +1784,8 @@ cask = "sublime-text"
 # manager-aware for one pnpm pair puts a second availability rule in the
 # engine. The Doctor is where an already-installed machine's state is audited,
 # so detection and repair belong there.
-# Doctor split-group detection: pending plan 05-04
+# Doctor split-group detection: the TUI Doctor reports a split as a warning
+# naming both packages and pointing at the `r` reinstall action.
 # Group coupling: pnpm's Global Packages documentation states that packages in
 # one comma group "are removed together" and that removing either member with
 # `pnpm remove -g` removes the WHOLE group. So a user who removes puppeteer by

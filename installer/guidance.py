@@ -142,32 +142,53 @@ def guard_guidance(status: dict[str, bool], warning: str | None) -> list[Guidanc
     return items
 
 
+_REINSTALL_NEXT_STEP = (
+    "Run `make setup` and open the Doctor view to reinstall the globals pnpm still tracks."
+)
+
+
 def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
-    """Warn when a pnpm-managed global command is missing; silent when healthy."""
-    if not report.missing:
-        return []
-    names = ", ".join(report.missing)
-    return [
-        Guidance(
-            title="pnpm-managed global set is incomplete",
-            meaning=(
-                f"pnpm still tracks {names} globally, but the command no longer "
-                "resolves on PATH. A pnpm self-update leaves the globals installed "
-                "by earlier `pnpm add -g` invocations behind in a stale directory."
-            ),
-            # The prefix is load-bearing: DoctorScreen._tui_guidance rewrites a
-            # next_step only when it starts with a known literal prefix — today
-            # `Run `make fix`` — so a step written in TUI terms ("press `r`")
-            # would leak the keybinding into `make doctor`'s console output,
-            # where no key can be pressed, and a step with an unrecognised
-            # prefix would leak console instructions into the TUI.
-            # "reinstall the globals pnpm still tracks", not "restore my global
-            # set": one `pnpm add -g` replays exactly the set pnpm reports, so
-            # anything pnpm has already forgotten is not coming back this way.
-            next_step=(
-                "Run `make setup` and open the Doctor view to reinstall the globals "
-                "pnpm still tracks."
-            ),
-            severity=Severity.WARN,
+    """Warn when a pnpm-managed global is missing or an install group is split."""
+    items: list[Guidance] = []
+    if report.missing:
+        names = ", ".join(report.missing)
+        items.append(
+            Guidance(
+                title="pnpm-managed global set is incomplete",
+                meaning=(
+                    f"pnpm still tracks {names} globally, but the command no longer "
+                    "resolves on PATH. A pnpm self-update leaves the globals installed "
+                    "by earlier `pnpm add -g` invocations behind in a stale directory."
+                ),
+                # The prefix is load-bearing: DoctorScreen._tui_guidance rewrites a
+                # next_step only when it starts with a known literal prefix — today
+                # `Run `make setup`` — so a step written in TUI terms ("press `r`")
+                # would leak the keybinding into `make doctor`'s console output,
+                # where no key can be pressed, and a step with an unrecognised
+                # prefix would leak console instructions into the TUI.
+                # "reinstall the globals pnpm still tracks", not "restore my global
+                # set": one `pnpm add -g` replays exactly the set pnpm reports, so
+                # anything pnpm has already forgotten is not coming back this way.
+                next_step=_REINSTALL_NEXT_STEP,
+                severity=Severity.WARN,
+            )
         )
-    ]
+    for group in report.split_groups:
+        names = " and ".join(group)
+        items.append(
+            Guidance(
+                title="pnpm install group is split",
+                meaning=(
+                    f"pnpm is holding {names} in separate global installs, so the "
+                    "dependent cannot load its peer at runtime — the tool fails when "
+                    "it is run rather than when it is installed."
+                ),
+                # This prefix is load-bearing: DoctorScreen._tui_guidance rewrites
+                # a next_step starting with `Run `make setup`` into
+                # `Press r to reinstall the pnpm-managed global set`. The console
+                # wording must stay runnable from a console.
+                next_step=_REINSTALL_NEXT_STEP,
+                severity=Severity.WARN,
+            )
+        )
+    return items

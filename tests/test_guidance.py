@@ -157,6 +157,38 @@ def test_node_globals_guidance_warns_and_points_at_make_setup() -> None:
     assert item.next_step.startswith("Run `make setup`")
 
 
+def test_node_globals_guidance_warns_on_a_split_install_group() -> None:
+    items = node_globals_guidance(
+        NodeGlobalsReport(
+            entries=(),
+            missing=(),
+            managed=("@mermaid-js/mermaid-cli", "puppeteer"),
+            split_groups=(("@mermaid-js/mermaid-cli", "puppeteer"),),
+        )
+    )
+    assert len(items) == 1
+    item = items[0]
+    assert item.severity == "warn"
+    assert "puppeteer" in item.meaning
+    assert "mermaid" in item.meaning
+    assert item.next_step.startswith("Run `make setup`")
+
+
+def test_node_globals_guidance_reports_missing_and_split_together() -> None:
+    items = node_globals_guidance(
+        NodeGlobalsReport(
+            entries=(NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),),
+            missing=("mmdc",),
+            managed=("@mermaid-js/mermaid-cli", "puppeteer"),
+            split_groups=(("@mermaid-js/mermaid-cli", "puppeteer"),),
+        )
+    )
+    assert len(items) == 2
+    assert items[0].next_step.startswith("Run `make setup`")
+    assert items[1].next_step.startswith("Run `make setup`")
+    assert "puppeteer" in items[1].meaning
+
+
 def test_guidance_is_frozen() -> None:
     g = Guidance(title="t", meaning="m", next_step="n", severity="ok")
     try:
