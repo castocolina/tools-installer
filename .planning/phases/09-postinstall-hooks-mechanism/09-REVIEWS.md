@@ -163,3 +163,61 @@ and the normative docs, per Rule 10:
   `cursor.js` directly) rather than guessing an unverified path at plan-authoring time.
 
 Proceeding to cycle 3.
+
+## Cycle 3 (codex-sol-high) — FINAL (max_cycles=3 reached)
+
+**Scope:** `09-01-PLAN.md`, `09-02-PLAN.md` as revised by cycles 1 and 2.
+
+**HIGH — `bin_dir(method.params.get("bin_dir"))` is not type-safe.** `method.params` is
+`dict[str, object]`, so `.get("bin_dir")` yields `object | None`, which
+`installer.locations.bin_dir(declared: str | None)` cannot accept under strict Pyright,
+unlike `install_download`'s own `_opt_str` normalization. Required revision: normalize the
+value (`isinstance(value, str) and value else None`) before calling `bin_dir`, exactly as
+`_opt_str` does.
+
+**HIGH — Unconditionally passing `tools=catalog` to all three `Install` call sites breaks
+every existing test double.** Ten pre-existing fake `install`/`fake_install` functions
+across `tests/test_app.py` and `tests/test_session.py` do not declare a `tools` parameter;
+calling them with an unexpected `tools=` keyword raises `TypeError`. `installer/session.py`
+and `tests/test_session.py` were also missing from Task 1's own `<files>` tag (present only
+in the frontmatter `files_modified` list). Required revision: explicitly migrate every
+existing fake to accept the new keyword, and add `installer/session.py`/
+`tests/test_session.py` to Task 1's `<files>` tag.
+
+**MEDIUM — The Tier-3 recipe exports `~/.local/bin` (installing `uv`) before claiming PATH
+independence, which could mask a defective bare-name invocation.** Required revision:
+invoke `uv` (if needed at all) by absolute path and keep `~/.local/bin` off PATH for the
+whole container lifetime — or, since this recipe never actually needs `uv`, drop the `uv`
+install entirely.
+
+**MEDIUM — Cursor verification was left as a comment, not an executable check.** The
+`present` case's evidence inspected only `~/.claude.json`; Cursor's own MCP registration
+was never actually verified. Required revision: locate and assert the real Cursor MCP
+config entry with a `CURSOR_MCP_ENTRY[present]` marker, required in acceptance criteria.
+
+`CYCLE_SUMMARY: current_high=2 current_actionable=2`
+
+**Disposition (max_cycles=3 reached — fixed directly, proceeding to execution per Rule 10,
+no cycle 4 dispatched):**
+- HIGH (bin_dir type safety): `_codegraph_mcp_register` now normalizes
+  `method.params.get("bin_dir")` inline (`isinstance(value, str) and value else None`)
+  before calling `bin_dir`, mirroring `installer/download.py::_opt_str` without importing
+  that module's private helper; added `test_codegraph_hook_ignores_a_non_string_bin_dir_
+  param`.
+- HIGH (test-double breakage): Task 1's `<files>` tag now includes `installer/session.py`
+  and `tests/test_session.py`; PART C.5 now explicitly instructs migrating all ten existing
+  `Install`-shaped fakes across both test files to accept `tools: Mapping[str, Tool] | None
+  = None` — the same precedent this codebase already used when `checksum_policy` was added
+  to the same Protocol.
+- MEDIUM (PATH masking): removed the vestigial `uv` install entirely from the Tier-3 recipe
+  (it was copied from 08-04-PLAN.md's uv-tool-executor test but is unused here — codegraph's
+  `github_release` method never touches `uv`); `~/.local/bin` is never on PATH anywhere in
+  the container's lifetime now.
+- MEDIUM (Cursor verification): the `present` case now searches the container's home
+  directory tree for any JSON file (other than `~/.claude.json`) containing a
+  `mcpServers.codegraph` entry, asserts at least one match, and prints
+  `CURSOR_MCP_ENTRY[present]` — real found evidence rather than an assumed path or a
+  comment-only TODO.
+
+Cap reached (3/3 cycles) — proceeding to execution regardless of any further residual
+findings, per ONESHOT-RULES Rule 10.
