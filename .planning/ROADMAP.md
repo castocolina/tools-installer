@@ -303,7 +303,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 4. npm/npx Ban Extension & Redirect Policy | 5/5 | Complete    | 2026-09-05 |
 | 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 4/4 | Complete    | 2026-09-05 |
 | 6. SDKMAN Hardening & Registry-Authoring Guidelines | 1/1 | Complete    | 2026-09-06 |
-| 7. System & User Tier Catalog Expansion | 0/TBD | Not started | - |
+| 7. System & User Tier Catalog Expansion | 3/3 | Complete    | 2026-09-06 |
 | 8. AI Tier Catalog Expansion & uv-tool Executor | 0/TBD | Not started | - |
 | 9. Postinstall Hooks Mechanism | 0/TBD | Not started | - |
 | 10. Agent CLI Ergonomics | 0/TBD | Not started | - |
