@@ -79,6 +79,24 @@ def _opt_version_map(method: Method, key: str) -> dict[str, str]:
     return out
 
 
+def _opt_smoke_name(method: Method) -> str | None:
+    """The declared smoke-check name, validated against the closed dispatch set.
+
+    Validated with the other params — BEFORE the install runs — because a
+    failure after `pnpm add -g` has returned leaves the package installed and
+    its shim on PATH while reporting the install as failed, which is the state
+    `installer/status.py::is_installed` then reads as ALREADY_INSTALLED.
+    `load_tools` catches an unknown name first, but this is the last gate
+    before argv and it must not be the one that runs out of order.
+    """
+    smoke = method.params.get("smoke")
+    if smoke is None:
+        return None
+    if not isinstance(smoke, str) or smoke not in SMOKE_CHECKS:
+        raise ExecutorError(f"method '{method.kind}' unknown smoke '{smoke}'")
+    return smoke
+
+
 def _require_minimum(binary: str, argv: list[str], minimum: str) -> None:
     observed = probe_version(argv)
     if observed is None or not meets_minimum(observed, minimum):
@@ -267,6 +285,7 @@ def _node(method: Method, runner: Runner) -> None:
     co_install = _opt_pkg_list(method, "co_install")
     allow_build = _opt_pkg_list(method, "allow_build")
     versions = _opt_version_map(method, "versions")
+    smoke = _opt_smoke_name(method)
     # A space-separated list would give each package its own isolated node_modules
     # and lockfile (pnpm Global Packages documentation) — which is the failure
     # mode this exists to prevent, not a stylistic difference.
@@ -296,10 +315,7 @@ def _node(method: Method, runner: Runner) -> None:
     # evidence that a DOWNLOAD succeeded, never evidence that the thing
     # downloaded can run. Accepted residual: the search covers the WHOLE
     # cache, not just what THIS install produced, so a stale browser can pass.
-    smoke = method.params.get("smoke")
     if smoke is not None:
-        if not isinstance(smoke, str) or smoke not in SMOKE_CHECKS:
-            raise ExecutorError(f"method '{method.kind}' unknown smoke '{smoke}'")
         SMOKE_CHECKS[smoke]()
 
 

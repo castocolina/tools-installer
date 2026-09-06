@@ -866,17 +866,23 @@ def test_smoke_executable_path_failure(tmp_path: Path, monkeypatch: pytest.Monke
     assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
 
 
-def test_unknown_smoke_raises_after_install(
+def test_unknown_smoke_raises_before_the_install_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    pnpm = _plant_pnpm(tmp_path, monkeypatch)
+    """A typo in a registry `smoke` name must not cost a real global install.
+
+    Every other `_node` param is validated before the side effect. Validating
+    this one afterwards left the machine in exactly the state CR-02 describes:
+    the package installed, its shim on PATH, and the install reported FAILED.
+    """
+    _plant_pnpm(tmp_path, monkeypatch)
     calls: list[list[str]] = []
     with pytest.raises(ExecutorError, match="smoke"):
         execute(
             Method(kind="node", params={"npm_pkg": "x", "smoke": "not-a-check"}),
             calls.append,
         )
-    assert calls == [[str(pnpm), "add", "-g", "x"]]
+    assert calls == []
 
 
 def test_puppeteer_cache_dir_falls_back_to_home(
