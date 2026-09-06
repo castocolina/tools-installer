@@ -456,9 +456,15 @@ def _node(method: Method, runner: Runner) -> None:
 def _sdkman(method: Method, runner: Runner) -> None:
     # `sdk` is a shell function defined by sourcing sdkman-init.sh, not a PATH
     # binary — it must be sourced in the same shell invocation that calls it.
-    # The sdkman tool's own bootstrap runs with `?ci=true`, which persists
-    # `sdkman_auto_answer=true` in ~/.sdkman/etc/config, so a candidate install
-    # here does not hang on an interactive version-choice prompt.
+    # On a machine where THIS installer bootstrapped SDKMAN, its `?ci=true`
+    # bootstrap persisted `sdkman_auto_answer=true` in ~/.sdkman/etc/config, so
+    # a candidate install here does not hang on the interactive version-choice
+    # prompt (see registry.toml's `sdkman`/`java` `# Verified` comments for the
+    # full finding). This guarantee does NOT extend to a brownfield machine
+    # with a pre-existing SDKMAN install — `is_installed`/`install_tool` skip
+    # this project's own bootstrap entirely for a tool SDKMAN already provides
+    # (installer/status.py, installer/engine.py), so `sdkman_auto_answer` may
+    # still be `false` there and this call can reach the prompt.
     candidate = require_str(method, "candidate")
     version = method.params.get("version")
     install = ["sdk", "install", candidate]

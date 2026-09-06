@@ -42,6 +42,32 @@ SDKMAN script 5.23.0, matching 06-RESEARCH.md's prior reading. `sdk install java
 `Downloading: java 25.0.4-tem` → `Done installing!` → `EXIT_CODE=0`, no prompt of
 any kind observed. The container was removed afterward.
 
+**Verbatim transcript excerpts** (the registry.toml comments cite this SUMMARY;
+recorded here in full so that citation is actually verifiable, per a Medium
+finding two independent code-review lanes raised against an earlier version of
+this SUMMARY that omitted them):
+
+```
+===== CONFIG auto_answer =====
+sdkman_auto_answer=true
+
+===== SDK VERSION =====
+SDKMAN!
+script: 5.23.0
+native: 0.7.34 (linux x86_64)
+
+===== sdk install java (stdin closed, timeout 150) =====
+Downloading: java 25.0.4-tem
+In progress...
+Installing: java 25.0.4-tem
+Done installing!
+EXIT_CODE=0
+```
+
+No "(Y/n)" prompt, no chooser menu, and no other interactive text appeared in the
+full output between the `Downloading:` line and `EXIT_CODE=0` — the progress
+indicator's percentage ticks were the only other output.
+
 This finding is recorded as two `# Verified 2026-09-06: ...` comments directly
 above the `sdkman` and `java` `[[tool]]` blocks in `installer/registry.toml`,
 mirroring the existing `codegraph`/`mmdc`/`puppeteer` comment precedent (D-01). The
