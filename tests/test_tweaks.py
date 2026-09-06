@@ -33,6 +33,7 @@ def test_bundles_have_stable_ids_and_order() -> None:
         "claude-skip",
         "codex-skip",
         "apt-upgrade",
+        "opencode-auto",
     ]
 
 
@@ -42,6 +43,19 @@ def test_codex_skip_body_matches_the_verified_flag() -> None:
     assert codex.requires == ()
     assert codex.executables == ()
     assert codex.platforms == ()
+
+
+def test_opencode_auto_body_matches_the_verified_flag() -> None:
+    opencode = _bundle("opencode-auto")
+    assert opencode.body == "alias opencode='opencode --auto'"
+    assert opencode.requires == ()
+    assert opencode.executables == ()
+    assert opencode.platforms == ()
+
+
+def test_opencode_auto_description_states_it_is_narrower_than_a_full_bypass() -> None:
+    description = _bundle("opencode-auto").description
+    assert "full" in description or "deny" in description
 
 
 def test_block_is_marker_delimited_around_body() -> None:

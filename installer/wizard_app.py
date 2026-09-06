@@ -960,6 +960,12 @@ class PoliciesScreen(AppScreen):
                 " prompts are intentional noise.",
                 "Disable it when you need normal Codex confirmation/sandboxing prompts back.",
             ),
+            "tweak:opencode-auto": (
+                "Aliases opencode to opencode --auto.",
+                "Narrower than claude-skip's/codex-skip's full bypass: explicit deny rules in"
+                " your own opencode config still apply.",
+                "Disable it when you want normal per-permission prompting back.",
+            ),
             "tweak:apt-upgrade": (
                 "Adds apt-upgrade for upgrading only packages that already have updates.",
                 "Keeps the command narrower than a broad apt upgrade flow.",

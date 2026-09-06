@@ -918,6 +918,25 @@ async def test_policy_detail_panel_explains_myshellrc_sourcing_for_every_tweak()
         assert "split" in screen.detail_text.lower()
 
 
+async def test_policy_detail_panel_explains_opencode_auto_is_narrower_than_a_full_bypass() -> None:
+    policy = Policy(
+        id="tweak:opencode-auto",
+        label="opencode auto-approve",
+        description="alias opencode opencode --auto — not a full bypass, deny rules still apply",
+        active=False,
+        apply=_ok_result,
+        remove=_ok_result,
+    )
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        del pilot
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        detail = screen.detail_text
+        assert "Space toggles this reversible shell policy." not in detail
+        assert "deny" in detail.lower()
+
+
 async def test_policy_missing_required_tool_blocks_enable() -> None:
     calls: list[str] = []
     policy = Policy(

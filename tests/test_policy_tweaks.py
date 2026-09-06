@@ -122,6 +122,16 @@ def test_codex_skip_policy_round_trips(tmp_path: Path) -> None:
     assert "cleared" in result.layers[0].detail
 
 
+def test_opencode_auto_policy_round_trips(tmp_path: Path) -> None:
+    rc = tmp_path / ".myshellrc"
+    policy = tweak_policy(_bundle("opencode-auto"), rc_path=rc)
+    policy.apply()
+    assert "opencode --auto" in rc.read_text()
+    result = policy.remove()
+    assert "opencode --auto" not in rc.read_text()
+    assert "cleared" in result.layers[0].detail
+
+
 def test_tweak_policy_enable_hint_names_source_not_hash_r(tmp_path: Path) -> None:
     rc = tmp_path / ".myshellrc"
     result = tweak_policy(_bundle("countdown"), rc_path=rc, bin_dir=tmp_path / "bin").apply()

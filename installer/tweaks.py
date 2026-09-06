@@ -73,6 +73,11 @@ _CLAUDE_BODY = "alias claude='claude --dangerously-skip-permissions'"
 # live 2026-09-06 (10-RESEARCH.md Summary #1).
 _CODEX_BODY = "alias codex='codex --dangerously-bypass-approvals-and-sandbox'"
 
+# opencode --help's own text for --auto is "auto-approve permissions that are
+# not explicitly denied (dangerous!)" — narrower than claude-skip/codex-skip's
+# full bypass — confirmed live 2026-09-06 (10-RESEARCH.md Summary #2).
+_OPENCODE_BODY = "alias opencode='opencode --auto'"
+
 _APT_BODY = (
     "alias apt-upgrade="
     r"'sudo apt install --only-upgrade"
@@ -130,6 +135,14 @@ BUNDLES: tuple[TweakBundle, ...] = (
         "alias apt-upgrade — upgrade only packages that have updates (Linux)",
         _LINUX,
         _APT_BODY,
+    ),
+    TweakBundle(
+        "opencode-auto",
+        "opencode auto-approve",
+        "alias opencode='opencode --auto' — auto-approves permissions not explicitly"
+        " denied; not a full bypass",
+        (),
+        _OPENCODE_BODY,
     ),
 )
 
