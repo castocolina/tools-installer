@@ -55,6 +55,8 @@ def test_registry_includes_requested_installable_entries() -> None:
         "volta",
         "codegraph",
         "graphify",
+        "cursor-agent",
+        "antigravity",
         "zsh",
         "oh-my-zsh",
     } <= ids
@@ -62,7 +64,7 @@ def test_registry_includes_requested_installable_entries() -> None:
 
 def test_human_agent_clis_are_p0_human_tools() -> None:
     tools = _tools_by_id()
-    for tool_id in ("codex", "claude", "opencode"):
+    for tool_id in ("codex", "claude", "opencode", "cursor-agent"):
         tool = tools[tool_id]
         assert tool.priority == "P0"
         assert tool.audience == "human"
@@ -186,6 +188,12 @@ def test_agent_clis_use_supported_install_methods() -> None:
     assert [m.kind for m in opencode.methods] == ["script", "pacman", "brew"]
     assert next(m for m in opencode.methods if m.kind == "script").params["url"] == (
         "https://opencode.ai/install"
+    )
+
+    cursor_agent = tools["cursor-agent"]
+    assert [m.kind for m in cursor_agent.methods] == ["script"]
+    assert next(m for m in cursor_agent.methods if m.kind == "script").params["url"] == (
+        "https://cursor.com/install"
     )
 
 
@@ -671,6 +679,62 @@ def test_graphify_entry_records_the_legitimacy_gate_evidence() -> None:
         assert needle in window, f"missing {needle!r} in graphify's comment"
 
 
+def test_cursor_agent_uses_the_legacy_collision_safe_cmd_name() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    cursor_agent = tools["cursor-agent"]
+    assert cursor_agent.name == "Cursor Agent CLI"
+    assert cursor_agent.category == "ai"
+    assert cursor_agent.cmd == "cursor-agent"
+    assert cursor_agent.cmd != "agent"
+    assert cursor_agent.priority == "P0"
+    assert cursor_agent.audience == "human"
+    assert cursor_agent.tier == "ai"
+    assert cursor_agent.recommends == ()
+    assert len(cursor_agent.methods) == 1
+    assert cursor_agent.methods[0].kind == "script"
+    assert cursor_agent.methods[0].params["url"] == "https://cursor.com/install"
+    assert cursor_agent.methods[0].params["shell"] == "bash"
+
+
+def test_antigravity_installs_via_official_script_with_no_recommends() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    antigravity = tools["antigravity"]
+    assert antigravity.name == "Antigravity CLI"
+    assert antigravity.category == "ai"
+    assert antigravity.cmd == "agy"
+    assert antigravity.priority == "P1"
+    assert antigravity.audience == "human"
+    assert antigravity.tier == "ai"
+    assert antigravity.recommends == ()
+    assert len(antigravity.methods) == 1
+    assert antigravity.methods[0].kind == "script"
+    assert antigravity.methods[0].params["url"] == "https://antigravity.google/cli/install.sh"
+    assert antigravity.methods[0].params["shell"] == "bash"
+
+
+def test_cursor_agent_and_antigravity_scripts_resolve_on_every_platform() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    for tool_id in ("cursor-agent", "antigravity"):
+        tool = tools[tool_id]
+        for os_name in ("macos", "debian", "arch", "fedora"):
+            for arch in ("amd64", "arm64"):
+                platform = Platform(os=os_name, arch=arch, immutable=False, has_brew=False)
+                assert [m.kind for m in resolve_methods(tool, platform)] == ["script"]
+
+
+def test_cursor_agent_and_antigravity_entries_record_the_verification_findings() -> None:
+    text = REGISTRY.read_text()
+    idx_ca = text.index('id = "cursor-agent"')
+    window_ca = text[max(0, idx_ca - 1500) : idx_ca]
+    for needle in ("cursor.com/install", "agent", "legacy", "cask"):
+        assert needle in window_ca, f"missing {needle!r} in cursor-agent's comment"
+
+    idx_ag = text.index('id = "antigravity"')
+    window_ag = text[max(0, idx_ag - 1500) : idx_ag]
+    for needle in ("agy", "SHA-512", "cask", "D-01"):
+        assert needle in window_ag, f"missing {needle!r} in antigravity's comment"
+
+
 def test_no_chrome_headless_shell_catalog_entry() -> None:
     ids = {tool.id for tool in load_tools(REGISTRY)}
     assert "chrome-headless-shell" not in ids
@@ -787,7 +851,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     # commit that changes the catalog.
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 26,
-        "ai": 11,
+        "ai": 13,
         "user": 38,
     }
 

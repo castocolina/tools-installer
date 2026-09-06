@@ -1371,6 +1371,68 @@ package = "opencode"
 kind = "brew"
 formula = "anomalyco/tap/opencode"
 
+# Verified 2026-09-06: the install script was fetched live (curl -fsS
+# https://cursor.com/install) and read verbatim this session; it self-detects
+# OS/arch, downloads a per-platform tarball from downloads.cursor.com, and
+# creates TWO symlinks to the same extracted binary -- ~/.local/bin/agent (the
+# newer primary name, shown in the script's own usage messaging) and
+# ~/.local/bin/cursor-agent (the script's own comment labels this "legacy").
+# cmd here is deliberately the legacy-but-real name, not the newer one:
+# cmd = "agent" would risk colliding with an unrelated agent binary from a
+# different installed CLI on a machine with more than one agent tool -- a
+# real, documented collision risk -- while cursor-agent is unambiguous and
+# matches every other reference to this tool already in this project's own
+# CONTEXT.md/ROADMAP/REQUIREMENTS.md. The only Homebrew artifact for this
+# vendor, cask "cursor" (confirmed live via
+# formulae.brew.sh/api/cask/cursor.json), installs the GUI IDE app -- a
+# different product from this terminal CLI -- so no kind="cask" fallback is
+# declared here.
+[[tool]]
+id = "cursor-agent"
+name = "Cursor Agent CLI"
+category = "ai"
+cmd = "cursor-agent"
+priority = "P0"
+audience = "human"
+tier = "ai"
+desc = "Cursor's terminal coding agent; installs via its own official curl|bash script, no brew/cask CLI equivalent exists."
+[[tool.method]]
+kind = "script"
+url = "https://cursor.com/install"
+shell = "bash"
+
+# Verified 2026-09-06: the install script was fetched live (curl -fsSL
+# https://antigravity.google/cli/install.sh) and read verbatim this session;
+# it installs a single binary agy into ~/.local/bin, fetches a per-platform
+# manifest JSON from a Google-run URL, and verifies the download's SHA-512
+# against that signed manifest before installing -- a stronger
+# self-verification than most kind="script" entries already in this
+# registry. If agy already exists at the target path the script no-ops with
+# an informational message rather than reinstalling (the CLI self-updates in
+# the background at runtime); this is inert from this installer's
+# perspective because is_installed's shutil.which("agy") check already
+# short-circuits a second run to ALREADY_INSTALLED, the same protection
+# every other script-kind entry with detect_path-free PATH detection already
+# relies on. The one Homebrew artifact for this vendor, cask "antigravity"
+# (confirmed live via formulae.brew.sh/api/cask/antigravity.json), installs
+# the GUI IDE .dmg -- a different product -- so no kind="cask" fallback is
+# declared here. No recommends field is declared on this entry per
+# CONTEXT.md D-01 (deferred, not dropped -- antigravity's own
+# companion-tool ecosystem is unresearched, revisit later).
+[[tool]]
+id = "antigravity"
+name = "Antigravity CLI"
+category = "ai"
+cmd = "agy"
+priority = "P1"
+audience = "human"
+tier = "ai"
+desc = "Google's terminal-based Antigravity agent CLI; installs via its own official curl|bash script, self-verifying the download's SHA-512 against a signed manifest."
+[[tool.method]]
+kind = "script"
+url = "https://antigravity.google/cli/install.sh"
+shell = "bash"
+
 # Verified 2026-09-05 against release tag v1.6.0 via the GitHub Releases API
 # (repos/colbymchenry/codegraph/releases/latest): the release publishes
 # codegraph-{darwin,linux}-{arm64,x64}.tar.gz plus a SHA256SUMS file, and
