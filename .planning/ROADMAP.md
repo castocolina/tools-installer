@@ -266,10 +266,10 @@ Plans:
   3. Invoking `cursor-agent`/`cursor` with no `--model` injects a live-verified, plain model slug (no bracket syntax); passing an explicit `--model` is never overridden.
   4. All three tweaks survive the target CLI self-updating in place (durable by construction — shell alias/function lookup precedes PATH search).
 
-**Plans**: 1 plan
+**Plans**: 1/1 plans executed
 Plans:
 
-- [ ] 10-01-PLAN.md — `codex-skip` + `opencode-auto` plain-alias tweaks and the `cursor-agent`/`cursor` conditional-injection default-model wrapper, all three wired through the existing `TweakBundle`/`tweak_policy` mechanism (wave 1)
+- [x] 10-01-PLAN.md — `codex-skip` + `opencode-auto` plain-alias tweaks and the `cursor-agent`/`cursor` conditional-injection default-model wrapper, all three wired through the existing `TweakBundle`/`tweak_policy` mechanism (wave 1)
 
 ### Phase 11: Background Maintenance Daemon
 
@@ -319,6 +319,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. System & User Tier Catalog Expansion | 3/3 | Complete    | 2026-09-06 |
 | 8. AI Tier Catalog Expansion & uv-tool Executor | 4/4 | Complete    | 2026-09-06 |
 | 9. Postinstall Hooks Mechanism | 2/2 | Complete    | 2026-09-06 |
-| 10. Agent CLI Ergonomics | 0/TBD | Not started | - |
+| 10. Agent CLI Ergonomics | 1/1 | In Progress|  |
 | 11. Background Maintenance Daemon | 0/TBD | Not started | - |
 | 12. Version-Aware Status & Update Action | 0/TBD | Not started | - |

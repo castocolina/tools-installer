@@ -66,12 +66,12 @@ Each maps to exactly one roadmap phase.
 
 ### Agent CLI Ergonomics (ingest batch 4/4 part A: `agent-cli-ergonomics`)
 
-- [ ] **REQ-codex-skip-tweak**: A `codex-skip` tweak, parallel to the existing `claude-skip` tweak, aliasing `codex` to its bypass-permissions flag with user-supplied flags respected (appended, never dropped).
+- [x] **REQ-codex-skip-tweak**: A `codex-skip` tweak, parallel to the existing `claude-skip` tweak, aliasing `codex` to its bypass-permissions flag with user-supplied flags respected (appended, never dropped).
   - status: codex's exact current flag name is unverified — needs the same live-verification pass every registry addition gets (Open Question 2).
-- [ ] **REQ-opencode-auto-tweak**: An `opencode-auto` tweak aliasing `opencode` to `opencode --auto` — explicitly *not* a full bypass-permissions equivalent (explicit deny rules still apply); Policies detail-panel copy must be honest about this narrower semantic so it isn't mistaken for `claude-skip`'s full bypass.
-- [ ] **REQ-cursor-agent-default-model-wrapper**: A `cursor-agent`/`cursor` wrapper that injects a plain, live-verified `--model <slug>` (no bracket syntax — confirmed unimplemented by a Cursor employee, not just buggy) on any bare invocation with no `--model` passed, since cursor-agent's model selection is stateful (persists across sessions) and a bare non-interactive call would otherwise silently inherit whatever was last selected anywhere. Never claims to set 1M context (confirmed interactive-Max-Mode-only, unreachable non-interactively).
+- [x] **REQ-opencode-auto-tweak**: An `opencode-auto` tweak aliasing `opencode` to `opencode --auto` — explicitly *not* a full bypass-permissions equivalent (explicit deny rules still apply); Policies detail-panel copy must be honest about this narrower semantic so it isn't mistaken for `claude-skip`'s full bypass.
+- [x] **REQ-cursor-agent-default-model-wrapper**: A `cursor-agent`/`cursor` wrapper that injects a plain, live-verified `--model <slug>` (no bracket syntax — confirmed unimplemented by a Cursor employee, not just buggy) on any bare invocation with no `--model` passed, since cursor-agent's model selection is stateful (persists across sessions) and a bare non-interactive call would otherwise silently inherit whatever was last selected anywhere. Never claims to set 1M context (confirmed interactive-Max-Mode-only, unreachable non-interactively).
   - status: the exact current high-effort "sol" model slug is unverified — must be confirmed via `cursor-agent`'s own live model-listing command at implementation time, never typed from memory (Open Question 1, narrowed from the original bracket-syntax question which is now fully resolved).
-- [ ] **REQ-agent-tweak-self-update-durability**: All three permissive-mode tweaks use a shell alias/function (`installer/tweaks.py`'s existing mechanism), not a file-based shim in the tool's own install directory — an alias lives in shell config, not the path a self-updating binary rewrites, and shell alias/function lookup happens before PATH search. `cursor-agent`'s wrapper specifically needs a shell *function* (not a plain alias), since it must conditionally omit its injection when the user already passed `--model`.
+- [x] **REQ-agent-tweak-self-update-durability**: All three permissive-mode tweaks use a shell alias/function (`installer/tweaks.py`'s existing mechanism), not a file-based shim in the tool's own install directory — an alias lives in shell config, not the path a self-updating binary rewrites, and shell alias/function lookup happens before PATH search. `cursor-agent`'s wrapper specifically needs a shell *function* (not a plain alias), since it must conditionally omit its injection when the user already passed `--model`.
 
 ### Background Maintenance Daemon (ingest batch 4/4 part B: `background-maintenance-daemon`)
 
@@ -143,10 +143,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-postinstall-idempotency-live-check | Phase 9 | Complete |
 | REQ-postinstall-noninteractive-only | Phase 9 | Complete |
 | REQ-codegraph-mcp-postinstall | Phase 9 | Complete |
-| REQ-codex-skip-tweak | Phase 10 | Pending |
-| REQ-opencode-auto-tweak | Phase 10 | Pending |
-| REQ-cursor-agent-default-model-wrapper | Phase 10 | Pending |
-| REQ-agent-tweak-self-update-durability | Phase 10 | Pending |
+| REQ-codex-skip-tweak | Phase 10 | Complete |
+| REQ-opencode-auto-tweak | Phase 10 | Complete |
+| REQ-cursor-agent-default-model-wrapper | Phase 10 | Complete |
+| REQ-agent-tweak-self-update-durability | Phase 10 | Complete |
 | REQ-launchd-prune-policy | Phase 11 | Pending |
 | REQ-daemon-log-diagnostics | Phase 11 | Pending |
 | REQ-daemon-dependency-gating | Phase 11 | Pending |

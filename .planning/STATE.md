@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 current_phase: 10
 current_phase_name: Agent CLI Ergonomics
-status: planning
-stopped_at: Phase 9 complete (09-01, 09-02, dual-lane review, verification passed), ready to plan Phase 10
-last_updated: "2026-09-06T20:00:00.000Z"
+status: executing
+stopped_at: Phase 10 Plan 01 complete (codex-skip, opencode-auto, cursor-agent-model tweaks), pending verify-work/code-review
+last_updated: "2026-09-06T22:12:19.850Z"
 last_activity: 2026-09-06
-last_activity_desc: Phase 9 (Postinstall Hooks Mechanism) verification closed (Tier-3 gap resolved), transitioned to Phase 10
-state_head: f5a6ae9
+last_activity_desc: Phase 10 Plan 01 (Agent CLI Ergonomics) executed — 3 tasks, all committed, make validate && make test green
+state_head: 8821242838daf031028f5a9f72a13d116abb781d
 progress:
   total_phases: 12
   completed_phases: 9
-  total_plans: 25
-  completed_plans: 25
+  total_plans: 26
+  completed_plans: 26
   percent: 75
 ---
 
@@ -28,9 +28,9 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 10 — Agent CLI Ergonomics
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-09-06 — Phase 9 (Postinstall Hooks Mechanism, 09-01/09-02) complete, transitioned to Phase 10
+Plan: 01 complete
+Status: Executed — pending verify-work/code-review
+Last activity: 2026-09-06 — Phase 10 Plan 01 (codex-skip, opencode-auto, cursor-agent-model tweaks) executed, all 3 tasks committed
 
 Progress: [████████░░] 75%
 
@@ -65,6 +65,7 @@ Progress: [████████░░] 75%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 09 P02 | 25 | 2 tasks | 2 files |
+| Phase 10 P01 | 25min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -91,6 +92,7 @@ Recent decisions affecting current work:
 - [07-03, 2026-09-06]: `kitty`/`wezterm` are cask-only on macOS (no formula); `kitty` has no Linux fallback at all on immutable Bazzite (`.txz` assets, gzip-only `tar -xzf`); `wezterm`'s Debian/Fedora AppImage (`raw=true`) sidesteps that extraction gap and gets an unplanned Bazzite path; Linux-arm64 AppImage confirmed absent via live GitHub API check, `pacman` already covers Arch arm64. Cross-AI execution failed 3x consecutively (transient backend outage) and worktree-isolated `gsd-executor` failed once (stale base branch) — executed directly on the orchestrator's own tokens per Rule 12's fallback. Phase 7 now fully complete.
 - [09-01, 2026-09-06]: `Tool.postinstall` is a closed dispatch-hook NAME (mirroring `smoke`), not a literal command string; `installer/engine.py::install_tool` dispatches it Method-aware, isolated in its own try/except, immediately after success and never on `ALREADY_INSTALLED`; codegraph's hook never passes `--target auto` (confirmed unsafe by live source read) and maps `cursor-agent` -> codegraph's own `cursor` id via live `is_installed` checks.
 - [09-02, 2026-09-06]: Tier-3 disposable-container run (colima+docker) proved the postinstall mechanism end to end against a real filesystem: composed `--target claude,cursor` CSV matched exactly, real `~/.claude.json`/`~/.cursor/mcp.json` `mcpServers.codegraph` entries were found, and the zero-hosts case proved the documented no-op (no install call, no config file). Phase 9 now fully complete; four decisions consolidated into PROJECT.md's Key Decisions table and the mechanism documented in `.claude/architecture.md`.
+- [Phase 10]: [10-01, 2026-09-06]: codex-skip/opencode-auto/cursor-agent-model added as plain TweakBundle entries; tweak_policy's reload hint split (enable vs disable) and gained ensure_sourced_from so every tweak reaches a real shell under split PATH link mode, wired from both of setup.py's _build_app call sites
 
 ### Pending Todos
 
@@ -113,6 +115,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-06T18:14:46.000Z
-Stopped at: Phase 9 complete (09-01, 09-02), ready to plan Phase 10
-Resume file: .planning/phases/09-postinstall-hooks-mechanism/09-02-SUMMARY.md
+Last session: 2026-09-06T22:12:19.405Z
+Stopped at: Completed 10-01-PLAN.md
+Resume file: None
