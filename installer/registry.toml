@@ -1294,6 +1294,23 @@ archive = "zip"
 kind = "brew"
 formula = "deno"
 
+# Verified 2026-09-06 (Tier-3 container, colima+docker, ubuntu:24.04; SDKMAN
+# script 5.23.0 / native 0.7.34 — see 06-01-SUMMARY.md for the verbatim
+# transcript): on a clean bootstrap performed by this project's own installer,
+# the `?ci=true` query param on this bootstrap URL persists
+# `sdkman_auto_answer=true` to `~/.sdkman/etc/config`, which removes one of the
+# two guard conditions on SDKMAN's single interactive prompt (`__sdk_install`'s
+# "Do you want X set as default? (Y/n)") for any future re-install/upgrade of a
+# machine this installer itself bootstrapped. This guarantee does NOT extend to
+# a brownfield machine with a pre-existing SDKMAN install:
+# `installer/status.py`'s `is_installed` detects an existing
+# `~/.sdkman/bin/sdkman-init.sh` via `detect_path`, and
+# `installer/engine.py::install_tool` returns `ALREADY_INSTALLED` before this
+# `script` method ever runs (`installer/status.py:26-29`,
+# `installer/engine.py:80-81`) — so a pre-existing SDKMAN install may retain
+# whatever `sdkman_auto_answer` value it already had. The `java` entry below
+# carries the full SC#2 finding this bootstrap choice contributes to.
+# Re-verify if SDKMAN's script version changes materially from 5.23.0.
 [[tool]]
 id = "sdkman"
 name = "SDKMAN"
@@ -1310,6 +1327,27 @@ shell = "bash"
 bin_dir = "~/.sdkman/bin"
 detect_path = "~/.sdkman/bin/sdkman-init.sh"
 
+# Verified 2026-09-06 (Tier-3 container, colima+docker, ubuntu:24.04; SDKMAN
+# script 5.23.0 / native 0.7.34 — see 06-01-SUMMARY.md for the verbatim
+# transcript): `sdk install java` (no version given) with stdin closed completed
+# non-interactively, exit 0, with no vendor prompt of any kind — SDKMAN
+# resolved its server-side "default" candidate version via one HTTP call, not
+# a chooser. Reading that container's installed SDKMAN source
+# (`sdkman-install.sh`/`sdkman-env-helpers.sh`) shows why: the only interactive
+# prompt in `__sdk_install` ("Do you want X set as default? (Y/n)") requires
+# an existing `$CURRENT` version (the upgrade-only path); on a first install —
+# this project's actual scenario — `$CURRENT` is empty, so the prompt is never
+# reached, regardless of `sdkman_auto_answer`. On a clean bootstrap by this
+# project's own installer (brownfield caveat: see the `sdkman` comment above,
+# `installer/status.py:26-29`, `installer/engine.py:80-81`), `?ci=true`
+# additionally sets `sdkman_auto_answer=true`, closing the prompt's other
+# guard condition for future re-installs of an installer-bootstrapped machine.
+# This resolves ROADMAP Phase 6 SC#2 for this project's actual installer-driven
+# path: no pinned `version` param is needed, none is added. Caveat: this
+# reproduces the mechanism observed at SDKMAN script 5.23.0, fetched unpinned —
+# 06-RESEARCH.md's Assumption A2 notes a future SDKMAN release could add a
+# different prompt elsewhere; re-verify if the script version changes
+# materially from 5.23.0.
 [[tool]]
 id = "java"
 name = "Java"

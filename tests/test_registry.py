@@ -140,6 +140,28 @@ def test_java_tools_install_exclusively_through_sdkman() -> None:
         assert method.params["bin_dir"] == f"~/.sdkman/candidates/{candidate}/current/bin"
 
 
+def test_java_and_sdkman_entries_record_the_sc2_no_pin_verification() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    assert "sdkman_auto_answer" in text
+    assert "Tier-3 container" in text
+    assert "$CURRENT" in text
+    assert "no vendor prompt" in text
+    assert "SC#2" in text
+
+    lines = text.splitlines()
+    sdkman_idx = next(i for i, line in enumerate(lines) if line == 'id = "sdkman"')
+    java_idx = next(i for i, line in enumerate(lines) if line == 'id = "java"')
+    window = 30
+    sdkman_window = "\n".join(lines[max(0, sdkman_idx - window) : sdkman_idx])
+    java_window = "\n".join(lines[max(0, java_idx - window) : java_idx])
+    assert "sdkman_auto_answer" in sdkman_window
+    assert "Tier-3 container" in sdkman_window
+    assert "$CURRENT" in java_window
+    assert "no vendor prompt" in java_window
+    assert "SC#2" in java_window
+    assert "Tier-3 container" in java_window
+
+
 def test_agent_clis_use_supported_install_methods() -> None:
     tools = _tools_by_id()
     codex = tools["codex"]
