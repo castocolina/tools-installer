@@ -1344,9 +1344,9 @@ tier = "ai"
 desc = "Anthropic coding agent for the user; complements Codex and needs clear install ownership."
 # real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
-# own README), rtk (native hook integration for this host -- see 08-RESEARCH.md's
-# per-host table for the one exception, codex, where rtk's integration is
-# instructions-based rather than a runtime hook).
+# own README), rtk (native hook integration for this host -- see codex's own recommends
+# comment for the one exception where rtk's integration is instructions-based rather
+# than a runtime hook).
 recommends = ["codegraph", "graphify", "rtk"]
 [[tool.method]]
 kind = "script"
@@ -1368,9 +1368,9 @@ tier = "ai"
 desc = "Open source coding agent for the user, useful when teams want provider-flexible terminal workflows."
 # real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
-# own README), rtk (native hook integration for this host -- see 08-RESEARCH.md's
-# per-host table for the one exception, codex, where rtk's integration is
-# instructions-based rather than a runtime hook).
+# own README), rtk (native hook integration for this host -- see codex's own recommends
+# comment for the one exception where rtk's integration is instructions-based rather
+# than a runtime hook).
 recommends = ["codegraph", "graphify", "rtk"]
 [[tool.method]]
 kind = "script"
@@ -1410,9 +1410,9 @@ tier = "ai"
 desc = "Cursor's terminal coding agent; installs via its own official curl|bash script, no brew/cask CLI equivalent exists."
 # real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
-# own README), rtk (native hook integration for this host -- see 08-RESEARCH.md's
-# per-host table for the one exception, codex, where rtk's integration is
-# instructions-based rather than a runtime hook).
+# own README), rtk (native hook integration for this host -- see codex's own recommends
+# comment for the one exception where rtk's integration is instructions-based rather
+# than a runtime hook).
 recommends = ["codegraph", "graphify", "rtk"]
 [[tool.method]]
 kind = "script"
@@ -1532,8 +1532,13 @@ pypi_pkg = "graphifyy"
 # methods. Each Linux tarball's top level is a bare rtk binary with no
 # wrapping directory (confirmed by downloading and running tar -tzf on all
 # three tarballs this session -- x86_64-musl, aarch64-gnu, and
-# x86_64-apple-darwin), hence member = "rtk", strip = 0 on every method --
-# no {ver} placeholder is needed in the asset names (upstream's own
+# x86_64-apple-darwin), hence member = "rtk", strip = 0 on every method.
+# The macOS method has no arch restriction (it also serves aarch64-apple-darwin,
+# the Apple Silicon build), but that specific tarball was NOT independently
+# downloaded/inspected -- assumed to share the same flat-binary layout as the
+# other three verified assets, based on rtk-ai's single cross-compiled release
+# pipeline (cross-AI dual-lane review, WR-01). No {ver} placeholder is needed
+# in the asset names (upstream's own
 # convention omits it). The default branch is develop, not main --
 # informational only, since this project's own tag resolution always uses
 # the GitHub Releases API's "latest" endpoint, never a branch checkout. A
