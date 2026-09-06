@@ -242,7 +242,7 @@ Plans:
 **Requirements**: REQ-postinstall-field, REQ-postinstall-execution-timing, REQ-postinstall-idempotency-live-check, REQ-postinstall-noninteractive-only, REQ-codegraph-mcp-postinstall
 **Success Criteria** (what must be TRUE):
 
-  1. A tool can declare an optional `postinstall` command (inline or `postinstall_script` file) in the registry; it runs exactly once per successful install, immediately after the specific `Method` that succeeded.
+  1. A tool can declare an optional `postinstall` command in the registry — inline, a `postinstall_script` file, or a closed dispatch-hook name for the case where the invocation depends on live machine state (see REQ-postinstall-field, amended during Phase 9 implementation) — it runs exactly once per successful install, immediately after the specific `Method` that succeeded.
   2. A postinstall failure is visible to the user but never marks the tool's own install as failed.
   3. Idempotency is a live check ("is the effect already present"), with no new state-tracking database anywhere in the codebase.
   4. A tool whose only setup path is interactive is not wired to this mechanism at all.

@@ -78,3 +78,88 @@ over-engineered); both plans have `cross_ai: true`; core same-commit test covera
 - LOW 2: same-commit tests added for empty-string and non-string `postinstall` values.
 
 Proceeding to cycle 2.
+
+## Cycle 2 (codex-sol-high)
+
+**Scope:** `09-01-PLAN.md`, `09-02-PLAN.md` as revised by cycle 1's fixes.
+
+**HIGH — The registry contract remains unsatisfied.** 09-01-PLAN.md admits a hook name is
+neither the required inline command nor `postinstall_script`, and cycle-1's fix only
+reconciled this in plan prose — it never revised `.planning/REQUIREMENTS.md` (REQ-
+postinstall-field) or `.planning/ROADMAP.md` (Phase 9 SC#1), the actual normative
+documents. Required revision: implement one of the two originally-declared shapes, or
+formally amend both normative files.
+
+**HIGH — The new `tools` parameter never reaches the production path.** Cycle-1's PART E
+fix targeted a nonexistent direct `install_tool` call inside `run_wizard`; `installer/
+app.py::run_wizard` actually delegates through `installer/session.py::run_installs`,
+whose `Install` Protocol and all three call sites (initial, mismatch-retry, mismatch-
+fallback) omitted `tools` entirely. Required revision: thread a full-catalog mapping
+through `run_installs`, its `Install` Protocol, and every invocation, with production-path
+tests.
+
+**HIGH — The claimed exception isolation is structurally false.** Cycle-1's PART C fix
+placed its dedicated postinstall `try/except` textually after `_perform`'s call, but still
+inside the SAME outer `try` the method ladder's own `except (CommandError, ExecutorError,
+VersionError)` clause guards — the real `installer/engine.py` shows the success branch's
+`return InstallOutcome(...)` sits inside that one `try` body. Required revision: a coherent
+`try/except/else` structure where postinstall executes in the `else` clause, a true sibling
+of `try`/`except`, never nested inside the try body — with a corroborating test.
+
+**HIGH — A fresh download does not guarantee the `codegraph` command is resolvable.**
+`installer/download.py::install_download` places a fresh binary into `~/.local/bin`; PATH
+wiring for that directory is a separate, later step (`configure_path`/`make fix`); the hook
+invoked bare `"codegraph"`, which only worked in the Tier-3 container recipe because that
+recipe happened to pre-export `~/.local/bin`, masking the defect. Required revision: invoke
+the freshly-installed executable through its resolved absolute path (the same `bin_dir`
+`install_download` itself used), with a test whose initial PATH excludes `~/.local/bin`.
+
+**HIGH — The Tier-3 verifier remains capable of false success and does not cover its
+stated cases.** The `<verify>` piped the whole container run into `tail` without
+`pipefail`, so a failing assertion inside the container would not fail the gate; the
+zero-host run and its exact-argv assertion were never actually written into the
+recipe; and the zero-host case's prescribed `CAPTURED == []` is impossible in practice
+because the download executor uses the SAME `logging_runner`, so `CAPTURED` also holds its
+own curl/tar/chmod calls. Required revision: one failure-propagating gate running both
+containers, filtering captured calls to only `codegraph install` invocations, and
+asserting exact argv, warning, and no-host filesystem behavior for both cases.
+
+**MEDIUM — The two-host Tier-3 case verifies only Claude's config.** It plants both Claude
+and Cursor host stubs but only inspects `~/.claude.json`. Required revision: also locate
+and assert Cursor's own real global MCP config entry.
+
+`CYCLE_SUMMARY: current_high=5 current_actionable=1`
+
+**Disposition:** All 5 HIGH + the MEDIUM fixed directly in `09-01-PLAN.md`/`09-02-PLAN.md`
+and the normative docs, per Rule 10:
+- HIGH (registry contract): `.planning/REQUIREMENTS.md`'s REQ-postinstall-field and
+  `.planning/ROADMAP.md`'s Phase 9 SC#1 both AMENDED in this same commit to name a closed
+  dispatch-hook NAME as a third accepted `postinstall` field shape, with the rationale
+  recorded directly in the requirement text — a genuine normative-document change, not a
+  plan-level workaround.
+- HIGH (`tools` threading): corrected to go through the REAL chain — a new `catalog:
+  Mapping[str, Tool] | None = None` parameter on `run_installs` (named distinctly from its
+  existing `tools: list[Tool]` parameter), threaded into all three `install(...)` call
+  sites and the `Install` Protocol; `run_wizard` builds `{t.id: t for t in tools}` from its
+  own already-held catalog list and passes it as `catalog=` into its one `run_installs`
+  call. New tests in `tests/test_session.py` and `tests/test_app.py`.
+- HIGH (exception isolation): `install_tool`'s method-ladder loop restructured to
+  `try/except/else` — `_perform(method, ctx)` is the only statement in the `try` body; the
+  postinstall dispatch and success `return` now live in a new `else` clause, a true sibling
+  of `try`/`except`, never nested inside it.
+- HIGH (PATH resolution): `_codegraph_mcp_register` now computes `bin_dir(method.params.
+  get("bin_dir")) / "codegraph"` (the SAME path `install_download` itself wrote to, via the
+  now-load-bearing `method` parameter) and invokes that resolved absolute path, never a
+  bare `"codegraph"` relying on the current process's PATH.
+- HIGH (Tier-3 false success): the container recipe rewritten as a single `tier3-verify.sh`
+  script with `set -euo pipefail` at both the outer-script and inner-container level (no
+  more unchecked `| tail`), running BOTH the host-present and host-absent cases, filtering
+  captured calls to `c[0] == expected_bin and c[1] == "install"` (since the download
+  executor shares the same logging runner), and asserting exact argv / warning / filesystem
+  state for both cases in one failure-propagating gate.
+- MEDIUM (Cursor config): the `present` case's Python block now asserts Cursor's own real
+  global MCP config entry alongside Claude's, with a note to confirm the exact config path
+  live during execution (e.g. via `codegraph install --print-config cursor` or reading
+  `cursor.js` directly) rather than guessing an unverified path at plan-authoring time.
+
+Proceeding to cycle 3.
