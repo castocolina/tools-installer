@@ -58,7 +58,7 @@ waiting on this Phase 12 mechanism — see Phase 4's scope note.
 - [x] **Phase 3: Install/Uninstall & Tweak Lifecycle Hardening** - Skip dependents after a failed prerequisite, sweep tweak-managed executables on uninstall, and enable Oh-My-Zsh's bundled plugins (completed 2026-09-05)
 - [x] **Phase 4: npm/npx Ban Extension & Redirect Policy** - Extend the ban to `npx` and redirect it to `pnpm dlx`, leaving `npm` hard-blocked pending its own subcommand-allowlist decision (completed 2026-09-05)
 - [x] **Phase 5: Registry Method Corrections (codegraph/mmdc/puppeteer)** - Move `codegraph` to `kind="github_release"`, resolve `mmdc`'s install method with real research, and give `puppeteer`/`chrome-headless-shell` their own catalog entries (completed 2026-09-06)
-- [ ] **Phase 6: SDKMAN Hardening & Registry-Authoring Guidelines** - Verify and harden the already-shipped SDKMAN-exclusivity work, and document the per-tool verification checklist and brew-preference guideline
+- [x] **Phase 6: SDKMAN Hardening & Registry-Authoring Guidelines** - Verify and harden the already-shipped SDKMAN-exclusivity work, and document the per-tool verification checklist and brew-preference guideline (completed 2026-09-06)
 - [ ] **Phase 7: System & User Tier Catalog Expansion** - Add zsh, oh-my-zsh, gnu-bash, Apple Containers (system tier) and kitty, wezterm (user tier), with real Linux/Bazzite parity
 - [ ] **Phase 8: AI Tier Catalog Expansion & uv-tool Executor** - Add the new `uv-tool` executor kind, antigravity, cursor-agent, rtk, and wire `recommends` for agent hosts
 - [ ] **Phase 9: Postinstall Hooks Mechanism** - Add the optional per-tool postinstall field/execution/idempotency mechanism, proven via codegraph's MCP registration
@@ -194,7 +194,7 @@ Plans:
 **Plans**: 1 plan
 Plans:
 
-- [ ] 06-01-PLAN.md — Fresh Tier-3 verification of `sdk install java` (no pin needed) recorded as a guarded registry comment; the two registry-authoring guidelines (D-01 verification checklist, D-02 brew-preference) written into `.claude/architecture.md`
+- [x] 06-01-PLAN.md — Fresh Tier-3 verification of `sdk install java` (no pin needed) recorded as a guarded registry comment; the two registry-authoring guidelines (D-01 verification checklist, D-02 brew-preference) written into `.claude/architecture.md`
 
 ### Phase 7: System & User Tier Catalog Expansion
 
@@ -208,7 +208,12 @@ Plans:
   3. `zsh`/`oh-my-zsh` have a working Linux/Bazzite install path; the existing `podman` entry (not a new one) is the container-runtime story there.
   4. Whether Apple Containers needs an actual install step on a current macOS, or is a pure version-gate/doc entry, is resolved and recorded.
 
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+
+- [ ] 07-01-PLAN.md — `zsh` + `oh-my-zsh` system-tier entries, Tier-3-verified `.zshrc` rewrite safety, Bazzite parity via the existing `podman` entry (wave 1)
+- [ ] 07-02-PLAN.md — `gnu-bash` (with a same-named-binary detection fix) + Apple Containers system-tier entries, D-01's disabled-state resolution recorded in architecture.md (wave 2, needs 07-01)
+- [ ] 07-03-PLAN.md — `kitty` + `wezterm` user-tier terminal-emulator entries (new `terminal` category), kitty's accepted Bazzite gap, wezterm's checksum-verified AppImage fallback, phase decision consolidation (wave 3, needs 07-02)
 
 ### Phase 8: AI Tier Catalog Expansion & uv-tool Executor
 
@@ -297,7 +302,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 3. Install/Uninstall & Tweak Lifecycle Hardening | 3/3 | Complete    | 2026-09-05 |
 | 4. npm/npx Ban Extension & Redirect Policy | 5/5 | Complete    | 2026-09-05 |
 | 5. Registry Method Corrections (codegraph/mmdc/puppeteer) | 4/4 | Complete    | 2026-09-05 |
-| 6. SDKMAN Hardening & Registry-Authoring Guidelines | 0/1 | Not started | - |
+| 6. SDKMAN Hardening & Registry-Authoring Guidelines | 1/1 | Complete    | 2026-09-06 |
 | 7. System & User Tier Catalog Expansion | 0/TBD | Not started | - |
 | 8. AI Tier Catalog Expansion & uv-tool Executor | 0/TBD | Not started | - |
 | 9. Postinstall Hooks Mechanism | 0/TBD | Not started | - |
