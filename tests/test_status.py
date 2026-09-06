@@ -186,6 +186,32 @@ def test_detect_path_absent_is_not_installed(tmp_path: Path, monkeypatch: pytest
     assert is_installed(_detect_path_tool(str(missing))) is False
 
 
+def _uv_tool_tool() -> Tool:
+    return Tool(
+        id="graphify",
+        name="Graphify",
+        category="dev",
+        cmd="graphify",
+        methods=(Method(kind="uv-tool", params={"pypi_pkg": "graphifyy"}),),
+    )
+
+
+def test_uv_tool_status_is_detected_through_its_cli_shim(monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.status as status
+
+    def which_graphify_only(cmd: str) -> str | None:
+        return "/home/user/.local/bin/graphify" if cmd == "graphify" else None
+
+    monkeypatch.setattr(status.shutil, "which", which_graphify_only)
+    assert is_installed(_uv_tool_tool()) is True
+
+    def which_none(cmd: str) -> str | None:
+        return None
+
+    monkeypatch.setattr(status.shutil, "which", which_none)
+    assert is_installed(_uv_tool_tool()) is False
+
+
 def test_gnu_bash_status_is_not_fooled_by_macos_system_bash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -94,7 +94,29 @@ def test_unsupported_kind_raises():
 
 
 def test_every_command_kind_has_an_executor():
-    assert set(EXECUTORS) == {"script", "node", "sdkman", "dnf", "apt", "pacman", "brew", "cask"}
+    assert set(EXECUTORS) == {
+        "script",
+        "node",
+        "uv-tool",
+        "sdkman",
+        "dnf",
+        "apt",
+        "pacman",
+        "brew",
+        "cask",
+    }
+
+
+def test_uv_tool_executor_builds_uv_tool_install() -> None:
+    calls, runner = _record()
+    method = Method(kind="uv-tool", params={"pypi_pkg": "graphifyy"})
+    execute(method, runner)
+    assert calls == [["uv", "tool", "install", "graphifyy"]]
+
+
+def test_uv_tool_without_pypi_pkg_raises_executor_error():
+    with pytest.raises(ExecutorError, match="pypi_pkg"):
+        execute(Method(kind="uv-tool", params={}), lambda _cmd: None)
 
 
 def test_script_passes_env_assignments_to_the_shell() -> None:

@@ -543,6 +543,27 @@ kind = "node"
         load_tools(manifest)
 
 
+def test_uv_tool_kind_parses_with_pypi_pkg(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "graphify"
+category = "dev"
+cmd = "graphify"
+tier = "ai"
+requires = ["uv"]
+[[tool.method]]
+kind = "uv-tool"
+pypi_pkg = "graphifyy"
+""",
+    )
+    tools = load_tools(manifest)
+    method = tools[0].methods[0]
+    assert method.kind == "uv-tool"
+    assert method.params["pypi_pkg"] == "graphifyy"
+
+
 def test_sdkman_kind_parses_with_candidate(tmp_path: Path) -> None:
     manifest = _write(
         tmp_path,

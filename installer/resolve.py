@@ -13,6 +13,7 @@ _RANK = {
     "script": 10,
     "github_release": 20,
     "node": 20,
+    "uv-tool": 20,
     "sdkman": 20,
     "tarball": 20,
     "app": 20,
@@ -43,7 +44,11 @@ def _applies(method: Method, platform: Platform) -> bool:
     ):
         return False
     kind = method.kind
-    if kind in ("script", "node", "sdkman", "github_release", "tarball", "app"):
+    # uv-tool is a userspace install this project's own toolchain (uv) performs,
+    # gated by whether uv itself is present -- a fact installer/deps.py's
+    # requires = ["uv"] edge already carries, not a platform fact this function
+    # should re-derive; mirrors node's and sdkman's unconditional-True treatment.
+    if kind in ("script", "node", "sdkman", "github_release", "tarball", "app", "uv-tool"):
         return True
     if kind == "brew":
         return platform.has_brew

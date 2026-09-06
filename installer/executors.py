@@ -453,6 +453,11 @@ def _node(method: Method, runner: Runner) -> None:
         SMOKE_CHECKS[smoke]()
 
 
+def _uv_tool(method: Method, runner: Runner) -> None:
+    pypi_pkg = require_str(method, "pypi_pkg")
+    runner(["uv", "tool", "install", pypi_pkg])
+
+
 def _sdkman(method: Method, runner: Runner) -> None:
     # `sdk` is a shell function defined by sourcing sdkman-init.sh, not a PATH
     # binary — it must be sourced in the same shell invocation that calls it.
@@ -485,6 +490,7 @@ def _cask(method: Method, runner: Runner) -> None:
 EXECUTORS: dict[str, Callable[[Method, Runner], None]] = {
     "script": _script,
     "node": _node,
+    "uv-tool": _uv_tool,
     "sdkman": _sdkman,
     "dnf": _dnf,
     "apt": _apt,

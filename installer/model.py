@@ -13,6 +13,7 @@ SMOKE_CHECK_NAMES: frozenset[str] = frozenset({"puppeteer-browser"})
 METHOD_KINDS = (
     "script",
     "node",
+    "uv-tool",
     "sdkman",
     "github_release",
     "tarball",

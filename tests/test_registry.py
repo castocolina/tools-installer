@@ -54,6 +54,7 @@ def test_registry_includes_requested_installable_entries() -> None:
         "maven",
         "volta",
         "codegraph",
+        "graphify",
         "zsh",
         "oh-my-zsh",
     } <= ids
@@ -631,6 +632,45 @@ def test_selecting_mmdc_drags_in_pnpm_and_puppeteer_on_linux_amd64() -> None:
     assert "pnpm" in result.dragged_in
 
 
+def test_graphify_uses_the_uv_tool_executor_and_requires_uv() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    graphify = tools["graphify"]
+    assert graphify.name == "Graphify"
+    assert graphify.category == "dev"
+    assert graphify.cmd == "graphify"
+    assert graphify.priority == "P1"
+    assert graphify.audience == "ai"
+    assert graphify.tier == "ai"
+    assert graphify.requires == ("uv",)
+    assert graphify.recommends == ()
+    assert len(graphify.methods) == 1
+    assert graphify.methods[0].kind == "uv-tool"
+    assert graphify.methods[0].params["pypi_pkg"] == "graphifyy"
+
+
+def test_selecting_graphify_drags_in_uv() -> None:
+    catalog = load_tools(REGISTRY)
+    by_id = {tool.id: tool for tool in catalog}
+    platform = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    result = resolve_dependencies(
+        [by_id["graphify"]],
+        catalog,
+        available=lambda tool: bool(resolve_methods(tool, platform)),
+        is_installed=lambda _tool: False,
+    )
+    ids = [tool.id for tool in result.order]
+    assert ids.index("uv") < ids.index("graphify")
+    assert "uv" in result.dragged_in
+
+
+def test_graphify_entry_records_the_legitimacy_gate_evidence() -> None:
+    text = REGISTRY.read_text()
+    idx = text.index('id = "graphify"')
+    window = text[max(0, idx - 1500) : idx]
+    for needle in ("graphifyy", "uv tool install", "too-new", "Graphify-Labs/graphify"):
+        assert needle in window, f"missing {needle!r} in graphify's comment"
+
+
 def test_no_chrome_headless_shell_catalog_entry() -> None:
     ids = {tool.id for tool in load_tools(REGISTRY)}
     assert "chrome-headless-shell" not in ids
@@ -747,7 +787,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     # commit that changes the catalog.
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 26,
-        "ai": 10,
+        "ai": 11,
         "user": 38,
     }
 
@@ -1280,6 +1320,13 @@ def test_shipped_node_tools_require_pnpm() -> None:
     for tool in tools:
         if any(m.kind == "node" for m in tool.methods):
             assert "pnpm" in tool.requires, f"{tool.id}: node tool must require pnpm"
+
+
+def test_shipped_uv_tool_tools_require_uv() -> None:
+    tools = load_tools(REGISTRY)
+    for tool in tools:
+        if any(m.kind == "uv-tool" for m in tool.methods):
+            assert "uv" in tool.requires, f"{tool.id}: uv-tool tool must require uv"
 
 
 def test_puppeteer_entry_records_when_the_smoke_check_does_not_re_run() -> None:

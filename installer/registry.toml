@@ -1414,6 +1414,33 @@ checksum = "SHA256SUMS"
 member = "bin/codegraph"
 strip = 1
 
+# Verified 2026-09-06: graphifyy's own README (fetched via the PyPI package
+# description field) states verbatim that the PyPI package is graphifyy
+# (double-y -- other graphify* packages are unaffiliated) and that the CLI
+# command stays graphify, with `uv tool install graphifyy` as its first
+# recommended install command; the distribution is a pure wheel (no setup.py
+# build step executes at install time).
+# The automated package-legitimacy seam flagged this [SUS] on a too-new /
+# unknown-downloads heuristic that reads only the latest release's timestamp.
+# This entry's legitimacy was instead discharged this session against LIVE
+# PyPI + GitHub metadata: 223 published releases (earliest 2026-04-04, well
+# before this session), and GitHub repo Graphify-Labs/graphify with 115,225
+# stars, created 2026-04-03 -- the opposite of a fresh look-alike. See this
+# plan's own SUMMARY (08-01-SUMMARY.md) for the full recorded evidence.
+[[tool]]
+id = "graphify"
+name = "Graphify"
+category = "dev"
+cmd = "graphify"
+priority = "P1"
+audience = "ai"
+tier = "ai"
+requires = ["uv"]
+desc = "Turns a codebase (plus docs, SQL schemas, configs, PDFs) into a queryable local knowledge graph for AI agents."
+[[tool.method]]
+kind = "uv-tool"
+pypi_pkg = "graphifyy"
+
 [[tool]]
 id = "deno"
 name = "Deno"
