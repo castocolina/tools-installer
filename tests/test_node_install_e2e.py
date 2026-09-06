@@ -26,36 +26,28 @@ def test_mmdc_is_a_node_tool_requiring_pnpm() -> None:
     assert node_methods and node_methods[0].params["npm_pkg"] == "@mermaid-js/mermaid-cli"
 
 
-def _stub_version_probe_and_browser_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    cache = tmp_path / "puppeteer-cache"
-    browser = (
-        cache
-        / "chrome-headless-shell"
-        / "linux-152.0.7977.75"
-        / "chrome-headless-shell-linux64"
-        / "chrome-headless-shell"
-    )
-    browser.parent.mkdir(parents=True)
-    browser.write_text("x")
-    browser.chmod(0o755)
-    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
+def _stub_version_probe_and_browser_launch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the two things that touch the machine: `--version` reads and the launch.
+
+    The launch is a real browser start through puppeteer's own `launch()`, so
+    there is nothing to plant on disk for it — the seam is the whole probe.
+    """
 
     def fake_probe(argv: list[str]) -> str:
         program = argv[0]
         if program.endswith("pnpm"):
             return "12.3.4"
-        if program == "node" or program.endswith("/node"):
-            return "v24.20.0"
-        return "152.0.7977.75"
+        return "v24.20.0"
 
     monkeypatch.setattr(executors, "probe_version", fake_probe)
+    monkeypatch.setattr(executors, "launch_puppeteer", lambda: None)
 
 
 def test_installing_mmdc_runs_pnpm_add_global_no_bare_npm(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    _stub_version_probe_and_browser_cache(monkeypatch, tmp_path)
+    _stub_version_probe_and_browser_launch(monkeypatch)
     real_dir = tmp_path / "real"
     real_dir.mkdir()
     pnpm = real_dir / "pnpm"

@@ -1117,38 +1117,26 @@ def test_audit_re_runs_the_smoke_check_on_the_group_aware_path_too() -> None:
     assert report.unhealthy == (("puppeteer", "browser is gone"),)
 
 
-def test_audit_uses_the_real_smoke_dispatch_by_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_audit_uses_the_real_smoke_dispatch_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """End to end over the shipped registry, with no seam injected.
 
     Proves the CR-02 wiring is live: the declared check really is dispatched
     from the audit, and its verdict really does depend on the machine rather
-    than on whether an install once succeeded.
+    than on whether an install once succeeded. The only thing replaced is the
+    browser launch itself, which is the machine.
     """
     import installer.executors as executors
 
-    cache = tmp_path / "cache"
-    browser = (
-        cache
-        / "chrome-headless-shell"
-        / "mac_arm-140.0.7339.16"
-        / "shell"
-        / "chrome-headless-shell"
-    )
-    browser.parent.mkdir(parents=True)
-    browser.write_text("x")
-    browser.chmod(0o755)
-    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
-    monkeypatch.setattr(executors, "probe_version", _const_probe("140.0.7339.16"))
+    monkeypatch.setattr(executors, "launch_puppeteer", lambda: None)
     healthy = audit_node_globals(
         load_tools(REGISTRY), which=lambda _n: "/x/bin", managed=_managed("puppeteer")
     )
     assert healthy.unhealthy == ()
 
-    monkeypatch.setattr(executors, "probe_version", _const_probe(None))
+    monkeypatch.setattr(executors, "launch_puppeteer", lambda: "libnss3.so is missing")
     broken = audit_node_globals(
         load_tools(REGISTRY), which=lambda _n: "/x/bin", managed=_managed("puppeteer")
     )
     assert [tool_id for tool_id, _reason in broken.unhealthy] == ["puppeteer"]
-    assert "could not be started" in broken.unhealthy[0][1]
+    assert "could not start a browser" in broken.unhealthy[0][1]
+    assert "libnss3.so is missing" in broken.unhealthy[0][1]

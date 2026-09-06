@@ -9,7 +9,7 @@ import installer.executors as executors
 from installer.executors import EXECUTORS, SMOKE_CHECKS, ExecutorError, execute
 from installer.guards import REDIRECT_SENTINEL
 from installer.model import SMOKE_CHECK_NAMES, Method
-from installer.run import Runner
+from installer.run import TIMEOUT_CODE, CommandError, Runner
 
 
 def _record() -> tuple[list[list[str]], Runner]:
@@ -355,21 +355,16 @@ def test_node_versions_bare_string_raises() -> None:
         execute(Method(kind="node", params={"npm_pkg": "x", "versions": "nope"}), lambda _cmd: None)
 
 
+def _stub_launch(result: str | None) -> Callable[[], str | None]:
+    def launch() -> str | None:
+        return result
+
+    return launch
+
+
 def test_node_smoke_does_not_change_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pnpm = _plant_pnpm(tmp_path, monkeypatch)
-    cache = tmp_path / "cache"
-    browser = (
-        cache
-        / "chrome-headless-shell"
-        / "linux-140.0.0"
-        / "chrome-headless-shell-linux64"
-        / "chrome-headless-shell"
-    )
-    browser.parent.mkdir(parents=True)
-    browser.write_text("x")
-    browser.chmod(0o755)
-    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
-    monkeypatch.setattr(executors, "probe_version", _const_probe("99.0.0"))
+    monkeypatch.setattr(executors, "launch_puppeteer", _stub_launch(None))
     calls: list[list[str]] = []
     execute(
         Method(
@@ -537,28 +532,11 @@ def test_smoke_checks_match_closed_name_set() -> None:
     assert set(SMOKE_CHECKS) == SMOKE_CHECK_NAMES == frozenset({"puppeteer-browser"})
 
 
-def _plant_browser(cache: Path, version: str = "linux-140.0.0") -> Path:
-    browser = (
-        cache
-        / "chrome-headless-shell"
-        / version
-        / "chrome-headless-shell-linux64"
-        / "chrome-headless-shell"
-    )
-    browser.parent.mkdir(parents=True)
-    browser.write_text("x")
-    browser.chmod(0o755)
-    return browser
-
-
-def test_smoke_puppeteer_browser_succeeds_when_probe_returns_version(
+def test_smoke_puppeteer_browser_passes_when_the_launch_succeeds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pnpm = _plant_pnpm(tmp_path, monkeypatch)
-    cache = tmp_path / "cache"
-    _plant_browser(cache)
-    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
-    monkeypatch.setattr(executors, "probe_version", _const_probe("99.0.0"))
+    monkeypatch.setattr(executors, "launch_puppeteer", _stub_launch(None))
     calls: list[list[str]] = []
     execute(
         Method(
@@ -574,18 +552,13 @@ def test_smoke_puppeteer_browser_succeeds_when_probe_returns_version(
     assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
 
 
-def test_smoke_puppeteer_browser_fails_when_browser_cannot_start(
+def test_smoke_puppeteer_browser_fails_when_the_launch_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pnpm = _plant_pnpm(tmp_path, monkeypatch)
-    cache = tmp_path / "cache"
-    browser = _plant_browser(cache)
-    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
-
-    def browser_fails(argv: list[str]) -> str | None:
-        return None if "chrome" in argv[0] else "99.0.0"
-
-    monkeypatch.setattr(executors, "probe_version", browser_fails)
+    monkeypatch.setattr(
+        executors, "launch_puppeteer", _stub_launch("error while loading libnss3.so")
+    )
     calls: list[list[str]] = []
     with pytest.raises(ExecutorError, match="PUPPETEER_EXECUTABLE_PATH") as exc_info:
         execute(
@@ -599,121 +572,30 @@ def test_smoke_puppeteer_browser_fails_when_browser_cannot_start(
             ),
             calls.append,
         )
-    assert str(browser) in str(exc_info.value)
+    assert "libnss3.so" in str(exc_info.value)
+    # The install already ran: a postinstall-driven download cannot be gated
+    # before the shim it produces exists.
     assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
 
 
-def test_smoke_puppeteer_browser_fails_when_cache_empty(
+def test_node_without_smoke_never_launches_a_browser(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pnpm = _plant_pnpm(tmp_path, monkeypatch)
-    cache = tmp_path / "empty-cache"
-    cache.mkdir()
-    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
-    monkeypatch.setattr(executors, "probe_version", _const_probe("99.0.0"))
-    calls: list[list[str]] = []
-    with pytest.raises(ExecutorError, match=cache.as_posix()):
-        execute(
-            Method(
-                kind="node",
-                params={
-                    "npm_pkg": "puppeteer",
-                    "allow_build": ["puppeteer"],
-                    "smoke": "puppeteer-browser",
-                },
-            ),
-            calls.append,
-        )
-    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
+    launches = 0
 
+    def counting_launch() -> str | None:
+        nonlocal launches
+        launches += 1
+        return None
 
-def test_smoke_honours_puppeteer_executable_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    pnpm = _plant_pnpm(tmp_path, monkeypatch)
-    custom = tmp_path / "custom-chrome"
-    custom.write_text("x")
-    custom.chmod(0o755)
-    monkeypatch.setenv("PUPPETEER_EXECUTABLE_PATH", str(custom))
-    seen: list[list[str]] = []
-
-    def fake_probe(argv: list[str]) -> str | None:
-        seen.append(argv)
-        return "99.0.0"
-
-    monkeypatch.setattr(executors, "probe_version", fake_probe)
-    calls: list[list[str]] = []
-    execute(
-        Method(
-            kind="node",
-            params={
-                "npm_pkg": "puppeteer",
-                "allow_build": ["puppeteer"],
-                "smoke": "puppeteer-browser",
-            },
-        ),
-        calls.append,
-    )
-    assert [argv[0] for argv in seen if "chrome" in argv[0] or argv[0] == str(custom)]
-    assert any(argv[0] == str(custom) for argv in seen)
-    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
-
-
-@pytest.mark.parametrize(
-    ("older_build", "newer_build"),
-    [
-        # Equal digit widths: lexicographic and numeric order coincide, so this
-        # pair passed even while the code sorted whole path STRINGS.
-        ("linux-140.0.0", "linux-152.0.0"),
-        # Real puppeteer build numbers of unequal width. "99" sorts AFTER "140"
-        # as text and BEFORE it as a number, so only a parsed comparison picks
-        # the right build.
-        ("linux-99.0.4844.51", "linux-140.0.7339.16"),
-    ],
-)
-def test_smoke_prefers_headless_shell_highest_version(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, older_build: str, newer_build: str
-) -> None:
-    _plant_pnpm(tmp_path, monkeypatch)
-    cache = tmp_path / "cache"
-    _plant_browser(cache, older_build)
-    newer = _plant_browser(cache, newer_build)
-    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
-    seen: list[list[str]] = []
-
-    def fake_probe(argv: list[str]) -> str | None:
-        seen.append(argv)
-        return "99.0.0"
-
-    monkeypatch.setattr(executors, "probe_version", fake_probe)
-    execute(
-        Method(
-            kind="node",
-            params={
-                "npm_pkg": "puppeteer",
-                "allow_build": ["puppeteer"],
-                "smoke": "puppeteer-browser",
-            },
-        ),
-        _record()[1],
-    )
-    browser_probes = [argv for argv in seen if argv[0].endswith("chrome-headless-shell")]
-    assert browser_probes
-    assert browser_probes[-1][0] == str(newer)
-
-
-def test_node_without_smoke_never_probes_browser(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    pnpm = _plant_pnpm(tmp_path, monkeypatch)
     seen: list[list[str]] = []
 
     def fake_probe(argv: list[str]) -> str:
         seen.append(argv)
-        if argv[0] == "node":
-            return "v24.4.0"
-        return "11.9.0"
+        return "v24.4.0" if argv[0] == "node" else "11.9.0"
 
+    monkeypatch.setattr(executors, "launch_puppeteer", counting_launch)
     monkeypatch.setattr(executors, "probe_version", fake_probe)
     execute(
         Method(
@@ -728,7 +610,7 @@ def test_node_without_smoke_never_probes_browser(
         ),
         _record()[1],
     )
-    assert all("chrome" not in argv[0] for argv in seen)
+    assert launches == 0
     assert any(argv[0] == str(pnpm) for argv in seen)
     assert any(argv[0] == "node" for argv in seen)
 
@@ -739,165 +621,6 @@ def test_node_versions_non_string_value_raises() -> None:
             Method(kind="node", params={"npm_pkg": "x", "versions": {"puppeteer": 1}}),
             _record()[1],
         )
-
-
-def test_smoke_falls_back_to_chrome_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    pnpm = _plant_pnpm(tmp_path, monkeypatch)
-    cache = tmp_path / "cache"
-    chrome = cache / "chrome" / "linux-140.0.0" / "chrome-linux64" / "chrome"
-    chrome.parent.mkdir(parents=True)
-    chrome.write_text("x")
-    chrome.chmod(0o755)
-    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
-    seen: list[list[str]] = []
-
-    def fake_probe(argv: list[str]) -> str:
-        seen.append(argv)
-        return "99.0.0"
-
-    monkeypatch.setattr(executors, "probe_version", fake_probe)
-    calls: list[list[str]] = []
-    execute(
-        Method(
-            kind="node",
-            params={
-                "npm_pkg": "puppeteer",
-                "allow_build": ["puppeteer"],
-                "smoke": "puppeteer-browser",
-            },
-        ),
-        calls.append,
-    )
-    assert any(argv[0] == str(chrome) for argv in seen)
-    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
-
-
-def test_smoke_falls_back_to_the_macos_full_chrome_bundle(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The registry declares this smoke check on the macOS methods too.
-
-    macOS installs the full browser as `Google Chrome for Testing` inside a
-    `.app` bundle, so a fallback that searches only for a file named `chrome`
-    finds nothing there — and the fallback is the whole check in the one
-    configuration that needs it (PUPPETEER_SKIP_CHROME_HEADLESS_SHELL_DOWNLOAD).
-    """
-    pnpm = _plant_pnpm(tmp_path, monkeypatch)
-    cache = tmp_path / "cache"
-    chrome = (
-        cache
-        / "chrome"
-        / "mac_arm-140.0.7339.16"
-        / "chrome-mac-arm64"
-        / "Google Chrome for Testing.app"
-        / "Contents"
-        / "MacOS"
-        / "Google Chrome for Testing"
-    )
-    chrome.parent.mkdir(parents=True)
-    chrome.write_text("x")
-    chrome.chmod(0o755)
-    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
-    seen: list[list[str]] = []
-
-    def fake_probe(argv: list[str]) -> str:
-        seen.append(argv)
-        return "99.0.0"
-
-    monkeypatch.setattr(executors, "probe_version", fake_probe)
-    calls: list[list[str]] = []
-    execute(
-        Method(
-            kind="node",
-            params={
-                "npm_pkg": "puppeteer",
-                "allow_build": ["puppeteer"],
-                "smoke": "puppeteer-browser",
-            },
-        ),
-        calls.append,
-    )
-    assert any(argv[0] == str(chrome) for argv in seen)
-    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
-
-
-def test_smoke_prefers_the_highest_build_across_macos_bundle_depth(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The build segment sits three directories deeper inside a `.app` bundle.
-
-    Indexing it at a fixed depth from the binary would read `MacOS` as the
-    build and rank both bundles equal, so the outward scan is what keeps the
-    macOS layout comparable at all.
-    """
-    _plant_pnpm(tmp_path, monkeypatch)
-    cache = tmp_path / "cache"
-
-    def plant(build: str) -> Path:
-        binary = (
-            cache
-            / "chrome"
-            / build
-            / "chrome-mac-arm64"
-            / "Google Chrome for Testing.app"
-            / "Contents"
-            / "MacOS"
-            / "Google Chrome for Testing"
-        )
-        binary.parent.mkdir(parents=True)
-        binary.write_text("x")
-        binary.chmod(0o755)
-        return binary
-
-    plant("mac_arm-99.0.4844.51")
-    newer = plant("mac_arm-140.0.7339.16")
-    monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(cache))
-    seen: list[list[str]] = []
-
-    def fake_probe(argv: list[str]) -> str:
-        seen.append(argv)
-        return "99.0.0"
-
-    monkeypatch.setattr(executors, "probe_version", fake_probe)
-    execute(
-        Method(
-            kind="node",
-            params={
-                "npm_pkg": "puppeteer",
-                "allow_build": ["puppeteer"],
-                "smoke": "puppeteer-browser",
-            },
-        ),
-        _record()[1],
-    )
-    browser_probes = [argv for argv in seen if "Google Chrome for Testing" in argv[0]]
-    assert browser_probes
-    assert browser_probes[-1][0] == str(newer)
-
-
-def test_smoke_executable_path_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    pnpm = _plant_pnpm(tmp_path, monkeypatch)
-    custom = tmp_path / "broken-chrome"
-    monkeypatch.setenv("PUPPETEER_EXECUTABLE_PATH", str(custom))
-
-    def fake_probe(argv: list[str]) -> str | None:
-        return None if argv[0] == str(custom) else "99.0.0"
-
-    monkeypatch.setattr(executors, "probe_version", fake_probe)
-    calls: list[list[str]] = []
-    with pytest.raises(ExecutorError, match="PUPPETEER_EXECUTABLE_PATH"):
-        execute(
-            Method(
-                kind="node",
-                params={
-                    "npm_pkg": "puppeteer",
-                    "allow_build": ["puppeteer"],
-                    "smoke": "puppeteer-browser",
-                },
-            ),
-            calls.append,
-        )
-    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
 
 
 def test_unknown_smoke_raises_before_the_install_runs(
@@ -919,28 +642,276 @@ def test_unknown_smoke_raises_before_the_install_runs(
     assert calls == []
 
 
-def test_puppeteer_cache_dir_falls_back_to_home(
+# --- the launch probe itself -------------------------------------------------
+#
+# Driven through `executors.launch_puppeteer`, the module-level seam the smoke
+# check calls. Root discovery and the subprocess both sit behind it, so these
+# tests exercise the real discovery without reaching a real pnpm, node or
+# browser — and without reaching past the module's public surface.
+
+
+def _plant_shim(bin_dir: Path, target: Path) -> Path:
+    """A pnpm-shaped `cmd-shim` script: a shell wrapper with a target trailer."""
+    return _plant_executable(
+        bin_dir,
+        "puppeteer",
+        body=f'#!/bin/sh\nexec node "{target}" "$@"\n# cmd-shim-target={target}\n',
+    )
+
+
+def _plant_package(root: Path) -> Path:
+    """`<group>/node_modules/puppeteer/lib/cli.js`, the file a shim points at."""
+    entry = root / "node_modules" / "puppeteer" / "lib" / "cli.js"
+    entry.parent.mkdir(parents=True)
+    entry.write_text("x")
+    return entry
+
+
+def _which_returning(result: str | None) -> Callable[[str], str | None]:
+    """A typed stand-in for `shutil.which`, which the probe uses to find the shim."""
+
+    def which(_name: str) -> str | None:
+        return result
+
+    return which
+
+
+class _FakeRun:
+    """Stands in for `run_output` for both calls the probe can make.
+
+    `pnpm bin -g` answers with `bin_dir`; anything else is the node launch and
+    answers with `launch`, which is either output or an exception to raise.
+    """
+
+    def __init__(self, *, bin_dir: Path | None = None, launch: str | Exception = "") -> None:
+        self.bin_dir = bin_dir
+        self.launch = launch
+        self.calls: list[tuple[list[str], float | None]] = []
+
+    def __call__(self, argv: list[str], *, timeout: float | None = None) -> str:
+        self.calls.append((argv, timeout))
+        if argv[1:] == ["bin", "-g"]:
+            return "" if self.bin_dir is None else f"{self.bin_dir}\n"
+        if isinstance(self.launch, Exception):
+            raise self.launch
+        return self.launch
+
+    @property
+    def node_call(self) -> tuple[list[str], float | None]:
+        return next(call for call in self.calls if call[0][0] == "node")
+
+
+def _no_shim_anywhere(monkeypatch: pytest.MonkeyPatch, run: _FakeRun) -> None:
+    monkeypatch.setattr(executors, "which", _which_returning(None))
+    monkeypatch.setattr(executors, "real_pnpm", lambda: None)
+    monkeypatch.setattr(executors, "run_output", run)
+
+
+def test_launch_probe_defers_every_browser_choice_to_puppeteer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole point of H1: this project no longer picks the binary.
+
+    A `--version` probe on a path found by globbing the cache proved neither
+    that the file was the browser puppeteer would launch nor that a launch
+    works, so the probe must go through `puppeteer.launch()` and must not
+    reintroduce a cache search or an executable-path read of its own.
+    """
+    run = _FakeRun()
+    _no_shim_anywhere(monkeypatch, run)
+    assert executors.launch_puppeteer() is None
+    argv, timeout = run.node_call
+    # Bare `node` for the same reason `min_node` is probed bare: the node that
+    # matters is the one pnpm's postinstall and mmdc find on PATH.
+    assert argv[:2] == ["node", "-e"]
+    script = argv[2]
+    assert "puppeteer.launch()" in script
+    assert "newPage()" in script
+    assert "browser.close()" in script
+    assert "--version" not in script
+    assert "PUPPETEER_EXECUTABLE_PATH" not in script
+    assert "chrome-headless-shell" not in script
+    # Bounded: this runs inside an install and inside the Doctor's audit thread.
+    assert timeout == executors.BROWSER_LAUNCH_TIMEOUT
+
+
+def test_launch_probe_resolves_puppeteer_from_the_shim_on_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    pnpm = _plant_pnpm(tmp_path, monkeypatch)
-    monkeypatch.delenv("PUPPETEER_CACHE_DIR", raising=False)
-    monkeypatch.setattr(executors, "probe_version", _const_probe("99.0.0"))
-    calls: list[list[str]] = []
-    expected = str(tmp_path / ".cache" / "puppeteer")
-    with pytest.raises(ExecutorError, match="puppeteer") as exc_info:
-        execute(
-            Method(
-                kind="node",
-                params={
-                    "npm_pkg": "puppeteer",
-                    "allow_build": ["puppeteer"],
-                    "smoke": "puppeteer-browser",
-                },
-            ),
-            calls.append,
+    """pnpm v11 has no single global node_modules, so the shim is the pointer.
+
+    `pnpm root -g` names a directory with no `node_modules` of its own — each
+    hash-keyed install group has one — so the root node must resolve from is the
+    directory of the file the bin shim execs.
+    """
+    entry = _plant_package(tmp_path / "group")
+    shim = _plant_shim(tmp_path / "bin", entry)
+    run = _FakeRun()
+    monkeypatch.setattr(executors, "which", _which_returning(str(shim)))
+    monkeypatch.setattr(executors, "real_pnpm", lambda: None)
+    monkeypatch.setattr(executors, "run_output", run)
+    assert executors.launch_puppeteer() is None
+    assert run.node_call[0][3:] == [str(entry.parent)]
+
+
+def test_launch_probe_follows_a_symlinked_shim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Older layouts symlink the global bin instead of writing a cmd-shim."""
+    entry = _plant_package(tmp_path / "group")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    link = bin_dir / "puppeteer"
+    link.symlink_to(entry)
+    run = _FakeRun()
+    monkeypatch.setattr(executors, "which", _which_returning(str(link)))
+    monkeypatch.setattr(executors, "real_pnpm", lambda: None)
+    monkeypatch.setattr(executors, "run_output", run)
+    assert executors.launch_puppeteer() is None
+    assert run.node_call[0][3:] == [str(entry.parent)]
+
+
+def test_launch_probe_asks_pnpm_for_its_bin_dir_when_path_is_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`which` is PATH-based, and PATH is not always current.
+
+    A machine whose pnpm global bin directory was added to PATH during this same
+    run has not inherited it here, and failing the smoke check there would
+    report a working install as broken.
+    """
+    entry = _plant_package(tmp_path / "group")
+    bin_dir = tmp_path / "bin"
+    _plant_shim(bin_dir, entry)
+    run = _FakeRun(bin_dir=bin_dir)
+    monkeypatch.setattr(executors, "which", _which_returning(None))
+    monkeypatch.setattr(executors, "real_pnpm", lambda: "/abs/pnpm")
+    monkeypatch.setattr(executors, "run_output", run)
+    assert executors.launch_puppeteer() is None
+    # Absolute path, never a bare `pnpm`: a bare name would be answered by this
+    # installer's own argv-conditional wrapper.
+    assert run.calls[0][0] == ["/abs/pnpm", "bin", "-g"]
+    assert run.node_call[0][3:] == [str(entry.parent)]
+
+
+def test_launch_probe_offers_each_root_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = _plant_package(tmp_path / "group")
+    bin_dir = tmp_path / "bin"
+    shim = _plant_shim(bin_dir, entry)
+    run = _FakeRun(bin_dir=bin_dir)
+    monkeypatch.setattr(executors, "which", _which_returning(str(shim)))
+    monkeypatch.setattr(executors, "real_pnpm", lambda: "/abs/pnpm")
+    monkeypatch.setattr(executors, "run_output", run)
+    assert executors.launch_puppeteer() is None
+    assert run.node_call[0][3:] == [str(entry.parent)]
+
+
+def test_launch_probe_passes_no_root_it_could_not_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An opaque shim, an empty trailer and an absent file all yield nothing.
+
+    No root is not a failure: node then resolves `puppeteer` its own way.
+    """
+    opaque = _plant_executable(tmp_path / "a", "puppeteer", body="#!/bin/sh\nexec node x\n")
+    blank = _plant_executable(tmp_path / "b", "puppeteer", body="#!/bin/sh\n# cmd-shim-target=\n")
+    for shim_dir in (opaque.parent, blank.parent, tmp_path / "absent"):
+        run = _FakeRun(bin_dir=shim_dir)
+        monkeypatch.setattr(executors, "which", _which_returning(None))
+        monkeypatch.setattr(executors, "real_pnpm", lambda: "/abs/pnpm")
+        monkeypatch.setattr(executors, "run_output", run)
+        assert executors.launch_puppeteer() is None
+        assert run.node_call[0][3:] == []
+
+
+def test_launch_probe_survives_a_shim_it_cannot_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreadable shim costs a root, never an OSError out of the check.
+
+    `run_smoke_check` catches ExecutorError and nothing else, so an OSError
+    escaping here would abort the Doctor's whole audit instead of reporting one
+    finding — the non-raising dispatch contract CR-02 established.
+    """
+    entry = _plant_package(tmp_path / "group")
+    shim = _plant_shim(tmp_path / "bin", entry)
+
+    def refuse(_self: Path, *_args: object, **_kwargs: object) -> str:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "read_text", refuse)
+    run = _FakeRun()
+    monkeypatch.setattr(executors, "which", _which_returning(str(shim)))
+    monkeypatch.setattr(executors, "real_pnpm", lambda: None)
+    monkeypatch.setattr(executors, "run_output", run)
+    assert executors.launch_puppeteer() is None
+    assert run.node_call[0][3:] == []
+
+
+def test_launch_probe_ignores_a_pnpm_that_cannot_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unreadable bin dir costs a root, never the whole check."""
+
+    class Refusing(_FakeRun):
+        def __call__(self, argv: list[str], *, timeout: float | None = None) -> str:
+            if argv[1:] == ["bin", "-g"]:
+                raise CommandError(argv, 1)
+            return super().__call__(argv, timeout=timeout)
+
+    run = Refusing()
+    monkeypatch.setattr(executors, "which", _which_returning(None))
+    monkeypatch.setattr(executors, "real_pnpm", lambda: "/abs/pnpm")
+    monkeypatch.setattr(executors, "run_output", run)
+    assert executors.launch_puppeteer() is None
+    assert run.node_call[0][3:] == []
+
+
+def test_launch_probe_reports_the_browsers_own_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = _FakeRun(
+        launch=CommandError(
+            ["node"], 1, detail="Failed to launch the browser process!\n  libnss3.so"
         )
-    assert expected in str(exc_info.value)
-    assert calls == [[str(pnpm), "add", "-g", "--allow-build=puppeteer", "puppeteer"]]
+    )
+    _no_shim_anywhere(monkeypatch, run)
+    assert executors.launch_puppeteer() == "Failed to launch the browser process! libnss3.so"
+
+
+def test_launch_probe_names_node_when_node_cannot_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = _FakeRun(launch=CommandError(["node"], 127))
+    _no_shim_anywhere(monkeypatch, run)
+    assert executors.launch_puppeteer() == "node could not be started to run the launch probe"
+
+
+def test_launch_probe_falls_back_to_the_exit_code_without_a_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _FakeRun(launch=CommandError(["node"], 3))
+    _no_shim_anywhere(monkeypatch, run)
+    assert executors.launch_puppeteer() == "the launch probe exited 3"
+
+
+def test_launch_probe_reports_a_timeout_rather_than_hanging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _FakeRun(launch=CommandError(["node"], TIMEOUT_CODE, detail="timed out after 60s"))
+    _no_shim_anywhere(monkeypatch, run)
+    assert executors.launch_puppeteer() == "timed out after 60s"
+
+
+def test_launch_failure_detail_is_condensed_for_a_one_line_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The text lands in a Doctor warning row; a Chrome failure is a paragraph."""
+    run = _FakeRun(launch=CommandError(["node"], 1, detail="a\n" + "b" * 900))
+    _no_shim_anywhere(monkeypatch, run)
+    detail = executors.launch_puppeteer()
+    assert detail is not None
+    assert len(detail) == 400
+    assert detail.endswith("...")
+    assert "\n" not in detail
 
 
 def test_sdkman_sources_init_script_then_installs_candidate():

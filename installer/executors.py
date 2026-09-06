@@ -8,12 +8,13 @@ import os
 import shlex
 from collections.abc import Callable
 from pathlib import Path
+from shutil import which
 from typing import cast
 
 from installer.guards import real_pnpm, shell_path
 from installer.locations import applications_dir
 from installer.model import Method
-from installer.run import Runner
+from installer.run import CommandError, Runner, run_output
 from installer.versions import (
     PNPM_ALLOW_BUILD_MIN,
     PNPM_CO_INSTALL_MIN,
@@ -107,117 +108,200 @@ def _require_minimum(binary: str, argv: list[str], minimum: str) -> None:
         )
 
 
-def _puppeteer_cache_dir() -> Path:
-    """Puppeteer's own documented locations: PUPPETEER_CACHE_DIR, else ~/.cache/puppeteer.
+# The launch probe is a QUERY this installer must not wait forever on: it runs
+# synchronously inside the install executor, and again inside the Doctor's audit
+# thread whose result the Textual event loop is waiting on. A cold Chrome start
+# is seconds; this is the bound past which the machine is telling us something
+# other than "slow" is wrong.
+BROWSER_LAUNCH_TIMEOUT = 60.0
 
-    Reading the env var keeps the check correct for a user who moved the cache.
+# Reading pnpm's own global bin directory is a plain query.
+PNPM_BIN_TIMEOUT = 5.0
 
-    ACCEPTED RESIDUAL (WR-03): puppeteer also honours a `cacheDirectory` set in
-    a `.puppeteerrc.cjs` / `puppeteer.config.js` and in npm-config keys. Neither
-    is read here, so a user who moved the cache that way gets a false install
-    failure. Both are PROJECT-scoped configuration resolved from the directory
-    puppeteer is required from, and this is a GLOBAL install with no project
-    directory to resolve them against, so reading them correctly means
-    reimplementing puppeteer's own config resolution — out of proportion to the
-    failure it prevents, which is loud and self-describing rather than silent.
-    The documented escape hatch is PUPPETEER_EXECUTABLE_PATH, which the check
-    above honours before it looks at any cache at all.
+# `cmd-shim` writes this trailer into every global bin script it generates, and
+# it is how pnpm's `$PNPM_HOME/bin/<name>` records which file, inside which
+# hash-keyed install group, it execs. That file's directory is the only place
+# node can resolve `puppeteer` from under pnpm v11: the global root
+# (`pnpm root -g`) has no `node_modules` of its own — each install group has one.
+_SHIM_TARGET_MARKER = "# cmd-shim-target="
+
+# Node source for the launch probe. Every decision about WHICH browser to start
+# is left to puppeteer: `launch()` reads PUPPETEER_EXECUTABLE_PATH, the cache
+# directory puppeteer itself resolves (including the `.puppeteerrc` this
+# installer deliberately does not reimplement) and the build puppeteer would
+# pick — so the thing started is the thing mmdc will start, not a file this
+# project guessed at by globbing.
+#
+# `process.argv[1..]` are candidate resolution roots; an empty list falls back to
+# node's ordinary resolution, which is what NODE_PATH and a local install give.
+_LAUNCH_SCRIPT = """\
+const roots = process.argv.slice(1);
+function load() {
+  for (const root of roots) {
+    try {
+      return require(require.resolve('puppeteer', { paths: [root] }));
+    } catch (err) {
+      if (!err || err.code !== 'MODULE_NOT_FOUND') throw err;
+    }
+  }
+  return require('puppeteer');
+}
+(async () => {
+  const loaded = load();
+  const puppeteer = loaded && loaded.default ? loaded.default : loaded;
+  const browser = await puppeteer.launch();
+  try {
+    const page = await browser.newPage();
+    await page.goto('about:blank');
+  } finally {
+    await browser.close();
+  }
+})().then(
+  () => process.exit(0),
+  (err) => {
+    console.error(String((err && err.message) || err));
+    process.exit(1);
+  },
+);
+"""
+
+
+def _shim_target(shim: Path) -> Path | None:
+    """The entry file a global bin shim runs, or None when the shim is opaque.
+
+    pnpm writes a POSIX `cmd-shim` SCRIPT for a global bin rather than a
+    symlink, and ends it with a `# cmd-shim-target=` trailer naming the file it
+    execs. Older layouts symlink instead, so both are read. The symlink branch
+    tests `is_symlink` rather than comparing against `realpath`, because on a
+    machine whose home directory is itself reached through a symlink every path
+    differs from its realpath and the trailer would never be read.
     """
-    env = os.environ.get("PUPPETEER_CACHE_DIR")
-    if env:
-        return Path(env)
-    return Path.home() / ".cache" / "puppeteer"
-
-
-def _build_version(path: Path) -> tuple[int, ...]:
-    """The build number of the puppeteer cache directory `path` sits under.
-
-    The layout is `<cache>/<browser>/<platform>-<build>/<browser>-<platform>/<binary>`,
-    so the build is the first parent segment whose text after the platform
-    prefix starts with a digit — scanned from the binary outwards rather than
-    indexed at a fixed depth, because macOS adds `<name>.app/Contents/MacOS/`
-    between the platform directory and the executable.
-
-    Returns an empty tuple when no segment parses, which sorts below every real
-    build rather than crashing on a layout puppeteer changes underneath us.
-    """
-    for part in reversed(path.parts[:-1]):
-        _, separator, build = part.partition("-")
-        if separator and build[:1].isdigit():
-            return tuple(int(number) for number in build.split(".") if number.isdigit())
-    return ()
-
-
-def _highest_build(paths: list[Path]) -> Path:
-    """The newest build among `paths`, compared as parsed version tuples.
-
-    A `sorted()` over the path STRINGS compares digits as text, which ranks
-    `linux-99.0.4844.51` above `linux-140.0.7339.16` and hands the smoke check
-    a browser six major versions older than the one the install just wrote. The
-    path string is the tiebreaker only, so the choice stays deterministic when
-    two directories carry the same build.
-    """
-    return max(paths, key=lambda path: (_build_version(path), str(path)))
-
-
-# The executable name of the FULL browser, per platform. macOS installs it as
-# `Google Chrome for Testing` inside a `.app` bundle, never as a file named
-# `chrome`, and the registry declares this smoke check on the macOS methods of
-# both puppeteer and mmdc — so a fallback that knows only the Linux name is a
-# fallback that cannot fire on half the platforms it ships to. Both names are
-# searched on both platforms: the cache directory is the user's, a macOS user
-# can hold a Linux build in it, and matching a name that is simply absent costs
-# one more glob.
-_FULL_CHROME_NAMES = ("chrome", "Google Chrome for Testing")
-
-
-def _executables(cache_dir: Path, name: str) -> list[Path]:
-    return [path for path in cache_dir.rglob(name) if path.is_file() and os.access(path, os.X_OK)]
-
-
-def _puppeteer_browser(cache_dir: Path) -> Path | None:
-    """Find a puppeteer-managed browser under cache_dir.
-
-    The layout — `<cache>/<browser>/<platform>-<build>/<browser>-<platform>/<binary>`
-    — is puppeteer's own cache convention and is matched by glob rather than
-    reconstructed, because the build and platform segments are not this project's
-    to predict.
-    """
-    shells = _executables(cache_dir, "chrome-headless-shell")
-    if shells:
-        return _highest_build(shells)
-    chromes = [path for name in _FULL_CHROME_NAMES for path in _executables(cache_dir, name)]
-    if chromes:
-        return _highest_build(chromes)
+    if shim.is_symlink():
+        return Path(os.path.realpath(shim))
+    try:
+        text = shim.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in reversed(text.splitlines()):
+        if line.startswith(_SHIM_TARGET_MARKER):
+            target = line[len(_SHIM_TARGET_MARKER) :].strip()
+            if target:
+                return Path(target)
     return None
 
 
+def _pnpm_global_bin() -> Path | None:
+    """pnpm's own global bin directory, or None when pnpm cannot be asked.
+
+    A second source for the shim, because `which` is PATH-based and PATH is not
+    always current: a machine whose pnpm global bin directory was put on PATH
+    during this same run has not inherited it into this process, and failing the
+    smoke check there would report a working install as broken.
+    """
+    pnpm = real_pnpm()
+    if pnpm is None:
+        return None
+    try:
+        text = run_output([pnpm, "bin", "-g"], timeout=PNPM_BIN_TIMEOUT)
+    except (CommandError, OSError):
+        return None
+    line = text.strip()
+    return Path(line) if line else None
+
+
+def _puppeteer_module_roots() -> list[str]:
+    """Directories node should try to resolve `puppeteer` from, best first.
+
+    pnpm v11 gives each global install invocation its own hash-keyed project
+    directory, so there is no single global `node_modules` to point node at —
+    `pnpm root -g` names a directory that has none. The `puppeteer` bin shim is
+    the pointer that does exist: it names a file inside the group's own
+    `node_modules`, from which node's ordinary upward search finds the package
+    with the peer resolution that group actually has.
+
+    An empty list is not a failure. It hands the script nothing and lets node
+    resolve `puppeteer` normally, which is the right answer whenever the package
+    is reachable some way this function does not model.
+    """
+    candidates: list[Path] = []
+    on_path = which("puppeteer")
+    if on_path:
+        candidates.append(Path(on_path))
+    bin_dir = _pnpm_global_bin()
+    if bin_dir is not None:
+        candidates.append(bin_dir / "puppeteer")
+    roots: list[str] = []
+    for shim in candidates:
+        if not shim.is_file():
+            continue
+        target = _shim_target(shim)
+        if target is not None:
+            roots.append(str(target.parent))
+    return list(dict.fromkeys(roots))
+
+
+# This text is rendered inside a one-line Doctor warning row, and a Chrome
+# launch failure can be a paragraph.
+_DETAIL_LIMIT = 400
+
+
+def _condensed(detail: str) -> str:
+    text = " ".join(detail.split())
+    return text if len(text) <= _DETAIL_LIMIT else f"{text[: _DETAIL_LIMIT - 3]}..."
+
+
+def _default_launch_puppeteer() -> str | None:
+    """Start and close a browser through puppeteer's own launch path.
+
+    Returns why it failed, or None when it worked. `node` is invoked bare for
+    the reason `min_node` is probed bare: this installer ships no node shim, and
+    the node that matters is the one pnpm's postinstall and mmdc itself find on
+    PATH.
+    """
+    argv = ["node", "-e", _LAUNCH_SCRIPT, *_puppeteer_module_roots()]
+    try:
+        run_output(argv, timeout=BROWSER_LAUNCH_TIMEOUT)
+    except CommandError as exc:
+        if exc.returncode == 127:
+            return "node could not be started to run the launch probe"
+        return _condensed(exc.detail) or f"the launch probe exited {exc.returncode}"
+    return None
+
+
+# The seam the tests replace. It covers the whole probe — root discovery and the
+# subprocess — so no test reaches a real pnpm, a real node or a real browser.
+launch_puppeteer: Callable[[], str | None] = _default_launch_puppeteer
+
+
 def _smoke_puppeteer_browser() -> None:
-    override = os.environ.get("PUPPETEER_EXECUTABLE_PATH")
-    if override:
-        if probe_version([override, "--version"]) is None:
-            raise ExecutorError(
-                f"installed browser {override} could not be started. "
-                "Install the platform's headless-Chrome shared libraries, or point "
-                "puppeteer at an existing browser with PUPPETEER_EXECUTABLE_PATH."
-            )
+    """Prove puppeteer can actually START a browser on this machine.
+
+    NOT `<browser> --version`, which is what this replaced and what made the
+    check hollow. `--version` prints a string and exits BEFORE browser startup,
+    sandbox initialisation, profile creation and the DevTools connection — the
+    four steps that fail on a machine missing Chrome's shared libraries, which
+    is the only failure this check exists to catch. It was also aimed by this
+    project's own glob over the puppeteer cache, picking the lexicographically
+    last (later, highest-parsed-build) path rather than necessarily the browser
+    puppeteer would launch, so any executable that printed something passed:
+    `PUPPETEER_EXECUTABLE_PATH=/bin/echo` cleared it.
+
+    `puppeteer.launch()` answers both halves at once. It resolves the browser
+    the way puppeteer will at runtime — so PUPPETEER_EXECUTABLE_PATH, the cache
+    directory and puppeteer's own configuration are honoured by puppeteer rather
+    than reimplemented here — and starting it is the evidence.
+
+    It renders no diagram. A blank page proves the browser runs; mmdc's own
+    rendering is not this installer's to verify.
+    """
+    detail = launch_puppeteer()
+    if detail is None:
         return
-    cache_dir = _puppeteer_cache_dir()
-    browser = _puppeteer_browser(cache_dir)
-    if browser is None:
-        raise ExecutorError(
-            f"{cache_dir} has no chrome-headless-shell or chrome binary — "
-            "puppeteer's postinstall did not leave a browser there"
-        )
-    # --version is the cheapest execution of the real binary that still goes
-    # through the dynamic loader, so a missing libnss3.so fails it exactly as
-    # a real launch would, with no sandbox, no display and no page load.
-    if probe_version([str(browser), "--version"]) is None:
-        raise ExecutorError(
-            f"installed browser {browser} could not be started. "
-            "Install the platform's headless-Chrome shared libraries, or point "
-            "puppeteer at an existing browser with PUPPETEER_EXECUTABLE_PATH."
-        )
+    raise ExecutorError(
+        f"puppeteer could not start a browser: {detail}. "
+        "Install the platform's headless-Chrome shared libraries, or point "
+        "puppeteer at an existing browser with PUPPETEER_EXECUTABLE_PATH."
+    )
 
 
 SMOKE_CHECKS: dict[str, Callable[[], None]] = {
@@ -331,12 +415,19 @@ def _node(method: Method, runner: Runner) -> None:
         # on PATH.
         _require_minimum("node", ["node", "--version"], min_node)
     runner([pnpm, "add", "-g", *allowances, group])
-    # This proves the browser this install downloaded starts on this machine;
-    # it does not render a page, and it is not a guarantee that every later
-    # Chrome update will keep starting. An exit code from a package manager is
-    # evidence that a DOWNLOAD succeeded, never evidence that the thing
-    # downloaded can run. Accepted residual: the search covers the WHOLE
-    # cache, not just what THIS install produced, so a stale browser can pass.
+    # This starts, navigates and closes a real browser through puppeteer's own
+    # `launch()`, so it proves the browser PUPPETEER RESOLVES runs on this
+    # machine. It does not render a diagram, and it is not a guarantee that
+    # every later Chrome update will keep starting. An exit code from a package
+    # manager is evidence that a DOWNLOAD succeeded, never evidence that the
+    # thing downloaded can run.
+    #
+    # Accepted residual: puppeteer resolves the browser, so on a machine that
+    # already had a working Chrome the check can pass on THAT browser rather
+    # than on bytes this install wrote. That is the correct answer to the
+    # question the tool cares about — can mmdc render here — and it is the same
+    # resolution mmdc performs, so a pass here and a working mmdc do not come
+    # apart.
     #
     # THIS CHECK FIRES ONCE, ON THE INSTALL PATH ONLY, AND ONLY WHEN THE
     # INSTALL PATH IS REACHED. It runs after `pnpm add -g` has already

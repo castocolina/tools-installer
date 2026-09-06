@@ -1881,12 +1881,20 @@ versions = { puppeteer = "^25" }
 # 05-01's executor preflight refuses the install below it rather than letting
 # the postinstall fail obscurely.
 # `smoke = "puppeteer-browser"` is the post-install check plan 05-01 Task 4
-# ships: after `pnpm add -g` returns, the installer runs the browser that was
-# actually downloaded and fails the install when it is missing or cannot
-# start. A package manager's exit code proves a download succeeded, not that
-# the thing downloaded can run, and on Linux amd64 those two facts genuinely
-# come apart when the system shared libraries above are missing. The check
-# starts the browser; it does not render a page.
+# ships: after `pnpm add -g` returns, the installer runs a bounded node script
+# that calls puppeteer's own `launch()`, opens a blank page and closes the
+# browser, and fails the install when that does not work. A package manager's
+# exit code proves a download succeeded, not that the thing downloaded can run,
+# and on Linux amd64 those two facts genuinely come apart when the system
+# shared libraries above are missing.
+# WHICH browser is puppeteer's decision, not this project's: `launch()`
+# resolves PUPPETEER_EXECUTABLE_PATH, the cache directory puppeteer itself
+# resolves and the build it would pick, so the thing started is the thing mmdc
+# will start. The check that shipped first instead globbed `~/.cache/puppeteer`
+# and ran `<binary> --version`, which proved neither — `--version` exits before
+# browser startup, sandbox initialisation, profile creation and the DevTools
+# connection, so any executable that printed something passed.
+# The check starts a browser and opens a blank page; it renders no diagram.
 # When it runs, and the gap that leaves: on the INSTALL path it fires exactly
 # once, after `pnpm add -g` has already returned — the packages stay installed
 # and the bin shim stays on PATH, so `installer/status.py::is_installed` (PATH
