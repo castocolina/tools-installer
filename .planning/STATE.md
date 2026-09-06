@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 current_phase: 05
 current_phase_name: Registry Method Corrections (codegraph/mmdc/puppeteer)
 status: executing
-stopped_at: Completed 05-03-PLAN.md
-last_updated: "2026-09-05T23:46:44Z"
-last_activity: 2026-09-05
-last_activity_desc: Executed 05-03 puppeteer catalog entry and mmdc wiring
+stopped_at: Completed 05-04-PLAN.md
+last_updated: "2026-09-06T00:23:30Z"
+last_activity: 2026-09-06
+last_activity_desc: Executed 05-04 group-aware pnpm-globals replay and split-group Doctor
 state_head: 2fa65eb9be91eba25fe30f037ef90fd756fbe638
 progress:
   total_phases: 12
@@ -28,9 +28,9 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 05 — Registry Method Corrections (codegraph/mmdc/puppeteer)
-Plan: 03 complete, ready for 05-04
+Plan: 04 complete — phase complete
 Status: Executing
-Last activity: 2026-09-05 — 05-03 puppeteer catalog entry and mmdc wiring shipped
+Last activity: 2026-09-06 — 05-04 group-aware pnpm-globals replay and split-group Doctor shipped
 
 Progress: [█████░░░░░] 83%
 
@@ -75,6 +75,7 @@ Recent decisions affecting current work:
 - [05-01, 2026-09-05]: GROUP_PIN=ok on pnpm 12.3.4; clean two-invocation path ends as ONE group; allowBuilds is name-only; LIBCHECK=fail without shared libs; BROWNFIELD_BEFORE=ok on this pnpm
 - [05-02, 2026-09-05]: codegraph is github_release only (no node/script/brew); no Homebrew formula as of 2026-09-05 so a checksum mismatch is terminal; ai-tier tripwire 9 -> 10
 - [05-03, 2026-09-05]: mmdc stays on pnpm (brew and Volta rejected); puppeteer is a user-tier node tool with Linux arm64 gated off; GROUP_PIN=ok; user-tier tripwire 35 -> 36
+- [05-04, 2026-09-06]: Doctor replay is grouped/pinned/allow-build-aware; TUI detects split groups via path hashes; console make doctor left unwired
 
 ### Pending Todos
 
@@ -97,6 +98,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-05T23:46:44Z
-Stopped at: Completed 05-03-PLAN.md
+Last session: 2026-09-06T00:23:30Z
+Stopped at: Completed 05-04-PLAN.md
 Resume file: None
