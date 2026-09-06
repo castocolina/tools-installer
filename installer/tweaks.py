@@ -97,18 +97,36 @@ _CURSOR_DEFAULT_MODEL = "gpt-5.6-sol-high"
 # (Pitfall 3). cursor() contains exactly one intentional BARE delegation to
 # the cursor-agent shell FUNCTION (a different name, not itself), which is
 # how it inherits the same argv-scan/injection logic. Both functions are
-# preceded by `unalias cursor-agent cursor 2>/dev/null` so a pre-existing
-# same-named alias never collides with the function definitions that follow
-# — live-verified on this machine (bash 3.2.57(1)-release, zsh 5.9.2): a bare
-# `name() { ... }` definition against an already-active same-named alias is a
-# hard syntax error in bash 3.2 and behaves inconsistently in zsh 5.9 across
-# interactive/non-interactive contexts; `unalias` first makes the outcome
-# identical and correct in every shell/context combination.
+# preceded by `unalias cursor-agent cursor 2>/dev/null || true` so a
+# pre-existing same-named alias never collides with the function definitions
+# that follow — live-verified on this machine (bash 3.2.57(1)-release, zsh
+# 5.9.2): a bare `name() { ... }` definition against an already-active
+# same-named alias is a hard syntax error in bash 3.2 and behaves
+# inconsistently in zsh 5.9 across interactive/non-interactive contexts;
+# `unalias` first makes the outcome identical and correct in every
+# shell/context combination. The trailing `|| true` (dual-lane review
+# WR-01/codex-sol-high) is required, not cosmetic: `unalias` exits nonzero
+# when neither name is currently an alias -- the common case -- and
+# `2>/dev/null` alone only silences the message, not the exit status; under
+# `set -e`/`setopt err_exit` that nonzero status would abort the rest of
+# `~/.myshellrc` with zero diagnostic output. `local a` (dual-lane review
+# WR-02) prevents the loop variable from leaking into the calling
+# interactive shell's global namespace. The loop breaks at a literal `--`
+# token (dual-lane review, codex-sol-high) since cursor-agent's own
+# commander.js-based parser treats everything after `--` as positional
+# prompt text, never as flags -- live-verified that `cursor-agent --model
+# ... update`/`--version` both tolerate the injected --model ahead of a
+# subcommand (exit 0, correct behavior), so no subcommand allowlist is
+# needed; the sole real gap was the unbounded `--` boundary.
 _CURSOR_AGENT_BODY = (
-    "unalias cursor-agent cursor 2>/dev/null\n"
+    "unalias cursor-agent cursor 2>/dev/null || true\n"
     "function cursor-agent {\n"
+    "    local a\n"
     '    for a in "$@"; do\n'
     '        case "$a" in\n'
+    "            --)\n"
+    "                break\n"
+    "                ;;\n"
     "            --model|--model=*)\n"
     '                command cursor-agent "$@"\n'
     "                return $?\n"

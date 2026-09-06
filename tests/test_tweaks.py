@@ -255,6 +255,7 @@ def _run_cursor_agent(
     *,
     shell: str = "bash",
     preamble: str = "",
+    postamble: str = "",
 ) -> str | None:
     """Source the cursor-agent-model tweak block, invoke it, and return stdout.
 
@@ -263,7 +264,10 @@ def _run_cursor_agent(
     so `command cursor-agent "$@"` resolves to the stub and echoes its argv.
     Returns None when `shell` is not installed on this machine (graceful skip).
     An explicit timeout turns a self-recursion regression into a diagnosable
-    AssertionError instead of hanging the whole test suite.
+    AssertionError instead of hanging the whole test suite. `postamble` is raw
+    shell text appended after the single shlex-joined invocation, for
+    assertions that must run in the same shell session afterward (e.g.
+    proving a loop variable did not leak).
     """
     binary = shutil.which(shell)
     if binary is None:
@@ -276,7 +280,11 @@ def _run_cursor_agent(
         stub.chmod(0o755)
     script = tmp_path / f"cursor-agent-{next(_SCRIPT_COUNTER)}.{shell}"
     script.write_text(
-        preamble + tweak_block(_bundle("cursor-agent-model")) + "\n" + shlex.join([invoke, *args])
+        preamble
+        + tweak_block(_bundle("cursor-agent-model"))
+        + "\n"
+        + shlex.join([invoke, *args])
+        + ("\n" + postamble if postamble else "")
     )
     env = os.environ | {"PATH": f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
     try:
@@ -370,6 +378,44 @@ def test_cursor_agent_wrapper_removes_a_pre_existing_conflicting_alias_under_zsh
     assert output is not None
     assert "PRE_EXISTING_ALIAS" not in output
     assert "ARGV: --model gpt-5.6-sol-high chat hello" in output
+
+
+def test_cursor_agent_unalias_guard_does_not_abort_sourcing_under_set_e(tmp_path: Path) -> None:
+    """WR-01 (dual-lane review, internal + codex-sol-high): `unalias` exits
+    nonzero when neither name is currently an alias -- the common case --
+    and `2>/dev/null` alone silences only the message, not the exit status.
+    Under `set -e` that would abort the rest of the sourcing shell with zero
+    diagnostic output. `|| true` must make the guard status-neutral."""
+    preamble = "set -e\n"
+    output = _run_cursor_agent(tmp_path, "cursor-agent", ["chat", "hello"], preamble=preamble)
+    assert output is not None
+    assert "ARGV: --model gpt-5.6-sol-high chat hello" in output
+
+
+def test_cursor_agent_loop_variable_does_not_leak_into_the_calling_shell(tmp_path: Path) -> None:
+    """WR-02 (dual-lane review, internal + codex-sol-high): the argv-scan
+    loop variable must be `local`, or it clobbers a pre-existing same-named
+    variable in the calling interactive shell after the function returns."""
+    output = _run_cursor_agent(
+        tmp_path,
+        "cursor-agent",
+        ["chat", "hello"],
+        preamble='a="my own variable"\n',
+        postamble='echo "SENTINEL=$a"',
+    )
+    assert output is not None
+    assert "SENTINEL=my own variable" in output
+
+
+def test_cursor_agent_stops_scanning_at_double_dash_boundary(tmp_path: Path) -> None:
+    """codex-sol-high (dual-lane review): cursor-agent's own commander.js
+    parser treats everything after a literal `--` as positional prompt
+    text, never as flags. The wrapper's scan must stop at `--` too, or it
+    would mistake a literal `--model` appearing after `--` for the real
+    flag and wrongly skip injecting the default."""
+    output = _run_cursor_agent(tmp_path, "cursor-agent", ["chat", "--", "explain", "--model"])
+    assert output is not None
+    assert "ARGV: --model gpt-5.6-sol-high chat -- explain --model" in output
 
 
 def test_cursor_agent_model_behavior_under_zsh_when_available(tmp_path: Path) -> None:
