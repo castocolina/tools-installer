@@ -109,3 +109,31 @@ N/A — single-reviewer cycle.
 ### Disposition
 
 Cycle 3 (final allowed cycle per ONESHOT-RULES cap) will replan to genuinely fix split-mode routing and the alias-collision test's shell semantics, split the reload hint by enable/disable, and add a subprocess timeout — all four findings are being addressed in code, not merely re-documented as accepted, since the reviewer explicitly rejected the "accepted limitation" framing for split mode.
+
+## Cycle 3 (codex-sol-high) — FINAL CYCLE (cap reached, ONESHOT-RULES Rule 10)
+
+**Reviewer:** codex CLI, model `gpt-5.6-sol (reasoning=high)`
+**Commit reviewed:** `344d342` (post cycle-2 fixes)
+**Risk assessment:** HIGH
+
+### Cycle 2 Fix Verification (per reviewer)
+
+| Claimed fix | Verdict |
+|---|---|
+| Split-mode inertness | INCOMPLETE — HIGH |
+| Alias collision via `unalias` + functions | RESOLVED, with a copy edge case |
+| Enable/disable reload hints | RESOLVED in task instructions, but contradicted by a stale must-have |
+| Subprocess timeout | RESOLVED |
+
+### Findings
+
+1. **HIGH — split-mode fix misses the primary interactive workflow.** The plan wires `ensure_sourced_from` only when `_build_app` receives `link_mode="split"` directly (the `--guard` branch). In the normal interactive path, `_select_catalog()` calls `_build_app()` with no link mode (centralized default) — `main()` resolves the actual link mode only AFTER the catalog/Policies TUI returns and `run_wizard` has already invoked the catalog callback during selection. So even `tools-installer --link-mode split` builds the Policies closures as centralized, and a tweak enabled there writes `.myshellrc` without wiring it — exactly the defect the fix was meant to close, still present in the actual primary user-facing flow. The planned test only exercises the separate `--guard` branch and cannot catch this.
+2. **MEDIUM — top-level reload must-have still contradicts the corrected task.** Line 38's must-have says both apply and remove offer `source ~/.myshellrc`; Task 1 correctly requires remove never to say that. Two mutually exclusive truths in the same plan.
+3. **MEDIUM — collision UI copy overstates what `unalias` guarantees.** `unalias` only removes an alias already active before the block loads; a later-defined alias or function can still override it. Copy should say "active before this block loads," not imply blanket removal.
+4. **LOW — reversibility language inaccurate.** Task 1 deliberately leaves a split-mode source marker on removal via `ensure_source`, but its reversibility section claims removal leaves nothing behind.
+
+### Disposition — CAP REACHED (cycle 3 of 3, ONESHOT-RULES Rule 10)
+
+This is the final allowed cross-AI review cycle. No further review-cycle dispatch will occur. However, finding #1 is a real, source-grounded, severe defect (it defeats the phase's own goal for the primary interactive install path, not merely a documented edge case) — verified against actual `setup.py`/`installer/app.py` control flow, not a speculative concern. Per engineering judgment (not a new review cycle), this HIGH finding is being fixed directly before execution: thread the resolved link mode through to catalog/Policies construction so `ensure_sourced_from` wiring is correct in the primary path, not just the `--guard` branch. Findings #2 (stale must-have contradiction) and #3 (collision copy overstatement) will be fixed in the same pass since they are cheap and clearly specified. Finding #4 (LOW, harmless residue) is accepted as-is — documented, not blocking.
+
+After this direct fix pass, the plan proceeds straight to execution (gsd-executor) regardless of any further residual findings, per the review-cycle cap.
