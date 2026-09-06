@@ -95,10 +95,20 @@ PNPM_ALLOW_BUILD_MIN = "10.4.0"
 
 
 def _default_probe_version(argv: list[str]) -> str | None:
-    """Single seam every runtime version read goes through.
+    """The one implementation every runtime version read goes through.
 
-    No test and no production path can reach a real `pnpm --version` subprocess
-    by accident — the same injection discipline `real_pnpm` already carries.
+    One definition, but NOT one patch point: `installer.executors` and
+    `installer.pnpm_globals` each do `from installer.versions import
+    probe_version`, which binds this function object at import time. Rebinding
+    `installer.versions.probe_version` therefore changes nothing for either
+    consumer — the name to patch is the CONSUMER's
+    (`executors.probe_version`, `pnpm_globals.probe_version`), which is what
+    every test in the suite already does.
+
+    The injection discipline `real_pnpm` carries still holds: no production
+    path reaches a real `--version` subprocess except through this function,
+    and no test reaches one as long as it patches the binding its subject
+    actually reads.
     """
     try:
         text = run_output(argv, timeout=PROBE_VERSION_TIMEOUT)

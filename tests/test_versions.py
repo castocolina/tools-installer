@@ -140,3 +140,28 @@ def test_probe_version_returns_none_on_command_error(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(versions, "run_output", boom)
     assert versions.probe_version(["/x/pnpm", "--version"]) is None
+
+
+def test_each_consumer_holds_its_own_probe_version_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The patch point is the CONSUMER's name, never `installer.versions`.
+
+    Both consumers do `from installer.versions import probe_version`, which
+    binds the function object at import time, so rebinding the definition
+    module leaves them untouched. The docstring on `_default_probe_version`
+    once advertised the opposite; this pins the behaviour the wording now
+    describes, so a future test that patches the wrong name fails here instead
+    of silently probing the real machine.
+    """
+    import installer.executors as executors
+    import installer.pnpm_globals as pnpm_globals
+    import installer.versions as versions
+
+    def sentinel(_argv: list[str]) -> str | None:
+        return "0.0.0-from-the-definition-module"
+
+    monkeypatch.setattr(versions, "probe_version", sentinel)
+    assert executors.probe_version is not sentinel
+    assert pnpm_globals.probe_version is not sentinel
+    assert executors.probe_version is pnpm_globals.probe_version
