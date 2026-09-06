@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 current_phase: 07
 current_phase_name: System & User Tier Catalog Expansion
-status: planning
-stopped_at: Phase 6 complete, ready to plan Phase 07
-last_updated: "2026-09-06T05:30:29.189Z"
+status: executing
+stopped_at: 07-01 complete, ready for 07-02
+last_updated: "2026-09-06T09:30:00.000Z"
 last_activity: 2026-09-06
-last_activity_desc: Phase 6 complete, transitioned to Phase 07
-state_head: 678f04fa034191becb84874e37b71fea614b37f5
+last_activity_desc: 07-01 executed — zsh and oh-my-zsh system-tier entries shipped
+state_head: 96ba29147d2b995c6415ff034afd6e1a8e9c06b6
 progress:
   total_phases: 12
   completed_phases: 6
-  total_plans: 16
-  completed_plans: 16
+  total_plans: 19
+  completed_plans: 17
   percent: 50
 ---
 
@@ -23,16 +23,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-04)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 05 — Registry Method Corrections (codegraph/mmdc/puppeteer)
+**Current focus:** Phase 07 — System & User Tier Catalog Expansion
 
 ## Current Position
 
 Phase: 07 — System & User Tier Catalog Expansion
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-09-06 — Phase 6 complete, transitioned to Phase 07
+Plan: 07-02 (next)
+Status: 07-01 complete
+Last activity: 2026-09-06 — 07-01 executed; zsh and oh-my-zsh shipped as verified system-tier entries
 
-Progress: [█████░░░░░] 83%
+Progress: [█████░░░░░] 50%
 
 ## Performance Metrics
 
@@ -78,6 +78,7 @@ Recent decisions affecting current work:
 - [05-02, 2026-09-05]: codegraph is github_release only (no node/script/brew); no Homebrew formula as of 2026-09-05 so a checksum mismatch is terminal; ai-tier tripwire 9 -> 10
 - [05-03, 2026-09-05]: mmdc stays on pnpm (brew and Volta rejected); puppeteer is a user-tier node tool with Linux arm64 gated off; GROUP_PIN=ok; user-tier tripwire 35 -> 36
 - [05-04, 2026-09-06]: Doctor replay is grouped/pinned/allow-build-aware; TUI detects split groups via path hashes; console make doctor left unwired
+- [07-01, 2026-09-06]: oh-my-zsh is kind=script only with RUNZSH=no CHSH=no KEEP_ZSHRC=yes; requires=[zsh, git] because install.sh clones via git; CHSH=no is a Bazzite correctness requirement
 
 ### Pending Todos
 
@@ -88,7 +89,7 @@ None yet.
 ### Blockers/Concerns
 
 - Six companion PRDs from the same 2026-09-04 batch (`package-manager-policy`, `postinstall-hooks`, `catalog-expansion`, `live-package-management`, `background-maintenance-daemon`, `agent-cli-ergonomics`) are queued for ingestion immediately after this roadmap — expect ROADMAP.md to grow with additional phases soon.
-- REQ-dependency-chain-requires' illustrative examples (`oh-my-zsh`, `volta`) name tools not yet in `registry.toml` — they arrive with the (not-yet-ingested) catalog-expansion PRD. Phase 1 demonstrates cross-tier drag-in using the existing `mmdc`->`pnpm` and `java`->`sdkman` `requires` chains instead.
+- REQ-dependency-chain-requires' illustrative examples (`oh-my-zsh`, `volta`) now have both tools in `registry.toml` (`volta` since 04-02, `oh-my-zsh` since 07-01).
 
 ## Deferred Items
 
@@ -100,6 +101,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-06T05:03:07.781Z
-Stopped at: Phase 6 complete, ready to plan Phase 07
-Resume file: .planning/phases/06-sdkman-hardening-registry-authoring-guidelines/06-01-SUMMARY.md
+Last session: 2026-09-06T09:30:00.000Z
+Stopped at: 07-01 complete, ready for 07-02
+Resume file: .planning/phases/07-system-user-tier-catalog-expansion/07-01-SUMMARY.md

@@ -211,7 +211,7 @@ Plans:
 **Plans**: 3 plans
 Plans:
 
-- [ ] 07-01-PLAN.md — `zsh` + `oh-my-zsh` system-tier entries, Tier-3-verified `.zshrc` rewrite safety, Bazzite parity via the existing `podman` entry (wave 1)
+- [x] 07-01-PLAN.md — `zsh` + `oh-my-zsh` system-tier entries, Tier-3-verified `.zshrc` rewrite safety, Bazzite parity via the existing `podman` entry (wave 1)
 - [ ] 07-02-PLAN.md — `gnu-bash` (with a same-named-binary detection fix) + Apple Containers system-tier entries, D-01's disabled-state resolution recorded in architecture.md (wave 2, needs 07-01)
 - [ ] 07-03-PLAN.md — `kitty` + `wezterm` user-tier terminal-emulator entries (new `terminal` category), kitty's accepted Bazzite gap, wezterm's checksum-verified AppImage fallback, phase decision consolidation (wave 3, needs 07-02)
 
