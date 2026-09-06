@@ -49,3 +49,42 @@
 
 All 11 findings applied directly (Rule 10 — plan-stage fixes, not original execution) rather
 than a planner re-spawn, since each has a precise, mechanical fix. Proceeding to cycle 2.
+
+## Cycle 2 (codex-sol-high)
+
+**CYCLE_SUMMARY:** `current_high=2 current_actionable=4`
+
+### HIGH findings
+
+1. **08-04's Tier-3 task bypassed the real production entry point** — the prior draft called
+   `_uv_tool`/`install_download` directly instead of `installer.engine.install_tool` (the only
+   route `installer/app.py` actually uses), proving equivalent primitives rather than the
+   catalog-to-production path. Fix: rewrote the task to load both tools via `model.load_tools`
+   and drive both installs through `install_tool`, asserting `InstallOutcome.status`,
+   `method_kind`, and (for `rtk`) `verified`.
+2. **08-04's Tier-3 container recipe was underspecified** — no `curl`/`tar`/CA-cert install
+   despite RTK's download path shelling out to `curl`, no `uv`'s `~/.local/bin` on `PATH`, a
+   `pip install uv` option violating this repo's uv-only rule, no concrete tag-capture command.
+   Fix: replaced with an exact, pinned `docker run --rm python:3.13-slim bash -c '...'` recipe
+   installing prerequisites, `uv` via its official installer script (never pip), exporting the
+   right `PATH` entries, and printing explicit `GRAPHIFY_OUTCOME`/`RTK_OUTCOME` evidence lines.
+
+### MEDIUM findings
+
+3. **Cycle-1 test fixes missing from executable task metadata** — 08-01 Task 1's `<files>` and
+   `must_haves.artifacts` omitted `tests/test_status.py`; 08-04 Task 1's `<files>` and
+   `must_haves.artifacts` omitted `tests/test_catalog_tui.py`; 08-04's `estimate.tasks` still
+   said 2 after the Tier-3 task made it 3. Fix: added the missing files to both plans' `<files>`
+   and `artifacts` lists, bumped `estimate.tasks` to 3.
+4. **08-03's RTK arm64 tarball claim was internally unsupported** — `must_haves.key_links`
+   claimed all three tarballs were inspected, but the executable `<action>` text and
+   08-RESEARCH.md's Sources list still only cited x86_64-musl and Darwin. Fix: personally
+   downloaded and `tar -tzf`-inspected the live `rtk-aarch64-unknown-linux-gnu.tar.gz` (tag
+   `v0.48.0`) this session — confirmed bare top-level `rtk` binary, same shape as the other two —
+   and aligned the `<action>` text and 08-RESEARCH.md's Sources entry to state all three were
+   genuinely inspected.
+
+### Disposition
+
+All 4 findings applied directly (Rule 10). No new findings contradict cycle 1's fixes — the
+checksum regression-set correction was independently confirmed correct. Proceeding to cycle 3.

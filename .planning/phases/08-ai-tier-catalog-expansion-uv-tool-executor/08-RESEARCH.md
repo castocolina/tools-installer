@@ -774,7 +774,7 @@ executed end-to-end against a real machine.
 - `api.github.com/repos/rtk-ai/rtk/releases/latest` — fetched live this session (tag `v0.48.0`, asset list, `checksums.txt` presence)
 - `api.github.com/repos/rtk-ai/rtk` — fetched live this session (`default_branch: develop`, stars, created_at)
 - `github.com/rtk-ai/rtk/releases/download/v0.48.0/checksums.txt` — downloaded and read verbatim this session
-- Two `rtk` release tarballs (`rtk-x86_64-unknown-linux-musl.tar.gz`, `rtk-x86_64-apple-darwin.tar.gz`) — downloaded and inspected with `tar -tzf` this session to confirm member layout (bare `rtk` file, no wrapping directory)
+- Three `rtk` release tarballs (`rtk-x86_64-unknown-linux-musl.tar.gz`, `rtk-aarch64-unknown-linux-gnu.tar.gz`, `rtk-x86_64-apple-darwin.tar.gz`) — downloaded and inspected with `tar -tzf` this session (the aarch64-gnu tarball verified in a follow-up pass responding to cross-AI review cycle 2) to confirm member layout (bare `rtk` file, no wrapping directory) on all three
 - `pypi.org/pypi/graphifyy/json` — fetched live this session (version, full release history, requires_python, project_urls, wheel filename)
 - `raw.githubusercontent.com/rtk-ai/rtk/develop/INSTALL.md` and `.../develop/README.md` — fetched live this session
 - `raw.githubusercontent.com/Graphify-Labs/graphify/.../README.md` (via the PyPI package description field) — the vendor's own install instructions, official-package disclaimer, and CLI-command confirmation
