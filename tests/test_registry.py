@@ -903,10 +903,13 @@ def test_apple_containers_entry_records_the_disabled_state_resolution() -> None:
         "NO_METHOD",
         "macos",
         "version",
-        "26",
+        # Not a bare "26" — every dated comment starts with "# Verified
+        # 2026-09-06: ...", so a bare "26" is trivially satisfied by "2026"
+        # regardless of whether the actual version-floor fact survives a
+        # future edit (dual-lane review, WR-01).
+        'min_os_version = "26"',
         "arm64",
         "brew install container",
-        "min_os_version",
     ):
         assert needle in window, f'missing {needle!r} above id = "container"'
 
@@ -948,10 +951,24 @@ def test_kitty_has_no_linux_download_fallback() -> None:
     kitty = _tools_by_id()["kitty"]
     fedora = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
     bazzite = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
-    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0")
     assert [m.kind for m in resolve_methods(kitty, fedora)] == ["dnf"]
     assert resolve_methods(kitty, bazzite) == []
     assert [m.kind for m in resolve_methods(kitty, macos)] == ["cask"]
+
+
+def test_kitty_cask_blocks_a_too_old_macos_version() -> None:
+    # Dual-lane review (codex-sol-high) found the cask's macOS >= 12 floor
+    # (formulae.brew.sh/api/cask/kitty.json depends_on.macos) was missing
+    # from the catalog, so platform_could_support wrongly left kitty
+    # enabled on an unsupported old macOS.
+    kitty = _tools_by_id()["kitty"]
+    too_old = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="11.0")
+    new_enough = Platform(
+        os="macos", arch="arm64", immutable=False, has_brew=True, os_version="12.0"
+    )
+    assert resolve_methods(kitty, too_old) == []
+    assert [m.kind for m in resolve_methods(kitty, new_enough)] == ["cask"]
 
 
 def test_wezterm_appimage_covers_bazzite_where_kitty_cannot() -> None:

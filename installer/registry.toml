@@ -2174,6 +2174,10 @@ smoke = "puppeteer-browser"
 # (e.g. `tar -xzf` -> `tar -xf`, which auto-detects compression) is out of
 # this registry-only phase's scope — flag for a future phase if ever
 # revisited, do not silently attempt it here.
+# Dual-lane code review (codex-sol-high) found the cask method missing a
+# macOS-version floor: formulae.brew.sh/api/cask/kitty.json declares
+# depends_on.macos >= 12. min_os_version = "12" below closes it, reusing
+# the same gate Apple Containers uses.
 [[tool]]
 id = "kitty"
 name = "kitty"
@@ -2197,6 +2201,7 @@ kind = "cask"
 os = ["macos"]
 cask = "kitty"
 app = "kitty.app"
+min_os_version = "12"
 
 # Verified 2026-09-06: confirmed live via formulae.brew.sh/api/cask/wezterm.json
 # (cask token wezterm, version 20240203-110809,5046fc22) and

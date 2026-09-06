@@ -29,7 +29,7 @@ from `resolve_methods`'s install-time gate.
 **Task 2 (`9084372`)** — Two new system-tier registry entries:
 `gnu-bash` (`cmd = "gnu-bash"`, a prefix-specific `detect_path` so macOS's
 always-present `/bin/bash` cannot false-positive `is_installed`), and
-`Apple Containers` (a real `brew` cask/formula install gated to macOS 26+
+`Apple Containers` (a real `brew` formula install gated to macOS 26+
 arm64 via `min_os_version`, always present in the catalog rather than
 hidden — the D-01 disabled-state example this phase's design work exists
 for).
@@ -39,9 +39,10 @@ for).
 existing dim/non-selectable-row mechanism so a genuinely incompatible
 entry (wrong OS/arch, or below `min_os_version`) renders disabled while
 browsing, without incorrectly disabling a brew-dependent tool on a fresh
-Mac that simply lacks Homebrew yet. `unstaged_recommends` and
-`action_accept_recommends` filter through the same `unavailable` signal
-so a disabled row cannot be staged via the Recommends path either.
+Mac that simply lacks Homebrew yet. `unstaged_recommends`,
+`action_accept_recommends`, and `on_tool_browser_accepted` all filter
+through the same `unavailable` signal so a disabled row cannot be staged
+via the Recommends path either.
 
 **Task 4 (`f155e4d`)** — Recorded the resulting convention in
 `.claude/architecture.md`: how a platform/arch/`min_os_version`-gated
