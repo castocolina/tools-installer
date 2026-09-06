@@ -1126,6 +1126,7 @@ class UnifiedApp(App[list[str] | None]):
         node_globals: Callable[[], NodeGlobalsReport] | None = None,
         globals_preview: Callable[[NodeGlobalsReport], str] | None = None,
         reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
+        unavailable: Mapping[str, bool] | None = None,
         initial_view: str = BASE_VIEW,
     ) -> None:
         super().__init__()
@@ -1138,6 +1139,7 @@ class UnifiedApp(App[list[str] | None]):
                 view=tier.value,
                 catalog=list(tools),
                 staged=self._staged,
+                unavailable=unavailable or {},
             )
             for tier in Tier
         }

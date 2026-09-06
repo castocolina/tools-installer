@@ -12,6 +12,8 @@ from installer.deps import resolve_dependencies
 from installer.doctor import DoctorReport
 from installer.enums import Audience
 from installer.model import Method, Tool, load_categories, load_tools
+from installer.platform import Platform
+from installer.resolve import platform_could_support
 from installer.selection import select_tools
 from installer.uninstall import SweepResult
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
@@ -19,7 +21,10 @@ from tests.test_registry import REGISTRY
 
 
 def _unified_app(
-    tools: list[Tool], installed: Mapping[str, bool], blurbs: Mapping[str, str]
+    tools: list[Tool],
+    installed: Mapping[str, bool],
+    blurbs: Mapping[str, str],
+    unavailable: Mapping[str, bool] | None = None,
 ) -> UnifiedApp:
     # The catalog tests exercise only the catalog view; the doctor/guard/fix
     # data is required by the constructor but irrelevant here, so pass neutral
@@ -39,6 +44,7 @@ def _unified_app(
             remove=lambda _decision: SweepResult(),
         ),
         policies=PolicyInputs(policies=[]),
+        unavailable=unavailable,
     )
 
 
@@ -769,3 +775,59 @@ async def test_detail_bar_shows_recommends_when_declared() -> None:
         assert "pairs well with rg, fd" in app.catalog.detail_text
         await pilot.press("down")
         assert "pairs well with" not in app.catalog.detail_text
+
+
+async def test_unavailable_catalog_rows_are_inert_under_select_all() -> None:
+    tools = [_tool("rg"), _tool("container")]
+    installed = {"rg": False, "container": False}
+    app = _unified_app(tools, installed, _BLURBS, unavailable={"container": True})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("a")
+        assert "container" not in app.catalog.selected
+        assert app.catalog.selected == {"rg"}
+
+
+async def test_unavailable_catalog_row_is_dimmed_with_blank_sel_cell() -> None:
+    tools = [_tool("container", desc="Apple's native container runtime")]
+    app = _unified_app(tools, {"container": False}, _BLURBS, unavailable={"container": True})
+    async with app.run_test(size=(100, 30)):
+        table = app.catalog.query_one(DataTable[Any])
+        sel = table.get_cell("container", "sel")
+        desc = table.get_cell("container", "desc")
+        assert sel.plain == ""
+        assert "dim" in str(sel.style)
+        assert "dim" in str(desc.style)
+        assert "(not available on this machine)" in desc.plain
+        assert "(not available on this machine)" in app.catalog.detail_text
+
+
+def test_real_apple_containers_unavailable_only_for_genuine_incompatibility() -> None:
+    tools = load_tools(REGISTRY)
+    intel = Platform(os="macos", arch="amd64", immutable=False, has_brew=True, os_version="26.0")
+    fresh = Platform(os="macos", arch="arm64", immutable=False, has_brew=False, os_version="26.0")
+    intel_map = {tool.id: not platform_could_support(tool, intel) for tool in tools}
+    fresh_map = {tool.id: not platform_could_support(tool, fresh) for tool in tools}
+    assert intel_map["container"] is True
+    assert fresh_map["container"] is False
+    assert fresh_map["gnu-bash"] is False
+
+
+async def test_unavailable_recommendation_is_not_staged_or_emitted() -> None:
+    tools = [
+        _tool("agent", category="ai", priority="P0", recommends=("jq",)),
+        _tool("jq", category="data", priority="P1"),
+    ]
+    installed = {tool.id: False for tool in tools}
+    app = _unified_app(tools, installed, _BLURBS, unavailable={"jq": True})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("space")
+        await pilot.pause()
+        await pilot.press("r")
+        await pilot.pause()
+        assert "jq" not in app.catalog.selected
+
+    seeded = _unified_app(tools, installed, _BLURBS, unavailable={"jq": True})
+    seeded.catalog.selected.update({"agent", "jq"})
+    async with seeded.run_test(size=(100, 30)) as pilot:
+        await pilot.press("enter")
+    assert seeded.return_value == ["agent"]

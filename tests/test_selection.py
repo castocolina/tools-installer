@@ -130,3 +130,12 @@ def test_unstaged_recommends_dedupes_preserving_declared_order() -> None:
     catalog = [_tool("rg", "search"), _tool("jq", "data")]
     tool = _tool("claude", "ai", recommends=("jq", "rg", "jq"))
     assert unstaged_recommends(tool, catalog, staged=set[str](), installed={}) == ("jq", "rg")
+
+
+def test_unstaged_recommends_skips_unavailable_ids() -> None:
+    catalog = [_tool("rg", "search"), _tool("fd", "search"), _tool("jq", "data")]
+    tool = _tool("claude", "ai", recommends=("rg", "fd", "jq"))
+    assert unstaged_recommends(
+        tool, catalog, staged=set[str](), installed={}, unavailable={"jq": True}
+    ) == ("rg", "fd")
+    assert unstaged_recommends(tool, catalog, staged=set[str](), installed={}) == ("rg", "fd", "jq")

@@ -11,7 +11,7 @@ import setup
 from installer import pnpm_globals
 from installer.app import UninstallDecision
 from installer.guards import install_shims
-from installer.model import Tool
+from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
 from installer.session import Summary
@@ -379,3 +379,40 @@ def test_a_no_method_only_run_still_exits_zero(monkeypatch: pytest.MonkeyPatch) 
     rendered = _stub_install_run(monkeypatch, summary)
     assert setup.main(["--all"]) == 0
     assert rendered == []
+
+
+def test_build_app_hands_unavailable_from_platform_could_support(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    debian_only = Tool(
+        id="apt-upgrade",
+        name="apt-upgrade",
+        category="pkg-mgr",
+        cmd="apt-upgrade",
+        methods=(Method(kind="apt", params={"package": "x"}, os=("debian",)),),
+        tier="system",
+    )
+    brew_tool = Tool(
+        id="fd",
+        name="fd",
+        category="search",
+        cmd="fd",
+        methods=(Method(kind="brew", params={"formula": "fd"}, os=("macos",), arch=("arm64",)),),
+        tier="system",
+    )
+
+    def fake_load_tools(_registry: object) -> list[Tool]:
+        return [debian_only, brew_tool]
+
+    def fake_detect() -> Platform:
+        return Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
+
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "load_tools", fake_load_tools)
+    monkeypatch.setattr(setup, "detect", fake_detect)
+    seen = _capture_app(monkeypatch)
+    assert setup.main([]) == 0
+    unavailable = seen[0]["unavailable"]
+    assert isinstance(unavailable, dict)
+    assert unavailable["apt-upgrade"] is True
+    assert unavailable["fd"] is False

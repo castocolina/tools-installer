@@ -166,6 +166,7 @@ class CatalogScreen(AppScreen):
         view: str,
         catalog: list[Tool],
         staged: set[str],
+        unavailable: Mapping[str, bool] | None = None,
     ) -> None:
         super().__init__(view=view)
         self.tools = list(tools)
@@ -174,6 +175,7 @@ class CatalogScreen(AppScreen):
         self._blurbs = dict(blurbs)
         self._catalog = list(catalog)
         self._staged = staged
+        self._unavailable = dict(unavailable) if unavailable else {}
         self._by_id = {tool.id: tool for tool in self._catalog}
         self._browser: ToolBrowser[Tool] = ToolBrowser(self._adapter(), selected=staged)
         self.recommends_line = StatusLine()
@@ -191,6 +193,7 @@ class CatalogScreen(AppScreen):
             legend=_LEGEND,
             on_sort=self._sort,
             sortable_in_views=frozenset({"table"}),
+            selectable=lambda tool: not self._unavailable.get(tool.id, False),
         )
 
     def compose_body(self) -> ComposeResult:
@@ -200,6 +203,18 @@ class CatalogScreen(AppScreen):
     # -- catalog data wiring for the browser adapter -----------------------
     def _row_cells(self, tool: Tool) -> list[Text]:
         installed = self._installed[tool.id]
+        desc = tool.desc or tool.name
+        if self._unavailable.get(tool.id, False):
+            desc = f"{desc} (not available on this machine)"
+            return [
+                Text("", style="dim"),
+                Text(tool.priority, style="dim"),
+                Text(tool.id, style="dim"),
+                Text(tool.category, style="dim"),
+                Text(AUDIENCE_LABEL[tool.audience], style="dim"),
+                Text("✓" if installed else "○", style="dim"),
+                Text(desc, style="dim"),
+            ]
         return [
             mark(tool.id in self._browser.selected),
             Text(tool.priority, style=_PRIORITY_STYLE[tool.priority]),
@@ -207,7 +222,7 @@ class CatalogScreen(AppScreen):
             Text(tool.category),
             Text(AUDIENCE_LABEL[tool.audience], style=_AUDIENCE_STYLE[tool.audience]),
             Text("✓", style="green") if installed else Text("○", style="yellow"),
-            Text(tool.desc or tool.name, style="dim"),
+            Text(desc, style="dim"),
         ]
 
     def _groups(self, view: str) -> list[Section[Tool]]:
@@ -231,6 +246,8 @@ class CatalogScreen(AppScreen):
         # list, not the filtered one — the two lists differing is correct.
         if tool.recommends:
             detail += f"  |  pairs well with {', '.join(tool.recommends)}"
+        if self._unavailable.get(tool.id, False):
+            detail += "  |  (not available on this machine)"
         return detail
 
     def _sort(self, column_key: str) -> None:
@@ -309,7 +326,11 @@ class CatalogScreen(AppScreen):
 
     def _offer_recommends(self, tool: Tool) -> None:
         pending = unstaged_recommends(
-            tool, self._catalog, staged=self._staged, installed=self._installed
+            tool,
+            self._catalog,
+            staged=self._staged,
+            installed=self._installed,
+            unavailable=self._unavailable,
         )
         if not pending:
             return
@@ -332,7 +353,11 @@ class CatalogScreen(AppScreen):
         # staged set may have moved since, so they are re-filtered here and only
         # the real delta is added and named. Reporting the captured tuple would
         # claim to have added ids that were already in the batch.
-        added = tuple(rec for rec in self._pending_recommends if rec not in self._staged)
+        added = tuple(
+            rec
+            for rec in self._pending_recommends
+            if rec not in self._staged and not self._unavailable.get(rec, False)
+        )
         self._pending_recommends = ()
         self.recommends_line.clear()
         if not added:
@@ -359,7 +384,11 @@ class CatalogScreen(AppScreen):
 
     def on_tool_browser_accepted(self, event: ToolBrowser.Accepted) -> None:
         event.stop()
-        ids = [tool.id for tool in select_tools(self._catalog, list(self._staged))]
+        ids = [
+            tool.id
+            for tool in select_tools(self._catalog, list(self._staged))
+            if not self._unavailable.get(tool.id, False)
+        ]
         if not ids:
             self.status.set("Select at least one tool, or press q to quit.", "warn")
             return

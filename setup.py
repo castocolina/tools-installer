@@ -38,6 +38,7 @@ from installer.platform import Platform, detect
 from installer.policy import ban_policy, omz_plugins_policy, tweak_policy
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
+from installer.resolve import platform_could_support
 from installer.selection import Choice
 from installer.shellrc import collect_bin_dirs, has_managed_block
 from installer.status import is_installed
@@ -146,6 +147,7 @@ def _build_app(
     link_mode: str = "centralized",
 ) -> UnifiedApp:
     installed = {tool.id: is_installed(tool) for tool in tools}
+    unavailable = {tool.id: not platform_could_support(tool, platform) for tool in tools}
     report, _status, _warning = doctor_data(
         tools,
         platform=platform,
@@ -287,6 +289,7 @@ def _build_app(
         node_globals=_node_globals_report,
         globals_preview=_globals_preview,
         reinstall_globals=_reinstall_globals,
+        unavailable=unavailable,
         initial_view=initial_view,
     )
 

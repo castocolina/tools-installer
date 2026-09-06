@@ -91,6 +91,7 @@ def unstaged_recommends(
     *,
     staged: Container[str],
     installed: Mapping[str, bool],
+    unavailable: Mapping[str, bool] | None = None,
 ) -> tuple[str, ...]:
     """Complementary tools a freshly-marked tool declares that the user has not
     already staged or installed, so the catalog can offer them.
@@ -101,10 +102,17 @@ def unstaged_recommends(
     remains the only mechanism that decides what installs and in what order,
     per `.claude/architecture.md`. This function lives here rather than beside
     the resolver precisely so it cannot drift into a second resolver.
+
+    `unavailable` is the catalog-browsing signal from platform_could_support:
+    a tool that can never install here is not offered as a recommendation.
     """
+    blocked = unavailable or {}
     known = {item.id for item in catalog}
     return tuple(
         rec_id
         for rec_id in dict.fromkeys(tool.recommends)
-        if rec_id in known and rec_id not in staged and not installed.get(rec_id, False)
+        if rec_id in known
+        and rec_id not in staged
+        and not installed.get(rec_id, False)
+        and not blocked.get(rec_id, False)
     )
