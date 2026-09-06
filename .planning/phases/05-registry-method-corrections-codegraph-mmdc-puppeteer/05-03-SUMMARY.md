@@ -177,7 +177,7 @@ Live `registry.npmjs.org` fetch, 2026-09-05, command exited 0 with `LEGITIMACY_O
 - pinned `dist.integrity`: `sha512-9ZfkiaZDQWpGPJp9XTS+Bkn/D78hPvYmtjPfIBeybn05oeY6Jj7aiSbYdfcSQD2UMvC0vE7Yi9PSDo179euRzw==`
 - This `25.10.0` integrity is the artifact the phase reasoned about — the version `pnpm add -g puppeteer@^25` resolves to on the day the gate ran.
 
-Disposition: the `SUS` flag is a `too-new`-heuristic false positive on a long-established, canonically-sourced package, discharged on registry metadata rather than on the researcher's judgement alone.
+Disposition: the `SUS` flag is a `too-new`-heuristic false positive on a package whose npm record shows a long history and a canonical upstream repository, discharged on registry metadata rather than on the researcher's judgement alone.
 
 ### @mermaid-js/mermaid-cli
 
@@ -188,13 +188,17 @@ Disposition: the `SUS` flag is a `too-new`-heuristic false positive on a long-es
 - `dist-tags.latest`: `11.17.0`
 - latest `dist.integrity`: `sha512-pxF8rmheBb1gabIN4GFDCNWzIUsOzcEsSp7H5CQoL7gv7X8U8r6FFKtdMzEmZMeHmziNAq2B7J7LG+CDSfIg9w==`
 
-Disposition: the `SUS` flag is a `too-new`-heuristic false positive on a long-established, canonically-sourced package, discharged on registry metadata rather than on the researcher's judgement alone.
+Disposition: the `SUS` flag is a `too-new`-heuristic false positive on a package whose npm record shows a long history and a canonical upstream repository, discharged on registry metadata rather than on the researcher's judgement alone.
 
 ### What this gate establishes and does not
 
-This gate establishes IDENTITY AND OWNERSHIP ONLY: this package name is published from the canonical upstream repository, and it is a long-established package with a real version history rather than a freshly published look-alike. That is the property the `SUS` flag put in question, and it is fully discharged here.
+> **Correction (second-pass review, finding M3).** This section originally read "This gate establishes IDENTITY AND OWNERSHIP ONLY". That overstated it, and the paragraph below is the corrected claim. The gate has real, reachable failure paths — it is not a no-op — but it is a metadata-consistency check, not an identity or ownership proof.
 
-It is NOT an artifact-integrity approval. It does not authenticate the tarball `pnpm add -g` will download and execute. Repository URL, age and version count are all metadata the publisher controls, and none of them is a signature over artifact bytes. The two integrity values recorded above are a POINT-IN-TIME RECORD, not an approval and not a control: `^25` is a mutable range, so a later install legitimately resolves to a version published after this gate ran, whose bytes this evidence says nothing about. The record's only purpose is forensic — it makes the exact artifact this phase reasoned about identifiable after the fact. The stronger control is npm provenance / pinning installs to an exact `dist.integrity`; it is deliberately NOT adopted, because it freezes puppeteer at one build with no security-update path, and the residual gap is carried as T-05-20 rather than silently closed.
+This gate establishes METADATA CONSISTENCY ONLY: the npm registry's own record for this exact package name reports a repository URL that normalizes to the expected canonical `owner/repo`, a creation date years old, and a version count consistent with a long-maintained package rather than a freshly published look-alike. Every one of those fields is SELF-REPORTED by the same registry record the gate is checking, and all of them are publisher-controlled. A compromised or malicious publisher account for this exact package name would retain the real creation date and version history, and could keep or set a `repository.url` pointing at the genuine upstream GitHub project, and would pass this gate unchanged. It is therefore not proof of current publisher identity, not proof of ownership, and not proof of provenance.
+
+What it does buy, and why it is still worth running: it refutes the specific hypothesis the `SUS` flag raised — a NEW package, or a typosquat sitting at a similar name with no history and an unrelated or absent repository field. Those shapes fail it, which is what makes it a gate rather than a formality. A takeover of the established name is a different threat, and this gate does not address it.
+
+It is NOT an artifact-integrity approval either. It does not authenticate the tarball `pnpm add -g` will download and execute. Repository URL, age and version count are all metadata the publisher controls, and none of them is a signature over artifact bytes. The two integrity values recorded above are a POINT-IN-TIME RECORD, not an approval and not a control: `^25` is a mutable range, so a later install legitimately resolves to a version published after this gate ran, whose bytes this evidence says nothing about. The record's only purpose is forensic — it makes the exact artifact this phase reasoned about identifiable after the fact. The stronger control is npm provenance / pinning installs to an exact `dist.integrity`; it is deliberately NOT adopted, because it freezes puppeteer at one build with no security-update path, and the residual gap is carried as T-05-20 rather than silently closed.
 
 ### Persistent build-allowance grant
 

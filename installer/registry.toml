@@ -1848,9 +1848,13 @@ versions = { puppeteer = "^25" }
 # beside it is the hand-install shape, and the replay grants it nothing, so
 # pressing `r` to repair other globals cannot create this grant on a machine
 # that never had it (installer/pnpm_globals.py::_formed_groups);
-# it does nothing until that package is installed again; its identity was
-# checked against the canonical upstream repository before it was created
-# (plan 05-03 Task 1); and it is revocable. Revocation: remove the package's
+# it does nothing until that package is installed again; the npm registry's own
+# record for this package name was checked for consistency with the canonical
+# upstream project before it was created (plan 05-03 Task 1 — a
+# metadata-consistency check on publisher-controlled fields, NOT proof of
+# publisher identity or artifact provenance, so it refutes a typosquat or a
+# freshly published look-alike and says nothing about a takeover of the
+# established name); and it is revocable. Revocation: remove the package's
 # entry from pnpm's build-allowance configuration (plan 05-01 recorded the
 # file as `/root/.local/share/pnpm/global/v11/pnpm-workspace.yaml` with
 # `allowBuilds: puppeteer: true`; on a user machine it is the same
