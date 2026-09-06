@@ -1,7 +1,7 @@
 ---
 phase: 7
 reviewers: [codex]
-reviewed_at: 2026-09-06T06:55:10Z
+reviewed_at: 2026-09-06T07:35:19Z
 plans_reviewed: [07-01-PLAN.md, 07-02-PLAN.md, 07-03-PLAN.md]
 models:
   codex: "gpt-5.6-sol (reasoning=high)"
@@ -11,160 +11,169 @@ model_sources:
 
 # Cross-AI Plan Review — Phase 7
 
-> **Note:** opencode-plan-review was attempted for this phase and failed with ETIMEDOUT on the
-> large 3-plan prompt bundle (a tool/network failure, not a completed review with a clean
-> verdict). This cycle forced the codex reviewer lane instead, per explicit user request.
-> Only one reviewer produced a review this cycle; the multi-reviewer consensus gate does not
-> apply — every HIGH below counts individually.
+> **Note:** This is a second review cycle for Phase 7, run against the PLAN.md revisions made
+> after the prior cycle's codex review (committed as `1587c34`). The codex reviewer lane was
+> forced explicitly per user request — it proved reliable for this phase in cycle 1, while the
+> default `opencode-plan-review` lane had twice failed with ETIMEDOUT on this phase's large
+> 3-plan prompt bundle. Only one reviewer produced a review this cycle; the multi-reviewer
+> consensus gate does not apply — every HIGH below counts individually.
+>
+> The prior cycle's `git`-dependency HIGH on Plan 07-01 appears resolved: this cycle's review
+> confirms "Adding `git` as a hard dependency is correct" as a strength rather than re-raising it
+> as a concern. New and different HIGH-severity concerns emerged against the revised plans below.
 
 ## Codex Review
 
-# Cross-AI Plan Review — Phase 7
+# Cross-AI Plan Review
 
-## Overall verdict
+## Overall assessment
 
-**Overall risk: HIGH. Do not execute these plans unchanged.** The plans understand most existing mechanisms well, but three blockers remain:
+The plans show strong source awareness and test discipline, but they should not execute unchanged. Two architectural gaps block the phase goal:
 
-1. Plan 01 masks Oh-My-Zsh's undeclared `git` prerequisite.
-2. Plan 02 does not implement D-01's disabled catalog state and misidentifies the production outcome as `NO_METHOD`.
-3. Plan 03 contains a verification command that cannot pass and does not pin its load-bearing `raw`/checksum fields.
+1. "No applicable method" currently conflates unsupported hardware/OS with a missing package manager.
+2. The accepted macOS-version limitation directly contradicts locked decision D-01.
 
-The current baseline is healthy: the targeted registry, resolver, status, and download tests completed with exit code 0.
-
----
-
-## Plan 07-01 — zsh and Oh-My-Zsh
-
-### Summary
-
-The registry shapes, environment-variable protection, `detect_path`, and immutable-Linux method resolution are grounded in the implementation. The main gap is the install's undeclared dependency on `git`: the proposed container setup installs `git` manually, so it cannot prove that a real catalog-driven installation succeeds on a clean machine.
-
-### Strengths
-
-- The data-only dependency approach is correct. `resolve_dependencies` follows declared `requires` edges transitively and emits dependencies before dependents; `run_wizard` passes that order to `run_installs`. No tier-specific resolver is needed. [installer/deps.py:32](/Users/ramon/git/personal/tools-installer/installer/deps.py:32), [installer/deps.py:121](/Users/ramon/git/personal/tools-installer/installer/deps.py:121), [installer/app.py:134](/Users/ramon/git/personal/tools-installer/installer/app.py:134)
-
-- The Oh-My-Zsh environment design matches the executor. `_env_prefix` quotes values and attaches assignments to the shell side of the pipe, so `KEEP_ZSHRC=yes`, `RUNZSH=no`, and `CHSH=no` reach `install.sh`. [installer/executors.py:334](/Users/ramon/git/personal/tools-installer/installer/executors.py:334), [installer/executors.py:353](/Users/ramon/git/personal/tools-installer/installer/executors.py:353)
-
-- `detect_path` is the right installed-state mechanism for Oh-My-Zsh. The status path first checks `cmd`, then accepts a declared marker path, matching the existing SDKMAN behavior. [installer/status.py:16](/Users/ramon/git/personal/tools-installer/installer/status.py:16), [installer/registry.toml:1314](/Users/ramon/git/personal/tools-installer/installer/registry.toml:1314)
-
-- The proposed `zsh` method ladder behaves as claimed when Homebrew is available: native managers apply on mutable Linux, native methods are suppressed on immutable Linux, and brew remains. [installer/resolve.py:32](/Users/ramon/git/personal/tools-installer/installer/resolve.py:32), [tests/test_registry.py:189](/Users/ramon/git/personal/tools-installer/tests/test_registry.py:189)
-
-### Concerns
-
-- **HIGH — The plan omits a real hard dependency on `git`.** Oh-My-Zsh lists Git as a prerequisite, and its installer performs Git repository operations. The script executor supplies only `curl` and the selected shell; it does not install Git. Meanwhile, `git` is a separate user-tier catalog tool, so `requires=["zsh"]` will not drag it in. The Tier-3 procedure hides this by running `apt-get install ... git` manually before the tested pipeline. [installer/executors.py:353](/Users/ramon/git/personal/tools-installer/installer/executors.py:353), [installer/registry.toml:244](/Users/ramon/git/personal/tools-installer/installer/registry.toml:244), [Oh-My-Zsh prerequisites and installer](https://github.com/ohmyzsh/ohmyzsh)
-
-- **MEDIUM — The Tier-3 run does not reproduce the claimed catalog dependency chain.** It manually installs zsh and then manually invokes the vendor script. It bypasses `resolve_dependencies`, `run_installs`, installed-state short-circuiting, and the registry-generated method selection—the actual production path at [installer/app.py:134](/Users/ramon/git/personal/tools-installer/installer/app.py:134). It proves vendor behavior, but not "the resolver chain for real."
-
-- **LOW — The mutable `master` script remains a semantic-drift risk.** The environment variables are effective against the current script, but future installs download a later revision. The fresh container run and dated comment reduce this risk, but do not bind runtime behavior to the reviewed revision. [installer/registry.toml:151](/Users/ramon/git/personal/tools-installer/installer/registry.toml:151) shows the project already accepts this pattern.
-
-### Suggestions
-
-- Change Oh-My-Zsh to `requires = ["zsh", "git"]`, or explicitly obtain user approval to treat Git as an installer-wide host prerequisite. The former exercises the intended cross-tier dependency mechanism.
-
-- Run the Tier-3 vendor-behavior check without preinstalling Git first, confirm the expected failure, then rerun through a catalog-equivalent order that installs both declared dependencies.
-
-- Add a registry-backed `resolve_dependencies` test proving the real `git → zsh → oh-my-zsh` order, followed by `run_installs` with recorded calls. Keep the container test specifically for `.zshrc` preservation.
-
-### Risk Assessment
-
-**HIGH.** The `.zshrc` safety work is strong, but the planned entry can fail on a clean Linux installation because the test preinstalls an undeclared prerequisite.
+The terminal-emulator plan is mechanically sound, but its phase-closeout claim inherits those unresolved blockers.
 
 ---
 
-## Plan 07-02 — GNU Bash and Apple Containers
+## Plan 07-01 — Zsh and Oh-My-Zsh
 
 ### Summary
 
-The GNU Bash collision analysis is good, and the `os`/`arch` method restrictions are mechanically correct. Apple Containers, however, does not satisfy D-01: the proposed catalog row remains enabled and selectable, macOS-version incompatibility is not detected, and the real wizard path produces an unavailable-dependency warning rather than a `NO_METHOD` outcome.
+The dependency and safety design is well grounded. Adding `git` as a hard dependency is correct, and the proposed tests exercise the real resolver. However, the plan proves the Bazzite path only when Homebrew is already installed, not from the fresh-machine state central to the project.
 
 ### Strengths
 
-- The `/bin/bash` false-positive is real. `is_installed` checks `shutil.which(tool.cmd)` before `detect_path`, so `cmd="bash"` would accept macOS's bundled Bash before inspecting Homebrew paths. [installer/status.py:16](/Users/ramon/git/personal/tools-installer/installer/status.py:16)
+- The resolver test is meaningful. `resolve_dependencies` recursively collects every `requires` edge and then visits runnable dependencies before dependents, so asserting both `zsh` and `git` precede `oh-my-zsh` tests the production mechanism rather than TOML shape alone. [installer/deps.py:59](/Users/ramon/git/personal/tools-installer/installer/deps.py:59), [installer/deps.py:121](/Users/ramon/git/personal/tools-installer/installer/deps.py:121)
 
-- Arch-split methods will resolve correctly for installation because `_applies` checks both `os` and `arch`. Homebrew's current formula does require macOS 26 and arm64, so a real brew installation method is well supported. [installer/resolve.py:32](/Users/ramon/git/personal/tools-installer/installer/resolve.py:32), [Homebrew container formula](https://formulae.brew.sh/formula/container)
+- The environment-variable mitigation reaches the correct process. `_env_prefix` quotes values, and `_script` attaches those assignments to the shell on the right side of the pipe. [installer/executors.py:334](/Users/ramon/git/personal/tools-installer/installer/executors.py:334), [installer/executors.py:353](/Users/ramon/git/personal/tools-installer/installer/executors.py:353)
 
-- The uninstall hint remains correct with a synthetic command name because `_manager_hint` uses the method's `formula`, not `tool.cmd`. [installer/uninstall.py:129](/Users/ramon/git/personal/tools-installer/installer/uninstall.py:129)
+- `detect_path` is the correct idempotency seam for a framework without a normal PATH executable. `is_installed` checks it after `which`, and `install_tool` returns `ALREADY_INSTALLED` before rerunning the vendor script. [installer/status.py:16](/Users/ramon/git/personal/tools-installer/installer/status.py:16), [installer/engine.py:80](/Users/ramon/git/personal/tools-installer/installer/engine.py:80)
+
+- The immutable-Linux assertions accurately reflect current resolution behavior: native managers are rejected on immutable platforms, while brew remains applicable when `has_brew=True`. [installer/resolve.py:40](/Users/ramon/git/personal/tools-installer/installer/resolve.py:40), [installer/resolve.py:49](/Users/ramon/git/personal/tools-installer/installer/resolve.py:49)
 
 ### Concerns
 
-- **HIGH — `NO_METHOD` is not a disabled catalog state.** `CatalogScreen` receives no platform or availability data, renders no disabled status, and leaves the browser's default "everything selectable" policy in force. [installer/catalog_tui.py:160](/Users/ramon/git/personal/tools-installer/installer/catalog_tui.py:160), [installer/catalog_tui.py:201](/Users/ramon/git/personal/tools-installer/installer/catalog_tui.py:201), [installer/tool_browser.py:60](/Users/ramon/git/personal/tools-installer/installer/tool_browser.py:60)
+- **HIGH — The test does not prove fresh-machine Bazzite parity.** Every proposed Bazzite fixture sets `has_brew=True`. On an immutable machine without Homebrew, native methods are rejected and the brew method is also rejected, leaving `zsh` with no method. `resolve_dependencies` then blocks `oh-my-zsh` through its unavailable dependency. `Platform.has_brew` is a live startup probe, not a capability that becomes true because `brew` was selected. [installer/platform.py:53](/Users/ramon/git/personal/tools-installer/installer/platform.py:53), [installer/resolve.py:40](/Users/ramon/git/personal/tools-installer/installer/resolve.py:40), [installer/deps.py:92](/Users/ramon/git/personal/tools-installer/installer/deps.py:92)
 
-- **HIGH — The plan describes the wrong production outcome.** In the wizard, `resolve_dependencies` evaluates availability before installation, marks an unavailable selected tool blocked, warns, and removes it from the runnable order. Consequently, `install_tool` is never called and its `NO_METHOD` branch is never reached. [installer/app.py:134](/Users/ramon/git/personal/tools-installer/installer/app.py:134), [installer/deps.py:92](/Users/ramon/git/personal/tools-installer/installer/deps.py:92), [installer/deps.py:102](/Users/ramon/git/personal/tools-installer/installer/deps.py:102), [installer/engine.py:83](/Users/ramon/git/personal/tools-installer/installer/engine.py:83)
+- **MEDIUM — The Tier-3 run tests preservation, not a clean-home installation.** It creates a pre-existing `.zshrc` and verifies that it remains unchanged. That does not prove a fresh user receives a usable Oh-My-Zsh configuration. The existing plugin policy refuses a missing or unsupported `plugins=(...)` array, so merely finding `~/.oh-my-zsh/oh-my-zsh.sh` is insufficient evidence that the framework is activated or compatible with the shipped policy. [installer/omz.py:54](/Users/ramon/git/personal/tools-installer/installer/omz.py:54), [installer/omz.py:132](/Users/ramon/git/personal/tools-installer/installer/omz.py:132)
 
-- **HIGH — Wrong macOS versions still appear available.** `Platform` has OS family, architecture, immutability, and brew presence, but no OS version. On an arm64 Mac below macOS 26, the method resolves and remains selectable; Homebrew rejects it only after confirmation. That directly conflicts with D-01's "wrong macOS version shows disabled" requirement. [installer/platform.py:19](/Users/ramon/git/personal/tools-installer/installer/platform.py:19), [installer/resolve.py:32](/Users/ramon/git/personal/tools-installer/installer/resolve.py:32)
+- **LOW — The claimed "verbatim" pipeline is not verbatim.** Production prepends a de-shimmed PATH export before `curl`; the proposed container command omits it. The placement of `< /dev/null` is also ambiguous—placing it on the right-hand shell would override the pipe that supplies the script. [installer/executors.py:30](/Users/ramon/git/personal/tools-installer/installer/executors.py:30), [installer/executors.py:359](/Users/ramon/git/personal/tools-installer/installer/executors.py:359), [07-01-PLAN.md:243](/Users/ramon/git/personal/tools-installer/.planning/phases/07-system-user-tier-catalog-expansion/07-01-PLAN.md:243)
 
-- **MEDIUM — The proposed architecture rule overgeneralizes an unresolved product decision.** The composition root already has `Platform`, and the reusable browser already supports non-selectable rows. The uninstall view demonstrates the exact dimmed, inert pattern that could be reused. [setup.py:141](/Users/ramon/git/personal/tools-installer/setup.py:141), [installer/wizard_app.py:581](/Users/ramon/git/personal/tools-installer/installer/wizard_app.py:581), [installer/wizard_app.py:683](/Users/ramon/git/personal/tools-installer/installer/wizard_app.py:683)
-
-- **LOW — GNU Bash detection is asserted structurally rather than behaviorally.** The proposed test checks `cmd` and paths, but never calls `is_installed` under a simulated `/bin/bash` PATH. Also, `detect_path` checks all methods without platform filtering, so an Intel-prefix Bash can satisfy the entry on Apple Silicon. [installer/status.py:24](/Users/ramon/git/personal/tools-installer/installer/status.py:24)
+- **LOW — The registry comments are excessively large.** The architecture convention requires a dated comment containing the verified finding, while detailed evidence belongs naturally in the research and summary artifacts. It does not require embedding the full investigation in TOML. [architecture.md:163](/Users/ramon/git/personal/tools-installer/.claude/architecture.md:163), [architecture.md:185](/Users/ramon/git/personal/tools-installer/.claude/architecture.md:185)
 
 ### Suggestions
 
-- Reopen D-01 instead of silently redefining "disabled." Either implement the locked behavior or obtain approval to weaken it to an install-time warning.
+- Add a `has_brew=False` immutable-Fedora test and explicitly resolve how Homebrew becomes available on a fresh Bazzite installation.
+- Add a second Tier-3 case with no pre-existing `.zshrc`; assert that the resulting configuration sources Oh-My-Zsh and contains an editable plugin array.
+- Generate or capture the actual `_script` runner argument for the container reproduction instead of manually retyping it.
+- Keep registry comments concise and place the transcript and extended rationale in `07-01-SUMMARY.md`.
 
-- Pass platform availability into the catalog, reuse `BrowserAdapter.selectable`, and mirror the uninstall view's dim/inert rendering. The composition root already owns `Platform`.
+### Risk assessment
 
-- Add a macOS-version capability to `Platform` or another explicit availability seam. Homebrew's later rejection cannot satisfy a browsing-time disabled-state requirement.
-
-- Remove or postpone the proposed architecture subsection until the product decision is resolved. If documentation is retained, describe the actual `resolve_dependencies` warning path, not `install_tool.NO_METHOD`.
-
-- Add a behavioral GNU Bash status test with mocked `shutil.which` and prefix paths.
-
-### Risk Assessment
-
-**HIGH.** This plan would codify a behavior that contradicts D-01 and inaccurately documents the production control flow.
+**HIGH.** The Oh-My-Zsh safety work is strong, but the plan does not yet demonstrate the required fresh-machine Bazzite path.
 
 ---
 
-## Plan 07-03 — kitty, WezTerm, and terminal category
+## Plan 07-02 — GNU Bash, Apple Containers, and disabled catalog rows
 
 ### Summary
 
-The category and download mechanics are mostly well designed. The plan honestly records the local `.txz` limitation and chooses a suitable raw AppImage for WezTerm. Its closeout verification is broken, however, and its tests fail to pin the two fields that prevent the AppImage from being incorrectly treated as a gzip archive.
+The GNU Bash detection fix is well reasoned, and reusing `BrowserAdapter.selectable` is the right UI primitive. The availability model is not correct, however: it disables brew-only tools when Homebrew is merely absent, and it still cannot disable Apple Containers on an unsupported macOS version despite D-01 explicitly requiring that behavior.
 
 ### Strengths
 
-- Adding `Category.TERMINAL` plus a registry blurb is the correct minimal schema change. Both loaders validate category IDs against the enum, while existing tests enforce blurb/tool parity. [installer/model.py:181](/Users/ramon/git/personal/tools-installer/installer/model.py:181), [installer/model.py:286](/Users/ramon/git/personal/tools-installer/installer/model.py:286), [tests/test_registry.py:942](/Users/ramon/git/personal/tools-installer/tests/test_registry.py:942)
+- The GNU Bash false-positive diagnosis is correct. `is_installed` checks `shutil.which(tool.cmd)` before `detect_path`, and `install_tool` stops immediately if that returns true. Using `cmd="bash"` would therefore let the system binary prevent the brew action. [installer/status.py:24](/Users/ramon/git/personal/tools-installer/installer/status.py:24), [installer/engine.py:80](/Users/ramon/git/personal/tools-installer/installer/engine.py:80)
 
-- The WezTerm checksum template is supported exactly as claimed: `{asset}` expands after asset rendering, the checksum is downloaded beside the asset, and `expected_sha256` handles `<hash> <filename>` sidecars. [installer/download.py:51](/Users/ramon/git/personal/tools-installer/installer/download.py:51), [installer/download.py:153](/Users/ramon/git/personal/tools-installer/installer/download.py:153), [installer/checksums.py:23](/Users/ramon/git/personal/tools-installer/installer/checksums.py:23), [WezTerm release assets](https://github.com/wezterm/wezterm/releases/tag/20240203-110809-5046fc22)
+- The two arch-specific methods match the existing model: installation resolution filters methods by `arch`, while status detection examines every declared `detect_path`. [installer/resolve.py:32](/Users/ramon/git/personal/tools-installer/installer/resolve.py:32), [installer/status.py:26](/Users/ramon/git/personal/tools-installer/installer/status.py:26)
 
-- `raw=true` correctly bypasses archive extraction and copies/chmods the verified AppImage directly. [installer/download.py:190](/Users/ramon/git/personal/tools-installer/installer/download.py:190)
+- `BrowserAdapter.selectable` is an appropriate reuse point. Toggle, select-all, and invert already honor it without changes to `ToolBrowser`. [installer/tool_browser.py:60](/Users/ramon/git/personal/tools-installer/installer/tool_browser.py:60), [installer/tool_browser.py:240](/Users/ramon/git/personal/tools-installer/installer/tool_browser.py:240), [installer/tool_browser.py:251](/Users/ramon/git/personal/tools-installer/installer/tool_browser.py:251)
 
-- The documented kitty extraction gap is real in this codebase: all non-ZIP archives use `tar -xzf`, while immutable systems suppress native package managers. [installer/download.py:136](/Users/ramon/git/personal/tools-installer/installer/download.py:136), [installer/download.py:203](/Users/ramon/git/personal/tools-installer/installer/download.py:203), [installer/resolve.py:45](/Users/ramon/git/personal/tools-installer/installer/resolve.py:45)
+- The proposed dimmed rendering follows a real existing pattern in `UninstallScreen`, including the blank selection cell and inert adapter entry. [installer/wizard_app.py:581](/Users/ramon/git/personal/tools-installer/installer/wizard_app.py:581), [installer/wizard_app.py:673](/Users/ramon/git/personal/tools-installer/installer/wizard_app.py:673)
 
 ### Concerns
 
-- **HIGH — Task 2's verification command cannot pass.** The task adds six rows containing `Phase 7` and then changes the footer to contain `Phase 7`; `grep -c 'Phase 7'` therefore sees at least seven lines, not six. The file's decision table and footer are separate lines. [`.planning/PROJECT.md:88`](/Users/ramon/git/personal/tools-installer/.planning/PROJECT.md:88), [`.planning/PROJECT.md:103`](/Users/ramon/git/personal/tools-installer/.planning/PROJECT.md:103)
+- **HIGH — D-01 remains unsatisfied.** D-01 explicitly includes a wrong macOS version as an unavailable case. `Platform` has no version field, and `_applies` checks only OS, architecture, immutability, and current brew presence. The plan acknowledges that a pre-macOS-26 Apple-Silicon machine remains selectable, then declares the gap accepted without a user decision. [07-CONTEXT.md:21](/Users/ramon/git/personal/tools-installer/.planning/phases/07-system-user-tier-catalog-expansion/07-CONTEXT.md:21), [installer/platform.py:19](/Users/ramon/git/personal/tools-installer/installer/platform.py:19), [installer/resolve.py:32](/Users/ramon/git/personal/tools-installer/installer/resolve.py:32)
 
-- **MEDIUM — The tests do not pin `raw=true` or the exact checksum field.** The proposed WezTerm resolve test checks only method kinds. If `raw=true` disappears, resolution still passes but installation sends the AppImage to `tar -xzf`. If `checksum` disappears, the comment test can still pass. The existing sidecar allowlist also omits WezTerm. [tests/test_registry.py:841](/Users/ramon/git/personal/tools-installer/tests/test_registry.py:841), [installer/download.py:194](/Users/ramon/git/personal/tools-installer/installer/download.py:194), [installer/download.py:207](/Users/ramon/git/personal/tools-installer/installer/download.py:207)
+- **HIGH — `not resolve_methods(...)` conflates unsupported platforms with missing Homebrew.** On a fresh Mac where `has_brew=False`, both `gnu-bash` and Apple Containers would be dimmed and non-selectable. Selecting the catalog's Homebrew tool cannot change the static `Platform` snapshot or availability map. This conflicts directly with the installer's bare-machine bootstrap purpose. [installer/platform.py:53](/Users/ramon/git/personal/tools-installer/installer/platform.py:53), [installer/resolve.py:40](/Users/ramon/git/personal/tools-installer/installer/resolve.py:40), [07-02-PLAN.md:460](/Users/ramon/git/personal/tools-installer/.planning/phases/07-system-user-tier-catalog-expansion/07-02-PLAN.md:460)
 
-- **MEDIUM — The proposed statement that kitty has no Linux cask path is already stale.** Homebrew's current kitty cask page includes Linux-on-Intel artifacts. The project still blocks all casks on Linux, so this does not automatically create a working method, but the verification comment should not claim that no upstream Linux cask exists. [installer/resolve.py:42](/Users/ramon/git/personal/tools-installer/installer/resolve.py:42), [Homebrew kitty cask](https://formulae.brew.sh/cask/kitty)
+- **MEDIUM — The proposed computation violates the "setup.py is wiring only" rule.** The plan imports `resolve_methods` into `setup.py` and makes a per-tool availability decision there. The architecture standard says decision functions belong under `installer/`. [architecture.md:20](/Users/ramon/git/personal/tools-installer/.claude/architecture.md:20), [setup.py:141](/Users/ramon/git/personal/tools-installer/setup.py:141)
 
-- **MEDIUM — Phase closeout is premature.** Plan 03 claims all four success criteria are satisfied, but Plan 02 leaves Apple Containers enabled in the catalog on unsupported machines and cannot detect macOS versions.
+- **MEDIUM — The new non-selectable invariant has a staging bypass.** Recommendations are filtered only by known/staged/installed state, then `action_accept_recommends` writes IDs directly into the shared staged set. `selected_ids` also returns staged IDs without checking `selectable`. An unavailable recommendation can therefore be silently staged despite its disabled row. Phase 8's planned recommendation wiring makes this a near-term issue. [installer/selection.py:88](/Users/ramon/git/personal/tools-installer/installer/selection.py:88), [installer/catalog_tui.py:323](/Users/ramon/git/personal/tools-installer/installer/catalog_tui.py:323), [installer/tool_browser.py:276](/Users/ramon/git/personal/tools-installer/installer/tool_browser.py:276)
+
+- **LOW — The claimed reuse of `classify_tools` is not exact.** `classify_tools` checks removable and installed states before classifying a tool as unavailable; the proposed map uses only `not resolve_methods`. [installer/uninstall.py:188](/Users/ramon/git/personal/tools-installer/installer/uninstall.py:188)
 
 ### Suggestions
 
-- Change the PROJECT verification to count outcome cells only, for example `grep -cE '\| Phase 7 \|$'`, and verify the footer separately.
+- Separate "unsupported on this OS/architecture/version" from "installer prerequisite currently missing." Disabled rows should use the former.
+- Add a reusable `installer/` availability classifier and keep `setup.py` limited to calling and forwarding it.
+- Either implement the macOS-version gate or return D-01 to the user for an explicit scope change. Do not close the phase while contradicting the locked decision.
+- Filter recommendation acceptance and final selected IDs through the same selectability predicate.
+- Add a bare-Mac test with `has_brew=False`; Apple Containers and GNU Bash should remain selectable if the installer can bootstrap Homebrew.
 
-- In the WezTerm test, assert the exact asset, `checksum == "{asset}.sha256"`, `raw is True`, `member == "wezterm"`, and `arch == ("amd64",)`. Add `wezterm` to `SIDECAR_VERIFIED`, or replace that allowlist with a more direct exhaustive invariant.
+### Risk assessment
 
-- Re-check the current kitty cask metadata and record the precise decision: Linux cask support exists upstream but is unsupported by this project's current `resolve.py`/cask assumptions.
+**HIGH.** The UI mechanism is good, but the availability definition would disable installable tools on the primary bootstrap path and still miss one explicitly required unavailable state.
 
-- Delay Phase 7 decision consolidation and completion claims until D-01 has an accepted, tested implementation.
+---
 
-### Risk Assessment
+## Plan 07-03 — Kitty, WezTerm, and terminal category
 
-**HIGH as a phase-closing plan; MEDIUM for the registry changes alone.** The category and method definitions are plausible, but the closeout gate is impossible and the AppImage's load-bearing parameters lack regression coverage.
+### Summary
+
+The registry shapes and checksum path fit the current implementation. The main implementation risk is that the novel WezTerm AppImage path is validated structurally but never installed and executed. The plan also closes the phase despite Plan 07-02's unresolved D-01 conflict.
+
+### Strengths
+
+- The new category integrates through existing validation. `load_tools` validates each tool category against the `Category` enum, and existing tests enforce both "every used category has a blurb" and "every blurb is used." [installer/model.py:172](/Users/ramon/git/personal/tools-installer/installer/model.py:172), [tests/test_registry.py:942](/Users/ramon/git/personal/tools-installer/tests/test_registry.py:942)
+
+- The WezTerm checksum template fits the implementation. `{asset}` expands after the release asset name is rendered, and the checksum parser accepts `<hash> <filename>` sidecars. [installer/download.py:51](/Users/ramon/git/personal/tools-installer/installer/download.py:51), [installer/checksums.py:23](/Users/ramon/git/personal/tools-installer/installer/checksums.py:23)
+
+- `raw=true` correctly bypasses archive extraction in both unverified and verified flows, avoiding the gzip-only `tar -xzf` path. [installer/download.py:118](/Users/ramon/git/personal/tools-installer/installer/download.py:118), [installer/download.py:190](/Users/ramon/git/personal/tools-installer/installer/download.py:190)
+
+- The accepted Kitty/Bazzite result matches current resolution: native methods are skipped on immutable Linux and casks are restricted to macOS. [installer/resolve.py:42](/Users/ramon/git/personal/tools-installer/installer/resolve.py:42), [installer/resolve.py:49](/Users/ramon/git/personal/tools-installer/installer/resolve.py:49)
+
+### Concerns
+
+- **HIGH — The phase-closeout claim is premature.** Plan 07-03 declares Phase 7 complete while 07-02 explicitly leaves the wrong-macOS-version case selectable, contrary to D-01. The source model confirms that limitation. [07-CONTEXT.md:21](/Users/ramon/git/personal/tools-installer/.planning/phases/07-system-user-tier-catalog-expansion/07-CONTEXT.md:21), [installer/platform.py:19](/Users/ramon/git/personal/tools-installer/installer/platform.py:19)
+
+- **MEDIUM — The AppImage path is not tested as an installable, runnable tool.** Proposed tests assert method selection and TOML parameters, but the real path resolves a live tag, downloads two files, parses the checksum, copies the AppImage, and executes it later through PATH. AppImage runtime dependencies such as FUSE are not exercised. [installer/versions.py:169](/Users/ramon/git/personal/tools-installer/installer/versions.py:169), [installer/download.py:153](/Users/ramon/git/personal/tools-installer/installer/download.py:153), [installer/download.py:190](/Users/ramon/git/personal/tools-installer/installer/download.py:190)
+
+- **MEDIUM — Linux arm64 has no WezTerm path.** The project recognizes `arm64` as a supported architecture, but the plan deliberately asserts that Fedora arm64 resolves to no method. The requirement says "a verified Linux path" without narrowing it to amd64, so this needs an explicit scope decision or an additional method. [installer/platform.py:9](/Users/ramon/git/personal/tools-installer/installer/platform.py:9), [07-03-PLAN.md:279](/Users/ramon/git/personal/tools-installer/.planning/phases/07-system-user-tier-catalog-expansion/07-03-PLAN.md:279), [REQUIREMENTS.md:51](/Users/ramon/git/personal/tools-installer/.planning/REQUIREMENTS.md:51)
+
+- **LOW — The required Kitty comment contradicts itself.** It correctly says Kitty has upstream Linux cask variations and that this project rejects all Linux casks, but later says there is "no brew/cask fallback for Linux" confirmed by a formula `404`. The actual reason is resolver policy, not absence of a Linux cask. [07-03-PLAN.md:192](/Users/ramon/git/personal/tools-installer/.planning/phases/07-system-user-tier-catalog-expansion/07-03-PLAN.md:192), [07-03-PLAN.md:214](/Users/ramon/git/personal/tools-installer/.planning/phases/07-system-user-tier-catalog-expansion/07-03-PLAN.md:214), [installer/resolve.py:42](/Users/ramon/git/personal/tools-installer/installer/resolve.py:42)
+
+- **LOW — The six long `PROJECT.md` table rows duplicate research, architecture, plans, and summaries.** This will make the decision ledger difficult to scan and maintain.
+
+### Suggestions
+
+- Add a Tier-3 WezTerm check that downloads through the intended checksum path and runs `wezterm --version` on at least Debian/Ubuntu and Fedora/Bazzite-equivalent environments.
+- Clarify whether Linux arm64 is required. If deferred, record it alongside the Kitty/Bazzite limitation.
+- Rewrite the Kitty comment as: "No resolver-applicable Linux fallback: the formula is absent, and project policy excludes casks on Linux."
+- Delay Phase 7 closeout until D-01 and the Homebrew-absence classification are resolved.
+- Condense the `PROJECT.md` decisions to short statements with links to the detailed summaries.
+
+### Risk assessment
+
+**HIGH for phase closeout; MEDIUM for the terminal entries themselves.** The registry mechanics are plausible, but runnable AppImage verification is missing and the plan inherits unresolved Phase 7 blockers.
 
 ---
 
 ## Consensus Summary
 
-Only one reviewer (Codex) produced a review this cycle — opencode-plan-review failed with
-ETIMEDOUT on this phase's large 3-plan prompt bundle (a tool failure, not a completed review).
-With a single reviewer, there is no cross-reviewer agreement/divergence to synthesize; Codex's
-findings are source-grounded with concrete `file:line` citations against the actual repository
-(registry, resolver, status, executors, download, catalog TUI, and test files), so they are
-treated as fully weighted individual findings rather than downgraded.
+Only one reviewer (Codex) produced a review this cycle. With a single reviewer, there is no
+cross-reviewer agreement/divergence to synthesize; Codex's findings are source-grounded with
+concrete `file:line` citations against the actual repository (registry, resolver, status,
+executors, download, catalog TUI, uninstall, selection, and test files), so they are treated as
+fully weighted individual findings rather than downgraded.
+
+Cross-cutting theme this cycle: two of the four HIGH findings (D-01 macOS-version gating and the
+`resolve_methods`/Homebrew-absence conflation) both trace back to the same root cause — `Platform`
+and `resolve_methods` currently express only "does a method exist for this OS/arch/immutability,"
+not "is this tool unsupported on this hardware" versus "is a prerequisite (Homebrew) merely
+missing right now." Plan 07-02's disabled-row mechanism inherits this ambiguity, and Plan 07-03's
+premature phase-closeout HIGH is a direct consequence of 07-02 not yet resolving it.
 
 ### Agreed Strengths
 
