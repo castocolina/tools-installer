@@ -10,6 +10,13 @@ from installer.versions import parse_declared_version
 
 SMOKE_CHECK_NAMES: frozenset[str] = frozenset({"puppeteer-browser"})
 
+# Duplicated (not imported) from installer/postinstall.py::POSTINSTALL_HOOKS's
+# keys, for the same layering reason SMOKE_CHECK_NAMES is duplicated from
+# installer/executors.py::SMOKE_CHECKS rather than imported: this module
+# stays a pure data/validation layer with no dependency on the heavier
+# installer.postinstall module.
+POSTINSTALL_HOOK_NAMES: frozenset[str] = frozenset({"codegraph-mcp-register"})
+
 METHOD_KINDS = (
     "script",
     "node",
@@ -138,6 +145,12 @@ class Tool:
     # as a selection-time prompt. Distinct from `requires`, which
     # resolve_dependencies expands transitively.
     recommends: tuple[str, ...] = ()
+    # Names a hook in installer/postinstall.py's closed POSTINSTALL_HOOKS
+    # table -- never a literal shell command -- mirroring this file's own
+    # `smoke` param: the registry selects an action by NAME from a closed,
+    # code-owned set, so a registry edit alone can never introduce arbitrary
+    # post-install execution.
+    postinstall: str | None = None
 
     def __init__(
         self,
@@ -152,6 +165,7 @@ class Tool:
         desc: str = "",
         requires: tuple[str, ...] = (),
         recommends: tuple[str, ...] = (),
+        postinstall: str | None = None,
     ) -> None:
         object.__setattr__(self, "id", id)
         object.__setattr__(self, "name", name)
@@ -168,6 +182,7 @@ class Tool:
         object.__setattr__(self, "desc", desc)
         object.__setattr__(self, "requires", requires)
         object.__setattr__(self, "recommends", recommends)
+        object.__setattr__(self, "postinstall", postinstall)
 
 
 def load_tools(manifest_path: str | Path) -> list[Tool]:
@@ -266,6 +281,15 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
         context = f"tool '{row['id']}'"
         requires = _parse_id_list(row.get("requires", []), "requires", context)
         recommends = _parse_id_list(row.get("recommends", []), "recommends", context)
+        postinstall = row.get("postinstall")
+        if postinstall is not None:
+            if not isinstance(postinstall, str) or not postinstall:
+                raise ValueError(f"{context}: 'postinstall' must be a non-empty string")
+            if postinstall not in POSTINSTALL_HOOK_NAMES:
+                known = ", ".join(sorted(POSTINSTALL_HOOK_NAMES))
+                raise ValueError(
+                    f"{context}: unknown postinstall '{postinstall}' (expected one of: {known})"
+                )
         tools.append(
             Tool(
                 id=row["id"],
@@ -279,6 +303,7 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
                 desc=row.get("desc", ""),
                 requires=requires,
                 recommends=recommends,
+                postinstall=postinstall,
             )
         )
     return tools

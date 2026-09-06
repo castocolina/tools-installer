@@ -1488,3 +1488,31 @@ def test_puppeteer_entry_records_when_the_smoke_check_does_not_re_run() -> None:
     text = REGISTRY.read_text(encoding="utf-8")
     assert "ALREADY_INSTALLED" in text
     assert "audit_node_globals" in text
+
+
+def test_codegraph_declares_the_mcp_postinstall_hook() -> None:
+    tools = _tools_by_id()
+    assert tools["codegraph"].postinstall == "codegraph-mcp-register"
+
+
+def test_codegraph_entry_records_the_postinstall_research_findings() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    idx = text.index('id = "codegraph"')
+    next_method = text.index("[[tool.method]]", idx)
+    window = text[idx:next_method]
+    for needle in (
+        "codegraph-mcp-register",
+        "--target auto",
+        "cursor-agent",
+        "is_installed",
+        "D-01",
+    ):
+        assert needle in window, f"missing {needle!r} in codegraph's postinstall window"
+
+
+def test_only_codegraph_declares_a_postinstall_hook() -> None:
+    tools = load_tools(REGISTRY)
+    for tool in tools:
+        if tool.id == "codegraph":
+            continue
+        assert tool.postinstall is None, f"{tool.id}: unexpected postinstall hook declared"

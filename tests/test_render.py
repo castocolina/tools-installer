@@ -14,6 +14,7 @@ from installer.render import (
     render_guard,
     render_guard_status,
     render_node_globals,
+    render_postinstall_warnings,
     render_skipped,
     render_summary,
     render_verification,
@@ -371,3 +372,28 @@ def test_guidance_text_styles_by_severity_and_suppresses_empty_next_step() -> No
     styles = {str(span.style) for span in text.spans}
     assert "green" in styles
     assert "yellow" in styles
+
+
+def test_render_postinstall_warnings_names_the_tool_and_the_detail() -> None:
+    outcomes = [
+        InstallOutcome(
+            "codegraph",
+            "installed",
+            method_kind="github_release",
+            postinstall_warning="codegraph MCP registration failed: exit 1",
+        ),
+        InstallOutcome("rg", "installed", method_kind="brew"),
+    ]
+    console, buf = _console()
+    render_postinstall_warnings(outcomes, console)
+    out = buf.getvalue()
+    assert "codegraph" in out
+    assert "codegraph MCP registration failed: exit 1" in out
+    assert "rg" not in out
+
+
+def test_render_postinstall_warnings_is_silent_when_nothing_warned() -> None:
+    outcomes = [InstallOutcome("rg", "installed", method_kind="brew")]
+    console, buf = _console()
+    render_postinstall_warnings(outcomes, console)
+    assert buf.getvalue().strip() == ""

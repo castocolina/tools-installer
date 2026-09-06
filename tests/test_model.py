@@ -793,3 +793,104 @@ smoke = "not-a-check"
     assert params["versions"] == "nope"
     assert params["min_node"] == 22
     assert params["smoke"] == "not-a-check"
+
+
+def test_postinstall_field_parses_with_a_known_hook_name(tmp_path: Path) -> None:
+    """`postinstall` names a hook from the closed dispatch table in
+    `installer/postinstall.py`, mirroring `smoke`'s closed-set-by-name shape
+    one level up: on `Tool` itself, not on a single `Method`."""
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "codegraph"
+category = "dev"
+tier = "ai"
+postinstall = "codegraph-mcp-register"
+[[tool.method]]
+kind = "github_release"
+repo = "x/y"
+asset = "a"
+member = "codegraph"
+""",
+    )
+    tools = load_tools(manifest)
+    assert tools[0].postinstall == "codegraph-mcp-register"
+
+
+def test_postinstall_defaults_to_none(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "rg"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "brew"
+formula = "rg"
+""",
+    )
+    tools = load_tools(manifest)
+    assert tools[0].postinstall is None
+
+
+def test_unknown_postinstall_name_is_rejected(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "codegraph"
+category = "dev"
+tier = "ai"
+postinstall = "not-a-real-hook"
+[[tool.method]]
+kind = "github_release"
+repo = "x/y"
+asset = "a"
+member = "codegraph"
+""",
+    )
+    with pytest.raises(ValueError, match="codegraph") as exc_info:
+        load_tools(manifest)
+    assert "not-a-real-hook" in str(exc_info.value)
+
+
+def test_empty_string_postinstall_is_rejected(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "codegraph"
+category = "dev"
+tier = "ai"
+postinstall = ""
+[[tool.method]]
+kind = "github_release"
+repo = "x/y"
+asset = "a"
+member = "codegraph"
+""",
+    )
+    with pytest.raises(ValueError, match="non-empty string"):
+        load_tools(manifest)
+
+
+def test_non_string_postinstall_is_rejected(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "codegraph"
+category = "dev"
+tier = "ai"
+postinstall = 1
+[[tool.method]]
+kind = "github_release"
+repo = "x/y"
+asset = "a"
+member = "codegraph"
+""",
+    )
+    with pytest.raises(ValueError, match="non-empty string"):
+        load_tools(manifest)

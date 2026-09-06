@@ -81,6 +81,21 @@ def render_skipped(outcomes: list[InstallOutcome], console: Console) -> None:
         console.print(f"[yellow]⚠ {outcome.tool_id} skipped — dependency failed: {blockers}[/]")
 
 
+def render_postinstall_warnings(outcomes: list[InstallOutcome], console: Console) -> None:
+    """Print each tool's postinstall warning, if any.
+
+    The tool's own install has already succeeded (status stays INSTALLED) by
+    the time this fires, so this is a secondary, non-fatal warning, never the
+    reason an install is reported as failed. Silent when nothing warned,
+    matching render_skipped's restraint.
+    """
+    for outcome in outcomes:
+        if outcome.postinstall_warning:
+            console.print(
+                f"[yellow]⚠ {outcome.tool_id} postinstall warning: {outcome.postinstall_warning}[/]"
+            )
+
+
 def render_troubleshooting(console: Console) -> None:
     """Point the user at the troubleshooting guide."""
     console.print(f"Something went wrong. Troubleshooting: {TROUBLESHOOTING_URL}")

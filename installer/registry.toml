@@ -1477,6 +1477,23 @@ priority = "P1"
 audience = "ai"
 tier = "ai"
 desc = "Local code-intelligence knowledge graph CLI and MCP server; ships its own Node runtime"
+# Verified 2026-09-06 (Phase 9, REQ-codegraph-mcp-postinstall): codegraph's real
+# `install --help` (v1.2.0) accepts `--target <ids>` (comma-separated real target ids
+# -- claude, cursor, codex, opencode, hermes, gemini, antigravity, kiro -- NOT
+# "cursor-agent", this project's own catalog id for that host), `--location
+# global|local`, and `--yes` (non-interactive). `--target auto` is UNSAFE here:
+# reading codegraph's own installer/targets/registry.js::resolveTargetFlag directly
+# found it silently falls back to registering `claude` when it detects ZERO installed
+# hosts. This postinstall hook (installer/postinstall.py::_codegraph_mcp_register)
+# never passes "auto" -- it computes an explicit CSV via installer.status.is_installed
+# on each of claude/codex/opencode/cursor-agent (mapping cursor-agent -> codegraph's own
+# "cursor" id) and skips the `codegraph install` call entirely when none are present.
+# `codegraph install` merges into each target's own config file rather than
+# duplicating an entry, so re-running it is a safe no-op -- no separate "already
+# registered" check is needed on this project's side. Per D-01 (09-CONTEXT.md), this
+# fires ONLY from codegraph's own successful install and is never re-triggered by
+# installing a NEW agent host afterward -- a known, accepted limitation.
+postinstall = "codegraph-mcp-register"
 [[tool.method]]
 kind = "github_release"
 os = ["macos"]

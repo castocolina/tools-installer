@@ -36,6 +36,7 @@ from installer.render import (
     render_guard,
     render_guard_status,
     render_node_globals,
+    render_postinstall_warnings,
     render_rc_duplicates,
     render_skipped,
     render_summary,
@@ -143,6 +144,7 @@ def run_wizard(
     render_audit(statuses, console)
     if not options.yes and not prompter.confirm("Install the selected tools?"):
         return None
+    tools_by_id = {t.id: t for t in tools}
     outcomes = run_installs(
         ordered,
         platform,
@@ -150,11 +152,13 @@ def run_wizard(
         resolve_tag,
         install,
         on_mismatch=None if options.yes else on_mismatch,
+        catalog=tools_by_id,
     )
     summary = summarize(outcomes)
     render_summary(summary, console)
     # Summary gives the counts; this gives the reasons, so a skipped dependent is never a bare id.
     render_skipped(outcomes, console)
+    render_postinstall_warnings(outcomes, console)
     render_verification(outcomes, console)
     return summary
 

@@ -1,4 +1,5 @@
 import io
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -68,6 +69,7 @@ def _recording_install() -> tuple[list[str], Install]:
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
     ) -> InstallOutcome:
         installed.append(tool.id)
         return InstallOutcome(tool.id, "installed", method_kind="brew")
@@ -115,6 +117,7 @@ def test_failed_install_surfaces_in_summary_without_crashing():
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
     ) -> InstallOutcome:
         return InstallOutcome(tool.id, "failed")
 
@@ -146,6 +149,7 @@ def test_run_wizard_reports_a_skipped_dependent_with_its_reason() -> None:
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
     ) -> InstallOutcome:
         called.append(tool.id)
         if tool.id == "sdkman":
@@ -576,6 +580,7 @@ def _mismatching_install() -> tuple[list[str], Install]:
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
     ) -> InstallOutcome:
         attempts.append(checksum_policy)
         return InstallOutcome(
@@ -1254,6 +1259,7 @@ def test_run_wizard_installs_dependencies_before_dependents() -> None:
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
     ) -> InstallOutcome:
         installed_order.append(tool.id)
         return InstallOutcome(tool.id, "installed", method_kind="node")
@@ -1581,3 +1587,75 @@ def test_run_uninstall_names_the_tweaks_it_could_not_disable(
     out = buf.getvalue()
     assert "Could not disable: tweak:countdown." in out
     assert "Shell tweaks disabled" not in out
+
+
+def test_run_wizard_surfaces_a_postinstall_warning_on_the_real_path() -> None:
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        return InstallOutcome(
+            tool.id,
+            "installed",
+            method_kind="github_release",
+            postinstall_warning="codegraph MCP registration failed: exit 1",
+        )
+
+    console, buf = _console()
+    summary = run_wizard(
+        [_tool("codegraph", "dev")],
+        _platform(),
+        FakePrompter(categories=[], tools=[], confirm=True),
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        installed=_never_installed,
+    )
+    assert summary is not None
+    out = buf.getvalue()
+    assert "codegraph" in out
+    assert "codegraph MCP registration failed: exit 1" in out
+
+
+def test_run_wizard_passes_the_full_catalog_as_tools_by_id_into_run_installs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import installer.app as app_module
+
+    seen: dict[str, object] = {}
+
+    def fake_run_installs(
+        ordered: list[Tool],
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        install: Install,
+        *,
+        on_mismatch: object = None,
+        catalog: Mapping[str, Tool] | None = None,
+    ) -> list[InstallOutcome]:
+        seen["catalog"] = catalog
+        return [InstallOutcome(tool.id, "installed", method_kind="brew") for tool in ordered]
+
+    monkeypatch.setattr(app_module, "run_installs", fake_run_installs)
+    catalog_tools = _catalog()
+    _installed, install = _recording_install()
+    run_wizard(
+        catalog_tools,
+        _platform(),
+        FakePrompter(categories=[], tools=[], confirm=True),
+        _console()[0],
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        installed=_never_installed,
+    )
+    assert seen["catalog"] == {t.id: t for t in catalog_tools}

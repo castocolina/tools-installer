@@ -16,8 +16,15 @@ def _platform() -> Platform:
     return Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
 
 
-def _tool(*methods: Method) -> Tool:
-    return Tool(id="rg", name="ripgrep", category="search", cmd="rg", methods=methods)
+def _tool(*methods: Method, postinstall: str | None = None) -> Tool:
+    return Tool(
+        id="rg",
+        name="ripgrep",
+        category="search",
+        cmd="rg",
+        methods=methods,
+        postinstall=postinstall,
+    )
 
 
 def test_already_installed_short_circuits(monkeypatch: pytest.MonkeyPatch):
@@ -317,3 +324,132 @@ def test_app_kind_routes_to_app_executor(monkeypatch: pytest.MonkeyPatch):
     assert outcome.method_kind == "app"
     assert outcome.verified is False
     assert seen == ["app"]
+
+
+def test_postinstall_hook_dispatches_after_a_successful_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _not_installed(monkeypatch)
+    seen: list[tuple[object, object, object, object]] = []
+
+    def fake_run_postinstall(name: str, method: Method, runner: object, tools: object) -> None:
+        seen.append((name, method, runner, tools))
+        return None
+
+    monkeypatch.setattr(engine, "run_postinstall", fake_run_postinstall)
+    method = Method(kind="dnf", params={"package": "codegraph"})
+    tools = {"claude": _tool()}
+
+    def runner(cmd: list[str]) -> None:
+        return None
+
+    outcome = install_tool(
+        _tool(method, postinstall="codegraph-mcp-register"),
+        _platform(),
+        runner=runner,
+        tools=tools,
+    )
+    assert outcome.status == "installed"
+    assert outcome.postinstall_warning is None
+    assert len(seen) == 1
+    name, called_method, called_runner, called_tools = seen[0]
+    assert name == "codegraph-mcp-register"
+    assert called_method is method
+    assert called_runner is runner
+    assert called_tools is tools
+
+
+def test_postinstall_failure_does_not_fail_the_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    _not_installed(monkeypatch)
+
+    def fake_run_postinstall(name: str, method: Method, runner: object, tools: object) -> str:
+        return "codegraph MCP registration failed: exit 1"
+
+    monkeypatch.setattr(engine, "run_postinstall", fake_run_postinstall)
+    outcome = install_tool(
+        _tool(
+            Method(kind="dnf", params={"package": "codegraph"}),
+            postinstall="codegraph-mcp-register",
+        ),
+        _platform(),
+        runner=lambda cmd: None,
+    )
+    assert outcome.status == "installed"
+    assert outcome.postinstall_warning == "codegraph MCP registration failed: exit 1"
+
+
+def test_postinstall_hook_exception_does_not_fail_the_install_or_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _not_installed(monkeypatch)
+
+    def fake_run_postinstall(
+        name: str, method: Method, runner: object, tools: object
+    ) -> str | None:
+        raise RuntimeError("hook bug")
+
+    monkeypatch.setattr(engine, "run_postinstall", fake_run_postinstall)
+    attempted: list[str] = []
+
+    def runner(cmd: list[str]) -> None:
+        attempted.append(cmd[0])
+
+    outcome = install_tool(
+        _tool(
+            Method(kind="dnf", params={"package": "codegraph"}),
+            Method(kind="brew", params={"formula": "codegraph"}),
+            postinstall="codegraph-mcp-register",
+        ),
+        _platform(),
+        runner=runner,
+    )
+    assert outcome.status == "installed"
+    assert outcome.postinstall_warning is not None
+    assert "crashed" in outcome.postinstall_warning
+    assert "hook bug" in outcome.postinstall_warning
+    # Only the first (successful) method's own command ran; the fallback
+    # brew method was never attempted once the first method succeeded.
+    assert attempted == ["sudo"]
+
+
+def test_no_postinstall_field_means_no_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    _not_installed(monkeypatch)
+    calls: list[object] = []
+
+    def spy_run_postinstall(name: str, method: Method, runner: object, tools: object) -> None:
+        calls.append(name)
+        return None
+
+    monkeypatch.setattr(engine, "run_postinstall", spy_run_postinstall)
+    outcome = install_tool(
+        _tool(Method(kind="dnf", params={"package": "ripgrep"})),
+        _platform(),
+        runner=lambda cmd: None,
+    )
+    assert outcome.status == "installed"
+    assert outcome.postinstall_warning is None
+    assert calls == []
+
+
+def test_already_installed_never_dispatches_postinstall(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_installed(tool: Tool) -> bool:
+        return True
+
+    monkeypatch.setattr(engine, "is_installed", fake_installed)
+    calls: list[object] = []
+
+    def spy_run_postinstall(name: str, method: Method, runner: object, tools: object) -> None:
+        calls.append(name)
+        return None
+
+    monkeypatch.setattr(engine, "run_postinstall", spy_run_postinstall)
+    outcome = install_tool(
+        _tool(
+            Method(kind="dnf", params={"package": "codegraph"}),
+            postinstall="codegraph-mcp-register",
+        ),
+        _platform(),
+        runner=lambda cmd: None,
+    )
+    assert outcome.status == "already-installed"
+    assert calls == []

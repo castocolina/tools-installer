@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 import pytest
 
 from installer.engine import ChecksumPolicy, InstallOutcome
@@ -53,6 +55,7 @@ def test_run_installs_calls_install_per_tool_with_injected_deps():
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
     ) -> InstallOutcome:
         seen.append((tool.id, platform.os))
         return InstallOutcome(tool.id, "installed", method_kind="brew")
@@ -99,6 +102,7 @@ def _mismatch_then_install() -> tuple[list[tuple[str, str]], Install]:
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
     ) -> InstallOutcome:
         seen.append((tool.id, checksum_policy))
         if len([s for s in seen if s[0] == tool.id]) == 1 and checksum_policy == "fail":
@@ -166,6 +170,7 @@ def test_on_mismatch_is_not_consulted_for_clean_installs() -> None:
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
     ) -> InstallOutcome:
         return InstallOutcome(tool.id, "installed", method_kind="brew")
 
@@ -199,6 +204,7 @@ def test_dependent_is_skipped_when_its_dependency_failed() -> None:
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
     ) -> InstallOutcome:
         called.append(tool.id)
         return InstallOutcome(tool.id, "failed")
@@ -238,6 +244,7 @@ def _failing_install(*failed_ids: str, status: str = "failed") -> tuple[list[str
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
     ) -> InstallOutcome:
         calls.append(tool.id)
         if tool.id in failed_ids:
@@ -291,6 +298,7 @@ def test_successful_statuses_never_block_a_dependent(status: str) -> None:
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
     ) -> InstallOutcome:
         calls.append(tool.id)
         return InstallOutcome(tool.id, status, method_kind="brew")
@@ -379,3 +387,64 @@ def test_a_dependent_listed_before_its_dependency_is_still_attempted() -> None:
     assert outcomes[0].status == "installed"
     assert outcomes[1].status == "failed"
     assert outcomes[0].blocked_by == ()
+
+
+def test_run_installs_threads_catalog_into_every_install_call() -> None:
+    """catalog reaches install(...)'s `tools` keyword at all three call sites:
+    the initial attempt, the mismatch-retry, and the mismatch-fallback."""
+    seen: list[Mapping[str, Tool] | None] = []
+    call_counts: dict[str, int] = {}
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        seen.append(tools)
+        call_counts[tool.id] = call_counts.get(tool.id, 0) + 1
+        if call_counts[tool.id] == 1:
+            return InstallOutcome(tool.id, "checksum-mismatch", method_kind="github_release")
+        return InstallOutcome(tool.id, "installed", method_kind="github_release")
+
+    catalog = {"rg": _tool("rg")}
+    choices: list[MismatchChoice] = ["retry", "fallback"]
+
+    def on_mismatch(tool_id: str) -> MismatchChoice:
+        return choices.pop(0)
+
+    outcomes = run_installs(
+        [_tool("retry-me"), _tool("fallback-me")],
+        _platform(),
+        lambda cmd: None,
+        lambda repo: "1.0.0",
+        install,
+        on_mismatch,
+        catalog=catalog,
+    )
+    assert all(mapping is catalog for mapping in seen)
+    assert len(seen) == 4  # initial + retry for retry-me, initial + fallback for fallback-me
+    assert outcomes[0].status == "installed"
+    assert outcomes[1].status == "installed"
+
+
+def test_run_installs_catalog_defaults_to_none_for_untouched_callers() -> None:
+    seen: list[Mapping[str, Tool] | None] = []
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        seen.append(tools)
+        return InstallOutcome(tool.id, "installed", method_kind="brew")
+
+    run_installs([_tool("rg")], _platform(), lambda cmd: None, lambda repo: "1.0.0", install)
+    assert seen == [None]

@@ -1,6 +1,6 @@
 """Orchestrate installs for a selection of tools and bucket the outcomes."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -41,6 +41,7 @@ class Install(Protocol):
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = ...,
+        tools: Mapping[str, Tool] | None = ...,
     ) -> InstallOutcome: ...
 
 
@@ -66,6 +67,7 @@ def run_installs(
     resolve_tag: TagResolver = resolve_github_tag,
     install: Install = install_tool,
     on_mismatch: OnMismatch | None = None,
+    catalog: Mapping[str, Tool] | None = None,
 ) -> list[InstallOutcome]:
     """Install each tool in turn, collecting one outcome per tool.
 
@@ -84,6 +86,11 @@ def run_installs(
     invariant is violated, dependents of failed tools are
     attempted rather than skipped, which is the behaviour this function had
     before this change and is never a crash.
+
+    `catalog`, when given, is threaded into every `install(...)` call as its
+    `tools` keyword — this is how a postinstall hook's host-presence check
+    reaches the full loaded catalog without run_installs needing to know
+    anything about postinstall itself.
     """
     outcomes: list[InstallOutcome] = []
     unresolved: set[str] = set()
@@ -92,14 +99,19 @@ def run_installs(
         if blocked:
             outcome = InstallOutcome(tool.id, InstallStatus.DEPENDENCY_FAILED, blocked_by=blocked)
         else:
-            outcome = install(tool, platform, runner, resolve_tag)
+            outcome = install(tool, platform, runner, resolve_tag, tools=catalog)
             if outcome.status == InstallStatus.CHECKSUM_MISMATCH and on_mismatch is not None:
                 choice = on_mismatch(tool.id)
                 if choice == "retry":
-                    outcome = install(tool, platform, runner, resolve_tag)
+                    outcome = install(tool, platform, runner, resolve_tag, tools=catalog)
                 elif choice == "fallback":
                     outcome = install(
-                        tool, platform, runner, resolve_tag, checksum_policy="continue"
+                        tool,
+                        platform,
+                        runner,
+                        resolve_tag,
+                        checksum_policy="continue",
+                        tools=catalog,
                     )
         if outcome.status in _UNRESOLVED:
             unresolved.add(tool.id)
