@@ -664,11 +664,11 @@ _GROUPED_STATE_JSON = """
 """
 
 
-def _group_of(groups: tuple[tuple[str, ...], ...], name: str) -> tuple[str, ...]:
-    for group in groups:
+def _group_of(live: pnpm_globals.GlobalGroups, name: str) -> tuple[str, ...]:
+    for group in live.groups:
         if name in group:
             return group
-    raise AssertionError(f"{name} not in {groups}")
+    raise AssertionError(f"{name} not in {live}")
 
 
 def test_parse_global_groups_split_state_holds_mmdc_and_puppeteer_apart() -> None:
@@ -691,20 +691,20 @@ def test_parse_global_groups_unreadable_output_is_unknown() -> None:
 
 def test_split_install_groups_reports_present_members_held_apart() -> None:
     policy = _EXPLICIT_POLICY
-    split = ((MMDC_NPM,), ("puppeteer",))
-    ok = ((MMDC_NPM, "puppeteer"),)
+    split = pnpm_globals.GlobalGroups(groups=((MMDC_NPM,), ("puppeteer",)))
+    ok = pnpm_globals.GlobalGroups(groups=((MMDC_NPM, "puppeteer"),))
     assert split_install_groups(policy, split) == ((MMDC_NPM, "puppeteer"),)
     assert split_install_groups(policy, ok) == ()
-    assert split_install_groups(policy, (("puppeteer",),)) == ()
+    assert split_install_groups(policy, pnpm_globals.GlobalGroups(groups=(("puppeteer",),))) == ()
     assert split_install_groups(NodeInstallPolicy(), split) == ()
 
 
 def test_audit_without_policy_skips_the_group_query_and_reports_no_split() -> None:
     grouped_calls: list[int] = []
 
-    def grouped() -> tuple[tuple[str, ...], ...] | None:
+    def grouped() -> pnpm_globals.GlobalGroups | None:
         grouped_calls.append(1)
-        return ((MMDC_NPM,), ("puppeteer",))
+        return pnpm_globals.GlobalGroups(groups=((MMDC_NPM,), ("puppeteer",)))
 
     report = audit_node_globals(
         [_mmdc()],
@@ -793,3 +793,64 @@ def test_reinstall_node_globals_refuses_when_version_cannot_be_read(
             policy=_EXPLICIT_POLICY,
         )
     assert calls == []
+
+
+# pnpm reported the packages but not the per-package `path`, which is the only
+# membership signal `parse_global_groups` has. The module's own docstring calls
+# that field version-dependent ("the project objects ARE the install groups on
+# some pnpm versions"), so this is a shape the code already knows it does not
+# control.
+_PATHLESS_STATE_JSON = """
+[
+  {
+    "path": "/root/.local/share/pnpm/global/v11",
+    "private": true,
+    "dependencies": {
+      "@mermaid-js/mermaid-cli": {
+        "from": "@mermaid-js/mermaid-cli",
+        "version": "11.17.0"
+      },
+      "puppeteer": {
+        "from": "puppeteer",
+        "version": "25.10.0"
+      }
+    }
+  }
+]
+"""
+
+
+def test_unreadable_membership_is_unknown_not_a_group_of_one() -> None:
+    """ "pnpm did not say" must never render as "this package is held apart".
+
+    Same rule as NodeGlobalsReport.known one level up: an unanswered query is
+    not a finding. The per-package fallback key made the two byte-identical.
+    """
+    live = parse_global_groups(_PATHLESS_STATE_JSON)
+    assert live is not None
+    assert set(live.unknown) == {MMDC_NPM, "puppeteer"}
+    assert split_install_groups(_EXPLICIT_POLICY, live) == ()
+
+
+def test_audit_does_not_report_a_split_it_could_not_read() -> None:
+    policy = node_install_policy(load_tools(REGISTRY))
+    report = audit_node_globals(
+        load_tools(REGISTRY),
+        which=lambda _n: "/x/bin",
+        grouped=lambda: parse_global_groups(_PATHLESS_STATE_JSON),
+        policy=policy,
+    )
+    assert report.split_groups == ()
+    # The packages themselves were read fine, so they still belong in the set
+    # the replay puts back — only their MEMBERSHIP was unreadable.
+    assert MMDC_NPM in report.managed
+    assert "puppeteer" in report.managed
+
+
+def test_a_single_unreadable_member_suppresses_the_whole_group_verdict() -> None:
+    """One known member and one unknown one is still not evidence of a split."""
+    live = pnpm_globals.GlobalGroups(
+        groups=((MMDC_NPM,), ("puppeteer",)),
+        unknown=("puppeteer",),
+    )
+    assert split_install_groups(_EXPLICIT_POLICY, live) == ()

@@ -255,17 +255,47 @@ def parse_global_packages(raw: str) -> tuple[str, ...] | None:
     return tuple(dict.fromkeys(name for name, _details in _iter_dependencies(projects)))
 
 
-def _install_group_key(details: object, fallback: str) -> str:
+def _install_group_key(details: object) -> str | None:
+    """Which pnpm install this package belongs to, or None when pnpm did not say.
+
+    None is NOT "its own group". A package pnpm listed without a `path` is a
+    package whose membership was never read, and an unread membership must
+    never become a finding — the same rule `NodeGlobalsReport.known` enforces
+    for the query as a whole. The previous fallback was a per-package-unique
+    sentinel, which made "we could not tell" byte-identical to "this package is
+    alone", and `split_install_groups` then reported a healthy machine as split.
+    """
     if isinstance(details, dict):
         path = cast(dict[str, object], details).get("path")
         if isinstance(path, str) and path:
             marker = "/node_modules/"
             index = path.find(marker)
             return path[:index] if index != -1 else path
-    return fallback
+    return None
 
 
-def parse_global_groups(raw: str) -> tuple[tuple[str, ...], ...] | None:
+@dataclass(frozen=True)
+class GlobalGroups:
+    """pnpm's live install groups, plus the packages whose membership was unreadable.
+
+    `groups` carries every package pnpm listed, so the flat set the replay
+    needs is still a projection of it. A package in `unknown` is present in
+    `groups` too — in a placeholder group of its own, which keeps the flat
+    projection and its order exactly what pnpm printed — but no consumer may
+    read that placement as evidence of anything. `unknown` is the marker that
+    says so, and it is why placement and verdict are two different fields
+    rather than one.
+    """
+
+    groups: tuple[tuple[str, ...], ...] = ()
+    unknown: tuple[str, ...] = ()
+
+    @property
+    def packages(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(name for group in self.groups for name in group))
+
+
+def parse_global_groups(raw: str) -> GlobalGroups | None:
     """Install groups in `pnpm list -g --json`; None when unreadable.
 
     pnpm v11 gives each global install invocation its own hash-keyed project
@@ -276,21 +306,34 @@ def parse_global_groups(raw: str) -> tuple[tuple[str, ...], ...] | None:
     `parse_global_packages` deliberately discards, and the reason that
     function is not changed — its callers, including
     `installer/app.py::run_doctor`, want the flat set.
+
+    A package pnpm lists without that `path` is recorded in `unknown` rather
+    than being invented into a group of its own.
     """
     projects = _load_projects(raw)
     if projects is None:
         return None
     grouped: dict[str, list[str]] = {}
     order: list[str] = []
+    unknown: list[str] = []
     for name, details in _iter_dependencies(projects):
-        key = _install_group_key(details, fallback=f"ungrouped:{name}")
+        key = _install_group_key(details)
+        if key is None:
+            unknown.append(name)
+            # A placeholder key, never a claim: the name still has to reach the
+            # flat set the replay puts back, and `unknown` is what stops any
+            # consumer reading this placement as a group.
+            key = f"unread-membership:{name}"
         members = grouped.get(key)
         if members is None:
             grouped[key] = [name]
             order.append(key)
         elif name not in members:
             members.append(name)
-    return tuple(tuple(grouped[key]) for key in order)
+    return GlobalGroups(
+        groups=tuple(tuple(grouped[key]) for key in order),
+        unknown=tuple(dict.fromkeys(unknown)),
+    )
 
 
 LIST_TIMEOUT_SECONDS = 20.0
@@ -335,7 +378,7 @@ def pnpm_global_groups(
     *,
     resolve_pnpm: Callable[[], str | None] = real_pnpm,
     runner_out: OutputRunner = _run_list,
-) -> tuple[tuple[str, ...], ...] | None:
+) -> GlobalGroups | None:
     """Install groups pnpm currently manages globally, or None when it cannot be asked.
 
     Same bounded `pnpm list -g --json` query as `pnpm_global_packages`, parsed
@@ -353,23 +396,27 @@ def pnpm_global_groups(
 
 def split_install_groups(
     policy: NodeInstallPolicy,
-    live: tuple[tuple[str, ...], ...],
+    live: GlobalGroups,
 ) -> tuple[tuple[str, ...], ...]:
     """Declared groups whose present members pnpm is holding apart.
 
-    This is the brownfield state — the registry says these packages must share
-    one pnpm install group so the dependent can resolve its peer, and pnpm is
-    holding them apart, which is precisely the runtime failure 05-RESEARCH.md
-    Pitfall 1 describes.
+    The registry says these packages must share one pnpm install group so the
+    dependent can resolve its peer, and pnpm is holding them apart.
+
+    Reports only what it READ. A declared group with a member in
+    `live.unknown` yields nothing: pnpm listed that package but not its
+    membership, and a verdict built on an unread membership is a guess, not a
+    finding (`GlobalGroups.unknown`, `NodeGlobalsReport.known`).
     """
-    live_sets = [set(group) for group in live]
-    present_anywhere: set[str] = set()
-    for group in live:
-        present_anywhere.update(group)
+    live_sets = [set(group) for group in live.groups]
+    present_anywhere = set(live.packages)
+    unknown = set(live.unknown)
     found: list[tuple[str, ...]] = []
     for declared in policy.groups:
         present = tuple(name for name in declared if name in present_anywhere)
         if len(present) < 2:
+            continue
+        if any(name in unknown for name in present):
             continue
         present_set = set(present)
         if any(present_set <= group for group in live_sets):
@@ -383,7 +430,7 @@ def audit_node_globals(
     *,
     which: Callable[[str], str | None] = shutil.which,
     managed: Callable[[], tuple[str, ...] | None] = pnpm_global_packages,
-    grouped: Callable[[], tuple[tuple[str, ...], ...] | None] = pnpm_global_groups,
+    grouped: Callable[[], GlobalGroups | None] = pnpm_global_groups,
     policy: NodeInstallPolicy = _EMPTY_POLICY,
 ) -> NodeGlobalsReport:
     """Report pnpm's live global set, and the catalog commands in it that are broken."""
@@ -402,7 +449,7 @@ def audit_node_globals(
     live = grouped()
     if live is None:
         return NodeGlobalsReport(entries=(), missing=(), managed=(), known=False)
-    packages = tuple(dict.fromkeys(name for group in live for name in group))
+    packages = live.packages
     entries = tuple(entry for entry in node_globals(tools) if entry.npm_pkg in packages)
     missing = tuple(entry.tool_id for entry in entries if which(entry.cmd) is None)
     return NodeGlobalsReport(
