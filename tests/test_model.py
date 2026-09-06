@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from installer.enums import Audience, Priority, Tier
-from installer.model import Method, Tool, load_categories, load_tools
+from installer.model import POSTINSTALL_HOOK_NAMES, Method, Tool, load_categories, load_tools
 
 
 def _write(tmp_path: Path, content: str) -> Path:
@@ -894,3 +894,15 @@ member = "codegraph"
     )
     with pytest.raises(ValueError, match="non-empty string"):
         load_tools(manifest)
+
+
+def test_postinstall_hook_names_matches_the_real_dispatch_table() -> None:
+    """WR-02 (internal dual-lane review): model.py's own comment claims
+    POSTINSTALL_HOOK_NAMES is "duplicated (not imported)" from
+    installer.postinstall.POSTINSTALL_HOOKS's keys -- unlike SMOKE_CHECK_NAMES/
+    SMOKE_CHECKS, which has exactly this drift guard (tests/test_executors.py),
+    nothing previously pinned the two postinstall sets to actually agree.
+    """
+    from installer.postinstall import POSTINSTALL_HOOKS
+
+    assert frozenset(POSTINSTALL_HOOKS) == POSTINSTALL_HOOK_NAMES

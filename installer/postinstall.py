@@ -72,9 +72,19 @@ def _codegraph_mcp_register(
     interactive prompt (codegraph's own `--yes` help text -- "Non-interactive:
     defaults to --location=global --target=auto" -- only applies its OWN
     defaults for a flag NOT otherwise given, and both are always given here).
+    `--no-permissions` is always passed too: codegraph's own `--yes` help text
+    documents that flag as ALSO enabling a Claude Code auto-allow permissions
+    list and a `UserPromptSubmit` hook, not merely skipping interactive
+    prompts -- a broader behavior change than REQ-codegraph-mcp-postinstall's
+    literal scope ("run its global MCP-registration step"). `--no-permissions`
+    is documented as Claude-only and a no-op for any other target, so passing
+    it unconditionally keeps this call scoped to registration only, for every
+    target, without needing to special-case Claude's presence in the CSV.
     """
     present = [
-        target for tool_id, target in _CODEGRAPH_TARGETS.items() if is_installed(tools[tool_id])
+        target
+        for tool_id, target in _CODEGRAPH_TARGETS.items()
+        if (tool := tools.get(tool_id)) is not None and is_installed(tool)
     ]
     if not present:
         return None
@@ -83,7 +93,18 @@ def _codegraph_mcp_register(
     bin_dir_override = bin_dir_param if isinstance(bin_dir_param, str) and bin_dir_param else None
     codegraph_bin = str(bin_dir(bin_dir_override) / "codegraph")
     try:
-        runner([codegraph_bin, "install", "--target", csv, "--location", "global", "--yes"])
+        runner(
+            [
+                codegraph_bin,
+                "install",
+                "--target",
+                csv,
+                "--location",
+                "global",
+                "--yes",
+                "--no-permissions",
+            ]
+        )
     except CommandError as exc:
         return f"codegraph MCP registration failed: {exc}"
     return None

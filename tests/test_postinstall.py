@@ -54,7 +54,16 @@ def test_codegraph_hook_composes_csv_from_present_hosts_only(
     assert warning is None
     expected_bin = str(Path.home() / ".local" / "bin" / "codegraph")
     assert calls == [
-        [expected_bin, "install", "--target", "claude,cursor", "--location", "global", "--yes"]
+        [
+            expected_bin,
+            "install",
+            "--target",
+            "claude,cursor",
+            "--location",
+            "global",
+            "--yes",
+            "--no-permissions",
+        ]
     ]
 
 
@@ -176,7 +185,16 @@ def test_codegraph_hook_matches_expected_argv_for_every_host_presence_subset(
     )
     expected_bin = str(Path.home() / ".local" / "bin" / "codegraph")
     assert calls == [
-        [expected_bin, "install", "--target", expected_csv, "--location", "global", "--yes"]
+        [
+            expected_bin,
+            "install",
+            "--target",
+            expected_csv,
+            "--location",
+            "global",
+            "--yes",
+            "--no-permissions",
+        ]
     ]
     for cmd in calls:
         assert "auto" not in cmd
@@ -203,3 +221,36 @@ def test_codegraph_hook_maps_cursor_agent_alone_to_cursor(monkeypatch: pytest.Mo
     method = Method(kind="github_release", params={})
     pi.run_postinstall("codegraph-mcp-register", method, lambda cmd: calls.append(cmd), _tools())
     assert calls[0][calls[0].index("--target") + 1] == "cursor"
+
+
+def test_codegraph_hook_always_passes_no_permissions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """codegraph's own --yes also enables a Claude auto-allow list and a
+    UserPromptSubmit hook, not merely non-interactivity (dual-lane review,
+    codex-sol-high second lane) -- --no-permissions keeps this call scoped to
+    MCP registration only, per REQ-codegraph-mcp-postinstall's literal wording.
+    """
+    monkeypatch.setattr(pi, "is_installed", _only_claude_installed)
+    calls: list[list[str]] = []
+    method = Method(kind="github_release", params={})
+    pi.run_postinstall("codegraph-mcp-register", method, lambda cmd: calls.append(cmd), _tools())
+    assert "--no-permissions" in calls[0]
+
+
+def test_codegraph_hook_treats_a_missing_tool_id_as_absent_not_a_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WR-01 (internal dual-lane review): bare `tools[tool_id]` indexing would
+    raise KeyError -- surfaced only as a confusing generic "crashed" warning --
+    for any caller (or future registry rename) whose `tools` mapping omits one
+    of the four hardcoded host ids. A missing id must behave exactly like an
+    id present but not installed: silently excluded from the composed CSV.
+    """
+    monkeypatch.setattr(pi, "is_installed", _only_claude_installed)
+    incomplete_tools = {"claude": _tool("claude")}  # codex/opencode/cursor-agent absent entirely
+    calls: list[list[str]] = []
+    method = Method(kind="github_release", params={})
+    warning = pi.run_postinstall(
+        "codegraph-mcp-register", method, lambda cmd: calls.append(cmd), incomplete_tools
+    )
+    assert warning is None
+    assert calls[0][calls[0].index("--target") + 1] == "claude"
