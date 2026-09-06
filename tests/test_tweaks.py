@@ -1,3 +1,4 @@
+import itertools
 import os
 import shlex
 import shutil
@@ -34,6 +35,7 @@ def test_bundles_have_stable_ids_and_order() -> None:
         "codex-skip",
         "apt-upgrade",
         "opencode-auto",
+        "cursor-agent-model",
     ]
 
 
@@ -241,6 +243,145 @@ def test_blocks_parse_in_bash_and_zsh_when_present(tmp_path: Path) -> None:
             script.write_text(tweak_block(bundle, tmp_path / "bin") + "\n")
             result = subprocess.run([binary, "-n", str(script)], capture_output=True)
             assert result.returncode == 0, f"{shell} {bundle.id}: {result.stderr!r}"
+
+
+_SCRIPT_COUNTER = itertools.count()
+
+
+def _run_cursor_agent(
+    tmp_path: Path,
+    invoke: str,
+    args: list[str],
+    *,
+    shell: str = "bash",
+    preamble: str = "",
+) -> str | None:
+    """Source the cursor-agent-model tweak block, invoke it, and return stdout.
+
+    A stub `cursor-agent` executable (never the real, installed CLI — ONESHOT-
+    RULES Rule 5) is put on a test-controlled PATH prepended to the real PATH,
+    so `command cursor-agent "$@"` resolves to the stub and echoes its argv.
+    Returns None when `shell` is not installed on this machine (graceful skip).
+    An explicit timeout turns a self-recursion regression into a diagnosable
+    AssertionError instead of hanging the whole test suite.
+    """
+    binary = shutil.which(shell)
+    if binary is None:
+        return None
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir(exist_ok=True)
+    stub = stub_dir / "cursor-agent"
+    if not stub.exists():
+        stub.write_text('#!/bin/sh\necho "ARGV: $*"\n')
+        stub.chmod(0o755)
+    script = tmp_path / f"cursor-agent-{next(_SCRIPT_COUNTER)}.{shell}"
+    script.write_text(
+        preamble + tweak_block(_bundle("cursor-agent-model")) + "\n" + shlex.join([invoke, *args])
+    )
+    env = os.environ | {"PATH": f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+    try:
+        result = subprocess.run(
+            [binary, str(script)], env=env, capture_output=True, text=True, timeout=10
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError(
+            "cursor-agent invocation timed out — likely self-recursion inside "
+            "cursor-agent() (a missing `command` guard)"
+        ) from exc
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def test_cursor_agent_model_injects_default_when_no_model_flag(tmp_path: Path) -> None:
+    output = _run_cursor_agent(tmp_path, "cursor-agent", ["chat", "hello"])
+    assert output is not None
+    assert "ARGV: --model gpt-5.6-sol-high chat hello" in output
+
+
+def test_cursor_agent_model_respects_explicit_space_form_model_flag(tmp_path: Path) -> None:
+    output = _run_cursor_agent(tmp_path, "cursor-agent", ["--model", "other-model", "chat"])
+    assert output is not None
+    assert "ARGV: --model other-model chat" in output
+
+
+def test_cursor_agent_model_respects_explicit_equals_form_model_flag(tmp_path: Path) -> None:
+    output = _run_cursor_agent(tmp_path, "cursor-agent", ["--model=other-model", "chat"])
+    assert output is not None
+    assert "ARGV: --model=other-model chat" in output
+
+
+def test_cursor_delegates_to_cursor_agent_function_and_inherits_injection(
+    tmp_path: Path,
+) -> None:
+    output = _run_cursor_agent(tmp_path, "cursor", ["chat", "hello"])
+    assert output is not None
+    assert "ARGV: --model gpt-5.6-sol-high chat hello" in output
+
+
+def test_cursor_agent_does_not_mistake_a_quoted_substring_for_the_flag(tmp_path: Path) -> None:
+    output = _run_cursor_agent(tmp_path, "cursor-agent", ["chat", "explain --model flag"])
+    assert output is not None
+    assert "ARGV: --model gpt-5.6-sol-high chat explain --model flag" in output
+
+
+def test_cursor_agent_model_body_declares_the_correct_command_guard_invariant() -> None:
+    body = _bundle("cursor-agent-model").body
+    unalias_index = body.index("unalias cursor-agent cursor")
+    agent_fn_index = body.index("function cursor-agent")
+    cursor_fn_index = body.index("function cursor ")
+    assert unalias_index < agent_fn_index
+    assert unalias_index < cursor_fn_index
+
+    agent_block = body[agent_fn_index:cursor_fn_index]
+    for line in agent_block.splitlines():
+        if "cursor-agent" in line and "function" not in line:
+            assert "command cursor-agent" in line, line
+
+    cursor_block = body[cursor_fn_index:]
+    assert "command cursor-agent" not in cursor_block
+    assert 'cursor-agent "$@"' in cursor_block
+    assert cursor_block.count("cursor-agent") == 1
+
+
+def test_cursor_agent_wrapper_removes_a_pre_existing_conflicting_alias(tmp_path: Path) -> None:
+    preamble = (
+        "shopt -s expand_aliases\n"
+        "alias cursor-agent='echo PRE_EXISTING_ALIAS'\n"
+        "alias cursor='echo PRE_EXISTING_ALIAS_CURSOR'\n"
+    )
+    output = _run_cursor_agent(tmp_path, "cursor-agent", ["chat", "hello"], preamble=preamble)
+    assert output is not None
+    assert "PRE_EXISTING_ALIAS" not in output
+    assert "ARGV: --model gpt-5.6-sol-high chat hello" in output
+
+
+def test_cursor_agent_wrapper_removes_a_pre_existing_conflicting_alias_under_zsh(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("zsh") is None:
+        pytest.skip("zsh not available")
+    preamble = (
+        "alias cursor-agent='echo PRE_EXISTING_ALIAS'\n"
+        "alias cursor='echo PRE_EXISTING_ALIAS_CURSOR'\n"
+    )
+    output = _run_cursor_agent(
+        tmp_path, "cursor-agent", ["chat", "hello"], shell="zsh", preamble=preamble
+    )
+    assert output is not None
+    assert "PRE_EXISTING_ALIAS" not in output
+    assert "ARGV: --model gpt-5.6-sol-high chat hello" in output
+
+
+def test_cursor_agent_model_behavior_under_zsh_when_available(tmp_path: Path) -> None:
+    if shutil.which("zsh") is None:
+        pytest.skip("zsh not available")
+    default_output = _run_cursor_agent(tmp_path, "cursor-agent", ["chat", "hello"], shell="zsh")
+    assert default_output is not None
+    assert "ARGV: --model gpt-5.6-sol-high chat hello" in default_output
+
+    delegate_output = _run_cursor_agent(tmp_path, "cursor", ["chat", "hello"], shell="zsh")
+    assert delegate_output is not None
+    assert "ARGV: --model gpt-5.6-sol-high chat hello" in delegate_output
 
 
 def test_write_then_present_then_remove_roundtrip(tmp_path: Path) -> None:

@@ -78,6 +78,50 @@ _CODEX_BODY = "alias codex='codex --dangerously-bypass-approvals-and-sandbox'"
 # full bypass — confirmed live 2026-09-06 (10-RESEARCH.md Summary #2).
 _OPENCODE_BODY = "alias opencode='opencode --auto'"
 
+# The slug was live-confirmed via `cursor-agent models` on 2026-09-06
+# (10-RESEARCH.md Summary #3); effort is baked into the slug itself (no
+# separate --effort flag). Per CONTEXT.md D-01's "re-verify, don't override"
+# instruction: Cursor's own CLI changelog (fetched live 2026-09-06, MEDIUM
+# confidence per 10-RESEARCH.md's own confidence breakdown — an official doc,
+# not an independently spent API call) documents a 2026-07-13 fix superseding
+# REQUIREMENTS.md's prior "Max-Mode-only, unreachable non-interactively"
+# finding, so headless --model selections requiring Max Mode now activate it
+# automatically. This wrapper REQUESTS that model and never claims to
+# independently verify the context window actually reached in any given
+# response (10-RESEARCH.md Pitfall 4/Assumption A2) — copy in this project's
+# UI must say "requests", never "guarantees" or "verifies".
+_CURSOR_DEFAULT_MODEL = "gpt-5.6-sol-high"
+
+# cursor-agent()'s own two calls to the real binary always go through
+# `command cursor-agent "$@"` so the function can never recurse into itself
+# (Pitfall 3). cursor() contains exactly one intentional BARE delegation to
+# the cursor-agent shell FUNCTION (a different name, not itself), which is
+# how it inherits the same argv-scan/injection logic. Both functions are
+# preceded by `unalias cursor-agent cursor 2>/dev/null` so a pre-existing
+# same-named alias never collides with the function definitions that follow
+# — live-verified on this machine (bash 3.2.57(1)-release, zsh 5.9.2): a bare
+# `name() { ... }` definition against an already-active same-named alias is a
+# hard syntax error in bash 3.2 and behaves inconsistently in zsh 5.9 across
+# interactive/non-interactive contexts; `unalias` first makes the outcome
+# identical and correct in every shell/context combination.
+_CURSOR_AGENT_BODY = (
+    "unalias cursor-agent cursor 2>/dev/null\n"
+    "function cursor-agent {\n"
+    '    for a in "$@"; do\n'
+    '        case "$a" in\n'
+    "            --model|--model=*)\n"
+    '                command cursor-agent "$@"\n'
+    "                return $?\n"
+    "                ;;\n"
+    "        esac\n"
+    "    done\n"
+    f'    command cursor-agent --model {_CURSOR_DEFAULT_MODEL} "$@"\n'
+    "}\n"
+    "function cursor {\n"
+    '    cursor-agent "$@"\n'
+    "}"
+)
+
 _APT_BODY = (
     "alias apt-upgrade="
     r"'sudo apt install --only-upgrade"
@@ -143,6 +187,14 @@ BUNDLES: tuple[TweakBundle, ...] = (
         " denied; not a full bypass",
         (),
         _OPENCODE_BODY,
+    ),
+    TweakBundle(
+        "cursor-agent-model",
+        "cursor-agent default model",
+        f"injects --model {_CURSOR_DEFAULT_MODEL} into a bare cursor-agent/cursor call;"
+        " skipped whenever --model is already present",
+        (),
+        _CURSOR_AGENT_BODY,
     ),
 )
 

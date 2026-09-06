@@ -132,6 +132,21 @@ def test_opencode_auto_policy_round_trips(tmp_path: Path) -> None:
     assert "cleared" in result.layers[0].detail
 
 
+def test_cursor_agent_model_policy_round_trips(tmp_path: Path) -> None:
+    rc = tmp_path / ".myshellrc"
+    policy = tweak_policy(_bundle("cursor-agent-model"), rc_path=rc)
+    assert policy.id == "tweak:cursor-agent-model"
+    policy.apply()
+    text = rc.read_text()
+    assert "function cursor-agent" in text
+    assert "function cursor " in text
+    result = policy.remove()
+    text = rc.read_text()
+    assert "function cursor-agent" not in text
+    assert "function cursor " not in text
+    assert "cleared" in result.layers[0].detail
+
+
 def test_tweak_policy_enable_hint_names_source_not_hash_r(tmp_path: Path) -> None:
     rc = tmp_path / ".myshellrc"
     result = tweak_policy(_bundle("countdown"), rc_path=rc, bin_dir=tmp_path / "bin").apply()

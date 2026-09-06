@@ -966,6 +966,22 @@ class PoliciesScreen(AppScreen):
                 " your own opencode config still apply.",
                 "Disable it when you want normal per-permission prompting back.",
             ),
+            "tweak:cursor-agent-model": (
+                "Injects --model gpt-5.6-sol-high into a bare cursor-agent/cursor call, and"
+                " never overrides an already-passed --model (either --model X or --model=X).",
+                "This tweak only requests, per Cursor's own headless-mode changelog fix, this"
+                " model's full context — this installer does not independently verify the"
+                " context window reached in a given response.",
+                "Requires a Cursor plan that actually includes this model; an unsupported plan"
+                " may error or silently downgrade.",
+                "Enabling this tweak automatically removes (via unalias) a cursor-agent/cursor"
+                " alias that is active before this block loads — not any alias anywhere in your"
+                " config — so the tweak's own function takes effect over whatever was defined"
+                " earlier. A same-named alias or function defined later in your own sourced"
+                " files still wins, since shell source order — not unalias — controls the final"
+                " definition.",
+                "Disable it to keep using whatever model was last selected.",
+            ),
             "tweak:apt-upgrade": (
                 "Adds apt-upgrade for upgrading only packages that already have updates.",
                 "Keeps the command narrower than a broad apt upgrade flow.",
