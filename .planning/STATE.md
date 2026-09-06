@@ -1,19 +1,19 @@
 ---
 gsd_state_version: 1.0
-current_phase: 07
-current_phase_name: System & User Tier Catalog Expansion
-status: executing
-stopped_at: 07-02 complete, ready for 07-03
-last_updated: "2026-09-06T10:22:00.000Z"
+current_phase: 08
+current_phase_name: AI Tier Catalog Expansion & uv-tool Executor
+status: planning
+stopped_at: Phase 7 complete, ready for Phase 8
+last_updated: "2026-09-06T11:10:00.000Z"
 last_activity: 2026-09-06
-last_activity_desc: 07-02 executed — gnu-bash and Apple Containers shipped; D-01 disabled-state threaded through catalog TUI
-state_head: f155e4d
+last_activity_desc: 07-03 executed (direct, cross-AI unavailable) — terminal category, kitty and wezterm shipped; Phase 7 fully complete
+state_head: f16a971
 progress:
   total_phases: 12
-  completed_phases: 6
-  total_plans: 19
-  completed_plans: 18
-  percent: 53
+  completed_phases: 7
+  total_plans: 20
+  completed_plans: 19
+  percent: 58
 ---
 
 # Project State
@@ -27,12 +27,12 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 07 — System & User Tier Catalog Expansion
-Plan: 07-03 (next)
-Status: 07-02 complete
-Last activity: 2026-09-06 — 07-02 executed; gnu-bash and Apple Containers shipped, D-01 disabled-state threaded through catalog TUI
+Phase: 08 — AI Tier Catalog Expansion & uv-tool Executor
+Plan: (not yet planned)
+Status: Phase 7 complete
+Last activity: 2026-09-06 — 07-03 executed; terminal category, kitty and wezterm shipped, Phase 7 fully complete (all 4 success criteria satisfied, no residual D-01 gap)
 
-Progress: [█████░░░░░] 53%
+Progress: [█████░░░░░] 58%
 
 ## Performance Metrics
 
@@ -80,6 +80,7 @@ Recent decisions affecting current work:
 - [05-04, 2026-09-06]: Doctor replay is grouped/pinned/allow-build-aware; TUI detects split groups via path hashes; console make doctor left unwired
 - [07-01, 2026-09-06]: oh-my-zsh is kind=script only with RUNZSH=no CHSH=no KEEP_ZSHRC=yes; requires=[zsh, git] because install.sh clones via git; CHSH=no is a Bazzite correctness requirement
 - [07-02, 2026-09-06]: `Platform.os_version`/`min_os_version` fail closed via existing `meets_minimum`; `platform_could_support` is a has_brew-blind browse-time predicate distinct from `resolve_methods`; D-01 disabled catalog rows reuse `UninstallScreen`'s existing dim-row mechanism, threaded through `setup.py`/`UnifiedApp`/`CatalogScreen`
+- [07-03, 2026-09-06]: `kitty`/`wezterm` are cask-only on macOS (no formula); `kitty` has no Linux fallback at all on immutable Bazzite (`.txz` assets, gzip-only `tar -xzf`); `wezterm`'s Debian/Fedora AppImage (`raw=true`) sidesteps that extraction gap and gets an unplanned Bazzite path; Linux-arm64 AppImage confirmed absent via live GitHub API check, `pacman` already covers Arch arm64. Cross-AI execution failed 3x consecutively (transient backend outage) and worktree-isolated `gsd-executor` failed once (stale base branch) — executed directly on the orchestrator's own tokens per Rule 12's fallback. Phase 7 now fully complete.
 
 ### Pending Todos
 
@@ -102,6 +103,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-06T10:22:00.000Z
-Stopped at: 07-02 complete, ready for 07-03
-Resume file: .planning/phases/07-system-user-tier-catalog-expansion/07-02-SUMMARY.md
+Last session: 2026-09-06T11:10:00.000Z
+Stopped at: Phase 7 complete, ready for Phase 8
+Resume file: .planning/phases/07-system-user-tier-catalog-expansion/07-03-SUMMARY.md

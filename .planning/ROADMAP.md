@@ -59,7 +59,7 @@ waiting on this Phase 12 mechanism — see Phase 4's scope note.
 - [x] **Phase 4: npm/npx Ban Extension & Redirect Policy** - Extend the ban to `npx` and redirect it to `pnpm dlx`, leaving `npm` hard-blocked pending its own subcommand-allowlist decision (completed 2026-09-05)
 - [x] **Phase 5: Registry Method Corrections (codegraph/mmdc/puppeteer)** - Move `codegraph` to `kind="github_release"`, resolve `mmdc`'s install method with real research, and give `puppeteer`/`chrome-headless-shell` their own catalog entries (completed 2026-09-06)
 - [x] **Phase 6: SDKMAN Hardening & Registry-Authoring Guidelines** - Verify and harden the already-shipped SDKMAN-exclusivity work, and document the per-tool verification checklist and brew-preference guideline (completed 2026-09-06)
-- [ ] **Phase 7: System & User Tier Catalog Expansion** - Add zsh, oh-my-zsh, gnu-bash, Apple Containers (system tier) and kitty, wezterm (user tier), with real Linux/Bazzite parity
+- [x] **Phase 7: System & User Tier Catalog Expansion** - Add zsh, oh-my-zsh, gnu-bash, Apple Containers (system tier) and kitty, wezterm (user tier), with real Linux/Bazzite parity
 - [ ] **Phase 8: AI Tier Catalog Expansion & uv-tool Executor** - Add the new `uv-tool` executor kind, antigravity, cursor-agent, rtk, and wire `recommends` for agent hosts
 - [ ] **Phase 9: Postinstall Hooks Mechanism** - Add the optional per-tool postinstall field/execution/idempotency mechanism, proven via codegraph's MCP registration
 - [ ] **Phase 10: Agent CLI Ergonomics** - Add `codex-skip`/`opencode-auto` tweaks and a durable, live-verified cursor-agent default-model wrapper
@@ -213,7 +213,7 @@ Plans:
 
 - [x] 07-01-PLAN.md — `zsh` + `oh-my-zsh` system-tier entries, Tier-3-verified `.zshrc` rewrite safety, Bazzite parity via the existing `podman` entry (wave 1)
 - [x] 07-02-PLAN.md — `gnu-bash` (with a same-named-binary detection fix) + Apple Containers system-tier entries, D-01's disabled-state resolution recorded in architecture.md (wave 2, needs 07-01)
-- [ ] 07-03-PLAN.md — `kitty` + `wezterm` user-tier terminal-emulator entries (new `terminal` category), kitty's accepted Bazzite gap, wezterm's checksum-verified AppImage fallback, phase decision consolidation (wave 3, needs 07-02)
+- [x] 07-03-PLAN.md — `kitty` + `wezterm` user-tier terminal-emulator entries (new `terminal` category), kitty's accepted Bazzite gap, wezterm's checksum-verified AppImage fallback, phase decision consolidation (wave 3, needs 07-02)
 
 ### Phase 8: AI Tier Catalog Expansion & uv-tool Executor
 

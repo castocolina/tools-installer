@@ -46,14 +46,14 @@ Each maps to exactly one roadmap phase.
 ### Catalog Expansion (ingest batch 3/7 part A: `catalog-expansion`)
 
 - [ ] **REQ-uv-tool-executor**: New `installer/executors.py` `kind="uv-tool"`, mirroring the existing `"node"` kind's shape (`uv tool install <pypi_pkg>` instead of `pnpm add -g <npm_pkg>`), using this project's already-trusted `uv` toolchain. `graphify`'s registry entry uses it (`kind="uv-tool"`, package `graphifyy` — double-y, note the PyPI package name differs from the CLI command `graphify`; `requires = ["uv"]`).
-- [ ] **REQ-system-tier-shell-container-entries**: New system-tier registry entries: `zsh`, `oh-my-zsh` (official install script, `requires = ["zsh"]` — verify its actual `.zshrc`-rewriting behavior before treating it as a safe reviewable `kind="script"` candidate), `gnu-bash` (macOS-only, brew), Apple Containers (macOS-only, native `container` CLI — may be a version-gate/doc entry with nothing to actually install on a current macOS).
+- [x] **REQ-system-tier-shell-container-entries**: New system-tier registry entries: `zsh`, `oh-my-zsh` (official install script, `requires = ["zsh"]` — verify its actual `.zshrc`-rewriting behavior before treating it as a safe reviewable `kind="script"` candidate), `gnu-bash` (macOS-only, brew), Apple Containers (macOS-only, native `container` CLI — may be a version-gate/doc entry with nothing to actually install on a current macOS).
   - status: whether there is anything to actually install for Apple Containers on a current macOS, or whether the entry is purely a doc/version-gate, is unresolved (Open Question 4).
-- [ ] **REQ-terminal-emulator-entries**: `kitty`, `wezterm` as user-tier entries — brew on macOS (both in homebrew-core); Linux via distro package manager or the existing GitHub-release download path if no native package exists, verified live before adding (per this project's registry-authoring convention).
+- [x] **REQ-terminal-emulator-entries**: `kitty`, `wezterm` as user-tier entries — brew on macOS (both in homebrew-core); Linux via distro package manager or the existing GitHub-release download path if no native package exists, verified live before adding (per this project's registry-authoring convention).
 - [ ] **REQ-agent-host-entries**: `antigravity`, `cursor-agent` as ai-tier entries via their verified official install method (not assumed); `codegraph` via `kind="github_release"` (per batch 2's `REQ-codegraph-github-release` finding, inherited not re-verified).
   - status: `antigravity`/`cursor-agent`'s actual, current install methods are unverified as of this ingest — needs the same live-verification pass every prior registry batch did (Open Question 2). This is a genuine external-research gap, appropriate for GSD's research-capable agents (`gsd-phase-researcher` et al.) at planning time, not resolvable from the PRD alone.
 - [ ] **REQ-rtk-github-release**: `rtk` ("Rust Token Killer") registry entry, `kind="github_release"` from `rtk-ai/rtk` (confirmed via GitHub API: pure Rust, prebuilt per-platform tarballs, `checksums.txt` release asset usable with this project's existing checksum-verification feature). Default branch is `develop`, not `main` — only matters if anything references the branch directly.
 - [ ] **REQ-recommends-wiring-agent-hosts**: Instantiates batch 1's `REQ-recommends-soft-dependency` mechanism with concrete data — `claude`/`opencode`/`codex`/`cursor-agent`/`antigravity` each gain `recommends = ["codegraph", "graphify", "rtk"]` (adjusted per tool as appropriate).
-- [ ] **REQ-linux-bazzite-shell-parity**: New system-tier tools (`zsh`, `oh-my-zsh`) get a real Linux/Bazzite install path, not just macOS; reuses the existing `podman` catalog entry for the container-runtime story on Linux/Bazzite (Apple Containers is macOS-only). Corrects an earlier draft's claim that "brew doesn't need curl on Bazzite" — Homebrew's bootstrap is `curl|bash` on every platform including Linux; the real distinction is that Bazzite's base image already ships `curl`/`git`/build tooling, not that brew needs less there.
+- [x] **REQ-linux-bazzite-shell-parity**: New system-tier tools (`zsh`, `oh-my-zsh`) get a real Linux/Bazzite install path, not just macOS; reuses the existing `podman` catalog entry for the container-runtime story on Linux/Bazzite (Apple Containers is macOS-only). Corrects an earlier draft's claim that "brew doesn't need curl on Bazzite" — Homebrew's bootstrap is `curl|bash` on every platform including Linux; the real distinction is that Bazzite's base image already ships `curl`/`git`/build tooling, not that brew needs less there.
 
 ### Postinstall Hooks (ingest batch 3/7 part B: `postinstall-hooks`)
 
@@ -131,9 +131,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-sdkman-exclusivity | Phase 6 | Done |
 | REQ-registry-authoring-verification-checklist | Phase 6 | Done |
 | REQ-brew-preference-guideline | Phase 6 | Done |
-| REQ-system-tier-shell-container-entries | Phase 7 | Pending |
-| REQ-terminal-emulator-entries | Phase 7 | Pending |
-| REQ-linux-bazzite-shell-parity | Phase 7 | Pending |
+| REQ-system-tier-shell-container-entries | Phase 7 | Done |
+| REQ-terminal-emulator-entries | Phase 7 | Done |
+| REQ-linux-bazzite-shell-parity | Phase 7 | Done |
 | REQ-uv-tool-executor | Phase 8 | Pending |
 | REQ-agent-host-entries | Phase 8 | Pending (external research needed) |
 | REQ-rtk-github-release | Phase 8 | Pending |
