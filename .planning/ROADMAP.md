@@ -62,7 +62,7 @@ waiting on this Phase 12 mechanism — see Phase 4's scope note.
 - [x] **Phase 7: System & User Tier Catalog Expansion** - Add zsh, oh-my-zsh, gnu-bash, Apple Containers (system tier) and kitty, wezterm (user tier), with real Linux/Bazzite parity
 - [x] **Phase 8: AI Tier Catalog Expansion & uv-tool Executor** - Add the new `uv-tool` executor kind, antigravity, cursor-agent, rtk, and wire `recommends` for agent hosts (completed 2026-09-06)
 - [x] **Phase 9: Postinstall Hooks Mechanism** - Add the optional per-tool postinstall field/execution/idempotency mechanism, proven via codegraph's MCP registration (completed 2026-09-06)
-- [ ] **Phase 10: Agent CLI Ergonomics** - Add `codex-skip`/`opencode-auto` tweaks and a durable, live-verified cursor-agent default-model wrapper
+- [x] **Phase 10: Agent CLI Ergonomics** - Add `codex-skip`/`opencode-auto` tweaks and a durable, live-verified cursor-agent default-model wrapper (completed 2026-09-06)
 - [ ] **Phase 11: Background Maintenance Daemon** - Wrap the existing tmpdir-prune script as a toggleable, macOS-only LaunchAgent with visible logs
 - [ ] **Phase 12: Version-Aware Status & Update Action** - Add version-aware status, a cached/staleness-tracked version check, and a manager-delegated update action (unblocks the automatic trigger for REQ-pnpm-global-reinstall-mitigation)
 
@@ -319,6 +319,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. System & User Tier Catalog Expansion | 3/3 | Complete    | 2026-09-06 |
 | 8. AI Tier Catalog Expansion & uv-tool Executor | 4/4 | Complete    | 2026-09-06 |
 | 9. Postinstall Hooks Mechanism | 2/2 | Complete    | 2026-09-06 |
-| 10. Agent CLI Ergonomics | 1/1 | In Progress|  |
+| 10. Agent CLI Ergonomics | 1/1 | Complete    | 2026-09-06 |
 | 11. Background Maintenance Daemon | 0/TBD | Not started | - |
 | 12. Version-Aware Status & Update Action | 0/TBD | Not started | - |
