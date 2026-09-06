@@ -61,7 +61,7 @@ waiting on this Phase 12 mechanism — see Phase 4's scope note.
 - [x] **Phase 6: SDKMAN Hardening & Registry-Authoring Guidelines** - Verify and harden the already-shipped SDKMAN-exclusivity work, and document the per-tool verification checklist and brew-preference guideline (completed 2026-09-06)
 - [x] **Phase 7: System & User Tier Catalog Expansion** - Add zsh, oh-my-zsh, gnu-bash, Apple Containers (system tier) and kitty, wezterm (user tier), with real Linux/Bazzite parity
 - [x] **Phase 8: AI Tier Catalog Expansion & uv-tool Executor** - Add the new `uv-tool` executor kind, antigravity, cursor-agent, rtk, and wire `recommends` for agent hosts (completed 2026-09-06)
-- [ ] **Phase 9: Postinstall Hooks Mechanism** - Add the optional per-tool postinstall field/execution/idempotency mechanism, proven via codegraph's MCP registration
+- [x] **Phase 9: Postinstall Hooks Mechanism** - Add the optional per-tool postinstall field/execution/idempotency mechanism, proven via codegraph's MCP registration (completed 2026-09-06)
 - [ ] **Phase 10: Agent CLI Ergonomics** - Add `codex-skip`/`opencode-auto` tweaks and a durable, live-verified cursor-agent default-model wrapper
 - [ ] **Phase 11: Background Maintenance Daemon** - Wrap the existing tmpdir-prune script as a toggleable, macOS-only LaunchAgent with visible logs
 - [ ] **Phase 12: Version-Aware Status & Update Action** - Add version-aware status, a cached/staleness-tracked version check, and a manager-delegated update action (unblocks the automatic trigger for REQ-pnpm-global-reinstall-mitigation)
@@ -248,11 +248,11 @@ Plans:
   4. A tool whose only setup path is interactive is not wired to this mechanism at all.
   5. After installing `codegraph`, its MCP server registers for every already-installed agent host (`claude`/`codex`/`opencode`/`cursor-agent`), and cleanly no-ops when none are installed.
 
-**Plans**: 2 plans
+**Plans**: 2/2 plans executed
 Plans:
 
-- [ ] 09-01-PLAN.md — The postinstall mechanism wired end-to-end via codegraph's real MCP-registration hook: `Tool.postinstall`, the closed dispatch table, `InstallOutcome.postinstall_warning`, and the never-`--target auto` host-presence CSV composition (wave 1)
-- [ ] 09-02-PLAN.md — Tier-3 container verification of the real `codegraph` install plus its postinstall hook, and Phase 9 decision consolidation into `.claude/architecture.md`/`.planning/PROJECT.md` (wave 2, needs 09-01)
+- [x] 09-01-PLAN.md — The postinstall mechanism wired end-to-end via codegraph's real MCP-registration hook: `Tool.postinstall`, the closed dispatch table, `InstallOutcome.postinstall_warning`, and the never-`--target auto` host-presence CSV composition (wave 1)
+- [x] 09-02-PLAN.md — Tier-3 container verification of the real `codegraph` install plus its postinstall hook, and Phase 9 decision consolidation into `.claude/architecture.md`/`.planning/PROJECT.md` (wave 2, needs 09-01)
 
 ### Phase 10: Agent CLI Ergonomics
 
@@ -315,7 +315,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. SDKMAN Hardening & Registry-Authoring Guidelines | 1/1 | Complete    | 2026-09-06 |
 | 7. System & User Tier Catalog Expansion | 3/3 | Complete    | 2026-09-06 |
 | 8. AI Tier Catalog Expansion & uv-tool Executor | 4/4 | Complete    | 2026-09-06 |
-| 9. Postinstall Hooks Mechanism | 0/2 | Not started | - |
+| 9. Postinstall Hooks Mechanism | 2/2 | Complete    | 2026-09-06 |
 | 10. Agent CLI Ergonomics | 0/TBD | Not started | - |
 | 11. Background Maintenance Daemon | 0/TBD | Not started | - |
 | 12. Version-Aware Status & Update Action | 0/TBD | Not started | - |

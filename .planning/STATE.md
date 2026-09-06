@@ -1,19 +1,19 @@
 ---
 gsd_state_version: 1.0
-current_phase: 09
-current_phase_name: Postinstall Hooks Mechanism
+current_phase: 10
+current_phase_name: Agent CLI Ergonomics
 status: planning
-stopped_at: Phase 8 complete, ready to plan Phase 09
-last_updated: "2026-09-06T15:52:07.735Z"
+stopped_at: Phase 9 complete (09-01, 09-02), ready to plan Phase 10
+last_updated: "2026-09-06T18:16:16.628Z"
 last_activity: 2026-09-06
-last_activity_desc: Phase 8 complete, transitioned to Phase 09
-state_head: 6a59a631be2ed2b6b05f0f8b4a9d0dd0dd447597
+last_activity_desc: Phase 9 (Postinstall Hooks Mechanism) complete, transitioned to Phase 10
+state_head: fe1eb8d78c0aeece8de7d39f1496e94c5e44664c
 progress:
   total_phases: 12
-  completed_phases: 8
-  total_plans: 23
-  completed_plans: 23
-  percent: 67
+  completed_phases: 9
+  total_plans: 25
+  completed_plans: 25
+  percent: 75
 ---
 
 # Project State
@@ -23,16 +23,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-04)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 07 — System & User Tier Catalog Expansion
+**Current focus:** Phase 10 — Agent CLI Ergonomics
 
 ## Current Position
 
-Phase: 09 — Postinstall Hooks Mechanism
+Phase: 10 — Agent CLI Ergonomics
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-09-06 — Phase 8 complete, transitioned to Phase 09
+Last activity: 2026-09-06 — Phase 9 (Postinstall Hooks Mechanism, 09-01/09-02) complete, transitioned to Phase 10
 
-Progress: [█████░░░░░] 58%
+Progress: [████████░░] 75%
 
 ## Performance Metrics
 
@@ -60,6 +60,12 @@ Progress: [█████░░░░░] 58%
 
 *Updated after each plan completion*
 
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 09 P02 | 25 | 2 tasks | 2 files |
+
 ## Accumulated Context
 
 ### Decisions
@@ -83,6 +89,8 @@ Recent decisions affecting current work:
 - [07-01, 2026-09-06]: oh-my-zsh is kind=script only with RUNZSH=no CHSH=no KEEP_ZSHRC=yes; requires=[zsh, git] because install.sh clones via git; CHSH=no is a Bazzite correctness requirement
 - [07-02, 2026-09-06]: `Platform.os_version`/`min_os_version` fail closed via existing `meets_minimum`; `platform_could_support` is a has_brew-blind browse-time predicate distinct from `resolve_methods`; D-01 disabled catalog rows reuse `UninstallScreen`'s existing dim-row mechanism, threaded through `setup.py`/`UnifiedApp`/`CatalogScreen`
 - [07-03, 2026-09-06]: `kitty`/`wezterm` are cask-only on macOS (no formula); `kitty` has no Linux fallback at all on immutable Bazzite (`.txz` assets, gzip-only `tar -xzf`); `wezterm`'s Debian/Fedora AppImage (`raw=true`) sidesteps that extraction gap and gets an unplanned Bazzite path; Linux-arm64 AppImage confirmed absent via live GitHub API check, `pacman` already covers Arch arm64. Cross-AI execution failed 3x consecutively (transient backend outage) and worktree-isolated `gsd-executor` failed once (stale base branch) — executed directly on the orchestrator's own tokens per Rule 12's fallback. Phase 7 now fully complete.
+- [09-01, 2026-09-06]: `Tool.postinstall` is a closed dispatch-hook NAME (mirroring `smoke`), not a literal command string; `installer/engine.py::install_tool` dispatches it Method-aware, isolated in its own try/except, immediately after success and never on `ALREADY_INSTALLED`; codegraph's hook never passes `--target auto` (confirmed unsafe by live source read) and maps `cursor-agent` -> codegraph's own `cursor` id via live `is_installed` checks.
+- [09-02, 2026-09-06]: Tier-3 disposable-container run (colima+docker) proved the postinstall mechanism end to end against a real filesystem: composed `--target claude,cursor` CSV matched exactly, real `~/.claude.json`/`~/.cursor/mcp.json` `mcpServers.codegraph` entries were found, and the zero-hosts case proved the documented no-op (no install call, no config file). Phase 9 now fully complete; four decisions consolidated into PROJECT.md's Key Decisions table and the mechanism documented in `.claude/architecture.md`.
 
 ### Pending Todos
 
@@ -105,6 +113,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-06T11:10:00.000Z
-Stopped at: Phase 8 complete, ready to plan Phase 09
-Resume file: .planning/phases/07-system-user-tier-catalog-expansion/07-03-SUMMARY.md
+Last session: 2026-09-06T18:14:46.000Z
+Stopped at: Phase 9 complete (09-01, 09-02), ready to plan Phase 10
+Resume file: .planning/phases/09-postinstall-hooks-mechanism/09-02-SUMMARY.md

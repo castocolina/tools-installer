@@ -57,11 +57,11 @@ Each maps to exactly one roadmap phase.
 
 ### Postinstall Hooks (ingest batch 3/7 part B: `postinstall-hooks`)
 
-- [ ] **REQ-postinstall-field**: Optional `postinstall` field declared per tool, dispatched with awareness of which `Method` succeeded (not kind-agnostic) — either inline (short command string), a `postinstall_script` file reference for anything multi-line, or a closed dispatch-hook NAME resolved through a code-owned table (mirroring `installer/model.py`'s existing `smoke` param), for the case where the actual invocation cannot be a static string because it depends on live machine state at install time (e.g. which other tools are already present) — this third shape was added during Phase 9 implementation (09-RESEARCH.md/09-01-PLAN.md) once codegraph's own proving case showed neither of the original two literal-text shapes could express a `--target` value computed from live host presence without inventing a new TOML templating micro-language for a single tool's one-off need. Mirrors `installer/tweaks.py`'s `ManagedExecutable`/`helper_assets/` precedent for the file-reference case — keeps `registry.toml` from bloating with long inline scripts. Runs through the same trusted `Runner` seam every other executor uses.
-- [ ] **REQ-postinstall-execution-timing**: The postinstall step dispatches immediately after the specific `Method` that just ran reports success (not batched, not deferred to end-of-session), and is aware of which `Method`/`kind` actually installed the tool. A postinstall failure is surfaced as a distinct warning, never marks the tool's own install as failed (the binary is on PATH and usable regardless).
-- [ ] **REQ-postinstall-idempotency-live-check**: Idempotency via a live check ("is the effect already present" — e.g. is the MCP entry already in a host's config file), not a new state-tracking database — consistent with this codebase's existing all-live-check convention (`status.is_installed`, `guard_status`, `has_managed_block`). `shutil.which` is a synchronous PATH lookup, not a subprocess spawn — confirmed not to hang or block the Textual event loop.
-- [ ] **REQ-postinstall-noninteractive-only**: A postinstall command must run unattended to completion; a tool whose only postinstall/setup path is interactive is not a candidate for this mechanism — hard requirement, since an interactive step would hang the TUI's live-apply flow with no way to answer it.
-- [ ] **REQ-codegraph-mcp-postinstall**: After `codegraph` installs, run its global MCP-registration step for each of `claude`/`codex`/`opencode`/`cursor-agent` that is already installed on this machine (never installing those hosts as a side effect); a documented no-op when none are installed. The proving case for the whole postinstall mechanism — depends on `codegraph` existing in the registry (REQ-agent-host-entries, this same batch).
+- [x] **REQ-postinstall-field**: Optional `postinstall` field declared per tool, dispatched with awareness of which `Method` succeeded (not kind-agnostic) — either inline (short command string), a `postinstall_script` file reference for anything multi-line, or a closed dispatch-hook NAME resolved through a code-owned table (mirroring `installer/model.py`'s existing `smoke` param), for the case where the actual invocation cannot be a static string because it depends on live machine state at install time (e.g. which other tools are already present) — this third shape was added during Phase 9 implementation (09-RESEARCH.md/09-01-PLAN.md) once codegraph's own proving case showed neither of the original two literal-text shapes could express a `--target` value computed from live host presence without inventing a new TOML templating micro-language for a single tool's one-off need. Mirrors `installer/tweaks.py`'s `ManagedExecutable`/`helper_assets/` precedent for the file-reference case — keeps `registry.toml` from bloating with long inline scripts. Runs through the same trusted `Runner` seam every other executor uses.
+- [x] **REQ-postinstall-execution-timing**: The postinstall step dispatches immediately after the specific `Method` that just ran reports success (not batched, not deferred to end-of-session), and is aware of which `Method`/`kind` actually installed the tool. A postinstall failure is surfaced as a distinct warning, never marks the tool's own install as failed (the binary is on PATH and usable regardless).
+- [x] **REQ-postinstall-idempotency-live-check**: Idempotency via a live check ("is the effect already present" — e.g. is the MCP entry already in a host's config file), not a new state-tracking database — consistent with this codebase's existing all-live-check convention (`status.is_installed`, `guard_status`, `has_managed_block`). `shutil.which` is a synchronous PATH lookup, not a subprocess spawn — confirmed not to hang or block the Textual event loop.
+- [x] **REQ-postinstall-noninteractive-only**: A postinstall command must run unattended to completion; a tool whose only postinstall/setup path is interactive is not a candidate for this mechanism — hard requirement, since an interactive step would hang the TUI's live-apply flow with no way to answer it.
+- [x] **REQ-codegraph-mcp-postinstall**: After `codegraph` installs, run its global MCP-registration step for each of `claude`/`codex`/`opencode`/`cursor-agent` that is already installed on this machine (never installing those hosts as a side effect); a documented no-op when none are installed. The proving case for the whole postinstall mechanism — depends on `codegraph` existing in the registry (REQ-agent-host-entries, this same batch).
   - status: the exact non-interactive invocation for codegraph's MCP-registration step (flags/env vars) is deferred research at implementation time, per the source PRD's own framing — not resolved here (Open Question 3).
 
 ### Agent CLI Ergonomics (ingest batch 4/4 part A: `agent-cli-ergonomics`)
@@ -138,11 +138,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-agent-host-entries | Phase 8 | Done |
 | REQ-rtk-github-release | Phase 8 | Done |
 | REQ-recommends-wiring-agent-hosts | Phase 8 | Done |
-| REQ-postinstall-field | Phase 9 | Pending |
-| REQ-postinstall-execution-timing | Phase 9 | Pending |
-| REQ-postinstall-idempotency-live-check | Phase 9 | Pending |
-| REQ-postinstall-noninteractive-only | Phase 9 | Pending |
-| REQ-codegraph-mcp-postinstall | Phase 9 | Pending (depends on Phase 8) |
+| REQ-postinstall-field | Phase 9 | Complete |
+| REQ-postinstall-execution-timing | Phase 9 | Complete |
+| REQ-postinstall-idempotency-live-check | Phase 9 | Complete |
+| REQ-postinstall-noninteractive-only | Phase 9 | Complete |
+| REQ-codegraph-mcp-postinstall | Phase 9 | Complete |
 | REQ-codex-skip-tweak | Phase 10 | Pending |
 | REQ-opencode-auto-tweak | Phase 10 | Pending |
 | REQ-cursor-agent-default-model-wrapper | Phase 10 | Pending |
@@ -158,6 +158,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-manager-drift-alerting | Phase 12 | Deferred (stretch, not MVP) |
 
 **Coverage:**
+
 - v1 requirements: 42 total (added REQ-npm-global-volta-redirect 2026-09-04)
 - Mapped to phases: 42
 - Unmapped: 0 ✓
