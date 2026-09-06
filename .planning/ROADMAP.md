@@ -266,7 +266,10 @@ Plans:
   3. Invoking `cursor-agent`/`cursor` with no `--model` injects a live-verified, plain model slug (no bracket syntax); passing an explicit `--model` is never overridden.
   4. All three tweaks survive the target CLI self-updating in place (durable by construction — shell alias/function lookup precedes PATH search).
 
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+
+- [ ] 10-01-PLAN.md — `codex-skip` + `opencode-auto` plain-alias tweaks and the `cursor-agent`/`cursor` conditional-injection default-model wrapper, all three wired through the existing `TweakBundle`/`tweak_policy` mechanism (wave 1)
 
 ### Phase 11: Background Maintenance Daemon
 
