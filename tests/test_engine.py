@@ -453,3 +453,30 @@ def test_already_installed_never_dispatches_postinstall(monkeypatch: pytest.Monk
     )
     assert outcome.status == "already-installed"
     assert calls == []
+
+
+def test_failed_install_never_dispatches_postinstall(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tool with no successful method has nothing to dispatch after."""
+    _not_installed(monkeypatch)
+    calls: list[object] = []
+
+    def spy_run_postinstall(name: str, method: Method, runner: object, tools: object) -> None:
+        calls.append(name)
+        return None
+
+    monkeypatch.setattr(engine, "run_postinstall", spy_run_postinstall)
+
+    def failing_runner(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1)
+
+    outcome = install_tool(
+        _tool(
+            Method(kind="dnf", params={"package": "codegraph"}),
+            postinstall="codegraph-mcp-register",
+        ),
+        _platform(),
+        runner=failing_runner,
+    )
+    assert outcome.status == "failed"
+    assert outcome.postinstall_warning is None
+    assert calls == []

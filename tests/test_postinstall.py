@@ -1,3 +1,4 @@
+from itertools import combinations
 from pathlib import Path
 
 import pytest
@@ -5,6 +6,20 @@ import pytest
 import installer.postinstall as pi
 from installer.model import Method, Tool
 from installer.run import CommandError, Runner
+
+_ALL_HOSTS = ("claude", "codex", "opencode", "cursor-agent")
+_ALL_SUBSETS: list[tuple[str, ...]] = [
+    subset for size in range(len(_ALL_HOSTS) + 1) for subset in combinations(_ALL_HOSTS, size)
+]
+# Mirrors installer.postinstall's own (private) _CODEGRAPH_TARGETS mapping and
+# declared order, kept here rather than reaching into that private module
+# symbol from the test.
+_EXPECTED_TARGET_FOR = {
+    "claude": "claude",
+    "codex": "codex",
+    "opencode": "opencode",
+    "cursor-agent": "cursor",
+}
 
 
 def _tool(tool_id: str) -> Tool:
@@ -133,3 +148,58 @@ def test_run_postinstall_unknown_name_is_a_noop() -> None:
     result = pi.run_postinstall("not-a-real-hook", method, lambda cmd: calls.append(cmd), {})
     assert result is None
     assert calls == []
+
+
+@pytest.mark.parametrize("present_subset", _ALL_SUBSETS, ids=lambda s: ",".join(s) or "none")
+def test_codegraph_hook_matches_expected_argv_for_every_host_presence_subset(
+    monkeypatch: pytest.MonkeyPatch, present_subset: tuple[str, ...]
+) -> None:
+    """Every one of the 16 subsets of the four hosts produces either the exact
+    expected argv (never "auto") or a genuine no-op — never anything else."""
+    present = set(present_subset)
+
+    def fake_is_installed(tool: Tool) -> bool:
+        return tool.id in present
+
+    monkeypatch.setattr(pi, "is_installed", fake_is_installed)
+    calls: list[list[str]] = []
+    method = Method(kind="github_release", params={})
+    warning = pi.run_postinstall(
+        "codegraph-mcp-register", method, lambda cmd: calls.append(cmd), _tools()
+    )
+    assert warning is None
+    if not present_subset:
+        assert calls == []
+        return
+    expected_csv = ",".join(
+        target for tool_id, target in _EXPECTED_TARGET_FOR.items() if tool_id in present
+    )
+    expected_bin = str(Path.home() / ".local" / "bin" / "codegraph")
+    assert calls == [
+        [expected_bin, "install", "--target", expected_csv, "--location", "global", "--yes"]
+    ]
+    for cmd in calls:
+        assert "auto" not in cmd
+
+
+def _all_installed(tool: Tool) -> bool:
+    return True
+
+
+def test_codegraph_hook_preserves_declared_host_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pi, "is_installed", _all_installed)
+    calls: list[list[str]] = []
+    method = Method(kind="github_release", params={})
+    pi.run_postinstall("codegraph-mcp-register", method, lambda cmd: calls.append(cmd), _tools())
+    assert calls[0][calls[0].index("--target") + 1] == "claude,codex,opencode,cursor"
+
+
+def test_codegraph_hook_maps_cursor_agent_alone_to_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
+    def only_cursor_agent(tool: Tool) -> bool:
+        return tool.id == "cursor-agent"
+
+    monkeypatch.setattr(pi, "is_installed", only_cursor_agent)
+    calls: list[list[str]] = []
+    method = Method(kind="github_release", params={})
+    pi.run_postinstall("codegraph-mcp-register", method, lambda cmd: calls.append(cmd), _tools())
+    assert calls[0][calls[0].index("--target") + 1] == "cursor"
