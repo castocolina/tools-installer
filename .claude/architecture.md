@@ -155,3 +155,64 @@ with nothing in between. The Uninstall view is a separate case: it reads
 `active_tweak_ids` at view entry rather than holding a list, because the
 Policies view can change the answer while the screen is suspended (see the
 `enter_view` rule under rule 2).
+
+## Registry-authoring guidelines
+
+### Per-tool, per-OS verification checklist
+
+Before any new `registry.toml` entry ships, its actual install script or
+package metadata is read directly — never assumed from a marketing page or a
+plausible-sounding guess — and confirmed independently for EACH `os`/`arch`
+the entry declares. A prerequisite that is a no-op on one platform is not
+assumed to behave the same way on another.
+
+The recording mechanism is a `# Verified {date}: ...` prose comment directly
+above the `[[tool]]` block it documents (D-01) — never a checked-in excerpt
+or snapshot of the verified external source. A comment is lower-friction and
+carries no staleness risk from content that changes upstream.
+
+Worked examples already in the registry:
+
+- `codegraph` (`installer/registry.toml:1225-1241`) records what the GitHub
+  Releases API published and what that does and does not establish.
+- `mmdc`/`puppeteer` (the `# Verified 2026-09-05: puppeteer declares...`
+  comment block directly above the `mmdc`/`puppeteer` `[[tool]]` entries)
+  records the brew-rejection finding, the pnpm postinstall grant, and the
+  Linux arm64 gate.
+- `sdkman`/`java` (Phase 6 plan 06-01) record the SC#2 finding that `sdk
+  install java` needs no pinned `version`.
+
+Where a finding is load-bearing enough that silently deleting the comment
+would be a regression, a test in `tests/test_registry.py` asserts specific
+substrings of the comment are present in the committed file —
+`test_mmdc_entry_records_the_brew_rejection_finding` and
+`test_java_and_sdkman_entries_record_the_sc2_no_pin_verification` are the
+pattern. The comment is the mechanism; the test is what keeps it from rotting
+away unnoticed.
+
+The checklist has no automated enforcement of its own existence — whether a
+given entry's author actually did the verification is not machine-checkable —
+so it is a process discipline for code review to hold new entries against,
+not a lint rule.
+
+### Prefer brew
+
+For a new user-tier tool with no other constraint, Homebrew is preferred over
+pnpm/npm, uv tool, or a bespoke script. The standing exception is the Java
+toolchain (`java`/`gradle`/`maven`/`groovy`/`springbootcli`): those install
+exclusively through SDKMAN (REQ-sdkman-exclusivity), never a native or brew
+package. The `java` entry's own `desc` field already says so, and commit
+`0e05f50`'s message records the same reasoning: "brew is preferred generally,
+but Java-toolchain tools must go through SDKMAN specifically, never a
+native/brew package."
+
+The general "prefer brew" preference is documented-only — no lint or test
+enforces the preference itself (D-02) — because brew availability differs too
+much per OS/tool for an automated "why isn't this brew" check to avoid noisy
+false positives. That is distinct from the SDKMAN carve-out named alongside
+it: unlike the general preference, the carve-out is already test-enforced
+today. `test_java_tools_install_exclusively_through_sdkman`
+(`tests/test_registry.py:122-140`) asserts all five Java-toolchain tools have
+exactly one `sdkman`-kind method with no brew/native fallback. D-02 covers
+only the general brew-preference convention, not the carve-out.
+
