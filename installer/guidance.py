@@ -189,10 +189,21 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
         items.append(
             Guidance(
                 title="pnpm install group is split",
+                # The MEASURED condition, not an unmeasured consequence. Plan
+                # 05-01's Tier-3 container recorded BROWNFIELD_BEFORE=ok for
+                # exactly this shape: a standalone mmdc plus a standalone
+                # allow-build puppeteer rendered successfully on pnpm 12.3.4
+                # with default `autoInstallPeers`. Telling that user their tool
+                # "fails when it is run" is a claim this phase's own evidence
+                # contradicts. What the evidence does support is the reason
+                # 05-01 gives for keeping `co_install` at all — the pair
+                # survives on a user-settable pnpm option rather than on the
+                # declared group.
                 meaning=(
-                    f"pnpm is holding {names} in separate global installs, so the "
-                    "dependent cannot load its peer at runtime — the tool fails when "
-                    "it is run rather than when it is installed."
+                    f"pnpm is holding {names} in separate global installs. The dependent "
+                    "reaches its peer only through pnpm's user-settable "
+                    "`auto-install-peers`, so this pair breaks if that setting changes; "
+                    "the declared install group does not depend on it."
                 ),
                 # This prefix is load-bearing: DoctorScreen._tui_guidance rewrites
                 # a next_step starting with `Run `make setup`` into

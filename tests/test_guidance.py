@@ -189,6 +189,29 @@ def test_node_globals_guidance_reports_missing_and_split_together() -> None:
     assert "puppeteer" in items[1].meaning
 
 
+def test_split_group_warning_states_the_measured_condition_not_a_disproved_one() -> None:
+    """05-01's Tier-3 container measured BROWNFIELD_BEFORE=ok for this shape.
+
+    A standalone mmdc plus a standalone allow-build puppeteer rendered fine on
+    pnpm 12.3.4 with default `autoInstallPeers`, so "the dependent cannot load
+    its peer at runtime" is an unmeasured consequence stated as fact — against
+    this phase's own evidence. The defensible claim is narrower and is the one
+    05-01 gives for keeping `co_install` at all: the pair survives only through
+    a user-settable pnpm option.
+    """
+    items = node_globals_guidance(
+        NodeGlobalsReport(
+            entries=(),
+            missing=(),
+            managed=("@mermaid-js/mermaid-cli", "puppeteer"),
+            split_groups=(("@mermaid-js/mermaid-cli", "puppeteer"),),
+        )
+    )
+    meaning = items[0].meaning
+    assert "cannot load its peer at runtime" not in meaning
+    assert "auto-install-peers" in meaning
+
+
 def test_node_globals_guidance_warns_on_an_incomplete_install_group() -> None:
     """The brownfield machine used to get NOTHING from the Doctor.
 
