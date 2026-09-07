@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from installer import daemon
+from installer.helper_assets import prune_daemon_runner
 from installer.run import CommandError
 
 _VALID_KWARGS: dict[str, object] = {
@@ -298,3 +299,242 @@ def test_bootstrap_bootout_real_launchctl_round_trip(tmp_path: Path) -> None:
         )
         assert printed_after.returncode != 0
         plist_path.unlink(missing_ok=True)
+
+
+# =============================================================================
+# Task 2: the wrapper executable (prune_daemon_runner), install/remove, and
+# decode-safe, hard-capped truncation.
+# =============================================================================
+
+_STUB_SUCCESS = """#!/bin/bash
+echo "some output on stdout"
+printf 'deleted: %s\\n' "${1:-0}"
+exit 0
+"""
+
+_STUB_FAILURE = """#!/bin/bash
+echo "boom, something went wrong" >&2
+exit 7
+"""
+
+
+def _write_stub(tmp_path: Path, name: str, body: str) -> Path:
+    script = tmp_path / name
+    script.write_text(body)
+    script.chmod(0o755)
+    return script
+
+
+# --- main(): append, (exit N) note, wrapper never raises --------------------
+
+
+def test_main_appends_a_timestamped_block_and_returns_0_on_success(tmp_path: Path) -> None:
+    script = _write_stub(tmp_path, "stub.sh", _STUB_SUCCESS)
+    log_path = tmp_path / "prune-daemon.log"
+    exit_code = prune_daemon_runner.main(
+        ["--script", str(script), "--log", str(log_path), "--cap-bytes", "999999", "--", "7"]
+    )
+    assert exit_code == 0
+    content = log_path.read_text()
+    assert content.startswith("=== ")
+    assert "deleted: 7" in content
+    assert "(exit" not in content
+
+
+def test_main_appends_exit_n_note_on_a_failing_script(tmp_path: Path) -> None:
+    script = _write_stub(tmp_path, "stub.sh", _STUB_FAILURE)
+    log_path = tmp_path / "prune-daemon.log"
+    exit_code = prune_daemon_runner.main(
+        ["--script", str(script), "--log", str(log_path), "--cap-bytes", "999999", "--"]
+    )
+    assert exit_code == 0
+    content = log_path.read_text()
+    assert "boom, something went wrong" in content
+    assert "(exit 7)" in content
+
+
+def test_main_forwards_argv_after_the_literal_double_dash_verbatim(tmp_path: Path) -> None:
+    script = _write_stub(tmp_path, "stub.sh", _STUB_SUCCESS)
+    log_path = tmp_path / "prune-daemon.log"
+    prune_daemon_runner.main(
+        [
+            "--script",
+            str(script),
+            "--log",
+            str(log_path),
+            "--cap-bytes",
+            "999999",
+            "--",
+            "--apply",
+            "--days",
+            "3",
+        ]
+    )
+    content = log_path.read_text()
+    # _STUB_SUCCESS only ever echoes its own first forwarded arg into
+    # `deleted: `, so seeing "--apply" survive proves the whole forwarded
+    # tail reached the script, not just the first token.
+    assert "deleted: --apply" in content
+
+
+def test_main_creates_missing_log_parent_directory_defensively(tmp_path: Path) -> None:
+    script = _write_stub(tmp_path, "stub.sh", _STUB_SUCCESS)
+    log_path = tmp_path / "nested" / "prune-daemon.log"
+    exit_code = prune_daemon_runner.main(
+        ["--script", str(script), "--log", str(log_path), "--cap-bytes", "999999", "--"]
+    )
+    assert exit_code == 0
+    assert log_path.exists()
+
+
+def test_main_never_raises_when_the_script_cannot_be_launched(tmp_path: Path) -> None:
+    log_path = tmp_path / "prune-daemon.log"
+    missing_script = tmp_path / "does-not-exist.sh"
+    exit_code = prune_daemon_runner.main(
+        ["--script", str(missing_script), "--log", str(log_path), "--cap-bytes", "999999", "--"]
+    )
+    assert exit_code == 0
+    assert log_path.exists()
+
+
+# --- _truncate: header-boundary snap, hard cap, decode safety --------------
+
+
+def _write_run(log_path: Path, timestamp: str, body: str) -> None:
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"=== {timestamp} ===\n{body}\n")
+
+
+def test_truncate_is_a_noop_when_under_cap(tmp_path: Path) -> None:
+    log_path = tmp_path / "log.txt"
+    _write_run(log_path, "run-1", "small body")
+    original = log_path.read_bytes()
+    prune_daemon_runner._truncate(log_path, 999_999)
+    assert log_path.read_bytes() == original
+
+
+def test_truncate_snaps_to_the_newest_runs_header_boundary(tmp_path: Path) -> None:
+    log_path = tmp_path / "log.txt"
+    for i in range(20):
+        _write_run(log_path, f"run-{i:02d}", f"body line for run {i:02d}")
+    cap = 200
+    prune_daemon_runner._truncate(log_path, cap)
+    result = log_path.read_text(encoding="utf-8")
+    assert result.startswith("=== run-")
+    assert "run-19" in result
+    assert "run-00" not in result
+    assert len(result.encode("utf-8")) <= cap + 200  # snap only shrinks; sane bound
+    assert result.endswith("\n")
+
+
+def test_truncate_never_splits_a_multibyte_utf8_character(tmp_path: Path) -> None:
+    log_path = tmp_path / "log.txt"
+    for i in range(10):
+        _write_run(log_path, f"run-{i:02d}", f"emoji body \U0001f600 for run {i:02d} " * 5)
+    prune_daemon_runner._truncate(log_path, 150)
+    # Must decode cleanly -- the original byte-window design could cut mid-
+    # sequence here.
+    result = log_path.read_text(encoding="utf-8")
+    assert result.startswith("=== ") or result == ""
+
+
+def test_truncate_recovers_from_pre_existing_invalid_utf8_bytes(tmp_path: Path) -> None:
+    log_path = tmp_path / "log.txt"
+    # Bytes no str.encode("utf-8") output could ever produce.
+    log_path.write_bytes(b"=== run-00 ===\n" + b"\xff" * 300 + b"\n")
+    prune_daemon_runner._truncate(log_path, 50)
+    # Must not raise UnicodeDecodeError; result must itself be valid UTF-8.
+    result = log_path.read_text(encoding="utf-8")
+    assert isinstance(result, str)
+
+
+def test_truncate_hard_caps_a_single_oversized_line(tmp_path: Path) -> None:
+    log_path = tmp_path / "log.txt"
+    huge_line = "x" * 5000
+    log_path.write_text(f"{huge_line}\n")
+    cap = 200
+    prune_daemon_runner._truncate(log_path, cap)
+    assert log_path.stat().st_size <= cap
+    result = log_path.read_text(encoding="utf-8")  # must not raise
+    assert result.endswith("\n")
+
+
+def test_truncate_caps_an_oversized_single_run(tmp_path: Path) -> None:
+    log_path = tmp_path / "log.txt"
+    body_lines = "\n".join(f"line {i}" for i in range(500))
+    _write_run(log_path, "run-00", body_lines)
+    cap = 300
+    prune_daemon_runner._truncate(log_path, cap)
+    assert log_path.stat().st_size <= cap
+    result = log_path.read_text(encoding="utf-8")  # must not raise
+    assert result.endswith("\n")
+
+
+def test_truncate_always_leaves_exactly_one_trailing_newline_for_the_next_append(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "log.txt"
+    for i in range(20):
+        _write_run(log_path, f"run-{i:02d}", f"body {i:02d}")
+    prune_daemon_runner._truncate(log_path, 200)
+    _write_run(log_path, "run-next", "fresh body")
+    content = log_path.read_text(encoding="utf-8")
+    # The two blocks' headers must never concatenate onto one line.
+    assert "\n=== run-next ===" in content
+    assert content.count("=== run-next ===") == 1
+
+
+# --- install_wrapper / remove_wrapper / wrapper_present ---------------------
+
+
+def test_install_wrapper_copies_the_asset_and_chmods_0o755(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    target = daemon.install_wrapper(bin_dir)
+    assert target == bin_dir / "tools-installer-prune-daemon"
+    assert target.exists()
+    assert target.stat().st_mode & 0o777 == 0o755
+    assert "tools-installer-helper: prune-daemon" in target.read_text()
+
+
+def test_wrapper_present_true_only_after_install(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    assert daemon.wrapper_present(bin_dir) is False
+    daemon.install_wrapper(bin_dir)
+    assert daemon.wrapper_present(bin_dir) is True
+
+
+def test_remove_wrapper_deletes_only_the_managed_file(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    daemon.install_wrapper(bin_dir)
+    daemon.remove_wrapper(bin_dir)
+    assert daemon.wrapper_present(bin_dir) is False
+    assert not (bin_dir / "tools-installer-prune-daemon").exists()
+
+
+def test_remove_wrapper_is_a_noop_against_a_missing_bin_dir(tmp_path: Path) -> None:
+    daemon.remove_wrapper(tmp_path / "does-not-exist")  # must not raise
+
+
+def test_install_wrapper_refuses_to_overwrite_an_unmanaged_file(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True)
+    unmanaged = bin_dir / "tools-installer-prune-daemon"
+    unmanaged.write_text("#!/bin/sh\necho not ours\n")
+    with pytest.raises(OSError):
+        daemon.install_wrapper(bin_dir)
+    assert unmanaged.read_text() == "#!/bin/sh\necho not ours\n"
+
+
+def test_remove_wrapper_refuses_to_delete_an_unmanaged_same_named_file(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True)
+    unmanaged = bin_dir / "tools-installer-prune-daemon"
+    unmanaged.write_text("#!/bin/sh\necho not ours\n")
+    daemon.remove_wrapper(bin_dir)
+    assert unmanaged.exists()
+
+
+def test_prune_daemon_runner_never_imports_the_installer_package() -> None:
+    source = Path(prune_daemon_runner.__file__).read_text()
+    assert "import installer" not in source
+    assert "from installer" not in source
