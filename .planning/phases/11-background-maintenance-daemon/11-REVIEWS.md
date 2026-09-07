@@ -530,3 +530,135 @@ further review cycle will be dispatched. Proceeding to ONE final direct fix pass
 cycle) addressing every finding above, then to execution regardless of any residual finding this
 final pass cannot fully close — any such residual will be carried forward as a documented known
 limitation in the phase's SUMMARY/VERIFICATION rather than silently dropped.
+
+### Revision Note (post cycle 3 — final)
+
+A full direct fix pass edited all four plan files (`11-01-PLAN.md` through `11-04-PLAN.md`) in
+place to address every cycle 3 finding above. **This is the final revision pass per the 3-cycle
+cap — no cycle 4 review will be dispatched; the plans proceed to execution after this pass.**
+
+- **11-01** (core mechanism): the live `launchctl bootstrap`/`print`/`bootout` round-trip test no
+  longer claims to build its plist via `render_plist`/`write_plist` (which hard-codes
+  `ProgramArguments` to the uv-routed wrapper invocation with no override) — it now builds a
+  throwaway plist dict by hand and writes it via a NEW, shared private
+  `_atomic_write(path: Path, data: bytes, *, mode: int | None = None) -> None` helper, called with
+  `mode=0o644` for this test exactly as `write_plist` itself now calls it internally (#1). Log
+  truncation (moved, see #3 below) now enforces its `cap_bytes` cap as a genuine hard ceiling: an
+  oversized single line is hard-truncated to its own trailing `cap_bytes - 1` bytes
+  (decode-recovered with `errors="ignore"` at the cut point), an oversized single run is capped
+  after the header-boundary snap rather than left as large as whatever was accumulated, and the
+  result always ends with exactly one re-added trailing newline regardless of the original file's
+  own trailing-newline state, so a truncated file's next appended header can never concatenate
+  onto prior content (#2). `_truncate` moves out of `installer/daemon.py` into
+  `installer/helper_assets/prune_daemon_runner.py` itself — self-contained, standard-library-only
+  — since the standalone wrapper (invoked via `uv run --no-project --script`) cannot assume the
+  `installer` package is importable; this plan's own tests now import it via
+  `from installer.helper_assets import prune_daemon_runner`, mirroring `tests/test_wait_time.py`'s
+  own existing import of `wait_time` for the SAME reason (#3). The new `_atomic_write` helper
+  takes an explicit `mode` parameter reconciling a genuine conflict the pre-cycle-3 text left
+  unresolved: `write_plist` calls it with `mode=0o644` (forced, unconditional, matching
+  `installer/omz.py::_atomic_write`'s Tampering-mitigation posture for a LaunchAgent config), while
+  Task 3's `record_decided`/`clear_decided` call the SAME function with `mode=None` (preserving
+  the target's existing mode via `shutil.copymode` when present, no chmod otherwise) — an exact
+  mirror of `installer/omz.py::_atomic_write`'s own mode-preservation behavior for `~/.myshellrc`,
+  re-read live this session (`installer/omz.py:190`-`:223`) to confirm it never chmods a
+  newly-created file and only ever `copymode`s an existing one (#4).
+- **11-02** (policy model + factory): `.apply()` now snapshots `wrapper_present(wrapper_bin_dir)`
+  and `log_path.exists()` BEFORE calling the shared validation-plus-write helper, so a FIRST-EVER
+  (`had_prior_plist is False`) `bootstrap` failure rolls back the wrapper/log THIS call newly
+  created (via `remove_wrapper`/`unlink`), not only the plist — a reapply's failure still leaves
+  the wrapper/log untouched, since they legitimately predate that call (#1). `.remove()` now
+  collects wrapper-removal and marker-write failures into a `warnings: list[str]`, guarding BOTH
+  `daemon.remove_wrapper` and `daemon.record_decided` in `try/except OSError`, joining any
+  non-empty result into `PolicyResult.warning` rather than ever propagating either as a removal
+  failure — mirroring `.apply()`'s own cycle-2 marker-write-as-warning fix, and closing the
+  specific risk that a marker-write failure after a genuinely successful removal would leave
+  `decided()` reading `False`, silently letting the next `make setup` run re-enable a daemon the
+  user just explicitly disabled (#2, #3). Every plist-bytes rollback (`.apply()`'s reapply path,
+  `.set_schedule()`'s own rollback) now writes through the SAME `_atomic_write(plist_path,
+  previous, mode=0o644)` helper 11-01 established, never a raw `write_bytes` call (#4).
+  `.set_schedule(hour, minute)` now raises `DaemonScheduleError` immediately when
+  `not plist_path.exists()`, a core-layer guard against creating a plist for a policy the user
+  never enabled, alongside (not instead of) 11-03's own UI-layer gate (#5).
+- **11-03** (Policies UI + time picker): `TimePickerScreen` now defines its own `DEFAULT_CSS`
+  (`align: center middle`, a BOUNDED `height` on its `ListView` — never `auto` — sized inside this
+  project's own smallest tested terminal height, re-confirmed live this session via
+  `grep -rn "run_test(size="` across `tests/test_wizard_app.py`/`tests/test_tool_browser.py`,
+  which consistently use `size=(100, 30)`/`size=(80, 20)`), since Textual's CSS selectors are
+  scoped by exact class name and `TimePickerScreen` never inherited `NavScreen`'s own
+  `NavScreen > ListView` rule (#10). Finding #1 (toggle/reschedule staying synchronous) was
+  re-raised by the reviewer but explicitly confirmed as this plan's own reasoned, already-documented
+  cycle-2 ACCEPT decision, not a defect — a one-line acknowledgment was added to
+  `<design_decisions>` per the reviewer's own instruction; no code change accompanies it.
+- **11-04** (composition, on-by-default, uninstall): `PoliciesScreen.refresh_daemon_state` (its
+  second parameter renamed `active` → `applied` to name what it actually represents) now looks up
+  the matching `Policy` from `self._policies` (confirmed live this session,
+  `installer/wizard_app.py:881`, `self._policies = inputs.policies`) and resolves its new value via
+  `policy.is_active()` when present, COMPLETELY IGNORING the worker's own `applied` boolean, which
+  only ever means "no `.apply()` call was made this run" — equally true whether the daemon is
+  already active-and-decided or already disabled-and-decided; the pre-cycle-3 code conflated the
+  two, incorrectly flipping an already-on daemon's row to OFF on every ordinary second run (#11).
+  `UninstallScreen._apply_removal`'s in-flight guard drops its own `self._tweak_ids` membership
+  check entirely, gating purely on `self.remove_tweaks` selected AND
+  `self.app._daemon_default_in_flight` — during first-run auto-apply the daemon `Policy` is
+  constructed inactive, so the screen's own construction-time snapshot may contain no daemon id at
+  all yet even while the worker is actively racing to register it (#12). The `clear_decided`
+  condition in both `run_uninstall`/`perform_uninstall` changes from "daemon id present in
+  `SweepResult.swept`" to "daemon id NOT present in `SweepResult.failed`" (`SweepResult`'s exact
+  `swept`/`failed` tuple shape re-confirmed live this session, `installer/uninstall.py:253`-`:263`)
+  — so a full uninstall now clears the marker whenever the daemon was not left in a genuinely
+  FAILED state, including when it was already disabled and contributed nothing to the sweep, while
+  still preserving the marker on an actual removal failure (#13). `tests/test_app.py`'s own 17
+  pre-existing `run_uninstall`/`perform_uninstall` call sites (14 + 3, live-grepped this session)
+  — not only the two `tests/test_uninstall_e2e.py` calls the pre-cycle-3 plan already named — are
+  now enumerated and added to Task 3's own migration/verification scope (this file was already
+  present in the frontmatter `files_modified` list, but the task body had not accounted for its own
+  call sites) (#14). The on-by-default worker's body is now wrapped in `try/finally`
+  (`applied = False` initialized before the `try`), so its completion message is always posted —
+  and `_daemon_default_in_flight` therefore always eventually cleared — even for an exception
+  outside `ensure_daemon_default`'s own `except (OSError, CommandError)` tuple (#15). The
+  "fresh install vs. first run after upgrade" ambiguity is resolved as an explicit, documented,
+  ACCEPTED consequence of CONTEXT.md's own D-01 decision: `decided(state_path)` answers a
+  per-POLICY question, not a per-installation-age one, so an existing installation with no daemon
+  marker is intentionally treated identically to a fresh one — a migration-specific marker was
+  considered and rejected as an unrequested scope expansion; a regression test locks the chosen
+  behavior in (#16).
+
+Live verification performed this session, before writing any fix that depends on real source
+shapes: `installer/omz.py::_atomic_write` (lines 190-223) was re-read to confirm its exact
+`shutil.copymode`-when-present / no-chmod-otherwise behavior, grounding 11-01 finding #4's `mode`
+parameter design. `tests/test_wait_time.py` was re-read to confirm its
+`from installer.helper_assets import wait_time` import shape, grounding 11-01 finding #3's
+test-import approach for the relocated `_truncate`. `grep -n "run_uninstall(\|perform_uninstall("
+tests/test_app.py` was run live, returning 17 matches (14 `run_uninstall(`, 3
+`perform_uninstall(`), grounding 11-04 finding #14's exact scope. `installer/uninstall.py`'s
+`SweepResult` dataclass (lines 253-263) was re-read to confirm its exact `swept`/`failed` tuple
+shape, grounding 11-04 finding #13's corrected `clear_decided` condition. `installer/wizard_app.py`'s
+`PoliciesScreen.__init__` (`self._policies = inputs.policies`), `NavScreen`/`ConfirmUninstall`'s
+own `DEFAULT_CSS` blocks, and `installer/run.py`'s `CommandError` shape were all re-read live this
+session before being cited by file:line. `grep -rn "run_test(size="` was run across
+`tests/test_wizard_app.py`/`tests/test_tool_browser.py`/`tests/test_policies_e2e.py`, confirming
+this project's own tested terminal-size conventions (`size=(100, 30)`, `size=(80, 20)`, `size=(80,
+30)`), grounding 11-03 finding #10's CSS-sizing rationale. No claim in this pass rests on an
+unverified assumption about `plistlib`, Textual, or `launchctl` behavior beyond what cycles 1 and 2
+already live-verified and recorded above; this pass introduced no new claims of that kind, since
+its own fixes (a hard truncation cap, an explicit `mode` parameter, a `try/finally` wrapper, a
+`SweepResult.failed`-based condition, an `is_active()`-based UI refresh) rest on ordinary,
+well-documented Python/dataclass semantics rather than undocumented system behavior.
+
+Every one of the 16 numbered cycle-3 findings across all four plans was closed with a concrete
+plan-text fix in this pass — none was silently dropped or deferred. The one item NOT treated as a
+code-level fix is finding #16 (fresh-install-vs-upgrade): per the reviewer's own framing ("decide
+whether that's acceptable... or whether a migration-specific marker/check is needed"), this pass
+made an explicit DECISION (accept, matching D-01's plain language) rather than adding new
+migration-tracking machinery, and recorded the reasoning plus a locking-in regression test in
+11-04's own `<design_decisions>` and `<must_haves>` — this is a decision made under this final
+pass's own authority in the absence of a user to consult mid-session, documented here for
+visibility rather than presented as equivalent to the other, code-level fixes. The one OTHER
+carried-forward item is not a gap this pass left open but a pre-existing, reviewer-reaffirmed
+ACCEPT: 11-03's synchronous `run_live`-routed toggle/reschedule (cycle 2's own finding #11)
+remains a documented, reasoned residual reliability risk — the cycle 3 reviewer explicitly
+confirmed this is not a defect requiring a fix, only re-flagging it for visibility, so no code
+change was made and none was warranted. Cycles 1, 2, and 3's findings above are left unmodified;
+this note is an append, not a rewrite. Per the 3-cycle cap (`.planning/ONESHOT-RULES.md` Rule 10),
+no cycle 4 review will be dispatched — these four plan files are now ready for execution.
