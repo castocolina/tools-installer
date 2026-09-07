@@ -3,7 +3,14 @@ import sys
 
 import pytest
 
-from installer.run import TIMEOUT_CODE, CommandError, run_captured, run_command, run_output
+from installer.run import (
+    TIMEOUT_CODE,
+    CommandError,
+    run_captured,
+    run_command,
+    run_output,
+    run_query,
+)
 
 
 def test_run_command_success(monkeypatch: pytest.MonkeyPatch):
@@ -94,3 +101,44 @@ def test_run_output_timeout_fails_fast_instead_of_hanging() -> None:
         run_output([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.2)
     assert exc.value.returncode == TIMEOUT_CODE
     assert "timed out" in str(exc.value)
+
+
+def test_run_query_merges_env_over_os_environ(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TI_PREEXISTING", "keep-me")
+    script = (
+        "import os;"
+        " print(os.environ.get('TI_PREEXISTING', ''),"
+        " os.environ.get('TI_OVERRIDE', ''),"
+        " bool(os.environ.get('PATH')))"
+    )
+    out = run_query([sys.executable, "-c", script], env={"TI_OVERRIDE": "new"})
+    assert "keep-me" in out
+    assert "new" in out
+    assert "True" in out
+
+
+def test_run_query_accepts_nonzero_in_accept_codes() -> None:
+    script = "import sys; print('payload'); print('err', file=sys.stderr); sys.exit(1)"
+    out = run_query([sys.executable, "-c", script], accept_codes=(0, 1))
+    assert "payload" in out
+
+
+def test_run_query_rejected_code_carries_stdout_and_stderr() -> None:
+    script = "import sys; print('payload'); print('err', file=sys.stderr); sys.exit(3)"
+    with pytest.raises(CommandError) as exc:
+        run_query([sys.executable, "-c", script], accept_codes=(0, 1))
+    assert exc.value.returncode == 3
+    assert exc.value.detail == "err"
+    assert "payload" in exc.value.stdout
+
+
+def test_run_query_timeout_uses_timeout_code() -> None:
+    with pytest.raises(CommandError) as exc:
+        run_query([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.2)
+    assert exc.value.returncode == TIMEOUT_CODE
+
+
+def test_run_query_missing_binary_is_127() -> None:
+    with pytest.raises(CommandError) as exc:
+        run_query(["definitely-not-a-real-binary-xyz"])
+    assert exc.value.returncode == 127

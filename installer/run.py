@@ -1,7 +1,8 @@
 """The command runner seam: executors build argv, the runner performs the side effect."""
 
+import os
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping
 
 # An executor calls a Runner with an argv list. The runner raises CommandError on failure.
 Runner = Callable[[list[str]], None]
@@ -12,10 +13,13 @@ OutputRunner = Callable[[list[str]], str]
 class CommandError(RuntimeError):
     """A command exited non-zero (or could not be launched)."""
 
-    def __init__(self, cmd: list[str], returncode: int, *, detail: str = "") -> None:
+    def __init__(
+        self, cmd: list[str], returncode: int, *, detail: str = "", stdout: str = ""
+    ) -> None:
         self.cmd = list(cmd)
         self.returncode = returncode
         self.detail = detail
+        self.stdout = stdout
         message = f"command failed ({returncode}): {' '.join(cmd)}"
         super().__init__(f"{message}\n{detail}" if detail else message)
 
@@ -69,3 +73,44 @@ def run_captured(cmd: list[str]) -> None:
     straight into the rendered frame.
     """
     run_output(cmd)
+
+
+QUERY_TIMEOUT = 20.0
+
+
+def run_query(
+    cmd: list[str],
+    *,
+    timeout: float = QUERY_TIMEOUT,
+    env: Mapping[str, str] | None = None,
+    accept_codes: Collection[int] = (0,),
+) -> str:
+    """Run a bounded query and return stdout when the exit code is accepted.
+
+    `env` is merged over `os.environ` (an override, never a replacement) so
+    PATH and HOME survive. `accept_codes` lets a caller treat pnpm's
+    exit-1-with-JSON as success. Every manager query in this phase goes
+    through this function; nothing else calls subprocess outside this module.
+    """
+    merged = None if env is None else {**os.environ, **env}
+    try:
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=merged,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CommandError(cmd, TIMEOUT_CODE, detail=f"timed out after {exc.timeout:g}s") from exc
+    except OSError as exc:
+        raise CommandError(cmd, 127) from exc
+    if completed.returncode in accept_codes:
+        return completed.stdout
+    raise CommandError(
+        cmd,
+        completed.returncode,
+        detail=(completed.stderr or "").strip(),
+        stdout=completed.stdout,
+    )

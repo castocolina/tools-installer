@@ -127,7 +127,7 @@ class ToolRow:
         object.__setattr__(self, "selectable", selectable)
 
 
-def _manager_name(method: Method, param: str, fallback: str) -> str:
+def manager_name(method: Method, param: str, fallback: str) -> str:
     # brew/cask uninstall takes the formula/cask name (in the method params),
     # NOT the runnable cmd — they differ for e.g. rg/ripgrep, code/visual-studio-code.
     value = method.params.get(param)
@@ -137,10 +137,10 @@ def _manager_name(method: Method, param: str, fallback: str) -> str:
 def _manager_hint(tool: Tool) -> str:
     for method in tool.methods:
         if method.kind == "cask":
-            name = _manager_name(method, "cask", tool.cmd)
+            name = manager_name(method, "cask", tool.cmd)
             return f"managed by Homebrew — `brew uninstall --cask {name}`"
         if method.kind == "brew":
-            name = _manager_name(method, "formula", tool.cmd)
+            name = manager_name(method, "formula", tool.cmd)
             return f"managed by Homebrew — `brew uninstall {name}`"
     return "managed outside this installer — remove with your package manager"
 

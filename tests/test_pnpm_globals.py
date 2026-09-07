@@ -143,8 +143,16 @@ def test_parse_global_packages_handles_an_empty_global_set() -> None:
     assert parse_global_packages('[{"path": "/g", "private": true}]') == ()
 
 
-def test_parse_global_packages_ignores_a_non_object_entry() -> None:
-    assert parse_global_packages('["noise", {"dependencies": {"vercel": {}}}]') == ("vercel",)
+def test_parse_global_packages_malformed_non_dict_project_is_unreadable() -> None:
+    assert parse_global_packages('["noise", {"dependencies": {"vercel": {}}}]') is None
+
+
+def test_parse_global_packages_malformed_non_dict_group_is_unreadable() -> None:
+    assert parse_global_packages('[{"dependencies": ["vercel"]}]') is None
+
+
+def test_parse_global_packages_empty_but_well_formed_dependencies_is_empty() -> None:
+    assert parse_global_packages('[{"dependencies": {}}]') == ()
 
 
 def test_parse_global_packages_unreadable_output_is_unknown() -> None:

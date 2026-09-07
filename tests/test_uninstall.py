@@ -10,6 +10,7 @@ from installer.tweaks import BUNDLES, TweakBundle
 from installer.uninstall import (
     SweepResult,
     active_tweak_ids,
+    manager_name,
     plan_uninstall,
     remove_paths,
     sweep_tweaks,
@@ -19,6 +20,12 @@ from installer.uninstall import (
 def _tool(method: Method, *, tool_id: str = "t", cmd: str = "t") -> Tool:
     # methods is tuple[Method, ...]; priority/audience/desc use their defaults.
     return Tool(id=tool_id, name=tool_id, category="dev", cmd=cmd, methods=(method,))
+
+
+def test_manager_name_is_a_public_export() -> None:
+    method = Method(kind="brew", params={"formula": "ripgrep"})
+    assert manager_name(method, "formula", "rg") == "ripgrep"
+    assert manager_name(Method(kind="brew"), "formula", "rg") == "rg"
 
 
 def test_plan_collects_existing_opt_and_bin_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

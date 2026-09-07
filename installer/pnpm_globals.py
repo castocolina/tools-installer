@@ -271,16 +271,19 @@ def _load_projects(raw: str) -> list[object] | None:
     return cast(list[object], data) if isinstance(data, list) else [cast(object, data)]
 
 
-def _iter_dependencies(projects: list[object]) -> list[tuple[str, object]]:
+def _iter_dependencies(projects: list[object]) -> list[tuple[str, object]] | None:
     items: list[tuple[str, object]] = []
     for project in projects:
         if not isinstance(project, dict):
-            continue
+            return None
         groups = cast(dict[str, object], project)
         for group in _DEPENDENCY_GROUPS:
-            block = groups.get(group)
-            if isinstance(block, dict):
-                items.extend(cast(dict[str, object], block).items())
+            if group not in groups:
+                continue
+            block = groups[group]
+            if not isinstance(block, dict):
+                return None
+            items.extend(cast(dict[str, object], block).items())
     return items
 
 
@@ -293,7 +296,10 @@ def parse_global_packages(raw: str) -> tuple[str, ...] | None:
     projects = _load_projects(raw)
     if projects is None:
         return None
-    return tuple(dict.fromkeys(name for name, _details in _iter_dependencies(projects)))
+    items = _iter_dependencies(projects)
+    if items is None:
+        return None
+    return tuple(dict.fromkeys(name for name, _details in items))
 
 
 def _install_group_key(details: object) -> str | None:
@@ -354,10 +360,13 @@ def parse_global_groups(raw: str) -> GlobalGroups | None:
     projects = _load_projects(raw)
     if projects is None:
         return None
+    items = _iter_dependencies(projects)
+    if items is None:
+        return None
     grouped: dict[str, list[str]] = {}
     order: list[str] = []
     unknown: list[str] = []
-    for name, details in _iter_dependencies(projects):
+    for name, details in items:
         key = _install_group_key(details)
         if key is None:
             unknown.append(name)
