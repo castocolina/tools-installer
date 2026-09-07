@@ -25,6 +25,7 @@ from textual.message import Message
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
+from installer import daemon
 from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
@@ -80,6 +81,10 @@ class PolicyInputs:
 
     policies: list[Policy]
 
+
+# The l log-view toggle's tail length — a plain, bounded slice of the raw log,
+# never a re-parse into structured blocks (that is last_run_summary's own job).
+_LOG_TAIL_LINES = 20
 
 _NOTHING_TO_REINSTALL = "Nothing to reinstall — pnpm manages no globals here."
 # Distinct from _NOTHING_TO_REINSTALL on purpose: an unanswered `pnpm list -g`
@@ -866,8 +871,15 @@ class PoliciesScreen(AppScreen):
     `enter` is inert here because there is no staged batch to commit.
     """
 
+    if TYPE_CHECKING:
+
+        @property
+        def app(self) -> "UnifiedApp": ...
+
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("space", "toggle_policy", "toggle policy", show=True, priority=True),
+        Binding("l", "toggle_log", "view log", show=True),
+        Binding("t", "pick_time", "set time", show=True),
     ]
     DEFAULT_CSS = """
     PoliciesScreen DataTable { height: 1fr; }
@@ -884,6 +896,11 @@ class PoliciesScreen(AppScreen):
         }
         self.error: str | None = None
         self.detail_text = ""
+        # Explicit, not left to on_data_table_row_highlighted's own reset as the
+        # sole assignment point: an AttributeError would otherwise be reachable
+        # if action_toggle_log ever ran before any row-highlight event has fired
+        # (11-REVIEWS.md cycle 2 finding #12).
+        self._log_view: bool = False
 
     def compose_body(self) -> ComposeResult:
         yield DataTable()
@@ -897,11 +914,12 @@ class PoliciesScreen(AppScreen):
         table.add_column("Requires", key="requires")
         table.add_column("Effect", key="effect")
         for policy in self._policies:
+            effect_kind = "scheduled job" if policy.log_path is not None else "shell config"
             table.add_row(
                 self._state_cell(self.active_state[policy.id]),
                 Text(policy.label, style="bold yellow"),
                 self._requires_cell(policy),
-                Text(f"shell config: {policy.description}", style="dim"),
+                Text(f"{effect_kind}: {policy.description}", style="dim"),
                 key=policy.id,
             )
         table.focus()
@@ -998,6 +1016,16 @@ class PoliciesScreen(AppScreen):
                 "Reads ON only once this installer has enabled it, so a"
                 " plugins=(git docker) you wrote by hand shows OFF and is left alone.",
             ),
+            "daemon:prune-tmpdir": (
+                "Runs scripts/prune-user-tmpdir.sh once a day via a macOS LaunchAgent,"
+                " deleting orphaned agent-runtime temp files.",
+                "Degrades gracefully without fd/rg — the script falls back to its own"
+                " find/grep search, just slower.",
+                "Disabling only unregisters the LaunchAgent: it never touches your temp"
+                " files directly, only through the unchanged script's own dry-run/apply"
+                " modes while the LaunchAgent is registered.",
+                "Press t to set the daily run time; press l to view the run log.",
+            ),
         }
         lines = [f"{policy.label} — {policy.description}"]
         if policy.missing_requires and policy.hard_requires:
@@ -1020,14 +1048,58 @@ class PoliciesScreen(AppScreen):
                 " enabling this Policy also wires that sourcing into your rc files"
                 " automatically, so it still works after your next new shell."
             )
+        # Both calls are already total/never-raising in installer/daemon.py itself
+        # (11-01's own mechanism-tier fix); this is a SECOND, independent guard
+        # directly around these two call sites, on the NORMAL render path (mount,
+        # row-highlight), not only the `l` toggle's own read — belt-and-suspenders
+        # against a future regression in that guarantee or an unanticipated
+        # malformed-input shape (11-REVIEWS.md cycle 2 finding #10).
+        if policy.log_path is not None:
+            try:
+                summary = daemon.last_run_summary(policy.log_path)
+            except (OSError, ValueError, UnicodeDecodeError):
+                summary = None
+            if summary is not None:
+                lines.append(summary)
+        if policy.set_schedule is not None and policy.read_schedule is not None:
+            try:
+                schedule = policy.read_schedule()
+            except (OSError, ValueError, UnicodeDecodeError):
+                schedule = None
+            if schedule is not None:
+                hour, minute = schedule
+                lines.append(f"scheduled daily at {hour:02d}:{minute:02d}")
         return "\n".join(lines)
 
     def _set_detail(self, policy: Policy | None) -> None:
-        self.detail_text = "" if policy is None else self._policy_detail(policy)
+        if policy is not None and self._log_view and policy.log_path is not None:
+            self.detail_text = self._log_tail(policy.log_path)
+        else:
+            self.detail_text = "" if policy is None else self._policy_detail(policy)
         self.query_one("#policy-detail", Static).update(Text(self.detail_text))
 
+    def _log_tail(self, log_path: Path, *, lines: int = _LOG_TAIL_LINES) -> str:
+        try:
+            text = log_path.read_text()
+        except FileNotFoundError:
+            return "log file does not exist yet"
+        except (OSError, UnicodeDecodeError) as exc:
+            return f"log could not be read: {exc}"
+        return "\n".join(text.splitlines()[-lines:])
+
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        # Navigating away from a log-view row and back must always start from
+        # the normal detail view, never a stale log left toggled on from
+        # whatever row was highlighted before.
+        self._log_view = False
         policy = next((item for item in self._policies if item.id == event.row_key.value), None)
+        self._set_detail(policy)
+
+    def action_toggle_log(self) -> None:
+        policy = self._highlighted_policy()
+        if policy is None or policy.log_path is None:
+            return
+        self._log_view = not self._log_view
         self._set_detail(policy)
 
     def action_toggle_policy(self) -> None:
