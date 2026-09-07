@@ -26,6 +26,7 @@ from installer.model import Method, Tool, load_categories, load_tools
 from installer.ownership import ManagerInventory, ManagerOwnership, Owner, OwnershipCandidate
 from installer.platform import Platform
 from installer.resolve import platform_could_support
+from installer.run import CommandError
 from installer.selection import select_tools
 from installer.uninstall import SweepResult
 from installer.update import UpdateService
@@ -41,6 +42,7 @@ def _unified_app(
     blurbs: Mapping[str, str],
     unavailable: Mapping[str, bool] | None = None,
     version_refresh: VersionRefreshService | None = None,
+    updates: UpdateService | None = None,
 ) -> UnifiedApp:
     # The catalog tests exercise only the catalog view; the doctor/guard/fix
     # data is required by the constructor but irrelevant here, so pass neutral
@@ -62,6 +64,7 @@ def _unified_app(
         policies=PolicyInputs(policies=[]),
         unavailable=unavailable,
         version_refresh=version_refresh,
+        updates=updates,
     )
 
 
@@ -1083,13 +1086,14 @@ def _ownership(
     unknown_reason: str | None = None,
     active_path: Path | None = None,
     candidates: tuple[OwnershipCandidate, ...] = (),
+    package: str | None = None,
 ) -> ManagerOwnership:
     if not candidates:
         candidates = (
             OwnershipCandidate(
                 owner=owner,
                 method=tool.methods[0] if tool.methods else None,
-                package=None,
+                package=package,
                 current_version=None,
                 evidence="test",
             ),
@@ -1098,7 +1102,7 @@ def _ownership(
         tool_id=tool.id,
         owner=owner,
         method=tool.methods[0] if tool.methods else None,
-        package=None,
+        package=package,
         current_version=None,
         confidence="none" if owner == "unknown" else "direct",
         shadowed=shadowed,
@@ -1424,3 +1428,266 @@ def test_action_update_tool_starts_worker_when_outdated_is_none(tmp_path: Path) 
     screen.status.set = lambda text, severity: None  # type: ignore[method-assign]
     screen.action_update_tool()
     assert started == ["pnpm"]
+
+
+# -- end-to-end `u`-press pipeline: keypress -> UpdateService.run() -> status
+# line, driven through a real Pilot with the worker's own message loop, so
+# `_update_tool_worker`/`on_tool_updated` run for real rather than being
+# stubbed out. Only the runner/manager-query seams are fake; nothing here
+# spawns a real subprocess. -----------------------------------------------
+
+
+async def _wait_until(pilot: Any, predicate: Callable[[], bool], tries: int = 400) -> None:
+    for _ in range(tries):
+        if predicate():
+            return
+        await pilot.pause()
+    raise AssertionError("condition never became true within the polling budget")
+
+
+def _outdated_status(tool_id: str, *, source: str = "brew") -> VersionStatus:
+    return VersionStatus(
+        tool_id=tool_id,
+        installed="1.0.0",
+        latest="1.0.1",
+        outdated=True,
+        stale=False,
+        source=source,
+    )
+
+
+async def _mount_and_settle(app: UnifiedApp, pilot: Any) -> None:
+    """Let the on_mount version-refresh worker finish before a test overrides
+    `_version_statuses`/`service._ownership` directly -- otherwise the real
+    refresh (which runs concurrently on mount) can clobber the test's fixture
+    state with its own resolution of a fake, unrecognised inventory."""
+    await _wait_until(pilot, lambda: not app.catalog.version_refreshing)
+
+
+async def test_update_success_renders_new_version_on_status_line(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    ownership = _ownership(tool, owner="brew", package="rg")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    updates = UpdateService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        runner=lambda _argv: None,
+        resolve_tag=lambda _repo: "v1",
+        tools={},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+    )
+    app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        service._ownership = {"rg": ownership}  # pyright: ignore[reportPrivateUsage]
+        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+            "rg": _outdated_status("rg")
+        }
+        await pilot.press("u")
+        await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
+        assert "updated rg" in app.catalog.status_text
+        assert "update failed" not in app.catalog.status_text
+
+
+async def test_update_success_reports_replay_cleanup_and_postinstall_warnings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import installer.update as update_module
+    from installer.download import ExecContext, UpdateExecResult
+    from installer.postinstall import POSTINSTALL_HOOKS
+
+    monkeypatch.setitem(
+        POSTINSTALL_HOOKS,
+        "fake-warn-hook",
+        lambda method, runner, tools: "postinstall shim needs manual review",
+    )
+
+    def fake_update_download(_method: Method, _ctx: ExecContext) -> UpdateExecResult:
+        return UpdateExecResult(verified=True, warnings=("removed a stale cache entry",))
+
+    monkeypatch.setattr(
+        update_module.download,
+        "update_download",
+        fake_update_download,
+    )
+
+    tool = Tool(
+        id="pnpm",
+        name="pnpm",
+        category="pkg-mgr",
+        cmd="pnpm",
+        methods=(Method(kind="github_release", params={"repo": "pnpm/pnpm"}),),
+        tier="system",
+        postinstall="fake-warn-hook",
+    )
+    ownership = ManagerOwnership(
+        tool_id="pnpm",
+        owner="installer",
+        method=tool.methods[0],
+        package=None,
+        current_version=None,
+        confidence="direct",
+        shadowed=False,
+        candidates=(),
+        active_candidate="installer",
+        active_path=None,
+        unknown_reason=None,
+    )
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v2",
+        probe_output=lambda argv: "2.0",
+    )
+    updates = UpdateService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        runner=lambda _argv: None,
+        resolve_tag=lambda _repo: "v2",
+        tools={"pnpm": tool},
+        managed_packages=lambda: ("typescript", "eslint"),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+    )
+    app = _unified_app([tool], {"pnpm": True}, _BLURBS, version_refresh=service, updates=updates)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        service._ownership = {"pnpm": ownership}  # pyright: ignore[reportPrivateUsage]
+        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+            "pnpm": _outdated_status("pnpm", source="installer")
+        }
+        await pilot.press("u")
+        await _wait_until(pilot, lambda: "updating pnpm" not in app.catalog.status_text)
+        status = app.catalog.status_text
+        assert "updated pnpm" in status
+        assert "replayed typescript, eslint" in status
+        assert "removed a stale cache entry" in status
+        assert "postinstall shim needs manual review" in status
+
+
+async def test_update_failure_renders_status_line(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    ownership = _ownership(tool, owner="brew", package="rg")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+
+    def failing_runner(argv: list[str]) -> None:
+        raise CommandError(argv, 1, detail="permission denied")
+
+    updates = UpdateService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        runner=failing_runner,
+        resolve_tag=lambda _repo: "v1",
+        tools={},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+    )
+    app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        service._ownership = {"rg": ownership}  # pyright: ignore[reportPrivateUsage]
+        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+            "rg": _outdated_status("rg")
+        }
+        await pilot.press("u")
+        await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
+        status = app.catalog.status_text
+        assert "updated rg" not in status
+        assert "permission denied" in status
+
+
+async def test_update_unknown_owner_refusal_from_fresh_reresolution(tmp_path: Path) -> None:
+    """The gate in `action_update_tool` reads the CACHED ownership (mutation
+    grade at highlight time); `UpdateService.run` always re-resolves fresh
+    ownership before mutating. A tool whose cached ownership was mutation
+    grade but whose fresh re-resolution comes back unknown (e.g. the manager
+    inventory changed between the two reads) must still be refused -- by
+    `on_tool_updated`'s outcome-formatting path, not the pre-flight gate."""
+    tool = _tool("rg")
+    cached_ownership = _ownership(tool, owner="brew")
+    fresh_unknown = _ownership(
+        tool, owner="unknown", unknown_reason="brew inventory changed mid-flight"
+    )
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    updates = UpdateService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        runner=lambda _argv: None,
+        resolve_tag=lambda _repo: "v1",
+        tools={},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: fresh_unknown,
+    )
+    app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        service._ownership = {"rg": cached_ownership}  # pyright: ignore[reportPrivateUsage]
+        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+            "rg": _outdated_status("rg")
+        }
+        await pilot.press("u")
+        await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
+        status = app.catalog.status_text
+        assert "updated rg" not in status
+        assert "brew inventory changed mid-flight" in status
+
+
+async def test_second_update_press_shows_already_in_flight(tmp_path: Path) -> None:
+    import threading
+
+    tool = _tool("rg")
+    ownership = _ownership(tool, owner="brew", package="rg")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    # A real mutation has non-zero duration; a no-op runner can let the whole
+    # update finish before the second key press is even dispatched, which
+    # would make the in-flight window flaky rather than exercised. Blocking
+    # the first update's runner on an Event -- released only after the second
+    # press has been observed -- makes the guard's window deterministic
+    # without a real subprocess or a sleep-based race.
+    release = threading.Event()
+
+    def blocking_runner(_argv: list[str]) -> None:
+        release.wait(timeout=5)
+
+    updates = UpdateService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        runner=blocking_runner,
+        resolve_tag=lambda _repo: "v1",
+        tools={},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+    )
+    app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        service._ownership = {"rg": ownership}  # pyright: ignore[reportPrivateUsage]
+        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+            "rg": _outdated_status("rg")
+        }
+        # `begin()` latches synchronously inside action_update_tool, before the
+        # worker thread is even spawned, so the second press deterministically
+        # observes the in-flight guard regardless of the first update's timing.
+        await pilot.press("u")
+        assert "updating rg" in app.catalog.status_text
+        await pilot.press("u")
+        assert "already in flight for rg" in app.catalog.status_text
+        # Let the blocked update finish so the worker's own thread and
+        # post_message do not leak past the end of the test.
+        release.set()
+        await _wait_until(pilot, lambda: "updated rg" in app.catalog.status_text)
