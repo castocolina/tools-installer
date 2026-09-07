@@ -338,11 +338,16 @@ This is presented as a finding, not a recommendation to skip: the planner/CONTEX
 - `installer/wizard_app.py`: a new `@work(thread=True, exclusive=True, group="tool-update")`-style worker + `post_message` pair, mirroring `_audit_globals_worker`/`_reinstall_globals_worker`.
 - New cache file at (recommended) `~/.local/state/tools-installer/versions.json`.
 
-## Open questions the planner should resolve explicitly (not resolved by this research)
+## Open questions the planner should resolve explicitly (RESOLVED — closed by the Phase 12 plans, 2026-09-07)
+
+These were open at research time. All three were resolved during planning; each resolution and its owning plan is recorded inline below.
 
 1. Exact cache file path/location (recommended above, not locked).
+   **Resolved:** `~/.local/state/tools-installer/versions.json`, via `installer/version_cache.py::default_cache_path()` — the recommendation above, locked. Owner: **12-01 Task 2** (`<behavior>`, `default_cache_path`), wired from `setup.py::_build_app`.
 2. Whether refresh fires on catalog-view entry (recommended, mirroring Doctor's own screen-entry audit) vs. a dedicated "check for updates" keybinding.
+   **Resolved:** on catalog-view entry, for stale entries only, bounded by a per-pass fetch budget and a failed-attempt backoff. No dedicated keybinding this phase. Owner: **12-01 Task 3**, which records the decision (and names this question) in `installer/version_status.py`'s module docstring.
 3. Whether the D-02 stretch task is attempted this phase at all, given the zero-real-proving-case finding in section 6.
+   **Resolved:** not attempted — REQ-manager-drift-alerting is deferred, exercising D-02's explicit "planner's call" clause. Section 6's zero-qualifying-rows finding, `brew outdated`'s installed-only scope, and `.claude/architecture.md` rule 5's no-orphan-helper rule are the three reasons. Owner: **12-04**, which records the deferral in `.planning/REQUIREMENTS.md`, `.planning/ROADMAP.md` SC#5, and `.planning/PROJECT.md`, and adds a guard test against a zero-caller drift helper.
 
 ---
 
