@@ -1612,6 +1612,107 @@ async def test_uninstall_summary_says_so_when_the_sweep_found_nothing() -> None:
         assert "no shell tweaks were still enabled" in app.screen.status.text
 
 
+async def test_uninstall_tweak_row_names_background_jobs_when_a_daemon_id_is_offered() -> None:
+    """Preview-row copy (11-REVIEWS.md cycle 2 finding #19's preview half): the
+    Tool-column label and detail both name the background job once a
+    daemon:-prefixed id is among what is offered."""
+    inputs = _uninstall_inputs(tweak_ids=("tweak:countdown", "daemon:prune-tmpdir"))
+    app = _app(uninstall=inputs, initial_view="uninstall")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        cells = screen.query_one(DataTable[Any]).get_row("#tweaks")
+        rendered = " ".join(str(cell) for cell in cells)
+        assert "shell tweaks + background jobs" in rendered
+        detail = next(entry.detail for entry in screen._entries if entry.key == "#tweaks")
+        assert "background maintenance" in detail.lower()
+        await pilot.pause()
+
+
+async def test_uninstall_tweak_row_stays_byte_identical_without_a_daemon_id() -> None:
+    """No daemon: id offered (Linux, or the daemon never enabled) -- the row's
+    label/detail must be unchanged from before this plan."""
+    inputs = _uninstall_inputs(tweak_ids=("tweak:countdown",))
+    app = _app(uninstall=inputs, initial_view="uninstall")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        cells = screen.query_one(DataTable[Any]).get_row("#tweaks")
+        rendered = " ".join(str(cell) for cell in cells)
+        assert "shell tweaks" in rendered
+        assert "background" not in rendered
+        detail = next(entry.detail for entry in screen._entries if entry.key == "#tweaks")
+        assert "background" not in detail.lower()
+        await pilot.pause()
+
+
+async def test_uninstall_applied_summary_names_the_background_job_alone() -> None:
+    """The sweep swept ONLY the daemon: no shell reload is relevant, so the
+    hint must not be appended (11-REVIEWS.md cycle 2 finding #19)."""
+    captured: list[UninstallDecision] = []
+    inputs = _uninstall_inputs(
+        tweak_ids=("daemon:prune-tmpdir",),
+        remove=_recorder(captured, SweepResult(swept=("daemon:prune-tmpdir",))),
+    )
+    app = _app(uninstall=inputs, initial_view="uninstall")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.press("a")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, UninstallScreen)
+        status = app.screen.status.text
+        assert "background maintenance job" in status
+        assert "open a new" not in status.lower()
+
+
+async def test_uninstall_applied_summary_names_both_when_swept_together() -> None:
+    """The sweep swept the daemon AND a real shell tweak together: the
+    background job is named AND the shell-reload hint is still appended,
+    since a real tweak's reload is still relevant."""
+    captured: list[UninstallDecision] = []
+    inputs = _uninstall_inputs(
+        tweak_ids=("tweak:countdown", "daemon:prune-tmpdir"),
+        remove=_recorder(captured, SweepResult(swept=("tweak:countdown", "daemon:prune-tmpdir"))),
+    )
+    app = _app(uninstall=inputs, initial_view="uninstall")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.press("a")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, UninstallScreen)
+        status = app.screen.status.text
+        assert "background maintenance job" in status
+        assert "open a new" in status.lower()
+
+
+async def test_uninstall_applied_summary_stays_byte_identical_without_a_daemon_id() -> None:
+    """No daemon: id in the sweep's own result -- the summary line must be
+    unchanged from before this plan."""
+    captured: list[UninstallDecision] = []
+    inputs = _uninstall_inputs(
+        tweak_ids=("tweak:countdown",),
+        remove=_recorder(captured, SweepResult(swept=("tweak:countdown",))),
+    )
+    app = _app(uninstall=inputs, initial_view="uninstall")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.press("a")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, UninstallScreen)
+        status = app.screen.status.text
+        assert "shell tweaks disabled (tweak:countdown) — open a new shell so functions" in status
+        assert "background" not in status.lower()
+
+
 async def test_uninstall_tweaks_row_follows_a_live_policies_toggle() -> None:
     """The Policies view and the Uninstall view are one process, one nav path.
     A tweak enabled in Policies must be reachable in Uninstall in the same
@@ -2425,7 +2526,7 @@ def _daemon_app(
 async def _settle_daemon(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> None:
     """Wait for the on-by-default worker's completion message to be handled."""
     for _ in range(400):
-        if not app._daemon_default_in_flight:
+        if not app.daemon_default_in_flight:
             break
         await pilot.pause()
     await pilot.pause()
@@ -2446,7 +2547,7 @@ async def test_on_by_default_auto_applies_on_a_fresh_undecided_machine(tmp_path:
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         assert screen.active_state["daemon:prune-tmpdir"] is True
-        assert app._daemon_default_in_flight is False
+        assert app.daemon_default_in_flight is False
 
 
 async def test_on_by_default_does_not_reenable_an_explicitly_disabled_daemon(
@@ -2483,7 +2584,7 @@ async def test_on_by_default_never_records_a_decision_on_a_failed_apply(tmp_path
         assert isinstance(screen, PoliciesScreen)
         assert screen.active_state["daemon:prune-tmpdir"] is False
         assert daemon.decided(state_path) is False
-        assert app._daemon_default_in_flight is False
+        assert app.daemon_default_in_flight is False
 
 
 async def test_manual_toggle_of_the_daemon_is_refused_while_the_worker_is_in_flight(
@@ -2498,7 +2599,7 @@ async def test_manual_toggle_of_the_daemon_is_refused_while_the_worker_is_in_fli
         daemon_default=lambda: ensure_daemon_default(policy, state_path=state_path),
     )
     async with app.run_test(size=(100, 30)) as pilot:
-        assert app._daemon_default_in_flight is True
+        assert app.daemon_default_in_flight is True
         await pilot.press("space")
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
@@ -2544,13 +2645,13 @@ async def test_daemon_default_in_flight_clears_even_on_an_unexpected_exception(
     app = _daemon_app(tmp_path, policy=policy, daemon_default=boom)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_daemon(app, pilot)
-        assert app._daemon_default_in_flight is False
+        assert app.daemon_default_in_flight is False
 
 
 async def test_uninstall_removal_is_refused_while_the_daemon_worker_is_in_flight(
     tmp_path: Path,
 ) -> None:
-    """The race guard blocks on _daemon_default_in_flight alone -- never on
+    """The race guard blocks on daemon_default_in_flight alone -- never on
     whether a daemon: id happens to already be visible in _tweak_ids, which it
     is not yet during first-run auto-apply (11-REVIEWS.md cycle 3 finding
     #12)."""
@@ -2574,11 +2675,17 @@ async def test_uninstall_removal_is_refused_while_the_daemon_worker_is_in_flight
         tweak_ids=("tweak:countdown",),  # an unrelated, real tweak -- no daemon id present yet
     )
     async with app.run_test(size=(100, 30)) as pilot:
-        assert app._daemon_default_in_flight is True
+        assert app.daemon_default_in_flight is True
         await pilot.press("5")
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
-        assert not any(tid.startswith("daemon:") for tid in screen._tweak_ids)
+        # pyright: ignore[reportPrivateUsage] -- _tweak_ids is internal UninstallScreen
+        # state with no public equivalent; this test proves the pre-worker snapshot
+        # genuinely lacks a daemon: id (11-REVIEWS.md cycle 3 finding #12).
+        assert not any(
+            tid.startswith("daemon:")
+            for tid in screen._tweak_ids  # pyright: ignore[reportPrivateUsage]
+        )
         await pilot.press("a")
         await pilot.press("enter")
         await pilot.press("enter")
