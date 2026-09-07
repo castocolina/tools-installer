@@ -1,5 +1,6 @@
 import os
 import plistlib
+import shutil
 import subprocess
 import uuid
 from pathlib import Path
@@ -62,8 +63,9 @@ def test_render_plist_exact_keys_and_values() -> None:
     plist_dict = daemon.render_plist(**_valid_kwargs())  # type: ignore[arg-type]
     assert plist_dict["Label"] == daemon.LABEL
     assert plist_dict["StartCalendarInterval"] == {"Hour": 3, "Minute": 30}
-    assert plist_dict["StandardOutPath"] == "/Users/tester/Library/Logs/tools-installer/prune-daemon.log"
-    assert plist_dict["StandardErrorPath"] == "/Users/tester/Library/Logs/tools-installer/prune-daemon.log"
+    log_path = "/Users/tester/Library/Logs/tools-installer/prune-daemon.log"
+    assert plist_dict["StandardOutPath"] == log_path
+    assert plist_dict["StandardErrorPath"] == log_path
     assert plist_dict["RunAtLoad"] is False
     assert plist_dict["EnvironmentVariables"] == {
         "PATH": "/usr/bin:/bin",
@@ -216,7 +218,10 @@ def test_bootout_swallows_the_already_unloaded_exit_code() -> None:
 
     def fake_run(cmd: list[str]) -> None:
         calls.append(cmd)
-        raise CommandError(cmd, daemon._ALREADY_UNLOADED_EXIT_CODE)
+        # 3 is daemon._ALREADY_UNLOADED_EXIT_CODE (Darwin's ESRCH, "No such
+        # process") -- live-verified this session against a real nonexistent
+        # label. Hardcoded rather than importing the private constant.
+        raise CommandError(cmd, 3)
 
     daemon.bootout(501, label="com.tools-installer.test", run=fake_run)
     assert calls == [["launchctl", "bootout", "gui/501/com.tools-installer.test"]]
@@ -251,7 +256,7 @@ def test_ensure_log_path_is_a_noop_against_an_already_populated_log(tmp_path: Pa
 
 
 @pytest.mark.skipif(
-    __import__("shutil").which("launchctl") is None
+    shutil.which("launchctl") is None
     or os.environ.get("TOOLS_INSTALLER_RUN_LAUNCHCTL_TESTS") != "1",
     reason="requires launchctl (macOS) and explicit opt-in via "
     "TOOLS_INSTALLER_RUN_LAUNCHCTL_TESTS=1",
@@ -269,7 +274,13 @@ def test_bootstrap_bootout_real_launchctl_round_trip(tmp_path: Path) -> None:
         "ProgramArguments": ["/bin/echo", "hello"],
         "RunAtLoad": False,
     }
-    daemon._atomic_write(plist_path, plistlib.dumps(plist_dict), mode=0o644)
+    # Deliberate private-member access (11-REVIEWS.md cycle 3 finding #1): this
+    # is the SAME crash-safe persistence path write_plist calls internally, so
+    # this test still exercises the module's real atomic-write mechanics
+    # without going through render_plist's content-shaping/validation.
+    daemon._atomic_write(  # pyright: ignore[reportPrivateUsage]
+        plist_path, plistlib.dumps(plist_dict), mode=0o644
+    )
     try:
         daemon.bootstrap(uid, plist_path, label=test_label)
         printed = subprocess.run(
