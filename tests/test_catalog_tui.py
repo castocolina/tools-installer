@@ -1,5 +1,6 @@
 import html
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from installer.platform import Platform
 from installer.resolve import platform_could_support
 from installer.selection import select_tools
 from installer.uninstall import SweepResult
+from installer.version_cache import VersionCacheEntry, save_version_cache
 from installer.version_status import VersionRefreshService, VersionStatus
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 from tests.test_registry import REGISTRY
@@ -34,6 +36,7 @@ def _unified_app(
     installed: Mapping[str, bool],
     blurbs: Mapping[str, str],
     unavailable: Mapping[str, bool] | None = None,
+    version_refresh: VersionRefreshService | None = None,
 ) -> UnifiedApp:
     # The catalog tests exercise only the catalog view; the doctor/guard/fix
     # data is required by the constructor but irrelevant here, so pass neutral
@@ -54,6 +57,7 @@ def _unified_app(
         ),
         policies=PolicyInputs(policies=[]),
         unavailable=unavailable,
+        version_refresh=version_refresh,
     )
 
 
@@ -911,3 +915,118 @@ def test_epoch_guard_drops_a_superseded_version_refresh(tmp_path: Path) -> None:
         VersionStatusRefreshed({"rg": _status(stale=False)}, generation=1, epoch=0)
     )
     assert screen._version_statuses == {}  # pyright: ignore[reportPrivateUsage]
+
+
+def _gh_tool(tool_id: str, *, desc: str = "") -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="search",
+        cmd=tool_id,
+        methods=(Method(kind="github_release", params={"repo": f"owner/{tool_id}"}),),
+        priority="P1",
+        audience="both",
+        desc=desc,
+        tier="system",
+    )
+
+
+async def test_unparseable_probe_output_renders_unknown(tmp_path: Path) -> None:
+    tool = _gh_tool("dasel")
+    service = VersionRefreshService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v2.8.0",
+        probe_output=lambda argv: "Usage: dasel <command>",
+    )
+    app = _unified_app([tool], {"dasel": True}, _BLURBS, version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        for _ in range(400):
+            if "dasel" in app.catalog._version_statuses:  # pyright: ignore[reportPrivateUsage]
+                break
+            await pilot.pause()
+        cell = app.catalog.query_one(DataTable[Any]).get_cell("dasel", "ver")
+        assert cell.plain == "unknown"
+
+
+async def test_stale_and_fresh_rows_differ_only_by_trailing_marker() -> None:
+    stale_status = VersionStatus(
+        tool_id="rg",
+        installed="15.2.0",
+        latest="15.2.0",
+        outdated=False,
+        stale=True,
+        source="github",
+    )
+    fresh_status = VersionStatus(
+        tool_id="fd",
+        installed="15.2.0",
+        latest="15.2.0",
+        outdated=False,
+        stale=False,
+        source="github",
+    )
+    unknown_status = VersionStatus(
+        tool_id="dasel",
+        installed=None,
+        latest=None,
+        outdated=None,
+        stale=True,
+        source="github",
+    )
+    rg = _gh_tool("rg")
+    fd = _gh_tool("fd")
+    dasel = _gh_tool("dasel")
+    screen = _screen([rg, fd, dasel], {"rg": True, "fd": True, "dasel": True})
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "rg": stale_status,
+        "fd": fresh_status,
+        "dasel": unknown_status,
+    }
+    stale_cell = screen._ver_cell(rg).plain  # pyright: ignore[reportPrivateUsage]
+    fresh_cell = screen._ver_cell(fd).plain  # pyright: ignore[reportPrivateUsage]
+    unknown_cell = screen._ver_cell(dasel).plain  # pyright: ignore[reportPrivateUsage]
+    assert stale_cell == fresh_cell + " ~"
+    assert not fresh_cell.endswith(" ~")
+    assert unknown_cell == "unknown"
+    assert " ~" not in unknown_cell
+
+
+async def test_budget_deferred_row_renders_stale_marker(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    path = tmp_path / "versions.json"
+    save_version_cache(
+        path,
+        {
+            "fresh": VersionCacheEntry(
+                latest_version="1.0.0",
+                checked_at=now.isoformat(),
+                failed_at=None,
+            ),
+            "stale": VersionCacheEntry(
+                latest_version="1.0.0",
+                checked_at=(now - timedelta(days=8)).isoformat(),
+                failed_at=(now - timedelta(hours=1)).isoformat(),
+            ),
+        },
+    )
+    service = VersionRefreshService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        cache_path=path,
+        resolve_tag=lambda repo: "1.0.0",
+        probe_output=lambda argv: "1.0.0",
+        now=lambda: now,
+    )
+    tools = [_gh_tool("fresh"), _gh_tool("stale")]
+    app = _unified_app(tools, {"fresh": True, "stale": True}, _BLURBS, version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        for _ in range(400):
+            statuses = app.catalog._version_statuses  # pyright: ignore[reportPrivateUsage]
+            if "fresh" in statuses and "stale" in statuses:
+                break
+            await pilot.pause()
+        table = app.catalog.query_one(DataTable[Any])
+        fresh = table.get_cell("fresh", "ver").plain
+        stale = table.get_cell("stale", "ver").plain
+        assert stale.endswith(" ~")
+        assert not fresh.endswith(" ~")

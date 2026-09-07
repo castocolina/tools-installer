@@ -1,5 +1,27 @@
 """Resolve installed-vs-latest status for github_release tools.
 
+Refresh fires automatically on catalog view entry for entries that are stale,
+mirroring DoctorScreen._start_globals_audit's own screen-entry audit. That is
+the answer to 12-RESEARCH.md open question 2: the user does not press a key
+to start a version check.
+
+github_repo() selects a latest-version SOURCE and is not an ownership claim.
+Ownership is installer/ownership.py's job from Plan 12-02 onward, and
+resolve_methods() ordering must never be read as "this is what installed the
+tool".
+
+PROVISIONAL (wave-1 Ver source): until Plan 12-02 Task 3 lands, github_repo()
+is also the only source this module has, so a tool that declares
+github_release while actually being installed by another manager is compared
+against GitHub in this wave — a known, time-boxed over-attribution that
+ownership routing replaces. Plan 12-02 Task 3 deletes this paragraph when it
+wires ownership; the other two decisions stay.
+
+A first-run empty cache across ~40 github_release tools would otherwise burn
+most of the unauthenticated 60-requests-per-hour GitHub budget in a single
+view entry, so MAX_FETCHES_PER_REFRESH caps resolve_tag calls per pass.
+Budget-deferred rows keep their last known comparison with stale=True.
+
 Refresh is blocking and belongs on a Textual thread worker, never the event
 loop. The merge guarantee is scoped to ONE process holding ONE
 VersionRefreshService instance, which is the production topology (setup.py
@@ -40,6 +62,8 @@ from installer.versions import (
     resolve_github_tag,
 )
 
+MAX_FETCHES_PER_REFRESH = 20
+
 
 @dataclass(frozen=True)
 class VersionStatus:
@@ -74,12 +98,15 @@ def resolve_github_release_status(
     now: datetime,
     probe_output: Callable[[list[str]], str | None],
     resolve_tag: TagResolver,
+    allow_fetch: bool = True,
 ) -> tuple[VersionStatus, VersionCacheEntry | None]:
     """Probe the installed tool, optionally fetch the latest tag, build status.
 
     `stale` is False only after a successful `resolve_tag` in THIS pass; every
     other path uses `is_stale(entry, now=now)` so a failed fetch that preserved
     an older `latest`, and a fetch skipped by backoff, both surface as stale.
+    `allow_fetch=False` skips the network even when `should_fetch` is True
+    (the per-pass GitHub budget) and forces stale=True.
     """
     output = probe_output([tool.cmd, "--version"])
     installed = extract_observed_version(output) if output else None
@@ -87,7 +114,7 @@ def resolve_github_release_status(
     fetched = False
     latest: str | None
     new_entry: VersionCacheEntry | None
-    if should_fetch(entry, now=now):
+    if allow_fetch and should_fetch(entry, now=now):
         try:
             latest = resolve_tag(repo)
             new_entry = VersionCacheEntry(latest_version=latest, checked_at=now_iso, failed_at=None)
@@ -102,7 +129,10 @@ def resolve_github_release_status(
     else:
         latest = entry.latest_version if entry is not None else None
         new_entry = None
-    stale = False if fetched else is_stale(entry, now=now)
+    if not allow_fetch and should_fetch(entry, now=now):
+        stale = True
+    else:
+        stale = False if fetched else is_stale(entry, now=now)
     outdated = (
         is_outdated(installed, latest) if installed is not None and latest is not None else None
     )
@@ -166,22 +196,29 @@ class VersionRefreshService:
         cache = load_version_cache(self._cache_path)
         produced: dict[str, VersionCacheEntry] = {}
         statuses: dict[str, VersionStatus] = {}
+        fetches = 0
         for tool in tools:
             found = github_repo(tool, self._platform)
             if found is None:
                 continue
             _method, repo = found
-            status, entry = resolve_github_release_status(
+            entry = cache.get(tool.id)
+            allow_fetch = fetches < MAX_FETCHES_PER_REFRESH
+            would_fetch = allow_fetch and should_fetch(entry, now=now)
+            status, new_entry = resolve_github_release_status(
                 tool,
                 repo=repo,
-                entry=cache.get(tool.id),
+                entry=entry,
                 now=now,
                 probe_output=self._probe_output,
                 resolve_tag=self._resolve_tag,
+                allow_fetch=allow_fetch,
             )
             statuses[tool.id] = status
-            if entry is not None:
-                produced[tool.id] = entry
+            if would_fetch:
+                fetches += 1
+            if new_entry is not None:
+                produced[tool.id] = new_entry
         with self._lock:
             merged = load_version_cache(self._cache_path)
             merged.update(produced)

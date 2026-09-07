@@ -245,8 +245,7 @@ class CatalogScreen(AppScreen):
         try:
             if service is not None:
                 epoch = service.epoch
-                scope = [tool for tool in self.tools if tool.id == "codegraph"]
-                result, _error = run_live(lambda: service.refresh(scope))
+                result, _error = run_live(lambda: service.refresh(self.tools))
                 if result is not None:
                     statuses = result
         finally:
