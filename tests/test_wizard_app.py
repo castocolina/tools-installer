@@ -9,8 +9,10 @@ from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
 from installer import daemon
 from installer.app import UninstallDecision
+from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
 from installer.model import Method, Tool
+from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport, reinstall_preview
 from installer.policy import (
     Policy,
@@ -24,6 +26,7 @@ from installer.run import CommandError
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, ToolRow
 from installer.version_status import VersionRefreshService
+from installer.versions import VersionError
 from installer.wizard_app import (
     VIEW_ORDER,
     ConfirmUninstall,
@@ -2824,31 +2827,29 @@ def _codegraph() -> Tool:
     )
 
 
-async def _settle_versions(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> None:
-    for _ in range(400):
-        if app.catalog._version_statuses:  # pyright: ignore[reportPrivateUsage]
-            break
-        await pilot.pause()
-    await pilot.pause()
-
-
-async def test_codegraph_ver_cell_contains_installed_and_latest_after_refresh(
-    tmp_path: Path,
-) -> None:
-    from installer.platform import Platform
-
-    service = VersionRefreshService(
-        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
-        cache_path=tmp_path / "versions.json",
-        resolve_tag=lambda repo: "v1.6.0",
-        probe_output=lambda argv: "1.2.0",
+def _gh_tool(tool_id: str, *, tier: str) -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="search" if tier != "ai" else "ai",
+        cmd=tool_id,
+        methods=(Method(kind="github_release", params={"repo": f"owner/{tool_id}"}),),
+        priority="P1",
+        audience="both",
+        tier=tier,
+        desc=tool_id,
     )
-    tools = [_codegraph()]
-    installed: Mapping[str, bool] = {"codegraph": True}
-    app = UnifiedApp(
+
+
+def _version_app(
+    tools: list[Tool],
+    installed: Mapping[str, bool],
+    service: VersionRefreshService,
+) -> UnifiedApp:
+    return UnifiedApp(
         tools,
         installed,
-        {"ai": "agents"},
+        {"search": "find things", "ai": "agents"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: ({}, None),
         fix_preview="",
@@ -2857,8 +2858,170 @@ async def test_codegraph_ver_cell_contains_installed_and_latest_after_refresh(
         policies=_policy_inputs(),
         version_refresh=service,
     )
+
+
+def _macos_service(
+    tmp_path: Path,
+    *,
+    resolve_tag: Callable[[str], str],
+    probe_output: Callable[[list[str]], str | None] = lambda argv: "1.2.0",
+) -> VersionRefreshService:
+    return VersionRefreshService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=resolve_tag,
+        probe_output=probe_output,
+    )
+
+
+async def _settle_versions(
+    app: UnifiedApp,
+    pilot: Pilot[list[str] | None],
+    screen: CatalogScreen | None = None,
+) -> None:
+    """Wait for a catalog version-refresh worker to post its completion message."""
+    target = app.catalog if screen is None else screen
+    for _ in range(400):
+        if not target.version_refreshing:
+            break
+        await pilot.pause()
+    await pilot.pause()
+
+
+async def test_codegraph_ver_cell_contains_installed_and_latest_after_refresh(
+    tmp_path: Path,
+) -> None:
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.6.0")
+    app = _version_app([_codegraph()], {"codegraph": True}, service)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         cell = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver")
         assert "1.2.0" in cell.plain
         assert "v1.6.0" in cell.plain
+
+
+async def test_version_refresh_runs_off_the_event_loop(tmp_path: Path) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_resolve(repo: str) -> str:
+        del repo
+        started.set()
+        assert release.wait(timeout=5)
+        return "v1.6.0"
+
+    service = _macos_service(tmp_path, resolve_tag=slow_resolve)
+    app = _version_app([_codegraph()], {"codegraph": True}, service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        assert started.wait(timeout=5)
+        screen = app.catalog
+        assert screen.version_refreshing is True
+        table = screen.query_one(DataTable[Any])
+        assert table.row_count >= 1
+        assert "codegraph" in {str(key.value) for key in table.rows}
+        assert screen.selected == set()
+        await pilot.press("space")
+        assert screen.selected == {"codegraph"}
+        release.set()
+        await _settle_versions(app, pilot)
+        cell = table.get_cell("codegraph", "ver")
+        assert "1.2.0" in cell.plain
+        assert "v1.6.0" in cell.plain
+        assert screen.version_refreshing is False
+
+
+async def test_version_unknown_on_network_failure(tmp_path: Path) -> None:
+    def boom(repo: str) -> str:
+        del repo
+        raise VersionError("github unavailable")
+
+    service = _macos_service(tmp_path, resolve_tag=boom)
+    app = _version_app([_codegraph()], {"codegraph": True}, service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        assert app.is_running
+        cell = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver")
+        assert cell.plain == "unknown"
+        await pilot.press("space")
+        assert app.is_running
+        assert app.catalog.selected == {"codegraph"}
+
+
+async def test_version_worker_crash_clears_refreshing_and_renders_a_cell(
+    tmp_path: Path,
+) -> None:
+    def boom(repo: str) -> str:
+        del repo
+        raise RuntimeError("unexpected domain failure")
+
+    service = _macos_service(tmp_path, resolve_tag=boom)
+    app = _version_app([_codegraph()], {"codegraph": True}, service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        assert app.is_running
+        assert app.catalog.version_refreshing is False
+        cell = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver")
+        assert cell.plain == "unknown"
+        assert cell.plain != ""
+
+
+async def test_version_navigation_discards_a_superseded_generation(tmp_path: Path) -> None:
+    lock = threading.Lock()
+    user_calls = 0
+    first_started = threading.Event()
+    second_started = threading.Event()
+    first_release = threading.Event()
+    second_release = threading.Event()
+    others_release = threading.Event()
+
+    def resolve_tag(repo: str) -> str:
+        nonlocal user_calls
+        if repo.endswith("user-tool"):
+            with lock:
+                user_calls += 1
+                n = user_calls
+            if n == 1:
+                first_started.set()
+                assert first_release.wait(timeout=5)
+                return "v1.0.0"
+            second_started.set()
+            assert second_release.wait(timeout=5)
+            return "v2.0.0"
+        assert others_release.wait(timeout=5)
+        return "v9.0.0"
+
+    tools = [
+        _gh_tool("sys-tool", tier="system"),
+        _gh_tool("user-tool", tier="user"),
+        _gh_tool("ai-tool", tier="ai"),
+    ]
+    installed = {tool.id: True for tool in tools}
+    service = _macos_service(tmp_path, resolve_tag=resolve_tag)
+    app = _version_app(tools, installed, service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.press("2")
+        assert app.current_view == "user"
+        assert first_started.wait(timeout=5)
+        user = app.catalog_for("user")
+        superseded = user._version_refresh_generation  # pyright: ignore[reportPrivateUsage]
+        await pilot.press("3")
+        assert app.current_view == "ai"
+        await pilot.press("2")
+        assert app.current_view == "user"
+        assert second_started.wait(timeout=5)
+        current = user._version_refresh_generation  # pyright: ignore[reportPrivateUsage]
+        assert current == superseded + 1
+        second_release.set()
+        await _settle_versions(app, pilot, user)
+        cell = user.query_one(DataTable[Any]).get_cell("user-tool", "ver")
+        assert "v2.0.0" in cell.plain
+        assert "v1.0.0" not in cell.plain
+        first_release.set()
+        await _settle_versions(app, pilot, user)
+        cell = user.query_one(DataTable[Any]).get_cell("user-tool", "ver")
+        assert "v2.0.0" in cell.plain
+        assert "v1.0.0" not in cell.plain
+        assert user._version_refresh_generation == current  # pyright: ignore[reportPrivateUsage]
+        others_release.set()
+        await _settle_versions(app, pilot)
+        await _settle_versions(app, pilot, app.catalog_for("ai"))

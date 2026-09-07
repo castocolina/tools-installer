@@ -201,6 +201,7 @@ class CatalogScreen(AppScreen):
         self._version_refresh = version_refresh
         self._version_statuses: dict[str, VersionStatus] = {}
         self._version_refresh_generation = 0
+        self.version_refreshing = False
         self._browser: ToolBrowser[Tool] = ToolBrowser(self._adapter(), selected=staged)
         self.recommends_line = StatusLine()
         self._pending_recommends: tuple[str, ...] = ()
@@ -235,6 +236,7 @@ class CatalogScreen(AppScreen):
         if self._version_refresh is None:
             return
         self._version_refresh_generation += 1
+        self.version_refreshing = True
         self._refresh_versions_worker(self._version_refresh_generation)
 
     @work(thread=True, exclusive=True, group="version-refresh", exit_on_error=False)
@@ -254,6 +256,7 @@ class CatalogScreen(AppScreen):
     def on_version_status_refreshed(self, message: "VersionStatusRefreshed") -> None:
         if message.generation != self._version_refresh_generation:
             return
+        self.version_refreshing = False
         service = self._version_refresh
         if service is None or message.epoch != service.epoch:
             return
