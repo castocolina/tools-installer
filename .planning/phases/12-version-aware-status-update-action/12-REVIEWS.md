@@ -741,3 +741,140 @@ The update rollback and cache-invalidation races add material secondary risk.
 **Verdict: revision required before execution.** Since the project will not dispatch Cycle 4, these should be handled as pre-execution edits or explicit in-execution deviations. At minimum, fix the four HIGH items before enabling the `u` action; the MEDIUM items should be fixed in the same pass because several are direct contradictions that will otherwise fail tests or invalidate the documented guarantees.
 
 
+
+
+## Cap-Reached Disposition (Cycle 3, final direct fix pass)
+
+This is cycle 3 of 3 — the hard cap per `.planning/ONESHOT-RULES.md` Rule 10. Cycle 3's own
+verdict was **"Overall risk: HIGH... revision required before execution... Since the project
+will not dispatch Cycle 4, these should be handled as pre-execution edits or explicit
+in-execution deviations."** Per that cap, no cycle 4 review was dispatched. A full direct fix
+pass edited `12-01-PLAN.md` through `12-04-PLAN.md` in place to address every real, fixable
+finding cycle 3 raised, before this phase proceeds to execution. `cross_ai: true` was verified
+present in all four plans' frontmatter both before and after this pass (`12-01-PLAN.md:25`,
+`12-02-PLAN.md:27`, `12-03-PLAN.md:24`, `12-04-PLAN.md:15`).
+
+### HIGH findings — all four fixed
+
+1. **By-elimination ownership branch ignored a contradictory active PATH.** `12-02-PLAN.md`'s
+   `resolve_ownership` decision procedure (Task 1) is reordered: a resolved `active_path` that is
+   NOT attributable to the lone remaining candidate (e.g. an active `/usr/bin/rg` beside a stray
+   installer artifact) now forces `owner="unknown"` in its own branch, evaluated and required to
+   win BEFORE the by-elimination branch is ever reached. By-elimination is now reachable only when
+   `active_path is None` — no live binary to contradict it — never as a fallback that can outrank
+   contradictory live-PATH evidence. The plan's own required regression test ("Unattributable
+   active binary", already present in the test list) now matches the corrected algorithm; the
+   `<fails_when>` and acceptance-criteria blocks were extended with an explicit assertion that no
+   code path returns `confidence="by-elimination"` while `active_path` is not `None`.
+2. **Inventory parsers could manufacture "complete negative evidence" from malformed data.**
+   `parse_brew_list_versions` and `parse_uv_tool_list` (`installer/ownership.py`, new in Plan
+   12-02) now return `dict[str, str] | None`, matching `parse_uv_tool_outdated`'s existing
+   fail-closed shape: any unrecognized line makes the WHOLE result `None`, not a partial map with
+   the bad line dropped. `installer/pnpm_globals.py::_iter_dependencies`/`parse_global_packages`
+   (reused, not reinvented) is changed to return `None` on a non-dict project or dependency-group
+   entry instead of silently `continue`-ing past it, closing the same gap in the reused pnpm
+   inventory reader. The two OUTDATED parsers (`parse_brew_outdated_json`,
+   `parse_pnpm_outdated_json`, Plan 12-02 Task 2 — the cycle-3 MEDIUM half of this same finding)
+   were fixed the same way: an entry missing a required field, or brew's `formulae`/`casks` key
+   missing entirely, now yields `None` for the whole report rather than a map with that entry
+   silently skipped. New fail-closed test cases and `<fails_when>`/acceptance-criteria language
+   were added for all four parsers plus `installer/pnpm_globals.py`, and `installer/pnpm_globals.py`
+   plus `tests/test_pnpm_globals.py` were added to Plan 12-02's `files_modified`.
+3. **A stale cached inventory (up to 6h old) was the sole mutation authorization.** Plan 12-03's
+   `UpdateService.run()` now performs a FRESH, single-tool, uncached ownership re-resolution
+   (`reresolve_ownership`, a new DI seam calling `ownership.read_inventory`+`resolve_ownership` for
+   one tool with no cache read) as step 0, before the pnpm pre-capture and before `perform_update`.
+   The cached `VersionRefreshService.ownership_of()` result is now used ONLY for the UI's cheap
+   initial gate and for rendering — never to authorize the mutation itself. A refusal at the fresh
+   check produces the same `status="unknown-owner"` outcome shape the cached-ownership gate already
+   produces, so the two refusal paths render identically. `setup.py::_build_app`'s wiring
+   instructions, the test list, `<fails_when>`, and acceptance criteria were all extended with the
+   fresh-vs-cached-disagreement regression test this fix requires.
+4. **Script/app/tarball-owned tools (including script-installed pnpm) could never reach the update
+   action.** Plan 12-03's `action_update_tool` gate is changed from "`outdated is not True` hides
+   the action" to "`outdated is False` (CONFIRMED not outdated) hides the action" — `outdated=None`
+   (staleness genuinely undeterminable, the status every installer-owned script/tarball/app tool
+   carries per Plan 12-02) now falls through to the existing ownership/confidence check instead of
+   being blocked outright. A mutation-grade-owned tool with unknown latest version is therefore
+   reachable, with an honest "latest version cannot be determined" detail-line label (added to
+   Plan 12-02's `_detail_text` behavior) rather than a false "up to date." The alternative — wiring
+   a real version-comparison source for script/tarball/app kinds — was considered and rejected in
+   the plan text itself: no general queryable version index exists for an arbitrary vendor install
+   script, so a partial GitHub-tag-based comparison would help only a subset of cases while adding
+   a second, narrower version-resolution path to maintain. "Reachable with an honest unknown label"
+   was judged the better fit for this phase's existing design; the reasoning is recorded inline in
+   `12-03-PLAN.md`'s `<behavior>` section per the reviewer's own instruction to document such
+   choices. A script-installed-pnpm-shaped regression test was added to the test list,
+   `<fails_when>`, and acceptance criteria.
+
+### MEDIUM findings — all fixed in the same pass
+
+5. **`invalidate()` cache-write race.** `VersionRefreshService.refresh()` (Plan 12-02) now
+   captures `started_epoch` before its slow, unlocked manager subprocess calls, and re-checks the
+   CURRENT epoch under the same lock immediately before persisting the manager snapshot, discarding
+   its own write on a mismatch. This closes the gap the pre-cycle-3 text left open: merely "taking
+   the same lock" serializes the write but does not prevent a stale write from happening at all. A
+   dedicated race test (a `read_inventory`/`read_outdated` fake that calls `invalidate` as a side
+   effect mid-refresh) and matching `<fails_when>`/acceptance-criteria language were added.
+6. **Rollback overpromised.** Plan 12-03's update-safe executors (Task 2) now: (a) capture the
+   original bin-dir/CLI symlink target with `os.readlink` at a new STEP -1, BEFORE any aside-move
+   or swap, and every restoration path uses that captured value via `os.symlink`-into-temp plus
+   `os.replace` — an independent primitive, never a retry of the identical `ln -sf`/shell operation
+   that just failed; (b) app bundle replacement is specified as `os.replace` exclusively, removing
+   the `mv` language that contradicted this same plan's `<must_haves>` claim of atomic `os.replace`;
+   (c) `installer.download.UpdateExecResult`/`installer.apps.UpdateExecResult` (new typed
+   dataclasses carrying `warnings: tuple[str, ...]`) replace the bare `bool`/`None` returns, giving
+   a cleanup-step failure an actual channel to reach the user — threaded through to a new
+   `UpdateOutcome.cleanup_warnings` field and surfaced in `CatalogScreen.on_tool_updated`'s status
+   line. New tests, `<fails_when>` clauses, and acceptance criteria cover all three sub-fixes.
+7. **Post-update status construction was underspecified for manager-owned tools and casks.** Plan
+   12-03's `_update_tool_worker` now explicitly calls `version_refresh.refresh([target.tool])[tool_id]`
+   — the same ownership-aware resolution path every other row's status comes from — instead of a
+   generic local `--version` re-probe that cannot produce a manager's authoritative report or
+   handle a cask with nothing on PATH to probe. A cask-fixture regression test (no probe-able
+   command, still renders a real post-update version) was added along with matching acceptance
+   criteria.
+8. **Private `_manager_name` cross-module reuse violated strict pyright.** `installer/uninstall.py`'s
+   `_manager_name` is renamed to public `manager_name` (signature unchanged); `installer/ownership.py`
+   imports and calls the public name. `installer/uninstall.py` and `tests/test_uninstall.py` were
+   added to Plan 12-02's `files_modified`, a direct test locking in the public export was added, and
+   the acceptance criteria now require zero `reportPrivateUsage` suppressions anywhere in the diff.
+9. **Two tests contradicted the design as specified.** The manager query-count test in Plan 12-02
+   now asserts exactly FOUR `query()` calls plus one SEPARATE `pnpm_packages()` call (two
+   independent counting fakes), replacing the single combined "five queries" assertion that did not
+   match the described design. The footer-binding drift test in Plan 12-03 now builds the EFFECTIVE
+   binding set as `CatalogScreen.BINDINGS` UNION `ToolBrowser.BINDINGS` (read from both classes, not
+   hand-copied) before doing its bidirectional actions-vs-bindings comparison, replacing the
+   `CatalogScreen.BINDINGS`-only comparison that would have failed on every pre-existing
+   widget-level key (`space`/`enter`/`a`/`i`), not just a genuine drift.
+10. **`_node`'s docstring/comment claimed "install path only."** Plan 12-03 Task 1 now includes an
+    explicit action item to update `installer/executors.py::_node`'s smoke-check comment
+    (`executors.py:432-439`) to say the check fires on either the install or the update path
+    reached through the same executor, since this same plan deliberately reuses `_node` for
+    pnpm-owned updates. `installer/executors.py` was added to Plan 12-03's `files_modified`, and a
+    corresponding acceptance-criteria line was added. This is a documentation-only change — `_node`'s
+    behavior is unmodified, consistent with this plan's own "no possibility of the two paths
+    drifting apart" reuse design.
+
+### LOW findings — left as accepted residual risk (not required for this pass)
+
+Per the task's own scope, the LOW items (the SDKMAN-unreachable branch in Plan 12-03, and the
+architecture-substring test note in Plan 12-04) were left unmodified. Both are genuinely low-risk:
+the SDKMAN branch is unreachable only because `Owner` has no SDKMAN value and the resolver never
+creates an SDKMAN candidate today — a correct, inert consequence of this phase's scope boundary
+(`dnf`/`apt`/`pacman`/`rpm_ostree`/SDKMAN are out of scope for Phase 12 and resolve to `unknown` by
+design), not a defect that could misfire; and Plan 12-04's architecture-substring test already
+carries its own documented instruction to follow shipped code over plan text on any disagreement,
+which is the correct posture for a test protecting phrasing rather than behavior. Neither was fixed
+in this pass, consistent with the task's own instruction that LOW items are optional.
+
+### Disposition
+
+Every HIGH and MEDIUM finding from Cycle 3 — 10 items in total — was closed with a concrete,
+specific plan-text fix in this pass: new decision-procedure ordering, new fail-closed parser
+contracts, a new fresh-ownership-reresolution seam, a corrected UI gate, an epoch compare-and-save
+guard, independent symlink-restoration and typed-warning-channel fixes, an ownership-aware
+post-update status call, a public helper rename, two corrected tests, and one doc-comment fix —
+none was silently dropped. The two LOW items were deliberately left as documented, low-risk residual
+per the task's own scope, not overlooked. Per the 3-cycle cap (`.planning/ONESHOT-RULES.md` Rule
+10), no cycle 4 review was dispatched — these four plan files are now ready for execution.
