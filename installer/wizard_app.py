@@ -1140,6 +1140,47 @@ class PoliciesScreen(AppScreen):
             parts.append(result.warning)
         return multiline_summary(parts)
 
+    def action_pick_time(self) -> None:
+        policy = self._highlighted_policy()
+        if policy is None or policy.set_schedule is None:
+            return
+        if not self.active_state[policy.id]:
+            self.status.set(
+                "Enable this policy first, then press t to set its schedule.",
+                "warn",
+            )
+            self._set_detail(policy)
+            return
+        self.app.push_screen(TimePickerScreen(), self._time_picked(policy, policy.set_schedule))
+
+    def _time_picked(
+        self, policy: Policy, set_schedule: Callable[[int, int], PolicyResult]
+    ) -> Callable[[str | None], None]:
+        # A closure supplying the mutation and the messages, never its own
+        # try/except OSError — set_schedule is called through run_live below,
+        # exactly like action_toggle_policy already calls apply/remove
+        # (.claude/architecture.md rule 3), never directly from this callback.
+        # set_schedule is threaded in as its own parameter (not re-read from
+        # policy inside the closure) so there is no reachable path where it
+        # could be None here — action_pick_time already confirmed it isn't,
+        # once, before this closure is ever built.
+        def picked(value: str | None) -> None:
+            if value is None:
+                return
+            hour_text, minute_text = value.split(":")
+            hour, minute = int(hour_text), int(minute_text)
+            result, error = run_live(lambda: set_schedule(hour, minute))
+            if result is None:
+                self.status.set(
+                    f"Policy change failed: {error}. Check permissions, then press t.",
+                    "error",
+                )
+                return
+            self.status.set(self._summary(policy, "rescheduled", result), "ok")
+            self._set_detail(policy)
+
+        return picked
+
 
 class ConfirmUninstall(ModalScreen[bool]):
     """Confirm the one destructive, hard-to-reverse commit: deleting installed
@@ -1198,6 +1239,42 @@ class NavScreen(ModalScreen[str | None]):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         self.dismiss(event.item.id)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class TimePickerScreen(ModalScreen[str | None]):
+    """Quantized 30-minute time-of-day picker: dismisses with an "HH:MM"
+    string, or None on escape/cancel. Structurally mirrors NavScreen's
+    ModalScreen[str | None] + ListView/ListItem shape, except every widget id
+    is letter-prefixed and colon-free ("time-HH-MM") since a raw "HH:MM" id
+    (e.g. "03:30") is an invalid Textual identifier — it begins with a digit
+    and contains ":" — while the DISPLAY text stays the plain "HH:MM" string.
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "cancel", "close", show=False),
+    ]
+    DEFAULT_CSS = """
+    TimePickerScreen { align: center middle; }
+    TimePickerScreen > ListView { width: 20; height: 20; border: round $accent; }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield ListView(
+            *[
+                ListItem(Label(f"{hour:02d}:{minute:02d}"), id=f"time-{hour:02d}-{minute:02d}")
+                for hour in range(24)
+                for minute in (0, 30)
+            ]
+        )
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item_id = event.item.id
+        if item_id is None:  # unreachable: every item above is constructed with one
+            return
+        self.dismiss(item_id.removeprefix("time-").replace("-", ":"))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
