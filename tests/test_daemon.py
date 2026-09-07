@@ -181,6 +181,35 @@ def test_read_schedule_returns_none_when_start_calendar_interval_malformed(tmp_p
     assert daemon.read_schedule(plist_path) is None
 
 
+def test_read_schedule_returns_none_when_hour_or_minute_is_not_an_integer(tmp_path: Path) -> None:
+    plist_path = tmp_path / "non_int_interval.plist"
+    plist_path.write_bytes(
+        plistlib.dumps({"Label": "x", "StartCalendarInterval": {"Hour": "3", "Minute": 30}})
+    )
+    assert daemon.read_schedule(plist_path) is None
+
+
+# --- _atomic_write: crash-mid-write safety ----------------------------------
+
+
+def test_atomic_write_leaves_the_original_intact_on_a_failed_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "daemon.plist"
+    target.write_bytes(b"original")
+
+    def failing_replace(_src: object, _dst: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(daemon.os, "replace", failing_replace)
+    with pytest.raises(OSError, match="disk full"):
+        daemon._atomic_write(  # pyright: ignore[reportPrivateUsage]
+            target, b"new", mode=0o644
+        )
+    assert target.read_bytes() == b"original"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["daemon.plist"]
+
+
 # --- bootstrap: bootout-then-bootstrap idempotent sequence ------------------
 
 
@@ -397,6 +426,31 @@ def test_main_never_raises_when_the_script_cannot_be_launched(tmp_path: Path) ->
     assert log_path.exists()
 
 
+def test_main_skips_an_unrecognized_flag_before_the_double_dash(tmp_path: Path) -> None:
+    script = _write_stub(tmp_path, "stub.sh", _STUB_SUCCESS)
+    log_path = tmp_path / "prune-daemon.log"
+    exit_code = prune_daemon_runner.main(
+        [
+            "--unrecognized-flag",
+            "ignored-value",
+            "--script",
+            str(script),
+            "--log",
+            str(log_path),
+            "--cap-bytes",
+            "999999",
+            "--",
+        ]
+    )
+    assert exit_code == 0
+    assert log_path.exists()
+
+
+def test_parse_argv_raises_when_a_required_flag_is_missing() -> None:
+    with pytest.raises(ValueError, match="--script, --log, and --cap-bytes"):
+        prune_daemon_runner.main(["--script", "/tmp/s", "--log", "/tmp/l", "--"])
+
+
 # --- _truncate: header-boundary snap, hard cap, decode safety --------------
 
 # Deliberate private-member access, one suppression point covering every call
@@ -420,6 +474,20 @@ def test_truncate_is_a_noop_when_under_cap(tmp_path: Path) -> None:
     original = log_path.read_bytes()
     _truncate(log_path, 999_999)
     assert log_path.read_bytes() == original
+
+
+def test_truncate_handles_a_source_log_with_no_trailing_newline(tmp_path: Path) -> None:
+    log_path = tmp_path / "log.txt"
+    # No trailing "\n": the split("\n") result's last element is a real line,
+    # not the empty string _truncate otherwise drops.
+    for i in range(20):
+        _write_run(log_path, f"run-{i:02d}", f"body {i:02d}")
+    content_without_trailing_newline = log_path.read_bytes().rstrip(b"\n")
+    log_path.write_bytes(content_without_trailing_newline)
+    _truncate(log_path, 200)
+    result = log_path.read_text(encoding="utf-8")
+    assert result.startswith("=== ")
+    assert result.endswith("\n")
 
 
 def test_truncate_snaps_to_the_newest_runs_header_boundary(tmp_path: Path) -> None:
@@ -527,6 +595,16 @@ def test_remove_wrapper_deletes_only_the_managed_file(tmp_path: Path) -> None:
 
 def test_remove_wrapper_is_a_noop_against_a_missing_bin_dir(tmp_path: Path) -> None:
     daemon.remove_wrapper(tmp_path / "does-not-exist")  # must not raise
+
+
+def test_wrapper_present_is_false_when_the_target_is_unreadable_as_text(tmp_path: Path) -> None:
+    # A directory can't be read as text -> IsADirectoryError (an OSError),
+    # mirroring installer/tweaks.py's own _is_our_executable unreadable-target
+    # coverage (tests/test_tweaks.py::test_is_our_executable_returns_false_when_unreadable).
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "tools-installer-prune-daemon").mkdir()
+    assert daemon.wrapper_present(bin_dir) is False
 
 
 def test_install_wrapper_refuses_to_overwrite_an_unmanaged_file(tmp_path: Path) -> None:
@@ -688,3 +766,17 @@ def test_last_run_summary_never_raises_on_invalid_utf8(tmp_path: Path) -> None:
     summary = daemon.last_run_summary(log_path)
     assert summary is not None
     assert "3 item(s) removed" in summary
+
+
+def test_last_run_summary_falls_back_when_deleted_line_is_not_an_integer(tmp_path: Path) -> None:
+    log_path = tmp_path / "prune-daemon.log"
+    _write_run(log_path, "2026-09-04T03:00:00+00:00", "deleted: not-a-number")
+    summary = daemon.last_run_summary(log_path)
+    assert summary == "last run: 2026-09-04T03:00:00+00:00 (see log for details)"
+
+
+def test_last_run_summary_handles_a_log_with_no_trailing_newline(tmp_path: Path) -> None:
+    log_path = tmp_path / "prune-daemon.log"
+    log_path.write_text("=== 2026-09-04T03:00:00+00:00 ===\ndeleted: 4")
+    summary = daemon.last_run_summary(log_path)
+    assert summary == "last run: 2026-09-04T03:00:00+00:00, 4 item(s) removed"
