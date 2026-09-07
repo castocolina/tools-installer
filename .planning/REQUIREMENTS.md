@@ -88,6 +88,7 @@ Each maps to exactly one roadmap phase.
 - [ ] **REQ-manager-version-resolution**: `brew outdated`/`pnpm outdated -g`/`uv tool list --outdated`-equivalent resolution (verify exact commands, not assumed) as the authoritative current+latest source for brew/pnpm/uv-tool-managed entries — each needs its own `Runner`-shaped seam per manager, not raw subprocess calls in the TUI layer. MVP piece #4.
 - [ ] **REQ-update-action-manager-delegation**: A manual "update" action parallel to install/uninstall, delegating to the tool's actual owning manager (this installer's own path, brew, pnpm, or uv tool) rather than assuming this installer's executor owns every tool; reuses `UninstallState`'s existing "managed elsewhere" concept rather than inventing a parallel one. MVP piece #5, last of the MVP set — **this is the "update mechanism" batch 2's `REQ-pnpm-global-reinstall-mitigation` was waiting on; that dependency is now unblocked** (see its updated status entry below).
 - [ ] **REQ-manager-drift-alerting**: If a tool is currently installed via `pnpm`/`npm`/`npx`/`pnpx` and a newer/safer version is available via `brew`, surface a distinct alert (changing which manager owns a tool is a bigger action than a version bump) — the alert half only, not auto-remediation (auto-updating the registry + filing a GitHub issue is explicitly deferred, needs a GitHub API/auth story this project doesn't have). Deferred, not MVP — depends on REQ-manager-version-resolution existing first, but cheap once it does.
+  **Amended 2026-09-07:** not implemented in Phase 12. Three structural reasons: (1) `brew outdated` lists only already-installed formulae and casks (confirmed 2026-09-07 from `brew help outdated`: "List installed casks and formulae that have an updated version available"), so it cannot detect an uninstalled brew alternative to a pnpm-managed tool; (2) zero tools in the current `installer/registry.toml` declare both a `node`/`uv-tool` method and a `brew`/`cask` method (12-RESEARCH.md section 6); (3) shipping the helper unwired would violate `.claude/architecture.md` rule 5, which forbids a production helper with zero callers. Authority: 12-CONTEXT.md D-02's explicit "planner's call" clause. A future implementation would need a structured `brew info <formula> --json` availability query for an uninstalled formula, a normalized active-versus-available comparison built on `installer/ownership.py`, and a drift state threaded through `VersionStatus`, the Ver cell, and a Pilot test.
 
 ## v2 Requirements
 
@@ -155,7 +156,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-background-version-refresh-worker | Phase 12 | Pending |
 | REQ-manager-version-resolution | Phase 12 | Pending |
 | REQ-update-action-manager-delegation | Phase 12 | Pending |
-| REQ-manager-drift-alerting | Phase 12 | Deferred (stretch, not MVP) |
+| REQ-manager-drift-alerting | Phase 12 | Deferred (not implemented in Phase 12 — see entry) |
 
 **Coverage:**
 

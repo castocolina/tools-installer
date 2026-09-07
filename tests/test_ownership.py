@@ -515,3 +515,23 @@ def test_attribute_path_unit_cases(monkeypatch: pytest.MonkeyPatch) -> None:
     assert attribute_path(_PNPM_HOME / "mmdc", dirs) == frozenset({"pnpm"})
     assert attribute_path(Path("/usr/bin/rg"), dirs) == frozenset()
     assert attribute_path(None, dirs) == frozenset()
+
+
+def test_abandoned_drift_helpers_are_absent() -> None:
+    """Phase 12 deferred REQ-manager-drift-alerting rather than shipping a
+    zero-caller helper (12-REVIEWS.md architecture-rule-5 finding).
+
+    The abandoned 12-04 design proposed `has_declared_manager_drift` and
+    `manager_drift_alert`. This test pins those two identifiers as absent
+    from the two modules they would have lived in. It does NOT ban the
+    substring `drift` generally: a future correctly-wired implementation
+    is free to use whatever name fits it (12-REVIEWS.md:486-490). Dead-code
+    detection in general is already `make validate`'s job (vulture), and
+    the no-orphan-helper rule is already written in `.claude/architecture.md`.
+    """
+    import installer.manager_versions as manager_versions
+    import installer.ownership as ownership
+
+    for name in ("has_declared_manager_drift", "manager_drift_alert"):
+        assert not hasattr(manager_versions, name)
+        assert not hasattr(ownership, name)

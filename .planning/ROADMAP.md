@@ -305,7 +305,7 @@ Plans:
   2. Version checks are cached with a `checked_at` timestamp; entries older than 7 days show stale and trigger a background re-check, not a full refetch every session.
   3. Version checks run via a Textual `Worker` without blocking first paint or keypresses; network failures degrade to "unknown," never crash.
   4. An "update" action exists and delegates to the tool's actual owning manager (brew/pnpm/uv tool/this installer's own path) — not assumed to always be this installer's executor.
-  5. (Stretch, deferred/non-MVP; attempt a minimal version if scope allows per 2026-09-04 discuss-phase) A tool installed via pnpm/npm with a newer version available via brew surfaces a distinct manager-drift alert.
+  5. (Stretch, deferred/non-MVP; attempt a minimal version if scope allows per 2026-09-04 discuss-phase) A tool installed via pnpm/npm with a newer version available via brew surfaces a distinct manager-drift alert. *(Amended 2026-09-07: this criterion was not delivered in Phase 12. `brew outdated` lists only already-installed formulae and casks, so it cannot observe an uninstalled brew alternative; zero registry rows declare both a node/uv-tool method and a brew/cask method (12-RESEARCH.md section 6); and shipping the helper unwired would violate `.claude/architecture.md` rule 5. 12-CONTEXT.md D-02's "planner's call" clause authorized the deferral. Recorded in `.planning/REQUIREMENTS.md` so an end-of-phase verifier reading the numbered criteria in isolation does not register a silent miss.)*
 
 **Plans**: 4 plans
 Plans:
