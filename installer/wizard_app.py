@@ -812,6 +812,15 @@ class UninstallScreen(AppScreen):
         return run
 
     def _apply_removal(self, ids: list[str]) -> None:
+        if self.remove_tweaks and getattr(self.app, "_daemon_default_in_flight", False):
+            # Gated DIRECTLY on the in-flight boolean, never additionally on
+            # whether a daemon: id already appears in self._tweak_ids: during
+            # first-run auto-apply the daemon Policy is constructed INACTIVE,
+            # so that id may not be visible here yet even while the worker is
+            # actively racing to register it (11-REVIEWS.md cycle 3 finding
+            # #12).
+            self.status.set(_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE, "warn")
+            return
         paths: list[Path] = []
         for key in ids:
             paths.extend(self._by_key[key].paths)
@@ -1102,9 +1111,45 @@ class PoliciesScreen(AppScreen):
         self._log_view = not self._log_view
         self._set_detail(policy)
 
+    def refresh_daemon_state(self, policy_id: str, applied: bool) -> None:
+        """Explicit UI refresh after an on-by-default worker run completes.
+
+        Resolves the value to display via the matching Policy's own
+        is_active() live-check when present, COMPLETELY IGNORING `applied`
+        -- `applied=False` means only "no apply() call was made this run",
+        which is equally true whether the policy is already ACTIVE-and-
+        decided or already DISABLED-and-decided; conflating the two would
+        incorrectly flip an already-on daemon's row to OFF on every ordinary
+        second run (11-REVIEWS.md cycle 3 finding #11). Falls back to
+        `applied` only when no matching policy is found or it has no
+        is_active closure (true for every other policy kind today).
+        Idempotent: a no-op when the resolved value does not actually
+        change anything, so calling this unconditionally is harmless.
+        """
+        policy = next((p for p in self._policies if p.id == policy_id), None)
+        if policy is not None and policy.is_active is not None:
+            resolved = policy.is_active()
+        else:
+            resolved = applied
+        if policy_id not in self.active_state or self.active_state[policy_id] == resolved:
+            return
+        self.active_state[policy_id] = resolved
+        if self.is_mounted:
+            self.query_one(DataTable[Any]).update_cell(
+                policy_id, "state", self._state_cell(resolved)
+            )
+            highlighted = self._highlighted_policy()
+            if highlighted is not None and highlighted.id == policy_id:
+                self._set_detail(highlighted)
+
     def action_toggle_policy(self) -> None:
         policy = self._highlighted_policy()
         if policy is None:
+            return
+        if policy.id == getattr(self.app, "_daemon_default_policy_id", None) and getattr(
+            self.app, "_daemon_default_in_flight", False
+        ):
+            self.status.set(_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE, "warn")
             return
         active = self.active_state[policy.id]
         if not active and policy.missing_requires and policy.hard_requires:
@@ -1280,6 +1325,27 @@ class TimePickerScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE = (
+    "Applying the on-by-default daemon setting; wait a moment, then try again."
+)
+
+
+class DaemonDefaultApplied(Message):
+    """The threaded on-by-default auto-apply worker finished; `applied` is
+    whether apply() actually ran (True) or was a no-op/failure (False).
+
+    Posted unconditionally from UnifiedApp's own worker, in a finally block,
+    regardless of outcome -- mirroring GlobalsAudited/GlobalsReinstalled's same
+    thread -> post_message hand-off shape, for the identical reason: widgets
+    may only be touched from the app's own thread.
+    """
+
+    def __init__(self, policy_id: str, applied: bool) -> None:
+        self.policy_id = policy_id
+        self.applied = applied
+        super().__init__()
+
+
 class UnifiedApp(App[list[str] | None]):
     """One app hosting the wizard views. run() returns the catalog selection
     (ids in catalog order) on accept, or None when aborted. `current_view` and
@@ -1319,6 +1385,8 @@ class UnifiedApp(App[list[str] | None]):
         reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
         unavailable: Mapping[str, bool] | None = None,
         initial_view: str = BASE_VIEW,
+        daemon_default: Callable[[], bool] | None = None,
+        daemon_default_policy_id: str | None = None,
     ) -> None:
         super().__init__()
         self._staged: set[str] = set()
@@ -1374,6 +1442,15 @@ class UnifiedApp(App[list[str] | None]):
         )
         self._initial_view = initial_view
         self.current_view = BASE_VIEW
+        self._daemon_default = daemon_default
+        self._daemon_default_policy_id = daemon_default_policy_id
+        # True from construction time whenever a real auto-apply callback was
+        # wired, so there is no window between __init__ and the worker
+        # actually starting inside on_mount where this reads False while an
+        # auto-apply is nonetheless about to run (11-REVIEWS.md cycle 2
+        # finding #15). Permanently False -- a no-op state -- for every
+        # construction site that never wires daemon_default at all.
+        self._daemon_default_in_flight: bool = self._daemon_default is not None
 
     # Textual annotates install_screen with a bare (unparameterized) Screen, which
     # pyright-strict reports as partially unknown at the call site. Re-declare it
@@ -1396,6 +1473,52 @@ class UnifiedApp(App[list[str] | None]):
             self.install_screen(screen, name)
         if self._initial_view != BASE_VIEW:
             await self.show_view(self._initial_view)
+        if self._daemon_default is not None:
+            self._apply_daemon_default_worker()
+
+    # exit_on_error=False (Textual's own worker.py defaults this True, which
+    # calls App._handle_exception -- crashing the whole app -- on any
+    # exception a threaded worker raises): an exception outside
+    # ensure_daemon_default's own except (OSError, CommandError) tuple must
+    # still leave a usable, running app (the finally block below already
+    # guarantees the in-flight flag clears); Worker.state/.error still record
+    # it for diagnosis, this only suppresses the exit-the-app side effect.
+    @work(thread=True, exclusive=True, group="daemon-default", exit_on_error=False)
+    def _apply_daemon_default_worker(self) -> None:
+        """Auto-apply the daemon's on-by-default policy off the event loop.
+
+        Mirrors DoctorScreen._audit_globals_worker/_reinstall_globals_worker's
+        own thread-worker + post_message shape, for the identical reason: a
+        real launchctl bootstrap call (run_captured's underlying
+        subprocess.run has no timeout) must never freeze frame rendering or
+        keypress handling. The body is wrapped in try/finally so the
+        completion message is ALWAYS posted -- regardless of whether
+        self._daemon_default() returns normally or raises ANYTHING, including
+        an exception outside ensure_daemon_default's own
+        except (OSError, CommandError) tuple -- so _daemon_default_in_flight
+        can never get stuck True (11-REVIEWS.md cycle 3 finding #15). An
+        exception raised inside the try still propagates normally after the
+        finally runs and is recorded on the Worker itself (state=ERROR,
+        .error); exit_on_error=False is what keeps that from also crashing
+        the app, so this fix only ever ADDS the guaranteed message post, it
+        never swallows or hides a genuine bug.
+        """
+        applied = False
+        try:
+            if self._daemon_default is not None:
+                applied = self._daemon_default()
+        finally:
+            if self._daemon_default_policy_id is not None:
+                self.post_message(DaemonDefaultApplied(self._daemon_default_policy_id, applied))
+
+    def on_daemon_default_applied(self, message: DaemonDefaultApplied) -> None:
+        # Cleared FIRST, unconditionally: this is the ONE place the flag is
+        # ever cleared, and the ALWAYS-post-message guarantee above is what
+        # makes that safe on every outcome, not only a successful apply.
+        self._daemon_default_in_flight = False
+        policies_screen = self._views.get("policies")
+        if isinstance(policies_screen, PoliciesScreen):
+            policies_screen.refresh_daemon_state(message.policy_id, message.applied)
 
     @property
     def catalog(self) -> CatalogScreen:

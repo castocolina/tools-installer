@@ -35,7 +35,14 @@ from installer.locations import all_ban_rc_paths, ban_rc_paths, rc_paths_for_mod
 from installer.model import Tool, load_categories, load_tools
 from installer.omz import omz_present
 from installer.platform import Platform, detect
-from installer.policy import Policy, ban_policy, daemon_policy, omz_plugins_policy, tweak_policy
+from installer.policy import (
+    Policy,
+    ban_policy,
+    daemon_policy,
+    ensure_daemon_default,
+    omz_plugins_policy,
+    tweak_policy,
+)
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.resolve import platform_could_support
@@ -201,6 +208,7 @@ def _build_app(
     *,
     initial_view: str = BASE_VIEW,
     link_mode: str = "centralized",
+    apply_daemon_default: bool = False,
 ) -> UnifiedApp:
     installed = {tool.id: is_installed(tool) for tool in tools}
     unavailable = {tool.id: not platform_could_support(tool, platform) for tool in tools}
@@ -339,6 +347,30 @@ def _build_app(
         # by the screen — not one re-derived here behind their back.
         return pnpm_globals.reinstall_node_globals(packages, policy=policy)
 
+    # An ALLOWLIST, not the initial_view != "uninstall" blocklist that would
+    # wrongly auto-apply for "doctor"/"policies" too (11-REVIEWS.md cycle 2
+    # finding #14) -- make doctor is documented read-only (Makefile:19), and
+    # --guard/--unguard's interactive branch must not silently register a
+    # background deletion LaunchAgent either. Only _select_catalog's own call
+    # site (the genuine, normal interactive make setup wizard flow) passes
+    # apply_daemon_default=True. The daemon Policy object itself is still
+    # appended to policy_inputs.policies above regardless of this flag, so it
+    # remains visible/toggleable from every entry point -- only the ON-BY-
+    # DEFAULT CALLBACK is gated here.
+    daemon_default = None
+    daemon_default_policy_id = None
+    if daemon is not None and apply_daemon_default:
+        daemon_policy_instance = daemon
+
+        def daemon_default() -> bool:
+            # Closes over daemon_policy_instance, never the module-level
+            # daemon_default local re-bound by this very assignment, and
+            # never re-constructs a second daemon_policy: the SAME instance
+            # already appended to policy_inputs.policies above.
+            return ensure_daemon_default(daemon_policy_instance, state_path=_DAEMON_STATE_PATH)
+
+        daemon_default_policy_id = daemon.id
+
     return UnifiedApp(
         tools,
         installed,
@@ -354,11 +386,13 @@ def _build_app(
         reinstall_globals=_reinstall_globals,
         unavailable=unavailable,
         initial_view=initial_view,
+        daemon_default=daemon_default,
+        daemon_default_policy_id=daemon_default_policy_id,
     )
 
 
 def _select_catalog(tools: list[Tool], *, link_mode: str = "centralized") -> list[str] | None:
-    return _build_app(tools, detect(), link_mode=link_mode).run()
+    return _build_app(tools, detect(), link_mode=link_mode, apply_daemon_default=True).run()
 
 
 def _resolve_link_mode(link_mode_option: str | None) -> str:

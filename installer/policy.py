@@ -507,6 +507,33 @@ def daemon_policy(
     )
 
 
+def ensure_daemon_default(policy: Policy, *, state_path: Path) -> bool:
+    """Auto-apply a policy's default exactly once, ever, per machine.
+
+    Returns False without calling apply() when daemon.decided(state_path) is
+    already True -- this covers BOTH "already explicitly enabled" and
+    "already explicitly disabled" (11-RESEARCH.md Pitfall 2's own
+    distinction: a plist's mere absence cannot tell those two apart, but the
+    decided marker can). Otherwise calls policy.apply(), catching
+    (OSError, CommandError) and returning False on failure WITHOUT the
+    marker being recorded -- so a transient first-run failure (including a
+    DaemonScheduleError, an OSError subclass per 11-01, from an unresolvable
+    uv or an empty TMPDIR) is retried on the NEXT run, per 11-RESEARCH.md's
+    Open Question 1 recommendation -- and returning True on success.
+
+    A no-op call (already decided) and a genuinely failed apply both return
+    False; callers that need to tell those two apart re-probe the policy's
+    own live state (Policy.is_active), never this return value alone.
+    """
+    if daemon.decided(state_path):
+        return False
+    try:
+        policy.apply()
+    except (OSError, CommandError):
+        return False
+    return True
+
+
 def omz_removal_detail(*, zshrc_path: Path, state_path: Path) -> str | None:
     """One line naming the plugins and the file a teardown would edit, or None.
 
