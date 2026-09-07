@@ -125,6 +125,10 @@ def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(setup, "_MYSHELLRC", tmp_path / ".myshellrc")
     monkeypatch.setattr(setup, "_ZSHRC", tmp_path / ".zshrc")
     monkeypatch.setattr(setup, "_RC_PATHS", [tmp_path / ".zshrc", tmp_path / ".bashrc"])
+    monkeypatch.setattr(setup, "_DAEMON_PLIST_PATH", tmp_path / "LaunchAgents" / "daemon.plist")
+    monkeypatch.setattr(setup, "_DAEMON_LOG_PATH", tmp_path / "Logs" / "prune-daemon.log")
+    monkeypatch.setattr(setup, "_DAEMON_SCRIPT_PATH", tmp_path / "scripts" / "prune-user-tmpdir.sh")
+    monkeypatch.setattr(setup, "_DAEMON_STATE_PATH", tmp_path / ".myshellrc")
     monkeypatch.setattr(setup, "load_tools", _no_tools)
     monkeypatch.setattr(setup, "load_categories", _no_categories)
     monkeypatch.setattr(setup, "detect", _platform)
@@ -192,7 +196,9 @@ def test_the_uninstall_view_reads_every_environment_row_live(
 def test_the_policies_view_is_wired_ban_then_tweaks_then_omz(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The omz policy is offered last, after the platform's tweak bundles."""
+    """omz is offered after the platform's tweak bundles; the daemon (macOS-only,
+    the newest addition) is offered last of all, per _sandbox's fixed macOS
+    Platform."""
     _sandbox(monkeypatch, tmp_path)
     seen = _capture_app(monkeypatch)
     assert setup.main(["--uninstall"]) == 0
@@ -201,9 +207,42 @@ def test_the_policies_view_is_wired_ban_then_tweaks_then_omz(
 
     ids = [policy.id for policy in policies.policies]
     assert ids[0] == "ban"
-    assert ids[-1] == "omz-plugins"
-    assert all(policy_id.startswith("tweak:") for policy_id in ids[1:-1])
-    assert len(ids) > 2
+    assert ids[-1] == "daemon:prune-tmpdir"
+    assert ids[-2] == "omz-plugins"
+    assert all(policy_id.startswith("tweak:") for policy_id in ids[1:-2])
+    assert len(ids) > 3
+
+
+def test_daemon_policy_is_absent_on_linux(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """ROADMAP SC#2: the daemon is invisible/inert on any non-macOS platform."""
+    _sandbox(monkeypatch, tmp_path)
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    monkeypatch.setattr(setup, "detect", lambda: linux)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--uninstall"]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    assert not any(policy.id.startswith("daemon:") for policy in policies.policies)
+
+
+def test_build_daemon_policy_returns_none_off_macos() -> None:
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    assert setup._build_daemon_policy(linux, {}) is None
+
+
+def test_build_daemon_policy_is_fail_closed_not_fail_hidden_for_a_bad_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Construction never raises on an unresolvable TMPDIR/HOME/uv -- only a
+    later apply() would, via installer.daemon's own fail-closed validation
+    gate. The fail-closed contract lives in the validation, not in a guard
+    that hides the policy from view."""
+    monkeypatch.delenv("TMPDIR", raising=False)
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.setattr(setup.shutil, "which", lambda _name: None)
+    policy = setup._build_daemon_policy(_platform(), {})
+    assert policy is not None
+    assert policy.id == "daemon:prune-tmpdir"
 
 
 def test_the_policies_view_wires_split_mode_myshellrc_sourcing_for_every_tweak(
