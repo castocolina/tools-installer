@@ -63,7 +63,7 @@ waiting on this Phase 12 mechanism — see Phase 4's scope note.
 - [x] **Phase 8: AI Tier Catalog Expansion & uv-tool Executor** - Add the new `uv-tool` executor kind, antigravity, cursor-agent, rtk, and wire `recommends` for agent hosts (completed 2026-09-06)
 - [x] **Phase 9: Postinstall Hooks Mechanism** - Add the optional per-tool postinstall field/execution/idempotency mechanism, proven via codegraph's MCP registration (completed 2026-09-06)
 - [x] **Phase 10: Agent CLI Ergonomics** - Add `codex-skip`/`opencode-auto` tweaks and a durable, live-verified cursor-agent default-model wrapper (completed 2026-09-06)
-- [ ] **Phase 11: Background Maintenance Daemon** - Wrap the existing tmpdir-prune script as a toggleable, macOS-only LaunchAgent with visible logs
+- [x] **Phase 11: Background Maintenance Daemon** - Wrap the existing tmpdir-prune script as a toggleable, macOS-only LaunchAgent with visible logs (completed 2026-09-07)
 - [ ] **Phase 12: Version-Aware Status & Update Action** - Add version-aware status, a cached/staleness-tracked version check, and a manager-delegated update action (unblocks the automatic trigger for REQ-pnpm-global-reinstall-mitigation)
 
 ## Phase Details
@@ -288,10 +288,10 @@ Plans:
 **Plans**: 4 plans
 Plans:
 
-- [ ] 11-01-PLAN.md — `installer/daemon.py` core mechanism: plist generation/parsing, real `launchctl bootstrap`/`bootout` round trip, the log-writing wrapper + truncation, the "decided" ownership marker (wave 1)
-- [ ] 11-02-PLAN.md — `Policy.hard_requires`/`log_path`/`set_schedule` fields, the `action_toggle_policy` gate fix, and the `daemon_policy` factory (wave 2, needs 11-01)
-- [ ] 11-03-PLAN.md — Policies detail-panel UI: "last run" line, log-view toggle, and the `TimePickerScreen` time-of-day picker (wave 3, needs 11-02)
-- [ ] 11-04-PLAN.md — `setup.py` composition-root wiring: macOS-only gating and on-by-default via `ensure_daemon_default`/`UnifiedApp.on_mount` (wave 4, needs 11-03)
+- [x] 11-01-PLAN.md — `installer/daemon.py` core mechanism: plist generation/parsing, real `launchctl bootstrap`/`bootout` round trip, the log-writing wrapper + truncation, the "decided" ownership marker (wave 1)
+- [x] 11-02-PLAN.md — `Policy.hard_requires`/`log_path`/`set_schedule` fields, the `action_toggle_policy` gate fix, and the `daemon_policy` factory (wave 2, needs 11-01)
+- [x] 11-03-PLAN.md — Policies detail-panel UI: "last run" line, log-view toggle, and the `TimePickerScreen` time-of-day picker (wave 3, needs 11-02)
+- [x] 11-04-PLAN.md — `setup.py` composition-root wiring: macOS-only gating and on-by-default via `ensure_daemon_default`/`UnifiedApp.on_mount` (wave 4, needs 11-03)
 
 ### Phase 12: Version-Aware Status & Update Action
 
@@ -326,5 +326,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8. AI Tier Catalog Expansion & uv-tool Executor | 4/4 | Complete    | 2026-09-06 |
 | 9. Postinstall Hooks Mechanism | 2/2 | Complete    | 2026-09-06 |
 | 10. Agent CLI Ergonomics | 1/1 | Complete    | 2026-09-06 |
-| 11. Background Maintenance Daemon | 0/4 | Not started | - |
+| 11. Background Maintenance Daemon | 4/4 | Complete    | 2026-09-07 |
 | 12. Version-Aware Status & Update Action | 0/TBD | Not started | - |

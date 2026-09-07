@@ -75,9 +75,9 @@ Each maps to exactly one roadmap phase.
 
 ### Background Maintenance Daemon (ingest batch 4/4 part B: `background-maintenance-daemon`)
 
-- [ ] **REQ-launchd-prune-policy**: A new `daemon_policy` factory (parallel to `ban_policy`/`tweak_policy` in `installer/policy.py`) installs/removes a macOS-only LaunchAgent running the existing `scripts/prune-user-tmpdir.sh --apply` daily via `StartCalendarInterval`, with `--days` defaulting to 3 (the script's own default, kept as a script-accepted param, not hardcoded higher just because it's unattended). No changes to the prune script's own logic/safety checks (dry-run default, `lsof` open-file skip).
-- [ ] **REQ-daemon-log-diagnostics**: Scheduled runs write to a single append-mode log file under the existing managed-state directory convention (one file, not one-per-run, capped by simple size/age truncation); the Policies view's detail panel for this policy gains a "last run: <timestamp>, <N> items removed" line plus a keybinding to view the log — not a new top-level Diagnostics view (would violate the one-view-registry standard for a single script's output).
-- [ ] **REQ-daemon-dependency-gating**: `fd`/`rg` are declared as `requires` on this policy (matching the `docker` tweak's `watch` dependency pattern) but the policy's `apply` never refuses to run when they're missing — it degrades to the script's own find/grep fallback (already confirmed in the script itself), surfaced via the existing `missing_requires` "recommended but not required" UI with no new mechanism.
+- [x] **REQ-launchd-prune-policy**: A new `daemon_policy` factory (parallel to `ban_policy`/`tweak_policy` in `installer/policy.py`) installs/removes a macOS-only LaunchAgent running the existing `scripts/prune-user-tmpdir.sh --apply` daily via `StartCalendarInterval`, with `--days` defaulting to 3 (the script's own default, kept as a script-accepted param, not hardcoded higher just because it's unattended). No changes to the prune script's own logic/safety checks (dry-run default, `lsof` open-file skip).
+- [x] **REQ-daemon-log-diagnostics**: Scheduled runs write to a single append-mode log file under the existing managed-state directory convention (one file, not one-per-run, capped by simple size/age truncation); the Policies view's detail panel for this policy gains a "last run: <timestamp>, <N> items removed" line plus a keybinding to view the log — not a new top-level Diagnostics view (would violate the one-view-registry standard for a single script's output).
+- [x] **REQ-daemon-dependency-gating**: `fd`/`rg` are declared as `requires` on this policy (matching the `docker` tweak's `watch` dependency pattern) but the policy's `apply` never refuses to run when they're missing — it degrades to the script's own find/grep fallback (already confirmed in the script itself), surfaced via the existing `missing_requires` "recommended but not required" UI with no new mechanism.
 
 ### Live Package Management (ingest batch 4/4 part C: `live-package-management`)
 
@@ -147,9 +147,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-opencode-auto-tweak | Phase 10 | Complete |
 | REQ-cursor-agent-default-model-wrapper | Phase 10 | Complete |
 | REQ-agent-tweak-self-update-durability | Phase 10 | Complete |
-| REQ-launchd-prune-policy | Phase 11 | Pending |
-| REQ-daemon-log-diagnostics | Phase 11 | Pending |
-| REQ-daemon-dependency-gating | Phase 11 | Pending |
+| REQ-launchd-prune-policy | Phase 11 | Done |
+| REQ-daemon-log-diagnostics | Phase 11 | Done |
+| REQ-daemon-dependency-gating | Phase 11 | Done |
 | REQ-version-aware-status-github | Phase 12 | Pending |
 | REQ-cached-timestamped-version-state | Phase 12 | Pending |
 | REQ-background-version-refresh-worker | Phase 12 | Pending |
