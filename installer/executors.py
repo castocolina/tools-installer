@@ -12,6 +12,7 @@ from shutil import which
 from typing import cast
 
 from installer.guards import real_pnpm, shell_path
+from installer.host_setup import HOST_SETUPS
 from installer.locations import applications_dir
 from installer.model import Method
 from installer.run import CommandError, Runner, run_output
@@ -490,6 +491,24 @@ def _cask(method: Method, runner: Runner) -> None:
     runner(
         ["brew", "install", "--cask", f"--appdir={applications_dir()}", require_str(method, "cask")]
     )
+
+
+def host_setup_handoff(method: Method) -> tuple[str, ...]:
+    """Return reviewed console instructions for a guided host setup."""
+    setup_id = require_str(method, "setup_id")
+    setup = HOST_SETUPS.get(setup_id)
+    if setup is None:
+        raise ExecutorError(f"unknown reviewed host setup '{setup_id}'")
+    return setup.handoff
+
+
+def host_setup_approval_disclosures(method: Method) -> tuple[str, ...]:
+    """Return reviewed effects that must be visible before setup approval."""
+    setup_id = require_str(method, "setup_id")
+    setup = HOST_SETUPS.get(setup_id)
+    if setup is None:
+        raise ExecutorError(f"unknown reviewed host setup '{setup_id}'")
+    return setup.approval_disclosures
 
 
 EXECUTORS: dict[str, Callable[[Method, Runner], None]] = {

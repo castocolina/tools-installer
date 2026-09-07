@@ -59,6 +59,10 @@ class InstallStatus(StrEnum):
     NO_METHOD = "no-method"
     FAILED = "failed"
     CHECKSUM_MISMATCH = "checksum-mismatch"
+    # A method (host_setup or skill_pack) that hands the user reviewed console
+    # instructions to run after the installer releases the terminal, rather
+    # than performing the install itself.
+    MANUAL_REQUIRED = "manual-required"
     # Not attempted: a required tool did not resolve earlier in this run.
     # Distinct from FAILED, which means it WAS attempted and every method lost.
     DEPENDENCY_FAILED = "dependency-failed"

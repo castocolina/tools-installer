@@ -12,7 +12,8 @@ from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.postinstall import run_postinstall
 from installer.resolve import resolve_methods
-from installer.run import CommandError, Runner, run_command
+from installer.run import CommandError, MethodAwareRunner, Runner, run_command
+from installer.skill_lifecycle import perform_action
 from installer.status import is_installed
 from installer.versions import TagResolver, VersionError, resolve_github_tag
 
@@ -35,6 +36,9 @@ class InstallOutcome:
     # converted to a warning string. Never changes `status` away from
     # INSTALLED — the tool's own binary is on PATH and usable regardless.
     postinstall_warning: str | None = None
+    # Only on MANUAL_REQUIRED (a host_setup or skill_pack method): reviewed
+    # console instructions to run after the installer releases the terminal.
+    handoff: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -45,6 +49,7 @@ class InstallOutcome:
         verified: bool = False,
         blocked_by: tuple[str, ...] = (),
         postinstall_warning: str | None = None,
+        handoff: tuple[str, ...] = (),
     ) -> None:
         object.__setattr__(self, "tool_id", tool_id)
         object.__setattr__(self, "status", InstallStatus(status))
@@ -53,22 +58,31 @@ class InstallOutcome:
         object.__setattr__(self, "verified", verified)
         object.__setattr__(self, "blocked_by", blocked_by)
         object.__setattr__(self, "postinstall_warning", postinstall_warning)
+        object.__setattr__(self, "handoff", handoff)
 
 
-def _perform(method: Method, ctx: ExecContext) -> bool:
+def _perform(tool: Tool, method: Method, ctx: ExecContext) -> tuple[bool, tuple[str, ...]]:
     """Route download kinds to the download executor; everything else to a command executor.
 
-    Returns True when the download was sha256-verified (non-download methods
-    are never marked verified — their package managers do their own checks;
-    app zips have no published checksums to verify).
+    Returns ``(verified, handoff)``. `verified` is True when the download was
+    sha256-verified (non-download methods are never marked verified — their
+    package managers do their own checks; app zips have no published
+    checksums to verify). A non-empty `handoff` means the reviewed setup must
+    run in a console after the installer releases the terminal (a host_setup
+    or skill_pack method never performs its own install here).
     """
     if method.kind in download.DOWNLOAD_KINDS:
-        return download.install_download(method, ctx)
+        return download.install_download(method, ctx), ()
     if method.kind in apps.APP_KINDS:
         apps.install_app(method, ctx.runner)
-        return False
+        return False, ()
+    if method.kind == "skill_pack":
+        outcome = perform_action(tool, "install", ctx.runner)
+        return False, outcome.instructions
+    if method.kind == "host_setup":
+        return False, executors.host_setup_handoff(method)
     executors.execute(method, ctx.runner)
-    return False
+    return False, ()
 
 
 def install_tool(
@@ -108,8 +122,10 @@ def install_tool(
     ctx = ExecContext(runner=runner, platform=platform, resolve_tag=resolve_tag)
     errors: list[Exception] = []
     for method in methods:
+        if isinstance(runner, MethodAwareRunner):
+            runner.method_started(method.kind)
         try:
-            verified = _perform(method, ctx)
+            verified, handoff = _perform(tool, method, ctx)
         except ChecksumMismatch as exc:
             if checksum_policy == "fail":
                 return InstallOutcome(
@@ -119,6 +135,13 @@ def install_tool(
         except (CommandError, executors.ExecutorError, VersionError) as exc:
             errors.append(exc)
         else:
+            if handoff:
+                return InstallOutcome(
+                    tool.id,
+                    InstallStatus.MANUAL_REQUIRED,
+                    method_kind=method.kind,
+                    handoff=handoff,
+                )
             warning = None
             if tool.postinstall:
                 try:

@@ -3,11 +3,21 @@
 import os
 import subprocess
 from collections.abc import Callable, Collection, Mapping
+from typing import Protocol, runtime_checkable
 
 # An executor calls a Runner with an argv list. The runner raises CommandError on failure.
 Runner = Callable[[list[str]], None]
 # A caller that needs to READ a command's answer rather than only run it.
 OutputRunner = Callable[[list[str]], str]
+
+
+@runtime_checkable
+class MethodAwareRunner(Protocol):
+    """Optional runner capability used to attribute method-ladder transitions."""
+
+    def __call__(self, cmd: list[str]) -> None: ...
+
+    def method_started(self, method: str) -> None: ...
 
 
 class CommandError(RuntimeError):
