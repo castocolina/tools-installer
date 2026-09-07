@@ -19,7 +19,7 @@ from installer.session import Summary
 from installer.shellrc import write_myshellrc
 from installer.tweaks import BUNDLES
 from installer.uninstall import SweepResult
-from installer.wizard_app import PolicyInputs, UninstallInputs
+from installer.wizard_app import DoctorScreen, PolicyInputs, UninstallInputs
 
 
 class _DummyApp:
@@ -639,3 +639,62 @@ def test_build_app_constructs_version_refresh_with_default_bin_dir(
     service = app.catalog._version_refresh  # pyright: ignore[reportPrivateUsage]
     assert service is not None
     assert service.managed_bin_dir == setup._DEFAULT_BIN_DIR  # pyright: ignore[reportPrivateUsage]
+
+
+def test_build_app_shares_one_update_service_and_invalidate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    platform = _platform()
+    app = setup._build_app([], platform)  # pyright: ignore[reportPrivateUsage]
+    updates = app.catalog._updates  # pyright: ignore[reportPrivateUsage]
+    assert updates is not None
+    assert updates.platform is platform
+    assert app.catalog_for("user")._updates is updates  # pyright: ignore[reportPrivateUsage]
+    assert app.catalog_for("ai")._updates is updates  # pyright: ignore[reportPrivateUsage]
+    refresh = app.catalog._version_refresh  # pyright: ignore[reportPrivateUsage]
+    assert refresh is not None
+    assert updates._invalidate == refresh.invalidate  # pyright: ignore[reportPrivateUsage]
+    doctor = app._views["doctor"]  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(doctor, DoctorScreen)
+    assert updates._replay_globals is doctor._reinstall_globals  # pyright: ignore[reportPrivateUsage]
+
+
+def test_build_app_reresolve_reads_live_inventory_not_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    platform = _platform()
+    tool = Tool(
+        id="rg",
+        name="ripgrep",
+        category="search",
+        cmd="rg",
+        methods=(Method(kind="brew", params={"formula": "ripgrep"}),),
+        tier="system",
+    )
+    state: dict[str, dict[str, str]] = {"formulae": {}}
+
+    def fake_query(cmd: list[str], **_kwargs: object) -> str:
+        if cmd[:3] == ["brew", "list", "--versions"] and "--formula" in cmd:
+            if state["formulae"]:
+                return "ripgrep 14.1.1\n"
+            return ""
+        if cmd[:2] == ["brew", "--prefix"]:
+            return "/opt/homebrew\n"
+        if cmd[:3] == ["brew", "list", "--versions"] and "--cask" in cmd:
+            return ""
+        if cmd[:3] == ["uv", "tool", "list"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr("installer.ownership.run_query", fake_query)
+    monkeypatch.setattr("installer.ownership.pnpm_global_packages", lambda: ())
+    app = setup._build_app([tool], platform)  # pyright: ignore[reportPrivateUsage]
+    updates = app.catalog._updates  # pyright: ignore[reportPrivateUsage]
+    assert updates is not None
+    first = updates._reresolve_ownership(tool)  # pyright: ignore[reportPrivateUsage]
+    state["formulae"] = {"ripgrep": "14.1.1"}
+    second = updates._reresolve_ownership(tool)  # pyright: ignore[reportPrivateUsage]
+    assert first.owner != second.owner or second.owner == "brew"
+    assert second.owner in {"brew", "unknown", "installer"}

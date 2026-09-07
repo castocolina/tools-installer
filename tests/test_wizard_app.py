@@ -13,7 +13,7 @@ from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
-from installer.ownership import ManagerInventory
+from installer.ownership import ManagerInventory, ManagerOwnership, Owner, OwnershipCandidate
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport, reinstall_preview
 from installer.policy import (
@@ -27,7 +27,8 @@ from installer.policy import (
 from installer.run import CommandError
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, ToolRow
-from installer.version_status import VersionRefreshService
+from installer.update import UpdateOutcome, UpdateService, UpdateTarget
+from installer.version_status import VersionRefreshService, VersionStatus
 from installer.versions import VersionError
 from installer.wizard_app import (
     VIEW_ORDER,
@@ -3049,3 +3050,729 @@ async def test_version_navigation_discards_a_superseded_generation(tmp_path: Pat
         others_release.set()
         await _settle_versions(app, pilot)
         await _settle_versions(app, pilot, app.catalog_for("ai"))
+
+
+def _owned(
+    tool: Tool,
+    owner: Owner,
+    *,
+    confidence: str = "direct",
+    package: str | None = None,
+    unknown_reason: str | None = None,
+) -> ManagerOwnership:
+    return ManagerOwnership(
+        tool_id=tool.id,
+        owner=owner,
+        method=tool.methods[0] if tool.methods else None,
+        package=package,
+        current_version=None,
+        confidence=confidence,  # type: ignore[arg-type]
+        shadowed=False,
+        candidates=(
+            OwnershipCandidate(
+                owner=owner,
+                method=tool.methods[0] if tool.methods else None,
+                package=package,
+                current_version=None,
+                evidence="test",
+            ),
+        ),
+        active_candidate=None if owner == "unknown" else owner,
+        active_path=None,
+        unknown_reason=unknown_reason,
+    )
+
+
+def _update_app(
+    tools: list[Tool],
+    installed: Mapping[str, bool],
+    *,
+    service: VersionRefreshService,
+    updates: UpdateService,
+) -> UnifiedApp:
+    return UnifiedApp(
+        tools,
+        installed,
+        {"search": "find things", "ai": "agents", "pkg-mgr": "pkg"},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: ({}, None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=_uninstall_inputs(),
+        policies=_policy_inputs(),
+        version_refresh=service,
+        updates=updates,
+    )
+
+
+def _freeze_status(
+    service: VersionRefreshService,
+    *,
+    ownership: dict[str, ManagerOwnership],
+    statuses: dict[str, VersionStatus],
+) -> None:
+    service._ownership = ownership  # pyright: ignore[reportPrivateUsage]
+    service._statuses = statuses  # pyright: ignore[reportPrivateUsage]
+
+    def frozen(_tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+        return dict(statuses)
+
+    service.refresh = frozen  # type: ignore[method-assign]
+
+
+async def _settle_update(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> None:
+    for _ in range(400):
+        screen = app.catalog
+        updates = screen._updates  # pyright: ignore[reportPrivateUsage]
+        if updates is None or updates.in_flight is None:
+            break
+        await pilot.pause()
+    await pilot.pause()
+
+
+def _brew_rg() -> Tool:
+    return Tool(
+        id="rg",
+        name="ripgrep",
+        category="search",
+        cmd="rg",
+        methods=(
+            Method(
+                kind="github_release",
+                params={"repo": "BurntSushi/ripgrep", "asset": "rg.tar.gz", "member": "rg"},
+            ),
+            Method(kind="brew", params={"formula": "ripgrep"}),
+        ),
+        priority="P0",
+        audience="ai",
+        tier="system",
+    )
+
+
+async def test_second_u_press_while_latched_is_refused(tmp_path: Path) -> None:
+    tool = _brew_rg()
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        started.set()
+        assert release.wait(timeout=5)
+
+    ownership = _owned(tool, "brew", package="ripgrep")
+    stale_status = VersionStatus(
+        tool_id="rg",
+        installed="14.1.0",
+        latest="14.1.1",
+        outdated=True,
+        stale=False,
+        source="brew",
+    )
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
+    _freeze_status(service, ownership={"rg": ownership}, statuses={"rg": stale_status})
+    updates = UpdateService(
+        platform=service.platform,
+        runner=runner,
+        resolve_tag=lambda _repo: "v1",
+        tools={"rg": tool},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+        invalidate=service.invalidate,
+    )
+    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        await pilot.press("u")
+        assert started.wait(timeout=5)
+        await pilot.press("u")
+        assert "in flight" in app.catalog.status_text
+        release.set()
+        await _settle_update(app, pilot)
+        assert calls == [["brew", "upgrade", "ripgrep"]]
+
+
+async def test_unknown_owner_row_produces_zero_runner_invocations(tmp_path: Path) -> None:
+    tool = _brew_rg()
+    calls: list[list[str]] = []
+    ownership = _owned(
+        tool, "unknown", confidence="none", unknown_reason="the brew inventory could not be read"
+    )
+    stale_status = VersionStatus(
+        tool_id="rg",
+        installed="14.1.0",
+        latest="14.1.1",
+        outdated=True,
+        stale=False,
+        source="unknown",
+    )
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
+    _freeze_status(service, ownership={"rg": ownership}, statuses={"rg": stale_status})
+    updates = UpdateService(
+        platform=service.platform,
+        runner=calls.append,
+        resolve_tag=lambda _repo: "v1",
+        tools={"rg": tool},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+    )
+    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        await pilot.press("u")
+        await _settle_update(app, pilot)
+        assert calls == []
+        assert "brew inventory" in app.catalog.status_text
+
+
+async def test_non_mutation_grade_owner_produces_zero_runner_invocations(tmp_path: Path) -> None:
+    tool = _brew_rg()
+    calls: list[list[str]] = []
+    ownership = _owned(
+        tool, "brew", confidence="none", unknown_reason="the brew inventory could not be read"
+    )
+    stale_status = VersionStatus(
+        tool_id="rg",
+        installed="14.1.0",
+        latest="14.1.1",
+        outdated=True,
+        stale=False,
+        source="brew",
+    )
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
+    _freeze_status(service, ownership={"rg": ownership}, statuses={"rg": stale_status})
+    updates = UpdateService(
+        platform=service.platform,
+        runner=calls.append,
+        resolve_tag=lambda _repo: "v1",
+        tools={"rg": tool},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+    )
+    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        await pilot.press("u")
+        await _settle_update(app, pilot)
+        assert calls == []
+        assert "brew inventory" in app.catalog.status_text
+
+
+async def test_rg_end_to_end_delegates_to_brew(tmp_path: Path) -> None:
+    tool = _brew_rg()
+    calls: list[list[str]] = []
+    ownership = _owned(tool, "brew", package="ripgrep")
+    stale_status = VersionStatus(
+        tool_id="rg",
+        installed="14.1.0",
+        latest="14.1.1",
+        outdated=True,
+        stale=False,
+        source="brew",
+    )
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
+    _freeze_status(service, ownership={"rg": ownership}, statuses={"rg": stale_status})
+    updates = UpdateService(
+        platform=service.platform,
+        runner=calls.append,
+        resolve_tag=lambda _repo: "v1",
+        tools={"rg": tool},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+        invalidate=service.invalidate,
+    )
+    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        depth = len(app.screen_stack)
+        await pilot.press("u")
+        await _settle_update(app, pilot)
+        assert calls == [["brew", "upgrade", "ripgrep"]]
+        assert len(app.screen_stack) == depth
+
+
+async def test_update_worker_crash_still_posts_and_clears(tmp_path: Path) -> None:
+    tool = _brew_rg()
+    ownership = _owned(tool, "brew", package="ripgrep")
+    stale_status = VersionStatus(
+        tool_id="rg",
+        installed="14.1.0",
+        latest="14.1.1",
+        outdated=True,
+        stale=False,
+        source="brew",
+    )
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
+    _freeze_status(service, ownership={"rg": ownership}, statuses={"rg": stale_status})
+
+    def boom(_cmd: list[str]) -> None:
+        raise VersionError("boom")
+
+    updates = UpdateService(
+        platform=service.platform,
+        runner=boom,
+        resolve_tag=lambda _repo: "v1",
+        tools={"rg": tool},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+    )
+    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        await pilot.press("u")
+        await _settle_update(app, pilot)
+        assert app.is_running
+        assert updates.in_flight is None
+        assert app.catalog.status_text
+
+
+async def test_fresh_ownership_dispatches_on_reresolve_not_cache(tmp_path: Path) -> None:
+    tool = _brew_rg()
+    calls: list[list[str]] = []
+    cached = _owned(tool, "installer", confidence="by-elimination")
+    fresh = _owned(tool, "brew", package="ripgrep")
+    stale_status = VersionStatus(
+        tool_id="rg",
+        installed="14.1.0",
+        latest="14.1.1",
+        outdated=True,
+        stale=False,
+        source="installer",
+    )
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
+    _freeze_status(service, ownership={"rg": cached}, statuses={"rg": stale_status})
+    updates = UpdateService(
+        platform=service.platform,
+        runner=calls.append,
+        resolve_tag=lambda _repo: "v1",
+        tools={"rg": tool},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: fresh,
+        invalidate=service.invalidate,
+    )
+    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        await pilot.press("u")
+        await _settle_update(app, pilot)
+        assert calls == [["brew", "upgrade", "ripgrep"]]
+
+
+async def test_fresh_unknown_overrides_cached_green_light(tmp_path: Path) -> None:
+    tool = _brew_rg()
+    calls: list[list[str]] = []
+    cached = _owned(tool, "brew", package="ripgrep")
+    fresh = _owned(
+        tool, "unknown", confidence="none", unknown_reason="the brew inventory could not be read"
+    )
+    stale_status = VersionStatus(
+        tool_id="rg",
+        installed="14.1.0",
+        latest="14.1.1",
+        outdated=True,
+        stale=False,
+        source="brew",
+    )
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
+    _freeze_status(service, ownership={"rg": cached}, statuses={"rg": stale_status})
+    order: list[str] = []
+
+    def reresolve(_tool: Tool) -> ManagerOwnership:
+        order.append("reresolve")
+        return fresh
+
+    def managed() -> tuple[str, ...] | None:
+        order.append("managed")
+        return ("x",)
+
+    updates = UpdateService(
+        platform=service.platform,
+        runner=calls.append,
+        resolve_tag=lambda _repo: "v1",
+        tools={"rg": tool},
+        managed_packages=managed,
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=reresolve,
+    )
+    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        await pilot.press("u")
+        await _settle_update(app, pilot)
+        assert calls == []
+        assert "brew inventory" in app.catalog.status_text
+        assert order == ["reresolve"]
+
+
+async def test_pnpm_precapture_replays_pre_update_set(tmp_path: Path) -> None:
+    """12-REVIEWS.md:338-342 — a post-update capture would replay an empty list."""
+    tool = Tool(
+        id="pnpm",
+        name="pnpm",
+        category="pkg-mgr",
+        cmd="pnpm",
+        methods=(Method(kind="script", params={"url": "https://get.pnpm.io/install.sh"}),),
+        tier="system",
+    )
+    ownership = _owned(tool, "installer", confidence="by-elimination")
+    live: list[str] = ["@mermaid-js/mermaid-cli", "puppeteer"]
+    order: list[str] = []
+    replayed: list[tuple[str, ...]] = []
+    stale_status = VersionStatus(
+        tool_id="pnpm",
+        installed="11.9.0",
+        latest=None,
+        outdated=None,
+        stale=True,
+        source="installer",
+    )
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
+    _freeze_status(service, ownership={"pnpm": ownership}, statuses={"pnpm": stale_status})
+
+    def reresolve(_tool: Tool) -> ManagerOwnership:
+        order.append("reresolve")
+        return ownership
+
+    def managed() -> tuple[str, ...] | None:
+        order.append("managed")
+        return tuple(live)
+
+    def runner(_cmd: list[str]) -> None:
+        order.append("mutate")
+        live.clear()
+
+    def replay(packages: Sequence[str]) -> tuple[str, ...]:
+        order.append("replay")
+        replayed.append(tuple(packages))
+        return tuple(packages)
+
+    updates = UpdateService(
+        platform=service.platform,
+        runner=runner,
+        resolve_tag=lambda _repo: "v1",
+        tools={"pnpm": tool},
+        managed_packages=managed,
+        replay_globals=replay,
+        reresolve_ownership=reresolve,
+        invalidate=service.invalidate,
+    )
+    app = _update_app([tool], {"pnpm": True}, service=service, updates=updates)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        await pilot.press("u")
+        await _settle_update(app, pilot)
+        assert order.index("reresolve") < order.index("managed")
+        assert order.index("managed") < order.index("mutate")
+        assert order.index("mutate") < order.index("replay")
+        assert replayed == [("@mermaid-js/mermaid-cli", "puppeteer")]
+        assert "replayed" in app.catalog.status_text
+
+
+async def test_non_pnpm_node_tool_skips_snapshot_and_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool = Tool(
+        id="mmdc",
+        name="mmdc",
+        category="ai",
+        cmd="mmdc",
+        methods=(Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
+        tier="system",
+    )
+    ownership = _owned(tool, "pnpm", package="@mermaid-js/mermaid-cli")
+    managed_calls: list[int] = []
+    replay_calls: list[int] = []
+    stale_status = VersionStatus(
+        tool_id="mmdc",
+        installed="11.9.0",
+        latest="12.3.4",
+        outdated=True,
+        stale=False,
+        source="pnpm",
+    )
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
+    _freeze_status(service, ownership={"mmdc": ownership}, statuses={"mmdc": stale_status})
+
+    def managed() -> tuple[str, ...] | None:
+        managed_calls.append(1)
+        return ("x",)
+
+    def replay(packages: Sequence[str]) -> tuple[str, ...]:
+        replay_calls.append(1)
+        return tuple(packages)
+
+    def fake_perform(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        return UpdateOutcome(tool_id=target.tool.id, status="updated", owner="pnpm")
+
+    monkeypatch.setattr("installer.update.perform_update", fake_perform)
+    updates = UpdateService(
+        platform=service.platform,
+        runner=lambda _cmd: None,
+        resolve_tag=lambda _repo: "v1",
+        tools={"mmdc": tool},
+        managed_packages=managed,
+        replay_globals=replay,
+        reresolve_ownership=lambda _tool: ownership,
+        invalidate=service.invalidate,
+    )
+    app = _update_app([tool], {"mmdc": True}, service=service, updates=updates)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        await pilot.press("u")
+        await _settle_update(app, pilot)
+        assert managed_calls == []
+        assert replay_calls == []
+
+
+async def test_none_package_snapshot_is_not_replayed_as_empty(tmp_path: Path) -> None:
+    tool = Tool(
+        id="pnpm",
+        name="pnpm",
+        category="pkg-mgr",
+        cmd="pnpm",
+        methods=(Method(kind="script", params={"url": "https://get.pnpm.io/install.sh"}),),
+        tier="system",
+    )
+    ownership = _owned(tool, "installer", confidence="by-elimination")
+    replay_calls: list[int] = []
+    stale_status = VersionStatus(
+        tool_id="pnpm",
+        installed="11.9.0",
+        latest=None,
+        outdated=None,
+        stale=True,
+        source="installer",
+    )
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
+    _freeze_status(service, ownership={"pnpm": ownership}, statuses={"pnpm": stale_status})
+
+    def replay(packages: Sequence[str]) -> tuple[str, ...]:
+        replay_calls.append(1)
+        return tuple(packages)
+
+    updates = UpdateService(
+        platform=service.platform,
+        runner=lambda _cmd: None,
+        resolve_tag=lambda _repo: "v1",
+        tools={"pnpm": tool},
+        managed_packages=lambda: None,
+        replay_globals=replay,
+        reresolve_ownership=lambda _tool: ownership,
+        invalidate=service.invalidate,
+    )
+    app = _update_app([tool], {"pnpm": True}, service=service, updates=updates)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        await pilot.press("u")
+        await _settle_update(app, pilot)
+        assert replay_calls == []
+        assert "could not be listed" in app.catalog.status_text
+
+
+async def test_post_update_status_comes_from_version_refresh(tmp_path: Path) -> None:
+    tool = Tool(
+        id="rectangle",
+        name="Rectangle",
+        category="search",
+        cmd="rectangle",
+        methods=(Method(kind="cask", params={"cask": "rectangle"}),),
+        tier="system",
+    )
+    ownership = _owned(tool, "cask", package="rectangle")
+    post = VersionStatus(
+        tool_id="rectangle",
+        installed="0.86",
+        latest="0.86",
+        outdated=False,
+        stale=False,
+        source="cask",
+    )
+    pre = VersionStatus(
+        tool_id="rectangle",
+        installed="0.85",
+        latest="0.86",
+        outdated=True,
+        stale=False,
+        source="cask",
+    )
+    service = _macos_service(
+        tmp_path, resolve_tag=lambda repo: "v1", probe_output=lambda argv: None
+    )
+    _freeze_status(service, ownership={"rectangle": ownership}, statuses={"rectangle": pre})
+
+    def fake_refresh(tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+        return {tools[0].id: post}
+
+    service.refresh = fake_refresh  # type: ignore[method-assign]
+    updates = UpdateService(
+        platform=service.platform,
+        runner=lambda _cmd: None,
+        resolve_tag=lambda _repo: "v1",
+        tools={"rectangle": tool},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+        invalidate=service.invalidate,
+    )
+    app = _update_app([tool], {"rectangle": True}, service=service, updates=updates)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        await pilot.press("u")
+        await _settle_update(app, pilot)
+        cell = app.catalog.query_one(DataTable[Any]).get_cell("rectangle", "ver")
+        assert "0.86" in cell.plain
+
+
+async def test_post_update_status_for_brew_also_comes_from_refresh(tmp_path: Path) -> None:
+    tool = _brew_rg()
+    ownership = _owned(tool, "brew", package="ripgrep")
+    post = VersionStatus(
+        tool_id="rg",
+        installed="14.1.1",
+        latest="14.1.1",
+        outdated=False,
+        stale=False,
+        source="brew",
+    )
+    pre = VersionStatus(
+        tool_id="rg",
+        installed="14.1.0",
+        latest="14.1.1",
+        outdated=True,
+        stale=False,
+        source="brew",
+    )
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
+    _freeze_status(service, ownership={"rg": ownership}, statuses={"rg": pre})
+
+    def fake_refresh(tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+        return {tools[0].id: post}
+
+    service.refresh = fake_refresh  # type: ignore[method-assign]
+    updates = UpdateService(
+        platform=service.platform,
+        runner=lambda _cmd: None,
+        resolve_tag=lambda _repo: "v1",
+        tools={"rg": tool},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+        invalidate=service.invalidate,
+    )
+    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        await pilot.press("u")
+        await _settle_update(app, pilot)
+        cell = app.catalog.query_one(DataTable[Any]).get_cell("rg", "ver")
+        assert "14.1.1" in cell.plain
+
+
+async def test_epoch_guard_drops_stale_refresh_after_update(tmp_path: Path) -> None:
+    tool = _brew_rg()
+    ownership = _owned(tool, "brew", package="ripgrep")
+    started = threading.Event()
+    release = threading.Event()
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
+    service._ownership = {"rg": ownership}  # pyright: ignore[reportPrivateUsage]
+    original_refresh = service.refresh
+
+    def latched_refresh(tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+        started.set()
+        assert release.wait(timeout=5)
+        return original_refresh(tools)
+
+    service.refresh = latched_refresh  # type: ignore[method-assign]
+    post = VersionStatus(
+        tool_id="rg",
+        installed="14.1.1",
+        latest="14.1.1",
+        outdated=False,
+        stale=False,
+        source="brew",
+    )
+
+    def post_refresh(tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+        return {tools[0].id: post}
+
+    updates = UpdateService(
+        platform=service.platform,
+        runner=lambda _cmd: None,
+        resolve_tag=lambda _repo: "v1",
+        tools={"rg": tool},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+        invalidate=service.invalidate,
+    )
+    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert started.wait(timeout=5)
+        app.catalog._version_statuses["rg"] = VersionStatus(  # pyright: ignore[reportPrivateUsage]
+            tool_id="rg",
+            installed="14.1.0",
+            latest="14.1.1",
+            outdated=True,
+            stale=False,
+            source="brew",
+        )
+        service.refresh = post_refresh  # type: ignore[method-assign]
+        await pilot.press("u")
+        await _settle_update(app, pilot)
+        post_cell = app.catalog.query_one(DataTable[Any]).get_cell("rg", "ver")
+        assert "14.1.1" in post_cell.plain or "updated" in app.catalog.status_text
+        release.set()
+        await _settle_versions(app, pilot)
+        cell = app.catalog.query_one(DataTable[Any]).get_cell("rg", "ver")
+        assert "14.1.0 ->" not in cell.plain
+
+
+async def test_update_runs_off_the_event_loop_with_no_confirmation(tmp_path: Path) -> None:
+    tool = _brew_rg()
+    started = threading.Event()
+    release = threading.Event()
+    ownership = _owned(tool, "brew", package="ripgrep")
+    stale_status = VersionStatus(
+        tool_id="rg",
+        installed="14.1.0",
+        latest="14.1.1",
+        outdated=True,
+        stale=False,
+        source="brew",
+    )
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
+    _freeze_status(service, ownership={"rg": ownership}, statuses={"rg": stale_status})
+
+    def runner(_cmd: list[str]) -> None:
+        started.set()
+        assert release.wait(timeout=5)
+
+    updates = UpdateService(
+        platform=service.platform,
+        runner=runner,
+        resolve_tag=lambda _repo: "v1",
+        tools={"rg": tool},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+        invalidate=service.invalidate,
+    )
+    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        depth = len(app.screen_stack)
+        await pilot.press("u")
+        assert started.wait(timeout=5)
+        assert app.catalog.selected == set()
+        await pilot.press("space")
+        assert app.catalog.selected == {"rg"}
+        assert len(app.screen_stack) == depth
+        release.set()
+        await _settle_update(app, pilot)
+        assert len(app.screen_stack) == depth

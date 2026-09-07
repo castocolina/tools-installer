@@ -1,6 +1,7 @@
 from typing import Any
 
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.widgets import DataTable
 
 from installer.ui_common import (
@@ -238,3 +239,31 @@ def test_tier_views_lead_the_nav_and_match_the_tier_enum() -> None:
     assert VIEW_ORDER[:3] == tuple(tier.value for tier in Tier)
     assert BASE_VIEW == "system"
     assert set(VIEW_BY_NAME) == set(VIEW_ORDER)
+
+
+def test_catalog_views_advertise_update_key() -> None:
+    from installer.ui_common import VIEW_BY_NAME
+
+    for name in ("system", "user", "ai"):
+        assert "u update" in VIEW_BY_NAME[name].actions
+    assert "u update" not in VIEW_BY_NAME["doctor"].actions
+    assert "u update" not in VIEW_BY_NAME["uninstall"].actions
+    assert "u update" not in VIEW_BY_NAME["policies"].actions
+
+
+def test_catalog_footer_actions_match_effective_bindings() -> None:
+    from installer.catalog_tui import CatalogScreen
+    from installer.tool_browser import ToolBrowser
+    from installer.ui_common import VIEW_BY_NAME
+
+    shown: set[str] = set()
+    for binding in (*CatalogScreen.BINDINGS, *ToolBrowser.BINDINGS):
+        if isinstance(binding, Binding) and binding.show and len(binding.key) == 1:
+            shown.add(binding.key)
+    action_keys: set[str] = set()
+    for name in ("system", "user", "ai"):
+        for part in VIEW_BY_NAME[name].actions.split("|"):
+            token = part.strip().split()[0]
+            if len(token) == 1:
+                action_keys.add(token)
+    assert shown == action_keys

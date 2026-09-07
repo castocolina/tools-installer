@@ -111,7 +111,7 @@ VIEWS: tuple[View, ...] = (
         glyph="o",
         style="cyan",
         hint="space marks a tool; enter installs everything you staged",
-        actions="space toggle | enter install | a all | i invert",
+        actions="space toggle | enter install | a all | i invert | u update",
     ),
     View(
         name="user",
@@ -121,7 +121,7 @@ VIEWS: tuple[View, ...] = (
         glyph="o",
         style="cyan",
         hint="space marks a tool; enter installs everything you staged",
-        actions="space toggle | enter install | a all | i invert",
+        actions="space toggle | enter install | a all | i invert | u update",
     ),
     View(
         name="ai",
@@ -131,7 +131,7 @@ VIEWS: tuple[View, ...] = (
         glyph="o",
         style="cyan",
         hint="space marks a tool; enter installs everything you staged",
-        actions="space toggle | enter install | a all | i invert",
+        actions="space toggle | enter install | a all | i invert | u update",
     ),
     View(
         name="doctor",

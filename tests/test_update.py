@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -23,8 +23,10 @@ from installer.postinstall import run_postinstall
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner
 from installer.update import (
+    InvalidateFn,
     UpdateError,
     UpdateOutcome,
+    UpdateService,
     UpdateTarget,
     perform_update,
     resolve_update_argv,
@@ -499,3 +501,214 @@ def test_perform_update_does_not_import_resolve_ownership_or_resolve_methods() -
     assert "resolve_ownership" not in joined
     assert "installer.resolve" not in joined
     assert "installer.engine" not in joined
+
+
+def _service(
+    *,
+    reresolve: Callable[[Tool], ManagerOwnership],
+    managed: Callable[[], tuple[str, ...] | None] = lambda: (),
+    replay: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
+    invalidate: InvalidateFn | None = None,
+    runner: Callable[[list[str]], None] | None = None,
+) -> UpdateService:
+    from collections.abc import Sequence as Seq
+
+    def _replay(packages: Seq[str]) -> tuple[str, ...]:
+        return tuple(packages)
+
+    return UpdateService(
+        platform=_platform(),
+        runner=runner or (lambda _cmd: None),
+        resolve_tag=lambda _repo: "v1",
+        tools={},
+        managed_packages=managed,
+        replay_globals=replay or _replay,
+        reresolve_ownership=reresolve,
+        invalidate=invalidate,
+    )
+
+
+def test_update_service_begin_blocks_a_second_trigger() -> None:
+    brew = Method(kind="brew", params={"formula": "ripgrep"})
+    tool = _tool("rg", brew, cmd="rg")
+    service = _service(
+        reresolve=lambda _tool: _ownership(tool, "brew", method=brew, package="ripgrep")
+    )
+    assert service.begin("rg") is True
+    assert service.in_flight == "rg"
+    assert service.begin("fd") is False
+    assert service.in_flight == "rg"
+    service.end()
+    assert service.in_flight is None
+    assert service.begin("fd") is True
+
+
+def test_update_service_fresh_ownership_overrides_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    brew = Method(kind="brew", params={"formula": "ripgrep"})
+    github = Method(
+        kind="github_release",
+        params={"repo": "BurntSushi/ripgrep", "asset": "rg.tar.gz", "member": "rg"},
+    )
+    tool = _tool("rg", github, brew, cmd="rg")
+    cached = _target(tool, "installer", method=github)
+    calls: list[list[str]] = []
+    order: list[str] = []
+
+    def reresolve(_tool: Tool) -> ManagerOwnership:
+        order.append("reresolve")
+        return _ownership(tool, "brew", method=brew, package="ripgrep")
+
+    def managed() -> tuple[str, ...] | None:
+        order.append("managed")
+        return ("x",)
+
+    def fake_perform(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        order.append("mutate")
+        return UpdateOutcome(tool_id=target.tool.id, status="updated", owner=target.ownership.owner)
+
+    monkeypatch.setattr(update, "perform_update", fake_perform)
+    service = _service(reresolve=reresolve, managed=managed, runner=calls.append)
+    outcome = service.run(cached)
+    assert outcome.status == "updated"
+    assert order[0] == "reresolve"
+    assert "managed" not in order
+
+
+def test_update_service_fresh_unknown_refuses_despite_cached_green() -> None:
+    brew = Method(kind="brew", params={"formula": "ripgrep"})
+    tool = _tool("rg", brew, cmd="rg")
+    cached = _target(tool, "brew", method=brew, package="ripgrep")
+    calls: list[list[str]] = []
+
+    def reresolve(_tool: Tool) -> ManagerOwnership:
+        return _ownership(
+            tool,
+            "unknown",
+            confidence="none",
+            unknown_reason="the brew inventory could not be read",
+        )
+
+    service = _service(reresolve=reresolve, runner=calls.append)
+    outcome = service.run(cached)
+    assert outcome.status == "unknown-owner"
+    assert "brew inventory" in outcome.detail
+    assert calls == []
+
+
+def test_update_service_precaptures_pnpm_globals_before_mutate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """12-REVIEWS.md:338-342 — a post-update capture would replay an empty list."""
+    method = Method(kind="script", params={"url": "https://get.pnpm.io/install.sh", "shell": "sh"})
+    tool = _tool("pnpm", method)
+    live: list[str] = ["@mermaid-js/mermaid-cli", "puppeteer"]
+    order: list[str] = []
+    replayed: list[tuple[str, ...]] = []
+
+    def managed() -> tuple[str, ...] | None:
+        order.append("managed")
+        return tuple(live)
+
+    def mutate(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        order.append("mutate")
+        live.clear()
+        return UpdateOutcome(tool_id=target.tool.id, status="updated", owner="installer")
+
+    def replay(packages: Sequence[str]) -> tuple[str, ...]:
+        order.append("replay")
+        replayed.append(tuple(packages))
+        return tuple(packages)
+
+    monkeypatch.setattr(update, "perform_update", mutate)
+    service = _service(
+        reresolve=lambda _tool: _ownership(tool, "installer", method=method),
+        managed=managed,
+        replay=replay,
+    )
+    outcome = service.run(_target(tool, "installer", method=method))
+    assert outcome.status == "updated"
+    assert order.index("managed") < order.index("mutate")
+    assert order.index("mutate") < order.index("replay")
+    assert replayed == [("@mermaid-js/mermaid-cli", "puppeteer")]
+    assert outcome.replayed_globals == ("@mermaid-js/mermaid-cli", "puppeteer")
+
+
+def test_update_service_skips_snapshot_for_non_pnpm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    method = Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"})
+    tool = _tool("mmdc", method, cmd="mmdc")
+    managed_calls: list[int] = []
+    replay_calls: list[int] = []
+
+    def managed() -> tuple[str, ...] | None:
+        managed_calls.append(1)
+        return ("x",)
+
+    def replay(packages: Sequence[str]) -> tuple[str, ...]:
+        replay_calls.append(1)
+        return tuple(packages)
+
+    def fake_perform(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        return UpdateOutcome(tool_id=target.tool.id, status="updated", owner="pnpm")
+
+    monkeypatch.setattr(update, "perform_update", fake_perform)
+    service = _service(
+        reresolve=lambda _tool: _ownership(
+            tool, "pnpm", method=method, package="@mermaid-js/mermaid-cli"
+        ),
+        managed=managed,
+        replay=replay,
+    )
+    service.run(_target(tool, "pnpm", method=method, package="@mermaid-js/mermaid-cli"))
+    assert managed_calls == []
+    assert replay_calls == []
+
+
+def test_update_service_none_snapshot_is_not_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    method = Method(kind="script", params={"url": "https://get.pnpm.io/install.sh", "shell": "sh"})
+    tool = _tool("pnpm", method)
+    replay_calls: list[int] = []
+
+    def replay(packages: Sequence[str]) -> tuple[str, ...]:
+        replay_calls.append(1)
+        return tuple(packages)
+
+    def fake_perform(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        return UpdateOutcome(tool_id=target.tool.id, status="updated", owner="installer")
+
+    monkeypatch.setattr(update, "perform_update", fake_perform)
+    service = _service(
+        reresolve=lambda _tool: _ownership(tool, "installer", method=method),
+        managed=lambda: None,
+        replay=replay,
+    )
+    outcome = service.run(_target(tool, "installer", method=method))
+    assert outcome.status == "updated"
+    assert replay_calls == []
+    assert "could not be listed" in outcome.detail
+
+
+def test_update_service_invalidate_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    brew = Method(kind="brew", params={"formula": "ripgrep"})
+    tool = _tool("rg", brew, cmd="rg")
+    reasons: list[str] = []
+
+    def fake_perform(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        return UpdateOutcome(tool_id=target.tool.id, status="updated", owner="brew")
+
+    def record_invalidate(*, reason: str) -> int:
+        reasons.append(reason)
+        return 2
+
+    monkeypatch.setattr(update, "perform_update", fake_perform)
+    service = _service(
+        reresolve=lambda _tool: _ownership(tool, "brew", method=brew, package="ripgrep"),
+        invalidate=record_invalidate,
+    )
+    service.run(_target(tool, "brew", method=brew, package="ripgrep"))
+    assert reasons == ["updated rg"]

@@ -208,6 +208,13 @@ class ToolBrowser(Widget, Generic[T]):
         # the lookup branchless (section rows key on "#title", never on None).
         return self._by_id.get(highlighted_key(self.query_one(DataTable[Any])))
 
+    def highlighted_id(self) -> str | None:
+        """The item id under the cursor, or None on an empty table or a section row."""
+        item = self._highlighted_item()
+        if item is None:
+            return None
+        return self._adapter.item_id(item)
+
     def _first_selectable_row(self) -> int | None:
         table = self.query_one(DataTable[Any])
         for index, row_key in enumerate(table.rows):

@@ -20,9 +20,11 @@ from textual.widgets import DataTable
 from installer.deps import missing_requires
 from installer.enums import Audience, Priority
 from installer.model import Tool
+from installer.ownership import MUTATION_GRADE
 from installer.selection import select_tools, unstaged_recommends
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import AppScreen, StatusLine, mark, run_live
+from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import VersionRefreshService, VersionStatus
 
 TableSortKey = Literal["id", "category", "priority", "audience", "installed"]
@@ -90,6 +92,25 @@ def group_tools(
     else:  # "table" is routed by the app before grouping; anything else is a bug
         raise ValueError(f"unknown view: {view!r}")
     return [(title, detail, members) for title, detail, members in groups if members]
+
+
+class ToolUpdated(Message):
+    """An update worker finished. Applied unconditionally; epoch is recorded."""
+
+    def __init__(
+        self,
+        tool_id: str,
+        outcome: UpdateOutcome | None,
+        status: VersionStatus | None,
+        error: str | None,
+        epoch: int,
+    ) -> None:
+        super().__init__()
+        self.tool_id = tool_id
+        self.outcome = outcome
+        self.status = status
+        self.error = error
+        self.epoch = epoch
 
 
 class VersionStatusRefreshed(Message):
@@ -160,6 +181,12 @@ class CatalogScreen(AppScreen):
     the tests assert on (view, table_sort, selected, detail_text, status_text)
     is delegated to the embedded `ToolBrowser` (or the screen's StatusLine) and
     exposed as public properties.
+
+    Update output policy: the update runs through `run_captured`, so the
+    child's stdout never reaches the rendered frame. The user sees an
+    in-flight line, then the re-probed version or the child's stderr from
+    `CommandError.detail`. Live streaming of manager output is not built
+    this phase.
     """
 
     class Decided(Message):
@@ -173,6 +200,7 @@ class CatalogScreen(AppScreen):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("r", "accept_recommends", "add recommended", show=False),
         Binding("d", "dismiss_recommends", "dismiss", show=False),
+        Binding("u", "update_tool", "update", show=True),
     ]
 
     def __init__(
@@ -186,6 +214,7 @@ class CatalogScreen(AppScreen):
         staged: set[str],
         unavailable: Mapping[str, bool] | None = None,
         version_refresh: VersionRefreshService | None = None,
+        updates: UpdateService | None = None,
     ) -> None:
         super().__init__(view=view)
         self.tools = list(tools)
@@ -199,6 +228,7 @@ class CatalogScreen(AppScreen):
         # Default None matches UnifiedApp's optional-closure convention: tests
         # that construct a CatalogScreen without a service stay silent.
         self._version_refresh = version_refresh
+        self._updates = updates
         self._version_statuses: dict[str, VersionStatus] = {}
         self._version_refresh_generation = 0
         self.version_refreshing = False
@@ -509,6 +539,88 @@ class CatalogScreen(AppScreen):
         # a requires notice for the same mark is a separate fact that survives it.
         self._pending_recommends = ()
         self.recommends_line.clear()
+
+    def action_update_tool(self) -> None:
+        """Press `u` on the highlighted row. Immediate, no confirmation (D-01)."""
+        if self._updates is None or self._version_refresh is None:
+            return
+        tool_id = self._browser.highlighted_id()
+        if tool_id is None:
+            return
+        tool = self._by_id.get(tool_id)
+        if tool is None:
+            return
+        status = self._version_statuses.get(tool_id)
+        if status is not None and status.outdated is False:
+            return
+        ownership = self._version_refresh.ownership_of(tool_id)
+        if ownership is None:
+            return
+        if ownership.owner == "unknown" or ownership.confidence not in MUTATION_GRADE:
+            reason = ownership.unknown_reason or "no manager claimed this tool"
+            self.status.set(f"cannot update {tool_id}: {reason}", "warn")
+            return
+        if not self._updates.begin(tool_id):
+            in_flight = self._updates.in_flight or "another tool"
+            self.status.set(f"update already in flight for {in_flight}", "warn")
+            return
+        self.status.set(f"updating {tool_id}…", "ok")
+        self._update_tool_worker(tool_id)
+
+    @work(thread=True, exclusive=True, group="tool-update", exit_on_error=False)
+    def _update_tool_worker(self, tool_id: str) -> None:
+        outcome: UpdateOutcome | None = None
+        status: VersionStatus | None = None
+        error: str | None = None
+        epoch = 0
+        try:
+            tool = self._by_id.get(tool_id)
+            service = self._updates
+            refresh = self._version_refresh
+            if tool is None or service is None or refresh is None:
+                return
+            cached = refresh.ownership_of(tool_id)
+            if cached is None:
+                return
+            target = UpdateTarget(tool=tool, ownership=cached)
+            result, error = run_live(lambda: service.run(target))
+            outcome = result
+            if outcome is not None and outcome.status == "updated":
+                refreshed = refresh.refresh([target.tool])
+                status = refreshed.get(tool_id)
+            epoch = refresh.epoch
+        finally:
+            if self._updates is not None:
+                self._updates.end()
+            self.post_message(ToolUpdated(tool_id, outcome, status, error, epoch))
+
+    def on_tool_updated(self, message: ToolUpdated) -> None:
+        if message.status is not None:
+            self._version_statuses[message.tool_id] = message.status
+            self._browser.reload(self._adapter())
+        outcome = message.outcome
+        if message.error is not None:
+            self.status.set(f"update failed: {message.error}", "error")
+            return
+        if outcome is None:
+            self.status.set(f"update of {message.tool_id} did not complete", "error")
+            return
+        if outcome.status == "updated":
+            version = ""
+            if message.status is not None and message.status.installed:
+                version = f" now {message.status.installed}"
+            line = f"updated {message.tool_id}{version}"
+            if outcome.replayed_globals:
+                line += f" — replayed {', '.join(outcome.replayed_globals)}"
+            if outcome.cleanup_warnings:
+                line += f" — {'; '.join(outcome.cleanup_warnings)}"
+            if outcome.postinstall_warning:
+                line += f" — {outcome.postinstall_warning}"
+            if outcome.detail:
+                line += f" — {outcome.detail}"
+            self.status.set(line, "ok")
+            return
+        self.status.set(outcome.detail or f"update {outcome.status}", "warn")
 
     def on_screen_resume(self) -> None:
         # The staged set is shared by all three tier screens (plan 02-01), and

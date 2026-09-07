@@ -34,6 +34,7 @@ from installer.cli import parse_args
 from installer.locations import all_ban_rc_paths, ban_rc_paths, rc_paths_for_mode, zshrc_path
 from installer.model import Tool, load_categories, load_tools
 from installer.omz import omz_present
+from installer.ownership import ManagerOwnership, read_inventory, resolve_ownership
 from installer.platform import Platform, detect
 from installer.policy import (
     Policy,
@@ -46,6 +47,7 @@ from installer.policy import (
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.resolve import platform_could_support
+from installer.run import run_captured
 from installer.selection import Choice
 from installer.shellrc import collect_bin_dirs, has_managed_block
 from installer.status import is_installed
@@ -55,8 +57,10 @@ from installer.uninstall import (
     SweepResult,
     active_tweak_ids,
     classify_tools,
+    plan_uninstall,
     reverse_dependencies,
 )
+from installer.update import UpdateService
 from installer.version_cache import default_cache_path
 from installer.version_status import VersionRefreshService
 from installer.versions import probe_version_output, resolve_github_tag
@@ -389,6 +393,29 @@ def _build_app(
         managed_bin_dir=_DEFAULT_BIN_DIR,
     )
 
+    def _reresolve_ownership(tool: Tool) -> ManagerOwnership:
+        inventory = read_inventory(has_brew=platform.has_brew)
+        artifacts = plan_uninstall([tool], _DEFAULT_BIN_DIR)
+        return resolve_ownership(
+            tool,
+            platform=platform,
+            inventory=inventory,
+            artifacts=artifacts,
+            which=shutil.which,
+            managed_bin_dir=_DEFAULT_BIN_DIR,
+        )
+
+    updates = UpdateService(
+        platform=platform,
+        runner=run_captured,
+        resolve_tag=resolve_github_tag,
+        tools={tool.id: tool for tool in tools},
+        managed_packages=pnpm_globals.pnpm_global_packages,
+        replay_globals=_reinstall_globals,
+        reresolve_ownership=_reresolve_ownership,
+        invalidate=version_refresh.invalidate,
+    )
+
     return UnifiedApp(
         tools,
         installed,
@@ -407,6 +434,7 @@ def _build_app(
         daemon_default=daemon_default,
         daemon_default_policy_id=daemon_default_policy_id,
         version_refresh=version_refresh,
+        updates=updates,
     )
 
 

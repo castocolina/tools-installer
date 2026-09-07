@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from rich.text import Text
+from textual.binding import Binding
 from textual.widgets import DataTable
 from textual.widgets.data_table import ColumnKey
 
@@ -27,6 +28,7 @@ from installer.platform import Platform
 from installer.resolve import platform_could_support
 from installer.selection import select_tools
 from installer.uninstall import SweepResult
+from installer.update import UpdateService
 from installer.version_cache import VersionCacheEntry, save_version_cache
 from installer.version_status import VersionRefreshService, VersionStatus
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
@@ -852,6 +854,7 @@ def _screen(
     tools: list[Tool],
     installed: Mapping[str, bool],
     version_refresh: VersionRefreshService | None = None,
+    updates: UpdateService | None = None,
 ) -> CatalogScreen:
     return CatalogScreen(
         tools,
@@ -861,6 +864,7 @@ def _screen(
         catalog=list(tools),
         staged=set(),
         version_refresh=version_refresh,
+        updates=updates,
     )
 
 
@@ -1287,3 +1291,136 @@ def test_installer_no_repo_detail_explains_undetermined_latest(tmp_path: Path) -
     text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert "cannot be determined" in text
     assert "up to date" not in text.lower()
+
+
+def _update_service(reresolve: Callable[[Tool], ManagerOwnership]) -> UpdateService:
+    return UpdateService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        runner=lambda _cmd: None,
+        resolve_tag=lambda _repo: "v1",
+        tools={},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=reresolve,
+    )
+
+
+def test_update_binding_exists_and_is_shown() -> None:
+    keys = {
+        binding.key: binding for binding in CatalogScreen.BINDINGS if isinstance(binding, Binding)
+    }
+    assert "u" in keys
+    assert keys["u"].show is True
+    assert keys["u"].action == "update_tool"
+
+
+def test_action_update_tool_skips_confirmed_current(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    ownership = _ownership(tool, owner="brew")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"rg": ownership}  # pyright: ignore[reportPrivateUsage]
+    started: list[str] = []
+    updates = _update_service(lambda _tool: ownership)
+    screen = _screen([tool], {"rg": True}, version_refresh=service, updates=updates)
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "rg": VersionStatus(
+            tool_id="rg",
+            installed="14.1.1",
+            latest="14.1.1",
+            outdated=False,
+            stale=False,
+            source="brew",
+        )
+    }
+    screen._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
+    screen._update_tool_worker = lambda tool_id: started.append(tool_id)  # type: ignore[method-assign]
+    screen.action_update_tool()
+    assert started == []
+
+
+def test_action_update_tool_refuses_non_mutation_grade(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    ownership = _ownership(
+        tool, owner="unknown", unknown_reason="the brew inventory could not be read"
+    )
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"rg": ownership}  # pyright: ignore[reportPrivateUsage]
+    started: list[str] = []
+    updates = _update_service(lambda _tool: ownership)
+    screen = _screen([tool], {"rg": True}, version_refresh=service, updates=updates)
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "rg": VersionStatus(
+            tool_id="rg",
+            installed="14.1.0",
+            latest="14.1.1",
+            outdated=True,
+            stale=False,
+            source="unknown",
+        )
+    }
+    screen._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
+    screen._update_tool_worker = lambda tool_id: started.append(tool_id)  # type: ignore[method-assign]
+    messages: list[str] = []
+    screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
+    screen.action_update_tool()
+    assert started == []
+    assert any("brew inventory" in message for message in messages)
+
+
+def test_action_update_tool_starts_worker_when_outdated_is_none(tmp_path: Path) -> None:
+    tool = Tool(
+        id="pnpm",
+        name="pnpm",
+        category="pkg-mgr",
+        cmd="pnpm",
+        methods=(Method(kind="script", params={"url": "https://get.pnpm.io/install.sh"}),),
+    )
+    ownership = ManagerOwnership(
+        tool_id="pnpm",
+        owner="installer",
+        method=tool.methods[0],
+        package=None,
+        current_version=None,
+        confidence="by-elimination",
+        shadowed=False,
+        candidates=(),
+        active_candidate=None,
+        active_path=None,
+        unknown_reason=None,
+    )
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"pnpm": ownership}  # pyright: ignore[reportPrivateUsage]
+    started: list[str] = []
+    updates = _update_service(lambda _tool: ownership)
+    screen = _screen([tool], {"pnpm": True}, version_refresh=service, updates=updates)
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "pnpm": VersionStatus(
+            tool_id="pnpm",
+            installed="11.9.0",
+            latest=None,
+            outdated=None,
+            stale=True,
+            source="installer",
+        )
+    }
+    screen._browser.highlighted_id = lambda: "pnpm"  # type: ignore[method-assign]
+
+    def fake_worker(tool_id: str) -> None:
+        started.append(tool_id)
+
+    screen._update_tool_worker = fake_worker  # type: ignore[method-assign]
+    screen.status.set = lambda text, severity: None  # type: ignore[method-assign]
+    screen.action_update_tool()
+    assert started == ["pnpm"]
