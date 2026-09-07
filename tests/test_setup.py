@@ -1,5 +1,6 @@
 import importlib
 import io
+import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
@@ -663,6 +664,26 @@ def test_build_app_shares_one_update_service_and_invalidate(
 def test_build_app_reresolve_reads_live_inventory_not_cache(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """I3 regression (12-REVIEW.md, codex-sol-high): the previous version of
+    this test patched `installer.ownership.run_query` and
+    `installer.ownership.pnpm_global_packages` by name, but
+    `read_inventory`'s `query`/`pnpm_packages` parameters default to those
+    names at FUNCTION-DEFINITION time — `setup.py::_reresolve_ownership`
+    calls `read_inventory(has_brew=...)` with neither overridden, so the
+    already-bound default objects run regardless of any later monkeypatch of
+    the module attribute. The old test's mocks were therefore inert (proven
+    by patching `installer.ownership.run_query` and calling
+    `read_inventory` directly — the patched callable is never invoked), and
+    its assertions were loosened to `first.owner != second.owner or
+    second.owner == "brew"` / `second.owner in {"brew", "unknown",
+    "installer"}` to paper over that, which would pass even if
+    `_reresolve_ownership` were reading a stale cache instead of live state.
+
+    This version intercepts at the actual boundary those defaults call
+    into at call-time — `installer.run.subprocess.run` — which respects a
+    monkeypatch because `run_query`'s BODY looks up `subprocess.run` fresh
+    on every call, unlike a default parameter value.
+    """
     _sandbox(monkeypatch, tmp_path)
     platform = _platform()
     tool = Tool(
@@ -675,26 +696,42 @@ def test_build_app_reresolve_reads_live_inventory_not_cache(
     )
     state: dict[str, dict[str, str]] = {"formulae": {}}
 
-    def fake_query(cmd: list[str], **_kwargs: object) -> str:
-        if cmd[:3] == ["brew", "list", "--versions"] and "--formula" in cmd:
-            if state["formulae"]:
-                return "ripgrep 14.1.1\n"
-            return ""
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         if cmd[:2] == ["brew", "--prefix"]:
-            return "/opt/homebrew\n"
-        if cmd[:3] == ["brew", "list", "--versions"] and "--cask" in cmd:
-            return ""
-        if cmd[:3] == ["uv", "tool", "list"]:
-            return ""
-        return ""
+            stdout = "/opt/homebrew\n"
+        elif cmd[:3] == ["brew", "list", "--versions"] and "--formula" in cmd:
+            stdout = "ripgrep 14.1.1\n" if state["formulae"] else ""
+        elif (cmd[:3] == ["brew", "list", "--versions"] and "--cask" in cmd) or cmd[:3] == [
+            "uv",
+            "tool",
+            "list",
+        ]:
+            stdout = ""
+        else:
+            stdout = ""
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
-    monkeypatch.setattr("installer.ownership.run_query", fake_query)
-    monkeypatch.setattr("installer.ownership.pnpm_global_packages", lambda: ())
+    # `installer.run.subprocess.run` is the actual system-call boundary every
+    # manager query goes through — `run_query`/`run_output` look it up fresh
+    # on each call, so this patch (unlike the inert ones above) takes effect
+    # for brew, uv, AND pnpm queries alike; pnpm's own real-binary resolution
+    # is a plain PATH lookup with no subprocess call, so it needs no patch.
+    monkeypatch.setattr("installer.run.subprocess.run", fake_run)
+
+    # Hermetic: `_reresolve_ownership` calls `shutil.which(tool.cmd)` for real
+    # PATH attribution, which would otherwise read whatever `rg` this actual
+    # test-running machine happens to have on PATH. Pin it to "not found" so
+    # the by-elimination branch this test targets is reached deterministically.
+    def fake_which(_cmd: str, *, mode: int = 0, path: str | None = None) -> str | None:
+        return None
+
+    monkeypatch.setattr("shutil.which", fake_which)
     app = setup._build_app([tool], platform)  # pyright: ignore[reportPrivateUsage]
     updates = app.catalog._updates  # pyright: ignore[reportPrivateUsage]
     assert updates is not None
     first = updates._reresolve_ownership(tool)  # pyright: ignore[reportPrivateUsage]
+    assert first.owner == "unknown"  # no brew formula listed yet, nothing on PATH
     state["formulae"] = {"ripgrep": "14.1.1"}
     second = updates._reresolve_ownership(tool)  # pyright: ignore[reportPrivateUsage]
-    assert first.owner != second.owner or second.owner == "brew"
-    assert second.owner in {"brew", "unknown", "installer"}
+    assert second.owner == "brew"
+    assert second.current_version == "14.1.1"

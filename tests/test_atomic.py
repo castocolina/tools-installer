@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from installer.atomic import atomic_write_bytes, atomic_write_text
+from installer.atomic import (
+    NEW_SUFFIX,
+    OLD_SUFFIX,
+    atomic_write_bytes,
+    atomic_write_text,
+    recover_update_remnants,
+    staged_sibling,
+)
 
 
 def test_atomic_write_bytes_replaces_an_existing_file(tmp_path: Path) -> None:
@@ -63,6 +70,55 @@ def test_atomic_write_bytes_oserror_leaves_the_original_and_no_temp(
         atomic_write_text(target, "partial")
     assert target.read_text() == "original"
     assert list(tmp_path.glob("*.tools-installer.tmp")) == []
+
+
+def test_recover_update_remnants_never_deletes_old_when_live_also_exists(
+    tmp_path: Path,
+) -> None:
+    """C4 regression (12-REVIEW.md, codex-sol-high): simulate a crash after
+    `.new` was swapped into `live` but before validation/relinking/cleanup
+    completed. Both `live` (unvalidated, possibly-broken new content) and
+    `.old` (the last known-good tree) exist. Recovery must restore `.old`
+    over `live`, never delete `.old` on the assumption that `live` existing
+    proves it was validated.
+    """
+    live = tmp_path / "rg"
+    live.mkdir()
+    (live / "rg").write_text("unvalidated-new-content")
+    old = staged_sibling(live, OLD_SUFFIX)
+    old.mkdir()
+    (old / "rg").write_text("known-good-content")
+
+    recover_update_remnants(live)
+
+    assert not old.exists()
+    assert live.exists()
+    assert (live / "rg").read_text() == "known-good-content"
+
+
+def test_recover_update_remnants_restores_old_when_live_is_missing(tmp_path: Path) -> None:
+    live = tmp_path / "rg"
+    old = staged_sibling(live, OLD_SUFFIX)
+    old.mkdir()
+    (old / "rg").write_text("known-good-content")
+
+    recover_update_remnants(live)
+
+    assert not old.exists()
+    assert (live / "rg").read_text() == "known-good-content"
+
+
+def test_recover_update_remnants_discards_stale_new(tmp_path: Path) -> None:
+    live = tmp_path / "rg"
+    live.mkdir()
+    new = staged_sibling(live, NEW_SUFFIX)
+    new.mkdir()
+    (new / "stale").write_text("stale")
+
+    recover_update_remnants(live)
+
+    assert not new.exists()
+    assert live.exists()
 
 
 def test_two_writes_to_the_same_target_produce_different_temp_names(

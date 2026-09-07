@@ -129,22 +129,29 @@ def parse_uv_tool_outdated(raw: str) -> dict[str, ManagerVersion] | None:
 
     Empty output returns `{}` because uv prints nothing and exits 0 when every
     tool is current. Absence from a non-`None` map means up to date.
+
+    An indented entry-point line or a `- name` line is only ever valid
+    immediately after a matched `name vX.Y [latest: Z]` line — one appearing
+    anywhere else has no preceding match to belong to, so it is unrecognized
+    structure and fails the whole report closed rather than being skipped.
     """
     mapping: dict[str, ManagerVersion] = {}
+    expect_entrypoint = False
     for line in raw.splitlines():
         if not line.strip():
             continue
-        if line[:1].isspace():
-            continue
         stripped = line.strip()
-        if stripped.startswith("- "):
-            continue
-        if _UV_NO_TOOLS in stripped.lower():
+        if not mapping and not expect_entrypoint and _UV_NO_TOOLS in stripped.lower():
+            return {}
+        if line[:1].isspace() or stripped.startswith("- "):
+            if not expect_entrypoint:
+                return None
             continue
         match = _UV_OUTDATED.fullmatch(stripped)
         if match is None:
             return None
         mapping[match.group(1)] = ManagerVersion(match.group(2), match.group(3))
+        expect_entrypoint = True
     return mapping
 
 

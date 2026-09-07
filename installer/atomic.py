@@ -76,17 +76,42 @@ def capture_symlink_target(link: Path) -> str | None:
 
 
 def recover_update_remnants(live: Path) -> None:
-    """Discard a leftover `.new`; restore a leftover `.old` when the live tree is missing."""
+    """Discard a leftover `.new`; always restore a leftover `.old` over `live`.
+
+    `download.py::_replace_archive` and `apps.py::update_app` both swap `.new`
+    into `live` BEFORE relinking and validating, and only remove `.old` AFTER
+    validation succeeds, in the SAME run that performed the swap (12-REVIEW.md
+    C4). So `.old` still being on disk when this recovery runs is itself
+    complete proof that the update which created it never finished: either the
+    swap never happened (aside-move done, `.old` holds the original, `live` is
+    whatever the aside-move left, possibly absent) or the swap happened but
+    validation/relinking/cleanup did not (`.old` holds the last KNOWN-GOOD
+    tree, `live` holds unvalidated new content that may be broken).
+
+    `live` merely existing is evidence of neither case — a corrupt or
+    unvalidated `live` exists exactly as much as a validated one does. So this
+    function never infers validity from existence: whenever `.old` is present,
+    it unconditionally wins over whatever `live` currently holds, discarding
+    `live` first when necessary. The one path that is allowed to remove
+    `.old` is the update flow itself, immediately after its own live-in-this-
+    run validation succeeds — never this best-effort recovery step.
+
+    Accepted residual: if that same-run cleanup's own `shutil.rmtree(old)`
+    fails after a successful, validated update (surfaced to the user as a
+    cleanup warning), a later recovery pass restores the older `.old` over the
+    newer validated `live`. That is a downgrade to a previously-live version,
+    not data loss or corruption, and is out of scope for the invariant this
+    function exists to hold.
+    """
     new = staged_sibling(live, NEW_SUFFIX)
     old = staged_sibling(live, OLD_SUFFIX)
     if new.exists():
         shutil.rmtree(new)
     if not old.exists():
         return
-    if not live.exists():
-        os.replace(old, live)
-        return
-    shutil.rmtree(old)
+    if live.exists():
+        shutil.rmtree(live)
+    os.replace(old, live)
 
 
 def replace_symlink(link: Path, target: str) -> None:

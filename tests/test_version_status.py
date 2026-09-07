@@ -17,6 +17,7 @@ from installer.version_cache import (
     load_manager_snapshot,
     load_version_cache,
     save_version_cache,
+    should_fetch_managers,
 )
 from installer.version_status import (
     MAX_FETCHES_PER_REFRESH,
@@ -546,6 +547,56 @@ def test_failed_at_backoff_suppresses_requery(tmp_path: Path) -> None:
     save_version_cache(path, {}, managers=encode_manager_snapshot(cooled))
     service.refresh([_brew_tool()])
     assert len(calls) == 7
+
+
+def test_partial_manager_failure_is_not_cached_as_confirmed_fresh(tmp_path: Path) -> None:
+    """W3 regression (12-REVIEW.md, codex-sol-high): each manager reader
+    (e.g. `_query_brew_list`) swallows its own CommandError/OSError into a
+    `None` field rather than raising, so a single transient brew failure
+    never trips `_load_or_query_snapshot`'s `except (CommandError, OSError)`
+    branch — it would otherwise be cached with `checked_at=now, failed_at=
+    None`, read as a confirmed-fresh snapshot for the full 6-hour
+    MANAGER_STALE_AFTER window, and could block the update-enablement gate
+    on stale "unknown" ownership. A manager confirmed present (has_brew=True
+    here) returning `None` must be treated the same as an outright query
+    exception: `failed_at` set, so a retry is allowed well inside
+    MANAGER_RETRY_BACKOFF rather than the full 6 hours."""
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    path = tmp_path / "versions.json"
+
+    def read_inv(**_kwargs: object) -> ManagerInventory:
+        return ManagerInventory(
+            brew_formulae=None,  # simulated transient, swallowed brew failure
+            brew_casks={},
+            pnpm_globals=frozenset(),
+            uv_tools={},
+            brew_prefix=Path("/opt/homebrew"),
+        )
+
+    def read_out(**_kwargs: object) -> OutdatedReport:
+        return OutdatedReport(brew={}, cask={}, pnpm={}, uv={})
+
+    service = VersionRefreshService(
+        platform=_platform(),
+        cache_path=path,
+        resolve_tag=lambda repo: "v0",
+        probe_output=lambda argv: "14.1.0",
+        now=lambda: now,
+        managed_bin_dir=_MANAGED,
+        which=_which_for_fixture,
+        artifacts_for=lambda _tool: [],
+        query=lambda *_a, **_k: "",
+        pnpm_packages=lambda: (),
+        read_inventory_fn=read_inv,
+        read_outdated_fn=read_out,
+        resolve_pnpm=lambda: "/opt/homebrew/bin/pnpm",
+    )
+    service.refresh([_brew_tool()])
+    loaded = load_manager_snapshot(path)
+    assert loaded is not None
+    assert loaded.failed_at is not None
+    soon = now + MANAGER_RETRY_BACKOFF + timedelta(minutes=1)
+    assert should_fetch_managers(loaded, now=soon) is True
 
 
 def test_invalidate_drops_snapshot_and_bumps_epoch(tmp_path: Path) -> None:

@@ -375,13 +375,25 @@ class UpdateService:
             )
         fresh_target = UpdateTarget(tool=target.tool, ownership=fresh)
         snapshot: tuple[str, ...] | None = None
-        snapshot_unknown = False
         if should_replay_node_globals(fresh_target):
             captured = self._managed_packages()
             if captured is None:
-                snapshot_unknown = True
-            else:
-                snapshot = tuple(captured)
+                # C3 (12-REVIEW.md, codex-sol-high): the pnpm self-update is
+                # the exact event that can lose the global set, so an
+                # unreadable pre-capture snapshot means there is no way to
+                # recover it after the fact. Refuse the mutation outright
+                # rather than proceeding with a warning — zero mutation, not
+                # perform_update's result.
+                return UpdateOutcome(
+                    tool_id=target.tool.id,
+                    status="failed",
+                    owner=fresh.owner,
+                    detail=(
+                        "pnpm's global set could not be verified before the update; "
+                        "refusing to update pnpm without a pre-update snapshot to replay"
+                    ),
+                )
+            snapshot = tuple(captured)
         outcome = perform_update(
             fresh_target,
             platform=self.platform,
@@ -391,11 +403,6 @@ class UpdateService:
         )
         detail = outcome.detail
         replayed: tuple[str, ...] = ()
-        if snapshot_unknown:
-            warning = (
-                "pnpm's global set could not be listed before the update; nothing was replayed"
-            )
-            detail = f"{detail}; {warning}" if detail else warning
         if outcome.status == "updated" and snapshot:
             try:
                 replayed = tuple(self._replay_globals(snapshot))
@@ -403,7 +410,13 @@ class UpdateService:
                 warning = f"pnpm globals replay failed: {extra}"
                 detail = f"{detail}; {warning}" if detail else warning
         if outcome.status == "updated" and self._invalidate is not None:
-            self._invalidate(reason=f"updated {target.tool.id}")
+            try:
+                self._invalidate(reason=f"updated {target.tool.id}")
+            except Exception as extra:  # noqa: BLE001 -- W2 (12-REVIEW.md): cache
+                # write is a POST-mutation side effect; its failure must never
+                # flip an already-successful mutation into a reported failure.
+                warning = f"cache invalidation failed: {extra}"
+                detail = f"{detail}; {warning}" if detail else warning
         if detail == outcome.detail and replayed == outcome.replayed_globals:
             return outcome
         return replace(outcome, detail=detail, replayed_globals=replayed)

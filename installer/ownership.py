@@ -65,6 +65,8 @@ MUTATION_GRADE: frozenset[str] = frozenset({"direct", "by-elimination"})
 
 _UV_NAME_VERSION = re.compile(r"^(\S+) v(\S+)$")
 _UV_NO_TOOLS = "no tools installed"
+_BREW_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+@-]*$")
+_BREW_VERSION_RE = re.compile(r"^(?:latest|[0-9][A-Za-z0-9.+_,-]*)$")
 _BREW_ENV = {"HOMEBREW_NO_AUTO_UPDATE": "1", "HOMEBREW_NO_ENV_HINTS": "1"}
 _PNPM_DEFAULTS: dict[str, str] = {
     "macos": "~/Library/pnpm",
@@ -119,7 +121,14 @@ class ManagerOwnership:
 def parse_brew_list_versions(raw: str) -> dict[str, str] | None:
     """Parse `brew list --versions` output; None when any line is unrecognized.
 
-    Empty input is `{}` (asked, found nothing), distinct from `None`.
+    Empty input is `{}` (asked, found nothing), distinct from `None`. A line
+    with 2+ tokens is not enough evidence on its own — a warning or notice
+    line (e.g. "warning: inventory format changed") also splits into 2+
+    tokens and must not be read as `{name: version}`. The first token must
+    look like a real formula/cask name (no colon or other stray punctuation)
+    and every remaining token must look like a real version string (starts
+    with a digit, or the literal `latest`); anything else fails the WHOLE
+    parse closed rather than skipping just that line.
     """
     mapping: dict[str, str] = {}
     for line in raw.splitlines():
@@ -129,31 +138,42 @@ def parse_brew_list_versions(raw: str) -> dict[str, str] | None:
         tokens = stripped.split()
         if len(tokens) < 2:
             return None
-        mapping[tokens[0]] = tokens[-1]
+        name, *versions = tokens
+        if not _BREW_NAME_RE.fullmatch(name):
+            return None
+        if not all(_BREW_VERSION_RE.fullmatch(version) for version in versions):
+            return None
+        mapping[name] = versions[-1]
     return mapping
 
 
 def parse_uv_tool_list(raw: str) -> dict[str, str] | None:
     """Parse `uv tool list` output; None when any unrecognized line appears.
 
-    Empty or all-whitespace input is `{}`. Indented entry-point lines and uv's
-    own no-tools-installed notice are known-benign and skipped.
+    Empty or all-whitespace input is `{}`. An indented entry-point line or a
+    `- name` line is only ever valid immediately after a matched `name vX.Y`
+    line — one appearing anywhere else (no preceding match to belong to) is
+    unrecognized structure, not benign noise, and fails the whole parse
+    closed. uv's own no-tools-installed notice is recognized only when it is
+    the first content line.
     """
     mapping: dict[str, str] = {}
+    expect_entrypoint = False
     for line in raw.splitlines():
         if not line.strip():
             continue
-        if line[:1].isspace():
-            continue
         stripped = line.strip()
-        if stripped.startswith("- "):
-            continue
-        if _UV_NO_TOOLS in stripped.lower():
+        if not mapping and not expect_entrypoint and _UV_NO_TOOLS in stripped.lower():
+            return {}
+        if line[:1].isspace() or stripped.startswith("- "):
+            if not expect_entrypoint:
+                return None
             continue
         match = _UV_NAME_VERSION.fullmatch(stripped)
         if match is None:
             return None
         mapping[match.group(1)] = match.group(2)
+        expect_entrypoint = True
     return mapping
 
 
@@ -214,10 +234,25 @@ def owner_dirs(
     managed_bin_dir: Path,
     platform: Platform,
 ) -> dict[Owner, tuple[Path, ...]]:
+    """Directory-membership attribution per candidate owner.
+
+    `applications_dir()` (`~/Applications`) is deliberately listed for BOTH
+    "installer" and "cask": Homebrew installs casks there too
+    (`installer/executors.py`'s cask executor), so a bundle under it is not
+    proof of installer ownership on its own. Listing it for both owners makes
+    `attribute_path` return `{"installer", "cask"}` for any path under it,
+    which — when both an installer-artifact candidate and a cask-inventory
+    candidate exist for the same tool — makes `resolve_ownership`'s
+    single-candidate-wins branch see two matching candidates instead of one
+    and fall through to `unknown` rather than picking one arbitrarily. A tool
+    genuinely owned by only one of the two still resolves `direct`, because
+    only that one owner appears among `candidates` in the first place.
+    """
     installer_dirs = (managed_bin_dir, opt_dir("x").parent, applications_dir())
     brew_dirs: tuple[Path, ...] = ()
     if inventory.brew_prefix is not None:
         brew_dirs = (inventory.brew_prefix,)
+    cask_dirs = (*brew_dirs, applications_dir())
     pnpm_home = os.environ.get("PNPM_HOME")
     if pnpm_home:
         pnpm_dir = Path(pnpm_home).expanduser()
@@ -229,7 +264,7 @@ def owner_dirs(
     return {
         "installer": installer_dirs,
         "brew": brew_dirs,
-        "cask": brew_dirs,
+        "cask": cask_dirs,
         "pnpm": (pnpm_dir,),
         "uv": (uv_dir,),
     }

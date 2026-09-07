@@ -764,8 +764,13 @@ def test_archive_update_symlink_failure_restores_tree_and_symlink(
     assert Path(os.readlink(link)).resolve() == binary.resolve()
     assert not Path(str(opt) + ".tools-installer.old").exists()
     assert not Path(str(opt) + ".tools-installer.new").exists()
-    assert seen[0] != original_target or True
-    assert original_target in seen[1:]
+    # The live symlink path is stable across an update (it always points at
+    # opt/<member>), so seen[0] is textually equal to original_target too —
+    # that equality proves nothing about restore behavior. What matters is
+    # that exactly two symlink attempts happened (the failing one, then the
+    # restore) and the second one is the captured pre-update target.
+    assert len(seen) == 2
+    assert seen[1] == original_target
 
 
 def test_archive_update_symlink_restore_uses_captured_step_minus_one_target(

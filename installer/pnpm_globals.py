@@ -74,6 +74,12 @@ _EMPTY_PREVIEW = "nothing pnpm-managed to reinstall"
 _UNRESOLVABLE_PREVIEW = "pnpm not found on PATH — cannot preview the reinstall."
 _UNKNOWN_PREVIEW = "pnpm's global set could not be read — cannot preview the reinstall."
 _DEPENDENCY_GROUPS = ("dependencies", "devDependencies", "optionalDependencies")
+# Keys `pnpm list -g --json` actually emits on a project object. A payload
+# whose object has none of these (e.g. `{"error": "schema changed"}`) is not
+# a genuinely empty project — it is an unrecognized shape, and reading it as
+# "an empty global set" would hand the ownership resolver false negative
+# evidence indistinguishable from a real, successfully-read empty install.
+_KNOWN_PROJECT_KEYS = frozenset({"name", "version", "path", "private", *_DEPENDENCY_GROUPS})
 
 
 class PnpmUnavailable(OSError):
@@ -277,13 +283,18 @@ def _iter_dependencies(projects: list[object]) -> list[tuple[str, object]] | Non
         if not isinstance(project, dict):
             return None
         groups = cast(dict[str, object], project)
+        if not any(key in groups for key in _KNOWN_PROJECT_KEYS):
+            return None
         for group in _DEPENDENCY_GROUPS:
             if group not in groups:
                 continue
             block = groups[group]
             if not isinstance(block, dict):
                 return None
-            items.extend(cast(dict[str, object], block).items())
+            for name, details in cast(dict[str, object], block).items():
+                if not isinstance(details, dict):
+                    return None
+                items.append((name, cast(dict[str, object], details)))
     return items
 
 

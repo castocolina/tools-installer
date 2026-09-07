@@ -667,18 +667,24 @@ def test_update_service_skips_snapshot_for_non_pnpm(
     assert replay_calls == []
 
 
-def test_update_service_none_snapshot_is_not_empty(
+def test_update_service_none_snapshot_refuses_to_mutate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """C3 regression (12-REVIEW.md, codex-sol-high): pnpm is the exact event
+    that can lose the global set, so an unreadable pre-capture snapshot must
+    refuse the mutation outright — never proceed with a warning. Zero mutation:
+    `perform_update` must not even be called."""
     method = Method(kind="script", params={"url": "https://get.pnpm.io/install.sh", "shell": "sh"})
     tool = _tool("pnpm", method)
     replay_calls: list[int] = []
+    perform_calls: list[int] = []
 
     def replay(packages: Sequence[str]) -> tuple[str, ...]:
         replay_calls.append(1)
         return tuple(packages)
 
     def fake_perform(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        perform_calls.append(1)
         return UpdateOutcome(tool_id=target.tool.id, status="updated", owner="installer")
 
     monkeypatch.setattr(update, "perform_update", fake_perform)
@@ -688,9 +694,11 @@ def test_update_service_none_snapshot_is_not_empty(
         replay=replay,
     )
     outcome = service.run(_target(tool, "installer", method=method))
-    assert outcome.status == "updated"
+    assert outcome.status != "updated"
+    assert outcome.status == "failed"
+    assert perform_calls == []
     assert replay_calls == []
-    assert "could not be listed" in outcome.detail
+    assert "could not be verified" in outcome.detail
 
 
 def test_update_service_invalidate_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -712,3 +720,29 @@ def test_update_service_invalidate_on_success(monkeypatch: pytest.MonkeyPatch) -
     )
     service.run(_target(tool, "brew", method=brew, package="ripgrep"))
     assert reasons == ["updated rg"]
+
+
+def test_update_service_invalidate_failure_stays_updated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """W2 regression (12-REVIEW.md, codex-sol-high): the machine was already
+    mutated successfully by the time cache invalidation runs, so a failure
+    writing the version cache must surface as a post-update warning on a
+    still-`"updated"` outcome — never propagate and get reported as a failed
+    update (which `run_live` would otherwise convert into `(None, message)`,
+    discarding the fact that the mutation itself succeeded)."""
+    brew = Method(kind="brew", params={"formula": "ripgrep"})
+    tool = _tool("rg", brew, cmd="rg")
+
+    def fake_perform(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        return UpdateOutcome(tool_id=target.tool.id, status="updated", owner="brew")
+
+    def failing_invalidate(*, reason: str) -> int:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(update, "perform_update", fake_perform)
+    service = _service(
+        reresolve=lambda _tool: _ownership(tool, "brew", method=brew, package="ripgrep"),
+        invalidate=failing_invalidate,
+    )
+    outcome = service.run(_target(tool, "brew", method=brew, package="ripgrep"))
+    assert outcome.status == "updated"
+    assert "cache invalidation failed" in outcome.detail

@@ -3530,7 +3530,11 @@ async def test_non_pnpm_node_tool_skips_snapshot_and_replay(
         assert replay_calls == []
 
 
-async def test_none_package_snapshot_is_not_replayed_as_empty(tmp_path: Path) -> None:
+async def test_none_package_snapshot_refuses_the_update(tmp_path: Path) -> None:
+    """C3 (12-REVIEW.md, codex-sol-high): pnpm is the exact event that can
+    lose the global set, so an unreadable pre-capture snapshot must refuse
+    the mutation outright — zero mutation, never "proceed with a warning".
+    """
     tool = Tool(
         id="pnpm",
         name="pnpm",
@@ -3541,6 +3545,7 @@ async def test_none_package_snapshot_is_not_replayed_as_empty(tmp_path: Path) ->
     )
     ownership = _owned(tool, "installer", confidence="by-elimination")
     replay_calls: list[int] = []
+    runner_calls: list[list[str]] = []
     stale_status = VersionStatus(
         tool_id="pnpm",
         installed="11.9.0",
@@ -3558,7 +3563,7 @@ async def test_none_package_snapshot_is_not_replayed_as_empty(tmp_path: Path) ->
 
     updates = UpdateService(
         platform=service.platform,
-        runner=lambda _cmd: None,
+        runner=lambda cmd: runner_calls.append(cmd),
         resolve_tag=lambda _repo: "v1",
         tools={"pnpm": tool},
         managed_packages=lambda: None,
@@ -3572,7 +3577,8 @@ async def test_none_package_snapshot_is_not_replayed_as_empty(tmp_path: Path) ->
         await pilot.press("u")
         await _settle_update(app, pilot)
         assert replay_calls == []
-        assert "could not be listed" in app.catalog.status_text
+        assert runner_calls == []
+        assert "could not be verified" in app.catalog.status_text
 
 
 async def test_post_update_status_comes_from_version_refresh(tmp_path: Path) -> None:

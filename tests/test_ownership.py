@@ -517,6 +517,53 @@ def test_attribute_path_unit_cases(monkeypatch: pytest.MonkeyPatch) -> None:
     assert attribute_path(None, dirs) == frozenset()
 
 
+def test_cask_installed_app_never_wins_installer_direct_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C2 regression (codex-sol-high, 12-REVIEW.md): a tool declaring both an
+    `app` method and a `cask` method, actually installed via Homebrew cask
+    into `~/Applications` (the app-kind method was never used), must never
+    resolve to owner="installer" with confidence="direct" — Homebrew casks
+    install into the same `~/Applications` directory this installer's own
+    `app` method uses, so directory membership alone cannot prove either one.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bundle = tmp_path / "Applications" / "Visual Studio Code.app"
+    cli = bundle / "Contents" / "Resources" / "app" / "bin" / "code"
+    cli.parent.mkdir(parents=True)
+    cli.write_text("#!/bin/sh\n")
+    tool = Tool(
+        id="vscode",
+        name="Visual Studio Code",
+        category="editor",
+        cmd="code",
+        methods=(
+            Method(kind="app", params={"app": "Visual Studio Code.app", "cli": str(cli)}),
+            Method(kind="cask", params={"cask": "visual-studio-code"}),
+        ),
+    )
+    result = _resolve(
+        tool,
+        inventory=_readable(brew_casks={"visual-studio-code": "1.90.0"}),
+        artifacts=[bundle],
+        which=str(cli),
+    )
+    assert not (result.owner == "installer" and result.confidence == "direct")
+    assert result.owner in ("cask", "unknown")
+
+
+def test_parse_brew_list_versions_warning_line_fails_closed() -> None:
+    """C1 regression: a warning line has 2+ whitespace tokens but is not a
+    genuine `name version` pair — the whole parse must fail closed."""
+    assert parse_brew_list_versions("warning: inventory format changed\n") is None
+
+
+def test_parse_uv_tool_list_entrypoint_without_preceding_match_fails_closed() -> None:
+    """C1 regression: an entry-point-shaped line with no preceding matched
+    `name vX.Y` line has no context to belong to and must not be skipped."""
+    assert parse_uv_tool_list("- graphify\n") is None
+
+
 def test_abandoned_drift_helpers_are_absent() -> None:
     """Phase 12 deferred REQ-manager-drift-alerting rather than shipping a
     zero-caller helper (12-REVIEWS.md architecture-rule-5 finding).

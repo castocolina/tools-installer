@@ -92,6 +92,33 @@ _EMPTY_INVENTORY = ManagerInventory(
 _EMPTY_OUTDATED = OutdatedReport(brew=None, cask=None, pnpm=None, uv=None)
 
 
+def _merge_inventory(fresh: ManagerInventory, previous: ManagerSnapshot | None) -> ManagerInventory:
+    """Keep every fresh, successfully-read field; backfill a failed one from
+    the last known-good snapshot (or leave it `None` when there is none)."""
+    fallback = previous.inventory if previous is not None else _EMPTY_INVENTORY
+    return ManagerInventory(
+        brew_formulae=fresh.brew_formulae
+        if fresh.brew_formulae is not None
+        else fallback.brew_formulae,
+        brew_casks=fresh.brew_casks if fresh.brew_casks is not None else fallback.brew_casks,
+        pnpm_globals=fresh.pnpm_globals
+        if fresh.pnpm_globals is not None
+        else fallback.pnpm_globals,
+        uv_tools=fresh.uv_tools if fresh.uv_tools is not None else fallback.uv_tools,
+        brew_prefix=fresh.brew_prefix if fresh.brew_prefix is not None else fallback.brew_prefix,
+    )
+
+
+def _merge_outdated(fresh: OutdatedReport, previous: ManagerSnapshot | None) -> OutdatedReport:
+    fallback = previous.outdated if previous is not None else _EMPTY_OUTDATED
+    return OutdatedReport(
+        brew=fresh.brew if fresh.brew is not None else fallback.brew,
+        cask=fresh.cask if fresh.cask is not None else fallback.cask,
+        pnpm=fresh.pnpm if fresh.pnpm is not None else fallback.pnpm,
+        uv=fresh.uv if fresh.uv is not None else fallback.uv,
+    )
+
+
 @dataclass(frozen=True)
 class VersionStatus:
     tool_id: str
@@ -412,6 +439,28 @@ class VersionRefreshService:
                 failed_at=now_iso,
             )
             return failed, True, True
+        if self._partial_manager_failure(inventory, outdated):
+            # W3 (12-REVIEW.md, codex-sol-high): each manager reader swallows
+            # its own CommandError/OSError into a `None` field rather than
+            # raising, so a single transient brew/pnpm/uv failure never trips
+            # the `except` branch above — it would otherwise be cached with
+            # `checked_at=now_iso, failed_at=None` and read as a confirmed-
+            # fresh snapshot for a full MANAGER_STALE_AFTER (6h), including by
+            # the update-enablement gate that reads cached ownership. Treat a
+            # confirmed-present manager returning `None` the same as the
+            # outright-exception case: keep whatever DID come back fresh this
+            # pass, backfill the failed field(s) from the previous snapshot
+            # when one exists, and mark `failed_at` so the 30-minute
+            # `MANAGER_RETRY_BACKOFF` applies instead of the full 6-hour
+            # freshness window.
+            previous = snapshot
+            merged = ManagerSnapshot(
+                inventory=_merge_inventory(inventory, previous),
+                outdated=_merge_outdated(outdated, previous),
+                checked_at=previous.checked_at if previous is not None else None,
+                failed_at=now_iso,
+            )
+            return merged, True, True
         return (
             ManagerSnapshot(
                 inventory=inventory,
@@ -422,6 +471,26 @@ class VersionRefreshService:
             True,
             False,
         )
+
+    def _partial_manager_failure(
+        self, inventory: ManagerInventory, outdated: OutdatedReport
+    ) -> bool:
+        """True when a manager CONFIRMED present on this machine came back
+        `None` on at least one of its fields — a swallowed transient query
+        failure, never "this manager just isn't installed"."""
+        if self._platform.has_brew and (
+            inventory.brew_formulae is None
+            or inventory.brew_casks is None
+            or inventory.brew_prefix is None
+            or outdated.brew is None
+            or outdated.cask is None
+        ):
+            return True
+        if self._resolve_pnpm() is not None and (
+            inventory.pnpm_globals is None or outdated.pnpm is None
+        ):
+            return True
+        return self._which("uv") is not None and (inventory.uv_tools is None or outdated.uv is None)
 
     def refresh(self, tools: Sequence[Tool]) -> dict[str, VersionStatus]:
         """Load cache, resolve each tool, merge-save under the instance lock.
