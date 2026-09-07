@@ -11,13 +11,13 @@ import io
 import os
 import shutil
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import questionary
 from rich.console import Console
 
-from installer import pnpm_globals
+from installer import daemon, pnpm_globals
 from installer.app import (
     UninstallDecision,
     clean_rc_duplicates,
@@ -35,7 +35,7 @@ from installer.locations import all_ban_rc_paths, ban_rc_paths, rc_paths_for_mod
 from installer.model import Tool, load_categories, load_tools
 from installer.omz import omz_present
 from installer.platform import Platform, detect
-from installer.policy import ban_policy, omz_plugins_policy, tweak_policy
+from installer.policy import Policy, ban_policy, daemon_policy, omz_plugins_policy, tweak_policy
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.resolve import platform_could_support
@@ -60,6 +60,16 @@ _MYSHELLRC = Path.home() / ".myshellrc"
 _ZSHRC = zshrc_path(Path.home(), os.environ)
 _RC_PATHS = [_ZSHRC, Path.home() / ".bashrc"]
 _SHELL = os.environ.get("SHELL", "")
+# The daemon's own artifacts, computed exactly like _MYSHELLRC (Path.home()-derived
+# at import time): the LaunchAgent plist, its log file, the wrapper script it
+# invokes, and the "decided" ownership record. _DAEMON_STATE_PATH deliberately
+# reuses _MYSHELLRC directly rather than introducing a new state file -- the
+# daemon's ownership record lives in the SAME ~/.myshellrc omz_plugins_policy
+# already uses for its own record (11-RESEARCH.md's "reuse ~/.myshellrc").
+_DAEMON_PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{daemon.LABEL}.plist"
+_DAEMON_LOG_PATH = Path.home() / "Library" / "Logs" / "tools-installer" / "prune-daemon.log"
+_DAEMON_SCRIPT_PATH = Path(__file__).parent / "scripts" / "prune-user-tmpdir.sh"
+_DAEMON_STATE_PATH = _MYSHELLRC
 
 _STYLE = questionary.Style(
     [
@@ -139,6 +149,52 @@ def _ask_mismatch(tool_id: str) -> str:
     )
 
 
+def _build_daemon_policy(platform: Platform, installed: Mapping[str, bool]) -> Policy | None:
+    """The background tmpdir-prune LaunchAgent as a Policy, macOS-only (ROADMAP
+    SC#2: invisible/inert on Linux) -- the single, shared construction point
+    both `_build_app` (the Policies list) and `_run_uninstall`'s non-interactive
+    CLI teardown sweep call, so the two paths' state reads can never silently
+    diverge.
+
+    Returns None immediately on any non-macOS platform. On macOS, resolves the
+    real per-user TMPDIR/HOME and the apply-time `uv` executable into named
+    locals: installer.daemon's own DaemonScheduleError is the fail-closed
+    backstop for an empty/unresolvable value here (11-REVIEWS.md cycle 1
+    finding #19, extended to HOME by cycle 2 finding #1's composition-root
+    half) -- this call site only resolves and names each value, it never
+    re-validates it itself. `path_value` extends the real interactive PATH
+    (never the raw, unmodified value alone) with both Homebrew prefixes and
+    this project's own managed bin dir, since a bare LaunchAgent's own default
+    environment PATH has neither (11-RESEARCH.md Pitfall 3).
+    """
+    if platform.os != "macos":
+        return None
+    tmpdir_value = os.environ.get("TMPDIR", "")  # DaemonScheduleError rejects empty/relative
+    home_value = os.environ.get("HOME", "")  # DaemonScheduleError rejects empty/relative
+    uv_path = Path(shutil.which("uv") or "")  # DaemonScheduleError rejects a non-absolute path
+    path_value = os.pathsep.join(
+        (
+            os.environ.get("PATH", ""),
+            str(_DEFAULT_BIN_DIR),
+            "/usr/local/bin",
+            "/opt/homebrew/bin",
+        )
+    )
+    return daemon_policy(
+        plist_path=_DAEMON_PLIST_PATH,
+        log_path=_DAEMON_LOG_PATH,
+        wrapper_bin_dir=_DEFAULT_BIN_DIR,
+        script_path=_DAEMON_SCRIPT_PATH,
+        state_path=_DAEMON_STATE_PATH,
+        installed_tools=installed,
+        path_value=path_value,
+        tmpdir_value=tmpdir_value,
+        home_value=home_value,
+        uv_path=uv_path,
+        uid=os.getuid(),
+    )
+
+
 def _build_app(
     tools: list[Tool],
     platform: Platform,
@@ -204,6 +260,11 @@ def _build_app(
             BUNDLES, rc_path=_MYSHELLRC, bin_dir=_DEFAULT_BIN_DIR, zshrc_path=_ZSHRC
         ),
     )
+    # Constructed once, here, and shared: the Policies list below and the
+    # on-by-default auto-apply closure (wired further down) must never each
+    # build their own independent daemon_policy instance -- both need to read
+    # and act on the exact same object.
+    daemon = _build_daemon_policy(platform, installed)
     policy_inputs = PolicyInputs(
         policies=[
             ban_policy(
@@ -228,6 +289,7 @@ def _build_app(
                 state_path=_MYSHELLRC,
                 present=omz_present(Path.home(), os.environ),
             ),
+            *((daemon,) if daemon is not None else ()),
         ]
     )
 
