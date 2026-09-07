@@ -343,3 +343,21 @@ This is presented as a finding, not a recommendation to skip: the planner/CONTEX
 1. Exact cache file path/location (recommended above, not locked).
 2. Whether refresh fires on catalog-view entry (recommended, mirroring Doctor's own screen-entry audit) vs. a dedicated "check for updates" keybinding.
 3. Whether the D-02 stretch task is attempted this phase at all, given the zero-real-proving-case finding in section 6.
+
+---
+
+## Validation Architecture
+
+| Property | Value |
+|----------|-------|
+| **Framework** | pytest (confirmed live: `pyproject.toml:46-48`, `[tool.pytest.ini_options]`, `addopts = "-q"`, `testpaths = ["tests"]`) |
+| **Config file** | `pyproject.toml` |
+| **Quick run command** | `uv run pytest tests/test_versions.py tests/test_wizard_app.py -k "version or outdated or update" -q` |
+| **Full suite command** | `uv run pytest --cov` (`Makefile:47-48`, `make test`) |
+| **Estimated runtime** | ~10-20s quick / ~60-90s full (consistent with Phase 11's equivalent estimate; this repo's suite is pure-Python/Textual with no real network or subprocess calls in tests — every live call this research made (`brew`/`pnpm`/`uv`/GitHub API) is a DI seam already, per `installer/run.py::OutputRunner`/`Runner` and `installer/versions.py::Fetch`/`TagResolver`, so phase tests inject fakes exactly like `tests/test_versions.py`, `tests/test_pnpm_globals.py`, and `tests/test_wizard_app.py`'s `_app(node_globals=...)` factory already do — no test in this phase should reach a real network/subprocess call) |
+
+**Sampling rate:** after every task commit, run the quick filtered command above; after each plan's wave, run the full suite; before `/gsd-verify-work`, the full suite must be green. Max feedback latency: under 30s for the quick command (no network/subprocess in tests, per the DI-seam note above).
+
+**Per-task verification approach:** every code-producing task in this phase is `tdd="true"` (per `workflow.tdd_mode`) with a dedicated pytest module/filter — `installer/versions.py` additions get `tests/test_versions.py` cases (mirroring the existing `resolve_github_tag`/`parse_version` test shapes already in that file), the manager-command wrappers get a new `tests/test_manager_versions.py` (mirroring `tests/test_pnpm_globals.py`'s pure-parser-vs-IO-wrapper split), and the Worker/UI wiring gets `tests/test_wizard_app.py` cases using the exact `threading.Event()` latch + bounded-`pilot.pause()`-polling pattern documented in section 3.2 above (`test_doctor_audit_runs_off_the_event_loop`, `_settle`).
+
+**Manual-only verifications:** none identified — every observable behavior in this phase (version comparison, cache staleness, manager command parsing, Worker non-blocking behavior, update delegation) has an automatable seam already proven by an existing analog test in this codebase (see section 3.2 and the DI seams named throughout sections 1, 2, and 4).
