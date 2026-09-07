@@ -1,5 +1,24 @@
 #!/usr/bin/env python3
 # tools-installer-helper: prune-daemon
+#
+# /// script
+# requires-python = ">=3.11"
+# ///
+#
+# The requires-python constraint above is load-bearing, not decorative: live
+# Tier-3 verification on this machine (a real launchctl bootstrap + kickstart
+# of this exact wrapper) proved that WITHOUT it, `uv run --no-project --script`
+# resolves an entirely different interpreter depending on the caller's current
+# working directory. Invoked from inside this repo (interactive testing), uv
+# happily reuses this project's own 3.14 venv; invoked from any OTHER cwd --
+# which is exactly what launchd does for a real scheduled run, never this
+# repo's directory -- uv instead fell back to macOS's ancient Command Line
+# Tools python3 (3.9.6 on this machine), which lacks `datetime.UTC` (added in
+# 3.11) and crashes this module's own main() on every single real invocation.
+# A PEP 723 inline requires-python constraint makes `uv run --script` honor it
+# regardless of cwd, downloading/selecting a compliant interpreter from uv's
+# own managed toolchain instead of falling back to whatever system Python
+# happens to be first on PATH.
 """Standalone wrapper invoked by the scheduled LaunchAgent via `uv run --script`.
 
 Runs the script named by --script with the forwarded argv, appends a single
