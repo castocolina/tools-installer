@@ -557,3 +557,134 @@ def test_prune_daemon_runner_never_imports_the_installer_package() -> None:
     for line in source.splitlines():
         assert not line.startswith("import installer.")
         assert not line.startswith("from installer.")
+
+
+# =============================================================================
+# Task 3: the "decided" ownership marker and the last-run log summary parser.
+# =============================================================================
+
+
+def test_decided_is_false_before_any_record(tmp_path: Path) -> None:
+    state_path = tmp_path / ".myshellrc"
+    assert daemon.decided(state_path) is False
+
+
+def test_decided_is_false_when_state_path_does_not_exist(tmp_path: Path) -> None:
+    assert daemon.decided(tmp_path / "missing") is False
+
+
+def test_decided_is_true_after_record_decided(tmp_path: Path) -> None:
+    state_path = tmp_path / ".myshellrc"
+    daemon.record_decided(state_path)
+    assert daemon.decided(state_path) is True
+
+
+def test_record_decided_is_idempotent_on_a_second_call(tmp_path: Path) -> None:
+    state_path = tmp_path / ".myshellrc"
+    daemon.record_decided(state_path)
+    daemon.record_decided(state_path)
+    content = state_path.read_text()
+    assert content.count("# >>> tools-installer daemon:decided >>>") == 1
+
+
+def test_record_decided_preserves_surrounding_content(tmp_path: Path) -> None:
+    state_path = tmp_path / ".myshellrc"
+    state_path.write_text("export EDITOR=vim\n")
+    daemon.record_decided(state_path)
+    content = state_path.read_text()
+    assert "export EDITOR=vim" in content
+    assert "# >>> tools-installer daemon:decided >>>" in content
+
+
+def test_decided_reads_false_again_after_clear_decided(tmp_path: Path) -> None:
+    state_path = tmp_path / ".myshellrc"
+    daemon.record_decided(state_path)
+    daemon.clear_decided(state_path)
+    assert daemon.decided(state_path) is False
+
+
+def test_clear_decided_is_a_noop_when_never_decided(tmp_path: Path) -> None:
+    state_path = tmp_path / ".myshellrc"
+    daemon.clear_decided(state_path)  # missing file: must not raise
+    assert not state_path.exists()
+    state_path.write_text("export EDITOR=vim\n")
+    daemon.clear_decided(state_path)  # existing file, no marker: unchanged
+    assert state_path.read_text() == "export EDITOR=vim\n"
+
+
+def test_an_orphaned_begin_marker_reads_as_no_record(tmp_path: Path) -> None:
+    # Mirrors installer/omz.py's own orphan-marker test shape (11-REVIEWS.md
+    # cycle 2 finding #4): an unclosed begin marker must never wedge the
+    # policy permanently "decided".
+    state_path = tmp_path / ".myshellrc"
+    state_path.write_text("# >>> tools-installer daemon:decided >>>\n")
+    assert daemon.decided(state_path) is False
+
+
+def test_a_reversed_marker_pair_reads_as_no_record(tmp_path: Path) -> None:
+    state_path = tmp_path / ".myshellrc"
+    state_path.write_text(
+        "# <<< tools-installer daemon:decided <<<\n# >>> tools-installer daemon:decided >>>\n"
+    )
+    assert daemon.decided(state_path) is False
+
+
+def test_record_decided_preserves_the_existing_files_mode(tmp_path: Path) -> None:
+    # The exact INVERSE of write_plist's forces-0o644 test (11-REVIEWS.md
+    # cycle 3 finding #4): record_decided must PRESERVE state_path's existing
+    # mode, since it is called with _atomic_write's mode=None, never
+    # write_plist's forced mode=0o644.
+    state_path = tmp_path / ".myshellrc"
+    state_path.write_text("export EDITOR=vim\n")
+    state_path.chmod(0o600)
+    daemon.record_decided(state_path)
+    assert state_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_record_decided_leaves_no_temp_sibling_file(tmp_path: Path) -> None:
+    state_path = tmp_path / ".myshellrc"
+    daemon.record_decided(state_path)
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".myshellrc"]
+
+
+# --- last_run_summary --------------------------------------------------------
+
+
+def test_last_run_summary_is_none_for_a_missing_log(tmp_path: Path) -> None:
+    assert daemon.last_run_summary(tmp_path / "missing.log") is None
+
+
+def test_last_run_summary_is_none_for_a_log_with_no_run_block(tmp_path: Path) -> None:
+    log_path = tmp_path / "prune-daemon.log"
+    log_path.write_text("some unrelated content\n")
+    assert daemon.last_run_summary(log_path) is None
+
+
+def test_last_run_summary_reports_the_deleted_count(tmp_path: Path) -> None:
+    log_path = tmp_path / "prune-daemon.log"
+    _write_run(log_path, "2026-09-04T03:00:00+00:00", "some output\ndeleted: 12\nskipped: 1")
+    summary = daemon.last_run_summary(log_path)
+    assert summary == "last run: 2026-09-04T03:00:00+00:00, 12 item(s) removed"
+
+
+def test_last_run_summary_falls_back_when_no_deleted_line(tmp_path: Path) -> None:
+    log_path = tmp_path / "prune-daemon.log"
+    _write_run(log_path, "2026-09-04T03:00:00+00:00", "--- dry-run complete ---\nNothing deleted.")
+    summary = daemon.last_run_summary(log_path)
+    assert summary == "last run: 2026-09-04T03:00:00+00:00 (see log for details)"
+
+
+def test_last_run_summary_reports_only_the_last_blocks_summary(tmp_path: Path) -> None:
+    log_path = tmp_path / "prune-daemon.log"
+    _write_run(log_path, "2026-09-04T03:00:00+00:00", "deleted: 5")
+    _write_run(log_path, "2026-09-05T03:00:00+00:00", "deleted: 9")
+    summary = daemon.last_run_summary(log_path)
+    assert summary == "last run: 2026-09-05T03:00:00+00:00, 9 item(s) removed"
+
+
+def test_last_run_summary_never_raises_on_invalid_utf8(tmp_path: Path) -> None:
+    log_path = tmp_path / "prune-daemon.log"
+    log_path.write_bytes(b"=== 2026-09-04T03:00:00+00:00 ===\n" + b"\xff" * 10 + b"\ndeleted: 3\n")
+    summary = daemon.last_run_summary(log_path)
+    assert summary is not None
+    assert "3 item(s) removed" in summary
