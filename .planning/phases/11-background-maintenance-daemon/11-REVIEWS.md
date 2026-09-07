@@ -97,3 +97,56 @@ correctness (Textual `BadIdentifier` crash, non-transactional state, TUI freeze)
 substantial, genuine defect set — not review noise. Proceeding to a full revision pass (not a
 partial patch) addressing all 19 findings before cycle 2, following the reviewer's own
 recommended replanning order.
+
+### Revision Note (post cycle 1)
+
+A full revision pass rewrote all four plan files (`11-01-PLAN.md` through `11-04-PLAN.md`) in
+place to address every cycle 1 finding above, following the reviewer's own recommended
+replanning order:
+
+- **11-01** (core mechanism): the scheduled wrapper is now invoked through an apply-time-resolved,
+  absolute `uv` executable via `uv run --no-project --script` (never a bare `python3` shebang,
+  live-verified against `installer/tweaks.py:64`'s own invocation shape); a new
+  `installer.daemon.ensure_log_path` creates the log directory/file at apply time, before
+  `launchctl bootstrap`, not lazily inside the wrapper; the real `launchctl` round-trip test now
+  requires an explicit `TOOLS_INSTALLER_RUN_LAUNCHCTL_TESTS=1` opt-in in addition to its existing
+  `launchctl`-availability skip; log truncation decodes the whole file once and cuts only on `\n`
+  line boundaries, never an arbitrary byte offset; and a new `DaemonScheduleError` (an `OSError`
+  subclass mirroring `installer/omz.py::OmzPluginsError`) makes `render_plist`/`write_plist`
+  reject an empty/invalid `TMPDIR`, `uv_path`, hour, minute, or `days` before any write.
+- **11-02** (policy model + factory): the soft-dependency copy now branches on `hard_requires`
+  ("recommended tool(s)... not required" for `hard_requires=False`, the unchanged hard-block
+  copy otherwise); `daemon_policy`'s apply/remove/reschedule are now fully transactional,
+  mirroring `installer/omz.py::write_plugins`'s reserve-and-rollback-on-failure pattern (a
+  `bootstrap` failure rolls the plist back to its prior snapshot; a reschedule failure also makes
+  a best-effort re-registration of the old, working schedule); `remove()`'s `bootout` now
+  distinguishes the idempotent "already not loaded" outcome (live-verified: `launchctl bootout`
+  against a nonexistent label exits `3`, decoded by `launchctl error 3` as `"3: No such
+  process"`) from a real failure that must block removal; and a dedicated failure-injection test
+  matrix covers every step of apply/remove/reschedule.
+- **11-03** (detail panel + time picker): every time-slot `ListItem` id is now a valid Textual
+  identifier (`"time-03-30"`, live-verified against a `BadIdentifier` crash on the raw `"03:30"`
+  form), with the display value stored separately; `set_schedule` is now routed through
+  `installer.ui_common.run_live`, this project's one apply-workflow seam, instead of being called
+  directly from the modal's dismissal callback; a new `Policy.read_schedule` field (added in
+  11-02) gives the detail panel a persistent value to render; the daemon's own detail-panel copy
+  replaces the generic "shell config"/"reversible shell policy" fallback; and log reads for the
+  `l` toggle are wrapped in `try/except (OSError, UnicodeDecodeError)`.
+- **11-04** (composition + on-by-default): auto-apply now runs in a Textual worker (mirroring
+  `DoctorScreen`'s existing subprocess-backed-audit pattern) and posts a message that explicitly
+  refreshes `PoliciesScreen.active_state` via a new `refresh_daemon_state` method, so a
+  successful auto-apply is never invisible to the UI; the auto-apply callback is never wired when
+  `_build_app` is constructed for `initial_view="uninstall"`, while the `Policy` itself remains
+  visible/toggleable there; both uninstall paths (CLI `run_uninstall`, TUI `perform_uninstall`)
+  now tear down an active daemon policy through the existing `active_policies`/`sweep_policies`
+  machinery, extended with a `daemon_policy` parameter (with `sweep_policies`'s own except clause
+  widened to also catch `CommandError`, an own-finding gap this revision discovered while wiring
+  the daemon into that sweep loop); and the real per-user `TMPDIR`/`uv` resolution is now named
+  and commented at the composition-root call site itself, not only inside `installer/daemon.py`.
+
+Every fix was verified live where it touched real system behavior before being written into the
+plans — `uv run --no-project --script`'s argv-forwarding, `launchctl bootout`'s exit-code-3
+"already absent" semantics, this project's installed Textual version's actual `BadIdentifier`
+behavior, and this machine's real `TMPDIR` value — rather than trusting either the review's or
+the original plans' claims blindly. Original findings above are left unmodified; this note is an
+append, not a rewrite.
