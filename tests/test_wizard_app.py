@@ -3,9 +3,11 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
+import pytest
 from textual.pilot import Pilot
 from textual.widgets import DataTable, Static
 
+from installer import daemon
 from installer.app import UninstallDecision
 from installer.doctor import DoctorReport
 from installer.model import Method, Tool
@@ -106,17 +108,24 @@ def _ok_result() -> PolicyResult:
 
 def _fake_policy(
     *,
+    id: str = "ban",
     active: bool = False,
     apply: Callable[[], PolicyResult] = _ok_result,
     remove: Callable[[], PolicyResult] = _ok_result,
+    log_path: Path | None = None,
+    set_schedule: Callable[[int, int], PolicyResult] | None = None,
+    read_schedule: Callable[[], tuple[int, int] | None] | None = None,
 ) -> Policy:
     return Policy(
-        id="ban",
+        id=id,
         label="pip/npm ban",
         description="blocks bare pip/npm",
         active=active,
         apply=apply,
         remove=remove,
+        log_path=log_path,
+        set_schedule=set_schedule,
+        read_schedule=read_schedule,
     )
 
 
@@ -1012,6 +1021,204 @@ async def test_policy_with_hard_requires_false_still_enables_when_requires_missi
         assert "Recommended tool(s): fd, rg. Not required" in screen.detail_text
         assert "Missing required tool(s)" not in screen.detail_text
         assert "before enabling" not in screen.detail_text
+
+
+async def test_existing_policies_render_byte_identical_effect_and_detail() -> None:
+    """log_path is None for every existing policy: the Effect-column cell and
+    _policy_detail's own output must be byte-identical before and after this
+    task's changes (11-03-PLAN.md's own regression requirement)."""
+    ban = _fake_policy(active=False)
+    docker = Policy(
+        id="tweak:docker",
+        label="Docker shortcuts",
+        description="docker helpers",
+        active=False,
+        apply=_ok_result,
+        remove=_ok_result,
+        requires=("watch",),
+    )
+    app = _app(policies=_policy_inputs([ban, docker]), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        table = screen.query_one(DataTable[Any])
+        assert table.get_cell("ban", "effect").plain == "shell config: blocks bare pip/npm"
+        assert table.get_cell("tweak:docker", "effect").plain == "shell config: docker helpers"
+        assert screen.detail_text == (
+            "pip/npm ban — blocks bare pip/npm\n"
+            "Blocks bare pip and pip3, redirects npx to pnpm dlx, and routes"
+            " npm/pnpm global installs to volta install.\n"
+            "Wraps your pnpm binary with a PATH shim: only global adds are"
+            " rerouted, every other pnpm command passes straight through.\n"
+            "Global installs then run npm's install scripts unrestricted, which"
+            " pnpm gates — keep untrusted packages on a project-local pnpm add.\n"
+            "Writes PATH shims plus interactive aliases, then asks for a shell reload.\n"
+            "Use when humans or agents keep reaching for unmanaged package installers."
+        )
+        await pilot.press("down")
+        assert "Required tool(s): watch" in screen.detail_text
+        assert "watch-powered" in screen.detail_text
+
+
+async def test_daemon_policy_detail_uses_accurate_daemon_copy() -> None:
+    policy = Policy(
+        id="daemon:prune-tmpdir",
+        label="Background tmpdir cleanup",
+        description="runs scripts/prune-user-tmpdir.sh daily via a macOS LaunchAgent",
+        active=False,
+        apply=_ok_result,
+        remove=_ok_result,
+        requires=("fd", "rg"),
+        missing_requires=("fd", "rg"),
+        hard_requires=False,
+        log_path=Path("/tmp/tools-installer-test-daemon.log"),
+    )
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)):
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        table = screen.query_one(DataTable[Any])
+        assert table.get_cell("daemon:prune-tmpdir", "effect").plain.startswith("scheduled job: ")
+        detail = screen.detail_text
+        assert "Space toggles this reversible shell policy." not in detail
+        assert "LaunchAgent" in detail
+        assert "find/grep" in detail
+
+
+async def test_policy_with_log_path_and_no_log_file_shows_no_last_run_and_placeholder(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "prune-daemon.log"
+    policy = _fake_policy(active=True, log_path=log_path)
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert "last run" not in screen.detail_text
+        await pilot.press("l")
+        assert screen.detail_text == "log file does not exist yet"
+        await pilot.press("l")
+        assert "last run" not in screen.detail_text
+
+
+async def test_policy_with_log_file_shows_last_run_and_l_toggles_raw_content(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "prune-daemon.log"
+    log_path.write_text("=== 2026-09-01T03:00:00+00:00 ===\ndeleted: 4\n\n")
+    policy = _fake_policy(active=True, log_path=log_path)
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert "last run: 2026-09-01T03:00:00+00:00, 4 item(s) removed" in screen.detail_text
+        await pilot.press("l")
+        assert "=== 2026-09-01T03:00:00+00:00 ===" in screen.detail_text
+        assert "deleted: 4" in screen.detail_text
+        await pilot.press("l")
+        assert "last run: 2026-09-01T03:00:00+00:00, 4 item(s) removed" in screen.detail_text
+
+
+async def test_policy_with_read_schedule_shows_persistent_schedule_line() -> None:
+    with_schedule = _fake_policy(
+        active=True,
+        set_schedule=lambda _h, _m: _ok_result(),
+        read_schedule=lambda: (3, 30),
+    )
+    app = _app(policies=_policy_inputs([with_schedule]), initial_view="policies")
+    async with app.run_test(size=(100, 30)):
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert "scheduled daily at 03:30" in screen.detail_text
+
+    without_schedule = _fake_policy(
+        active=True,
+        set_schedule=lambda _h, _m: _ok_result(),
+        read_schedule=lambda: None,
+    )
+    app2 = _app(policies=_policy_inputs([without_schedule]), initial_view="policies")
+    async with app2.run_test(size=(100, 30)):
+        screen2 = app2.screen
+        assert isinstance(screen2, PoliciesScreen)
+        assert "scheduled daily at" not in screen2.detail_text
+
+    no_set_schedule = _fake_policy(active=True, read_schedule=lambda: (3, 30))
+    app3 = _app(policies=_policy_inputs([no_set_schedule]), initial_view="policies")
+    async with app3.run_test(size=(100, 30)):
+        screen3 = app3.screen
+        assert isinstance(screen3, PoliciesScreen)
+        assert "scheduled daily at" not in screen3.detail_text
+
+
+async def test_toggle_log_is_noop_when_policy_has_no_log_path() -> None:
+    policy = _fake_policy(active=True)
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        before = screen.detail_text
+        await pilot.press("l")
+        assert screen.detail_text == before
+
+
+async def test_toggle_log_against_invalid_utf8_shows_read_failure_placeholder(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "prune-daemon.log"
+    log_path.write_bytes(b"\xff\xfe not valid utf-8")
+    policy = _fake_policy(active=True, log_path=log_path)
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        await pilot.press("l")
+        assert screen.detail_text.startswith("log could not be read: ")
+
+
+async def test_normal_detail_render_is_defensive_against_corrupt_schedule_and_log(
+    tmp_path: Path,
+) -> None:
+    """Corrupt managed files must never crash mount/row-highlight rendering —
+    only the l toggle's own read is defended by an earlier test; this proves
+    the NORMAL render path is equally defended (11-REVIEWS.md cycle 2 #10)."""
+    log_path = tmp_path / "prune-daemon.log"
+    log_path.write_bytes(b"\xff\xfe not valid utf-8")
+
+    def _raising_read_schedule() -> tuple[int, int] | None:
+        raise ValueError("corrupt plist")
+
+    policy = _fake_policy(
+        active=True,
+        log_path=log_path,
+        set_schedule=lambda _h, _m: _ok_result(),
+        read_schedule=_raising_read_schedule,
+    )
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)):
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        # No exception propagated out of the pilot; the two lines are omitted.
+        assert "last run" not in screen.detail_text
+        assert "scheduled daily at" not in screen.detail_text
+
+
+async def test_normal_detail_render_defends_against_last_run_summary_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Second, independent belt on top of installer.daemon.last_run_summary's
+    own total/never-raising guarantee — this exercises wizard_app's own guard
+    directly, since the real function never raises by construction."""
+
+    def _raise(_log_path: Path) -> str | None:
+        raise OSError("boom")
+
+    monkeypatch.setattr(daemon, "last_run_summary", _raise)
+    policy = _fake_policy(active=True, log_path=Path("/nonexistent/tools-installer-test.log"))
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)):
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert "last run" not in screen.detail_text
 
 
 async def test_policy_toggle_disables_active_policy() -> None:
