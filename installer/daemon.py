@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import cast
 
 from installer.run import CommandError, Runner, run_captured
+from installer.shellrc import apply_block, strip_block
 
 LABEL = "com.tools-installer.prune-tmpdir"
 DEFAULT_HOUR = 3
@@ -36,6 +37,17 @@ _ALREADY_UNLOADED_EXIT_CODE = 3
 _WRAPPER_ASSET = "helper_assets/prune_daemon_runner.py"
 _WRAPPER_COMMAND = "tools-installer-prune-daemon"
 _WRAPPER_SENTINEL = "tools-installer-helper: prune-daemon"
+
+# The "has any decision ever been recorded for this policy" ownership marker,
+# mirroring installer/omz.py's _record/_record_owned pattern against the SAME
+# ~/.myshellrc state file -- but for a bare decision (no names list). Answers
+# "has this policy's default ever been applied on this machine" (11-RESEARCH.md
+# Pitfall 2), which plain plist-file presence alone cannot: a machine where the
+# plist is absent because the user explicitly disabled it, and one where it is
+# absent because setup has never run before, are indistinguishable by presence
+# alone.
+_DECIDED_BEGIN = "# >>> tools-installer daemon:decided >>>"
+_DECIDED_END = "# <<< tools-installer daemon:decided <<<"
 
 
 class DaemonScheduleError(OSError):
@@ -331,3 +343,113 @@ def wrapper_present(bin_dir: Path) -> bool:
     """
     target = bin_dir / _WRAPPER_COMMAND
     return target.exists() and _is_our_wrapper(target)
+
+
+def _decided_block() -> str:
+    return "\n".join(
+        (
+            _DECIDED_BEGIN,
+            "# This installer has made an on/off decision (auto-default or an",
+            "# explicit user toggle) for the background maintenance daemon on",
+            "# this machine. Comments only: nothing here is executed.",
+            _DECIDED_END,
+        )
+    )
+
+
+def decided(state_path: Path) -> bool:
+    """True once record_decided has written its marker block at least once.
+
+    False when state_path does not exist or contains no CLOSED begin..end
+    block. Mirrors installer/omz.py::_record's "only a CLOSED begin..end block
+    counts, last-closed-block-wins" discipline exactly, since this predicate
+    is built on the SAME line-scan shape apply_block/strip_block use: an
+    orphan (unpaired) begin marker or a reversed (end appears before its
+    matching begin) marker pair both read as False, never a crash and never a
+    false True (11-REVIEWS.md cycle 2 finding #4).
+    """
+    if not state_path.exists():
+        return False
+    found = False
+    inside = False
+    for line in state_path.read_text().split("\n"):
+        if line == _DECIDED_BEGIN:
+            inside = True
+        elif line == _DECIDED_END and inside:
+            inside, found = False, True
+    return found
+
+
+def record_decided(state_path: Path) -> None:
+    """Idempotently record that a decision has been made for this policy.
+
+    Reuses installer.shellrc.apply_block against state_path (creating the file
+    if absent), then commits via THIS module's own shared _atomic_write with
+    mode=None -- mode-PRESERVING (11-REVIEWS.md cycle 3 finding #4), since
+    state_path is typically ~/.myshellrc, the SAME file installer/omz.py's own
+    _atomic_write already protects: a crash mid-write here must not be able to
+    leave it half-written either (11-REVIEWS.md cycle 2 finding #2).
+    """
+    existing = state_path.read_text() if state_path.exists() else ""
+    updated = apply_block(existing, _decided_block(), begin=_DECIDED_BEGIN, end=_DECIDED_END)
+    _atomic_write(state_path, updated.encode("utf-8"), mode=None)
+
+
+def clear_decided(state_path: Path) -> None:
+    """Strip the "decided" marker block; a no-op when absent or unrecorded.
+
+    Mirrors installer/omz.py::_clear_owned exactly: only writes when the
+    stripped content actually differs from the original. Deliberately NEVER
+    called by decided/record_decided/daemon_policy.remove() -- its one caller
+    is a later plan's full-uninstall composition, run AFTER that plan's sweep
+    completes (11-REVIEWS.md cycle 2 finding #17).
+    """
+    if not state_path.exists():
+        return
+    original = state_path.read_text()
+    stripped = strip_block(original, _DECIDED_BEGIN, _DECIDED_END)
+    if stripped != original:
+        _atomic_write(state_path, stripped.encode("utf-8"), mode=None)
+
+
+_DELETED_PREFIX = "deleted: "
+
+
+def last_run_summary(log_path: Path) -> str | None:
+    """The last "=== " block's timestamp and deleted-count summary, or None.
+
+    None when log_path does not exist or contains no "=== " block; otherwise
+    the LAST such block's timestamp, plus its `deleted: N` count when present
+    (the script's own literal `printf 'deleted: %s\\n' "$deleted"` summary
+    line), or a "(see log for details)" fallback when the last block has no
+    such line (a dry-run block, or a script-side failure body) -- never
+    fabricating a count. Reads via read_bytes().decode(errors="replace"),
+    never Path.read_text()'s strict decode, so a hand-edited or externally-
+    corrupted log file can never raise UnicodeDecodeError out of a function
+    a detail-panel render calls on every normal render (11-REVIEWS.md cycle 2
+    finding #3).
+    """
+    if not log_path.exists():
+        return None
+    text = log_path.read_bytes().decode("utf-8", errors="replace")
+    lines = text.split("\n")
+    header_indices = [index for index, line in enumerate(lines) if line.startswith("=== ")]
+    if not header_indices:
+        return None
+    start = header_indices[-1]
+    header_line = lines[start]
+    timestamp = header_line.removeprefix("=== ").removesuffix(" ===")
+    body_lines = lines[start + 1 :]
+    if body_lines and body_lines[-1] == "":
+        body_lines = body_lines[:-1]
+    deleted: int | None = None
+    for line in body_lines:
+        if line.startswith(_DELETED_PREFIX):
+            try:
+                deleted = int(line.removeprefix(_DELETED_PREFIX).strip())
+            except ValueError:
+                deleted = None
+            break
+    if deleted is not None:
+        return f"last run: {timestamp}, {deleted} item(s) removed"
+    return f"last run: {timestamp} (see log for details)"
