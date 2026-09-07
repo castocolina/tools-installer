@@ -416,3 +416,117 @@ success line, and `tests/test_setup.py::_capture_app` were all re-read from the 
 source (not from memory of the earlier research/review passes) immediately before citing their
 exact line numbers above. Cycle 1 and cycle 2's findings above are left unmodified; this note is an
 append, not a rewrite.
+
+## Cycle 3 (codex-sol-high)
+
+**Reviewer:** codex CLI, model `gpt-5.6-sol (reasoning=high)`
+**Commit reviewed:** `c17609a` (post cycle-2 revision, all 4 plan files)
+**Risk assessment:** HIGH (all 4 plans)
+
+### Overall Assessment
+
+"Request changes before execution. Overall risk: HIGH." The plans are unusually thorough and
+source-aware, but several lifecycle bugs remain, concentrated in partial-failure/state-transition
+edge cases. Most severe: Plan 11-02 can leave daemon-owned artifacts after a failed first
+bootstrap and can re-enable a daemon after an explicit disable if recording the decision fails;
+Plan 11-04 confuses "default application occurred" with "policy is currently active," contains an
+uninstall/auto-apply race the cycle-2 guard doesn't actually close, and fails to clear the decision
+marker when uninstalling an already-disabled daemon; Plan 11-01 specifies an integration test that
+cannot use the production `render_plist` API as written.
+
+### Plan 11-01 — Core daemon mechanism (HIGH until fixed, MEDIUM after)
+
+1. **HIGH — the real integration test is incompatible with the specified API.** `render_plist`
+   fixes `ProgramArguments` to the `uv`/wrapper invocation, but the live test says to build the
+   plist "via `render_plist`/`write_plist`" with `["/bin/echo", "hello"]` instead
+   (`11-01-PLAN.md:291`, `:339`) — no parameter permits that override.
+2. **MEDIUM — the truncation algorithm does not enforce the stated cap.** It retains complete
+   lines until the accumulated size is already at or over the cap, so a single long line can
+   remain substantially larger than 256 KB; `"\n".join(kept)` may also drop the final newline,
+   concatenating the next header with prior content (`11-01-PLAN.md:455`).
+3. **MEDIUM — `_truncate` has conflicting ownership.** Assigned to `installer/daemon.py`, but the
+   standalone wrapper launched via `uv run --no-project --script` from `~/.local/bin` cannot
+   safely assume the repository's `installer` package is importable (`11-01-PLAN.md:486`).
+4. **MEDIUM — one shared atomic-write helper has incompatible permission requirements** — plist
+   writes must force `0644` while `.myshellrc` writes must preserve existing mode
+   (`11-01-PLAN.md:306`, `:558`); the existing OMZ helper always preserves the target mode
+   (`installer/omz.py:190`, `:217`).
+
+### Plan 11-02 — Policy model and daemon factory (HIGH)
+
+1. **HIGH — a failed first bootstrap leaves owned artifacts behind.** The shared helper installs
+   the wrapper and creates the log before bootstrap; on first-bootstrap failure, rollback removes
+   only the plist (`11-02-PLAN.md:620`, `:629`) — since activity is defined by plist presence,
+   later uninstall discovery never sees the orphan wrapper, violating the "no orphan helpers" rule
+   (`.claude/architecture.md:23`).
+2. **HIGH — decision-marker failure after removal breaks user intent.** Removal unregisters the
+   job, deletes the plist/wrapper, and only then calls `record_decided` without the apply path's
+   warning handling (`11-02-PLAN.md:653`) — a write failure here reports the whole operation
+   failed even though the daemon is already off, and more importantly an absent marker lets the
+   next setup auto-enable it again, silently reversing an explicit disable.
+3. **MEDIUM — `remove_wrapper` is treated as infallible** — an owned-file `unlink()` failure after
+   plist removal isn't guarded, creating the same UI/reality mismatch pattern as other findings.
+4. **MEDIUM — rollback bypasses the atomic plist writer**, restoring old bytes via
+   `plist_path.write_bytes(previous)` (`11-02-PLAN.md:636`) instead of through the same
+   crash-safe/permission-preserving writer 11-01 establishes.
+5. **MEDIUM — `set_schedule` can create an inactive policy's plist** — the core closure accepts a
+   missing snapshot and proceeds even though the UI intends to guard this (`11-02-PLAN.md:669`).
+
+### Plan 11-03 — Policies UI and time picker (MEDIUM)
+
+1. **MEDIUM — toggle and reschedule can freeze the TUI.** The plan keeps both synchronous on the
+   event loop (`11-03-PLAN.md:213`); `run_captured` still has no timeout. (Reviewer acknowledges
+   this is an explicit, reasoned ACCEPT decision from cycle 2, not an oversight — still flags it
+   as a residual reliability risk worth a bounded worker/timeout if feasible.)
+2. **LOW — the new modal doesn't inherit `NavScreen`'s class-specific CSS** (`installer/wizard_app.py:1111`
+   targets `NavScreen > ListView` specifically) — a 48-row `TimePickerScreen` needs its own
+   bounded/centered styling.
+
+### Plan 11-04 — Composition, default enablement, and uninstall (HIGH)
+
+1. **HIGH — `applied` is not the same as `active`.** `ensure_daemon_default` returns `False` when
+   the decision marker already exists; the handler passes that to
+   `refresh_daemon_state(..., active=False)` (`11-04-PLAN.md:760`, `:787`) — on a normal second run
+   where the marker exists AND the daemon is active, the UI flips from its correct construction-time
+   `True` snapshot to `False`. Tests cover decided-and-disabled but not decided-and-enabled.
+2. **HIGH — the uninstall race guard misses the dangerous case.** It blocks only when `_tweak_ids`
+   already contains a `daemon:` ID (`11-04-PLAN.md:824`) — during first-run auto-apply the daemon
+   starts inactive, so the uninstall screen's live snapshot may contain no daemon ID at all
+   (`installer/wizard_app.py:718`); uninstall can finish, then the worker registers the daemon
+   afterward.
+3. **HIGH — full uninstall does not clear an explicit-disable marker.** `clear_decided` runs only
+   if the daemon was actually in `SweepResult.swept` (`11-04-PLAN.md:985`) — if the user previously
+   disabled the daemon, the plist is already absent, so sweep sweeps nothing and the marker
+   survives, meaning reinstall is not "genuinely fresh" as claimed.
+4. **MEDIUM — required-argument migration is underspecified** — `tests/test_app.py` alone has 15
+   `run_uninstall` calls and several `perform_uninstall` calls beyond the two e2e calls the plan
+   names explicitly (`tests/test_app.py:355`, `:1201`; `tests/test_uninstall_e2e.py:53`).
+5. **MEDIUM — an unexpected worker exception leaves the in-flight flag stuck** — completion is only
+   posted from the expected `OSError`/`CommandError` paths, not a `finally` block.
+6. **MEDIUM — "fresh install" vs. "first run after upgrade" is unresolved** — an existing
+   installation with no daemon decision marker will be treated as fresh on its next ordinary setup
+   run and silently enable the daemon; needs an explicit migration decision and test.
+
+### Recommended execution gate (per reviewer)
+
+1. Fix Plan 11-01's integration-test API contradiction.
+2. Make Plan 11-02 roll back wrapper/log side effects on failed first bootstrap, and make
+   explicit-disable recording durable even if the marker write fails.
+3. Make Plan 11-04 communicate live active state (not "applied"), block uninstall for the full
+   duration of auto-apply regardless of the `_tweak_ids` snapshot, and clear the marker on full
+   uninstall even when the daemon was already disabled.
+4. Add decided-and-active, uninstall-during-first-apply, failed-first-bootstrap-orphan, and
+   disabled-daemon-full-uninstall regression tests.
+
+### Disposition
+
+This is cycle 3 of 3 — the hard cap per `.planning/ONESHOT-RULES.md` Rule 10. 6 HIGH + 9 MEDIUM +
+1 LOW findings remain, source-grounded with exact file:line citations. These are real,
+substantive edge-case defects (state-machine correctness under partial failure, not review noise),
+but narrower in scope than cycle 2's 9 HIGH findings, and every "Strengths" section confirms the
+core cycle-1/cycle-2 architecture (uv invocation, atomic writes, transactional apply/remove intent,
+`apply_daemon_default` allowlist, worker-based defaulting) is sound. Per the 3-cycle cap, no
+further review cycle will be dispatched. Proceeding to ONE final direct fix pass (not a 4th review
+cycle) addressing every finding above, then to execution regardless of any residual finding this
+final pass cannot fully close — any such residual will be carried forward as a documented known
+limitation in the phase's SUMMARY/VERIFICATION rather than silently dropped.
