@@ -984,6 +984,36 @@ async def test_policy_missing_required_tool_blocks_enable() -> None:
         assert "Install required tool(s) first: watch" in screen.status.text
 
 
+async def test_policy_with_hard_requires_false_still_enables_when_requires_missing_with_recommended_copy() -> (  # noqa: E501
+    None
+):
+    calls: list[str] = []
+    policy = Policy(
+        id="daemon:test",
+        label="Background daemon",
+        description="daemon helpers",
+        active=False,
+        apply=lambda: (calls.append("apply"), _ok_result())[1],
+        remove=_ok_result,
+        requires=("fd", "rg"),
+        missing_requires=("fd", "rg"),
+        hard_requires=False,
+    )
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert "Recommended tool(s): fd, rg. Not required" in screen.detail_text
+        assert "Missing required tool(s)" not in screen.detail_text
+        await pilot.press("space")
+        assert calls == ["apply"]
+        assert screen.active_state["daemon:test"] is True
+        assert "enabled" in screen.status.text
+        assert "Recommended tool(s): fd, rg. Not required" in screen.detail_text
+        assert "Missing required tool(s)" not in screen.detail_text
+        assert "before enabling" not in screen.detail_text
+
+
 async def test_policy_toggle_disables_active_policy() -> None:
     calls: list[str] = []
     policy = _fake_policy(active=True, remove=lambda: (calls.append("remove"), _ok_result())[1])
