@@ -11,14 +11,19 @@ renders UI.
 
 import contextlib
 import importlib.resources
-import os
+import os  # noqa: F401  # pyright: ignore[reportUnusedImport]
 import plistlib
-import shutil
 from pathlib import Path
 from typing import cast
 
+from installer.atomic import atomic_write_bytes
 from installer.run import CommandError, Runner, run_captured
 from installer.shellrc import apply_block, strip_block
+
+# `import os` is the monkeypatch surface tests/test_daemon.py and
+# tests/test_policy_daemon.py use (`daemon.os.replace`). It is the same stdlib
+# module installer.atomic imports, so those patches still intercept the write
+# after this body became a delegation.
 
 LABEL = "com.tools-installer.prune-tmpdir"
 DEFAULT_HOUR = 3
@@ -69,37 +74,20 @@ class DaemonScheduleError(OSError):
 def _atomic_write(path: Path, data: bytes, *, mode: int | None = None) -> None:
     """Replace path's content atomically, creating it when it does not exist yet.
 
-    Mirrors installer/omz.py::_atomic_write's crash-safety shape (sibling temp file
-    in the same directory, then os.replace) but adds an explicit `mode` parameter
-    (11-REVIEWS.md cycle 3 finding #4): the plist this module writes and the
-    ~/.myshellrc "decided" marker it also writes have genuinely different
-    permission requirements, so one hardcoded policy cannot serve both callers.
-    When `mode` is given, the temp file is chmod'd to exactly that value before the
-    replace -- an explicit, umask-independent permission (write_plist's own forced
-    0o644 for a LaunchAgent config nobody else should be able to edit). When `mode`
-    is None (the default), this mirrors installer/omz.py::_atomic_write exactly:
-    shutil.copymode(target, tmp) when target already exists, no explicit chmod
-    otherwise (record_decided's mode-PRESERVING write against ~/.myshellrc, the
-    same file omz.py's own _atomic_write already protects).
-
-    When path is itself a symlink, os.replace(tmp, path) would rename OVER the
-    symlink rather than through it; resolving to the real target first means the
-    symlink itself is never touched.
+    Delegates to installer.atomic.atomic_write_bytes, the shared sibling-temp
+    plus os.replace implementation. The explicit `mode` parameter
+    (11-REVIEWS.md cycle 3 finding #4) is preserved: the plist this module
+    writes and the ~/.myshellrc "decided" marker it also writes have genuinely
+    different permission requirements, so one hardcoded policy cannot serve
+    both callers. When `mode` is given, the temp file is chmod'd to exactly
+    that value before the replace -- an explicit, umask-independent permission
+    (write_plist's own forced 0o644 for a LaunchAgent config nobody else
+    should be able to edit). When `mode` is None (the default), this mirrors
+    installer/omz.py::_atomic_write exactly: shutil.copymode from an existing
+    target, no explicit chmod otherwise (record_decided's mode-PRESERVING
+    write against ~/.myshellrc).
     """
-    target = path.resolve() if path.is_symlink() else path
-    tmp = target.with_name(f"{target.name}.tools-installer.tmp")
-    try:
-        tmp.write_bytes(data)
-        if mode is not None:
-            tmp.chmod(mode)
-        elif target.exists():
-            shutil.copymode(target, tmp)
-        os.replace(tmp, target)
-    except OSError:
-        # The original is still intact; drop the partial temp rather than leaving
-        # a half-written file beside it.
-        tmp.unlink(missing_ok=True)
-        raise
+    atomic_write_bytes(path, data, mode=mode)
 
 
 def render_plist(

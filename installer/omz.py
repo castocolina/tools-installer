@@ -37,13 +37,17 @@ refused write permanent, since the retry the caller advertises would find
 nothing left to act on.
 """
 
-import os
+import os  # noqa: F401  # pyright: ignore[reportUnusedImport]
 import re
-import shutil
 from collections.abc import Mapping
 from pathlib import Path
 
+from installer.atomic import atomic_write_text
 from installer.shellrc import apply_block, strip_block
+
+# `import os` is the monkeypatch surface tests/test_omz.py uses (`omz.os.replace`).
+# It is the same stdlib module installer.atomic imports, so those patches still
+# intercept the write after this body became a delegation.
 
 # The only names this installer ever writes into a user's array. They are
 # Oh-My-Zsh's own bundled plugins, requiring no download. A module constant so no
@@ -197,30 +201,15 @@ def _atomic_write(path: Path, updated: str) -> None:
     tell a name this installer added from one the user wrote, and a half-written
     record is unrecoverable by design — `strip_block` refuses an orphan begin
     marker, so a truncated record would wedge the policy permanently ON with no
-    way to clear it. Write a sibling temp file (same directory, so the rename
-    cannot cross a filesystem), carry any existing mode over, then os.replace —
-    which is atomic on POSIX.
+    way to clear it.
 
-    When path is itself a symlink (a dotfile-manager setup that symlinks
-    ~/.zshrc to a repo elsewhere is common), os.replace(tmp, path) would rename
-    OVER the symlink, deleting it and leaving a plain file in its place — the
-    repo copy the symlink pointed at is left with the old content and silently
-    falls out of sync. Resolving to the real target first means the rename
-    replaces the file the symlink points to, and the symlink itself is never
-    touched.
+    Implementation lives in installer.atomic.atomic_write_text: a unique sibling
+    temp, then os.replace. When path is itself a symlink (a dotfile-manager
+    setup that symlinks ~/.zshrc to a repo elsewhere is common), that helper
+    resolves through the link so the rename never replaces the symlink with a
+    regular file.
     """
-    target = path.resolve() if path.is_symlink() else path
-    tmp = target.with_name(f"{target.name}.tools-installer.tmp")
-    try:
-        tmp.write_text(updated)
-        if target.exists():
-            shutil.copymode(target, tmp)
-        os.replace(tmp, target)
-    except OSError:
-        # The original is still intact; drop the partial temp rather than
-        # leaving a half-written file beside the user's own.
-        tmp.unlink(missing_ok=True)
-        raise
+    atomic_write_text(path, updated)
 
 
 def _owned_block(added: tuple[str, ...]) -> str:
