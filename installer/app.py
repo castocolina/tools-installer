@@ -536,4 +536,17 @@ def perform_uninstall(
         if daemon_policy is not None and daemon_policy.id not in swept.failed:
             daemon.clear_decided(myshellrc_path)
         return swept
+    # decision.remove_tweaks is False here -- either the user genuinely left
+    # an ACTIVE tweaks row unselected (keep the marker, nothing to clear), or
+    # there was no tweaks row to select at all because the daemon was already
+    # inactive (an already-disabled daemon never appears in active_policies).
+    # Only the second case should still clear the marker, mirroring
+    # run_uninstall's own "nothing to sweep" early-return branch -- an
+    # already-off daemon leaves no active state for a skipped selection to
+    # preserve, so a full visible uninstall must still leave the machine
+    # genuinely fresh (post-implementation review finding, second lane).
+    if daemon_policy is not None and not (
+        daemon_policy.is_active() if daemon_policy.is_active is not None else daemon_policy.active
+    ):
+        daemon.clear_decided(myshellrc_path)
     return SweepResult()

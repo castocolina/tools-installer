@@ -1778,6 +1778,71 @@ def test_perform_uninstall_forwards_daemon_policy_and_clears_the_marker(tmp_path
     assert daemon.decided(state_path) is False
 
 
+def test_perform_uninstall_clears_marker_for_disabled_daemon_with_no_tweaks_row(
+    tmp_path: Path,
+) -> None:
+    """Post-implementation review, second lane: when the daemon is already
+    inactive and the TUI's Uninstall screen never offered a tweaks row to
+    select (finding #4's exact scenario), decision.remove_tweaks is False --
+    but the marker must still be cleared so a full uninstall+reinstall is
+    genuinely fresh, mirroring run_uninstall's own "nothing to sweep" case."""
+    from installer import daemon
+    from installer.app import UninstallDecision, perform_uninstall
+
+    daemon_policy_obj, state_path = _daemon_for_uninstall(tmp_path, decided=True)
+    assert not (tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist").exists()
+    assert daemon.decided(state_path) is True
+
+    decision = UninstallDecision(
+        paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=False
+    )
+    result = perform_uninstall(
+        decision,
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=state_path,
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=daemon_policy_obj,
+    )
+    assert result.swept == ()
+    assert daemon.decided(state_path) is False
+
+
+def test_perform_uninstall_preserves_the_decided_marker_for_an_active_daemon_left_unselected(
+    tmp_path: Path,
+) -> None:
+    """The other side of the same fix: an ACTIVE daemon the user deliberately
+    left unselected (remove_tweaks=False while a tweaks row genuinely existed
+    and was declined) must keep its marker -- the new fallback branch only
+    fires when the daemon is already inactive, never when it is merely
+    unselected while still running."""
+    from installer import daemon
+    from installer.app import UninstallDecision, perform_uninstall
+
+    daemon_policy_obj, state_path = _daemon_for_uninstall(tmp_path)
+    daemon_policy_obj.apply()
+    plist_path = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
+    assert plist_path.exists()
+    assert daemon.decided(state_path) is True
+
+    decision = UninstallDecision(
+        paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=False
+    )
+    result = perform_uninstall(
+        decision,
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=state_path,
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=daemon_policy_obj,
+    )
+    assert result.swept == ()
+    assert plist_path.exists()  # untouched: the user did not select removal
+    assert daemon.decided(state_path) is True  # marker preserved: still active
+
+
 def test_perform_uninstall_requires_daemon_policy() -> None:
     from installer.app import UninstallDecision, perform_uninstall
 

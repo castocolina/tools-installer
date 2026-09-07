@@ -255,6 +255,58 @@ def test_apply_bootstrap_failure_on_first_ever_apply_preserves_a_pre_existing_lo
     assert paths.log_path.exists()
 
 
+def test_apply_write_plist_failure_after_install_wrapper_rolls_back_the_new_wrapper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A first-ever apply where install_wrapper succeeds but write_plist itself
+    then raises OSError (disk full, EACCES) must still roll back the brand-new
+    wrapper it just created -- not only a later daemon.bootstrap failure.
+    Post-implementation review finding CR-01: the pre-fix code only guarded
+    the bootstrap call, leaving an orphaned wrapper on disk with no plist and
+    no registration whenever the write/install step itself failed."""
+    paths = _make_paths(tmp_path)
+
+    def failing_write_plist(*args: object, **kwargs: object) -> None:
+        raise OSError("simulated disk full writing the plist")
+
+    monkeypatch.setattr(daemon, "write_plist", failing_write_plist)
+    fake_run = _FakeRun()
+    policy = _build(paths, run=fake_run)
+    with pytest.raises(OSError):
+        policy.apply()
+    assert not paths.plist_path.exists()
+    assert daemon.wrapper_present(paths.wrapper_bin_dir) is False
+    assert not paths.log_path.exists()
+    assert daemon.decided(paths.state_path) is False
+    assert not any(cmd[1] == "bootstrap" for cmd in fake_run.calls)
+
+
+def test_apply_write_plist_failure_on_a_reapply_restores_the_previous_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same failure point, but on a REAPPLY: the pre-existing plist bytes
+    must be restored and re-bootstrapped, exactly like a bootstrap-failure
+    reapply already does -- a write_plist failure must not be treated any
+    differently from a bootstrap failure once a prior snapshot exists."""
+    paths = _make_paths(tmp_path)
+    setup_policy = _build(paths, run=_FakeRun())
+    setup_policy.apply()
+    original_bytes = paths.plist_path.read_bytes()
+
+    def failing_write_plist(*args: object, **kwargs: object) -> None:
+        raise OSError("simulated disk full writing the plist")
+
+    monkeypatch.setattr(daemon, "write_plist", failing_write_plist)
+    fake_run = _FakeRun()
+    policy = _build(paths, run=fake_run)
+    with pytest.raises(OSError):
+        policy.apply()
+    assert paths.plist_path.read_bytes() == original_bytes
+    bootstrap_calls = [c for c in fake_run.calls if c[1] == "bootstrap"]
+    assert len(bootstrap_calls) == 1  # the best-effort re-bootstrap of the restored plist
+    assert daemon.wrapper_present(paths.wrapper_bin_dir) is True
+
+
 def test_apply_bootstrap_failure_on_a_reapply_restores_bytes_and_re_bootstraps(
     tmp_path: Path,
 ) -> None:
@@ -377,6 +429,38 @@ def test_remove_wrapper_unlink_failure_degrades_to_warning(
     assert "wrapper removal failed" in result.warning
     assert not paths.plist_path.exists()
     assert any(cmd[1] == "bootout" for cmd in fake_run.calls)
+
+
+def test_remove_marker_write_transient_failure_recovers_on_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A marker-write failure after a manual disable is worse than the
+    symmetric apply-side failure: it leaves daemon.decided() False, so the
+    NEXT interactive setup run silently re-enables the daemon the user just
+    turned off. A single-attempt transient OSError (the common real-world
+    case -- a momentary lock, not a persistent disk-full) must not surface
+    as a failure at all once the retry succeeds."""
+    paths = _make_paths(tmp_path)
+    fake_run = _FakeRun()
+    policy = _build(paths, run=fake_run)
+    policy.apply()
+
+    original_replace = daemon.os.replace
+    calls_for_state_path = 0
+
+    def flaky_replace(src: str | Path, dst: str | Path) -> None:
+        nonlocal calls_for_state_path
+        if Path(dst) == paths.state_path:
+            calls_for_state_path += 1
+            if calls_for_state_path == 1:
+                raise OSError("simulated transient lock")
+        original_replace(src, dst)
+
+    monkeypatch.setattr(daemon.os, "replace", flaky_replace)
+    result = policy.remove()
+    assert result.warning is None
+    assert daemon.decided(paths.state_path) is True
+    assert calls_for_state_path == 2  # the failed attempt + the successful retry
 
 
 def test_remove_marker_write_failure_degrades_to_warning_and_leaves_undecided(

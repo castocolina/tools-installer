@@ -35,7 +35,12 @@ _ALREADY_UNLOADED_EXIT_CODE = 3
 # installer/tweaks.py's ManagedExecutable/_is_our_executable sentinel-checked
 # copy pattern for a single executable outside the TweakBundle mechanism.
 _WRAPPER_ASSET = "helper_assets/prune_daemon_runner.py"
-_WRAPPER_COMMAND = "tools-installer-prune-daemon"
+# Public: installer/policy.py's daemon_policy factory needs this same filename
+# to build a pre-write validation path before install_wrapper ever runs, and a
+# private symbol should never be re-declared across a module boundary (a
+# post-implementation review flagged the previous hand-duplicated copy as a
+# silent-drift trap -- this is the single source of truth instead).
+WRAPPER_COMMAND = "tools-installer-prune-daemon"
 _WRAPPER_SENTINEL = "tools-installer-helper: prune-daemon"
 
 # The "has any decision ever been recorded for this policy" ownership marker,
@@ -312,14 +317,20 @@ def install_wrapper(bin_dir: Path) -> Path:
     pattern for a single, non-TweakBundle executable. Refuses to overwrite a
     same-named file it does not own (no sentinel present) rather than clobbering
     an unrelated file a user or another tool placed there.
+
+    Written through the shared _atomic_write helper (forced mode=0o755) rather
+    than a plain write_text/chmod pair: every other artifact this feature writes
+    (the plist, the "decided" marker) is already crash-safe, and a truncated
+    wrapper file left by a crash/disk-full mid-write would otherwise be silently
+    re-interpreted by `uv run --script` on every subsequent scheduled run
+    (post-implementation review finding WR-01).
     """
     bin_dir.mkdir(parents=True, exist_ok=True)
-    target = bin_dir / _WRAPPER_COMMAND
+    target = bin_dir / WRAPPER_COMMAND
     if target.exists() and not _is_our_wrapper(target):
         raise OSError(f"{target} exists and is not managed by tools-installer")
     source = importlib.resources.files("installer").joinpath(_WRAPPER_ASSET).read_text()
-    target.write_text(source)
-    target.chmod(0o755)
+    _atomic_write(target, source.encode("utf-8"), mode=0o755)
     return target
 
 
@@ -329,7 +340,7 @@ def remove_wrapper(bin_dir: Path) -> None:
     A missing bin_dir or file, or a same-named file this module does not own, is
     a silent no-op -- mirrors installer/tweaks.py's remove_tweak_executables.
     """
-    target = bin_dir / _WRAPPER_COMMAND
+    target = bin_dir / WRAPPER_COMMAND
     if target.exists() and _is_our_wrapper(target):
         target.unlink()
 
@@ -341,7 +352,7 @@ def wrapper_present(bin_dir: Path) -> bool:
     sentinel-checked so this can never promise to remove a same-named file
     remove_wrapper would correctly refuse to delete.
     """
-    target = bin_dir / _WRAPPER_COMMAND
+    target = bin_dir / WRAPPER_COMMAND
     return target.exists() and _is_our_wrapper(target)
 
 

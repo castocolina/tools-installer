@@ -834,13 +834,19 @@ class UninstallScreen(AppScreen):
         return run
 
     def _apply_removal(self, ids: list[str]) -> None:
-        if self.remove_tweaks and getattr(self.app, "daemon_default_in_flight", False):
-            # Gated DIRECTLY on the in-flight boolean, never additionally on
-            # whether a daemon: id already appears in self._tweak_ids: during
-            # first-run auto-apply the daemon Policy is constructed INACTIVE,
-            # so that id may not be visible here yet even while the worker is
-            # actively racing to register it (11-REVIEWS.md cycle 3 finding
-            # #12).
+        # Gated DIRECTLY on the in-flight boolean, unconditionally -- never
+        # additionally on self.remove_tweaks or whether a daemon: id already
+        # appears in self._tweak_ids. On a fresh machine with no OTHER active
+        # tweaks, the daemon starts inactive at screen-construction time, so
+        # _build_entries never offers a tweaks row at all (self._tweak_ids is
+        # empty) -- self.remove_tweaks can then never become True through
+        # this screen, so a condition on it would never fire in exactly the
+        # scenario it exists to guard: the on-by-default worker can still
+        # register the daemon during or after this uninstall completes with
+        # no user-visible way to have prevented it (post-implementation
+        # review finding, previously 11-REVIEWS.md cycle 3 finding #12's
+        # narrower self._tweak_ids-based guard).
+        if getattr(self.app, "daemon_default_in_flight", False):
             self.status.set(_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE, "warn")
             return
         paths: list[Path] = []
@@ -1247,6 +1253,23 @@ class PoliciesScreen(AppScreen):
         # once, before this closure is ever built.
         def picked(value: str | None) -> None:
             if value is None:
+                return
+            # Checked HERE, at the actual mutation point, not only when the
+            # picker was opened: the picker can stay on screen for as long as
+            # the user takes to choose a time, and the on-by-default worker
+            # can start racing to reapply/reschedule the SAME policy at any
+            # point during that window (a machine where the plist already
+            # exists -- so this policy reads active=True at construction --
+            # but daemon.decided() is still False, e.g. an upgrade that
+            # registered the LaunchAgent before the "decided" marker existed).
+            # Guarding only action_pick_time would leave that whole window
+            # open; action_toggle_policy and UninstallScreen._apply_removal
+            # already guard their own mutation points the same way
+            # (post-implementation review finding CR-02).
+            if policy.id == getattr(self.app, "_daemon_default_policy_id", None) and getattr(
+                self.app, "daemon_default_in_flight", False
+            ):
+                self.status.set(_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE, "warn")
                 return
             hour_text, minute_text = value.split(":")
             hour, minute = int(hour_text), int(minute_text)

@@ -9,6 +9,7 @@ with no screen changes.
 """
 
 import contextlib
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,11 +37,13 @@ from installer.tweaks import (
     write_tweak,
 )
 
-# The wrapper's installed filename, mirrored here purely for the
+# The wrapper's installed filename, imported (not re-declared) for the
 # validation-only render_plist call daemon_policy's apply/set_schedule make
-# BEFORE install_wrapper has (re)created the real file -- must stay in sync
-# with installer.daemon._WRAPPER_COMMAND's value (both name the same asset).
-_DAEMON_WRAPPER_COMMAND = "tools-installer-prune-daemon"
+# BEFORE install_wrapper has (re)created the real file: a hand-duplicated copy
+# here previously risked silent drift from installer.daemon's own value
+# (post-implementation review finding WR-03) -- daemon.WRAPPER_COMMAND is now
+# the single source of truth for both modules.
+_DAEMON_WRAPPER_COMMAND = daemon.WRAPPER_COMMAND
 
 _RELOAD_HINT = "Open a new shell or run `hash -r` so cached command paths refresh."
 # hash -r is about cached command PATH lookups and says nothing useful about a
@@ -325,6 +328,26 @@ def omz_plugins_policy(*, zshrc_path: Path, state_path: Path, present: bool) -> 
     )
 
 
+def _record_decided_durably(state_path: Path) -> None:
+    """Retry daemon.record_decided once after a brief pause before giving up.
+
+    A failed marker write after a MANUAL disable is worse than the symmetric
+    failure after apply: it leaves daemon.decided() False, so the next
+    interactive setup run's ensure_daemon_default silently re-applies (and
+    re-registers) a daemon the user explicitly just turned off -- a reversal
+    of user intent, not merely a lost audit trail (post-implementation review
+    finding). The write is a single atomic rename against a small text file,
+    so a real failure is almost always a transient one (a momentary lock/
+    EINTR on a network home directory); retrying once cheaply closes most of
+    that window without a larger state-machine change.
+    """
+    try:
+        daemon.record_decided(state_path)
+    except OSError:
+        time.sleep(0.05)
+        daemon.record_decided(state_path)
+
+
 def daemon_policy(
     *,
     plist_path: Path,
@@ -408,10 +431,22 @@ def daemon_policy(
         schedule = daemon.read_schedule(plist_path)
         default_schedule = (daemon.DEFAULT_HOUR, daemon.DEFAULT_MINUTE)
         hour, minute = schedule if schedule is not None else default_schedule
-        _validate_and_write(hour, minute)
+        # The rollback below must also cover _validate_and_write itself, not
+        # only daemon.bootstrap: on a first-ever apply, install_wrapper/
+        # ensure_log_path/write_plist can each raise OSError (disk full,
+        # EACCES, a read-only LaunchAgents dir) AFTER install_wrapper has
+        # already created a brand-new wrapper executable -- leaving it
+        # orphaned on disk with no plist and no registration if only the
+        # bootstrap call were guarded (post-implementation review finding
+        # CR-01). DaemonScheduleError is itself an OSError subclass raised
+        # by render_plist's pure validation half, before any write, so
+        # catching OSError here is safe: wrapper_existed_before/
+        # log_existed_before are still accurate and the rollback is a no-op
+        # against artifacts that were never created.
         try:
+            _validate_and_write(hour, minute)
             daemon.bootstrap(uid, plist_path, run=run)
-        except CommandError:
+        except (CommandError, OSError):
             if previous is not None:
                 # A reapply: bootstrap's own internal pre-clear already tore
                 # the old registration out before this attempt, so restoring
@@ -432,7 +467,7 @@ def daemon_policy(
             raise
         warning: str | None = None
         try:
-            daemon.record_decided(state_path)
+            _record_decided_durably(state_path)
         except OSError as exc:
             warning = f"decision not recorded: {exc}"
         return PolicyResult(
@@ -455,7 +490,11 @@ def daemon_policy(
         except OSError as exc:
             warnings.append(f"wrapper removal failed: {exc}")
         try:
-            daemon.record_decided(state_path)
+            # A retried write here matters more than the symmetric one in
+            # _apply: a failure that leaves daemon.decided() False after a
+            # manual disable lets the NEXT interactive setup silently
+            # re-enable the daemon the user just turned off.
+            _record_decided_durably(state_path)
         except OSError as exc:
             warnings.append(f"decision not recorded: {exc}")
         return PolicyResult(

@@ -2504,6 +2504,7 @@ def _daemon_app(
     daemon_default: Callable[[], bool] | None,
     remove: Callable[[UninstallDecision], SweepResult] = lambda _d: SweepResult(),
     tweak_ids: tuple[str, ...] | Callable[[], tuple[str, ...]] = (),
+    rows: list[ToolRow] | None = None,
 ) -> UnifiedApp:
     return UnifiedApp(
         [_tool("rg")],
@@ -2513,7 +2514,7 @@ def _daemon_app(
         guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
-        uninstall=_uninstall_inputs(remove=remove, tweak_ids=tweak_ids),
+        uninstall=_uninstall_inputs(rows=rows, remove=remove, tweak_ids=tweak_ids),
         policies=PolicyInputs(policies=[policy]),
         initial_view="policies",
         daemon_default=daemon_default,
@@ -2608,6 +2609,51 @@ async def test_manual_toggle_of_the_daemon_is_refused_while_the_worker_is_in_fli
         assert len(bootstrap_calls) == 1
 
 
+async def test_reschedule_is_refused_while_the_worker_is_in_flight(tmp_path: Path) -> None:
+    """Post-implementation review finding CR-02: action_toggle_policy and
+    UninstallScreen._apply_removal both guard against the on-by-default
+    worker racing a manual mutation of the SAME policy, but the reschedule
+    action (t) had no such guard. The scenario this closes: a plist already
+    exists on disk (so the daemon reads active=True at PoliciesScreen
+    construction, enabling the t binding) but daemon.decided() is still
+    False -- e.g. an upgrade that registered the LaunchAgent before the
+    "decided" marker existed -- so the worker calls policy.apply() for REAL
+    on a background thread at the same moment a user picks a new time on the
+    main thread. The guard must fire at the actual mutation point (inside the
+    picker's dismiss callback), not only when the picker screen is opened,
+    since the picker can stay open for as long as the user takes to choose."""
+    state_path = tmp_path / ".myshellrc"
+    seed = _daemon_policy(tmp_path)
+    seed.apply()
+    seed_bytes = (tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist").read_bytes()
+    state_path.unlink()  # simulate an upgrade: plist registered, no decided marker yet
+    fake_run = _FakeDaemonRun()
+    policy = _daemon_policy(tmp_path, run=fake_run)
+    assert policy.active is True
+
+    release = threading.Event()
+
+    def slow_daemon_default() -> bool:
+        release.wait(timeout=5)
+        return ensure_daemon_default(policy, state_path=state_path)
+
+    app = _daemon_app(tmp_path, policy=policy, daemon_default=slow_daemon_default)
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert app.daemon_default_in_flight is True
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert screen.active_state["daemon:prune-tmpdir"] is True
+        await pilot.press("t")
+        assert isinstance(app.screen, TimePickerScreen)
+        await pilot.press("down", "down", "down", "enter")
+        assert isinstance(app.screen, PoliciesScreen)
+        assert "wait a moment" in screen.status.text.lower()
+        plist_path = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
+        assert plist_path.read_bytes() == seed_bytes  # untouched by the refused reschedule
+        release.set()
+        await _settle_daemon(app, pilot)
+
+
 async def test_on_by_default_leaves_an_already_active_daemon_active(tmp_path: Path) -> None:
     """The decided-AND-active case: refresh_daemon_state must resolve via the
     policy's own is_active(), never the worker's applied=False boolean
@@ -2684,6 +2730,50 @@ async def test_uninstall_removal_is_refused_while_the_daemon_worker_is_in_flight
             tid.startswith("daemon:")
             for tid in screen._tweak_ids  # pyright: ignore[reportPrivateUsage]
         )
+        await pilot.press("a")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        assert captured == []
+        assert screen.applied is False
+        assert "wait a moment" in screen.status.text.lower()
+        release.set()
+        await _settle_daemon(app, pilot)
+
+
+async def test_uninstall_removal_is_refused_while_in_flight_even_with_no_tweaks_row(
+    tmp_path: Path,
+) -> None:
+    """Post-implementation review finding: on a machine with NO other active
+    tweaks, the daemon's inactive-at-construction Policy means _tweak_ids is
+    empty, so _build_entries never offers a tweaks row at all -- remove_tweaks
+    can then never become True through this screen, so the guard MUST fire
+    directly on daemon_default_in_flight alone, never gated behind
+    self.remove_tweaks (which the pre-fix code required, making the guard a
+    no-op in exactly this scenario)."""
+    policy = _daemon_policy(tmp_path)
+    captured: list[UninstallDecision] = []
+    release = threading.Event()
+
+    def slow_daemon_default() -> bool:
+        release.wait(timeout=5)
+        return False
+
+    app = _daemon_app(
+        tmp_path,
+        policy=policy,
+        daemon_default=slow_daemon_default,
+        remove=_recorder(captured, SweepResult()),
+        tweak_ids=(),  # no other tweaks: the daemon row never appears at all
+        rows=[_removable_row(_tool("rg"), [tmp_path / "rg-artifact"])],
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert app.daemon_default_in_flight is True
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        # pyright: ignore[reportPrivateUsage] -- confirms the tweaks row is
+        # genuinely absent, not merely lacking a daemon: id.
+        assert screen._tweak_ids == ()  # pyright: ignore[reportPrivateUsage]
         await pilot.press("a")
         await pilot.press("enter")
         await pilot.press("enter")
