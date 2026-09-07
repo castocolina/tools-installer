@@ -1,5 +1,6 @@
 import html
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -7,7 +8,14 @@ from rich.text import Text
 from textual.widgets import DataTable
 from textual.widgets.data_table import ColumnKey
 
-from installer.catalog_tui import AUDIENCE_LABEL, group_tools, sort_for_table
+from installer.catalog_tui import (
+    _COLUMNS,  # pyright: ignore[reportPrivateUsage]
+    AUDIENCE_LABEL,
+    CatalogScreen,
+    VersionStatusRefreshed,
+    group_tools,
+    sort_for_table,
+)
 from installer.deps import resolve_dependencies
 from installer.doctor import DoctorReport
 from installer.enums import Audience
@@ -16,6 +24,7 @@ from installer.platform import Platform
 from installer.resolve import platform_could_support
 from installer.selection import select_tools
 from installer.uninstall import SweepResult
+from installer.version_status import VersionRefreshService, VersionStatus
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 from tests.test_registry import REGISTRY
 
@@ -831,3 +840,74 @@ async def test_unavailable_recommendation_is_not_staged_or_emitted() -> None:
     async with seeded.run_test(size=(100, 30)) as pilot:
         await pilot.press("enter")
     assert seeded.return_value == ["agent"]
+
+
+def _screen(
+    tools: list[Tool],
+    installed: Mapping[str, bool],
+    version_refresh: VersionRefreshService | None = None,
+) -> CatalogScreen:
+    return CatalogScreen(
+        tools,
+        installed,
+        _BLURBS,
+        view="system",
+        catalog=list(tools),
+        staged=set(),
+        version_refresh=version_refresh,
+    )
+
+
+def _status(*, stale: bool) -> VersionStatus:
+    return VersionStatus(
+        tool_id="rg",
+        installed="1.2.0",
+        latest="v1.6.0",
+        outdated=True,
+        stale=stale,
+        source="github",
+    )
+
+
+def test_catalog_columns_include_ver() -> None:
+    assert len(_COLUMNS) == 8
+    assert _COLUMNS[5] == ("Inst", "inst")
+    assert _COLUMNS[6] == ("Ver", "ver")
+    assert _COLUMNS[7] == ("What it does", "desc")
+
+
+def test_row_cells_both_branches_return_eight_cells() -> None:
+    tool = _tool("rg")
+    screen = _screen([tool], {"rg": True})
+    assert len(screen._row_cells(tool)) == 8  # pyright: ignore[reportPrivateUsage]
+    screen._unavailable["rg"] = True  # pyright: ignore[reportPrivateUsage]
+    assert len(screen._row_cells(tool)) == 8  # pyright: ignore[reportPrivateUsage]
+
+
+def test_stale_marker_is_visible_on_rendered_ver_cell() -> None:
+    tool = _tool("rg")
+    screen = _screen([tool], {"rg": True})
+    screen._version_statuses = {"rg": _status(stale=False)}  # pyright: ignore[reportPrivateUsage]
+    fresh = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
+    screen._version_statuses = {"rg": _status(stale=True)}  # pyright: ignore[reportPrivateUsage]
+    stale = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
+    assert stale != fresh
+    assert stale.endswith(" ~")
+    assert not fresh.endswith(" ~")
+
+
+def test_epoch_guard_drops_a_superseded_version_refresh(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    service = VersionRefreshService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1.6.0",
+        probe_output=lambda argv: "1.2.0",
+    )
+    screen = _screen([tool], {"rg": True}, version_refresh=service)
+    screen._version_refresh_generation = 1  # pyright: ignore[reportPrivateUsage]
+    service.invalidate(reason="test")
+    screen.on_version_status_refreshed(
+        VersionStatusRefreshed({"rg": _status(stale=False)}, generation=1, epoch=0)
+    )
+    assert screen._version_statuses == {}  # pyright: ignore[reportPrivateUsage]

@@ -615,3 +615,16 @@ def test_build_app_hands_unavailable_from_platform_could_support(
     assert isinstance(unavailable, dict)
     assert unavailable["apt-upgrade"] is True
     assert unavailable["fd"] is False
+
+
+def test_build_app_shares_one_version_refresh_service_across_tier_screens(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    platform = _platform()
+    app = setup._build_app([], platform)  # pyright: ignore[reportPrivateUsage]
+    service = app.catalog._version_refresh  # pyright: ignore[reportPrivateUsage]
+    assert service is not None
+    assert service.platform is platform
+    assert app.catalog_for("user")._version_refresh is service  # pyright: ignore[reportPrivateUsage]
+    assert app.catalog_for("ai")._version_refresh is service  # pyright: ignore[reportPrivateUsage]

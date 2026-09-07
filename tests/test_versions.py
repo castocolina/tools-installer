@@ -6,10 +6,14 @@ from installer.versions import (
     PNPM_ALLOW_BUILD_MIN,
     PNPM_CO_INSTALL_MIN,
     VersionError,
+    extract_observed_version,
+    is_outdated,
     meets_minimum,
     parse_declared_version,
+    parse_status_version,
     parse_version,
     probe_version,
+    probe_version_output,
     resolve_github_tag,
 )
 
@@ -233,3 +237,74 @@ def test_each_consumer_holds_its_own_probe_version_binding(
     assert executors.probe_version is not sentinel
     assert pnpm_globals.probe_version is not sentinel
     assert executors.probe_version is pnpm_globals.probe_version
+
+
+def test_extract_observed_version_finds_the_first_parseable_token() -> None:
+    assert extract_observed_version("1.2.0") == "1.2.0"
+    assert extract_observed_version("ripgrep 15.2.0") == "15.2.0"
+    assert extract_observed_version("gh version 2.98.0 (2026-08-20)") == "2.98.0"
+    eza = "eza eza - A modern, maintained replacement for ls\nv0.23.5 [+git]"
+    assert extract_observed_version(eza) == "v0.23.5"
+    assert extract_observed_version("Usage: dasel <command>") is None
+    assert extract_observed_version("gron version dev") is None
+    assert extract_observed_version("commit=, build date=, version=0.64.1, os=darwin") is None
+    assert extract_observed_version("") is None
+
+
+def test_is_outdated_ranks_full_cores_and_distinct_prereleases() -> None:
+    assert is_outdated("1.2.0", "v1.6.0") is True
+    assert is_outdated("15.2.0", "15.2.0") is False
+    assert is_outdated("10.4.2", "v10.5.0") is True
+    assert is_outdated("dev", "v1.0.0") is None
+    assert is_outdated("0.28.1-nightly", "v0.28.1") is True
+    assert is_outdated("1.2.3+build9", "1.2.3+build1") is False
+
+
+def test_status_parser_keeps_what_feature_floor_parser_collapses() -> None:
+    four_a = parse_version("1.2.3.4")
+    four_b = parse_version("1.2.3.5")
+    assert four_a == four_b
+    assert is_outdated("1.2.3.4", "1.2.3.5") is True
+    rc_a = parse_version("1.2.3-rc.1")
+    rc_b = parse_version("1.2.3-rc.2")
+    assert rc_a == rc_b
+    assert is_outdated("1.2.3-rc.1", "1.2.3-rc.2") is True
+
+
+def test_parse_status_version_discards_build_and_keeps_every_numeric_component() -> None:
+    assert parse_status_version("1.2.3.4") == ((1, 2, 3, 4), None)
+    assert parse_status_version("v1.6.0") == ((1, 6, 0), None)
+    assert parse_status_version("1.2.3+build9") == ((1, 2, 3), None)
+    assert parse_status_version("dev") is None
+
+
+def test_probe_version_output_returns_full_stdout_while_probe_version_stays_first_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import installer.versions as versions
+
+    def fake_output(argv: list[str], timeout: float | None = None) -> str:
+        return "first line\nv0.23.5\n"
+
+    monkeypatch.setattr(versions, "run_output", fake_output)
+    assert probe_version(["eza", "--version"]) == "first line"
+    assert probe_version_output(["eza", "--version"]) == "first line\nv0.23.5\n"
+
+
+def test_probe_version_output_returns_none_on_error_or_whitespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import installer.versions as versions
+    from installer.run import CommandError
+
+    def boom(argv: list[str], timeout: float | None = None) -> str:
+        raise CommandError(argv, 127)
+
+    monkeypatch.setattr(versions, "run_output", boom)
+    assert probe_version_output(["missing", "--version"]) is None
+
+    def blank(argv: list[str], timeout: float | None = None) -> str:
+        return "   \n"
+
+    monkeypatch.setattr(versions, "run_output", blank)
+    assert probe_version_output(["empty", "--version"]) is None

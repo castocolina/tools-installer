@@ -57,6 +57,9 @@ from installer.uninstall import (
     classify_tools,
     reverse_dependencies,
 )
+from installer.version_cache import default_cache_path
+from installer.version_status import VersionRefreshService
+from installer.versions import probe_version_output, resolve_github_tag
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 
 _REGISTRY = Path(__file__).parent / "installer" / "registry.toml"
@@ -378,6 +381,13 @@ def _build_app(
 
         daemon_default_policy_id = daemon.id
 
+    version_refresh = VersionRefreshService(
+        platform=platform,
+        cache_path=default_cache_path(),
+        resolve_tag=resolve_github_tag,
+        probe_output=probe_version_output,
+    )
+
     return UnifiedApp(
         tools,
         installed,
@@ -395,6 +405,7 @@ def _build_app(
         initial_view=initial_view,
         daemon_default=daemon_default,
         daemon_default_policy_id=daemon_default_policy_id,
+        version_refresh=version_refresh,
     )
 
 

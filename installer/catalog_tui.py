@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from typing import ClassVar, Literal
 
 from rich.text import Text
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.message import Message
@@ -21,7 +22,8 @@ from installer.enums import Audience, Priority
 from installer.model import Tool
 from installer.selection import select_tools, unstaged_recommends
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
-from installer.ui_common import AppScreen, StatusLine, mark
+from installer.ui_common import AppScreen, StatusLine, mark, run_live
+from installer.version_status import VersionRefreshService, VersionStatus
 
 TableSortKey = Literal["id", "category", "priority", "audience", "installed"]
 
@@ -90,6 +92,21 @@ def group_tools(
     return [(title, detail, members) for title, detail, members in groups if members]
 
 
+class VersionStatusRefreshed(Message):
+    """A version-refresh worker finished; generation and epoch both gate apply.
+
+    `generation` discards a superseded worker within one screen (rapid tier
+    navigation). `epoch` discards a pass whose view of the machine a mutation
+    has since invalidated (Plan 12-03's update action calling invalidate).
+    """
+
+    def __init__(self, statuses: dict[str, VersionStatus], generation: int, epoch: int) -> None:
+        super().__init__()
+        self.statuses = statuses
+        self.generation = generation
+        self.epoch = epoch
+
+
 VIEWS: tuple[str, ...] = ("category", "priority", "audience", "status", "table")
 _TAB_LABELS = {
     "category": "Category",
@@ -122,6 +139,7 @@ _COLUMNS = (
     ("Cat", "cat"),
     ("For", "for"),
     ("Inst", "inst"),
+    ("Ver", "ver"),
     ("What it does", "desc"),
 )
 
@@ -167,6 +185,7 @@ class CatalogScreen(AppScreen):
         catalog: list[Tool],
         staged: set[str],
         unavailable: Mapping[str, bool] | None = None,
+        version_refresh: VersionRefreshService | None = None,
     ) -> None:
         super().__init__(view=view)
         self.tools = list(tools)
@@ -177,6 +196,11 @@ class CatalogScreen(AppScreen):
         self._staged = staged
         self._unavailable = dict(unavailable) if unavailable else {}
         self._by_id = {tool.id: tool for tool in self._catalog}
+        # Default None matches UnifiedApp's optional-closure convention: tests
+        # that construct a CatalogScreen without a service stay silent.
+        self._version_refresh = version_refresh
+        self._version_statuses: dict[str, VersionStatus] = {}
+        self._version_refresh_generation = 0
         self._browser: ToolBrowser[Tool] = ToolBrowser(self._adapter(), selected=staged)
         self.recommends_line = StatusLine()
         self._pending_recommends: tuple[str, ...] = ()
@@ -200,10 +224,68 @@ class CatalogScreen(AppScreen):
         yield self._browser
         yield self.recommends_line
 
+    def on_mount(self) -> None:
+        self._start_version_refresh()
+
+    def enter_view(self) -> None:
+        if self.is_mounted:
+            self._start_version_refresh()
+
+    def _start_version_refresh(self) -> None:
+        if self._version_refresh is None:
+            return
+        self._version_refresh_generation += 1
+        self._refresh_versions_worker(self._version_refresh_generation)
+
+    @work(thread=True, exclusive=True, group="version-refresh", exit_on_error=False)
+    def _refresh_versions_worker(self, generation: int) -> None:
+        statuses: dict[str, VersionStatus] = {}
+        epoch = 0
+        service = self._version_refresh
+        try:
+            if service is not None:
+                epoch = service.epoch
+                scope = [tool for tool in self.tools if tool.id == "codegraph"]
+                result, _error = run_live(lambda: service.refresh(scope))
+                if result is not None:
+                    statuses = result
+        finally:
+            self.post_message(VersionStatusRefreshed(statuses, generation, epoch))
+
+    def on_version_status_refreshed(self, message: "VersionStatusRefreshed") -> None:
+        if message.generation != self._version_refresh_generation:
+            return
+        service = self._version_refresh
+        if service is None or message.epoch != service.epoch:
+            return
+        self._version_statuses = dict(message.statuses)
+        self._browser.reload(self._adapter())
+
+    def _ver_cell(self, tool: Tool) -> Text:
+        if not self._installed.get(tool.id, False):
+            return Text("")
+        status = self._version_statuses.get(tool.id)
+        if status is None or status.installed is None or status.latest is None:
+            return Text("unknown", style="dim")
+        if status.outdated is True:
+            base = f"{status.installed} -> {status.latest}"
+            color = "yellow"
+        elif status.outdated is False:
+            base = status.installed
+            color = "green"
+        else:
+            return Text("unknown", style="dim")
+        # Trailing dim ` ~` marks a cached `latest` at or past STALE_AFTER that
+        # this pass did not re-confirm.
+        if status.stale:
+            return Text.assemble((base, color), (" ~", "dim"))
+        return Text(base, style=color)
+
     # -- catalog data wiring for the browser adapter -----------------------
     def _row_cells(self, tool: Tool) -> list[Text]:
         installed = self._installed[tool.id]
         desc = tool.desc or tool.name
+        ver = self._ver_cell(tool)
         if self._unavailable.get(tool.id, False):
             desc = f"{desc} (not available on this machine)"
             return [
@@ -213,6 +295,7 @@ class CatalogScreen(AppScreen):
                 Text(tool.category, style="dim"),
                 Text(AUDIENCE_LABEL[tool.audience], style="dim"),
                 Text("✓" if installed else "○", style="dim"),
+                Text(ver.plain, style="dim"),
                 Text(desc, style="dim"),
             ]
         return [
@@ -222,6 +305,7 @@ class CatalogScreen(AppScreen):
             Text(tool.category),
             Text(AUDIENCE_LABEL[tool.audience], style=_AUDIENCE_STYLE[tool.audience]),
             Text("✓", style="green") if installed else Text("○", style="yellow"),
+            ver,
             Text(desc, style="dim"),
         ]
 

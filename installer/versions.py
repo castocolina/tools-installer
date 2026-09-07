@@ -107,6 +107,79 @@ def meets_minimum(observed: str, minimum: str) -> bool:
     return got >= (*need, _RELEASE)
 
 
+# Full dotted numeric core plus optional prerelease identifiers. A release is
+# encoded as None in the second slot so it outranks any prerelease under a
+# plain tuple comparison after the cores are zero-padded to equal length.
+StatusVersion = tuple[tuple[int, ...], tuple[tuple[int, int | str], ...] | None]
+
+
+def extract_observed_version(text: str) -> str | None:
+    """Return the first parseable version token across ALL of `text`, verbatim.
+
+    `parse_version` only inspects the first whitespace-delimited token of a
+    single line. Tools such as eza put the version on a later line; this walks
+    every token so the caller can both compare and display what was found.
+    """
+    for token in text.split():
+        if parse_version(token) is not None:
+            return token
+    return None
+
+
+def parse_status_version(text: str) -> StatusVersion | None:
+    """Parser for "is a newer version available", not a feature-floor check.
+
+    `parse_version` answers "does the installed version clear a declared FEATURE
+    FLOOR", where three components and one collapsed prerelease rank are
+    sufficient. That contract is pinned by tests/test_versions.py and depended
+    on by `meets_minimum`, `executors._require_minimum`, and `pnpm_globals`.
+    This parser answers "is a newer version available", where discarding a
+    fourth numeric component or collapsing distinct prereleases would report a
+    false `up to date`. Build metadata (`+build`) is parsed and discarded:
+    semver does not include it in precedence.
+    """
+    match = _OBSERVED_VERSION.fullmatch(text.strip())
+    if match is None:
+        return None
+    core = tuple(int(part) for part in match.group(1).split("."))
+    raw_pre = match.group(2)
+    if raw_pre is None:
+        return (core, None)
+    identifiers: list[tuple[int, int | str]] = []
+    for ident in raw_pre.split("."):
+        if ident.isdigit():
+            identifiers.append((0, int(ident)))
+        else:
+            identifiers.append((1, ident))
+    return (core, tuple(identifiers))
+
+
+def is_outdated(observed: str, latest: str) -> bool | None:
+    """True when `observed` is older than `latest`; None when either side cannot rank.
+
+    Comparison goes through `parse_status_version`, never `parse_version`: a
+    discarded fourth component or a collapsed prerelease is a false `up to date`.
+    """
+    left = parse_status_version(observed)
+    right = parse_status_version(latest)
+    if left is None or right is None:
+        return None
+    left_core, left_pre = left
+    right_core, right_pre = right
+    width = max(len(left_core), len(right_core))
+    left_padded = left_core + (0,) * (width - len(left_core))
+    right_padded = right_core + (0,) * (width - len(right_core))
+    if left_padded != right_padded:
+        return left_padded < right_padded
+    if left_pre is None and right_pre is None:
+        return False
+    if left_pre is None:
+        return False
+    if right_pre is None:
+        return True
+    return left_pre < right_pre
+
+
 # A bound belongs on a query, never on the side-effecting install itself
 # (see installer.run.run_output).
 PROBE_VERSION_TIMEOUT = 5.0
@@ -158,6 +231,25 @@ def _default_probe_version(argv: list[str]) -> str | None:
 
 
 probe_version: Callable[[list[str]], str | None] = _default_probe_version
+
+
+def _default_probe_version_output(argv: list[str]) -> str | None:
+    """Full-stdout sibling of `_default_probe_version`.
+
+    `probe_version` is pinned to the first non-empty line; tools that put the
+    version on a later line need the whole stdout so `extract_observed_version`
+    can scan it. This function does not replace that contract.
+    """
+    try:
+        text = run_output(argv, timeout=PROBE_VERSION_TIMEOUT)
+    except (CommandError, OSError):
+        return None
+    if not text.strip():
+        return None
+    return text
+
+
+probe_version_output: Callable[[list[str]], str | None] = _default_probe_version_output
 
 
 def urlopen_fetch(url: str) -> bytes:

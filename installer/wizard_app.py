@@ -48,6 +48,7 @@ from installer.ui_common import (
     run_live,
 )
 from installer.uninstall import SweepResult, ToolRow
+from installer.version_status import VersionRefreshService
 
 
 @dataclass(frozen=True)
@@ -1446,9 +1447,11 @@ class UnifiedApp(App[list[str] | None]):
         initial_view: str = BASE_VIEW,
         daemon_default: Callable[[], bool] | None = None,
         daemon_default_policy_id: str | None = None,
+        version_refresh: VersionRefreshService | None = None,
     ) -> None:
         super().__init__()
         self._staged: set[str] = set()
+        self._version_refresh = version_refresh
         self._catalogs: dict[str, CatalogScreen] = {
             tier.value: CatalogScreen(
                 [tool for tool in tools if tool.tier == tier],
@@ -1458,6 +1461,7 @@ class UnifiedApp(App[list[str] | None]):
                 catalog=list(tools),
                 staged=self._staged,
                 unavailable=unavailable or {},
+                version_refresh=version_refresh,
             )
             for tier in Tier
         }

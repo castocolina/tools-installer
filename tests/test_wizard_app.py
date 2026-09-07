@@ -23,6 +23,7 @@ from installer.policy import (
 from installer.run import CommandError
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, ToolRow
+from installer.version_status import VersionRefreshService
 from installer.wizard_app import (
     VIEW_ORDER,
     ConfirmUninstall,
@@ -2807,3 +2808,57 @@ async def test_on_by_default_treats_an_existing_installation_as_fresh(tmp_path: 
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         assert screen.active_state["daemon:prune-tmpdir"] is True
+
+
+def _codegraph() -> Tool:
+    return Tool(
+        id="codegraph",
+        name="codegraph",
+        category="ai",
+        cmd="codegraph",
+        methods=(Method(kind="github_release", params={"repo": "colbymchenry/codegraph"}),),
+        priority="P1",
+        audience="ai",
+        tier="system",
+        desc="code intelligence",
+    )
+
+
+async def _settle_versions(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> None:
+    for _ in range(400):
+        if app.catalog._version_statuses:  # pyright: ignore[reportPrivateUsage]
+            break
+        await pilot.pause()
+    await pilot.pause()
+
+
+async def test_codegraph_ver_cell_contains_installed_and_latest_after_refresh(
+    tmp_path: Path,
+) -> None:
+    from installer.platform import Platform
+
+    service = VersionRefreshService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1.6.0",
+        probe_output=lambda argv: "1.2.0",
+    )
+    tools = [_codegraph()]
+    installed: Mapping[str, bool] = {"codegraph": True}
+    app = UnifiedApp(
+        tools,
+        installed,
+        {"ai": "agents"},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: ({}, None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=_uninstall_inputs(),
+        policies=_policy_inputs(),
+        version_refresh=service,
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        cell = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver")
+        assert "1.2.0" in cell.plain
+        assert "v1.6.0" in cell.plain
