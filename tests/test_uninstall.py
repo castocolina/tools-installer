@@ -1,9 +1,11 @@
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from installer.model import Method, Tool
-from installer.policy import omz_plugins_policy, tweak_policy
+from installer.policy import Policy, daemon_policy, omz_plugins_policy, tweak_policy
+from installer.run import CommandError
 from installer.tweaks import BUNDLES, TweakBundle
 from installer.uninstall import (
     SweepResult,
@@ -607,6 +609,100 @@ def _enabled_omz(
     bin_dir.mkdir(exist_ok=True)
     omz_plugins_policy(zshrc_path=zshrc, state_path=rc_path, present=True).apply()
     return zshrc, rc_path, bin_dir
+
+
+class _FakeDaemonRun:
+    """Records every argv; never touches real launchctl. Can be told to fail
+    the bootout call, to exercise a real removal failure during a sweep."""
+
+    def __init__(self, *, fail_bootout: bool = False) -> None:
+        self.calls: list[list[str]] = []
+        self._fail_bootout = fail_bootout
+
+    def __call__(self, cmd: list[str]) -> None:
+        self.calls.append(cmd)
+        if self._fail_bootout and cmd[:2] == ["launchctl", "bootout"]:
+            raise CommandError(cmd, 5)
+
+
+def _enabled_daemon(tmp_path: Path, *, run: Callable[[list[str]], None] | None = None) -> Policy:
+    """Enable the daemon policy for real (a real wrapper file on disk, a real
+    plist), so the sweep sees a genuine artifact, not a mock."""
+    script_path = tmp_path / "scripts" / "prune-user-tmpdir.sh"
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text("#!/bin/sh\n")
+    policy = daemon_policy(
+        plist_path=tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist",
+        log_path=tmp_path / "Logs" / "prune-daemon.log",
+        wrapper_bin_dir=tmp_path / ".local" / "bin",
+        script_path=script_path,
+        state_path=tmp_path / ".myshellrc",
+        installed_tools={"fd": True, "rg": True},
+        path_value="/usr/bin:/bin",
+        tmpdir_value=str(tmp_path / "tmp"),
+        home_value=str(tmp_path),
+        uv_path=tmp_path / "uv",
+        uid=501,
+        run=run if run is not None else _FakeDaemonRun(),
+    )
+    policy.apply()
+    # active=True is a construction-time snapshot on this frozen Policy; the
+    # sweep never relies on it for the daemon (it calls is_active() instead,
+    # per 11-REVIEWS.md cycle 2 finding #13), so returning this SAME instance
+    # -- now that .apply() has written the real plist -- is correct either way.
+    return policy
+
+
+def test_active_tweak_ids_includes_the_daemon_policy_id_when_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    daemon = _enabled_daemon(tmp_path)
+    ids = active_tweak_ids(
+        BUNDLES, rc_path=tmp_path / ".myshellrc", bin_dir=tmp_path / "bin", daemon_policy=daemon
+    )
+    assert "daemon:prune-tmpdir" in ids
+
+
+def test_sweep_tweaks_includes_an_active_daemon_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    plist_path = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
+    daemon = _enabled_daemon(tmp_path)
+    assert plist_path.exists()
+    result = sweep_tweaks(
+        BUNDLES, rc_path=tmp_path / ".myshellrc", bin_dir=tmp_path / "bin", daemon_policy=daemon
+    )
+    assert "daemon:prune-tmpdir" in result.swept
+    assert not plist_path.exists()
+
+
+def test_a_failing_daemon_removal_does_not_abort_the_rest_of_the_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc_path, bin_dir = _enabled_countdown(tmp_path)
+    daemon = _enabled_daemon(tmp_path, run=_FakeDaemonRun(fail_bootout=True))
+    result = sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, daemon_policy=daemon)
+    assert result.failed == ("daemon:prune-tmpdir",)
+    assert result.swept == ("tweak:countdown",)
+
+
+def test_sweep_tweaks_also_removes_the_daemon_wrapper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression pin for 11-REVIEWS.md cycle 2 finding #16, resolved by
+    daemon_policy.remove()'s own remove_wrapper call (11-02) -- no additional
+    production code needed here."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    daemon = _enabled_daemon(tmp_path)
+    wrapper = tmp_path / ".local" / "bin" / "tools-installer-prune-daemon"
+    assert wrapper.exists()
+    sweep_tweaks(
+        BUNDLES, rc_path=tmp_path / ".myshellrc", bin_dir=tmp_path / "bin", daemon_policy=daemon
+    )
+    assert not wrapper.exists()
 
 
 def test_sweep_tweaks_includes_the_omz_plugins_tweak(
