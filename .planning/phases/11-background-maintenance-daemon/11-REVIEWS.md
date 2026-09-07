@@ -280,3 +280,139 @@ fixes were directionally correct (the reviewer explicitly credits them as "mater
 all four plans") but incomplete in the failure-recovery, ordering, and cross-screen-consistency
 details. This is cycle 2 of the 3-cycle cap (`.planning/ONESHOT-RULES.md` Rule 10) — a full
 revision pass will address every finding above before a final cycle 3 review.
+
+### Revision Note (post cycle 2)
+
+A full revision pass rewrote all four plan files (`11-01-PLAN.md` through `11-04-PLAN.md`) in
+place to address every cycle 2 finding above. The plans' own `<source_audit>`/`<design_decisions>`
+sections cite a single global numbering for this pass — #1-#4 (11-01's own four findings), #5-#9
+(11-02's first five), #10-#12 (11-03's three), and #13-#20 (11-04's eight, of which #13 is
+resolved inside 11-02 since it names a new `Policy` field 11-04 only consumes):
+
+- **11-01** (core mechanism): `render_plist`/`write_plist` now also resolve and validate a
+  non-empty, absolute `home` value (mirroring `tmpdir`'s own treatment exactly) and emit it into
+  the plist's `EnvironmentVariables` alongside `PATH`/`TMPDIR` (#1); `record_decided`'s marker
+  write now commits through the SAME sibling-temp-file-plus-`os.replace` atomic shape `write_plist`
+  already uses (a local re-implementation of the pattern, never a private cross-module import of
+  `installer/omz.py::_atomic_write`), so a crash mid-write can never half-write the shared
+  `~/.myshellrc` file (#2); `read_schedule` now catches `(KeyError, TypeError, ValueError)` around
+  its own `plistlib.loads` call (`plistlib.InvalidFileException` is a `ValueError` subclass, not an
+  `OSError` — re-verified live this session, see below) and returns `None` for a byte-corrupt plist
+  exactly like the already-handled missing-key case; `last_run_summary` and the truncation routine
+  now decode with `errors="replace"` instead of `Path.read_text()`'s strict decode (#3); and
+  `decided`'s marker parser gains dedicated orphan-marker and reversed-marker test cases mirroring
+  `installer/omz.py`'s own coverage for the same shape (#4). A new `clear_decided(state_path)`
+  function (mirroring `installer/omz.py::_clear_owned`) is added but deliberately given zero
+  callers in this plan — its one production caller is 11-04's full-uninstall wiring (finding #17).
+- **11-02** (policy model + factory): `.apply()`'s reapply-failure rollback now makes a best-effort
+  RE-BOOTSTRAP of the restored (old) plist content when a prior snapshot existed, correcting the
+  cycle-1 assumption that restoring the plist bytes alone was sufficient — re-reading `bootstrap`'s
+  own 11-01 implementation shows it ALWAYS runs its own unconditional `bootout` pre-clear first, on
+  every call, so a reapply's failed second `bootstrap` leaves NOTHING registered, not merely the
+  old config (#5); the shared apply helper now calls `daemon.render_plist(...)` as a pure
+  validation gate BEFORE `install_wrapper`/`ensure_log_path` run, not only inside `write_plist`
+  itself, so an invalid environment produces genuinely zero filesystem side effects as the plan's
+  own text already claimed (#6); a marker-write failure AFTER a successful `bootstrap`/`bootout`
+  no longer propagates as an exception — `.apply()` now catches it and returns its normal
+  successful `PolicyResult` with `.warning` set, since `action_toggle_policy` (re-read live this
+  session, `installer/wizard_app.py:1038`-`:1043`) only updates `active_state` when the result is
+  non-`None`, and a propagated failure here would have shown the daemon as OFF while it is actually
+  ON (#7); `.remove()`'s own plist unlink is now guarded, making a best-effort re-bootstrap of the
+  still-on-disk plist on a real unlink failure (mirroring `.apply()`/`.set_schedule()`'s own
+  rollback shape), and `.remove()` now also calls `daemon.remove_wrapper(wrapper_bin_dir)` — which
+  had no production caller anywhere in the pre-cycle-2 plan set, the exact "no orphan helpers" gap
+  `.claude/architecture.md` rule 5 flags (#8, #9; #9 also auto-resolves 11-04's own finding #16,
+  since 11-04's full-uninstall teardown reuses this SAME `.remove()` closure, so no separate 11-04
+  code change was needed for #16). `Policy` gains a fifth new field, `is_active: Callable[[], bool]
+  | None = None`, a live re-check closure (`lambda: plist_path.exists()`), `None` for every other
+  policy — consumed by 11-04's `active_policies` fix so a daemon enabled by the on-by-default
+  worker AFTER `Policy` construction is never invisible to a later Uninstall visit (#13, a Plan
+  11-04 finding resolved here since it is fundamentally a `Policy`-shape gap).
+- **11-03** (detail panel + time picker): `_policy_detail`'s NORMAL render path (mount,
+  row-highlight — not only the `l` log-toggle action) now wraps BOTH its `daemon.
+  last_run_summary(...)` and `policy.read_schedule()` calls in a local `try/except (OSError,
+  ValueError, UnicodeDecodeError)`, a second, independent guard on top of 11-01's own
+  mechanism-tier total-ness fix, so a corrupted plist/log file can never crash the whole screen
+  before a user ever presses `l` (#10); `space`/`t` (toggle/reschedule) remain synchronous through
+  `run_live`, an explicit ACCEPT decision (not a code fix) — re-reading `installer/wizard_app.py::
+  action_toggle_policy` live confirms every OTHER existing policy (`ban`, every `tweak:*`,
+  `omz-plugins`) already runs this way with zero worker infrastructure; giving the daemon a worker
+  here alone would be an unexplained, one-off exception to this codebase's own single "apply
+  workflow" architecture rule, a hang here is directly attributable to the key the user just
+  pressed (unlike 11-04's unattended startup auto-apply, which DOES get worker treatment for
+  exactly that reason), and `launchctl bootstrap`/`bootout` are sub-second, kernel-level operations
+  per 11-RESEARCH.md's own already-live-verified transcript (#11); and `PoliciesScreen.__init__`
+  now explicitly initializes `self._log_view: bool = False` rather than relying solely on the
+  row-highlight handler ever having fired first (#12).
+- **11-04** (composition + on-by-default): the Uninstall sweep's daemon-inclusion predicate in
+  `active_policies` now reads `daemon_policy.is_active()` when that closure is present (11-02's new
+  field), falling back to the frozen `.active` snapshot only when it is not — every other policy is
+  unaffected, since `is_active` stays `None` for them (#13); the auto-apply gate is now an explicit
+  `apply_daemon_default: bool = False` ALLOWLIST parameter threaded through `_build_app`, replacing
+  the pre-cycle-2 `initial_view != "uninstall"` BLOCKLIST — re-reading `setup.py` live this session
+  confirms `initial_view` also takes the values `"doctor"` (both `_run_doctor`'s and `_run_fix`'s
+  interactive branches) and `"policies"` (the `--guard`/`--unguard` branch), neither of which the
+  old blocklist excluded, meaning simply running `make doctor` — documented read-only at
+  `Makefile:19` — would have silently registered and started the daemon; only `_select_catalog`'s
+  own call site (the genuine interactive `make setup` wizard flow) now passes
+  `apply_daemon_default=True` (#14); a new `UnifiedApp._daemon_default_in_flight` boolean, `True`
+  from `__init__` whenever a real auto-apply callback is wired and cleared unconditionally the
+  moment the worker's completion message is handled, gates `action_toggle_policy` and
+  `UninstallScreen._apply_removal` against acting on the daemon's own policy id while the
+  background worker may still be mid-`bootstrap`/`bootout` on a separate thread — the worker itself
+  now ALWAYS posts its `DaemonDefaultApplied` completion message regardless of the boolean outcome
+  (the pre-cycle-2 design posted only on success, leaving the in-flight flag with no deterministic
+  clearing point on a no-op or failed auto-apply), which is what makes the flag's clearing correct
+  in every case (#15); 11-02's own `remove_wrapper` fix (#9) closes the "full uninstall leaves the
+  wrapper behind" gap with zero additional code needed here, pinned by a new regression test (#16);
+  a new `clear_decided(state_path)` call, added to `run_uninstall`/`perform_uninstall`, fires ONLY
+  after their respective sweep completes and ONLY when the daemon's id is actually present in that
+  sweep's own `SweepResult.swept` — never before the sweep, since `daemon_policy.remove()` itself
+  still calls `record_decided` as part of that same sweep call, and never on a failed removal — so
+  a full uninstall+reinstall is treated as genuinely fresh without touching the ordinary
+  toggle-off's permanent marker (#17); `tests/test_uninstall_e2e.py`'s two pre-existing
+  `perform_uninstall(...)` call sites (inside `_build_real_app`'s and `_build_real_app_with_tweaks`'s
+  own `_remove` closures) now pass `daemon_policy=None`, fixing a `TypeError` these Linux-platform
+  tests would otherwise raise the moment `daemon_policy` becomes a required parameter — this file
+  was genuinely absent from the pre-cycle-2 plan's own modified-file list and is now added to
+  11-04's `files_modified` (#18); `UninstallScreen._applied_summary` and `run_uninstall`'s own CLI
+  success line (re-read live this session, `installer/wizard_app.py:841`-`:847` and
+  `installer/app.py:427`) are now ALSO made daemon-aware, keyed off the sweep's own
+  `SweepResult.swept` — the pre-cycle-2 design fixed only the PREVIEW row, missing the
+  SUCCESS-reporting strings shown after confirmation (#19); and the auto-apply-suppression test now
+  asserts against `_capture_app`'s own captured `_build_app` kwargs (re-confirmed live this session
+  at `tests/test_setup.py:93`) across every `initial_view` entry point, rather than only proving an
+  injected callback was never invoked — the composition-wiring bug finding #14 identifies would
+  have passed the pre-cycle-2 test's own assertions completely undetected, since `_capture_app`'s
+  stub never runs `on_mount` at all (#20).
+
+Live verification performed this session, on this machine, before writing any fix touching real
+system/library behavior, and re-confirmed a second time immediately before writing this note:
+`python3 -c "import plistlib; print(plistlib.InvalidFileException.__mro__)"` confirms
+`plistlib.InvalidFileException` is a `ValueError` subclass (`(InvalidFileException, ValueError,
+Exception, BaseException, object)`), NOT an `OSError` — grounding 11-01 finding #3's exact `except`
+clause. `env -u HOME TMPDIR=/tmp bash scripts/prune-user-tmpdir.sh --dry-run` fails immediately with
+`line 71: HOME: unbound variable`, confirming the script itself genuinely requires `HOME` to be set
+— grounding finding #1's mechanism-tier motivation. `launchctl bootout gui/$(id -u)/com.tools-
+installer.nonexistent-test-<n> ; launchctl error 3` re-confirms exit code `3` decodes as `"3: No
+such process"` (Darwin's ESRCH) — the same "already absent" fact cycle 1 established, reused
+(not re-derived) as the grounding for 11-02 findings #5/#7/#8's ordering logic. A SEPARATE real
+test performed during this revision — bootstrapping a genuine, self-torn-down `gui/<uid>`
+LaunchAgent on this machine, once with no `EnvironmentVariables` key at all and once with an
+explicit `EnvironmentVariables={PATH, TMPDIR}` override — showed `HOME` (along with `SHELL`/`USER`/
+`LOGNAME`/`SSH_AUTH_SOCK`) already inherited from the login session's own environment in BOTH
+cases; `HOME` was never actually observed missing from a real bootstrapped LaunchAgent's
+environment on this machine/session, in contrast to what finding #1's report text might otherwise
+suggest. Finding #1's fix is implemented in full anyway, exactly as the finding requests, as a
+defensive, version-independent guarantee that does not depend on undocumented launchd
+session-inheritance behavior holding across every macOS version or session state — this nuance is
+recorded here, and in 11-01's own `<design_decisions>`, rather than silently treated as if the
+missing-`HOME` failure mode had been reproduced on this machine. Findings #5/#6/#7/#8 (11-02's
+apply/remove ordering and rollback corrections) were verified by re-reading 11-01's own
+already-live-verified `bootstrap`/`bootout` implementations directly against 11-02's own draft
+logic, rather than re-deriving new system-level facts these fixes did not depend on; `installer/
+wizard_app.py::action_toggle_policy`, `UninstallScreen._applied_summary`, `run_uninstall`'s CLI
+success line, and `tests/test_setup.py::_capture_app` were all re-read from the actual current
+source (not from memory of the earlier research/review passes) immediately before citing their
+exact line numbers above. Cycle 1 and cycle 2's findings above are left unmodified; this note is an
+append, not a rewrite.
