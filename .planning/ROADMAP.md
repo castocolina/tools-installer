@@ -307,7 +307,13 @@ Plans:
   4. An "update" action exists and delegates to the tool's actual owning manager (brew/pnpm/uv tool/this installer's own path) — not assumed to always be this installer's executor.
   5. (Stretch, deferred/non-MVP; attempt a minimal version if scope allows per 2026-09-04 discuss-phase) A tool installed via pnpm/npm with a newer version available via brew surfaces a distinct manager-drift alert.
 
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+
+- [ ] 12-01-PLAN.md — Tracer: end-to-end version status for `codegraph` (versions.py/version_cache.py/version_status.py) wired through a background Worker into a new Catalog "Ver" column, then generalized to every `github_release` tool (wave 1)
+- [ ] 12-02-PLAN.md — `installer/manager_versions.py`: live-verified brew/pnpm/uv-tool outdated commands, wired into the same cache/Worker/column (wave 2, needs 12-01)
+- [ ] 12-03-PLAN.md — Manager-delegated "update" action (`installer/update.py`) + the automatic post-pnpm-update `reinstall_node_globals` trigger (wave 3, needs 12-01/12-02)
+- [ ] 12-04-PLAN.md — Stretch (D-02): declared-methods-only manager-drift alert (wave 4, needs 12-03)
 
 ## Progress
 
@@ -327,4 +333,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 9. Postinstall Hooks Mechanism | 2/2 | Complete    | 2026-09-06 |
 | 10. Agent CLI Ergonomics | 1/1 | Complete    | 2026-09-06 |
 | 11. Background Maintenance Daemon | 4/4 | Complete    | 2026-09-07 |
-| 12. Version-Aware Status & Update Action | 0/TBD | Not started | - |
+| 12. Version-Aware Status & Update Action | 0/4 | Planned | - |
