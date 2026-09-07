@@ -56,3 +56,50 @@ def atomic_write_bytes(path: Path, data: bytes, *, mode: int | None = None) -> N
 def atomic_write_text(path: Path, text: str, *, mode: int | None = None) -> None:
     """UTF-8 text entry point over atomic_write_bytes."""
     atomic_write_bytes(path, text.encode("utf-8"), mode=mode)
+
+
+NEW_SUFFIX = ".tools-installer.new"
+OLD_SUFFIX = ".tools-installer.old"
+
+
+def staged_sibling(path: Path, suffix: str) -> Path:
+    """`<name>.tools-installer.{new,old}` next to `path`, never a suffix on the parent."""
+    return path.with_name(path.name + suffix)
+
+
+def capture_symlink_target(link: Path) -> str | None:
+    """Read the live symlink target once. Restoration uses this value, never a later readlink."""
+    try:
+        return os.readlink(link)
+    except OSError:
+        return None
+
+
+def recover_update_remnants(live: Path) -> None:
+    """Discard a leftover `.new`; restore a leftover `.old` when the live tree is missing."""
+    new = staged_sibling(live, NEW_SUFFIX)
+    old = staged_sibling(live, OLD_SUFFIX)
+    if new.exists():
+        shutil.rmtree(new)
+    if not old.exists():
+        return
+    if not live.exists():
+        os.replace(old, live)
+        return
+    shutil.rmtree(old)
+
+
+def replace_symlink(link: Path, target: str) -> None:
+    """Point `link` at `target` via a sibling temp symlink plus `os.replace`.
+
+    Never shells `ln`. The temp is in the same directory so the replace cannot
+    cross a filesystem. A failure leaves `link` untouched (POSIX os.replace
+    does not partially apply) and unlinks the temp.
+    """
+    tmp = _temp_path(link)
+    try:
+        os.symlink(target, tmp)
+        os.replace(tmp, link)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise

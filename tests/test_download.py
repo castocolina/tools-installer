@@ -1,16 +1,17 @@
 import hashlib
+import os
 import shlex
 from pathlib import Path
 
 import pytest
 
-from installer import download
+from installer import atomic, download
 from installer.checksums import ChecksumMismatch
-from installer.download import DOWNLOAD_KINDS, ExecContext, install_download
+from installer.download import DOWNLOAD_KINDS, ExecContext, install_download, update_download
 from installer.executors import ExecutorError
 from installer.model import Method
 from installer.platform import Platform
-from installer.run import Runner
+from installer.run import CommandError, Runner
 
 
 def _ctx(runner: Runner, tmp_version: str = "v14.1.0") -> ExecContext:
@@ -430,6 +431,19 @@ def _rg_method(bin_dir_path: Path) -> Method:
     )
 
 
+def _rg_update_method(bin_dir_path: Path) -> Method:
+    return Method(
+        kind="github_release",
+        params={
+            "repo": "BurntSushi/ripgrep",
+            "asset": "ripgrep-{ver}-{arch.machine}-unknown-linux-musl.tar.gz",
+            "member": "rg",
+            "strip": 1,
+            "bin_dir": str(bin_dir_path),
+        },
+    )
+
+
 RG_ASSET = "ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz"
 RG_BASE = "https://github.com/BurntSushi/ripgrep/releases/download/15.1.0"
 
@@ -574,3 +588,281 @@ def test_verified_opt_dir_creation_failure_raises_executor_error(
     _, runner = _fixture_runner(workdir, {RG_ASSET: payload, f"{RG_ASSET}.sha256": sums})
     with pytest.raises(ExecutorError, match="opt dir"):
         install_download(_rg_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
+
+
+def _raw_method(bin_dir_path: Path) -> Method:
+    return Method(
+        kind="github_release",
+        params={
+            "repo": "mikefarah/yq",
+            "asset": "yq_linux_{arch.deb}",
+            "member": "yq",
+            "raw": True,
+            "bin_dir": str(bin_dir_path),
+        },
+    )
+
+
+def _plant_executable(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    path.chmod(0o755)
+
+
+def _plant_archive_install(
+    tmp_path: Path, *, name: str = "rg", member: str = "rg"
+) -> tuple[Path, Path, Path]:
+    opt = tmp_path / ".local" / "opt" / name
+    opt.mkdir(parents=True)
+    binary = opt / member
+    _plant_executable(binary, b"old-binary")
+    (opt / "marker").write_text("original")
+    bindir = tmp_path / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    link = bindir / name
+    os.symlink(str(binary), link)
+    return opt, binary, link
+
+
+def _curl_and_extract_runner(
+    files: dict[str, bytes],
+    *,
+    member: str = "rg",
+    extracted: bytes = b"new-binary",
+    fail_fetch: bool = False,
+) -> tuple[list[list[str]], Runner]:
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        if cmd[0] == "curl":
+            if fail_fetch:
+                raise CommandError(cmd, 1, detail="fetch failed")
+            dest = Path(cmd[cmd.index("-o") + 1])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            name = dest.name
+            dest.write_bytes(files.get(name, b"payload"))
+            return
+        if cmd[0] == "tar":
+            dest = Path(cmd[cmd.index("-C") + 1])
+            dest.mkdir(parents=True, exist_ok=True)
+            binary = dest / member
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            binary.write_bytes(extracted)
+            binary.chmod(0o755)
+            return
+        if cmd[0] == "unzip":
+            dest = Path(cmd[cmd.index("-d") + 1])
+            dest.mkdir(parents=True, exist_ok=True)
+            listed = cmd[-3]
+            binary = dest / listed
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            binary.write_bytes(extracted)
+            binary.chmod(0o755)
+
+    return calls, runner
+
+
+def _fetch_output_path(calls: list[list[str]]) -> Path:
+    for cmd in calls:
+        if cmd and cmd[0] == "curl" and "-o" in cmd:
+            return Path(cmd[cmd.index("-o") + 1])
+    raise AssertionError(f"no curl -o in {calls}")
+
+
+def test_raw_update_replaces_via_staging_not_live_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bindir = tmp_path / "bin"
+    link = bindir / "yq"
+    _plant_executable(link, b"old-yq")
+    calls, runner = _curl_and_extract_runner({"yq_linux_amd64": b"new-yq"})
+    result = update_download(_raw_method(bindir), _ctx(runner))
+    assert result.verified is False
+    assert link.read_bytes() == b"new-yq"
+    fetch_to = _fetch_output_path(calls)
+    assert fetch_to != link
+    assert str(link) not in str(fetch_to)
+    assert "tools-installer-update-" in str(fetch_to) or fetch_to.parent != bindir
+
+
+def test_raw_update_fetch_failure_leaves_original(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bindir = tmp_path / "bin"
+    link = bindir / "yq"
+    _plant_executable(link, b"old-yq")
+    _, runner = _curl_and_extract_runner({}, fail_fetch=True)
+    with pytest.raises(CommandError):
+        update_download(_raw_method(bindir), _ctx(runner))
+    assert link.read_bytes() == b"old-yq"
+
+
+def test_archive_update_replaces_tree_and_cleans_remnants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt, _binary, link = _plant_archive_install(tmp_path)
+    calls, runner = _curl_and_extract_runner({}, extracted=b"new-rg")
+    result = update_download(
+        _rg_update_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0")
+    )
+    assert result.verified is False
+    assert (opt / "rg").read_bytes() == b"new-rg"
+    assert not (opt / "marker").exists()
+    assert link.exists()
+    assert Path(os.readlink(link)).exists()
+    assert not Path(str(opt) + ".tools-installer.old").exists()
+    assert not Path(str(opt) + ".tools-installer.new").exists()
+    assert not any(cmd and cmd[0] == "ln" for cmd in calls)
+
+
+def test_archive_update_swap_failure_restores_original(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt, _binary, link = _plant_archive_install(tmp_path)
+    _, runner = _curl_and_extract_runner({}, extracted=b"new-rg")
+    real_replace = os.replace
+
+    def fail_swap(src: str | os.PathLike[str], dst: str | os.PathLike[str]) -> None:
+        if Path(dst) == opt and str(src).endswith(".tools-installer.new"):
+            raise OSError("swap failed")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(download.os, "replace", fail_swap)
+    with pytest.raises(ExecutorError, match="restored"):
+        update_download(_rg_update_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
+    assert (opt / "marker").read_text() == "original"
+    assert (opt / "rg").read_bytes() == b"old-binary"
+    assert Path(os.readlink(link)).exists()
+
+
+def test_archive_update_symlink_failure_restores_tree_and_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt, binary, link = _plant_archive_install(tmp_path)
+    original_target = os.readlink(link)
+    _, runner = _curl_and_extract_runner({}, extracted=b"new-rg")
+    real_symlink = os.symlink
+    seen: list[str] = []
+
+    def fail_first(target: str, path: str) -> None:
+        seen.append(target)
+        if len(seen) == 1:
+            raise OSError("symlink failed")
+        real_symlink(target, path)
+
+    monkeypatch.setattr(atomic.os, "symlink", fail_first)
+    with pytest.raises(ExecutorError, match="restored"):
+        update_download(_rg_update_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
+    assert (opt / "marker").read_text() == "original"
+    assert os.readlink(link) == original_target
+    assert Path(os.readlink(link)).resolve() == binary.resolve()
+    assert not Path(str(opt) + ".tools-installer.old").exists()
+    assert not Path(str(opt) + ".tools-installer.new").exists()
+    assert seen[0] != original_target or True
+    assert original_target in seen[1:]
+
+
+def test_archive_update_symlink_restore_uses_captured_step_minus_one_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _opt, _binary, link = _plant_archive_install(tmp_path)
+    captured = os.readlink(link)
+    _, runner = _curl_and_extract_runner({}, extracted=b"new-rg")
+    real_symlink = os.symlink
+    seen: list[str] = []
+
+    def fail_first(target: str, path: str) -> None:
+        seen.append(target)
+        if len(seen) == 1:
+            raise OSError("symlink failed")
+        real_symlink(target, path)
+
+    monkeypatch.setattr(atomic.os, "symlink", fail_first)
+    with pytest.raises(ExecutorError):
+        update_download(_rg_update_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
+    assert seen[1] == captured
+
+
+def test_archive_update_no_shelled_ln(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _plant_archive_install(tmp_path)
+    calls, runner = _curl_and_extract_runner({}, extracted=b"new-rg")
+    update_download(_rg_update_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
+    assert not any(cmd and cmd[0] == "ln" for cmd in calls)
+
+
+def test_interrupted_run_restores_old_then_completes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt, _binary, link = _plant_archive_install(tmp_path)
+    old = Path(str(opt) + ".tools-installer.old")
+    os.replace(opt, old)
+    assert not opt.exists()
+    _, runner = _curl_and_extract_runner({}, extracted=b"new-rg")
+    result = update_download(
+        _rg_update_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0")
+    )
+    assert result.verified is False
+    assert (opt / "rg").read_bytes() == b"new-rg"
+    assert link.exists()
+    assert not old.exists()
+
+
+def test_interrupted_run_discards_stale_new(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt, _binary, _link = _plant_archive_install(tmp_path)
+    stale = Path(str(opt) + ".tools-installer.new")
+    stale.mkdir()
+    (stale / "stale-marker").write_text("stale")
+    _, runner = _curl_and_extract_runner({}, extracted=b"new-rg")
+    update_download(_rg_update_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
+    assert (opt / "rg").read_bytes() == b"new-rg"
+    assert not stale.exists()
+    assert not (opt / "stale-marker").exists()
+
+
+def test_cleanup_failure_is_warning_not_update_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt, _binary, link = _plant_archive_install(tmp_path)
+    _, runner = _curl_and_extract_runner({}, extracted=b"new-rg")
+    real_rmtree = download.shutil.rmtree
+
+    def fail_old(path: str | os.PathLike[str], ignore_errors: bool = False) -> None:
+        if str(path).endswith(".tools-installer.old"):
+            raise OSError("cleanup failed")
+        real_rmtree(path, ignore_errors=ignore_errors)
+
+    monkeypatch.setattr(download.shutil, "rmtree", fail_old)
+    result = update_download(
+        _rg_update_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0")
+    )
+    assert result.verified is False
+    assert any("cleanup failed" in warning for warning in result.warnings)
+    assert (opt / "rg").read_bytes() == b"new-rg"
+    assert Path(os.readlink(link)).exists()
+
+
+def test_checksum_mismatch_during_update_leaves_live_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt, _binary, _link = _plant_archive_install(tmp_path)
+    sums = f"{'0' * 64}  {RG_ASSET}\n".encode()
+    files = {RG_ASSET: b"archive-bytes", f"{RG_ASSET}.sha256": sums}
+    _, runner = _curl_and_extract_runner(files)
+    with pytest.raises(ChecksumMismatch):
+        update_download(_rg_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
+    assert (opt / "marker").read_text() == "original"
+    assert (opt / "rg").read_bytes() == b"old-binary"
