@@ -300,8 +300,127 @@ macOS-version gap Pitfall 4 originally recommended leaving unbuilt was,
 after being flagged HIGH by cross-AI review in both cycle 1 and cycle 2 as
 "documented but unimplemented," genuinely implemented: a stdlib-only
 `Platform.os_version` field and a `Method`-level `min_os_version` gate,
-reusing the already-tested `installer/versions.py::meets_minimum`. No
+  reusing the already-tested `installer/versions.py::meets_minimum`. No
 residual gap remains for the version case: a too-old-macOS Apple-Silicon Mac
 now resolves zero methods and is shown disabled, exactly like a wrong-`os` /
 wrong-`arch` machine.
+
+## Phase 12: version-aware status and the update action
+
+`installer/resolve.py::resolve_methods` returns platform-applicable methods
+ordered by the `_RANK` install-preference ladder. That ordering answers
+"which method should we try first when installing", and it is never provenance.
+`rg` declares `github_release` (rank 20) and `brew` (rank 40), so a
+brew-installed `rg` would be misread as a GitHub download by anything that
+treats index 0 as the owning manager.
+
+`installer/ownership.py` answers the different question. Ownership comes
+from installer-artifact presence (`installer/uninstall.py::plan_uninstall`),
+real manager inventory membership (`brew list --versions`, `pnpm list -g
+--json` via the existing `pnpm_global_packages`, `uv tool list`), and live
+PATH attribution (`shutil.which` plus each owner's known directories,
+including brew's own `brew --prefix`). An inventory that could not be read
+is `None`, never an empty set, and an unresolvable owner is `unknown` —
+fail closed. The two concepts must not be merged.
+
+The evidence rule is the load-bearing half: ownership is asserted only when
+the live executable is attributable to the candidate, or when every other
+manager that could have owned the tool was queried successfully and did not
+claim it. One positive candidate beside an inventory that could not be read
+is `unknown`, not ownership — `plan_uninstall` proves an artifact EXISTS,
+never that it is the active copy, so a stale `~/.local/bin` artifact next
+to an unreadable brew inventory and a live `/opt/homebrew/bin/<cmd>` must
+not resolve to this installer. `ManagerOwnership` carries the evidence
+(`candidates`, `active_candidate`, `active_path`, `unknown_reason`) so the
+UI can say WHY a row is unknown, and `MUTATION_GRADE` is the single list of
+confidence values a mutating action may act on. There is no fixed-order
+tiebreak anywhere: ambiguity resolves to `unknown`.
+
+The mutating update action acts only on a resolved `ManagerOwnership` whose
+confidence is in `MUTATION_GRADE`, and refuses everything else outright
+with the recorded reason. This is why ownership is a prerequisite of
+`installer/update.py` rather than a convenience. Display can be cheap and
+cached; mutation cannot — `UpdateService.run` re-resolves ownership for
+the one tool at mutation time and uses that fresh result, never the
+six-hour snapshot that gated the keypress.
+
+Update is not install re-run: `installer/engine.py::install_tool`'s
+`is_installed` short-circuit returns `ALREADY_INSTALLED` before resolving
+a method, and the install-side download/archive/app executors write over
+live artifacts. `installer/download.py::update_download` and
+`installer/apps.py::update_app` stage, validate, and replace through one
+rollback state machine — remnant recovery, aside-move, swap, symlink
+recreation, validation — retaining the prior installation and its symlink
+until the last step succeeds.
+
+A pnpm-owned tool is the exception that proves the rule: its update
+dispatches `installer/executors.py::execute` with the registry's own
+`node` method — the same path the install takes — rather than any
+`pnpm update -g` argv. Plain `pnpm update` respects the package's declared
+range and would not reach the version the outdated report advertises,
+`--latest` would discard this project's own registry pins, and either bare
+argv would bypass `_node`'s co-install grouping, `--allow-build`
+allowances, version floors, and smoke check. Reusing the install executor
+makes it impossible for the update path and the install path to drift
+apart.
+
+REQ-pnpm-global-reinstall-mitigation's automatic trigger captures the
+pnpm-managed global set BEFORE the update and replays that captured
+snapshot afterwards. The order is the mitigation: a snapshot taken after a
+pnpm self-update can already be empty, and `reinstall_node_globals` treats
+an empty list as a no-op, so a post-update capture would report success
+while restoring nothing. The trigger keys on `tool.id == "pnpm"`, not on
+the manager performing the update, because pnpm itself has no `node`
+method.
+
+`installer/version_cache.py` also caches the manager reports themselves —
+inventory and outdated, as one timestamped snapshot under the same file's
+`managers` key — so navigating between tier views does not launch brew,
+pnpm, and uv child processes each time. Its window is short (hours, not
+the GitHub cache's seven days) because it describes local state, and every
+mutation this app performs calls `VersionRefreshService.invalidate`, which
+drops the snapshot and bumps a shared status epoch. That epoch is also
+what stops a version refresh started before an update from landing after
+it and overwriting the freshly re-probed row.
+
+`installer/version_cache.py` is this project's first persisted JSON state
+file (`~/.local/state/tools-installer/versions.json`, the `~/.local/...`
+userspace convention from `installer/locations.py`). It is written through
+`installer/atomic.py::atomic_write_text`, the one sibling-temp-plus-
+`os.replace` implementation this repository has — `installer/omz.py` and
+`installer/daemon.py` both delegate to it, where before Phase 12 each
+carried its own copy. A malformed entry degrades to "never checked"; a
+timestamp is only trusted when it is timezone-aware, normalized to UTC,
+and not implausibly in the future; and nothing from the cache ever reaches
+an argv.
+
+The `u` action is registered in `installer/ui_common.py`'s `VIEWS` table,
+not only in `CatalogScreen.BINDINGS` — rule 1 again, and a concrete
+instance of why it exists: this project renders its own footer from
+`View.actions`, so a binding added without the registry row is an action
+the user is never told about.
+
+The refresh fires on catalog view entry for stale entries only, mirroring
+`DoctorScreen`'s own screen-entry audit, and is bounded by a per-pass
+fetch budget plus a failed-attempt backoff so an offline or rate-limited
+machine cannot retry on every navigation. Because a bounded pass leaves
+some rows unconfirmed, staleness is SHOWN as well as acted on: a Ver cell
+whose `latest` came from an entry at or past `STALE_AFTER` carries a
+trailing dim marker and its detail line says so. Both halves of
+REQ-cached-timestamped-version-state — the marker and the re-check — are
+user-observable.
+
+Ownership covers this installer, brew, cask, pnpm, and uv only. `dnf`,
+`apt`, `pacman`, and `rpm_ostree` are valid `METHOD_KINDS` but were out of
+scope for Phase 12: a tool installed through a Linux system package
+manager resolves to `owner="unknown"`, renders unknown, and is refused by
+the update action. That is the fail-closed default, not a defect;
+extending it means adding an inventory reader and an outdated parser, with
+no change to the resolver's shape.
+
+REQ-manager-drift-alerting was deferred in this phase: `brew outdated`
+cannot observe an uninstalled brew alternative, the registry has no
+qualifying row, and an unwired helper would violate rule 5. The full
+record is in `.planning/REQUIREMENTS.md`.
+
 
