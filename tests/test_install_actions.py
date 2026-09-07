@@ -4,9 +4,9 @@ from pathlib import Path
 import pytest
 
 import installer.run as command_run
+from installer.install_actions import ActionContext, ActionResult, apply_actions, set_login_shell
 from installer.model import Method, Tool
 from installer.platform import Platform
-from installer.install_actions import ActionContext, ActionResult, apply_actions, set_login_shell
 from installer.run import Runner
 
 

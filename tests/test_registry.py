@@ -902,9 +902,14 @@ def test_gron_uses_tgz_with_trailing_version() -> None:
 def test_registry_has_unique_tools_and_cmds() -> None:
     tools = load_tools(REGISTRY)
     ids = [t.id for t in tools]
-    cmds = [t.cmd for t in tools]
     assert len(ids) == len(set(ids))
-    assert len(cmds) == len(set(cmds))
+    by_cmd: dict[str, set[str]] = {}
+    for tool in tools:
+        by_cmd.setdefault(tool.cmd, set()).add(tool.id)
+    duplicates = {cmd: tool_ids for cmd, tool_ids in by_cmd.items() if len(tool_ids) > 1}
+    # drawio-cli ships inside drawio-desktop's own release and is never
+    # independently invocable, so both reviewed entries share the `drawio` cmd.
+    assert duplicates == {"drawio": {"drawio-desktop", "drawio-cli"}}
 
 
 def test_registry_tier_distribution_is_pinned() -> None:
@@ -913,8 +918,8 @@ def test_registry_tier_distribution_is_pinned() -> None:
     # commit that changes the catalog.
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 26,
-        "ai": 14,
-        "user": 38,
+        "ai": 22,
+        "user": 41,
     }
 
 

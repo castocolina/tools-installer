@@ -4,8 +4,8 @@ import subprocess
 import pytest
 
 import installer.install_ownership as ownership
-from installer.model import Method, Tool
 from installer.install_ownership import Ownership, detect_owner
+from installer.model import Method, Tool
 
 
 def _tool(
