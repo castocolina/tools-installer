@@ -31,9 +31,8 @@ coverage.xml
 
 # Graphs
 .codegraph/
-.planning/graphs/
 graphify-out/
 
-# GSD transient review/execution diagnostics (regenerated per cycle)
-.planning/phases/*/.review-diagnostics/
-.planning/state.json
+# GSD/superpowers scratch artifacts (not part of the product delivery)
+.planning/
+.claude/handoffs/
