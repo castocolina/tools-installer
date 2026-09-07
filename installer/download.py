@@ -19,6 +19,19 @@ DOWNLOAD_KINDS = ("github_release", "tarball")
 
 
 @dataclass(frozen=True)
+class UpdateExecResult:
+    """Result of an update-safe download replacement.
+
+    `verified` matches `install_download`'s return: True when a checksum was
+    checked in staging. `warnings` carries non-fatal cleanup failures (a leftover
+    `.old` tree that did not fail the update) so the caller has a channel.
+    """
+
+    verified: bool
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ExecContext:
     runner: Runner
     platform: Platform
@@ -185,6 +198,11 @@ def _install_verified(
         _place_verified(method, ctx, target, link, asset_path)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def update_download(method: Method, ctx: ExecContext) -> UpdateExecResult:
+    """Replace a live download/archive install. Implemented in Plan 12-03 Task 2."""
+    raise ExecutorError("update_download is not yet implemented")
 
 
 def _place_verified(

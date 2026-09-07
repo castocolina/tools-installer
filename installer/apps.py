@@ -10,6 +10,7 @@ com.apple.quarantine, so installed apps launch without the Gatekeeper
 """
 
 import shlex
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from installer.executors import ExecutorError, require_str
@@ -18,6 +19,18 @@ from installer.model import Method
 from installer.run import Runner
 
 APP_KINDS = ("app",)
+
+
+@dataclass(frozen=True)
+class UpdateExecResult:
+    """Result of an update-safe app-bundle replacement.
+
+    App zips have no published checksum, so this type has no `verified` field.
+    `warnings` carries non-fatal cleanup failures (a leftover `.old` bundle
+    that did not fail the update).
+    """
+
+    warnings: tuple[str, ...] = ()
 
 
 def cli_spec(method: Method) -> tuple[str, str] | None:
@@ -74,3 +87,8 @@ def install_app(method: Method, runner: Runner) -> None:
     except OSError as exc:
         raise ExecutorError(f"cannot create bin dir: {exc}") from exc
     runner(["ln", "-sf", str(apps / app / cli), str(dest / name)])
+
+
+def update_app(method: Method, runner: Runner) -> UpdateExecResult:
+    """Replace a live app bundle. Implemented in Plan 12-03 Task 2."""
+    raise ExecutorError("update_app is not yet implemented")

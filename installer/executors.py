@@ -429,14 +429,18 @@ def _node(method: Method, runner: Runner) -> None:
     # resolution mmdc performs, so a pass here and a working mmdc do not come
     # apart.
     #
-    # THIS CHECK FIRES ONCE, ON THE INSTALL PATH ONLY, AND ONLY WHEN THE
-    # INSTALL PATH IS REACHED. It runs after `pnpm add -g` has already
-    # returned, so a failure here leaves the packages installed and pnpm's bin
-    # shim on PATH while the install reports FAILED — and nothing rolls that
-    # back, because a postinstall-driven download cannot be gated before the
-    # shim exists. `installer/status.py::is_installed` is PATH-presence-based,
-    # so `installer/engine.py::install_tool` returns ALREADY_INSTALLED on the
-    # next run and never reaches this executor again.
+    # THIS CHECK FIRES AFTER `pnpm add -g` RETURNS, ON EITHER THE INSTALL
+    # PATH OR THE UPDATE PATH REACHED THROUGH THIS SAME EXECUTOR
+    # (`installer/update.py` dispatches a pnpm-owned update via
+    # `executors.execute` with the owning node method). A failure here leaves
+    # the packages installed and pnpm's bin shim on PATH while the caller
+    # reports FAILED — and nothing rolls that back, because a
+    # postinstall-driven download cannot be gated before the shim exists.
+    # `installer/status.py::is_installed` is PATH-presence-based, so
+    # `installer/engine.py::install_tool` returns ALREADY_INSTALLED on the
+    # next install run and never reaches this executor again. An update
+    # reusing this executor gets exactly the same smoke-check behavior and
+    # exactly the same known gap, not a new one.
     #
     # The Doctor closes that gap rather than the engine:
     # `installer/pnpm_globals.py::audit_node_globals` re-runs the declared
@@ -447,8 +451,9 @@ def _node(method: Method, runner: Runner) -> None:
     # browser per render to answer "is it here?" trades one wrong answer for a
     # rule that no longer describes availability. So the residual that remains
     # is narrow and known: a tool broken after install is reported by the
-    # Doctor, not by the install flow, and re-running the install alone will
-    # still short-circuit on ALREADY_INSTALLED.
+    # Doctor, not by the install or update flow, and re-running the install
+    # alone will still short-circuit on ALREADY_INSTALLED. An update that
+    # reuses this executor inherits that same residual.
     if smoke is not None:
         SMOKE_CHECKS[smoke]()
 
