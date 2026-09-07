@@ -334,7 +334,59 @@ class CatalogScreen(AppScreen):
             detail += f"  |  pairs well with {', '.join(tool.recommends)}"
         if self._unavailable.get(tool.id, False):
             detail += "  |  (not available on this machine)"
+        detail += self._version_detail(tool)
         return detail
+
+    def _version_detail(self, tool: Tool) -> str:
+        status = self._version_statuses.get(tool.id)
+        service = self._version_refresh
+        ownership = service.ownership_of(tool.id) if service is not None else None
+        segments: list[str] = []
+        if ownership is not None and ownership.owner != "unknown":
+            labels = {
+                "brew": "managed by Homebrew",
+                "cask": "managed by Homebrew",
+                "pnpm": "managed by pnpm",
+                "uv": "managed by uv",
+                "installer": "installed by this installer",
+            }
+            label = labels.get(ownership.owner)
+            if label:
+                segments.append(label)
+            if ownership.shadowed:
+                others = [
+                    candidate.owner
+                    for candidate in ownership.candidates
+                    if candidate.owner != ownership.owner
+                ]
+                extra = f"also claimed by {', '.join(others)}" if others else "shadowed"
+                if ownership.active_path is not None:
+                    extra += f" — live copy at {ownership.active_path}"
+                segments.append(extra)
+        if ownership is not None and ownership.owner == "unknown" and ownership.unknown_reason:
+            segments.append(ownership.unknown_reason)
+        if (
+            status is not None
+            and status.source == "installer"
+            and status.outdated is None
+            and (ownership is None or ownership.owner == "installer")
+        ):
+            segments.append(
+                "latest version cannot be determined for this install method — "
+                "pressing u re-runs the same install path this tool was originally installed with"
+            )
+        if status is not None and status.pinned_spec:
+            segments.append(
+                f"this project pins {status.pinned_spec} and constrains the version deliberately"
+            )
+        if status is not None and status.stale and status.latest is not None:
+            segments.append(
+                "the shown latest version came from a cache entry at or past STALE_AFTER "
+                "and a re-check is pending"
+            )
+        if not segments:
+            return ""
+        return "  |  " + "  |  ".join(segments)
 
     def _sort(self, column_key: str) -> None:
         key = _SORT_BY_COLUMN.get(column_key)

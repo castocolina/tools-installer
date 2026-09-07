@@ -386,6 +386,7 @@ def _build_app(
         cache_path=default_cache_path(),
         resolve_tag=resolve_github_tag,
         probe_output=probe_version_output,
+        managed_bin_dir=_DEFAULT_BIN_DIR,
     )
 
     return UnifiedApp(

@@ -11,7 +11,9 @@ from installer import daemon
 from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
+from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
+from installer.ownership import ManagerInventory
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport, reinstall_preview
 from installer.policy import (
@@ -2860,17 +2862,39 @@ def _version_app(
     )
 
 
+def _empty_inventory(**_kwargs: object) -> ManagerInventory:
+    return ManagerInventory(
+        brew_formulae={},
+        brew_casks={},
+        pnpm_globals=frozenset(),
+        uv_tools={},
+        brew_prefix=None,
+    )
+
+
+def _empty_outdated(**_kwargs: object) -> OutdatedReport:
+    return OutdatedReport(brew={}, cask={}, pnpm={}, uv={})
+
+
 def _macos_service(
     tmp_path: Path,
     *,
     resolve_tag: Callable[[str], str],
     probe_output: Callable[[list[str]], str | None] = lambda argv: "1.2.0",
 ) -> VersionRefreshService:
+    managed = tmp_path / "bin"
     return VersionRefreshService(
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         cache_path=tmp_path / "versions.json",
         resolve_tag=resolve_tag,
         probe_output=probe_output,
+        managed_bin_dir=managed,
+        which=lambda cmd: str(managed / cmd),
+        artifacts_for=lambda tool: [managed / tool.cmd],
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+        pnpm_packages=lambda: (),
+        query=lambda *_a, **_k: "",
     )
 
 

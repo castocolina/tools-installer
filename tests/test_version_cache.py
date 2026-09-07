@@ -4,11 +4,17 @@ from pathlib import Path
 
 import pytest
 
+from installer.manager_versions import ManagerVersion, OutdatedReport
+from installer.ownership import ManagerInventory
 from installer.version_cache import (
     RETRY_BACKOFF,
     STALE_AFTER,
+    ManagerSnapshot,
     VersionCacheEntry,
+    decode_manager_snapshot,
     default_cache_path,
+    encode_manager_snapshot,
+    is_manager_stale,
     is_stale,
     load_version_cache,
     save_version_cache,
@@ -143,3 +149,101 @@ def test_should_fetch_backs_off_inside_retry_window() -> None:
         failed_at=(now - (RETRY_BACKOFF + timedelta(hours=1))).isoformat(),
     )
     assert should_fetch(cooled, now=now) is True
+
+
+def _snapshot() -> ManagerSnapshot:
+    return ManagerSnapshot(
+        inventory=ManagerInventory(
+            brew_formulae={"ripgrep": "14.1.0"},
+            brew_casks=None,
+            pnpm_globals=frozenset({"vercel"}),
+            uv_tools={"ruff": "0.6.0"},
+            brew_prefix=Path("/opt/homebrew"),
+        ),
+        outdated=OutdatedReport(
+            brew={"ripgrep": ManagerVersion("14.1.0", "14.1.1")},
+            cask=None,
+            pnpm={},
+            uv={"ruff": ManagerVersion("0.6.0", "0.6.1")},
+        ),
+        checked_at="2026-09-07T00:00:00+00:00",
+        failed_at=None,
+    )
+
+
+def test_manager_snapshot_round_trips_none_fields() -> None:
+    encoded = encode_manager_snapshot(_snapshot())
+    decoded = decode_manager_snapshot(encoded)
+    assert decoded is not None
+    assert decoded.inventory.brew_formulae == {"ripgrep": "14.1.0"}
+    assert decoded.inventory.brew_casks is None
+    assert decoded.inventory.pnpm_globals == frozenset({"vercel"})
+    assert decoded.inventory.uv_tools == {"ruff": "0.6.0"}
+    assert decoded.inventory.brew_prefix == Path("/opt/homebrew")
+    assert decoded.outdated.brew is not None
+    assert decoded.outdated.brew["ripgrep"] == ManagerVersion("14.1.0", "14.1.1")
+    assert decoded.outdated.cask is None
+    assert decoded.outdated.pnpm == {}
+    assert decoded.checked_at == "2026-09-07T00:00:00+00:00"
+
+
+def test_manager_snapshot_wrong_inventory_type_degrades_to_none() -> None:
+    decoded = decode_manager_snapshot(
+        {
+            "inventory": ["not", "an", "object"],
+            "outdated": {},
+            "checked_at": "2026-09-07T00:00:00+00:00",
+            "failed_at": None,
+        }
+    )
+    assert decoded is not None
+    assert decoded.inventory.brew_formulae is None
+    assert decoded.inventory.brew_casks is None
+    assert decoded.inventory.pnpm_globals is None
+    assert decoded.inventory.uv_tools is None
+    assert decoded.inventory.brew_prefix is None
+
+
+def test_manager_snapshot_naive_or_future_checked_at_is_stale() -> None:
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    naive = ManagerSnapshot(
+        inventory=_snapshot().inventory,
+        outdated=_snapshot().outdated,
+        checked_at="2026-09-07T00:00:00",
+    )
+    future = ManagerSnapshot(
+        inventory=_snapshot().inventory,
+        outdated=_snapshot().outdated,
+        checked_at=(now + timedelta(days=365)).isoformat(),
+    )
+    assert is_manager_stale(naive, now=now) is True
+    assert is_manager_stale(future, now=now) is True
+
+
+def test_managers_and_tools_keys_survive_each_other(tmp_path: Path) -> None:
+    path = tmp_path / "versions.json"
+    tools = {
+        "codegraph": VersionCacheEntry(
+            latest_version="v1.6.0",
+            checked_at="2026-09-01T00:00:00+00:00",
+            failed_at=None,
+        )
+    }
+    save_version_cache(path, tools, managers=encode_manager_snapshot(_snapshot()))
+    raw = json.loads(path.read_text())
+    assert "codegraph" in raw["tools"]
+    assert raw["managers"]["inventory"]["brew_formulae"]["ripgrep"] == "14.1.0"
+    save_version_cache(
+        path,
+        {
+            **tools,
+            "rg": VersionCacheEntry(
+                latest_version="14.1.1",
+                checked_at="2026-09-07T00:00:00+00:00",
+                failed_at=None,
+            ),
+        },
+    )
+    raw = json.loads(path.read_text())
+    assert "rg" in raw["tools"]
+    assert raw["managers"]["inventory"]["brew_formulae"]["ripgrep"] == "14.1.0"

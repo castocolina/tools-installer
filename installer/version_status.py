@@ -1,4 +1,4 @@
-"""Resolve installed-vs-latest status for github_release tools.
+"""Resolve installed-vs-latest status from a tool's real owning manager.
 
 Refresh fires automatically on catalog view entry for entries that are stale,
 mirroring DoctorScreen._start_globals_audit's own screen-entry audit. That is
@@ -6,16 +6,8 @@ the answer to 12-RESEARCH.md open question 2: the user does not press a key
 to start a version check.
 
 github_repo() selects a latest-version SOURCE and is not an ownership claim.
-Ownership is installer/ownership.py's job from Plan 12-02 onward, and
-resolve_methods() ordering must never be read as "this is what installed the
-tool".
-
-PROVISIONAL (wave-1 Ver source): until Plan 12-02 Task 3 lands, github_repo()
-is also the only source this module has, so a tool that declares
-github_release while actually being installed by another manager is compared
-against GitHub in this wave — a known, time-boxed over-attribution that
-ownership routing replaces. Plan 12-02 Task 3 deletes this paragraph when it
-wires ownership; the other two decisions stay.
+Ownership is installer/ownership.py's job, and resolve_methods() ordering
+must never be read as "this is what installed the tool".
 
 A first-run empty cache across ~40 github_release tools would otherwise burn
 most of the unauthenticated 60-requests-per-hour GitHub budget in a single
@@ -31,27 +23,53 @@ entry lost to a last-writer-wins merge, self-healed on that entry's next
 refresh. The unique sibling temp name in installer.atomic means even that
 case cannot corrupt the file.
 
-`invalidate` exists so Plan 12-03's update action can declare every in-flight
-read of the machine obsolete. Nothing in this plan calls it.
+`invalidate` bumps the epoch AND drops the persisted manager snapshot so the
+next refresh re-queries. Every mutation this app performs calls it, so the
+cache can only ever be stale about changes made OUTSIDE this app. Residual:
+a `brew upgrade` the user ran in another terminal within MANAGER_STALE_AFTER
+is reported from the snapshot until it expires.
+
+A refresh that started before an `invalidate` can still finish after it.
+Immediately before persisting, under the same lock, the current epoch is
+compared against the epoch captured before the slow manager queries; a
+mismatch discards the write so a pre-update snapshot cannot resurrect the
+evidence the update just invalidated.
 """
 
 from __future__ import annotations
 
+import shutil
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
+from installer.guards import real_pnpm
+from installer.manager_versions import OutdatedReport, read_outdated
 from installer.model import Method, Tool
+from installer.ownership import (
+    ManagerInventory,
+    ManagerOwnership,
+    read_inventory,
+    resolve_ownership,
+)
 from installer.platform import Platform
+from installer.pnpm_globals import pnpm_global_packages
 from installer.resolve import resolve_methods
+from installer.run import CommandError, run_query
+from installer.uninstall import plan_uninstall
 from installer.version_cache import (
+    ManagerSnapshot,
     VersionCacheEntry,
+    encode_manager_snapshot,
     is_stale,
+    load_manager_snapshot,
     load_version_cache,
     save_version_cache,
     should_fetch,
+    should_fetch_managers,
 )
 from installer.versions import (
     TagResolver,
@@ -64,6 +82,15 @@ from installer.versions import (
 
 MAX_FETCHES_PER_REFRESH = 20
 
+_EMPTY_INVENTORY = ManagerInventory(
+    brew_formulae=None,
+    brew_casks=None,
+    pnpm_globals=None,
+    uv_tools=None,
+    brew_prefix=None,
+)
+_EMPTY_OUTDATED = OutdatedReport(brew=None, cask=None, pnpm=None, uv=None)
+
 
 @dataclass(frozen=True)
 class VersionStatus:
@@ -73,13 +100,13 @@ class VersionStatus:
     outdated: bool | None
     stale: bool
     source: str
+    pinned_spec: str | None = None
 
 
 def github_repo(tool: Tool, platform: Platform) -> tuple[Method, str] | None:
     """The first applicable github_release method and its repo string.
 
-    Used ONLY to find the latest-version SOURCE. This is not an ownership claim;
-    ownership arrives in Plan 12-02.
+    Used ONLY to find the latest-version SOURCE. This is not an ownership claim.
     """
     for method in resolve_methods(tool, platform):
         if method.kind != "github_release":
@@ -147,8 +174,143 @@ def resolve_github_release_status(
     return status, new_entry
 
 
+def _pinned_spec(ownership: ManagerOwnership) -> str | None:
+    if ownership.owner != "pnpm" or ownership.method is None:
+        return None
+    raw = ownership.method.params.get("versions")
+    if not isinstance(raw, dict):
+        return None
+    for name, spec in cast(dict[object, object], raw).items():
+        if isinstance(name, str) and isinstance(spec, str) and name and spec:
+            return f"{name} {spec}"
+    return None
+
+
+def _probed_version(tool: Tool, probe_output: Callable[[list[str]], str | None]) -> str | None:
+    output = probe_output([tool.cmd, "--version"])
+    return extract_observed_version(output) if output else None
+
+
+def resolve_status(
+    tool: Tool,
+    *,
+    ownership: ManagerOwnership,
+    outdated: OutdatedReport,
+    entry: VersionCacheEntry | None,
+    now: datetime,
+    probe_output: Callable[[list[str]], str | None],
+    resolve_tag: TagResolver,
+    platform: Platform,
+    allow_fetch: bool = True,
+) -> tuple[VersionStatus, VersionCacheEntry | None]:
+    """Pick the latest-version source from ownership.owner, never from rank."""
+    pin = _pinned_spec(ownership)
+    owner = ownership.owner
+    if owner == "installer":
+        found = github_repo(tool, platform)
+        if found is not None:
+            _method, repo = found
+            status, new_entry = resolve_github_release_status(
+                tool,
+                repo=repo,
+                entry=entry,
+                now=now,
+                probe_output=probe_output,
+                resolve_tag=resolve_tag,
+                allow_fetch=allow_fetch,
+            )
+            if pin is None:
+                return status, new_entry
+            pinned = VersionStatus(
+                tool_id=status.tool_id,
+                installed=status.installed,
+                latest=status.latest,
+                outdated=status.outdated,
+                stale=status.stale,
+                source=status.source,
+                pinned_spec=pin,
+            )
+            return pinned, new_entry
+        probed = _probed_version(tool, probe_output)
+        return (
+            VersionStatus(
+                tool_id=tool.id,
+                installed=probed,
+                latest=None,
+                outdated=None,
+                stale=True,
+                source="installer",
+                pinned_spec=pin,
+            ),
+            None,
+        )
+    if owner in ("brew", "cask", "pnpm", "uv"):
+        mapping = {
+            "brew": outdated.brew,
+            "cask": outdated.cask,
+            "pnpm": outdated.pnpm,
+            "uv": outdated.uv,
+        }[owner]
+        probed = _probed_version(tool, probe_output)
+        if mapping is None:
+            return (
+                VersionStatus(
+                    tool_id=tool.id,
+                    installed=ownership.current_version or probed,
+                    latest=None,
+                    outdated=None,
+                    stale=True,
+                    source=owner,
+                    pinned_spec=pin,
+                ),
+                None,
+            )
+        package = ownership.package
+        if package is None or package not in mapping:
+            installed = ownership.current_version or probed
+            return (
+                VersionStatus(
+                    tool_id=tool.id,
+                    installed=installed,
+                    latest=installed,
+                    outdated=False,
+                    stale=False,
+                    source=owner,
+                    pinned_spec=pin,
+                ),
+                None,
+            )
+        version = mapping[package]
+        installed = version.current or ownership.current_version or probed
+        return (
+            VersionStatus(
+                tool_id=tool.id,
+                installed=installed,
+                latest=version.latest,
+                outdated=True,
+                stale=False,
+                source=owner,
+                pinned_spec=pin,
+            ),
+            None,
+        )
+    probed = _probed_version(tool, probe_output)
+    return (
+        VersionStatus(
+            tool_id=tool.id,
+            installed=probed,
+            latest=None,
+            outdated=None,
+            stale=True,
+            source="unknown",
+            pinned_spec=None,
+        ),
+        None,
+    )
+
+
 class VersionRefreshService:
-    """Blocking refresh of github_release version status, shared by three screens."""
+    """Blocking refresh of version status, shared by three screens."""
 
     def __init__(
         self,
@@ -158,14 +320,35 @@ class VersionRefreshService:
         resolve_tag: TagResolver = resolve_github_tag,
         probe_output: Callable[[list[str]], str | None] = probe_version_output,
         now: Callable[[], datetime] | None = None,
+        managed_bin_dir: Path | None = None,
+        which: Callable[[str], str | None] = shutil.which,
+        query: Callable[..., str] | None = None,
+        pnpm_packages: Callable[[], tuple[str, ...] | None] = pnpm_global_packages,
+        resolve_pnpm: Callable[[], str | None] = real_pnpm,
+        artifacts_for: Callable[[Tool], Sequence[Path]] | None = None,
+        read_inventory_fn: Callable[..., ManagerInventory] | None = None,
+        read_outdated_fn: Callable[..., OutdatedReport] | None = None,
     ) -> None:
         self._platform = platform
         self._cache_path = cache_path
         self._resolve_tag = resolve_tag
         self._probe_output = probe_output
         self._now = now if now is not None else (lambda: datetime.now(UTC))
+        self._managed_bin_dir = (
+            managed_bin_dir if managed_bin_dir is not None else Path.home() / ".local" / "bin"
+        )
+        self._which = which
+        self._query = query if query is not None else run_query
+        self._pnpm_packages = pnpm_packages
+        self._resolve_pnpm = resolve_pnpm
+        self._artifacts_for = artifacts_for
+        self._read_inventory = (
+            read_inventory_fn if read_inventory_fn is not None else read_inventory
+        )
+        self._read_outdated = read_outdated_fn if read_outdated_fn is not None else read_outdated
         self._lock = threading.Lock()
         self._statuses: dict[str, VersionStatus] = {}
+        self._ownership: dict[str, ManagerOwnership] = {}
         self._epoch = 0
 
     @property
@@ -180,38 +363,108 @@ class VersionRefreshService:
     def statuses(self) -> dict[str, VersionStatus]:
         return dict(self._statuses)
 
+    @property
+    def managed_bin_dir(self) -> Path:
+        return self._managed_bin_dir
+
+    def ownership_of(self, tool_id: str) -> ManagerOwnership | None:
+        return self._ownership.get(tool_id)
+
     def invalidate(self, *, reason: str) -> int:
-        """Bump the epoch so in-flight refreshes that started earlier are dropped."""
+        """Bump the epoch and drop the manager snapshot under the merge lock."""
         del reason
         with self._lock:
             self._epoch += 1
+            tools = load_version_cache(self._cache_path)
+            save_version_cache(self._cache_path, tools, managers={})
             return self._epoch
+
+    def _artifacts(self, tool: Tool) -> Sequence[Path]:
+        if self._artifacts_for is not None:
+            return self._artifacts_for(tool)
+        return plan_uninstall([tool], self._managed_bin_dir)
+
+    def _load_or_query_snapshot(
+        self, *, now: datetime
+    ) -> tuple[ManagerSnapshot | None, bool, bool]:
+        """Return (snapshot, persist, failed). persist means this pass queried."""
+        snapshot = load_manager_snapshot(self._cache_path)
+        if not should_fetch_managers(snapshot, now=now):
+            return snapshot, False, False
+        now_iso = now.astimezone(UTC).isoformat()
+        try:
+            inventory = self._read_inventory(
+                has_brew=self._platform.has_brew,
+                query=self._query,
+                pnpm_packages=self._pnpm_packages,
+            )
+            outdated = self._read_outdated(
+                has_brew=self._platform.has_brew,
+                query=self._query,
+                resolve_pnpm=self._resolve_pnpm,
+            )
+        except (CommandError, OSError):
+            previous = snapshot
+            failed = ManagerSnapshot(
+                inventory=previous.inventory if previous is not None else _EMPTY_INVENTORY,
+                outdated=previous.outdated if previous is not None else _EMPTY_OUTDATED,
+                checked_at=previous.checked_at if previous is not None else None,
+                failed_at=now_iso,
+            )
+            return failed, True, True
+        return (
+            ManagerSnapshot(
+                inventory=inventory,
+                outdated=outdated,
+                checked_at=now_iso,
+                failed_at=None,
+            ),
+            True,
+            False,
+        )
 
     def refresh(self, tools: Sequence[Tool]) -> dict[str, VersionStatus]:
         """Load cache, resolve each tool, merge-save under the instance lock.
 
         BLOCKING — call only from a worker thread.
         """
+        started_epoch = self.epoch
         now = self._now()
         cache = load_version_cache(self._cache_path)
+        snapshot, persist_snapshot, _failed = self._load_or_query_snapshot(now=now)
+        inventory = snapshot.inventory if snapshot is not None else _EMPTY_INVENTORY
+        outdated = snapshot.outdated if snapshot is not None else _EMPTY_OUTDATED
         produced: dict[str, VersionCacheEntry] = {}
         statuses: dict[str, VersionStatus] = {}
+        ownerships: dict[str, ManagerOwnership] = {}
         fetches = 0
         for tool in tools:
-            found = github_repo(tool, self._platform)
-            if found is None:
-                continue
-            _method, repo = found
+            ownership = resolve_ownership(
+                tool,
+                platform=self._platform,
+                inventory=inventory,
+                artifacts=self._artifacts(tool),
+                which=self._which,
+                managed_bin_dir=self._managed_bin_dir,
+            )
+            ownerships[tool.id] = ownership
             entry = cache.get(tool.id)
             allow_fetch = fetches < MAX_FETCHES_PER_REFRESH
-            would_fetch = allow_fetch and should_fetch(entry, now=now)
-            status, new_entry = resolve_github_release_status(
+            would_fetch = (
+                allow_fetch
+                and ownership.owner == "installer"
+                and github_repo(tool, self._platform) is not None
+                and should_fetch(entry, now=now)
+            )
+            status, new_entry = resolve_status(
                 tool,
-                repo=repo,
+                ownership=ownership,
+                outdated=outdated,
                 entry=entry,
                 now=now,
                 probe_output=self._probe_output,
                 resolve_tag=self._resolve_tag,
+                platform=self._platform,
                 allow_fetch=allow_fetch,
             )
             statuses[tool.id] = status
@@ -220,8 +473,18 @@ class VersionRefreshService:
             if new_entry is not None:
                 produced[tool.id] = new_entry
         with self._lock:
+            if self._epoch != started_epoch:
+                self._statuses.update(statuses)
+                self._ownership.update(ownerships)
+                return dict(statuses)
             merged = load_version_cache(self._cache_path)
             merged.update(produced)
-            save_version_cache(self._cache_path, merged)
+            managers: dict[str, object] | None
+            if persist_snapshot:
+                managers = encode_manager_snapshot(snapshot) if snapshot is not None else {}
+            else:
+                managers = None
+            save_version_cache(self._cache_path, merged, managers=managers)
             self._statuses.update(statuses)
+            self._ownership.update(ownerships)
         return dict(statuses)

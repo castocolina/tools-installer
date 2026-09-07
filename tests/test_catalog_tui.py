@@ -1,5 +1,5 @@
 import html
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -20,7 +20,9 @@ from installer.catalog_tui import (
 from installer.deps import resolve_dependencies
 from installer.doctor import DoctorReport
 from installer.enums import Audience
+from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool, load_categories, load_tools
+from installer.ownership import ManagerInventory, ManagerOwnership, Owner, OwnershipCandidate
 from installer.platform import Platform
 from installer.resolve import platform_could_support
 from installer.selection import select_tools
@@ -902,9 +904,8 @@ def test_stale_marker_is_visible_on_rendered_ver_cell() -> None:
 
 def test_epoch_guard_drops_a_superseded_version_refresh(tmp_path: Path) -> None:
     tool = _tool("rg")
-    service = VersionRefreshService(
-        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
-        cache_path=tmp_path / "versions.json",
+    service = _offline_service(
+        tmp_path / "versions.json",
         resolve_tag=lambda repo: "v1.6.0",
         probe_output=lambda argv: "1.2.0",
     )
@@ -915,6 +916,46 @@ def test_epoch_guard_drops_a_superseded_version_refresh(tmp_path: Path) -> None:
         VersionStatusRefreshed({"rg": _status(stale=False)}, generation=1, epoch=0)
     )
     assert screen._version_statuses == {}  # pyright: ignore[reportPrivateUsage]
+
+
+_MANAGED = Path("/tmp/tools-installer-bin")
+
+
+def _empty_inventory(**_kwargs: object) -> ManagerInventory:
+    return ManagerInventory(
+        brew_formulae={},
+        brew_casks={},
+        pnpm_globals=frozenset(),
+        uv_tools={},
+        brew_prefix=None,
+    )
+
+
+def _empty_outdated(**_kwargs: object) -> OutdatedReport:
+    return OutdatedReport(brew={}, cask={}, pnpm={}, uv={})
+
+
+def _offline_service(
+    cache_path: Path,
+    *,
+    resolve_tag: Callable[[str], str],
+    probe_output: Callable[[list[str]], str | None],
+    now: Callable[[], datetime] | None = None,
+) -> VersionRefreshService:
+    return VersionRefreshService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        cache_path=cache_path,
+        resolve_tag=resolve_tag,
+        probe_output=probe_output,
+        now=now,
+        managed_bin_dir=_MANAGED,
+        which=lambda cmd: str(_MANAGED / cmd),
+        artifacts_for=lambda tool: [_MANAGED / tool.cmd],
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+        pnpm_packages=lambda: (),
+        query=lambda *_a, **_k: "",
+    )
 
 
 def _gh_tool(tool_id: str, *, desc: str = "") -> Tool:
@@ -933,9 +974,8 @@ def _gh_tool(tool_id: str, *, desc: str = "") -> Tool:
 
 async def test_unparseable_probe_output_renders_unknown(tmp_path: Path) -> None:
     tool = _gh_tool("dasel")
-    service = VersionRefreshService(
-        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
-        cache_path=tmp_path / "versions.json",
+    service = _offline_service(
+        tmp_path / "versions.json",
         resolve_tag=lambda repo: "v2.8.0",
         probe_output=lambda argv: "Usage: dasel <command>",
     )
@@ -1010,9 +1050,8 @@ async def test_budget_deferred_row_renders_stale_marker(tmp_path: Path) -> None:
             ),
         },
     )
-    service = VersionRefreshService(
-        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
-        cache_path=path,
+    service = _offline_service(
+        path,
         resolve_tag=lambda repo: "1.0.0",
         probe_output=lambda argv: "1.0.0",
         now=lambda: now,
@@ -1030,3 +1069,221 @@ async def test_budget_deferred_row_renders_stale_marker(tmp_path: Path) -> None:
         stale = table.get_cell("stale", "ver").plain
         assert stale.endswith(" ~")
         assert not fresh.endswith(" ~")
+
+
+def _ownership(
+    tool: Tool,
+    *,
+    owner: Owner,
+    shadowed: bool = False,
+    unknown_reason: str | None = None,
+    active_path: Path | None = None,
+    candidates: tuple[OwnershipCandidate, ...] = (),
+) -> ManagerOwnership:
+    if not candidates:
+        candidates = (
+            OwnershipCandidate(
+                owner=owner,
+                method=tool.methods[0] if tool.methods else None,
+                package=None,
+                current_version=None,
+                evidence="test",
+            ),
+        )
+    return ManagerOwnership(
+        tool_id=tool.id,
+        owner=owner,
+        method=tool.methods[0] if tool.methods else None,
+        package=None,
+        current_version=None,
+        confidence="none" if owner == "unknown" else "direct",
+        shadowed=shadowed,
+        candidates=candidates,
+        active_candidate=None if owner == "unknown" else owner,
+        active_path=active_path,
+        unknown_reason=unknown_reason,
+    )
+
+
+def test_detail_line_names_homebrew_for_brew_owned_row(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"rg": _ownership(tool, owner="brew")}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"rg": True}, version_refresh=service)
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "rg": VersionStatus(
+            tool_id="rg",
+            installed="14.1.0",
+            latest="14.1.1",
+            outdated=True,
+            stale=False,
+            source="brew",
+        )
+    }
+    text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    assert "Homebrew" in text
+
+
+def test_detail_line_names_competing_manager_and_active_path(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    path = Path("/opt/homebrew/bin/rg")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {  # pyright: ignore[reportPrivateUsage]
+        "rg": _ownership(
+            tool,
+            owner="brew",
+            shadowed=True,
+            active_path=path,
+            candidates=(
+                OwnershipCandidate(
+                    owner="installer",
+                    method=None,
+                    package=None,
+                    current_version=None,
+                    evidence="artifact",
+                ),
+                OwnershipCandidate(
+                    owner="brew",
+                    method=tool.methods[0],
+                    package="ripgrep",
+                    current_version="14.1.0",
+                    evidence="inventory",
+                ),
+            ),
+        )
+    }
+    screen = _screen([tool], {"rg": True}, version_refresh=service)
+    text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    assert "installer" in text
+    assert str(path) in text
+
+
+def test_unknown_owner_detail_contains_unknown_reason(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    reason = "the brew inventory could not be read"
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {  # pyright: ignore[reportPrivateUsage]
+        "rg": _ownership(tool, owner="unknown", unknown_reason=reason)
+    }
+    screen = _screen([tool], {"rg": True}, version_refresh=service)
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "rg": VersionStatus(
+            tool_id="rg",
+            installed="14.1.0",
+            latest=None,
+            outdated=None,
+            stale=True,
+            source="unknown",
+        )
+    }
+    text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    assert reason in text
+    cell = screen._ver_cell(tool)  # pyright: ignore[reportPrivateUsage]
+    assert cell.plain == "unknown"
+    assert " ~" not in cell.plain
+    assert "re-check is pending" not in text
+
+
+def test_pinned_spec_appears_in_detail_line(tmp_path: Path) -> None:
+    tool = _tool("mmdc")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"mmdc": _ownership(tool, owner="pnpm")}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"mmdc": True}, version_refresh=service)
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "mmdc": VersionStatus(
+            tool_id="mmdc",
+            installed="11.0.0",
+            latest="11.1.0",
+            outdated=True,
+            stale=False,
+            source="pnpm",
+            pinned_spec="puppeteer ^25",
+        )
+    }
+    text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    assert "puppeteer ^25" in text
+
+
+def test_stale_latest_has_marker_and_detail_explanation(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"rg": _ownership(tool, owner="brew")}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"rg": True}, version_refresh=service)
+    stale_status = VersionStatus(
+        tool_id="rg",
+        installed="14.1.0",
+        latest="14.1.1",
+        outdated=True,
+        stale=True,
+        source="brew",
+    )
+    fresh_status = VersionStatus(
+        tool_id="rg",
+        installed="14.1.0",
+        latest="14.1.1",
+        outdated=True,
+        stale=False,
+        source="brew",
+    )
+    screen._version_statuses = {"rg": stale_status}  # pyright: ignore[reportPrivateUsage]
+    stale_cell = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
+    stale_detail = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    assert stale_cell.endswith(" ~")
+    assert "re-check is pending" in stale_detail
+    screen._version_statuses = {"rg": fresh_status}  # pyright: ignore[reportPrivateUsage]
+    fresh_cell = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
+    fresh_detail = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    assert not fresh_cell.endswith(" ~")
+    assert "re-check is pending" not in fresh_detail
+
+
+def test_installer_no_repo_detail_explains_undetermined_latest(tmp_path: Path) -> None:
+    tool = Tool(
+        id="pnpm",
+        name="pnpm",
+        category="pkg-mgr",
+        cmd="pnpm",
+        methods=(Method(kind="script", params={"url": "https://get.pnpm.io/install.sh"}),),
+    )
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {  # pyright: ignore[reportPrivateUsage]
+        "pnpm": _ownership(tool, owner="installer")
+    }
+    screen = _screen([tool], {"pnpm": True}, version_refresh=service)
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "pnpm": VersionStatus(
+            tool_id="pnpm",
+            installed="11.9.0",
+            latest=None,
+            outdated=None,
+            stale=True,
+            source="installer",
+        )
+    }
+    text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    assert "cannot be determined" in text
+    assert "up to date" not in text.lower()

@@ -300,10 +300,14 @@ def test_uv_owned_by_elimination_when_default_bin_collides(
     assert result.confidence == "by-elimination"
 
 
+def _pretend_installed(_tool: Tool) -> bool:
+    return True
+
+
 def test_script_only_installed_tool_is_installer_by_elimination(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("installer.ownership.is_installed", lambda _tool: True)
+    monkeypatch.setattr("installer.ownership.is_installed", _pretend_installed)
     tool = Tool(
         id="pnpm",
         name="pnpm",
@@ -319,7 +323,7 @@ def test_script_only_installed_tool_is_installer_by_elimination(
 def test_script_only_with_unreadable_brew_is_unknown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("installer.ownership.is_installed", lambda _tool: True)
+    monkeypatch.setattr("installer.ownership.is_installed", _pretend_installed)
     tool = Tool(
         id="pnpm",
         name="pnpm",

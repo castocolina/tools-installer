@@ -5,6 +5,21 @@ written through installer.atomic.atomic_write_text. Every persisted timestamp
 is read through `_parse_iso`: naive, non-ISO, and implausibly-future values
 degrade to "no usable timestamp" rather than crashing the refresh worker or
 suppressing checks forever.
+
+The manager snapshot lives under the same envelope's `managers` key and reuses
+this module's staleness model rather than inventing a second one. The window
+is deliberately SHORTER than the GitHub cache's seven days: a manager report
+describes THIS machine's local state, which the user changes far more often
+than a repo publishes a release, and the queries are local and cheap rather
+than rate-limited. It is bounded rather than zero because a fresh session
+should refetch only what is stale, and a burst of tier navigation must not
+launch three child processes per view entry.
+
+The snapshot is cached as ONE UNIT, not per manager: the three outdated
+queries and the five inventory queries always run together in one pass, so a
+per-manager window would add state without removing a single child process
+in the common case; and ownership resolution needs the whole inventory at
+once, so a partially-refreshed snapshot has no consumer.
 """
 
 from __future__ import annotations
@@ -18,15 +33,27 @@ from typing import cast
 
 from installer.atomic import atomic_write_text
 from installer.locations import ensure_dir
+from installer.manager_versions import ManagerVersion, OutdatedReport
+from installer.ownership import ManagerInventory
 
 FUTURE_SKEW = timedelta(minutes=5)
 STALE_AFTER = timedelta(days=7)
 RETRY_BACKOFF = timedelta(hours=6)
+MANAGER_STALE_AFTER = timedelta(hours=6)
+MANAGER_RETRY_BACKOFF = timedelta(minutes=30)
 
 
 @dataclass(frozen=True)
 class VersionCacheEntry:
     latest_version: str | None
+    checked_at: str | None
+    failed_at: str | None = None
+
+
+@dataclass(frozen=True)
+class ManagerSnapshot:
+    inventory: ManagerInventory
+    outdated: OutdatedReport
     checked_at: str | None
     failed_at: str | None = None
 
@@ -168,3 +195,167 @@ def should_fetch(entry: VersionCacheEntry | None, *, now: datetime) -> bool:
 
 def default_cache_path() -> Path:
     return Path.home() / ".local" / "state" / "tools-installer" / "versions.json"
+
+
+def _str_map(raw: object) -> dict[str, str] | None:
+    mapping = _as_object(raw)
+    if mapping is None:
+        return None
+    out: dict[str, str] = {}
+    for key, value in mapping.items():
+        if isinstance(value, str):
+            out[key] = value
+        else:
+            return None
+    return out
+
+
+def _str_set(raw: object) -> frozenset[str] | None:
+    if not isinstance(raw, list):
+        return None
+    names: list[str] = []
+    for item in cast(list[object], raw):
+        if not isinstance(item, str):
+            return None
+        names.append(item)
+    return frozenset(names)
+
+
+def _version_map(raw: object) -> dict[str, ManagerVersion] | None:
+    mapping = _as_object(raw)
+    if mapping is None:
+        return None
+    out: dict[str, ManagerVersion] = {}
+    for key, value in mapping.items():
+        item = _as_object(value)
+        if item is None:
+            return None
+        current = item.get("current")
+        latest = item.get("latest")
+        if current is not None and not isinstance(current, str):
+            return None
+        if not isinstance(latest, str) or not latest:
+            return None
+        out[key] = ManagerVersion(current if isinstance(current, str) else None, latest)
+    return out
+
+
+def _decode_inventory(raw: object) -> ManagerInventory:
+    mapping = _as_object(raw)
+    if mapping is None:
+        return ManagerInventory(
+            brew_formulae=None,
+            brew_casks=None,
+            pnpm_globals=None,
+            uv_tools=None,
+            brew_prefix=None,
+        )
+    prefix_raw = mapping.get("brew_prefix")
+    prefix = Path(prefix_raw) if isinstance(prefix_raw, str) and prefix_raw else None
+    return ManagerInventory(
+        brew_formulae=_str_map(mapping.get("brew_formulae")),
+        brew_casks=_str_map(mapping.get("brew_casks")),
+        pnpm_globals=_str_set(mapping.get("pnpm_globals")),
+        uv_tools=_str_map(mapping.get("uv_tools")),
+        brew_prefix=prefix,
+    )
+
+
+def _decode_outdated(raw: object) -> OutdatedReport:
+    mapping = _as_object(raw)
+    if mapping is None:
+        return OutdatedReport(brew=None, cask=None, pnpm=None, uv=None)
+    return OutdatedReport(
+        brew=_version_map(mapping.get("brew")),
+        cask=_version_map(mapping.get("cask")),
+        pnpm=_version_map(mapping.get("pnpm")),
+        uv=_version_map(mapping.get("uv")),
+    )
+
+
+def encode_manager_snapshot(snapshot: ManagerSnapshot) -> dict[str, object]:
+    inventory = snapshot.inventory
+    outdated = snapshot.outdated
+
+    def versions(mapping: Mapping[str, ManagerVersion] | None) -> dict[str, object] | None:
+        if mapping is None:
+            return None
+        return {
+            name: {"current": version.current, "latest": version.latest}
+            for name, version in mapping.items()
+        }
+
+    return {
+        "inventory": {
+            "brew_formulae": (
+                dict(inventory.brew_formulae) if inventory.brew_formulae is not None else None
+            ),
+            "brew_casks": dict(inventory.brew_casks) if inventory.brew_casks is not None else None,
+            "pnpm_globals": (
+                sorted(inventory.pnpm_globals) if inventory.pnpm_globals is not None else None
+            ),
+            "uv_tools": dict(inventory.uv_tools) if inventory.uv_tools is not None else None,
+            "brew_prefix": (
+                str(inventory.brew_prefix) if inventory.brew_prefix is not None else None
+            ),
+        },
+        "outdated": {
+            "brew": versions(outdated.brew),
+            "cask": versions(outdated.cask),
+            "pnpm": versions(outdated.pnpm),
+            "uv": versions(outdated.uv),
+        },
+        "checked_at": snapshot.checked_at,
+        "failed_at": snapshot.failed_at,
+    }
+
+
+def decode_manager_snapshot(raw: object) -> ManagerSnapshot | None:
+    mapping = _as_object(raw)
+    if mapping is None:
+        return None
+    checked = mapping.get("checked_at")
+    failed = mapping.get("failed_at")
+    if checked is not None and not isinstance(checked, str):
+        checked = None
+    if failed is not None and not isinstance(failed, str):
+        failed = None
+    return ManagerSnapshot(
+        inventory=_decode_inventory(mapping.get("inventory")),
+        outdated=_decode_outdated(mapping.get("outdated")),
+        checked_at=checked if isinstance(checked, str) else None,
+        failed_at=failed if isinstance(failed, str) else None,
+    )
+
+
+def load_manager_snapshot(path: Path) -> ManagerSnapshot | None:
+    return decode_manager_snapshot(_existing_managers(path))
+
+
+def save_manager_snapshot(
+    path: Path,
+    snapshot: ManagerSnapshot | None,
+    *,
+    tools: Mapping[str, VersionCacheEntry] | None = None,
+) -> None:
+    cache = dict(tools) if tools is not None else load_version_cache(path)
+    encoded = encode_manager_snapshot(snapshot) if snapshot is not None else {}
+    save_version_cache(path, cache, managers=encoded)
+
+
+def is_manager_stale(snapshot: ManagerSnapshot | None, *, now: datetime) -> bool:
+    if snapshot is None:
+        return True
+    checked_at = _parse_iso(snapshot.checked_at, now=now)
+    if checked_at is None:
+        return True
+    return now - checked_at >= MANAGER_STALE_AFTER
+
+
+def should_fetch_managers(snapshot: ManagerSnapshot | None, *, now: datetime) -> bool:
+    if not is_manager_stale(snapshot, now=now):
+        return False
+    if snapshot is None:
+        return True
+    failed_at = _parse_iso(snapshot.failed_at, now=now)
+    return not (failed_at is not None and now - failed_at < MANAGER_RETRY_BACKOFF)
