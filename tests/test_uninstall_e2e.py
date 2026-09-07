@@ -57,6 +57,7 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
             rc_paths=[myshellrc],
             bundles=(),
             zshrc_path=home / ".zshrc",
+            daemon_policy=None,
         )
 
     inputs = UninstallInputs(
@@ -114,6 +115,7 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
             rc_paths=[myshellrc],
             bundles=BUNDLES,
             zshrc_path=zshrc,
+            daemon_policy=None,
         )
 
     inputs = UninstallInputs(

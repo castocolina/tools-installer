@@ -14,6 +14,7 @@ from installer.guards import install_shims
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
+from installer.policy import Policy
 from installer.session import Summary
 from installer.shellrc import write_myshellrc
 from installer.tweaks import BUNDLES
@@ -227,7 +228,15 @@ def test_daemon_policy_is_absent_on_linux(monkeypatch: pytest.MonkeyPatch, tmp_p
 
 def test_build_daemon_policy_returns_none_off_macos() -> None:
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
-    assert setup._build_daemon_policy(linux, {}) is None
+    # _build_daemon_policy is setup.py's own private composition-root helper;
+    # the plan's own <behavior> requires testing it directly (construction
+    # must never raise on a bad environment) -- there is no public seam that
+    # exercises this without going through the full main()/_build_app flow.
+    assert setup._build_daemon_policy(linux, {}) is None  # pyright: ignore[reportPrivateUsage]
+
+
+def _no_uv(_name: str) -> str | None:
+    return None
 
 
 def test_build_daemon_policy_is_fail_closed_not_fail_hidden_for_a_bad_environment(
@@ -239,8 +248,8 @@ def test_build_daemon_policy_is_fail_closed_not_fail_hidden_for_a_bad_environmen
     that hides the policy from view."""
     monkeypatch.delenv("TMPDIR", raising=False)
     monkeypatch.delenv("HOME", raising=False)
-    monkeypatch.setattr(setup.shutil, "which", lambda _name: None)
-    policy = setup._build_daemon_policy(_platform(), {})
+    monkeypatch.setattr(setup.shutil, "which", _no_uv)
+    policy = setup._build_daemon_policy(_platform(), {})  # pyright: ignore[reportPrivateUsage]
     assert policy is not None
     assert policy.id == "daemon:prune-tmpdir"
 
@@ -456,6 +465,57 @@ def test_the_cli_teardown_is_wired_to_a_total_sweep_of_the_zdotdir_aware_zshrc(
         # developer's shell exports.
         monkeypatch.delenv("ZDOTDIR", raising=False)
         importlib.reload(setup)
+
+
+def test_the_non_interactive_uninstall_cli_forwards_a_real_daemon_policy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """setup.main(["--uninstall", "--yes"])'s non-interactive path constructs
+    and forwards a real (non-None) daemon_policy into run_uninstall on macOS
+    -- the CLI teardown sweep, per _build_daemon_policy's own single, shared
+    construction point."""
+    _sandbox(monkeypatch, tmp_path)
+    forwarded: list[dict[str, object]] = []
+
+    def fake_run_uninstall(_tools: object, _console: object, **kwargs: object) -> list[Path]:
+        forwarded.append(kwargs)
+        return []
+
+    monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
+
+    assert setup.main(["--uninstall", "--yes"]) == 0
+    daemon_policy_obj = forwarded[0]["daemon_policy"]
+    assert isinstance(daemon_policy_obj, Policy)
+    assert daemon_policy_obj.id == "daemon:prune-tmpdir"
+
+
+def test_the_interactive_uninstall_view_forwards_the_same_daemon_instance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """_do_uninstall's own daemon_policy kwarg must be the SAME object (by
+    identity) already appended to PolicyInputs.policies -- never a second,
+    independently-constructed daemon_policy."""
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    forwarded: list[dict[str, object]] = []
+
+    def fake_perform_uninstall(_decision: object, **kwargs: object) -> SweepResult:
+        forwarded.append(kwargs)
+        return SweepResult()
+
+    monkeypatch.setattr(setup, "perform_uninstall", fake_perform_uninstall)
+
+    assert setup.main(["--uninstall"]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    daemon_in_list = next(p for p in policies.policies if p.id == "daemon:prune-tmpdir")
+
+    inputs = seen[0]["uninstall"]
+    assert isinstance(inputs, UninstallInputs)
+    inputs.remove(
+        UninstallDecision(paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True)
+    )
+    assert forwarded[0]["daemon_policy"] is daemon_in_list
 
 
 def _stub_install_run(monkeypatch: pytest.MonkeyPatch, summary: Summary) -> list[str]:
