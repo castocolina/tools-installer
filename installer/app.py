@@ -7,6 +7,7 @@ from pathlib import Path
 
 from rich.console import Console
 
+from installer import daemon
 from installer.audit import audit
 from installer.cli import Options
 from installer.deps import resolve_dependencies
@@ -26,7 +27,7 @@ from installer.guards import (
 from installer.model import Tool
 from installer.platform import Platform
 from installer.pnpm_globals import audit_node_globals, pnpm_global_packages
-from installer.policy import omz_removal_detail
+from installer.policy import Policy, omz_removal_detail
 from installer.prompt import Prompter
 from installer.rcclean import find_duplicate_path_lines, strip_lines
 from installer.render import (
@@ -352,6 +353,17 @@ def run_guard(
     return True
 
 
+def _has_daemon_id(ids: tuple[str, ...]) -> bool:
+    """True when any id in ids is the background daemon's own namespaced id.
+
+    A tiny, named predicate rather than an inline generator expression
+    repeated at every daemon-aware copy call site (preview + success, CLI and
+    TUI): naming it once makes the "daemon:-prefixed id" condition legible
+    and keeps every call site byte-for-byte consistent with the others.
+    """
+    return any(policy_id.startswith("daemon:") for policy_id in ids)
+
+
 def run_uninstall(
     tools: list[Tool],
     console: Console,
@@ -362,18 +374,21 @@ def run_uninstall(
     confirm: Callable[[str], bool],
     bundles: tuple[TweakBundle, ...],
     zshrc_path: Path,
+    daemon_policy: Policy | None,
 ) -> list[Path]:
     """Preview userspace artifacts, confirm, then remove them, the PATH block,
     any pip/npm-ban artifacts (shims + alias blocks), and still-enabled shell
-    tweaks.
+    tweaks (the background maintenance daemon included, when active).
 
     Returns the removed download/app paths ([] if nothing to remove or declined).
 
-    `bundles` and `zshrc_path` are required, unlike on the uninstall primitives
-    they forward to. There the defaults are a test affordance; here a dropped
-    kwarg would type-check, pass the suite, and silently sweep nothing while
-    reporting success — a user-visible data-integrity regression that nothing
-    else can catch.
+    `bundles`, `zshrc_path`, and `daemon_policy` are required, unlike on the
+    uninstall primitives they forward to. There the defaults are a test
+    affordance; here a dropped kwarg would type-check, pass the suite, and
+    silently sweep nothing while reporting success — a user-visible
+    data-integrity regression that nothing else can catch. `daemon_policy` is
+    `None` on any non-macOS platform (the daemon is never constructed there)
+    or when the caller genuinely has none to offer.
 
     The tweak preview and the tweak sweep are one `active_policies` list, not
     two reads of it: `remove_paths`, `remove_managed_block`, `remove_shims` and
@@ -392,20 +407,35 @@ def run_uninstall(
     # "a preview and its effect cannot diverge" invariant unenforced on the one
     # path that deletes the user's shell config.
     policies = active_policies(
-        bundles, rc_path=myshellrc_path, bin_dir=default_bin_dir, zshrc_path=zshrc_path
+        bundles,
+        rc_path=myshellrc_path,
+        bin_dir=default_bin_dir,
+        zshrc_path=zshrc_path,
+        daemon_policy=daemon_policy,
     )
     tweaks = tuple(policy.id for policy in policies)
     # A machine whose only tools-installer footprint is an enabled tweak must
     # not be told there is nothing to uninstall.
     if not paths and not shimmed and not tweaks:
         render_uninstall([], console)  # prints the "nothing to uninstall" line
+        # An already-disabled daemon never appears in `tweaks` (active_policies
+        # only includes it when is_active() is True) and needs no confirm --
+        # nothing destructive happens, only an internal marker resetting so a
+        # later reinstall is genuinely fresh (11-REVIEWS.md cycle 3 finding
+        # #13's "already disabled, nothing to sweep" case).
+        if daemon_policy is not None:
+            daemon.clear_decided(myshellrc_path)
         return []
     if paths:
         render_uninstall(paths, console)
     if shimmed:
         console.print(f"The pip/npm ban will also be removed ({', '.join(shimmed)}).")
     if tweaks:
-        console.print(f"These shell tweaks will also be disabled ({', '.join(tweaks)}).")
+        # Byte-identical to today when no daemon: id is among the offered ids
+        # (Linux, or the daemon never enabled) — the tail is appended only
+        # when one is present.
+        tail = " and the background maintenance job" if _has_daemon_id(tweaks) else ""
+        console.print(f"These shell tweaks{tail} will also be disabled ({', '.join(tweaks)}).")
         # Name the plugins and the file: .zshrc is the one file in the sweep the
         # installer does not own, so "omz-plugins" alone is not enough for the
         # user to consent to what happens to it.
@@ -424,11 +454,29 @@ def run_uninstall(
     # off, and a per-policy failure no longer aborts the rest of the teardown.
     swept = sweep_policies(policies)
     if swept.swept:
-        console.print(f"Shell tweaks disabled: {', '.join(swept.swept)}.")
+        # Byte-identical to today ("Shell tweaks disabled: ...") when no
+        # daemon: id is among what the sweep actually swept.
+        prefix = (
+            "Shell tweaks and the background maintenance job"
+            if _has_daemon_id(swept.swept)
+            else "Shell tweaks"
+        )
+        console.print(f"{prefix} disabled: {', '.join(swept.swept)}.")
     if swept.failed:
         console.print(
             f"Could not disable: {', '.join(swept.failed)}. Check permissions and re-run."
         )
+    # Composition-root-only, and only AFTER the sweep: daemon_policy.remove()
+    # itself still calls daemon.record_decided as part of that same sweep
+    # call, so clearing the marker BEFORE the sweep would be immediately
+    # undone by that call running moments later (11-REVIEWS.md cycle 2
+    # finding #17). Cleared whenever the daemon is NOT left in a FAILED state
+    # -- whether it was actively swept, or was already off and had nothing to
+    # sweep at all -- so a full uninstall+reinstall is genuinely fresh in
+    # both cases, while a genuine removal failure still preserves the marker
+    # (11-REVIEWS.md cycle 3 finding #13).
+    if daemon_policy is not None and daemon_policy.id not in swept.failed:
+        daemon.clear_decided(myshellrc_path)
     return paths
 
 
@@ -452,6 +500,7 @@ def perform_uninstall(
     rc_paths: list[Path],
     bundles: tuple[TweakBundle, ...],
     zshrc_path: Path,
+    daemon_policy: Policy | None,
 ) -> SweepResult:
     """Apply exactly the levers the view chose, composing the existing core
     removers. Unlike `run_uninstall`, nothing is removed all-or-nothing: a
@@ -461,9 +510,11 @@ def perform_uninstall(
     rather than the snapshot it rendered its rows from. Empty when the sweep
     lever was not selected.
 
-    `bundles` and `zshrc_path` are required for the same reason they are on
-    `run_uninstall`: this is a composition-root entry point, and a dropped
-    kwarg here silently narrows a teardown instead of narrowing a test."""
+    `bundles`, `zshrc_path`, and `daemon_policy` are required for the same
+    reason they are on `run_uninstall`: this is a composition-root entry
+    point, and a dropped kwarg here silently narrows a teardown instead of
+    narrowing a test. `daemon_policy` is `None` on any non-macOS platform or
+    when the caller genuinely has none to offer."""
     remove_paths(list(decision.paths))
     if decision.remove_ban:
         remove_shims(bin_dir)
@@ -473,5 +524,16 @@ def perform_uninstall(
     if decision.remove_path_block:
         remove_managed_block(myshellrc_path)
     if decision.remove_tweaks:
-        return sweep_tweaks(bundles, rc_path=myshellrc_path, bin_dir=bin_dir, zshrc_path=zshrc_path)
+        swept = sweep_tweaks(
+            bundles,
+            rc_path=myshellrc_path,
+            bin_dir=bin_dir,
+            zshrc_path=zshrc_path,
+            daemon_policy=daemon_policy,
+        )
+        # Same post-sweep, composition-root-only marker clear as run_uninstall
+        # (see that function's own comment for the full ordering rationale).
+        if daemon_policy is not None and daemon_policy.id not in swept.failed:
+            daemon.clear_decided(myshellrc_path)
+        return swept
     return SweepResult()

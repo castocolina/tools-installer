@@ -243,6 +243,13 @@ def _build_app(
     # not on disk, so the total sweep costs nothing.
     bundles = applicable_bundles(platform)
 
+    # Constructed once, here, and shared: the Policies list below, the
+    # on-by-default auto-apply closure, and the Uninstall teardown closures
+    # (all wired further down) must never each build their own independent
+    # daemon_policy instance -- all three need to read and act on the exact
+    # same object.
+    daemon = _build_daemon_policy(platform, installed)
+
     def _do_uninstall(decision: UninstallDecision) -> SweepResult:
         # Runs live inside the UninstallScreen. rc_paths is the standard set so the
         # ban aliases are cleaned wherever they were written, regardless of mode.
@@ -254,6 +261,7 @@ def _build_app(
             rc_paths=_RC_PATHS,
             bundles=BUNDLES,
             zshrc_path=_ZSHRC,
+            daemon_policy=daemon,
         )
 
     # Every environment row is a predicate, not its result: the Policies and
@@ -265,14 +273,13 @@ def _build_app(
         has_path_block=lambda: has_managed_block(_MYSHELLRC),
         remove=_do_uninstall,
         tweak_ids=lambda: active_tweak_ids(
-            BUNDLES, rc_path=_MYSHELLRC, bin_dir=_DEFAULT_BIN_DIR, zshrc_path=_ZSHRC
+            BUNDLES,
+            rc_path=_MYSHELLRC,
+            bin_dir=_DEFAULT_BIN_DIR,
+            zshrc_path=_ZSHRC,
+            daemon_policy=daemon,
         ),
     )
-    # Constructed once, here, and shared: the Policies list below and the
-    # on-by-default auto-apply closure (wired further down) must never each
-    # build their own independent daemon_policy instance -- both need to read
-    # and act on the exact same object.
-    daemon = _build_daemon_policy(platform, installed)
     policy_inputs = PolicyInputs(
         policies=[
             ban_policy(
@@ -458,8 +465,13 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
         _build_app(load_tools(_REGISTRY), platform, initial_view="uninstall").run()
         return 0
     confirm = (lambda _message: True) if assume_yes else _ask_confirm
+    tools = load_tools(_REGISTRY)
+    # Mirrors _build_app's own installed computation, so the non-interactive
+    # CLI teardown path gates fd/rg-aware daemon construction on the SAME
+    # real-installed-status map the interactive path would use.
+    installed = {tool.id: is_installed(tool) for tool in tools}
     run_uninstall(
-        load_tools(_REGISTRY),
+        tools,
         console,
         default_bin_dir=_DEFAULT_BIN_DIR,
         myshellrc_path=_MYSHELLRC,
@@ -469,6 +481,7 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
         # total (see _build_app).
         bundles=BUNDLES,
         zshrc_path=_ZSHRC,
+        daemon_policy=_build_daemon_policy(platform, installed),
     )
     return 0
 
