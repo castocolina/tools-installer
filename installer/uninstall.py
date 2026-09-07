@@ -18,6 +18,7 @@ from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.policy import Policy, omz_plugins_policy, tweak_policy
 from installer.resolve import resolve_methods
+from installer.run import CommandError
 from installer.tweaks import TweakBundle, tweak_executables_present, tweak_present
 
 # No import cycle: installer.policy imports guards, tweaks and omz, none of
@@ -269,6 +270,7 @@ def active_policies(
     rc_path: Path,
     bin_dir: Path,
     zshrc_path: Path | None = None,
+    daemon_policy: Policy | None = None,
 ) -> list[Policy]:
     """Every policy whose footprint is still on this machine, built exactly once.
 
@@ -279,6 +281,17 @@ def active_policies(
     deletes paths, strips the managed block and removes shims and alias blocks
     between its preview and its sweep, all from the same rc file and bin dir the
     predicate below reads.
+
+    `daemon_policy`, when given, is appended last when it is currently active
+    -- evaluated as `daemon_policy.is_active() if daemon_policy.is_active is
+    not None else daemon_policy.active` (11-REVIEWS.md cycle 2 finding #13),
+    NEVER the frozen `.active` field alone: `daemon_policy` is a frozen
+    dataclass instance shared with the Policies list and the on-by-default
+    worker, which may enable it on a separate thread AFTER construction --
+    reading `is_active()` re-probes the real, current state instead of
+    trusting a stale construction-time snapshot. Every other policy kind is
+    unaffected (`is_active` is `None` for all of them, so the `.active`
+    fallback runs, unchanged from today).
     """
     policies: list[Policy] = []
     for bundle in bundles:
@@ -288,6 +301,14 @@ def active_policies(
         policy = _omz_policy(zshrc_path, rc_path)
         if policy.active:
             policies.append(policy)
+    if daemon_policy is not None:
+        is_active = (
+            daemon_policy.is_active()
+            if daemon_policy.is_active is not None
+            else daemon_policy.active
+        )
+        if is_active:
+            policies.append(daemon_policy)
     return policies
 
 
@@ -297,6 +318,7 @@ def active_tweak_ids(
     rc_path: Path,
     bin_dir: Path,
     zshrc_path: Path | None = None,
+    daemon_policy: Policy | None = None,
 ) -> tuple[str, ...]:
     """Ids of tweaks still present on this machine.
 
@@ -319,15 +341,20 @@ def active_tweak_ids(
     `docker` — and let a future bundle named `omz-plugins` make the two arms
     below fire off one another's entry in a flat set.
 
-    The None default on zshrc_path exists for unit tests and any caller working
-    only with bundles; production callers MUST pass the real path, because
-    omitting it silently narrows the sweep to bundles and leaves the Oh-My-Zsh
-    plugins=(...) edit on the machine with nothing reporting it.
+    The None default on zshrc_path/daemon_policy exists for unit tests and any
+    caller working only with bundles; production callers MUST pass the real
+    values, because omitting them silently narrows the sweep and leaves the
+    Oh-My-Zsh plugins=(...) edit / an active daemon registration on the
+    machine with nothing reporting it.
     """
     return tuple(
         policy.id
         for policy in active_policies(
-            bundles, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc_path
+            bundles,
+            rc_path=rc_path,
+            bin_dir=bin_dir,
+            zshrc_path=zshrc_path,
+            daemon_policy=daemon_policy,
         )
     )
 
@@ -346,18 +373,20 @@ def sweep_policies(policies: list[Policy]) -> SweepResult:
     code rather than a claim about it: no read happens between the two.
 
     Failures are isolated per policy. A read-only ~/.local/bin, an
-    immutable-flagged rc file or an EACCES on an unlink raises OSError, and
-    letting the first one propagate abandoned every later bundle and the
-    .zshrc arm after it — leaving a half-torn-down machine with no record of
-    what had already gone. Each failure is collected and the sweep continues,
-    so the caller can name what did not come off.
+    immutable-flagged rc file or an EACCES on an unlink raises OSError, and a
+    real `launchctl` failure from the daemon's own `.remove()` raises
+    CommandError (11-02's transactional design) -- letting either propagate
+    would abandon every later bundle and the .zshrc arm after it, leaving a
+    half-torn-down machine with no record of what had already gone. Each
+    failure is collected and the sweep continues, so the caller can name what
+    did not come off.
     """
     swept: list[str] = []
     failed: list[str] = []
     for policy in policies:
         try:
             policy.remove()
-        except OSError:
+        except (OSError, CommandError):
             failed.append(policy.id)
         else:
             swept.append(policy.id)
@@ -370,6 +399,7 @@ def sweep_tweaks(
     rc_path: Path,
     bin_dir: Path,
     zshrc_path: Path | None = None,
+    daemon_policy: Policy | None = None,
 ) -> SweepResult:
     """Read what is active right now and disable it: `active_policies` + `sweep_policies`.
 
@@ -380,11 +410,18 @@ def sweep_tweaks(
 
     Idempotent: a second call finds nothing active and reports nothing.
 
-    The None default on zshrc_path exists for unit tests and any caller working
-    only with bundles; production callers MUST pass the real path, because
-    omitting it silently narrows the sweep to bundles and leaves the Oh-My-Zsh
-    plugins=(...) edit on the machine with nothing reporting it.
+    The None default on zshrc_path/daemon_policy exists for unit tests and any
+    caller working only with bundles; production callers MUST pass the real
+    values, because omitting them silently narrows the sweep and leaves the
+    Oh-My-Zsh plugins=(...) edit / an active daemon registration on the
+    machine with nothing reporting it.
     """
     return sweep_policies(
-        active_policies(bundles, rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc_path)
+        active_policies(
+            bundles,
+            rc_path=rc_path,
+            bin_dir=bin_dir,
+            zshrc_path=zshrc_path,
+            daemon_policy=daemon_policy,
+        )
     )
