@@ -91,13 +91,14 @@ def _build(
     tmpdir_value: str | None = None,
     home_value: str | None = None,
 ) -> Policy:
+    resolved_tools = installed_tools if installed_tools is not None else {"fd": True, "rg": True}
     return daemon_policy(
         plist_path=paths.plist_path,
         log_path=paths.log_path,
         wrapper_bin_dir=paths.wrapper_bin_dir,
         script_path=paths.script_path,
         state_path=paths.state_path,
-        installed_tools=installed_tools if installed_tools is not None else {"fd": True, "rg": True},
+        installed_tools=resolved_tools,
         path_value="/usr/bin:/bin",
         tmpdir_value=tmpdir_value if tmpdir_value is not None else paths.tmpdir_value,
         home_value=home_value if home_value is not None else paths.home_value,
@@ -268,7 +269,7 @@ def test_apply_marker_write_failure_degrades_to_warning(
     paths = _make_paths(tmp_path)
     original_replace = daemon.os.replace
 
-    def failing_replace(src: object, dst: object) -> None:
+    def failing_replace(src: str | Path, dst: str | Path) -> None:
         if Path(dst) == paths.state_path:
             raise OSError("simulated disk full")
         original_replace(src, dst)
@@ -378,7 +379,7 @@ def test_remove_marker_write_failure_degrades_to_warning_and_leaves_undecided(
 
     original_replace = daemon.os.replace
 
-    def failing_replace(src: object, dst: object) -> None:
+    def failing_replace(src: str | Path, dst: str | Path) -> None:
         if Path(dst) == paths.state_path:
             raise OSError("simulated disk full")
         original_replace(src, dst)
@@ -411,7 +412,7 @@ def test_remove_both_wrapper_and_marker_failures_are_both_reported(
 
     original_replace = daemon.os.replace
 
-    def failing_replace(src: object, dst: object) -> None:
+    def failing_replace(src: str | Path, dst: str | Path) -> None:
         if Path(dst) == paths.state_path:
             raise OSError("simulated disk full")
         original_replace(src, dst)

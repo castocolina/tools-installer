@@ -8,10 +8,12 @@ paths. The pip/npm ban is the first and only instance; future env tweaks slot in
 with no screen changes.
 """
 
+import contextlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from installer import daemon
 from installer.guards import (
     guard_path_warning,
     guard_status,
@@ -23,6 +25,7 @@ from installer.guards import (
     write_ban_aliases,
 )
 from installer.omz import owned_plugins, plugins_owned, remove_plugins, write_plugins
+from installer.run import CommandError, Runner, run_captured
 from installer.shellrc import ensure_source
 from installer.tweaks import (
     TweakBundle,
@@ -32,6 +35,12 @@ from installer.tweaks import (
     tweak_present,
     write_tweak,
 )
+
+# The wrapper's installed filename, mirrored here purely for the
+# validation-only render_plist call daemon_policy's apply/set_schedule make
+# BEFORE install_wrapper has (re)created the real file -- must stay in sync
+# with installer.daemon._WRAPPER_COMMAND's value (both name the same asset).
+_DAEMON_WRAPPER_COMMAND = "tools-installer-prune-daemon"
 
 _RELOAD_HINT = "Open a new shell or run `hash -r` so cached command paths refresh."
 # hash -r is about cached command PATH lookups and says nothing useful about a
@@ -313,6 +322,188 @@ def omz_plugins_policy(*, zshrc_path: Path, state_path: Path, present: bool) -> 
         remove=_remove,
         requires=("oh-my-zsh",),
         missing_requires=() if present else ("oh-my-zsh",),
+    )
+
+
+def daemon_policy(
+    *,
+    plist_path: Path,
+    log_path: Path,
+    wrapper_bin_dir: Path,
+    script_path: Path,
+    state_path: Path,
+    installed_tools: Mapping[str, bool],
+    path_value: str,
+    tmpdir_value: str,
+    home_value: str,
+    uv_path: Path,
+    uid: int,
+    days: int = daemon.DEFAULT_DAYS,
+    run: Runner = run_captured,
+) -> Policy:
+    """The background tmpdir-prune LaunchAgent as a Policy, parallel to
+    omz_plugins_policy: a single artifact to write/remove plus a state_path
+    ownership record for the "has any decision ever been made" marker.
+
+    apply/remove/set_schedule are fully transactional: each snapshots the
+    plist's prior bytes (or absence) before any launchctl call and, on a real
+    launchctl failure, rolls back to that snapshot -- restoring the file via
+    installer.daemon's own crash-safe _atomic_write helper and, whenever a
+    prior working registration existed, making a best-effort daemon.bootstrap
+    call with the restored content -- so a failed apply/remove/reschedule
+    never leaves the plist file and the real registration disagreeing with
+    each other (daemon.bootstrap's own internal bootout-then-bootstrap
+    pre-clear unconditionally tears the OLD registration out before every
+    attempt, reapply or not). A marker-write (record_decided) failure AFTER
+    an already-successful launchctl call degrades to PolicyResult.warning
+    instead of rolling back or propagating: the plist and the real
+    registration already agree with each other at that point, so undoing a
+    working registration over a bookkeeping-only failure would be strictly
+    worse.
+
+    `active`/`is_active()` are both plist_path.exists(), never a parsed
+    `launchctl print` (its own man page disclaims that output as non-API).
+    `fd`/`rg` are declared `requires` but `hard_requires=False`: a missing
+    fd/rg never blocks `apply` (REQ-daemon-dependency-gating) -- the wrapped
+    script's own find/grep fallback degrades silently instead.
+    """
+
+    def _validate_and_write(hour: int, minute: int) -> None:
+        # Validation gate FIRST, discarding the result: a DaemonScheduleError
+        # here propagates with ZERO filesystem side effects at all, before
+        # install_wrapper/ensure_log_path ever run (11-REVIEWS.md cycle 2
+        # finding #6).
+        daemon.render_plist(
+            uv_path=uv_path,
+            wrapper_path=wrapper_bin_dir / _DAEMON_WRAPPER_COMMAND,
+            script_path=script_path,
+            log_path=log_path,
+            hour=hour,
+            minute=minute,
+            days=days,
+            tmpdir=tmpdir_value,
+            home=home_value,
+            path_value=path_value,
+        )
+        installed_wrapper = daemon.install_wrapper(wrapper_bin_dir)
+        daemon.ensure_log_path(log_path)
+        daemon.write_plist(
+            plist_path,
+            uv_path=uv_path,
+            wrapper_path=installed_wrapper,
+            script_path=script_path,
+            log_path=log_path,
+            hour=hour,
+            minute=minute,
+            days=days,
+            tmpdir=tmpdir_value,
+            home=home_value,
+            path_value=path_value,
+        )
+
+    def _apply() -> PolicyResult:
+        previous: bytes | None = plist_path.read_bytes() if plist_path.exists() else None
+        wrapper_existed_before = daemon.wrapper_present(wrapper_bin_dir)
+        log_existed_before = log_path.exists()
+        schedule = daemon.read_schedule(plist_path)
+        default_schedule = (daemon.DEFAULT_HOUR, daemon.DEFAULT_MINUTE)
+        hour, minute = schedule if schedule is not None else default_schedule
+        _validate_and_write(hour, minute)
+        try:
+            daemon.bootstrap(uid, plist_path, run=run)
+        except CommandError:
+            if previous is not None:
+                # A reapply: bootstrap's own internal pre-clear already tore
+                # the old registration out before this attempt, so restoring
+                # only the plist FILE would make `active` a false positive.
+                daemon._atomic_write(  # pyright: ignore[reportPrivateUsage]
+                    plist_path, previous, mode=0o644
+                )
+                with contextlib.suppress(CommandError):
+                    daemon.bootstrap(uid, plist_path, run=run)
+            else:
+                # A first-ever apply: roll back everything THIS call created,
+                # never an artifact that legitimately predates it.
+                plist_path.unlink(missing_ok=True)
+                if not wrapper_existed_before:
+                    daemon.remove_wrapper(wrapper_bin_dir)
+                if not log_existed_before:
+                    log_path.unlink(missing_ok=True)
+            raise
+        warning: str | None = None
+        try:
+            daemon.record_decided(state_path)
+        except OSError as exc:
+            warning = f"decision not recorded: {exc}"
+        return PolicyResult(
+            layers=(PolicyLayer("Schedule", f"scheduled daily at {hour:02d}:{minute:02d}"),),
+            reload_hint=None,
+            warning=warning,
+        )
+
+    def _remove() -> PolicyResult:
+        daemon.bootout(uid, run=run)
+        try:
+            plist_path.unlink(missing_ok=True)
+        except OSError:
+            with contextlib.suppress(CommandError):
+                daemon.bootstrap(uid, plist_path, run=run)
+            raise
+        warnings: list[str] = []
+        try:
+            daemon.remove_wrapper(wrapper_bin_dir)
+        except OSError as exc:
+            warnings.append(f"wrapper removal failed: {exc}")
+        try:
+            daemon.record_decided(state_path)
+        except OSError as exc:
+            warnings.append(f"decision not recorded: {exc}")
+        return PolicyResult(
+            layers=(PolicyLayer("Schedule", "unregistered; the plist was removed"),),
+            reload_hint=None,
+            warning="; ".join(warnings) if warnings else None,
+        )
+
+    def _set_schedule(hour: int, minute: int) -> PolicyResult:
+        if not plist_path.exists():
+            raise daemon.DaemonScheduleError(
+                "cannot set a schedule for an inactive policy; enable it first"
+            )
+        previous = plist_path.read_bytes()
+        _validate_and_write(hour, minute)
+        try:
+            daemon.bootstrap(uid, plist_path, run=run)
+        except CommandError:
+            daemon._atomic_write(plist_path, previous, mode=0o644)  # pyright: ignore[reportPrivateUsage]
+            with contextlib.suppress(CommandError):
+                daemon.bootstrap(uid, plist_path, run=run)
+            raise
+        return PolicyResult(
+            layers=(PolicyLayer("Schedule", f"scheduled daily at {hour:02d}:{minute:02d}"),),
+            reload_hint=None,
+            warning=None,
+        )
+
+    missing_requires = tuple(
+        tool_id for tool_id in ("fd", "rg") if not installed_tools.get(tool_id, False)
+    )
+    return Policy(
+        id="daemon:prune-tmpdir",
+        label="Background tmpdir cleanup",
+        description=(
+            "runs scripts/prune-user-tmpdir.sh daily via a macOS LaunchAgent, deleting "
+            "orphaned agent-runtime temp files"
+        ),
+        active=plist_path.exists(),
+        apply=_apply,
+        remove=_remove,
+        requires=("fd", "rg"),
+        missing_requires=missing_requires,
+        hard_requires=False,
+        log_path=log_path,
+        set_schedule=_set_schedule,
+        read_schedule=lambda: daemon.read_schedule(plist_path),
+        is_active=lambda: plist_path.exists(),
     )
 
 
