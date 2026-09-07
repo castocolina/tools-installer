@@ -507,3 +507,237 @@ The manager-cache behavior also fails the stated “fresh session only refetches
 
 
 ---
+
+## Cycle 3 (codex, FINAL cycle)
+
+**Reviewer:** codex CLI, model `unknown`
+**Commit reviewed:** `3dc4cfb` (branch feat/tui-interaction-consistency, revised 4-plan Phase 12 plan set, post cycle-2 fixes from commits c2f1a0d/3dc4cfb)
+**Risk assessment:** see body below
+
+# Cross-AI Plan Review — Cycle 3 (Final)
+
+Reviewed at commit `3dc4cfb281f2d162e8843ef9b44f04106ec2ba5d` on `feat/tui-interaction-consistency`. The worktree is clean. The new Phase 12 modules do not exist yet, so this review verifies the plans against the current executable seams they intend to extend.
+
+## 1. Cycle-2 HIGH Finding Resolution Verification
+
+### 1. Pnpm-global snapshot timing — RESOLVED
+
+The revised order is explicit: `UpdateService.run()` captures `managed_packages()` first, calls `perform_update()` second, and replays the immutable captured tuple only after an `updated` outcome ([12-03-PLAN.md:278](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:278), [12-03-PLAN.md:283](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:283)). The regression test must record call order and simulate an update that empties the live package set ([12-03-PLAN.md:308](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:308)).
+
+That mechanism addresses the real failure mode: the current replay function immediately returns on an empty package sequence ([pnpm_globals.py:705](/Users/ramon/git/personal/tools-installer/installer/pnpm_globals.py:705)). A post-update capture could therefore silently restore nothing; the revised pre-capture cannot.
+
+### 2. Ownership evidence and active-path proof — PARTIALLY RESOLVED, remaining risk HIGH
+
+The revision makes substantial progress:
+
+- It separates ownership from `resolve_methods()`’s installation-preference ordering ([12-02-PLAN.md:37](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:37)); the current resolver indeed only sorts applicable methods by `_RANK` ([resolve.py:68](/Users/ramon/git/personal/tools-installer/installer/resolve.py:68)).
+- It adds candidates, active path, active candidate, and a human-readable failure reason ([12-02-PLAN.md:152](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:152)).
+- It removes the arbitrary fixed-order owner tiebreak and adds `brew --prefix`-based path attribution ([12-02-PLAN.md:147](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:147), [12-02-PLAN.md:165](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:165)).
+- The exact stale-artifact/unreadable-brew case must return `unknown` ([12-02-PLAN.md:190](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:190)). That is important because `plan_uninstall()` proves only that artifacts exist ([uninstall.py:56](/Users/ramon/git/personal/tools-installer/installer/uninstall.py:56)), not that they own the active executable.
+
+However, three gaps still invalidate the plan’s “complete evidence” claim:
+
+1. The decision procedure says that any single candidate wins by elimination whenever `unreadable` is empty ([12-02-PLAN.md:168](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:168)). It does not first reject a non-`None` active path that points outside that candidate. This directly contradicts the required `/usr/bin/rg` test, which expects `unknown` ([12-02-PLAN.md:192](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:192)). As written, the algorithm returns the candidate before reaching the “unattributable active binary” fallback.
+
+2. The inventory parsers do not make malformed output unreadable. Brew inventory skips malformed lines, and uv inventory has no fail-closed rule for unrecognized lines ([12-02-PLAN.md:148](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:148), [12-02-PLAN.md:149](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:149)). Those parsers return ordinary mappings, which then count as complete negative evidence. The reused pnpm parser likewise returns an empty tuple for several structurally valid but unrecognized JSON shapes because it skips non-dict projects/groups ([pnpm_globals.py:264](/Users/ramon/git/personal/tools-installer/installer/pnpm_globals.py:264), [pnpm_globals.py:287](/Users/ramon/git/personal/tools-installer/installer/pnpm_globals.py:287)).
+
+3. Mutation uses ownership reconstructed from a cached manager inventory that may be six hours old ([12-02-PLAN.md:298](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:298), [12-02-PLAN.md:312](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:312)). That is suitable for display caching, but not complete negative evidence for a no-confirmation mutation after the user has changed managers outside this app.
+
+The exact Cycle-2 scenario is covered, but the general mutation-grade ownership guarantee is not yet safe.
+
+### 3. Pnpm update strategy — RESOLVED
+
+The revised plan rejects both `pnpm update -g` and `pnpm update -g --latest` and dispatches pnpm-owned tools through `executors.execute(ownership.method, runner)` using the existing `node` method ([12-03-PLAN.md:147](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:147), [12-03-PLAN.md:154](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:154)).
+
+That reuse genuinely preserves the current node invariants:
+
+- Absolute `real_pnpm()` resolution ([executors.py:379](/Users/ramon/git/personal/tools-installer/installer/executors.py:379)).
+- Comma-grouped co-installation.
+- Registry version pins and `--allow-build`.
+- Node/pnpm version floors.
+- The smoke check after installation ([executors.py:417](/Users/ramon/git/personal/tools-installer/installer/executors.py:417), [executors.py:453](/Users/ramon/git/personal/tools-installer/installer/executors.py:453)).
+
+The real `mmdc` entry uses every relevant field ([registry.toml:2201](/Users/ramon/git/personal/tools-installer/installer/registry.toml:2201)). The specified test verifies the resulting argv rather than merely asserting that `execute()` was called ([12-03-PLAN.md:168](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:168)).
+
+### 4. Manager-query staleness cache — RESOLVED for the original finding
+
+Plan 12-02 now stores inventory and outdated reports as one timestamped manager snapshot in the same cache envelope ([12-02-PLAN.md:293](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:293)). `VersionRefreshService.refresh()` must issue zero manager subprocesses when that snapshot is fresh and only re-query after its six-hour staleness interval or retry backoff ([12-02-PLAN.md:298](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:298), [12-02-PLAN.md:326](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:326)).
+
+This directly resolves the Cycle-2 complaint that every fresh session or tier navigation invoked brew, pnpm, and uv again. The invalidation and mutation-authorization consequences have separate problems discussed below.
+
+## 2. Full Finding Resolution Verification
+
+### Cycle 1 findings
+
+| # | Finding | Verdict | Current evidence |
+|---|---|---|---|
+| 1 | Wrong `CatalogScreen` module and missing production wiring | RESOLVED | Work targets the real class in `catalog_tui.py`, and one service is constructed in `_build_app()` and passed through `UnifiedApp` ([12-01-PLAN.md:220](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:220), [12-01-PLAN.md:224](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:224)). The current class is indeed defined at [catalog_tui.py:135](/Users/ramon/git/personal/tools-installer/installer/catalog_tui.py:135), while `_build_app()` is the real composition root at [setup.py:205](/Users/ramon/git/personal/tools-installer/setup.py:205). |
+| 2 | `TagResolver` arity violation | RESOLVED | The plan calls `resolve_tag(repo)` with one argument ([12-01-PLAN.md:206](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:206)), matching the current alias `Callable[[str], str]` ([versions.py:13](/Users/ramon/git/personal/tools-installer/installer/versions.py:13)). |
+| 3 | Existing probe discards multiline output | RESOLVED | A new full-output probe is added while `_default_probe_version()` remains unchanged ([12-01-PLAN.md:189](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:189), [12-01-PLAN.md:212](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:212)). The current probe returns only the first non-empty line ([versions.py:133](/Users/ramon/git/personal/tools-installer/installer/versions.py:133)). |
+| 4 | Fresh cache leaves Ver blank | RESOLVED | Fresh entries reconstruct `VersionStatus`; only the network request is skipped ([12-01-PLAN.md:206](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:206), [12-01-PLAN.md:275](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:275)). |
+| 5 | Failed refresh retries forever | RESOLVED | `failed_at`, six-hour `RETRY_BACKOFF`, and explicit one-hour/seven-hour tests provide bounded retry behavior ([12-01-PLAN.md:200](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:200), [12-01-PLAN.md:273](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:273)). |
+| 6 | Three screens race on a non-atomic cache | RESOLVED for the supported topology | One service is shared by all screens; same-service workers serialize reload/merge/save, and unique sibling temp names prevent temp-file collision ([12-01-PLAN.md:98](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:98), [12-01-PLAN.md:146](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:146), [12-01-PLAN.md:275](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:275)). The plan now explicitly excludes independent-process merge guarantees. |
+| 7 | `resolve_methods()[0]` treated as owner | PARTIALLY RESOLVED | The conceptual conflation is removed, but the ownership algorithm still has contradictory and fail-open evidence branches; see primary finding 2. |
+| 8 | Manager queries once per stale tool | RESOLVED | Inventory/outdated calls occur before the per-tool loop, with a 25-versus-50-tool constant-count test ([12-02-PLAN.md:298](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:298), [12-02-PLAN.md:330](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:330)). |
+| 9 | Manager results discard current version/ownership data | PARTIALLY RESOLVED | Brew, cask, pnpm-outdated, and uv-outdated use `ManagerVersion(current, latest)` ([12-02-PLAN.md:238](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:238)). Pnpm inventory still contains names only—the current API returns `tuple[str, ...]` ([pnpm_globals.py:396](/Users/ramon/git/personal/tools-installer/installer/pnpm_globals.py:396))—so an up-to-date pnpm package absent from the outdated map still lacks manager-authoritative current-version data and falls back to a command probe ([12-02-PLAN.md:303](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:303)). |
+| 10 | Cask handling underspecified | RESOLVED | One brew JSON payload is split into independent formula and cask maps, including same-name collision coverage ([12-02-PLAN.md:241](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:241), [12-02-PLAN.md:261](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:261)). |
+| 11 | Runner lacks env, accepted codes, and timeout | RESOLVED | `run_query()` explicitly merges environment overrides, supports accepted codes, preserves stdout, and imposes a timeout ([12-02-PLAN.md:145](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:145)). This leaves existing `run_output()` callers unchanged; its current narrower contract is visible at [run.py:36](/Users/ramon/git/personal/tools-installer/installer/run.py:36). |
+| 12 | “Actual manager” guarantee is false | PARTIALLY RESOLVED | Update dispatch now consumes `ManagerOwnership` and never indexes installation preference ([12-03-PLAN.md:150](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:150)). Its correctness remains limited by the unresolved ownership evidence defects. |
+| 13 | Production mutation dependencies not wired | RESOLVED | One `UpdateService` is built in `_build_app()` using the real platform, tool map, captured runner, existing pnpm replay closure, and the same refresh service’s invalidator ([12-03-PLAN.md:296](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:296)). |
+| 14 | Installer-owned update executors are unsafe | PARTIALLY RESOLVED | Staging, checksum-before-swap, remnants, aside/swap, and failure tests are now specified ([12-03-PLAN.md:207](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:207)). However, the promised symlink rollback and atomic app replacement remain underspecified; see Cycle-2 rollback finding and new issues. The current install paths are indeed unsafe for update reuse ([download.py:123](/Users/ramon/git/personal/tools-installer/installer/download.py:123), [apps.py:44](/Users/ramon/git/personal/tools-installer/installer/apps.py:44)). |
+| 15 | Exception isolation incomplete | RESOLVED | Seven domain exception types become typed failure outcomes, while the worker uses `exit_on_error=False` and a guaranteed `finally` completion path ([12-03-PLAN.md:150](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:150), [12-03-PLAN.md:290](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:290)). This is necessary because current `run_live()` catches only `OSError` and `CommandError` ([ui_common.py:41](/Users/ramon/git/personal/tools-installer/installer/ui_common.py:41)). |
+| 16 | `exclusive=True` does not prevent overlapping updates | RESOLVED | Shared `UpdateService.begin/end` state is lock-guarded and tested with a held worker latch ([12-03-PLAN.md:278](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:278), [12-03-PLAN.md:304](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:304)). |
+| 17 | Pnpm recovery trigger too broad | RESOLVED | `should_replay_node_globals()` is true only for `tool.id == "pnpm"` ([12-03-PLAN.md:158](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:158)). |
+| 18 | Direct update skips postinstall | RESOLVED | A successful update re-dispatches the owning method’s hook, with hook failure retained as a warning ([12-03-PLAN.md:156](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:156)). This mirrors the current install behavior at [engine.py:122](/Users/ramon/git/personal/tools-installer/installer/engine.py:122). |
+| 19 | TUI subprocess-output policy unresolved | RESOLVED | Production uses `run_captured`, showing an in-flight line and final result instead of child terminal output ([12-03-PLAN.md:291](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:291)). Current `run_captured()` routes through captured stdout/stderr at [run.py:64](/Users/ramon/git/personal/tools-installer/installer/run.py:64). |
+| 20 | `brew outdated` cannot detect an uninstalled alternative | N/A / SUPERSEDED | Runtime drift detection was genuinely removed; the plan records non-delivery and its installed-only data limitation ([12-04-PLAN.md:27](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-04-PLAN.md:27), [12-04-PLAN.md:48](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-04-PLAN.md:48)). |
+| 21 | No active-pnpm-versus-brew comparison | N/A / SUPERSEDED | No drift algorithm ships. The future requirement explicitly calls for an availability query and normalized active-versus-available comparison ([12-04-PLAN.md:55](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-04-PLAN.md:55)). |
+| 22 | Drift requirement says “surface,” but helper is unwired | N/A / SUPERSEDED | The helper is removed, and the deferral is recorded in requirement, roadmap, and project decision log ([12-04-PLAN.md:94](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-04-PLAN.md:94)). |
+| 23 | Drift `active_kind` inherits false ownership | N/A / SUPERSEDED | No `active_kind` path remains; future work must use `installer/ownership.py` ([12-04-PLAN.md:94](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-04-PLAN.md:94)). |
+
+No Cycle-1 finding that Cycle 2 marked fully resolved has regressed. The ownership, pnpm-current-version, and update-atomicity findings were already partial in Cycle 2 and remain partial.
+
+### Other Cycle 2 findings
+
+| Finding | Verdict | Current evidence |
+|---|---|---|
+| Independent-service cache test contradicted instance-local lock | RESOLVED | The guarantee and test now cover one production service with two worker threads; independent app processes are explicitly unsupported. Temp paths are unique per writer ([12-01-PLAN.md:98](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:98), [12-01-PLAN.md:146](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:146), [12-01-PLAN.md:275](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:275)). |
+| Version comparator loses fourth components/prerelease distinctions | RESOLVED | `parse_status_version()` preserves the full numeric core and semver prerelease identifiers; tests cover `1.2.3.4` and `rc.1` versus `rc.2` ([12-01-PLAN.md:191](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:191), [12-01-PLAN.md:226](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:226)). |
+| `ManagerOwnership` lacks UI/refusal evidence | RESOLVED | The model now includes candidates, active candidate/path, and `unknown_reason`; detail and refusal tests read them ([12-02-PLAN.md:152](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:152), [12-02-PLAN.md:339](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:339)). |
+| Malformed uv outdated output becomes clean map | RESOLVED for that parser | Any unrecognized non-indented line makes the whole uv outdated report `None`; empty output alone means clean ([12-02-PLAN.md:243](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:243)). Ownership inventory parsing and other manager parsers remain separate gaps. |
+| Replacement rollback ends at second `os.replace` | PARTIALLY RESOLVED | The new state machine adds remnant recovery, link recreation, validation, and tests ([12-03-PLAN.md:210](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:210)). It still promises restoration through the same failing symlink operation and lacks a channel for its cleanup warning. |
+| `u` missing from canonical footer registry | RESOLVED | The three `VIEWS` rows and `CatalogScreen.BINDINGS` both gain `u` ([12-03-PLAN.md:288](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:288)). The current footer does derive its text from `View.actions` ([ui_common.py:191](/Users/ramon/git/personal/tools-installer/installer/ui_common.py:191)). The proposed bidirectional test is inconsistent with nested widget bindings, discussed below. |
+| Refresh result can overwrite update result | RESOLVED for UI messages | Refresh messages carry an epoch captured before work, successful updates bump it, and the handler drops old-epoch messages ([12-01-PLAN.md:208](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:208), [12-03-PLAN.md:285](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:285)). A separate persistence race can resurrect the manager snapshot. |
+| Naive, offset, and future timestamps unsafe | RESOLVED | `_parse_iso()` rejects naive values, normalizes offsets, and bounds future skew; all boundaries are tested ([12-01-PLAN.md:195](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:195), [12-01-PLAN.md:273](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:273)). |
+| Drift guard test bans every name containing `drift` | RESOLVED | The guard now checks only the two abandoned identifiers and explicitly permits future correctly wired drift code ([12-04-PLAN.md:99](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-04-PLAN.md:99), [12-04-PLAN.md:106](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-04-PLAN.md:106)). |
+
+## 3. New Issues Introduced By This Revision
+
+- **HIGH — The explicit ownership algorithm contradicts its active-PATH safety test.** After failing to find an `active_candidate`, the next branch grants any lone candidate by elimination if inventories are readable ([12-02-PLAN.md:167](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:167)). Therefore one installer candidate plus active `/usr/bin/rg` returns installer-owned, even though the plan’s test requires `unknown` ([12-02-PLAN.md:192](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:192)). An attributable or absent active path must be a prerequisite for by-elimination; a contradictory live path must fail closed before that branch.
+
+- **HIGH — Inventory schema failures can become mutation-grade negative evidence.** Brew inventory explicitly skips malformed lines, and uv inventory lacks an unrecognized-line failure state ([12-02-PLAN.md:148](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:148), [12-02-PLAN.md:149](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:149)). The reused pnpm parser also skips unrecognized project/group shapes and may return an empty tuple ([pnpm_globals.py:264](/Users/ramon/git/personal/tools-installer/installer/pnpm_globals.py:264), [pnpm_globals.py:287](/Users/ramon/git/personal/tools-installer/installer/pnpm_globals.py:287)). Downstream, non-`None` inventories count as complete negative evidence and may authorize mutation. All ownership inventory parsers need whole-report validation or an explicit completeness flag.
+
+- **HIGH — A six-hour cached inventory is used as mutation authorization.** The manager snapshot includes ownership inventories, not only display versions, and fresh snapshots issue zero real queries ([12-02-PLAN.md:293](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:293), [12-02-PLAN.md:326](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:326)). The update action then consumes `ownership_of()` from that completed pass ([12-02-PLAN.md:312](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:312)). The threat model incorrectly says an external manager change can only make a row one version behind ([12-02-PLAN.md:387](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:387)); it can change which manager owns the tool. Display reports may be cached, but pressing `u` should revalidate the selected tool’s ownership with fresh manager evidence before mutation.
+
+- **HIGH — Installer-owned script/app/tarball updates are unreachable, including the common script-installed pnpm case.** Plan 12-02 gives installer-owned script/tarball/app tools no latest version and `outdated=None` ([12-02-PLAN.md:302](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:302)). Plan 12-03 refuses to start an update unless `VersionStatus.outdated is True` ([12-03-PLAN.md:289](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:289)). Yet `perform_update()` contains installer-owned script/app/tarball branches ([12-03-PLAN.md:155](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:155)). Those branches are dead through the production UI. More importantly, pnpm’s registry entry commonly resolves to an official `script` method ([registry.toml:1881](/Users/ramon/git/personal/tools-installer/installer/registry.toml:1881), [registry.toml:1889](/Users/ramon/git/personal/tools-installer/installer/registry.toml:1889)), so its automatic pre-capture/replay mitigation cannot be triggered unless pnpm happens to be brew-owned.
+
+- **MEDIUM — `invalidate()` can race with and lose to a pre-update refresh’s cache write.** Plan 12-01 places only the reload/merge/save section under the service lock, after slow resolution work ([12-01-PLAN.md:207](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:207)). Plan 12-02 claims that taking the same lock while dropping the snapshot prevents resurrection ([12-02-PLAN.md:317](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:317)). It does not: a refresh can query outside the lock, the update can invalidate, and then the old refresh can acquire the lock and persist its pre-update manager snapshot. The refresh must compare its starting epoch under the lock before saving and discard the write if the epoch changed.
+
+- **MEDIUM — Brew and pnpm outdated parsers can turn malformed entries into false green rows.** Brew skips entries missing `name` or `current_version`, and treats a missing entire namespace key as an empty clean map; pnpm skips an entry lacking `latest` ([12-02-PLAN.md:241](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:241), [12-02-PLAN.md:242](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:242)). Downstream, absence from a non-`None` map means up to date ([12-02-PLAN.md:303](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:303)). Apply the uv parser’s fail-closed principle consistently: any malformed report entry or missing required top-level key should make the relevant manager map `None`.
+
+- **MEDIUM — The rollback specification still overpromises.** On symlink recreation failure, rollback attempts to recreate the original link through the same operation that just failed ([12-03-PLAN.md:214](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:214)). Persistent permission/filesystem failures can make that retry fail too; the plan never captures the original symlink target for independent restoration. App replacement is described as a `mv`, while the plan’s must-have claims atomic `os.replace` ([12-03-PLAN.md:40](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:40), [12-03-PLAN.md:219](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:219)). Finally, cleanup failure is supposed to be recorded as a warning ([12-03-PLAN.md:217](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:217)), but `update_download()` returns only `bool` and `update_app()` returns `None`; no warning channel is specified.
+
+- **MEDIUM — Post-update `VersionStatus` construction is undefined for manager-owned tools and casks.** The worker merely “re-probes” the tool and constructs a status ([12-03-PLAN.md:290](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:290)). Plan 12-02 says manager-owned status must come from ownership plus the authoritative manager report, and casks may have no command to probe ([12-02-PLAN.md:303](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:303)). The worker should explicitly call an ownership-aware `VersionRefreshService.refresh([tool])` after invalidation and use that result; a generic command re-probe cannot produce the promised cask or manager truth.
+
+- **MEDIUM — Reusing private `_manager_name` conflicts with strict pyright.** Both ownership and update plans require reuse of `uninstall._manager_name` ([12-02-PLAN.md:129](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:129), [12-03-PLAN.md:135](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:135)), but neither plan modifies `installer/uninstall.py`, where the helper is private ([uninstall.py:130](/Users/ramon/git/personal/tools-installer/installer/uninstall.py:130)). Strict pyright is enabled ([pyproject.toml:43](/Users/ramon/git/personal/tools-installer/pyproject.toml:43)); existing cross-module private use requires explicit `reportPrivateUsage` ignores ([policy.py:454](/Users/ramon/git/personal/tools-installer/installer/policy.py:454)). This project forbids silencing quality checks. Promote a public helper and include `uninstall.py` in the owning task.
+
+- **LOW — Two planned counting/registry tests contradict current architecture.** `read_inventory()` has four `query` calls when brew exists—three brew calls plus `uv tool list`—and one separate `pnpm_packages()` call, yet its test demands five `query` calls ([12-02-PLAN.md:150](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:150), [12-02-PLAN.md:204](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:204)). Separately, the footer test requires keys such as `a` and `i` to have `CatalogScreen` bindings ([12-03-PLAN.md:301](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:301)), but those bindings belong to the nested `ToolBrowser` ([tool_browser.py:101](/Users/ramon/git/personal/tools-installer/installer/tool_browser.py:101)); current `CatalogScreen.BINDINGS` contains only hidden recommendation keys ([catalog_tui.py:155](/Users/ramon/git/personal/tools-installer/installer/catalog_tui.py:155)). The drift test must inspect the effective parent-plus-widget binding set.
+
+- **LOW — Reusing `_node` makes its existing documentation false.** The current comment says the smoke check fires “on the install path only” ([executors.py:432](/Users/ramon/git/personal/tools-installer/installer/executors.py:432)), but Plan 12-03 intentionally invokes `_node` for updates while excluding `executors.py` from its file list ([12-03-PLAN.md:154](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:154)). Update that comment when adopting the executor.
+
+## 4. Per-Plan Assessment
+
+### 12-01
+
+**Summary:** Mostly implementation-ready. It correctly establishes full-output probing, a precision-preserving comparator, cache timestamp validation, visible staleness, retry backoff, production DI, and off-event-loop refresh.
+
+**Strengths**
+
+- The production route matches the current architecture: `_build_app()` owns `Platform`, `UnifiedApp` constructs the three catalogs, and the real screen lives in `catalog_tui.py` ([setup.py:205](/Users/ramon/git/personal/tools-installer/setup.py:205), [wizard_app.py:1453](/Users/ramon/git/personal/tools-installer/installer/wizard_app.py:1453), [catalog_tui.py:135](/Users/ramon/git/personal/tools-installer/installer/catalog_tui.py:135)).
+- It preserves the current feature-floor parser/probe contracts while adding separate status-oriented functions ([12-01-PLAN.md:189](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:189), [12-01-PLAN.md:191](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:191)).
+- Cache concurrency claims now match the actual single-service topology ([12-01-PLAN.md:275](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:275)).
+
+**Concerns**
+
+- **LOW:** The plan’s epoch protects UI messages but not later manager-snapshot persistence; Plan 12-02 must add an epoch check before any cache merge/save, not merely when rendering ([12-01-PLAN.md:207](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-01-PLAN.md:207)).
+
+**Suggestion:** Execute after adding a cache-write epoch precondition consumed by Plan 12-02.
+
+### 12-02
+
+**Summary:** The abstractions are appropriate, but this remains the unsafe plan. It supplies the authorization evidence for a no-confirmation mutating action, and the current decision procedure can still assert ownership after contradictory, malformed, or stale evidence.
+
+**Strengths**
+
+- Clear separation between installation preference and ownership ([12-02-PLAN.md:37](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:37)).
+- Manager-wide batching, current-plus-latest result types, and zero-query fresh-session behavior are well specified ([12-02-PLAN.md:238](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:238), [12-02-PLAN.md:298](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:298)).
+- Unknown ownership now has structured, user-readable evidence ([12-02-PLAN.md:152](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-02-PLAN.md:152)).
+
+**Concerns**
+
+- **HIGH:** The by-elimination branch ignores contradictory active PATH evidence.
+- **HIGH:** Inventory parsers can silently convert schema drift into complete negative evidence.
+- **HIGH:** Cached inventories are reused as mutation-grade authorization.
+- **MEDIUM:** Pnpm still lacks authoritative current versions for packages absent from the outdated report.
+- **MEDIUM:** `invalidate()` lacks a refresh-start epoch check before persistence.
+- **MEDIUM:** Private `_manager_name` reuse conflicts with strict pyright.
+- **LOW:** The planned query-count test expects five `query` calls where the described design makes four plus one separate pnpm call.
+
+**Suggestions**
+
+- Make ownership parsers return a report with `complete: bool`, or `None` on any unrecognized shape.
+- Reject any live active path not attributable to the winning candidate before by-elimination.
+- Treat cached ownership as display evidence only; perform a fresh selected-tool ownership check inside the update worker.
+- Add an epoch compare-and-save guard around manager snapshot persistence.
+- Promote `_manager_name` to a public shared helper.
+
+### 12-03
+
+**Summary:** The pnpm snapshot and node-executor fixes are genuine. The plan still cannot deliver all claimed update paths, and its filesystem/status handoff guarantees exceed its specified mechanisms.
+
+**Strengths**
+
+- Correct capture-mutate-replay ordering for pnpm self-update ([12-03-PLAN.md:278](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:278)).
+- Correct reuse of `_node`, including co-install grouping, build permissions, pins, floors, and smoke checks ([12-03-PLAN.md:154](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:154), [executors.py:379](/Users/ramon/git/personal/tools-installer/installer/executors.py:379)).
+- Explicit global in-flight protection, captured output, exception containment, postinstall handling, and footer registration ([12-03-PLAN.md:44](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:44), [12-03-PLAN.md:47](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-03-PLAN.md:47)).
+
+**Concerns**
+
+- **HIGH:** The UI’s `outdated is True` gate makes script/app/tarball branches unreachable and prevents script-installed pnpm from exercising the required automatic replay.
+- **HIGH:** Mutation still inherits Plan 12-02’s unsafe cached/fail-open ownership.
+- **MEDIUM:** Symlink rollback, app atomicity, and cleanup-warning propagation remain incomplete.
+- **MEDIUM:** The post-update status path does not explicitly call the ownership-aware manager refresh.
+- **LOW:** Footer-binding drift test inspects the wrong widget boundary.
+- **LOW:** The SDKMAN “unsupported” branch appears unreachable because `Owner` has no SDKMAN value and the resolver creates no SDKMAN candidate.
+
+**Suggestions**
+
+- Permit an explicit update for installed, mutation-grade owner rows whose latest version is unknown, or add a special authoritative pnpm-self status source.
+- Revalidate ownership inside the worker immediately before mutation.
+- Make post-update status exactly `version_refresh.refresh([tool])[tool.id]` after invalidation.
+- Give replacement helpers a typed result carrying cleanup warnings and independently back up symlink state.
+
+### 12-04
+
+**Summary:** Correct disposition. Deferring drift detection is honest and avoids dead production code.
+
+**Strengths**
+
+- It records non-delivery where requirements, roadmap, and project audits will find it ([12-04-PLAN.md:94](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-04-PLAN.md:94)).
+- It names the missing data source and active-versus-available comparison a future implementation needs ([12-04-PLAN.md:55](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-04-PLAN.md:55)).
+- The revised guard checks only the two abandoned orphan-helper names ([12-04-PLAN.md:99](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-04-PLAN.md:99)).
+
+**Concerns**
+
+- **LOW:** The architecture substring test protects phrases, not truth. The task correctly instructs the writer to follow shipped code when code and plan disagree ([12-04-PLAN.md:152](/Users/ramon/git/personal/tools-installer/.planning/phases/12-version-aware-status-update-action/12-04-PLAN.md:152)); that instruction must be followed after any in-execution deviations.
+
+**Suggestion:** Keep this plan, but write the architecture section only after the preceding plans and any safety deviations are complete.
+
+## 5. Overall Risk Assessment
+
+**Overall risk: HIGH.**
+
+Three of the four Cycle-2 HIGH findings are resolved as originally framed: pnpm globals are captured before mutation, pnpm updates reuse `_node`, and manager subprocess results are cached. Ownership is only partially resolved.
+
+The phase is **not ready to execute exactly as planned** because four remaining issues affect real no-confirmation mutations:
+
+1. The ownership algorithm grants by-elimination ownership despite a contradictory active PATH.
+2. Malformed and cached inventories can count as complete negative evidence.
+3. Cached ownership is reused as mutation authorization for up to six hours.
+4. Script-owned tools—including script-installed pnpm—cannot reach the update worker because their status is always `outdated=None`.
+
+The update rollback and cache-invalidation races add material secondary risk.
+
+**Verdict: revision required before execution.** Since the project will not dispatch Cycle 4, these should be handled as pre-execution edits or explicit in-execution deviations. At minimum, fix the four HIGH items before enabling the `u` action; the MEDIUM items should be fixed in the same pass because several are direct contradictions that will otherwise fail tests or invalidate the documented guarantees.
+
+
