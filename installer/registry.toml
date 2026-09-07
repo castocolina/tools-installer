@@ -2471,3 +2471,475 @@ kind = "cask"
 os = ["macos"]
 cask = "wezterm"
 app = "WezTerm.app"
+
+[[tool]]
+id = "glab"
+name = "GitLab CLI"
+category = "git"
+cmd = "glab"
+priority = "P0"
+audience = "both"
+desc = "Uses GitLab from the terminal to work with merge requests, issues, pipelines, and authentication."
+tier = "user"
+# GitLab officially supports Homebrew on macOS and Linux.
+[[tool.method]]
+kind = "brew"
+formula = "glab"
+
+
+
+[[tool]]
+id = "pi"
+name = "Pi"
+category = "ai"
+cmd = "pi"
+priority = "P1"
+audience = "human"
+desc = "Minimal coding-agent harness; setup remains interactive, and uninstall uses pnpm remove."
+tier = "ai"
+requires = ["pnpm"]
+source = "https://github.com/earendil-works/pi"
+owner = "pnpm"
+owner_probes = ["host-setup"]
+uninstall = "pnpm remove -g @earendil-works/pi-coding-agent"
+[[tool.method]]
+kind = "host_setup"
+setup_id = "pi"
+
+
+
+[[tool]]
+id = "drawio-desktop"
+name = "draw.io Desktop"
+category = "diagram"
+cmd = "drawio"
+priority = "P2"
+audience = "human"
+desc = "Official draw.io Desktop release with export CLI; uninstall removes its managed app or AppImage."
+tier = "user"
+source = "https://github.com/jgraph/drawio-desktop"
+owner = "tools-installer managed release"
+owner_probes = ["managed-download"]
+uninstall = "Remove ~/.local/bin/drawio or ~/Applications/draw.io.app"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+arch = ["amd64"]
+repo = "jgraph/drawio-desktop"
+asset = "drawio-x86_64-{ver}.AppImage"
+member = "drawio"
+raw = true
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+arch = ["arm64"]
+repo = "jgraph/drawio-desktop"
+asset = "drawio-arm64-{ver}.AppImage"
+member = "drawio"
+raw = true
+[[tool.method]]
+kind = "app"
+os = ["macos"]
+arch = ["arm64"]
+url = "https://github.com/jgraph/drawio-desktop/releases/download/v31.0.2/draw.io-arm64-31.0.2.zip"
+app = "draw.io.app"
+cli = "Contents/MacOS/draw.io"
+cli_name = "drawio"
+[[tool.method]]
+kind = "app"
+os = ["macos"]
+arch = ["amd64"]
+url = "https://github.com/jgraph/drawio-desktop/releases/download/v31.0.2/draw.io-x64-31.0.2.zip"
+app = "draw.io.app"
+cli = "Contents/MacOS/draw.io"
+cli_name = "drawio"
+
+
+
+[[tool]]
+id = "drawio-cli"
+name = "draw.io CLI"
+category = "diagram"
+cmd = "drawio"
+priority = "P2"
+audience = "both"
+desc = "Export CLI shipped by draw.io Desktop; uninstall it with the managed desktop release."
+tier = "user"
+requires = ["drawio-desktop"]
+source = "https://github.com/jgraph/drawio-desktop"
+owner = "tools-installer managed release"
+owner_probes = ["managed-download"]
+uninstall = "Uninstall drawio-desktop to remove the drawio CLI"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+arch = ["amd64"]
+repo = "jgraph/drawio-desktop"
+asset = "drawio-x86_64-{ver}.AppImage"
+member = "drawio"
+raw = true
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+arch = ["arm64"]
+repo = "jgraph/drawio-desktop"
+asset = "drawio-arm64-{ver}.AppImage"
+member = "drawio"
+raw = true
+[[tool.method]]
+kind = "app"
+os = ["macos"]
+arch = ["arm64"]
+url = "https://github.com/jgraph/drawio-desktop/releases/download/v31.0.2/draw.io-arm64-31.0.2.zip"
+app = "draw.io.app"
+cli = "Contents/MacOS/draw.io"
+cli_name = "drawio"
+[[tool.method]]
+kind = "app"
+os = ["macos"]
+arch = ["amd64"]
+url = "https://github.com/jgraph/drawio-desktop/releases/download/v31.0.2/draw.io-x64-31.0.2.zip"
+app = "draw.io.app"
+cli = "Contents/MacOS/draw.io"
+cli_name = "drawio"
+
+
+
+[[tool]]
+id = "ponytail"
+name = "Ponytail"
+category = "ai"
+cmd = "ponytail"
+priority = "P3"
+audience = "human"
+desc = "Codex plugin whose lifecycle hooks require review; uninstall through Codex."
+tier = "ai"
+[[tool.method]]
+kind = "skill_pack"
+[tool.skill_lifecycle]
+source = "https://github.com/DietrichGebert/ponytail"
+owner = "DietrichGebert"
+supported_harnesses = ["claude", "codex", "pi", "opencode", "antigravity"]
+revision_policy = "host-marketplace-current"
+targets = [
+  { scope = "harness", path = "<codex-plugin-dir>/ponytail" },
+  { scope = "global", path = "~/.config/ponytail/config.json" },
+]
+approval_disclosures = [
+  "Affected agent hosts: Codex CLI and Codex Desktop.",
+  "Codex installs Ponytail skills and two Node.js lifecycle hooks; open /hooks and review both hooks before trusting them.",
+  "Ponytail documents no telemetry; its optional mode state remains under ~/.config/ponytail after host removal unless cleaned first.",
+]
+[tool.skill_lifecycle.install]
+mode = "manual-required"
+instructions = [
+  "After leaving the installer, run these official Codex commands in a console:",
+  "codex plugin marketplace add DietrichGebert/ponytail",
+  "codex plugin add ponytail@ponytail",
+  "Run codex, open /hooks, review and trust both lifecycle hooks, then start a new thread.",
+]
+[tool.skill_lifecycle.status]
+mode = "command"
+operation_id = "codex_plugin_status"
+args = { plugin = "ponytail" }
+[tool.skill_lifecycle.update]
+mode = "manual-required"
+instructions = [
+  "Use the Codex plugin marketplace update flow for ponytail.",
+  "Review the new release and both lifecycle hooks before trusting the updated plugin.",
+]
+[tool.skill_lifecycle.removal]
+mode = "manual-required"
+instructions = [
+  "Before removing the plugin, run node scripts/uninstall.js from the installed Ponytail plugin directory to clean optional state.",
+  "codex plugin remove ponytail",
+]
+
+
+
+[[tool]]
+id = "openspec"
+name = "OpenSpec"
+category = "dev"
+cmd = "openspec"
+priority = "P2"
+audience = "human"
+desc = "Guided spec workflow; discloses anonymous telemetry and OPENSPEC_TELEMETRY=0; uninstall with pnpm."
+tier = "ai"
+requires = ["pnpm"]
+[[tool.method]]
+kind = "skill_pack"
+[tool.skill_lifecycle]
+source = "https://github.com/Fission-AI/OpenSpec"
+owner = "Fission-AI"
+supported_harnesses = ["claude", "codex", "opencode", "antigravity", "cursor"]
+revision_policy = "package-manager-latest"
+targets = [
+  { scope = "global", path = "<pnpm-global-dir>/@fission-ai/openspec" },
+  { scope = "project", path = "<project>/openspec" },
+  { scope = "project", path = "<project>/<selected-agent-dir>" },
+]
+approval_disclosures = [
+  "Affected agent hosts: those selected during openspec init.",
+  "Generated files: openspec/specs/, openspec/changes/, openspec/config.yaml, and selected agent skill or command directories.",
+  "Anonymous telemetry sends command names and version only. Set OPENSPEC_TELEMETRY=0 or DO_NOT_TRACK=1 to opt out.",
+]
+[tool.skill_lifecycle.install]
+mode = "manual-required"
+instructions = [
+  "After leaving the installer, set PROJECT_DIR to an absolute, user-approved project directory, then run:",
+  "PROJECT_DIR=/absolute/path/to/project",
+  "pnpm add -g @fission-ai/openspec@latest",
+  "cd \"$PROJECT_DIR\" && openspec init",
+]
+[tool.skill_lifecycle.status]
+mode = "manual-required"
+instructions = [
+  "In the target project, review the openspec/ tree and the selected agent directories; a global openspec binary alone does not prove project initialization.",
+]
+[tool.skill_lifecycle.update]
+mode = "manual-required"
+instructions = [
+  "Set PROJECT_DIR to the initialized project and review local changes before running:",
+  "cd \"$PROJECT_DIR\" && openspec update",
+]
+[tool.skill_lifecycle.removal]
+mode = "manual-required"
+instructions = [
+  "Review and manually remove OpenSpec-generated project and selected-agent files in each initialized project.",
+  "pnpm remove -g @fission-ai/openspec",
+]
+
+
+
+[[tool]]
+id = "superpowers"
+name = "Superpowers"
+category = "ai"
+cmd = "superpowers"
+priority = "P3"
+audience = "human"
+desc = "Harness-native workflow plugin installed through Pi; uninstall through Pi's package manager."
+tier = "ai"
+requires = ["pi"]
+[[tool.method]]
+kind = "skill_pack"
+[tool.skill_lifecycle]
+source = "https://github.com/obra/superpowers"
+owner = "obra"
+supported_harnesses = ["pi"]
+revision_policy = "upstream-default-branch"
+targets = [{ scope = "harness", path = "<pi-package-dir>/superpowers" }]
+[tool.skill_lifecycle.install]
+mode = "manual-required"
+instructions = [
+  "After leaving the installer, run the official Pi package command in a console:",
+  "pi install git:github.com/obra/superpowers",
+]
+[tool.skill_lifecycle.status]
+mode = "command"
+operation_id = "pi_package_status"
+args = { package = "obra/superpowers" }
+[tool.skill_lifecycle.update]
+mode = "manual-required"
+instructions = [
+  "Use Pi's package manager to review and update the obra/superpowers package from its upstream default branch.",
+]
+[tool.skill_lifecycle.removal]
+mode = "manual-required"
+instructions = [
+  "After leaving the installer, remove the package through Pi:",
+  "pi uninstall git:github.com/obra/superpowers",
+]
+
+
+
+[[tool]]
+id = "softaworks-agent-toolkit"
+name = "Softaworks Agent Toolkit"
+category = "ai"
+cmd = "softaworks-agent-toolkit"
+priority = "P3"
+audience = "human"
+desc = "Selected host-aware agent skills installed by the official skills CLI; uninstall with npx skills remove."
+tier = "ai"
+[[tool.method]]
+kind = "skill_pack"
+[tool.skill_lifecycle]
+source = "https://github.com/softaworks/agent-toolkit"
+owner = "softaworks"
+supported_harnesses = ["claude", "codex", "cursor"]
+revision_policy = "upstream-latest"
+targets = [
+  { scope = "global", path = "~/.agents/skills/<selected-skill>" },
+  { scope = "harness", path = "<selected-harness-skill-dir>/<selected-skill>" },
+]
+[tool.skill_lifecycle.install]
+mode = "manual-required"
+instructions = [
+  "After leaving the installer, select each skill and target harness through the official skills CLI:",
+  "npx skills add https://github.com/softaworks/agent-toolkit --skill <name>",
+]
+[tool.skill_lifecycle.status]
+mode = "manual-required"
+instructions = [
+  "Run npx skills list in a console and verify each selected skill and harness; status stays unknown here because npx may acquire the skills CLI.",
+]
+[tool.skill_lifecycle.update]
+mode = "manual-required"
+instructions = [
+  "Review upstream changes, then update each selected installed skill through the official CLI:",
+  "npx skills update <selected-skill>",
+]
+[tool.skill_lifecycle.removal]
+mode = "manual-required"
+instructions = [
+  "Select the installed skill and affected harnesses through the official removal flow:",
+  "npx skills remove <selected-skill>",
+]
+
+
+
+[[tool]]
+id = "matt-pocock-skills"
+name = "Matt Pocock Skills"
+category = "ai"
+cmd = "matt-pocock-skills"
+priority = "P3"
+audience = "human"
+desc = "Interactive host-aware skills collection installed by skills; uninstall selected skills with npx skills remove."
+tier = "ai"
+[[tool.method]]
+kind = "skill_pack"
+[tool.skill_lifecycle]
+source = "https://github.com/mattpocock/skills"
+owner = "mattpocock"
+supported_harnesses = ["claude", "codex", "cursor"]
+revision_policy = "upstream-latest"
+targets = [
+  { scope = "global", path = "~/.agents/skills/<selected-skill>" },
+  { scope = "harness", path = "<selected-harness-skill-dir>/<selected-skill>" },
+]
+[tool.skill_lifecycle.install]
+mode = "manual-required"
+instructions = [
+  "After leaving the installer, choose skills and harnesses in the official skills CLI:",
+  "npx skills@latest add mattpocock/skills",
+  "Run /setup-matt-pocock-skills in the selected agent and answer its project questions.",
+]
+[tool.skill_lifecycle.status]
+mode = "manual-required"
+instructions = [
+  "Run npx skills list in a console and verify the selected skills and harnesses; status stays unknown here because npx may acquire the skills CLI.",
+]
+[tool.skill_lifecycle.update]
+mode = "manual-required"
+instructions = [
+  "Review upstream changes, then update each selected installed skill through the official CLI:",
+  "npx skills update <selected-skill>",
+]
+[tool.skill_lifecycle.removal]
+mode = "manual-required"
+instructions = [
+  "Select the installed skill and affected harnesses through the official removal flow:",
+  "npx skills remove <selected-skill>",
+]
+
+
+
+[[tool]]
+id = "opengsd"
+name = "OpenGSD"
+category = "ai"
+cmd = "opengsd"
+priority = "P3"
+audience = "human"
+desc = "Guided cross-runtime workflow installer; uninstall with its runtime, scope, and --uninstall flags."
+tier = "ai"
+[[tool.method]]
+kind = "skill_pack"
+[tool.skill_lifecycle]
+source = "https://github.com/open-gsd/gsd-core"
+owner = "open-gsd"
+supported_harnesses = ["claude", "codex", "opencode", "antigravity", "cursor", "windsurf", "copilot", "kimi", "kilo"]
+revision_policy = "package-manager-latest"
+targets = [
+  { scope = "global", path = "<selected-runtime-global-dir>" },
+  { scope = "project", path = "<project>/<selected-runtime-dir>" },
+]
+[tool.skill_lifecycle.install]
+mode = "manual-required"
+instructions = [
+  "After leaving the installer, run the required guided cross-runtime installer in a console:",
+  "npx @opengsd/gsd-core@latest",
+  "Select the runtime and global or local scope; do not copy files from the repository.",
+]
+[tool.skill_lifecycle.status]
+mode = "manual-required"
+instructions = [
+  "Use the OpenGSD installer for the selected runtime and scope to verify its managed installation; a generated-file guess is not authoritative.",
+]
+[tool.skill_lifecycle.update]
+mode = "manual-required"
+instructions = [
+  "From the installed agent runtime, invoke the documented update workflow:",
+  "/gsd-update",
+]
+[tool.skill_lifecycle.removal]
+mode = "manual-required"
+instructions = [
+  "Re-run the official installer with the same runtime and scope selected at install time and its uninstall flag:",
+  "npx @opengsd/gsd-core@latest --<runtime> --global|--local --uninstall",
+]
+
+
+
+[[tool]]
+id = "spec-kit"
+name = "GitHub Spec Kit"
+category = "dev"
+cmd = "specify"
+priority = "P2"
+audience = "human"
+desc = "Official Specify CLI plus guided project integration; uninstall the CLI with uv tool uninstall."
+tier = "ai"
+requires = ["uv"]
+[[tool.method]]
+kind = "skill_pack"
+[tool.skill_lifecycle]
+source = "https://github.com/github/spec-kit"
+owner = "github"
+supported_harnesses = ["claude", "codex", "opencode", "antigravity", "cursor"]
+revision_policy = "package-manager-latest"
+targets = [
+  { scope = "global", path = "<uv-tool-dir>/specify-cli" },
+  { scope = "project", path = "<project>/.specify" },
+  { scope = "project", path = "<project>/<selected-agent-dir>" },
+]
+[tool.skill_lifecycle.install]
+mode = "manual-required"
+instructions = [
+  "After leaving the installer, set PROJECT_DIR to an absolute, user-approved project directory, then run:",
+  "PROJECT_DIR=/absolute/path/to/project",
+  "uv tool install specify-cli",
+  "specify init \"$PROJECT_DIR\"",
+]
+[tool.skill_lifecycle.status]
+mode = "manual-required"
+instructions = [
+  "In the initialized project, run specify integration list and inspect .specify plus the selected integration; the specify binary alone is not project status.",
+]
+[tool.skill_lifecycle.update]
+mode = "manual-required"
+instructions = [
+  "Upgrade the official CLI, then refresh the selected integration from the initialized project:",
+  "uv tool upgrade specify-cli",
+  "specify integration upgrade",
+]
+[tool.skill_lifecycle.removal]
+mode = "manual-required"
+instructions = [
+  "From each initialized project, remove its tracked integration before removing the CLI:",
+  "specify integration uninstall",
+  "uv tool uninstall specify-cli",
+]
