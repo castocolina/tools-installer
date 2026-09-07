@@ -91,6 +91,11 @@ class Policy:
     remove: Callable[[], PolicyResult]
     requires: tuple[str, ...] = ()
     missing_requires: tuple[str, ...] = ()
+    hard_requires: bool = True
+    log_path: Path | None = None
+    set_schedule: Callable[[int, int], PolicyResult] | None = None
+    read_schedule: Callable[[], tuple[int, int] | None] | None = None
+    is_active: Callable[[], bool] | None = None
 
 
 def ban_policy(

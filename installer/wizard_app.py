@@ -914,8 +914,10 @@ class PoliciesScreen(AppScreen):
         return Text(label, style="green" if active else "dim")
 
     def _requires_cell(self, policy: Policy) -> Text:
-        if policy.missing_requires:
+        if policy.missing_requires and policy.hard_requires:
             return Text("missing: " + ", ".join(policy.missing_requires), style="bold yellow")
+        if policy.missing_requires:
+            return Text("recommended: " + ", ".join(policy.missing_requires), style="yellow")
         if policy.requires:
             return Text(", ".join(policy.requires), style="dim")
         return Text("none", style="dim")
@@ -998,10 +1000,16 @@ class PoliciesScreen(AppScreen):
             ),
         }
         lines = [f"{policy.label} — {policy.description}"]
-        if policy.missing_requires:
+        if policy.missing_requires and policy.hard_requires:
             lines.append(
                 "Missing required tool(s): "
                 f"{', '.join(policy.missing_requires)}. Install from Catalog before enabling."
+            )
+        elif policy.missing_requires:
+            lines.append(
+                "Recommended tool(s): "
+                f"{', '.join(policy.missing_requires)}. Not required — apply still runs and "
+                "falls back automatically."
             )
         elif policy.requires:
             lines.append(f"Required tool(s): {', '.join(policy.requires)}.")
@@ -1027,7 +1035,7 @@ class PoliciesScreen(AppScreen):
         if policy is None:
             return
         active = self.active_state[policy.id]
-        if not active and policy.missing_requires:
+        if not active and policy.missing_requires and policy.hard_requires:
             self.status.set(
                 "Install required tool(s) first: "
                 f"{', '.join(policy.missing_requires)}. Open Catalog, install them, then retry.",
