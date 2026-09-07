@@ -241,6 +241,20 @@ def test_apply_bootstrap_failure_on_first_ever_apply_preserves_a_pre_existing_wr
     assert not paths.log_path.exists()
 
 
+def test_apply_bootstrap_failure_on_first_ever_apply_preserves_a_pre_existing_log(
+    tmp_path: Path,
+) -> None:
+    paths = _make_paths(tmp_path)
+    daemon.ensure_log_path(paths.log_path)  # an unrelated, earlier successful apply
+    fake_run = _FakeRun(fail_on=frozenset({("bootstrap", 1)}))
+    policy = _build(paths, run=fake_run)
+    with pytest.raises(CommandError):
+        policy.apply()
+    assert not paths.plist_path.exists()
+    assert daemon.wrapper_present(paths.wrapper_bin_dir) is False
+    assert paths.log_path.exists()
+
+
 def test_apply_bootstrap_failure_on_a_reapply_restores_bytes_and_re_bootstraps(
     tmp_path: Path,
 ) -> None:
