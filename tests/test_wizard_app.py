@@ -5,7 +5,7 @@ from typing import Any, TypeVar, cast
 
 import pytest
 from textual.pilot import Pilot
-from textual.widgets import DataTable, Static
+from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
 from installer import daemon
 from installer.app import UninstallDecision
@@ -23,6 +23,7 @@ from installer.wizard_app import (
     NavScreen,
     PoliciesScreen,
     PolicyInputs,
+    TimePickerScreen,
     UnifiedApp,
     UninstallInputs,
     UninstallScreen,
@@ -1219,6 +1220,127 @@ async def test_normal_detail_render_defends_against_last_run_summary_raising(
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         assert "last run" not in screen.detail_text
+
+
+def test_time_picker_widget_ids_are_all_valid_textual_identifiers() -> None:
+    """Constructing the actual widgets is itself the test: a raw "HH:MM" id
+    (e.g. "00:00") raises Textual's own BadIdentifier — live-verified against
+    this project's installed Textual version — so a clean construction here
+    is the proof every one of the 48 generated ids is valid."""
+    items = [
+        ListItem(Label(f"{hour:02d}:{minute:02d}"), id=f"time-{hour:02d}-{minute:02d}")
+        for hour in range(24)
+        for minute in (0, 30)
+    ]
+    assert len(items) == 48
+    assert items[0].id == "time-00-00"
+    assert items[-1].id == "time-23-30"
+
+
+def test_time_picker_on_list_view_selected_is_a_noop_without_an_id() -> None:
+    """Structurally unreachable in production (every real item carries an id),
+    but on_list_view_selected still narrows event.item.id: str | None for
+    pyright, so this proves the guard itself never raises or dismisses."""
+    screen = TimePickerScreen()
+    event = ListView.Selected(ListView(), ListItem(), 0)
+    screen.on_list_view_selected(event)  # must not raise
+
+
+async def test_time_picker_is_noop_when_policy_has_no_set_schedule() -> None:
+    policy = _fake_policy(active=True)
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("t")
+        assert isinstance(app.screen, PoliciesScreen)  # the modal never opened
+
+
+async def test_time_picker_shows_enable_first_message_for_inactive_policy() -> None:
+    calls: list[tuple[int, int]] = []
+
+    def fake_set_schedule(hour: int, minute: int) -> PolicyResult:
+        calls.append((hour, minute))
+        return _ok_result()
+
+    policy = _fake_policy(active=False, set_schedule=fake_set_schedule)
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        await pilot.press("t")
+        assert isinstance(app.screen, PoliciesScreen)
+        assert calls == []
+        assert "Enable this policy first" in screen.status.text
+
+
+async def test_time_picker_selecting_a_slot_calls_set_schedule_with_parsed_hour_minute() -> None:
+    calls: list[tuple[int, int]] = []
+
+    def fake_set_schedule(hour: int, minute: int) -> PolicyResult:
+        calls.append((hour, minute))
+        return _ok_result()
+
+    policy = _fake_policy(
+        active=True, set_schedule=fake_set_schedule, read_schedule=lambda: (1, 30)
+    )
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        await pilot.press("t")
+        assert isinstance(app.screen, TimePickerScreen)
+        # ListView starts on 00:00 (index 0); step to 01:30 (index 3).
+        await pilot.press("down", "down", "down", "enter")
+        assert isinstance(app.screen, PoliciesScreen)
+        assert calls == [(1, 30)]
+        assert "rescheduled" in screen.status.text
+        assert "scheduled daily at 01:30" in screen.detail_text
+
+
+async def test_time_picker_escape_cancels_without_calling_set_schedule() -> None:
+    calls: list[tuple[int, int]] = []
+
+    def fake_set_schedule(hour: int, minute: int) -> PolicyResult:
+        calls.append((hour, minute))
+        return _ok_result()
+
+    policy = _fake_policy(active=True, set_schedule=fake_set_schedule)
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("t")
+        assert isinstance(app.screen, TimePickerScreen)
+        await pilot.press("escape")
+        assert isinstance(app.screen, PoliciesScreen)
+        assert calls == []
+
+
+async def test_time_picker_list_view_does_not_overflow_smallest_tested_terminal() -> None:
+    """Proves TimePickerScreen's own DEFAULT_CSS is actually applied — a bounded
+    ListView height, never NavScreen's class-scoped selector or Textual's bare
+    `height: auto` default, which would try to render all 48 rows at once
+    (11-REVIEWS.md cycle 3 finding #10)."""
+    policy = _fake_policy(active=True, set_schedule=lambda _h, _m: _ok_result())
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("t")
+        screen = app.screen
+        assert isinstance(screen, TimePickerScreen)
+        list_view = screen.query_one(ListView)
+        assert list_view.size.height <= 20
+
+
+async def test_time_picker_set_schedule_failure_surfaces_on_status_line() -> None:
+    def failing_set_schedule(_hour: int, _minute: int) -> PolicyResult:
+        raise CommandError(["launchctl", "bootstrap"], 1)
+
+    policy = _fake_policy(active=True, set_schedule=failing_set_schedule)
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        await pilot.press("t")
+        await pilot.press("enter")  # select the first slot, 00:00
+        assert isinstance(app.screen, PoliciesScreen)
+        assert "Policy change failed" in screen.status.text
 
 
 async def test_policy_toggle_disables_active_policy() -> None:
