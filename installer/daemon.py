@@ -10,6 +10,7 @@ renders UI.
 """
 
 import contextlib
+import importlib.resources
 import os
 import plistlib
 import shutil
@@ -28,6 +29,13 @@ DEFAULT_CAP_BYTES = 256 * 1024
 # `launchctl bootout` against a nonexistent label on this machine exits 3, and
 # `launchctl error 3` decodes it as "3: No such process" (Darwin's ESRCH).
 _ALREADY_UNLOADED_EXIT_CODE = 3
+
+# The wrapper asset copied into the managed bin dir at apply time, mirroring
+# installer/tweaks.py's ManagedExecutable/_is_our_executable sentinel-checked
+# copy pattern for a single executable outside the TweakBundle mechanism.
+_WRAPPER_ASSET = "helper_assets/prune_daemon_runner.py"
+_WRAPPER_COMMAND = "tools-installer-prune-daemon"
+_WRAPPER_SENTINEL = "tools-installer-helper: prune-daemon"
 
 
 class DaemonScheduleError(OSError):
@@ -276,3 +284,50 @@ def ensure_log_path(log_path: Path) -> None:
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.touch(exist_ok=True)
+
+
+def _is_our_wrapper(path: Path) -> bool:
+    try:
+        return _WRAPPER_SENTINEL in path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def install_wrapper(bin_dir: Path) -> Path:
+    """Copy the wrapper asset into bin_dir, chmod 0o755. Returns the installed path.
+
+    Mirrors installer/tweaks.py's install_tweak_executables/ManagedExecutable copy
+    pattern for a single, non-TweakBundle executable. Refuses to overwrite a
+    same-named file it does not own (no sentinel present) rather than clobbering
+    an unrelated file a user or another tool placed there.
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    target = bin_dir / _WRAPPER_COMMAND
+    if target.exists() and not _is_our_wrapper(target):
+        raise OSError(f"{target} exists and is not managed by tools-installer")
+    source = importlib.resources.files("installer").joinpath(_WRAPPER_ASSET).read_text()
+    target.write_text(source)
+    target.chmod(0o755)
+    return target
+
+
+def remove_wrapper(bin_dir: Path) -> None:
+    """Delete the installed wrapper only if it exists AND carries the sentinel.
+
+    A missing bin_dir or file, or a same-named file this module does not own, is
+    a silent no-op -- mirrors installer/tweaks.py's remove_tweak_executables.
+    """
+    target = bin_dir / _WRAPPER_COMMAND
+    if target.exists() and _is_our_wrapper(target):
+        target.unlink()
+
+
+def wrapper_present(bin_dir: Path) -> bool:
+    """True when this module's own wrapper (sentinel-checked) is on disk.
+
+    Mirrors installer/tweaks.py's tweak_executables_present: ownership is
+    sentinel-checked so this can never promise to remove a same-named file
+    remove_wrapper would correctly refuse to delete.
+    """
+    target = bin_dir / _WRAPPER_COMMAND
+    return target.exists() and _is_our_wrapper(target)

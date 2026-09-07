@@ -399,6 +399,15 @@ def test_main_never_raises_when_the_script_cannot_be_launched(tmp_path: Path) ->
 
 # --- _truncate: header-boundary snap, hard cap, decode safety --------------
 
+# Deliberate private-member access, one suppression point covering every call
+# below: _truncate is a self-contained, standard-library-only pure function
+# with no public entry point of its own (main() only exercises it as a
+# side effect of a real subprocess call) -- 11-01-PLAN.md's own Task 2 action
+# text requires these tests import and call it directly, the SAME way
+# tests/test_wait_time.py already imports wait_time's own module-level
+# functions.
+_truncate = prune_daemon_runner._truncate  # pyright: ignore[reportPrivateUsage]
+
 
 def _write_run(log_path: Path, timestamp: str, body: str) -> None:
     with log_path.open("a", encoding="utf-8") as handle:
@@ -409,7 +418,7 @@ def test_truncate_is_a_noop_when_under_cap(tmp_path: Path) -> None:
     log_path = tmp_path / "log.txt"
     _write_run(log_path, "run-1", "small body")
     original = log_path.read_bytes()
-    prune_daemon_runner._truncate(log_path, 999_999)
+    _truncate(log_path, 999_999)
     assert log_path.read_bytes() == original
 
 
@@ -418,7 +427,7 @@ def test_truncate_snaps_to_the_newest_runs_header_boundary(tmp_path: Path) -> No
     for i in range(20):
         _write_run(log_path, f"run-{i:02d}", f"body line for run {i:02d}")
     cap = 200
-    prune_daemon_runner._truncate(log_path, cap)
+    _truncate(log_path, cap)
     result = log_path.read_text(encoding="utf-8")
     assert result.startswith("=== run-")
     assert "run-19" in result
@@ -431,18 +440,23 @@ def test_truncate_never_splits_a_multibyte_utf8_character(tmp_path: Path) -> Non
     log_path = tmp_path / "log.txt"
     for i in range(10):
         _write_run(log_path, f"run-{i:02d}", f"emoji body \U0001f600 for run {i:02d} " * 5)
-    prune_daemon_runner._truncate(log_path, 150)
-    # Must decode cleanly -- the original byte-window design could cut mid-
-    # sequence here.
-    result = log_path.read_text(encoding="utf-8")
-    assert result.startswith("=== ") or result == ""
+    # A cap that retains two whole runs (~151 bytes each, header+body): large
+    # enough that the header-boundary snap lands on a real "=== " line, but
+    # tight enough that an emoji sits right at the accumulation boundary --
+    # exactly where the ORIGINAL byte-window design (cut first, find header
+    # after) could have sliced mid-sequence.
+    _truncate(log_path, 320)
+    result = log_path.read_text(encoding="utf-8")  # must decode cleanly
+    assert result.startswith("=== ")
+    assert "\U0001f600" in result
+    assert "run-09" in result
 
 
 def test_truncate_recovers_from_pre_existing_invalid_utf8_bytes(tmp_path: Path) -> None:
     log_path = tmp_path / "log.txt"
     # Bytes no str.encode("utf-8") output could ever produce.
     log_path.write_bytes(b"=== run-00 ===\n" + b"\xff" * 300 + b"\n")
-    prune_daemon_runner._truncate(log_path, 50)
+    _truncate(log_path, 50)
     # Must not raise UnicodeDecodeError; result must itself be valid UTF-8.
     result = log_path.read_text(encoding="utf-8")
     assert isinstance(result, str)
@@ -453,7 +467,7 @@ def test_truncate_hard_caps_a_single_oversized_line(tmp_path: Path) -> None:
     huge_line = "x" * 5000
     log_path.write_text(f"{huge_line}\n")
     cap = 200
-    prune_daemon_runner._truncate(log_path, cap)
+    _truncate(log_path, cap)
     assert log_path.stat().st_size <= cap
     result = log_path.read_text(encoding="utf-8")  # must not raise
     assert result.endswith("\n")
@@ -464,7 +478,7 @@ def test_truncate_caps_an_oversized_single_run(tmp_path: Path) -> None:
     body_lines = "\n".join(f"line {i}" for i in range(500))
     _write_run(log_path, "run-00", body_lines)
     cap = 300
-    prune_daemon_runner._truncate(log_path, cap)
+    _truncate(log_path, cap)
     assert log_path.stat().st_size <= cap
     result = log_path.read_text(encoding="utf-8")  # must not raise
     assert result.endswith("\n")
@@ -476,7 +490,7 @@ def test_truncate_always_leaves_exactly_one_trailing_newline_for_the_next_append
     log_path = tmp_path / "log.txt"
     for i in range(20):
         _write_run(log_path, f"run-{i:02d}", f"body {i:02d}")
-    prune_daemon_runner._truncate(log_path, 200)
+    _truncate(log_path, 200)
     _write_run(log_path, "run-next", "fresh body")
     content = log_path.read_text(encoding="utf-8")
     # The two blocks' headers must never concatenate onto one line.
@@ -535,6 +549,11 @@ def test_remove_wrapper_refuses_to_delete_an_unmanaged_same_named_file(tmp_path:
 
 
 def test_prune_daemon_runner_never_imports_the_installer_package() -> None:
+    # Line-anchored, mirroring this plan's own phase-level verification grep
+    # (`grep -c "^import installer\.\|^from installer\."`) -- a substring
+    # check would also match this module's own docstring, which legitimately
+    # DISCUSSES the test-only import shape without ever using it.
     source = Path(prune_daemon_runner.__file__).read_text()
-    assert "import installer" not in source
-    assert "from installer" not in source
+    for line in source.splitlines():
+        assert not line.startswith("import installer.")
+        assert not line.startswith("from installer.")
