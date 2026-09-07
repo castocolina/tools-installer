@@ -363,7 +363,7 @@ def daemon_policy(
 
     `active`/`is_active()` are both plist_path.exists(), never a parsed
     `launchctl print` (its own man page disclaims that output as non-API).
-    `fd`/`rg` are declared `requires` but `hard_requires=False`: a missing
+    `fd`/`rg` are declared `requires`, but `hard_requires` is False: a missing
     fd/rg never blocks `apply` (REQ-daemon-dependency-gating) -- the wrapped
     script's own find/grep fallback degrades silently instead.
     """
