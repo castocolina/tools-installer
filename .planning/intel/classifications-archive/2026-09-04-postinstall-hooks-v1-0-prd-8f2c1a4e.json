@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/ramon/git/personal/tools-installer/docs/prds/2026-09-04-postinstall-hooks-v1.0-prd.md",
+  "type": "PRD",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Postinstall Hooks - Product Requirements Document (PRD)",
+  "summary": "Adds an optional postinstall field so catalog tools like codegraph can run a one-time follow-up setup step after install.",
+  "scope": ["postinstall hook", "Tool", "Method", "codegraph", "MCP server registration", "install flow", "idempotency", "TUI visibility"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

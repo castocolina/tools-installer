@@ -1,0 +1,7 @@
+docs:
+  - path: docs/prds/2026-09-04-live-package-management-v1.0-prd.md
+    type: PRD
+  - path: docs/prds/2026-09-04-background-maintenance-daemon-v1.0-prd.md
+    type: PRD
+  - path: docs/prds/2026-09-04-agent-cli-ergonomics-v1.0-prd.md
+    type: PRD

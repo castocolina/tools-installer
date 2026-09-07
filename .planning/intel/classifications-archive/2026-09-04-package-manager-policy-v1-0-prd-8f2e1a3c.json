@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/ramon/git/personal/tools-installer/docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md",
+  "type": "PRD",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Package Manager Policy - Product Requirements Document (PRD)",
+  "summary": "Requirements for banning bare npx, fixing pnpm global-install data loss, and verifying real install mechanisms for catalog tools like codegraph and mmdc.",
+  "scope": ["npm", "npx", "pnpm", "package manager policy", "guards", "codegraph", "mmdc", "graphify", "installer catalog"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

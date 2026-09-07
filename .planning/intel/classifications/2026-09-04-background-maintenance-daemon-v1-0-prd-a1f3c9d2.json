@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/ramon/git/personal/tools-installer/docs/prds/2026-09-04-background-maintenance-daemon-v1.0-prd.md",
+  "type": "PRD",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Background Maintenance Daemon Policy - Product Requirements Document (PRD)",
+  "summary": "Requirements for a new macOS-only Policy that installs a launchd LaunchAgent to run the existing prune-user-tmpdir.sh cleanup script daily.",
+  "scope": ["background maintenance daemon", "launchd LaunchAgent", "prune-user-tmpdir.sh", "Policy", "scheduling", "macOS"],
+  "cross_refs": ["scripts/prune-user-tmpdir.sh"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

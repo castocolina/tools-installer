@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/ramon/git/personal/tools-installer/docs/prds/2026-09-04-catalog-expansion-v1.0-prd.md",
+  "type": "PRD",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Catalog Expansion: Shell, Terminals, Agent Hosts, and Linux Parity - Product Requirements Document (PRD)",
+  "summary": "Adds shell/container tooling, terminal emulators, agent-host CLIs, and Linux parity to the installer catalog.",
+  "scope": ["catalog", "shell tooling", "terminal emulators", "agent-host CLIs", "code intelligence tools", "Linux/Bazzite parity", "rtk", "codegraph", "graphify"],
+  "cross_refs": ["2026-09-04-catalog-tiers-and-dependency-chain-v1.0-prd.md", "2026-09-04-package-manager-policy-v1.0-prd.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

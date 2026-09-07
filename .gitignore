@@ -33,6 +33,5 @@ coverage.xml
 .codegraph/
 graphify-out/
 
-# GSD/superpowers scratch artifacts (not part of the product delivery)
-.planning/
+# superpowers scratch artifacts (not part of the product delivery)
 .claude/handoffs/
