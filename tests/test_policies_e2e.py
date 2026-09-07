@@ -4,13 +4,15 @@ enable and vanish on disable while the real $HOME is never touched. Saves SVG
 screenshots for agent inspection."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
+from textual.widgets import DataTable
 
 from installer.doctor import DoctorReport
 from installer.guards import REDIRECT_SENTINEL, SHIM_SENTINEL, guard_status
 from installer.model import Method, Tool
-from installer.policy import ban_policy, omz_plugins_policy, tweak_policy
+from installer.policy import ban_policy, daemon_policy, omz_plugins_policy, tweak_policy
 from installer.tweaks import BUNDLES, TweakBundle
 from installer.uninstall import SweepResult
 from installer.wizard_app import (
@@ -385,3 +387,86 @@ async def test_every_policy_detail_fits_the_panel_at_80_columns(
             )
             await pilot.press("down")
             await pilot.pause()
+
+
+class _FakeDaemonRun:
+    """Records every argv; never touches real launchctl."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def __call__(self, cmd: list[str]) -> None:
+        self.calls.append(cmd)
+
+
+def _daemon_app(home: Path, *, installed_tools: dict[str, bool]) -> tuple[UnifiedApp, Path]:
+    plist_path = home / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
+    log_path = home / "Logs" / "prune-daemon.log"
+    wrapper_bin_dir = home / ".local" / "bin"
+    script_path = home / "scripts" / "prune-user-tmpdir.sh"
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text("#!/bin/sh\n")
+    policy = daemon_policy(
+        plist_path=plist_path,
+        log_path=log_path,
+        wrapper_bin_dir=wrapper_bin_dir,
+        script_path=script_path,
+        state_path=home / ".myshellrc",
+        installed_tools=installed_tools,
+        path_value="/usr/bin:/bin",
+        tmpdir_value=str(home / "tmp"),
+        home_value=str(home),
+        uv_path=home / "uv",  # fake, absolute -- the fake run never executes it
+        uid=501,
+        run=_FakeDaemonRun(),
+    )
+    app = UnifiedApp(
+        [_tool()],
+        {"rg": True},
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: (guard_status(wrapper_bin_dir), None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=UninstallInputs(
+            rows=[],
+            ban_names=list,
+            has_path_block=lambda: False,
+            remove=lambda _d: SweepResult(),
+        ),
+        policies=PolicyInputs(policies=[policy]),
+        initial_view="policies",
+    )
+    return app, plist_path
+
+
+async def test_daemon_policy_toggles_on_despite_missing_fd_and_rg_with_recommended_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    app, plist_path = _daemon_app(Path.home(), installed_tools={"fd": False, "rg": False})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        table = screen.query_one(DataTable[Any])
+        requires_cell = table.get_cell("daemon:prune-tmpdir", "requires").plain
+        assert requires_cell == "recommended: fd, rg"
+        assert "Recommended tool(s): fd, rg. Not required — apply still runs and falls back" in (
+            screen.detail_text
+        )
+        assert "missing:" not in requires_cell
+        assert "Missing required tool(s)" not in screen.detail_text
+        assert "before enabling" not in screen.detail_text
+
+        await pilot.press("space")
+        await pilot.pause()
+        assert isinstance(screen, PoliciesScreen)
+        assert screen.active_state["daemon:prune-tmpdir"] is True
+        assert plist_path.exists()  # concrete proof apply() actually ran
+
+        await pilot.press("space")
+        await pilot.pause()
+        assert isinstance(screen, PoliciesScreen)
+        assert screen.active_state["daemon:prune-tmpdir"] is False
+        assert not plist_path.exists()
