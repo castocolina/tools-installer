@@ -15,6 +15,18 @@ _PATH_BEGIN = "# >>> tools-installer path >>>"
 _PATH_END = "# <<< tools-installer path <<<"
 _SOURCE_BEGIN = "# >>> tools-installer source >>>"
 _SOURCE_END = "# <<< tools-installer source <<<"
+_PNPM_BEGIN = "# >>> tools-installer pnpm >>>"
+_PNPM_END = "# <<< tools-installer pnpm <<<"
+
+
+def _resolve_home(path: Path, home: Path) -> Path:
+    """Resolve only the current-user tilde against an injected home directory."""
+    raw = str(path)
+    if raw == "~":
+        return home
+    if raw.startswith("~/"):
+        return home / raw[2:]
+    return path
 
 
 def collect_bin_dirs(
@@ -22,6 +34,8 @@ def collect_bin_dirs(
     platform: Platform,
     default: Path,
     exists: Callable[[Path], bool] = Path.is_dir,
+    *,
+    home: Path | None = None,
 ) -> list[Path]:
     """The default bin dir plus each platform-applicable method's existing bin_dir.
 
@@ -30,12 +44,17 @@ def collect_bin_dirs(
     and wiring it into PATH (or reporting it broken) is noise. Disk presence —
     not PATH probing — avoids the bootstrap chicken-and-egg: right after
     installing brew, `brew` is not on PATH yet but /opt/homebrew/bin exists.
+
+    `home`, when given, is used only to resolve a bare `~` or `~/...` default —
+    letting a caller (installer/install_actions.py's ActionContext) inject a
+    non-default home for tests, while every other path is unaffected.
     """
+    resolved_home = Path.home() if home is None else home
     dirs: list[Path] = []
     seen: set[Path] = set()
 
     def add(path: Path, *, require_exists: bool) -> None:
-        resolved = path.expanduser()
+        resolved = _resolve_home(path, resolved_home)
         if resolved in seen or (require_exists and not exists(resolved)):
             return
         seen.add(resolved)
@@ -48,6 +67,35 @@ def collect_bin_dirs(
             if isinstance(raw, str) and raw:
                 add(Path(raw), require_exists=True)
     return dirs
+
+
+def existing_managed_bin_dirs(
+    path: Path,
+    exists: Callable[[Path], bool] = Path.is_dir,
+) -> list[Path]:
+    """Read valid PATH entries from the last installer-owned managed block."""
+    if not path.exists():
+        return []
+    lines = path.read_text().splitlines()
+    starts = [index for index, line in enumerate(lines) if line == _PATH_BEGIN]
+    if not starts:
+        return []
+    start = starts[-1]
+    try:
+        stop = lines.index(_PATH_END, start + 1)
+    except ValueError:
+        return []
+
+    prefix = 'export PATH="'
+    suffix = ':$PATH"'
+    paths: list[Path] = []
+    for line in lines[start + 1 : stop]:
+        if not (line.startswith(prefix) and line.endswith(suffix)):
+            continue
+        candidate = Path(line[len(prefix) : -len(suffix)])
+        if candidate.is_absolute() and exists(candidate) and candidate not in paths:
+            paths.append(candidate)
+    return paths
 
 
 def managed_block(bin_dirs: list[Path]) -> str:
@@ -147,3 +195,25 @@ def ensure_source(rc_path: Path, myshellrc_path: Path) -> None:
     )
     existing = rc_path.read_text() if rc_path.exists() else ""
     rc_path.write_text(apply_block(existing, block, begin=_SOURCE_BEGIN, end=_SOURCE_END))
+
+
+def write_pnpm_home(rc_path: Path, pnpm_home: Path) -> bool:
+    """Write PNPM_HOME and its PATH entry as one installer-owned block.
+
+    Returns whether the file changed so the action layer can distinguish a
+    first application from an idempotent repeat.
+    """
+    block = "\n".join(
+        (
+            _PNPM_BEGIN,
+            f'export PNPM_HOME="{pnpm_home}"',
+            f'export PATH="{pnpm_home}:$PATH"',
+            _PNPM_END,
+        )
+    )
+    existing = rc_path.read_text() if rc_path.exists() else ""
+    updated = apply_block(existing, block, begin=_PNPM_BEGIN, end=_PNPM_END)
+    if updated == existing:
+        return False
+    rc_path.write_text(updated)
+    return True
