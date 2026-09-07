@@ -12,7 +12,14 @@ from installer.app import UninstallDecision
 from installer.doctor import DoctorReport
 from installer.model import Method, Tool
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport, reinstall_preview
-from installer.policy import Policy, PolicyLayer, PolicyResult
+from installer.policy import (
+    Policy,
+    PolicyLayer,
+    PolicyResult,
+    daemon_policy,
+    ensure_daemon_default,
+    omz_plugins_policy,
+)
 from installer.run import CommandError
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, ToolRow
@@ -147,6 +154,8 @@ def _app(
     globals_preview: Callable[[NodeGlobalsReport], str] | None = None,
     reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
     initial_view: str = BASE_VIEW,
+    daemon_default: Callable[[], bool] | None = None,
+    daemon_default_policy_id: str | None = None,
 ) -> UnifiedApp:
     tools = [_tool("rg"), _tool("fd")]
     installed: Mapping[str, bool] = {"rg": True, "fd": False}
@@ -165,6 +174,8 @@ def _app(
         globals_preview=globals_preview,
         reinstall_globals=reinstall_globals,
         initial_view=initial_view,
+        daemon_default=daemon_default,
+        daemon_default_policy_id=daemon_default_policy_id,
     )
 
 
@@ -2316,3 +2327,288 @@ def test_unified_app_constructs_without_node_globals_closures() -> None:
         uninstall=_uninstall_inputs(),
         policies=_policy_inputs(),
     )
+
+
+# -- on-by-default (ensure_daemon_default + the worker/message/guard wiring) --
+
+
+def test_ensure_daemon_default_applies_once_when_undecided(tmp_path: Path) -> None:
+    state_path = tmp_path / ".myshellrc"
+    calls: list[str] = []
+    policy = _fake_policy(active=False, apply=lambda: (calls.append("apply"), _ok_result())[1])
+    assert ensure_daemon_default(policy, state_path=state_path) is True
+    assert calls == ["apply"]
+
+
+def test_ensure_daemon_default_is_a_noop_once_decided(tmp_path: Path) -> None:
+    state_path = tmp_path / ".myshellrc"
+    daemon.record_decided(state_path)
+    calls: list[str] = []
+    policy = _fake_policy(active=False, apply=lambda: (calls.append("apply"), _ok_result())[1])
+    assert ensure_daemon_default(policy, state_path=state_path) is False
+    assert calls == []
+
+
+def test_ensure_daemon_default_returns_false_on_a_failed_apply_without_recording(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / ".myshellrc"
+
+    def boom() -> PolicyResult:
+        raise CommandError(["launchctl", "bootstrap"], 5)
+
+    policy = _fake_policy(active=False, apply=boom)
+    assert ensure_daemon_default(policy, state_path=state_path) is False
+    assert daemon.decided(state_path) is False
+
+
+class _FakeDaemonRun:
+    """Records every argv; never touches real launchctl. Can be told to fail
+    the bootstrap call, to exercise a first-run auto-apply failure."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.calls: list[list[str]] = []
+        self._fail = fail
+
+    def __call__(self, cmd: list[str]) -> None:
+        self.calls.append(cmd)
+        if self._fail and cmd[:2] == ["launchctl", "bootstrap"]:
+            raise CommandError(cmd, 5)
+
+
+def _daemon_policy(tmp_path: Path, *, run: Callable[[list[str]], None] | None = None) -> Policy:
+    """A real daemon_policy against tmp_path-scoped artifacts, with an injected
+    fake run so no real launchctl call is ever made."""
+    script_path = tmp_path / "scripts" / "prune-user-tmpdir.sh"
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text("#!/bin/sh\n")
+    return daemon_policy(
+        plist_path=tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist",
+        log_path=tmp_path / "Logs" / "prune-daemon.log",
+        wrapper_bin_dir=tmp_path / ".local" / "bin",
+        script_path=script_path,
+        state_path=tmp_path / ".myshellrc",
+        installed_tools={"fd": True, "rg": True},
+        path_value="/usr/bin:/bin",
+        tmpdir_value=str(tmp_path / "tmp"),
+        home_value=str(tmp_path),
+        uv_path=tmp_path / "uv",
+        uid=501,
+        run=run if run is not None else _FakeDaemonRun(),
+    )
+
+
+def _daemon_app(
+    tmp_path: Path,
+    *,
+    policy: Policy,
+    daemon_default: Callable[[], bool] | None,
+    remove: Callable[[UninstallDecision], SweepResult] = lambda _d: SweepResult(),
+    tweak_ids: tuple[str, ...] | Callable[[], tuple[str, ...]] = (),
+) -> UnifiedApp:
+    return UnifiedApp(
+        [_tool("rg")],
+        {"rg": True},
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: ({}, None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=_uninstall_inputs(remove=remove, tweak_ids=tweak_ids),
+        policies=PolicyInputs(policies=[policy]),
+        initial_view="policies",
+        daemon_default=daemon_default,
+        daemon_default_policy_id=policy.id,
+    )
+
+
+async def _settle_daemon(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> None:
+    """Wait for the on-by-default worker's completion message to be handled."""
+    for _ in range(400):
+        if not app._daemon_default_in_flight:
+            break
+        await pilot.pause()
+    await pilot.pause()
+
+
+async def test_on_by_default_auto_applies_on_a_fresh_undecided_machine(tmp_path: Path) -> None:
+    state_path = tmp_path / ".myshellrc"
+    plist_path = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
+    policy = _daemon_policy(tmp_path)
+    app = _daemon_app(
+        tmp_path,
+        policy=policy,
+        daemon_default=lambda: ensure_daemon_default(policy, state_path=state_path),
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_daemon(app, pilot)
+        assert plist_path.exists()
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert screen.active_state["daemon:prune-tmpdir"] is True
+        assert app._daemon_default_in_flight is False
+
+
+async def test_on_by_default_does_not_reenable_an_explicitly_disabled_daemon(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / ".myshellrc"
+    plist_path = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
+    daemon.record_decided(state_path)
+    policy = _daemon_policy(tmp_path)
+    app = _daemon_app(
+        tmp_path,
+        policy=policy,
+        daemon_default=lambda: ensure_daemon_default(policy, state_path=state_path),
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_daemon(app, pilot)
+        assert not plist_path.exists()
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert screen.active_state["daemon:prune-tmpdir"] is False
+
+
+async def test_on_by_default_never_records_a_decision_on_a_failed_apply(tmp_path: Path) -> None:
+    state_path = tmp_path / ".myshellrc"
+    policy = _daemon_policy(tmp_path, run=_FakeDaemonRun(fail=True))
+    app = _daemon_app(
+        tmp_path,
+        policy=policy,
+        daemon_default=lambda: ensure_daemon_default(policy, state_path=state_path),
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_daemon(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert screen.active_state["daemon:prune-tmpdir"] is False
+        assert daemon.decided(state_path) is False
+        assert app._daemon_default_in_flight is False
+
+
+async def test_manual_toggle_of_the_daemon_is_refused_while_the_worker_is_in_flight(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / ".myshellrc"
+    fake_run = _FakeDaemonRun()
+    policy = _daemon_policy(tmp_path, run=fake_run)
+    app = _daemon_app(
+        tmp_path,
+        policy=policy,
+        daemon_default=lambda: ensure_daemon_default(policy, state_path=state_path),
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert app._daemon_default_in_flight is True
+        await pilot.press("space")
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert "wait a moment" in screen.status.text.lower()
+        await _settle_daemon(app, pilot)
+        assert screen.active_state["daemon:prune-tmpdir"] is True
+        bootstrap_calls = [c for c in fake_run.calls if c[:2] == ["launchctl", "bootstrap"]]
+        assert len(bootstrap_calls) == 1
+
+
+async def test_on_by_default_leaves_an_already_active_daemon_active(tmp_path: Path) -> None:
+    """The decided-AND-active case: refresh_daemon_state must resolve via the
+    policy's own is_active(), never the worker's applied=False boolean
+    directly, or an ordinary already-on second run would flip to OFF."""
+    state_path = tmp_path / ".myshellrc"
+    seed = _daemon_policy(tmp_path)
+    seed.apply()
+    assert daemon.decided(state_path) is True
+    # A second daemon_policy instance, freshly constructed against the SAME
+    # on-disk plist: active=True is baked in at construction time.
+    policy = _daemon_policy(tmp_path)
+    assert policy.active is True
+    app = _daemon_app(
+        tmp_path,
+        policy=policy,
+        daemon_default=lambda: ensure_daemon_default(policy, state_path=state_path),
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert screen.active_state["daemon:prune-tmpdir"] is True
+        await _settle_daemon(app, pilot)
+        assert screen.active_state["daemon:prune-tmpdir"] is True
+
+
+async def test_daemon_default_in_flight_clears_even_on_an_unexpected_exception(
+    tmp_path: Path,
+) -> None:
+    def boom() -> bool:
+        raise RuntimeError("boom, outside ensure_daemon_default's own except tuple")
+
+    policy = _daemon_policy(tmp_path)
+    app = _daemon_app(tmp_path, policy=policy, daemon_default=boom)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_daemon(app, pilot)
+        assert app._daemon_default_in_flight is False
+
+
+async def test_uninstall_removal_is_refused_while_the_daemon_worker_is_in_flight(
+    tmp_path: Path,
+) -> None:
+    """The race guard blocks on _daemon_default_in_flight alone -- never on
+    whether a daemon: id happens to already be visible in _tweak_ids, which it
+    is not yet during first-run auto-apply (11-REVIEWS.md cycle 3 finding
+    #12)."""
+    policy = _daemon_policy(tmp_path)
+    captured: list[UninstallDecision] = []
+    # A release-gated callable, not the real ensure_daemon_default: the guard
+    # must hold across this whole multi-keypress sequence, and a real
+    # (near-instant) fake-run apply could otherwise settle before the last
+    # keypress lands, making the race window this test targets flaky.
+    release = threading.Event()
+
+    def slow_daemon_default() -> bool:
+        release.wait(timeout=5)
+        return False
+
+    app = _daemon_app(
+        tmp_path,
+        policy=policy,
+        daemon_default=slow_daemon_default,
+        remove=_recorder(captured, SweepResult()),
+        tweak_ids=("tweak:countdown",),  # an unrelated, real tweak -- no daemon id present yet
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert app._daemon_default_in_flight is True
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert not any(tid.startswith("daemon:") for tid in screen._tweak_ids)
+        await pilot.press("a")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        assert captured == []
+        assert screen.applied is False
+        assert "wait a moment" in screen.status.text.lower()
+        release.set()
+        await _settle_daemon(app, pilot)
+
+
+async def test_on_by_default_treats_an_existing_installation_as_fresh(tmp_path: Path) -> None:
+    """A pre-existing installation (other managed blocks present) with no
+    daemon 'decided' marker yet is treated identically to a genuinely fresh
+    HOME -- CONTEXT.md's own D-01 decision, documented and locked in
+    (11-REVIEWS.md cycle 3 finding #16)."""
+    state_path = tmp_path / ".myshellrc"
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text("plugins=(git)\nsource $ZSH/oh-my-zsh.sh\n")
+    omz_plugins_policy(zshrc_path=zshrc, state_path=state_path, present=True).apply()
+    assert daemon.decided(state_path) is False  # a pre-existing install, no daemon marker yet
+    plist_path = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
+    policy = _daemon_policy(tmp_path)
+    app = _daemon_app(
+        tmp_path,
+        policy=policy,
+        daemon_default=lambda: ensure_daemon_default(policy, state_path=state_path),
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_daemon(app, pilot)
+        assert plist_path.exists()
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert screen.active_state["daemon:prune-tmpdir"] is True

@@ -245,6 +245,37 @@ def test_build_daemon_policy_is_fail_closed_not_fail_hidden_for_a_bad_environmen
     assert policy.id == "daemon:prune-tmpdir"
 
 
+def test_daemon_default_is_wired_only_for_the_genuine_setup_wizard_entry_point(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """apply_daemon_default's ALLOWLIST gate (11-REVIEWS.md cycle 2 finding
+    #14): only the default/no-flag path (_select_catalog's own call site --
+    the genuine, normal interactive `make setup` wizard flow) ever wires a
+    real daemon_default callback into UnifiedApp. `--doctor` (read-only,
+    Makefile:19), `--uninstall`, and `--guard`'s interactive Policies view
+    must never auto-apply -- proven against _capture_app's own CAPTURED
+    kwargs, not merely that an injected callback was never invoked
+    (11-REVIEWS.md cycle 2 finding #20)."""
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
+
+    assert setup.main(["--doctor"]) == 0
+    assert setup.main(["--uninstall"]) == 0
+    assert setup.main(["--guard"]) == 0
+    assert setup.main([]) == 0
+
+    assert len(seen) == 4
+    doctor_kwargs, uninstall_kwargs, policies_kwargs, default_kwargs = seen
+
+    for kwargs in (doctor_kwargs, uninstall_kwargs, policies_kwargs):
+        assert kwargs.get("daemon_default") is None
+        assert kwargs.get("daemon_default_policy_id") is None
+
+    assert callable(default_kwargs["daemon_default"])
+    assert default_kwargs["daemon_default_policy_id"] == "daemon:prune-tmpdir"
+
+
 def test_the_policies_view_wires_split_mode_myshellrc_sourcing_for_every_tweak(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
