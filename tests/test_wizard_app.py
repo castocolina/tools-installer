@@ -1624,9 +1624,8 @@ async def test_uninstall_tweak_row_names_background_jobs_when_a_daemon_id_is_off
         cells = screen.query_one(DataTable[Any]).get_row("#tweaks")
         rendered = " ".join(str(cell) for cell in cells)
         assert "shell tweaks + background jobs" in rendered
-        detail = next(entry.detail for entry in screen._entries if entry.key == "#tweaks")
-        assert "background maintenance" in detail.lower()
         await pilot.pause()
+        assert "background maintenance" in screen.detail_text.lower()
 
 
 async def test_uninstall_tweak_row_stays_byte_identical_without_a_daemon_id() -> None:
@@ -1641,9 +1640,8 @@ async def test_uninstall_tweak_row_stays_byte_identical_without_a_daemon_id() ->
         rendered = " ".join(str(cell) for cell in cells)
         assert "shell tweaks" in rendered
         assert "background" not in rendered
-        detail = next(entry.detail for entry in screen._entries if entry.key == "#tweaks")
-        assert "background" not in detail.lower()
         await pilot.pause()
+        assert "background" not in screen.detail_text.lower()
 
 
 async def test_uninstall_applied_summary_names_the_background_job_alone() -> None:

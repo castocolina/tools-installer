@@ -542,6 +542,17 @@ _TWEAK_KEY = "#tweaks"
 _ENV_KEYS = (_BAN_KEY, _BLOCK_KEY, _TWEAK_KEY)
 
 
+def _has_daemon_id(ids: tuple[str, ...]) -> bool:
+    """True when any id in ids is the background daemon's own namespaced id.
+
+    Mirrors `installer.app._has_daemon_id` exactly: a tiny, named predicate
+    rather than an inline generator expression repeated at every daemon-aware
+    copy call site (preview row + success summary), keeping both byte-for-byte
+    consistent with each other and with the CLI's own equivalent wording.
+    """
+    return any(policy_id.startswith("daemon:") for policy_id in ids)
+
+
 class UninstallScreen(AppScreen):
     """Full catalog-parity uninstall browser. Every tool is listed with its
     removability state; only removable tools (and the env rows) toggle. Enter
@@ -653,21 +664,32 @@ class UninstallScreen(AppScreen):
         )
 
     def _tweak_entry(self) -> _UninstallEntry:
+        # Byte-identical to today when no daemon: id is among the offered ids
+        # (Linux, or the daemon never enabled) -- the label/detail only name
+        # the background job when one is actually present.
+        has_daemon = _has_daemon_id(self._tweak_ids)
+        label = "shell tweaks + background jobs" if has_daemon else "shell tweaks"
+        detail = (
+            "Disables every enabled shell tweak — the ~/.myshellrc blocks, "
+            "the managed helper executables, and the Oh-My-Zsh plugin names "
+            "this installer added to .zshrc (never ones you added yourself)"
+        )
+        if has_daemon:
+            detail += (
+                " — and unregisters the background maintenance LaunchAgent"
+                " (its plist and wrapper executable)"
+            )
         return _UninstallEntry(
             key=_TWEAK_KEY,
             cells=[
                 mark(False),
-                Text("shell tweaks", style="bold yellow"),
+                Text(label, style="bold yellow"),
                 Text("env", style="yellow"),
                 Text("shell config", style="dim"),
                 Text(f"blocks + helpers ({', '.join(self._tweak_ids)})", style="dim"),
             ],
             selectable=True,
-            detail=(
-                "Disables every enabled shell tweak — the ~/.myshellrc blocks, "
-                "the managed helper executables, and the Oh-My-Zsh plugin names "
-                "this installer added to .zshrc (never ones you added yourself)"
-            ),
+            detail=detail,
             paths=(),
             is_ban=False,
             is_path_block=False,
@@ -812,7 +834,7 @@ class UninstallScreen(AppScreen):
         return run
 
     def _apply_removal(self, ids: list[str]) -> None:
-        if self.remove_tweaks and getattr(self.app, "_daemon_default_in_flight", False):
+        if self.remove_tweaks and getattr(self.app, "daemon_default_in_flight", False):
             # Gated DIRECTLY on the in-flight boolean, never additionally on
             # whether a daemon: id already appears in self._tweak_ids: during
             # first-run auto-apply the daemon Policy is constructed INACTIVE,
@@ -856,10 +878,24 @@ class UninstallScreen(AppScreen):
             # From the sweep's own result, never from the row's snapshot: the
             # snapshot describes what was offered, not what came off.
             if swept.swept:
-                parts.append(
-                    f"shell tweaks disabled ({', '.join(swept.swept)}) — open a new "
-                    "shell so functions and aliases refresh."
+                # Byte-identical to today when no daemon: id is among what was
+                # actually swept. When one is present, name it explicitly and
+                # append the shell-reload hint only if a real, non-daemon
+                # tweak was ALSO swept -- a LaunchAgent needs no shell reload
+                # at all (11-REVIEWS.md cycle 2 finding #19).
+                has_daemon = _has_daemon_id(swept.swept)
+                has_other = any(not sid.startswith("daemon:") for sid in swept.swept)
+                prefix = (
+                    "shell tweaks and the background maintenance job"
+                    if has_daemon
+                    else "shell tweaks"
                 )
+                reload_hint = (
+                    " — open a new shell so functions and aliases refresh."
+                    if not has_daemon or has_other
+                    else "."
+                )
+                parts.append(f"{prefix} disabled ({', '.join(swept.swept)}){reload_hint}")
             if swept.failed:
                 parts.append(
                     f"could not disable {', '.join(swept.failed)} — check permissions and re-run."
@@ -1147,7 +1183,7 @@ class PoliciesScreen(AppScreen):
         if policy is None:
             return
         if policy.id == getattr(self.app, "_daemon_default_policy_id", None) and getattr(
-            self.app, "_daemon_default_in_flight", False
+            self.app, "daemon_default_in_flight", False
         ):
             self.status.set(_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE, "warn")
             return
@@ -1450,7 +1486,7 @@ class UnifiedApp(App[list[str] | None]):
         # auto-apply is nonetheless about to run (11-REVIEWS.md cycle 2
         # finding #15). Permanently False -- a no-op state -- for every
         # construction site that never wires daemon_default at all.
-        self._daemon_default_in_flight: bool = self._daemon_default is not None
+        self.daemon_default_in_flight: bool = self._daemon_default is not None
 
     # Textual annotates install_screen with a bare (unparameterized) Screen, which
     # pyright-strict reports as partially unknown at the call site. Re-declare it
@@ -1495,7 +1531,7 @@ class UnifiedApp(App[list[str] | None]):
         completion message is ALWAYS posted -- regardless of whether
         self._daemon_default() returns normally or raises ANYTHING, including
         an exception outside ensure_daemon_default's own
-        except (OSError, CommandError) tuple -- so _daemon_default_in_flight
+        except (OSError, CommandError) tuple -- so daemon_default_in_flight
         can never get stuck True (11-REVIEWS.md cycle 3 finding #15). An
         exception raised inside the try still propagates normally after the
         finally runs and is recorded on the Worker itself (state=ERROR,
@@ -1515,7 +1551,7 @@ class UnifiedApp(App[list[str] | None]):
         # Cleared FIRST, unconditionally: this is the ONE place the flag is
         # ever cleared, and the ALWAYS-post-message guarantee above is what
         # makes that safe on every outcome, not only a successful apply.
-        self._daemon_default_in_flight = False
+        self.daemon_default_in_flight = False
         policies_screen = self._views.get("policies")
         if isinstance(policies_screen, PoliciesScreen):
             policies_screen.refresh_daemon_state(message.policy_id, message.applied)
