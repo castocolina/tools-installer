@@ -204,9 +204,46 @@ def _rtk_register(method: Method, runner: Runner, tools: Mapping[str, Tool]) -> 
     return "; ".join(errors) if errors else None
 
 
+# graphify's per-host subcommand form is `graphify <host> install`, NOT the
+# `graphify install --platform <host>` form -- both shapes exist across the
+# full set of hosts graphify itself supports, but claude/opencode/codex/
+# cursor-agent (this project's four catalog hosts) all use the dedicated
+# `<host> install` subcommand (confirmed live via `graphify --help`).
+# cursor-agent's catalog id maps to graphify's own "cursor" subcommand name --
+# the same id mapping _CODEGRAPH_TARGETS already uses.
+_GRAPHIFY_HOST_SUBCOMMANDS: dict[str, str] = {
+    "claude": "claude",
+    "opencode": "opencode",
+    "codex": "codex",
+    "cursor-agent": "cursor",
+}
+
+
+def _graphify_register(method: Method, runner: Runner, tools: Mapping[str, Tool]) -> str | None:
+    """Register graphify for every already-installed agent host, one
+    `graphify <host> install` invocation per host (never a composed CSV --
+    unlike codegraph, graphify has no multi-target flag; Pitfall 4)."""
+    present = present_agent_hosts(tools)
+    if not present:
+        return None
+    bin_dir_param = method.params.get("bin_dir")
+    override = bin_dir_param if isinstance(bin_dir_param, str) and bin_dir_param else None
+    graphify_bin = str(bin_dir(override) / "graphify")
+    errors: list[str] = []
+    for host_id, subcommand in _GRAPHIFY_HOST_SUBCOMMANDS.items():
+        if host_id not in present:
+            continue
+        try:
+            runner([graphify_bin, subcommand, "install"])
+        except CommandError as exc:
+            errors.append(f"{host_id}: {exc}")
+    return "; ".join(errors) if errors else None
+
+
 POSTINSTALL_HOOKS: dict[str, PostinstallHook] = {
     "codegraph-mcp-register": _codegraph_mcp_register,
     "rtk-register": _rtk_register,
+    "graphify-register": _graphify_register,
 }
 
 

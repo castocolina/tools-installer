@@ -1557,9 +1557,9 @@ def test_codegraph_entry_records_the_postinstall_research_findings() -> None:
         assert needle in window, f"missing {needle!r} in codegraph's postinstall window"
 
 
-def test_only_codegraph_and_rtk_declare_a_postinstall_hook() -> None:
+def test_only_codegraph_rtk_and_graphify_declare_a_postinstall_hook() -> None:
     tools = load_tools(REGISTRY)
     for tool in tools:
-        if tool.id in ("codegraph", "rtk"):
+        if tool.id in ("codegraph", "rtk", "graphify"):
             continue
         assert tool.postinstall is None, f"{tool.id}: unexpected postinstall hook declared"

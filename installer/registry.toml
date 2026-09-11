@@ -1547,6 +1547,19 @@ audience = "ai"
 tier = "ai"
 requires = ["uv"]
 desc = "Turns a codebase (plus docs, SQL schemas, configs, PDFs) into a queryable local knowledge graph for AI agents."
+postinstall = "graphify-register"
+# Verified 2026-09-11 (graphify 0.9.54): all four agent hosts' `graphify
+# <host> install` registration live-tested in a throwaway scratch project
+# (never this repo or the real $HOME), closing 12.4-RESEARCH.md's
+# Assumption A2 -- merge-safety was previously only proven for `claude`.
+# opencode+codex share AGENTS.md: seeded with unrelated pre-existing content,
+# both installs appended additively, survived byte-for-byte, idempotent on
+# rerun (second run reports "already configured (no change)", zero
+# duplicate sections). opencode's own .opencode/opencode.json survived a
+# pre-existing unrelated key untouched, plugin entry appended. cursor-agent's
+# .cursor/rules/graphify.mdc was added alongside a pre-existing unrelated
+# .mdc rule file, untouched; idempotent on rerun. See 12.4-02-SUMMARY.md for
+# the full transcript.
 [[tool.method]]
 kind = "uv-tool"
 pypi_pkg = "graphifyy"
