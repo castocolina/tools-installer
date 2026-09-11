@@ -557,4 +557,52 @@ e2e phase for a different distro family should add a new pass1/pass2-style
 subcommand reusing this same detection-script + named-container pattern,
 not invent a parallel harness.
 
+## Phase 12.4: tool onboarding and registry postinstall audit
+
+`installer/postinstall.py::present_agent_hosts(tools)` is the single shared
+computation of which of the four canonical agent-host catalog ids
+(`claude`/`codex`/`opencode`/`cursor-agent`) are actually installed — every
+`postinstall` hook that needs host-presence detection calls it rather than
+re-deriving its own loop over `installer.status.is_installed`. It was
+extracted from `_codegraph_mcp_register`'s original inline loop (Phase 9)
+with zero observable behavior change, and is now shared by three hooks in
+`POSTINSTALL_HOOKS`:
+
+1. `codegraph-mcp-register` (Phase 9) — composes one `--target` CSV call.
+2. `rtk-register` (Phase 12.4) — one `rtk init <args>` invocation per
+   present host; `cursor-agent`'s branch only fires when `claude` is ALSO
+   present, because live testing against the real rtk v0.49.0 binary
+   confirmed `--agent cursor` still unconditionally also writes Claude
+   Code's `RTK.md`/`settings.json` as a side effect — writing unrequested
+   Claude Code scaffolding on a Cursor-only machine would violate D-01a's
+   detect-and-configure-never-blind-overwrite principle below.
+3. `graphify-register` (Phase 12.4) — one `graphify <host> install`
+   invocation per present host (never a composed CSV — graphify has no
+   multi-target flag, unlike codegraph).
+
+**Detect and configure, never blind-overwrite (D-01a).** A postinstall hook
+must never pass a flag that overwrites existing host configuration
+unconditionally — the confirmed real-world precedent is GSD's own installer
+writing `gsd-statusline.js` on Claude Code automatically, with no flag to
+skip it. Every hook here gates on live host presence before writing
+anything, and every hook's per-host write behavior is verified merge-safe
+against pre-existing config before shipping — proven for `rtk`/`graphify`
+via live adversarial-seed testing in isolated scratch `$HOME`s (see
+12.4-01-SUMMARY.md, 12.4-02-SUMMARY.md), never assumed.
+
+**Registry-authoring guidelines** (above) gained a permanent tier/
+dependency/postinstall onboarding checklist, and `.claude/skills/
+tool-onboarding/SKILL.md` (this project's first self-authored skill) walks
+it interactively — this is the checklist that would have caught rtk/
+graphify's own gap (researched Phase 8, wired Phase 12.4) before it sat
+unnoticed across three phases.
+
+The D-04 full-catalog audit this checklist enables ran against all 89
+`registry.toml` entries: zero new postinstall-mechanism gaps found. One
+pre-existing, unrelated dead-code finding (`Tool.post_install` plural,
+`POST_INSTALL_ACTIONS`, `SENSITIVE_POST_INSTALL_ACTIONS` — zero production
+callers, confusingly similar name to the live `Tool.postinstall` singular
+mechanism) was logged as a pending todo rather than fixed in-phase. Full
+findings: `.planning/phases/12.4-tool-onboarding-research-skill-and-registry-postinstall-audi/12.4-AUDIT.md`.
+
 
