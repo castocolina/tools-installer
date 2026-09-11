@@ -127,16 +127,19 @@ def _has_controlling_tty() -> bool:
 
 @contextlib.contextmanager
 def _stdin_on_tty() -> Iterator[None]:
-    """Point fd 0 at the controlling terminal for the duration of a Textual
-    app's .run() call.
+    """Point fd 0 at the controlling terminal for the duration of one
+    interactive prompt -- a Textual app's .run() call, or one questionary
+    ask() call.
 
-    Under `curl | sh`, the process inherits the script pipe as fd 0; Textual's
-    driver reads keystrokes from `sys.__stdin__.fileno()` (fd 0) directly --
-    not from any handle passed to it -- so without this the full-screen wizard
-    cannot be driven. A no-op when fd 0 is already a TTY (a direct terminal
-    run). The original fd 0 is restored on exit, even on exception. Only
-    stdin is touched: Textual writes its escape sequences to stderr, which
-    under `curl | sh` is still the user's terminal.
+    Under `curl | sh`, the process inherits the script pipe as fd 0; both
+    Textual's driver and prompt_toolkit (questionary's engine) read
+    keystrokes from `sys.__stdin__.fileno()` (fd 0) directly -- not from any
+    handle passed to them -- so without this neither the full-screen wizard
+    nor a single confirm/select prompt can be driven. A no-op when fd 0 is
+    already a TTY (a direct terminal run). The original fd 0 is restored on
+    exit, even on exception. Only stdin is touched: both libraries write
+    their escape sequences to stderr, which under `curl | sh` is still the
+    user's terminal.
     """
     if os.isatty(0):
         yield
@@ -176,35 +179,45 @@ def _title(choice: Choice) -> list[tuple[str, str]]:
 
 
 def _ask_checkbox(message: str, choices: list[Choice]) -> list[str]:
-    answer = questionary.checkbox(
-        message,
-        choices=[
-            questionary.Choice(
-                title=_title(c), value=c.id, checked=c.checked, description=c.description or None
-            )
-            for c in choices
-        ],
-        instruction=_CHECKBOX_KEYS,
-        style=_STYLE,
-    ).ask()
+    # questionary (prompt_toolkit) reads fd 0 directly, exactly like Textual --
+    # see _stdin_on_tty()'s docstring. Every ask_* helper needs the same
+    # redirect, not just the Textual .run() call sites: _resolve_link_mode()
+    # calls _ask_select() BEFORE the catalog wizard ever opens.
+    with _stdin_on_tty():
+        answer = questionary.checkbox(
+            message,
+            choices=[
+                questionary.Choice(
+                    title=_title(c),
+                    value=c.id,
+                    checked=c.checked,
+                    description=c.description or None,
+                )
+                for c in choices
+            ],
+            instruction=_CHECKBOX_KEYS,
+            style=_STYLE,
+        ).ask()
     if answer is None:  # questionary returns None on Ctrl+C / Ctrl+D at the prompt
         raise KeyboardInterrupt
     return list(answer)
 
 
 def _ask_confirm(message: str) -> bool:
-    answer = questionary.confirm(message, default=True, style=_STYLE).ask()
+    with _stdin_on_tty():
+        answer = questionary.confirm(message, default=True, style=_STYLE).ask()
     if answer is None:  # questionary returns None on Ctrl+C / Ctrl+D at the prompt
         raise KeyboardInterrupt
     return bool(answer)
 
 
 def _ask_select(message: str, choices: list[tuple[str, str]]) -> str:
-    answer = questionary.select(
-        message,
-        choices=[questionary.Choice(title=title, value=value) for title, value in choices],
-        style=_STYLE,
-    ).ask()
+    with _stdin_on_tty():
+        answer = questionary.select(
+            message,
+            choices=[questionary.Choice(title=title, value=value) for title, value in choices],
+            style=_STYLE,
+        ).ask()
     if answer is None:  # Ctrl+C / Ctrl+D
         raise KeyboardInterrupt
     return str(answer)

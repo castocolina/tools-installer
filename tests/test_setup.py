@@ -27,6 +27,7 @@ from installer.wizard_app import DoctorScreen, PolicyInputs, UninstallInputs
 # private composition-root function under test.
 _has_controlling_tty = setup._has_controlling_tty  # pyright: ignore[reportPrivateUsage]
 _stdin_on_tty = setup._stdin_on_tty  # pyright: ignore[reportPrivateUsage]
+_ask_select = setup._ask_select  # pyright: ignore[reportPrivateUsage]
 
 
 class _DummyApp:
@@ -231,6 +232,63 @@ def test_main_doctor_reaches_the_interactive_tui_under_a_curl_pipe(
 
     assert setup.main(["--doctor"]) == 0
     assert seen  # _build_app/UnifiedApp was constructed -- the interactive path ran
+
+
+def test_ask_select_redirects_fd0_before_the_questionary_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the reported bug: under `curl | sh`, _resolve_link_mode
+    calls _ask_select() BEFORE the catalog wizard's Textual .run() ever opens
+    -- wrapping only the .run() call sites left this one still reading the
+    (empty, already-consumed) script pipe on fd 0, raising EOFError.
+    _ask_select must redirect fd 0 itself, same as every other ask_* helper."""
+    calls: list[tuple[object, ...]] = []
+    fake_tty_fd, saved_fd = 9201, 9202
+
+    def fake_isatty(fd: int) -> bool:
+        return False if fd == 0 else _REAL_OS_ISATTY(fd)
+
+    def fake_open(path: str, flags: int) -> int:
+        if path == "/dev/tty":
+            return fake_tty_fd
+        return _REAL_OS_OPEN(path, flags)
+
+    def fake_dup(fd: int) -> int:
+        return saved_fd if fd == 0 else _REAL_OS_DUP(fd)
+
+    def fake_dup2(src: int, dst: int) -> None:
+        if dst == 0:
+            calls.append(("dup2", src, dst))
+            return
+        _REAL_OS_DUP2(src, dst)
+
+    def fake_close(fd: int) -> None:
+        if fd in (fake_tty_fd, saved_fd):
+            calls.append(("close", fd))
+            return
+        _REAL_OS_CLOSE(fd)
+
+    class _FakeQuestion:
+        def ask(self) -> str:
+            # fd 0 must already be redirected by the time questionary would
+            # read a keystroke -- prove it, rather than trusting call order.
+            assert calls[:1] == [("dup2", fake_tty_fd, 0)]
+            return "centralized"
+
+    monkeypatch.setattr(setup.os, "isatty", fake_isatty)
+    monkeypatch.setattr(setup.os, "open", fake_open)
+    monkeypatch.setattr(setup.os, "dup", fake_dup)
+    monkeypatch.setattr(setup.os, "dup2", fake_dup2)
+    monkeypatch.setattr(setup.os, "close", fake_close)
+
+    def fake_select(*_args: object, **_kwargs: object) -> _FakeQuestion:
+        return _FakeQuestion()
+
+    monkeypatch.setattr(setup.sys, "stdin", _NonTtyStdin())
+    monkeypatch.setattr(setup.questionary, "select", fake_select)
+
+    assert _ask_select("pick one", [("A", "a")]) == "centralized"
+    assert ("dup2", saved_fd, 0) in calls  # restored afterward
 
 
 def test_main_fix_interactive_without_link_mode_opens_doctor(
