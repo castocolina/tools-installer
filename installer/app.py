@@ -34,6 +34,7 @@ from installer.render import (
     render_audit,
     render_dependency_notice,
     render_doctor,
+    render_failure_details,
     render_guard,
     render_guard_status,
     render_handoff,
@@ -158,6 +159,8 @@ def run_wizard(
     )
     summary = summarize(outcomes)
     render_summary(summary, console)
+    # Summary only counts failures; this is where the actual exception lives.
+    render_failure_details(outcomes, console)
     # Summary gives the counts; this gives the reasons, so a skipped dependent is never a bare id.
     render_skipped(outcomes, console)
     # Summary only names manual-required tools; this is where their actual setup steps live.

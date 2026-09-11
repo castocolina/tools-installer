@@ -79,14 +79,20 @@ def find_duplicate_path_lines(
             continue
         path_match = _PATH_EXPORT.match(line)
         if path_match:
-            value = _unquote(path_match.group(1))
-            for segment in value.split(":"):
-                if segment in ("$PATH", "${PATH}"):
-                    continue
-                expanded = _expand(segment, local)
-                if expanded is not None and expanded in targets:
-                    flagged.append(index)
-                    break
+            # An indented line is never one bun/fnm/this installer appended (always
+            # column 0) and is very likely the body of an if/case/for the rc file's
+            # own template wraps it in (e.g. Fedora's default .bashrc). Stripping
+            # such a line but leaving its block would corrupt the file (an empty
+            # then-clause is a bash syntax error), so it is never a strip candidate.
+            if line[:1] not in (" ", "\t"):
+                value = _unquote(path_match.group(1))
+                for segment in value.split(":"):
+                    if segment in ("$PATH", "${PATH}"):
+                        continue
+                    expanded = _expand(segment, local)
+                    if expanded is not None and expanded in targets:
+                        flagged.append(index)
+                        break
             continue
         assign = _ASSIGN.match(line)
         if assign:

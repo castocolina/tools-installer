@@ -8,6 +8,7 @@ from installer import apps, download, executors
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.enums import InstallStatus
+from installer.locations import bin_dir, prepend_path
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.postinstall import run_postinstall
@@ -148,6 +149,9 @@ def install_tool(
                     warning = run_postinstall(tool.postinstall, method, runner, tools or {})
                 except Exception as exc:  # noqa: BLE001 -- isolation boundary, see design_decisions
                     warning = f"postinstall hook {tool.postinstall!r} crashed: {exc}"
+            raw_bin_dir = method.params.get("bin_dir")
+            if isinstance(raw_bin_dir, str) and raw_bin_dir:
+                prepend_path(bin_dir(raw_bin_dir))
             return InstallOutcome(
                 tool.id,
                 InstallStatus.INSTALLED,

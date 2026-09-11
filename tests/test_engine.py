@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,33 @@ def test_first_method_succeeds(monkeypatch: pytest.MonkeyPatch):
     assert outcome.status == "installed"
     assert outcome.method_kind == "dnf"
     assert calls == [["sudo", "dnf", "install", "-y", "ripgrep"]]
+
+
+def test_install_tool_prepends_declared_bin_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A later tool in the same process must see a just-installed bin dir.
+
+    pnpm's script method lands the `pnpm` binary in a declared bin_dir that is
+    not on the installer process PATH until we prepend it. Without this, a
+    subsequent node tool (puppeteer) reports 'pnpm not found' after pnpm just
+    installed successfully in the same --all run.
+    """
+
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+    monkeypatch.setenv("PATH", "/usr/bin")
+    dest = tmp_path / "pnpm-bin"
+    dest.mkdir()
+    outcome = install_tool(
+        _tool(Method(kind="dnf", params={"package": "ripgrep", "bin_dir": str(dest)})),
+        _platform(),
+        runner=lambda cmd: None,
+    )
+    assert outcome.status == "installed"
+    assert os.environ["PATH"].split(os.pathsep)[0] == str(dest)
 
 
 def test_falls_through_to_next_method_on_failure(monkeypatch: pytest.MonkeyPatch):

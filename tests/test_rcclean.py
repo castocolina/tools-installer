@@ -123,6 +123,24 @@ def test_orphan_begin_marker_does_not_crash():
     assert result == [1]
 
 
+def test_indented_path_line_inside_if_block_is_not_flagged():
+    """Regression: Fedora's default .bashrc wraps its PATH assignment in an
+    `if ! [[ ... ]]; then\n    PATH=...\nfi` block. Stripping only the indented
+    body line leaves an empty then-clause, a bash syntax error that breaks
+    every later login shell. An indented line is never one this installer, bun,
+    or fnm appended (always column 0), so it must never be a strip candidate.
+    """
+    rc = (
+        'if ! [[ "$PATH" =~ "$HOME/.local/bin:$HOME/bin:" ]]; then\n'
+        '    PATH="$HOME/.local/bin:$HOME/bin:$PATH"\n'
+        "fi\n"
+        "export PATH\n"
+    )
+    managed = {Path("/home/u/.local/bin")}
+    env = {"HOME": "/home/u"}
+    assert find_duplicate_path_lines(rc, managed, env) == []
+
+
 def test_assignment_with_unresolvable_var_is_skipped():
     """Covers line 87 False-branch: _expand returns None for an assignment line.
 

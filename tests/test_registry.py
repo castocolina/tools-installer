@@ -1312,8 +1312,8 @@ def test_script_installer_tier_resolves_script_then_brew() -> None:
     assert [m.kind for m in pnpm_macos] == ["script", "brew"]
     assert pnpm_linux[0].params["url"] == "https://get.pnpm.io/install.sh"
     assert pnpm_linux[0].params["shell"] == "sh"
-    assert pnpm_linux[0].params["bin_dir"] == "~/.local/share/pnpm"
-    assert pnpm_macos[0].params["bin_dir"] == "~/Library/pnpm"
+    assert pnpm_linux[0].params["bin_dir"] == "~/.local/share/pnpm/bin"
+    assert pnpm_macos[0].params["bin_dir"] == "~/Library/pnpm/bin"
 
     # fnm: script on Linux, brew-only on macOS (its installer brew-delegates there).
     fnm_linux = resolve_methods(tools["fnm"], linux)

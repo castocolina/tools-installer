@@ -1889,15 +1889,15 @@ desc = "Fast, disk-space-efficient Node.js package manager"
 [[tool.method]]
 kind = "script"
 os = ["debian", "arch", "fedora"]
-url = "https://get.pnpm.io/install.sh"
-shell = "sh"
-bin_dir = "~/.local/share/pnpm"
-[[tool.method]]
-kind = "script"
-os = ["macos"]
-url = "https://get.pnpm.io/install.sh"
-shell = "sh"
-bin_dir = "~/Library/pnpm"
+    url = "https://get.pnpm.io/install.sh"
+    shell = "sh"
+    bin_dir = "~/.local/share/pnpm/bin"
+    [[tool.method]]
+    kind = "script"
+    os = ["macos"]
+    url = "https://get.pnpm.io/install.sh"
+    shell = "sh"
+    bin_dir = "~/Library/pnpm/bin"
 [[tool.method]]
 kind = "brew"
 formula = "pnpm"

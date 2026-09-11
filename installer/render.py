@@ -69,6 +69,21 @@ def render_summary(summary: Summary, console: Console) -> None:
             console.print(f"  {label}: {', '.join(ids)}")
 
 
+def render_failure_details(outcomes: list[InstallOutcome], console: Console) -> None:
+    """Print why each FAILED tool failed — its last ladder method's error.
+
+    render_summary only counts and names failed tools; this is where the
+    actual exception lives (mirrors CHECKSUM_MISMATCH's existing detail line
+    in render_checksum_verification), so a bare "failed" is never the last
+    word an operator sees. Silent when nothing failed.
+    """
+    for outcome in outcomes:
+        if outcome.status is not InstallStatus.FAILED:
+            continue
+        detail = outcome.errors[-1] if outcome.errors else "no method succeeded"
+        console.print(f"[red]✗ {outcome.tool_id} failed: {detail}[/]")
+
+
 def render_skipped(outcomes: list[InstallOutcome], console: Console) -> None:
     """Name every tool the run deliberately did not attempt and why.
 

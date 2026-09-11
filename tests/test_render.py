@@ -11,6 +11,7 @@ from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.render import (
     render_audit,
     render_dependency_notice,
+    render_failure_details,
     render_guard,
     render_guard_status,
     render_handoff,
@@ -102,6 +103,28 @@ def test_render_summary_still_reports_zero_when_nothing_was_skipped() -> None:
     console, buf = _console()
     render_summary(Summary(installed=(), already=(), failed=(), no_method=()), console)
     assert "Dependency failed: 0" in buf.getvalue()
+
+
+def test_render_failure_details_prints_the_error() -> None:
+    console, buf = _console()
+    render_failure_details(
+        [InstallOutcome("puppeteer", "failed", errors=(RuntimeError("network unreachable"),))],
+        console,
+    )
+    out = buf.getvalue()
+    assert "puppeteer failed: network unreachable" in out
+
+
+def test_render_failure_details_is_silent_when_nothing_failed() -> None:
+    console, buf = _console()
+    render_failure_details([InstallOutcome("rg", "installed", method_kind="brew")], console)
+    assert buf.getvalue() == ""
+
+
+def test_render_failure_details_falls_back_without_a_captured_error() -> None:
+    console, buf = _console()
+    render_failure_details([InstallOutcome("puppeteer", "failed")], console)
+    assert "puppeteer failed: no method succeeded" in buf.getvalue()
 
 
 def test_render_skipped_names_the_tool_and_its_blockers() -> None:
