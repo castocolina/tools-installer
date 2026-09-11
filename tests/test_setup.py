@@ -1,5 +1,6 @@
 import importlib
 import io
+import os
 import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -22,6 +23,11 @@ from installer.tweaks import BUNDLES
 from installer.uninstall import SweepResult
 from installer.wizard_app import DoctorScreen, PolicyInputs, UninstallInputs
 
+# Aliased once, matching tests/test_daemon.py's convention for pinning a
+# private composition-root function under test.
+_has_controlling_tty = setup._has_controlling_tty  # pyright: ignore[reportPrivateUsage]
+_stdin_on_tty = setup._stdin_on_tty  # pyright: ignore[reportPrivateUsage]
+
 
 class _DummyApp:
     def run(self) -> None:
@@ -33,8 +39,198 @@ class _FakeStdin:
         return True
 
 
+class _NonTtyStdin:
+    def isatty(self) -> bool:
+        return False
+
+
 def _platform() -> Platform:
     return Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+
+
+# -- /dev/tty reconnection (`curl | sh` fix) ---------------------------------
+#
+# `curl -fsSL ... | sh` pipes the script itself onto stdin, so
+# sys.stdin.isatty() is False even when the user is at a real terminal.
+# These pin the two primitives that recover from that (probing /dev/tty, and
+# redirecting fd 0 onto it for a Textual .run() call) without ever opening a
+# real device — os.open/os.isatty/os.dup/os.dup2/os.close are all faked.
+
+
+def test_has_controlling_tty_true_when_stdin_isatty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(setup.sys, "stdin", _FakeStdin())
+    assert _has_controlling_tty() is True
+
+
+def test_has_controlling_tty_false_when_stdin_and_dev_tty_both_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(setup.sys, "stdin", _NonTtyStdin())
+
+    def fake_open(path: str, flags: int) -> int:
+        raise OSError("no controlling terminal")
+
+    monkeypatch.setattr(setup.os, "open", fake_open)
+    assert _has_controlling_tty() is False
+
+
+def test_has_controlling_tty_true_via_dev_tty_when_stdin_is_the_curl_pipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The regression this exists to fix: stdin is the piped script (not a
+    tty), but a real controlling terminal is still reachable via /dev/tty."""
+    monkeypatch.setattr(setup.sys, "stdin", _NonTtyStdin())
+    opened: list[str] = []
+    closed: list[int] = []
+
+    def fake_open(path: str, _flags: int) -> int:
+        opened.append(path)
+        return 99
+
+    monkeypatch.setattr(setup.os, "open", fake_open)
+    monkeypatch.setattr(setup.os, "close", closed.append)
+    assert _has_controlling_tty() is True
+    assert opened == ["/dev/tty"]
+    assert closed == [99]
+
+
+# These four fakes intercept ONLY fd 0 (or the /dev/tty path) and delegate
+# everything else to the REAL os.* function. os is one process-wide singleton
+# module -- pytest's own fd-level capture machinery calls os.dup2/os.isatty
+# on ITS OWN (non-zero) fds throughout a run, so a fake that ignores which fd
+# it was called with corrupts capture teardown for every other test, not just
+# this one (reproduced: a blanket fake raised inside pytest's own stdout
+# restore). Scoping to fd 0 / "/dev/tty" keeps the fakes inert for anything
+# that isn't this function's own fd-0 plumbing.
+_REAL_OS_OPEN = os.open
+_REAL_OS_CLOSE = os.close
+_REAL_OS_DUP = os.dup
+_REAL_OS_DUP2 = os.dup2
+_REAL_OS_ISATTY = os.isatty
+
+
+def test_stdin_on_tty_is_a_noop_when_fd0_is_already_a_tty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_isatty(fd: int) -> bool:
+        return True if fd == 0 else _REAL_OS_ISATTY(fd)
+
+    def fail_on_dev_tty(path: str, flags: int) -> int:
+        if path == "/dev/tty":
+            raise AssertionError("must not touch fd 0 when it is already a tty")
+        return _REAL_OS_OPEN(path, flags)
+
+    monkeypatch.setattr(setup.os, "isatty", fake_isatty)
+    monkeypatch.setattr(setup.os, "open", fail_on_dev_tty)
+    with _stdin_on_tty():
+        pass
+
+
+def test_stdin_on_tty_redirects_fd0_to_dev_tty_and_restores_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+    fake_tty_fd, saved_fd = 9001, 9002
+
+    def fake_isatty(fd: int) -> bool:
+        return False if fd == 0 else _REAL_OS_ISATTY(fd)
+
+    def fake_open(path: str, flags: int) -> int:
+        if path == "/dev/tty":
+            return fake_tty_fd
+        return _REAL_OS_OPEN(path, flags)
+
+    def fake_dup(fd: int) -> int:
+        return saved_fd if fd == 0 else _REAL_OS_DUP(fd)
+
+    def fake_dup2(src: int, dst: int) -> None:
+        if dst == 0:
+            calls.append(("dup2", src, dst))
+            return
+        _REAL_OS_DUP2(src, dst)
+
+    def fake_close(fd: int) -> None:
+        if fd in (fake_tty_fd, saved_fd):
+            calls.append(("close", fd))
+            return
+        _REAL_OS_CLOSE(fd)
+
+    monkeypatch.setattr(setup.os, "isatty", fake_isatty)
+    monkeypatch.setattr(setup.os, "open", fake_open)
+    monkeypatch.setattr(setup.os, "dup", fake_dup)
+    monkeypatch.setattr(setup.os, "dup2", fake_dup2)
+    monkeypatch.setattr(setup.os, "close", fake_close)
+
+    with _stdin_on_tty():
+        assert calls == [("dup2", fake_tty_fd, 0), ("close", fake_tty_fd)]
+
+    assert calls == [
+        ("dup2", fake_tty_fd, 0),
+        ("close", fake_tty_fd),
+        ("dup2", saved_fd, 0),
+        ("close", saved_fd),
+    ]
+
+
+def test_stdin_on_tty_falls_through_when_dev_tty_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_isatty(fd: int) -> bool:
+        return False if fd == 0 else _REAL_OS_ISATTY(fd)
+
+    def fake_open(path: str, flags: int) -> int:
+        if path == "/dev/tty":
+            raise OSError("no controlling terminal")
+        return _REAL_OS_OPEN(path, flags)
+
+    monkeypatch.setattr(setup.os, "isatty", fake_isatty)
+    monkeypatch.setattr(setup.os, "open", fake_open)
+    ran = False
+    with _stdin_on_tty():
+        ran = True
+    assert ran is True
+
+
+def test_main_doctor_reaches_the_interactive_tui_under_a_curl_pipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end regression for the reported bug: `curl | sh` leaves
+    sys.stdin non-tty, but a real terminal is reachable via /dev/tty, so
+    --doctor must still open the interactive app instead of printing
+    'No TTY detected'."""
+    fake_tty_fd, saved_fd = 9101, 9102
+
+    def fake_isatty(fd: int) -> bool:
+        return False if fd == 0 else _REAL_OS_ISATTY(fd)
+
+    def fake_open(path: str, flags: int) -> int:
+        if path == "/dev/tty":
+            return fake_tty_fd
+        return _REAL_OS_OPEN(path, flags)
+
+    def fake_dup(fd: int) -> int:
+        return saved_fd if fd == 0 else _REAL_OS_DUP(fd)
+
+    def fake_dup2(src: int, dst: int) -> None:
+        if dst != 0:
+            _REAL_OS_DUP2(src, dst)
+
+    def fake_close(fd: int) -> None:
+        if fd not in (fake_tty_fd, saved_fd):
+            _REAL_OS_CLOSE(fd)
+
+    monkeypatch.setattr(setup, "load_tools", _no_tools)
+    monkeypatch.setattr(setup, "detect", _platform)
+    monkeypatch.setattr(setup.sys, "stdin", _NonTtyStdin())
+    monkeypatch.setattr(setup.os, "isatty", fake_isatty)
+    monkeypatch.setattr(setup.os, "open", fake_open)
+    monkeypatch.setattr(setup.os, "dup", fake_dup)
+    monkeypatch.setattr(setup.os, "dup2", fake_dup2)
+    monkeypatch.setattr(setup.os, "close", fake_close)
+    seen = _capture_app(monkeypatch)
+
+    assert setup.main(["--doctor"]) == 0
+    assert seen  # _build_app/UnifiedApp was constructed -- the interactive path ran
 
 
 def test_main_fix_interactive_without_link_mode_opens_doctor(

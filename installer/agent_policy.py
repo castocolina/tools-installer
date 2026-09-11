@@ -1,5 +1,6 @@
 """Audit and apply narrowly scoped, read-only agent environment policy."""
 
+import errno
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,12 +49,31 @@ class AgentAudit:
     permission_pending: bool | None = None
 
 
+def _resolved(path: Path) -> Path:
+    """Path.resolve()'s own lexical resolution -- unchanged, and still
+    tolerant of a path that doesn't exist yet (the common, valid state for
+    most adapter destinations before setup: `.resolve()` returns a best-effort
+    absolute path without requiring the target to exist).
+
+    The one thing normalized here: a genuine symlink loop. Some CPython
+    versions have Path.resolve() raise RuntimeError instead of OSError for
+    that case (a documented pathlib inconsistency, not stable across Python
+    versions or platforms) -- re-raised as OSError so every caller's
+    `except OSError` catches it uniformly regardless of which CPython this
+    runs under.
+    """
+    try:
+        return path.resolve()
+    except RuntimeError as error:
+        raise OSError(errno.ELOOP, str(error), str(path)) from error
+
+
 def _validated_home(adapter: AgentAdapter, home: Path) -> Path:
     root = home.resolve()
     destinations = [adapter.config_path, home / ".agents" / "AGENTS-TOOLING.md"]
     if adapter.instruction_path is not None:
         destinations.append(adapter.instruction_path)
-    if any(not path.resolve().is_relative_to(root) for path in destinations):
+    if any(not _resolved(path).is_relative_to(root) for path in destinations):
         raise ValueError(f"{adapter.label} adapter path is outside injected home")
     return root
 

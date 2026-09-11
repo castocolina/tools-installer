@@ -247,7 +247,11 @@ def test_node_skips_wrapper_first_on_path(tmp_path: Path, monkeypatch: pytest.Mo
     assert calls == [[str(real), "add", "-g", "@mermaid-js/mermaid-cli"]]
 
 
-def test_node_without_npm_pkg_raises_executor_error():
+def test_node_without_npm_pkg_raises_executor_error(monkeypatch: pytest.MonkeyPatch):
+    # Pinned regardless of ambient pnpm presence: a malformed registry.toml
+    # entry must be reported as that bug even on a machine (e.g. CI's
+    # macos-latest) with no pnpm on PATH at all -- see _node()'s comment.
+    monkeypatch.setattr(executors, "real_pnpm", lambda: None)
     with pytest.raises(ExecutorError, match="npm_pkg"):
         execute(Method(kind="node", params={}), lambda _cmd: None)
 
@@ -357,7 +361,8 @@ def test_node_co_install_does_not_duplicate_own_package(
     assert calls == [[str(pnpm), "add", "-g", "puppeteer"]]
 
 
-def test_node_bare_string_co_install_raises_not_iterated() -> None:
+def test_node_bare_string_co_install_raises_not_iterated(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(executors, "real_pnpm", lambda: None)
     calls: list[list[str]] = []
     with pytest.raises(ExecutorError, match="co_install"):
         execute(
@@ -367,12 +372,14 @@ def test_node_bare_string_co_install_raises_not_iterated() -> None:
     assert calls == []
 
 
-def test_node_non_string_co_install_element_raises() -> None:
+def test_node_non_string_co_install_element_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(executors, "real_pnpm", lambda: None)
     with pytest.raises(ExecutorError, match="co_install"):
         execute(Method(kind="node", params={"npm_pkg": "x", "co_install": [1]}), lambda _cmd: None)
 
 
-def test_node_versions_bare_string_raises() -> None:
+def test_node_versions_bare_string_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(executors, "real_pnpm", lambda: None)
     with pytest.raises(ExecutorError, match="versions"):
         execute(Method(kind="node", params={"npm_pkg": "x", "versions": "nope"}), lambda _cmd: None)
 
@@ -637,7 +644,8 @@ def test_node_without_smoke_never_launches_a_browser(
     assert any(argv[0] == "node" for argv in seen)
 
 
-def test_node_versions_non_string_value_raises() -> None:
+def test_node_versions_non_string_value_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(executors, "real_pnpm", lambda: None)
     with pytest.raises(ExecutorError, match="versions"):
         execute(
             Method(kind="node", params={"npm_pkg": "x", "versions": {"puppeteer": 1}}),

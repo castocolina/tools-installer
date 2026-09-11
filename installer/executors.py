@@ -378,6 +378,16 @@ def _brew(method: Method, runner: Runner) -> None:
 
 
 def _node(method: Method, runner: Runner) -> None:
+    # Method-shape validation runs BEFORE the pnpm-presence probe below: a
+    # malformed registry.toml entry is a bug regardless of what's on PATH, and
+    # must be reported as that bug, not masked behind "pnpm not found" on any
+    # machine that happens to lack pnpm (surfaced by CI on macos-latest, which
+    # ships no pnpm, unlike every dev machine this was written/tested on).
+    npm_pkg = require_str(method, "npm_pkg")
+    co_install = _opt_pkg_list(method, "co_install")
+    allow_build = _opt_pkg_list(method, "allow_build")
+    versions = _opt_version_map(method, "versions")
+    smoke = _opt_smoke_name(method)
     # pnpm is invoked by absolute path because the managed bin dir may hold this
     # installer's own argv-conditional pnpm wrapper, and a global install
     # performed by this installer must reach real pnpm so its gated postinstall
@@ -388,11 +398,6 @@ def _node(method: Method, runner: Runner) -> None:
             "pnpm not found on PATH — install pnpm (or, if this installer's pnpm wrapper "
             "is the only pnpm on PATH, re-apply the package-manager policy)"
         )
-    npm_pkg = require_str(method, "npm_pkg")
-    co_install = _opt_pkg_list(method, "co_install")
-    allow_build = _opt_pkg_list(method, "allow_build")
-    versions = _opt_version_map(method, "versions")
-    smoke = _opt_smoke_name(method)
     # A space-separated list would give each package its own isolated node_modules
     # and lockfile (pnpm Global Packages documentation) — which is the failure
     # mode this exists to prevent, not a stylistic difference.

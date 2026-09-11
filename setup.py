@@ -7,11 +7,12 @@ It deliberately lives outside the `installer/` package so the untyped
 questionary boundary is isolated from the strict-typed, fully-covered core.
 """
 
+import contextlib
 import io
 import os
 import shutil
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 
 import questionary
@@ -100,6 +101,63 @@ _STYLE = questionary.Style(
     ]
 )
 _CHECKBOX_KEYS = "(↑/↓ move, <space> toggle, <a> all, <i> invert, <enter> confirm)"
+
+
+def _has_controlling_tty() -> bool:
+    """True when a real terminal is reachable for this run.
+
+    `curl -fsSL ... | sh` pipes the script itself onto stdin, so
+    `sys.stdin.isatty()` is always False there even when the user is sitting
+    at a real terminal. sys.stdin.isatty() stays the primary check (a direct
+    terminal run, and every existing test mocking sys.stdin, resolve here
+    without ever touching the filesystem); only when it says False do we
+    probe /dev/tty -- the controlling terminal -- before concluding this is a
+    genuinely headless run (CI, a cron job, an IDE task runner). Mirrors
+    ../ai-kit's setup.py open_tty()/is_interactive() pattern.
+    """
+    if sys.stdin.isatty():
+        return True
+    try:
+        fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+    except OSError:
+        return False
+    os.close(fd)
+    return True
+
+
+@contextlib.contextmanager
+def _stdin_on_tty() -> Iterator[None]:
+    """Point fd 0 at the controlling terminal for the duration of a Textual
+    app's .run() call.
+
+    Under `curl | sh`, the process inherits the script pipe as fd 0; Textual's
+    driver reads keystrokes from `sys.__stdin__.fileno()` (fd 0) directly --
+    not from any handle passed to it -- so without this the full-screen wizard
+    cannot be driven. A no-op when fd 0 is already a TTY (a direct terminal
+    run). The original fd 0 is restored on exit, even on exception. Only
+    stdin is touched: Textual writes its escape sequences to stderr, which
+    under `curl | sh` is still the user's terminal.
+    """
+    if os.isatty(0):
+        yield
+        return
+    try:
+        tty_fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+    except OSError:
+        # No controlling terminal -- _has_controlling_tty() has already gated
+        # every call site that reaches here, so this is unreachable in the
+        # current call graph. Kept as defense-in-depth: proceed without
+        # redirect rather than mask the path.
+        yield
+        return
+    saved = os.dup(0)
+    try:
+        os.dup2(tty_fd, 0)
+        os.close(tty_fd)
+        yield
+    finally:
+        os.dup2(saved, 0)
+        os.close(saved)
 
 
 def _tag_class(tag: str) -> str:
@@ -439,13 +497,14 @@ def _build_app(
 
 
 def _select_catalog(tools: list[Tool], *, link_mode: str = "centralized") -> list[str] | None:
-    return _build_app(tools, detect(), link_mode=link_mode, apply_daemon_default=True).run()
+    with _stdin_on_tty():
+        return _build_app(tools, detect(), link_mode=link_mode, apply_daemon_default=True).run()
 
 
 def _resolve_link_mode(link_mode_option: str | None) -> str:
     if link_mode_option is not None:
         return link_mode_option
-    if not sys.stdin.isatty():
+    if not _has_controlling_tty():
         return "centralized"
     return _ask_select(
         "How should PATH be wired into your shells?",
@@ -460,8 +519,9 @@ def _resolve_link_mode(link_mode_option: str | None) -> str:
 def _run_doctor(console: Console) -> int:
     tools = load_tools(_REGISTRY)
     platform = detect()
-    if sys.stdin.isatty():
-        _build_app(tools, platform, initial_view="doctor").run()
+    if _has_controlling_tty():
+        with _stdin_on_tty():
+            _build_app(tools, platform, initial_view="doctor").run()
         return 0
     run_doctor(
         tools,
@@ -480,11 +540,12 @@ def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
     # confusion the doctor/fix split removes.
     tools = load_tools(_REGISTRY)
     platform = detect()
-    if sys.stdin.isatty() and link_mode_option is None:
+    if _has_controlling_tty() and link_mode_option is None:
         # Resolve the link mode once BEFORE opening the app (the TUI cannot host a
         # questionary prompt). The DoctorScreen then previews and applies live.
         link_mode = _resolve_link_mode(None)
-        _build_app(tools, platform, initial_view="doctor", link_mode=link_mode).run()
+        with _stdin_on_tty():
+            _build_app(tools, platform, initial_view="doctor", link_mode=link_mode).run()
         return 0
     link_mode = _resolve_link_mode(link_mode_option)
     configure_path(
@@ -501,8 +562,9 @@ def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
 
 def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
     platform = detect()
-    if sys.stdin.isatty() and not assume_yes:
-        _build_app(load_tools(_REGISTRY), platform, initial_view="uninstall").run()
+    if _has_controlling_tty() and not assume_yes:
+        with _stdin_on_tty():
+            _build_app(load_tools(_REGISTRY), platform, initial_view="uninstall").run()
         return 0
     confirm = (lambda _message: True) if assume_yes else _ask_confirm
     tools = load_tools(_REGISTRY)
@@ -569,13 +631,14 @@ def main(argv: list[str]) -> int:
     if options.uninstall:
         return _run_uninstall(console, assume_yes=options.yes)
     if options.guard or options.unguard:
-        if sys.stdin.isatty() and not options.yes:
+        if _has_controlling_tty() and not options.yes:
             # Honor an explicit --link-mode so the ban's aliases land in the same
             # rc files as the rest of the wiring; default stays centralized.
             link_mode = options.link_mode or "centralized"
-            _build_app(
-                load_tools(_REGISTRY), detect(), initial_view="policies", link_mode=link_mode
-            ).run()
+            with _stdin_on_tty():
+                _build_app(
+                    load_tools(_REGISTRY), detect(), initial_view="policies", link_mode=link_mode
+                ).run()
             return 0
         if options.guard:
             return _run_guard(
@@ -586,7 +649,7 @@ def main(argv: list[str]) -> int:
             )
         # Removal needs no link-mode prompt — it sweeps every rc file.
         return _run_guard(console, remove=True, rc_paths=all_ban_rc_paths(), assume_yes=options.yes)
-    can_proceed = options.all or bool(options.categories) or sys.stdin.isatty()
+    can_proceed = options.all or bool(options.categories) or _has_controlling_tty()
     if not can_proceed:
         console.print(
             "No TTY detected. Re-run with --all or --categories A,B (and --yes) for "
