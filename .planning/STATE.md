@@ -1,18 +1,19 @@
 ---
-gsd_state_version: 1.0
-current_phase: 12
-status: completed
-stopped_at: Phase 12 complete — all phases complete
-last_updated: "2026-09-07T18:26:55.248Z"
-last_activity: 2026-09-07
-last_activity_desc: Phase 12 complete
-state_head: 1bfc0dc102e851597b54acdda155a343ad774a38
+gsd_state_version: "1.0"
+current_phase: "12.2"
+current_phase_name: "Install-Actions and Agent-Policy UI Wiring Decision: decide whether local's ported install_actions.py (multi-hook post_install) and agent_policy.py (permission auditing) get surfaced in origin's Textual UI, where, and whether they duplicate/conflict with origin's own omz.py/daemon.py/update.py flows"
+status: planning
+stopped_at: Phase 12.1 complete, ready to plan Phase 12.2
+last_updated: "2026-09-10T21:45:03.790Z"
+last_activity: 2026-09-10
+last_activity_desc: Phase 12.1 complete, transitioned to Phase 12.2
+state_head: 3dd7738035768c4cc21413885eb2fc30e2178cd6
 progress:
-  total_phases: 12
-  completed_phases: 12
-  total_plans: 34
-  completed_plans: 34
-  percent: 100
+  total_phases: 15
+  completed_phases: 13
+  total_plans: 35
+  completed_plans: 35
+  percent: 87
 ---
 
 # Project State
@@ -22,22 +23,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-04)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 10 — Agent CLI Ergonomics
+**Current focus:** Phase 12.1 — Reconciliation Merge Verification
 
 ## Current Position
 
-Phase: 12
+Phase: 12.2 — Install-Actions and Agent-Policy UI Wiring Decision: decide whether local's ported install_actions.py (multi-hook post_install) and agent_policy.py (permission auditing) get surfaced in origin's Textual UI, where, and whether they duplicate/conflict with origin's own omz.py/daemon.py/update.py flows
 Plan: Not started
-Status: All phases complete
-Last activity: 2026-09-07 — Phase 12 complete
+Status: Ready to plan
+Last activity: 2026-09-10 — Phase 12.1 complete, transitioned to Phase 12.2
 
-Progress: [████████░░] 75%
+Progress: [█████████░] 87%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 27
+- Total plans completed: 28
 - Average duration: - min
 - Total execution time: 0 hours
 
@@ -54,6 +55,7 @@ Progress: [████████░░] 75%
 | 10 | 1 | - | - |
 | 11 | 4 | - | - |
 | 12 | 4 | - | - |
+| 12.1 | 1 | - | - |
 
 **Recent Trend:**
 
@@ -107,6 +109,12 @@ None yet.
 - Six companion PRDs from the same 2026-09-04 batch (`package-manager-policy`, `postinstall-hooks`, `catalog-expansion`, `live-package-management`, `background-maintenance-daemon`, `agent-cli-ergonomics`) are queued for ingestion immediately after this roadmap — expect ROADMAP.md to grow with additional phases soon.
 - REQ-dependency-chain-requires' illustrative examples (`oh-my-zsh`, `volta`) now have both tools in `registry.toml` (`volta` since 04-02, `oh-my-zsh` since 07-01).
 
+### Roadmap Evolution
+
+- Phase 12.1 inserted after Phase 12: Reconciliation merge verification after adopting origin b9a8876 (12-phase GSD milestone) as base and porting local's unique subsystems on branch recon/tui-interaction-consistency-2026-09-07 (URGENT)
+- Phase 12.2 inserted after Phase 12: Install-actions/agent-policy UI wiring decision left open by the reconciliation merge (URGENT)
+- Phase 12.3 inserted after Phase 12: Container e2e verification of the reconciled branch (URGENT)
+
 ## Deferred Items
 
 Items acknowledged and deferred at milestone close, most recent first:
@@ -117,6 +125,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-06T22:12:19.405Z
-Stopped at: Phase 12 complete — all phases complete
-Resume file: None
+Last session: 2026-09-07T21:53:42.575Z
+Stopped at: Phase 12.1 complete, ready to plan Phase 12.2
+Resume file: .planning/phases/12.1-reconciliation-merge-verification-confirm-the-layered-merge/12.1-CONTEXT.md

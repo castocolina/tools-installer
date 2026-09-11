@@ -36,6 +36,7 @@ from installer.render import (
     render_doctor,
     render_guard,
     render_guard_status,
+    render_handoff,
     render_node_globals,
     render_postinstall_warnings,
     render_rc_duplicates,
@@ -159,6 +160,8 @@ def run_wizard(
     render_summary(summary, console)
     # Summary gives the counts; this gives the reasons, so a skipped dependent is never a bare id.
     render_skipped(outcomes, console)
+    # Summary only names manual-required tools; this is where their actual setup steps live.
+    render_handoff(outcomes, console)
     render_postinstall_warnings(outcomes, console)
     render_verification(outcomes, console)
     return summary

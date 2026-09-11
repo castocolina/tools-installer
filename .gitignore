@@ -35,3 +35,6 @@ graphify-out/
 
 # superpowers scratch artifacts (not part of the product delivery)
 .claude/handoffs/
+
+# local git worktrees
+.worktrees/

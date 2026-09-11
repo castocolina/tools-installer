@@ -338,3 +338,46 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 10. Agent CLI Ergonomics | 1/1 | Complete    | 2026-09-06 |
 | 11. Background Maintenance Daemon | 4/4 | Complete    | 2026-09-07 |
 | 12. Version-Aware Status & Update Action | 4/4 | Complete    | 2026-09-07 |
+
+### Phase 12.3: Container E2E Verification of the Reconciled Branch: real end-to-end run of the reconciled installer inside a container to confirm origin's ported architecture, local's ported subsystems (host_setup/skill_lifecycle, ownership/skill-lifecycle registry fields, remapped tool tiers), and the 11 re-added registry rows all work together live, not just under unit tests (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 12
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 12.3 to break down)
+
+### Phase 12.2: Install-Actions and Agent-Policy UI Wiring Decision: decide whether local's ported install_actions.py (multi-hook post_install) and agent_policy.py (permission auditing) get surfaced in origin's Textual UI, where, and whether they duplicate/conflict with origin's own omz.py/daemon.py/update.py flows (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 12
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 12.2 to break down)
+
+### Phase 12.1: Reconciliation Merge Verification: confirm the layered merge of origin's 12-phase GSD work (b9a8876) with local's independent line (985f602) on branch recon/tui-interaction-consistency-2026-09-07 is architecturally sound, not just green on make validate/test (INSERTED)
+
+**Goal:** Confirm the layered merge on `recon/tui-interaction-consistency-2026-09-07` (origin's
+12-phase GSD milestone `b9a8876` adopted as base, plus local's independent line's unique
+subsystems ported on top from `985f602`) is architecturally sound: a fully green test suite with
+no known pre-existing failures, every re-added registry row individually audited against real
+tier semantics, the two ported-but-unwired local subsystems confirmed structurally inert without
+new wiring, and a real-terminal TUI smoke walkthrough proving all six views render correctly
+with zero real-machine mutation.
+**Requirements**: D-01, D-02, D-03, D-04 (12.1-CONTEXT.md locked decisions — this inserted
+verification phase has no `REQUIREMENTS.md` entries of its own)
+**Depends on:** Phase 12
+**Plans:** 1/1 plans complete
+
+Plans:
+
+- [x] 12.1-01-PLAN.md — Fix the one confirmed pre-existing failing test (D-03, tracer); codify
+  the 11-row tier remapping audit as a permanent regression test (D-02); static import-graph
+  audit of the two ported-but-unwired local subsystems plus a real-terminal tmux structural
+  smoke walkthrough of all six views (D-01, D-04)

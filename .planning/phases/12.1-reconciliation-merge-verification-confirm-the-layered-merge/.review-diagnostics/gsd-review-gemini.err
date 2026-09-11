@@ -1,0 +1,18 @@
+Error authenticating: IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals. To continue using Gemini, please migrate to the Antigravity suite of products: https://antigravity.google
+    at throwIneligibleOrProjectIdError (file:///var/home/bazzite/.local/share/pnpm/store/v11/links/@google/gemini-cli/0.57.0/3408f3294d18436b5f3441f2dc3570351338c4a1ddd9689ecb3e110b6f296a44/node_modules/@google/gemini-cli/bundle/chunk-7HKQGPWB.js:310101:11)
+    at _doSetupUser (file:///var/home/bazzite/.local/share/pnpm/store/v11/links/@google/gemini-cli/0.57.0/3408f3294d18436b5f3441f2dc3570351338c4a1ddd9689ecb3e110b6f296a44/node_modules/@google/gemini-cli/bundle/chunk-7HKQGPWB.js:310090:5)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5) {
+  ineligibleTiers: [
+    {
+      reasonCode: 'UNSUPPORTED_CLIENT',
+      reasonMessage: 'This client is no longer supported for Gemini Code Assist for individuals. To continue using Gemini, please migrate to the Antigravity suite of products: https://antigravity.google',
+      tierId: 'free-tier',
+      tierName: 'Gemini Code Assist for individuals'
+    }
+  ]
+}
+Ripgrep is not available. Falling back to GrepTool.
+An unexpected critical error occurred:IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals. To continue using Gemini, please migrate to the Antigravity suite of products: https://antigravity.google
+    at throwIneligibleOrProjectIdError (file:///var/home/bazzite/.local/share/pnpm/store/v11/links/@google/gemini-cli/0.57.0/3408f3294d18436b5f3441f2dc3570351338c4a1ddd9689ecb3e110b6f296a44/node_modules/@google/gemini-cli/bundle/chunk-7HKQGPWB.js:310101:11)
+    at _doSetupUser (file:///var/home/bazzite/.local/share/pnpm/store/v11/links/@google/gemini-cli/0.57.0/3408f3294d18436b5f3441f2dc3570351338c4a1ddd9689ecb3e110b6f296a44/node_modules/@google/gemini-cli/bundle/chunk-7HKQGPWB.js:310090:5)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)

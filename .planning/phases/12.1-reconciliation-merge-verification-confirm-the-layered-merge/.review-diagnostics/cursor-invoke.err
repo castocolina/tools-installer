@@ -1,0 +1,1 @@
+gsd-tools: warning: /home/bazzite/.gsd/defaults.json sets model_profile, commit_docs, workflow.research_before_questions but a project config takes precedence here — those global keys are ignored for model resolution. (#3532)

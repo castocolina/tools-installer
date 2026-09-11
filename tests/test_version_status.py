@@ -4,6 +4,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from installer.manager_versions import ManagerVersion, OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import ManagerInventory, ManagerOwnership, Owner, OwnershipCandidate
@@ -424,7 +426,11 @@ def _counting_query() -> tuple[Callable[..., str], list[list[str]]]:
     return query, calls
 
 
-def test_fresh_manager_snapshot_issues_zero_queries(tmp_path: Path) -> None:
+def test_fresh_manager_snapshot_issues_zero_queries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PNPM_HOME", raising=False)
+    monkeypatch.delenv("UV_TOOL_BIN_DIR", raising=False)
     now = datetime(2026, 9, 7, tzinfo=UTC)
     path = tmp_path / "versions.json"
     snapshot = _fresh_manager_snapshot()

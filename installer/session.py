@@ -20,12 +20,17 @@ _PRIORITY_RANK = {Priority.P0: 0, Priority.P1: 1, Priority.P2: 2, Priority.P3: 3
 # Statuses meaning this tool is not on the machine after this run.
 # DEPENDENCY_FAILED is a member of its own set on purpose: that membership,
 # and nothing else, is what carries a failure down a multi-link requires chain.
+# MANUAL_REQUIRED belongs here too: the tool only got as far as reviewed
+# handoff instructions (host_setup / skill_pack), not an actual install, so a
+# dependent naming it in `requires` must be blocked the same as any other
+# not-actually-installed status.
 _UNRESOLVED: frozenset[InstallStatus] = frozenset(
     {
         InstallStatus.FAILED,
         InstallStatus.NO_METHOD,
         InstallStatus.CHECKSUM_MISMATCH,
         InstallStatus.DEPENDENCY_FAILED,
+        InstallStatus.MANUAL_REQUIRED,
     }
 )
 
@@ -53,6 +58,7 @@ class Summary:
     no_method: tuple[str, ...]
     mismatched: tuple[str, ...] = ()
     dependency_failed: tuple[str, ...] = ()
+    manual_required: tuple[str, ...] = ()
 
 
 def order_for_install(tools: list[Tool]) -> list[Tool]:
@@ -133,6 +139,7 @@ def summarize(outcomes: list[InstallOutcome]) -> Summary:
         InstallStatus.NO_METHOD: [],
         InstallStatus.CHECKSUM_MISMATCH: [],
         InstallStatus.DEPENDENCY_FAILED: [],
+        InstallStatus.MANUAL_REQUIRED: [],
     }
     for outcome in outcomes:
         buckets[outcome.status].append(outcome.tool_id)
@@ -143,4 +150,5 @@ def summarize(outcomes: list[InstallOutcome]) -> Summary:
         no_method=tuple(buckets[InstallStatus.NO_METHOD]),
         mismatched=tuple(buckets[InstallStatus.CHECKSUM_MISMATCH]),
         dependency_failed=tuple(buckets[InstallStatus.DEPENDENCY_FAILED]),
+        manual_required=tuple(buckets[InstallStatus.MANUAL_REQUIRED]),
     )

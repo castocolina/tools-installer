@@ -1,0 +1,791 @@
+2026-09-10T20:02:37.905708Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {
+  "error": {
+    "message": "Your refresh token has already been used to generate a new access token. Please try signing in again.",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "refresh_token_reused"
+  }
+}
+2026-09-10T20:02:37.906476Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:37.914731Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:37.936694Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:37.964477Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:37.972794Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:37.990260Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:38.142730Z ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: Provided authentication token is expired. Please try signing in again., url: https://chatgpt.com/backend-api/codex/models?client_version=0.153.4, cf-ray: a391080b98b6fda1-SCL, request id: req_56b90da1e946483bbd089d909b2a5cd8, auth error: 401, auth error code: token_expired
+2026-09-10T20:02:38.151624Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:38.185895Z ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: Provided authentication token is expired. Please try signing in again., url: https://chatgpt.com/backend-api/codex/models?client_version=0.153.4, cf-ray: a391080b9f0970fd-SCL, request id: req_6db96256114d4bd180e83b1a338bad34, auth error: 401, auth error code: token_expired
+2026-09-10T20:02:38.200808Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+OpenAI Codex v0.153.4
+--------
+workdir: /var/home/bazzite/git/personal/tools-installer
+model: gpt-5.6-luna
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: high
+reasoning summaries: none
+session id: 01a08cea-43c0-7911-bb89-c4351dee1fec
+--------
+user
+# Cross-AI Plan Review Request
+
+You are reviewing implementation plans for a software project phase.
+Provide structured feedback on plan quality, completeness, and risks.
+
+## Project Context
+# tools-installer
+
+## What This Is
+
+tools-installer is an interactive, cross-platform (macOS/Linux, including immutable
+Bazzite) Textual TUI and CLI that installs and manages a developer's AI-assisted dev
+environment from a single declarative `registry.toml` catalog. It handles install
+ordering, dependency drag-in, PATH repair, uninstall, and shell/environment tweaks so
+a developer never has to sequence machine-bootstrap steps by hand. Python 3, managed
+end-to-end by `uv` (interpreter version, venv, dependencies).
+
+## Core Value
+
+A developer can go from a bare machine to a working, correctly-ordered install
+(system prerequisites -> user tools -> AI-agent tooling) entirely through the
+catalog, with dependency drag-in resolving automatically and no manual ordering
+knowledge required.
+
+## Requirements
+
+### Validated
+
+<!-- Shipped and confirmed valuable. Inferred from the existing codebase (brownfield) — this is the first GSD planning pass over an already-working installer. -->
+
+- ✓ Interactive Textual TUI catalog: browse/select tools grouped by Category, Priority, Audience, or Status, or as a flat sortable table — shipped pre-GSD
+- ✓ Cross-platform install engine covering script/node/sdkman/github_release/tarball/app/dnf/apt/pacman/rpm_ostree/brew/cask methods — shipped pre-GSD
+- ✓ Hard-dependency resolution via `Tool.requires`: transitive drag-in, deps-first topological order, cycle detection, unavailable-dependency skipping (`installer/deps.py`) — shipped pre-GSD
+- ✓ PATH doctor: read-only audit plus an explicit apply-fix flow — shipped pre-GSD
+- ✓ Registry-driven uninstall for userspace (download/app) artifacts, with "managed by Homebrew" vs. "removable here" classification — shipped pre-GSD
+- ✓ Policies tab: pip/npm ban (shims + aliases) and curated cross-shell tweak bundles (docker shortcuts, countdown helper, claude skip-permissions, apt selective upgrade) written into `~/.myshellrc` — shipped pre-GSD
+- ✓ One view registry / one navigation path / one apply workflow UI architecture (`installer/ui_common.py`, `.claude/architecture.md`) — shipped pre-GSD
+
+### Active
+
+<!-- Current scope: the catalog-tiers-and-dependency-chain PRD (1st of 7 in the 2026-09-04 planning batch). -->
+
+- [ ] **REQ-catalog-tier-field**: Every registry tool declares a `tier` (system/user/ai) on the `Tool` model and registry schema, validated like `Priority`/`Audience`; `uv`/`pnpm`/`brew`/`sdkman` migrate to `tier="system"`
+- [ ] **REQ-dependency-chain-requires**: Cross-tier `requires` chains resolve via the existing resolver with zero new resolver logic
+- [ ] **REQ-catalog-tier-views**: The catalog splits into three tier-scoped top-level views (System/User/AI) reachable from the top nav
+- [ ] **REQ-recommends-soft-dependency**: `Tool.recommends`, a soft-dependency field distinct from `requires`, surfaces (never auto-installs) complementary tools
+- [ ] **REQ-install-failure-propagation**: A tool whose `requires` dependency failed earlier in the same run is skipped with a clear "dependency failed" outcome
+- [ ] **REQ-uninstall-sweep-tweak-executables**: A full uninstall also removes tweak-managed executables, not only `Tool`-shaped artifacts
+- [ ] **REQ-oh-my-zsh-plugin-config**: Oh-My-Zsh's bundled `git`/`docker` plugins are enabled via a config-array edit to `.zshrc`, reusing the existing rc-editing tweak mechanism
+
+### Out of Scope
+
+- New resolver/ordering logic keyed on `tier` — `requires` already handles ordering, cycle detection, and availability skipping; a second mechanism would drift out of sync (PRD Design Decisions)
+- A tier-keyed "gate" blocking ai-tier selection until its system-tier `requires` resolves — redundant with the existing `requires` drag-in
+- The actual new tool catalog additions (`oh-my-zsh`, `volta`, `ruby`, `kitty`, `wezterm`, `cursor-agent`, `antigravity`, `codegraph`, etc.) — covered by the companion catalog-expansion PRD, not yet ingested
+- Postinstall actions (MCP registration, non-bundled shell plugin wiring) — covered by the companion postinstall-hooks PRD, not yet ingested
+- External/custom (non-bundled) Oh-My-Zsh plugins requiring their own `git clone` step — explicitly deferred per the source PRD's Open Questions
+- Package-manager policy, live package management, background maintenance daemon, and agent CLI ergonomics — the four remaining companion PRDs from this batch, deferred to their own future ingest passes
+
+## Context
+
+This is the first of seven PRDs from a 2026-09-04 planning batch being ingested one
+at a time, in a deliberate dependency order — catalog-tiers-and-dependency-chain
+first because it is foundational (Tier enum, tier-scoped views, the `recommends`
+soft-dependency field, and two dependency-resolution gaps found by code review). The
+remaining six (package-manager-policy, postinstall-hooks, catalog-expansion,
+live-package-management, background-maintenance-daemon, agent-cli-ergonomics) will
+be ingested in subsequent merge-mode passes immediately after this one, each
+expected to extend ROADMAP.md with further phases — this is not the complete
+project scope.
+
+Codebase research performed while drafting the source PRD found that the
+dependency-chain mechanism this PRD might otherwise have proposed building already
+exists end-to-end (`Tool.requires`, `installer/deps.py:resolve_dependencies`, wired
+from `installer/app.py` for every install run) — so the dependency-chain portion of
+this milestone is a data problem (declare `requires` in `registry.toml`), not an
+architecture problem.
+
+The `REQ-install-failure-propagation` and `REQ-uninstall-sweep-tweak-executables`
+requirements were both surfaced by a code review of the already-merged
+dependencies-and-shell-tweaks work (commit `431a0a9`): its own PRD/plan specified
+"soft-warn + skip dependents on failure", but `installer/session.py::run_installs`
+never implemented the skip, and the uninstall planner only walks `Tool` entries,
+missing `installer/tweaks.py`'s `ManagedExecutable` artifacts (e.g.
+`tools-installer-wait-time`).
+
+
+## Phase 12.1: Reconciliation Merge Verification
+### Roadmap Section
+### Phase 12.1: Reconciliation Merge Verification: confirm the layered merge of origin's 12-phase GSD work (b9a8876) with local's independent line (985f602) on branch recon/tui-interaction-consistency-2026-09-07 is architecturally sound, not just green on make validate/test (INSERTED)
+
+**Goal:** Confirm the layered merge on `recon/tui-interaction-consistency-2026-09-07` (origin's
+12-phase GSD milestone `b9a8876` adopted as base, plus local's independent line's unique
+subsystems ported on top from `985f602`) is architecturally sound: a fully green test suite with
+no known pre-existing failures, every re-added registry row individually audited against real
+tier semantics, the two ported-but-unwired local subsystems confirmed structurally inert without
+new wiring, and a real-terminal TUI smoke walkthrough proving all six views render correctly
+with zero real-machine mutation.
+**Requirements**: D-01, D-02, D-03, D-04 (12.1-CONTEXT.md locked decisions — this inserted
+verification phase has no `REQUIREMENTS.md` entries of its own)
+**Depends on:** Phase 12
+**Plans:** 1 plan
+
+Plans:
+
+- [ ] 12.1-01-PLAN.md — Fix the one confirmed pre-existing failing test (D-03, tracer); codify
+  the 11-row tier remapping audit as a permanent regression test (D-02); static import-graph
+  audit of the two ported-but-unwired local subsystems plus a real-terminal tmux structural
+  smoke walkthrough of all six views (D-01, D-04)
+
+### Requirements Addressed
+This inserted verification phase has no REQUIREMENTS.md entries of its own; its authority comes from 12.1-CONTEXT.md's locked decisions D-01 through D-04.
+
+### User Decisions (CONTEXT.md)
+# Phase 12.1: Reconciliation Merge Verification - Context
+
+**Gathered:** 2026-09-07
+**Status:** Ready for planning
+
+<domain>
+## Phase Boundary
+
+Confirm that the layered merge on `recon/tui-interaction-consistency-2026-09-07`
+— origin's 12-phase GSD milestone (`b9a8876`) adopted as base, plus 9 commits
+porting local's independent line's unique subsystems (`985f602`) on top — is
+architecturally sound, not just green on `make validate`/`make test`. This is
+a verification phase over already-executed reconciliation work, not new
+feature development. Wiring `install_actions.py`/`agent_policy.py` into the
+UI is explicitly out of scope here (Phase 12.2). Container e2e is out of
+scope here (Phase 12.3) — this phase is static/manual-smoke verification only.
+
+</domain>
+
+<decisions>
+## Implementation Decisions
+
+### Verification depth
+- **D-01:** Static/automated checks (import graph, orphaned modules, vulture,
+  coverage) PLUS a manual smoke walkthrough of the TUI in `tmux` (navigation
+  across Catalog/Doctor/Uninstall/Policies views) — no real install/uninstall
+  actions executed yet, that's Phase 12.3's job.
+
+### Tier remapping audit
+- **D-02:** Full individual audit of all 11 re-added registry rows (`glab`,
+  `drawio-desktop`, `drawio-cli`, `pi`, `ponytail`, `openspec`, `superpowers`,
+  `softaworks-agent-toolkit`, `matt-pocock-skills`, `opengsd`, `spec-kit`)
+  against origin's real tier semantics (system = machine prerequisite, user =
+  personal-pick tool, ai = agent-facing tooling) — not just trusting the
+  porting agent's skill-pack/agent→`ai`, everything-else→`user` heuristic.
+  Correct any row found misclassified.
+
+### Pre-existing failing test
+- **D-03:** Fix `tests/test_version_status.py::test_fresh_manager_snapshot_issues_zero_queries`
+  within this phase, even though it was confirmed failing identically on
+  unmodified origin `b9a8876` (not introduced by the reconciliation) —
+  keeps the branch fully green before Phase 12.3's container e2e run, so a
+  future failure there is unambiguously new.
+
+### Ported-but-unwired code hygiene
+- **D-04:** Verify `installer/install_actions.py` and `installer/agent_policy.py`
+  don't break `make validate` (vulture dead-code, import correctness,
+  coverage floor) as inert-but-valid modules — do NOT wire them into the UI
+  or add integration tests here. That wiring decision belongs to Phase 12.2.
+
+### Claude's Discretion
+- Exact static-analysis tooling/commands beyond what `make validate` already
+  runs (e.g., whether a dedicated import-graph check is needed on top of
+  vulture) — planner's call based on what `make validate`'s existing gates
+  already cover.
+- Whether fixing D-03's test requires touching `installer/version_status.py`
+  logic or only the test's fixture/mock setup — research/implementation-time
+  call, informed by reading the actual failure.
+
+</decisions>
+
+<canonical_refs>
+## Canonical References
+
+**Downstream agents MUST read these before planning or implementing.**
+
+### This session's reconciliation record
+- `docs/prds/branch-reconciliation-tui-interaction-consistency-v1.0-prd.md` —
+  original divergence diagnosis, rescue/drop catalog, and the deferred
+  reconciliation plan this phase now executes
+- `.planning/ROADMAP.md` Phase 12.1/12.2/12.3 entries — the three inserted
+  decimal phases and their scope boundaries relative to each other
+
+### Origin's own record (now merged in)
+- `.planning/RUN-REPORT.md` — origin's own milestone completion report for
+  the 12-phase GSD work now forming this branch's base
+- `.claude/architecture.md` — updated by origin's phases; states the
+  one-registry/one-nav-path/one-apply-workflow rules this verification must
+  confirm the merge still honors
+
+### Reconciliation commits to review (on `recon/tui-interaction-consistency-2026-09-07`)
+- `8416d5c`, `e62d712`, `9f6274b`, `2af3a47`, `bdcdcb4`, `8c61d0e`, `4543bd1`,
+  `7b9dbb7`, `a570bf3` — the 9 commits this phase verifies
+
+</canonical_refs>
+
+<code_context>
+## Existing Code Insights
+
+### Reusable Assets
+- `make validate` (ruff, pyright, bandit, vulture, shellcheck) and `make test`
+  (pytest + coverage) — the existing quality gates this phase re-runs and
+  extends, not new tooling to build
+
+### Established Patterns
+- This project's existing apply-workflow convention (one action, one
+  keypress, live output) and one-registry/one-nav-path architecture
+  (`.claude/architecture.md`) — the yardstick for "architecturally sound"
+  in D-01's manual smoke walkthrough
+
+### Integration Points
+- `installer/model.py`'s merged `Tool` dataclass (origin's StrEnum typing +
+  local's ownership/skill-lifecycle fields) — the highest-risk merge point,
+  since `Tier` enum values drive D-02's audit
+- `installer/registry.toml` — the 11 rows D-02 audits live here
+
+</code_context>
+
+<specifics>
+## Specific Ideas
+
+No specific implementation preferences beyond the four locked decisions above
+— this phase's gray areas were about verification method and scope, not
+product behavior.
+
+</specifics>
+
+<deferred>
+## Deferred Ideas
+
+- Wiring `install_actions.py`/`agent_policy.py` into the Textual UI — Phase 12.2.
+- Real install/uninstall actions and container-based e2e — Phase 12.3.
+- Explicitly marking the two unwired modules with a TODO/architecture note —
+  considered and declined (D-04): verify-without-blocking was chosen instead,
+  since Phase 12.2 already exists as the tracked follow-up.
+
+### Reviewed Todos (not folded)
+None — no matching todos found for this phase.
+
+</deferred>
+
+---
+
+*Phase: 12.1-reconciliation-merge-verification-confirm-the-layered-merge*
+*Context gathered: 2026-09-07*
+
+### Plans to Review
+#### /var/home/bazzite/git/personal/tools-installer/.planning/phases/12.1-reconciliation-merge-verification-confirm-the-layered-merge/12.1-01-PLAN.md
+---
+phase: 12.1-reconciliation-merge-verification-confirm-the-layered-merge
+plan: 01
+type: execute
+wave: 1
+cross_ai: true
+depends_on: []
+files_modified:
+  - tests/test_version_status.py
+  - tests/test_registry.py
+autonomous: true
+requirements:
+  - D-01
+  - D-02
+  - D-03
+  - D-04
+
+estimate:
+  tokens: 70000
+  raw_tokens: 70000
+  tasks: 3
+  confidence: low
+
+must_haves:
+  truths:
+    - "The full test suite (`uv run pytest -q`) is 100% green — zero known-failing tests — proving the reconciled branch's baseline is trustworthy going into Phase 12.3's container e2e run (D-03)."
+    - "Every one of the 11 registry rows re-added by the reconciliation (`glab`, `drawio-desktop`, `drawio-cli`, `pi`, `ponytail`, `openspec`, `superpowers`, `softaworks-agent-toolkit`, `matt-pocock-skills`, `opengsd`, `spec-kit`) carries a `tier` that matches origin's real tier semantics (system = machine prerequisite, user = personal-pick tool, ai = agent-facing tooling), individually audited against this registry's own established precedents rather than trusted from the porting agent's skill-pack/agent→ai, everything-else→user heuristic, and that finding is pinned as a permanent automated regression test (D-02)."
+    - "`installer/install_actions.py` and `installer/agent_policy.py` (plus their sibling modules `installer/install_ownership.py`, `installer/agent_env.py`, `installer/agent_guidance.py`) are confirmed to have zero production callers into `setup.py`'s composition root — structurally inert, per `.claude/architecture.md` rule 5's own 'only its own test keeping it covered' definition of an orphan helper — without breaking `make validate`'s vulture/coverage gates, and without being wired into the UI or flagged with a TODO (locked D-04; Phase 12.2 owns the wiring decision)."
+    - "A real terminal session (tmux) driving the actual `uv run setup.py` process navigates all six views (System/User/AI/Doctor/Uninstall/Policies), each renders without a crash, the 11 re-added rows are visible in their expected tier views, and zero real-machine mutation occurs (this machine's `~/.myshellrc`/`~/.zshrc` mtimes are provably unchanged) — D-01's static-plus-manual-smoke verification depth, never Phase 12.3's real install/uninstall scope."
+  artifacts:
+    - tests/test_version_status.py
+    - tests/test_registry.py
+    - .planning/phases/12.1-reconciliation-merge-verification-confirm-the-layered-merge/12.1-01-SUMMARY.md
+  key_links:
+    - "installer/ownership.py::owner_dirs (reads `os.environ.get(\"PNPM_HOME\")` unconditionally) → tests/test_version_status.py::_which_for_fixture (hardcodes a macOS-shaped path) — the fragile link D-03's fix isolates via `monkeypatch.delenv`."
+    - "installer/policy.py::agent_environment_policy / compose_agent_environment_policy (imports installer/agent_policy.py + installer/agent_env.py, following the same Policy-factory shape as daemon_policy/tweak_policy/omz_plugins_policy) → setup.py's policy_inputs composition (lines 290-314) — confirmed NOT called, the concrete evidence D-04's verification produces."
+    - "installer/registry.toml's 11 re-added rows → installer/model.py::Tool.tier → installer/ui_common.py::VIEWS-driven CatalogScreen rendering — the link both D-02's audit test and Task 3's live tmux walkthrough independently verify."
+---
+
+<objective>
+Verify — not merely re-run `make validate`/`make test` on — the layered merge of origin's
+12-phase GSD milestone (`b9a8876`, adopted as base) with local's independent line's unique
+subsystems (`985f602`, ported on top via commits `8416d5c`..`a570bf3` on
+`recon/tui-interaction-consistency-2026-09-07`) is architecturally sound. This phase has no
+`REQUIREMENTS.md` entries (ROADMAP lists this inserted phase's Requirements as `TBD`); its four
+locked decisions in `12.1-CONTEXT.md` (D-01 verification depth, D-02 tier remapping audit, D-03
+pre-existing failing test, D-04 ported-but-unwired code hygiene) are this plan's concrete,
+testable requirements and are cited as `D-01`..`D-04` throughout.
+
+Three closed findings drive this plan's three tasks, each already confirmed live on this
+machine on 2026-09-10 before writing this plan (not assumed):
+
+1. **D-03**: `tests/test_version_status.py::test_fresh_manager_snapshot_issues_zero_queries` is
+   the ONLY failing test in the entire suite (confirmed via a full `uv run pytest -q` run with
+   and without `--deselect` on that one test). Root cause: this machine's real `PNPM_HOME` env
+   var leaks into `installer/ownership.py::owner_dirs`'s unconditional `os.environ.get` read,
+   which the test's `_which_for_fixture`/`_node_tool` fixtures never isolate — unlike
+   `tests/test_ownership.py`, which already does via `monkeypatch.setenv`/`delenv`. This
+   reproduces identically on unmodified origin `b9a8876` per D-03, confirming it predates the
+   reconciliation.
+2. **D-02**: all 11 registry rows commit `9f6274b` re-added were individually audited against
+   origin's real tier semantics and this registry's own established precedents (`gh`↔`glab`,
+   `mmdc`↔`drawio-cli`/`drawio-desktop`, `claude`/`codex`/`opencode`/`cursor-agent`/`antigravity`
+   ↔`pi`, `codegraph`/`graphify`/`rtk`↔the seven `skill_pack` rows). No misclassification found.
+3. **D-04**: a direct import-graph grep (`grep -rnE ... setup.py installer/wizard_app.py
+   installer/app.py installer/catalog_tui.py installer/engine.py installer/ui_common.py`,
+   0 matches) plus a live tmux Policies-view capture (only 9 policies render; no
+   agent-environment/permission-audit row) confirm `installer/install_actions.py` and
+   `installer/agent_policy.py` (and their sibling modules) are genuinely orphaned from the live
+   app — exactly `.claude/architecture.md` rule 5's "only its own test keeping it covered"
+   definition of an orphan helper. Locked D-04 explicitly declines wiring or even a TODO note
+   here (Phase 12.2 owns that decision) — this plan verifies without blocking, per that decision.
+
+Purpose: close the phase's verification scope (D-01: static/automated checks PLUS a manual
+tmux smoke walkthrough, no real install/uninstall — that stays Phase 12.3's job) so the branch
+is provably, not just apparently, ready for Phase 12.3's container e2e run.
+
+Output: a fully green test suite (zero known failures); a permanent, individually-reasoned
+regression test pinning D-02's tier audit; a recorded static import-graph audit confirming
+D-04's orphan finding without new wiring; and a recorded, verbatim real-terminal tmux
+transcript proving all six views render correctly with zero real-machine mutation.
+</objective>
+
+<execution_context>
+@~/.claude/gsd-core/workflows/execute-plan.md
+@~/.claude/gsd-core/templates/summary.md
+</execution_context>
+
+<context>
+@.planning/PROJECT.md
+@.planning/ROADMAP.md
+@.planning/STATE.md
+@.planning/REQUIREMENTS.md
+@.planning/phases/12.1-reconciliation-merge-verification-confirm-the-layered-merge/12.1-CONTEXT.md
+@.planning/ONESHOT-RULES.md
+@CLAUDE.md
+@.claude/architecture.md
+@.claude/testing.md
+@installer/ownership.py
+@installer/version_status.py
+@tests/test_version_status.py
+@installer/registry.toml
+@tests/test_registry.py
+@installer/policy.py
+@installer/model.py
+@installer/ui_common.py
+@installer/cli.py
+@setup.py
+</context>
+
+<tasks>
+
+<task type="tracer">
+  <name>Task 1 (tracer): Fix the confirmed pre-existing failing test — pin PNPM_HOME/UV_TOOL_BIN_DIR so ownership attribution is host-independent (D-03)</name>
+  <files>tests/test_version_status.py</files>
+  <read_first>
+    - `installer/ownership.py` lines 231-270 (`owner_dirs`) and 303-382 (`resolve_ownership`) —
+      the real production logic this test exercises; `PNPM_HOME`/`UV_TOOL_BIN_DIR` are read
+      directly from `os.environ` (lines 256, 262), unconditionally, never gated by the fixture's
+      simulated `platform.os="macos"`.
+    - `tests/test_ownership.py` lines 24, 205-285, 500-515 — the ALREADY-established
+      `monkeypatch.setenv("PNPM_HOME", ...)` / `monkeypatch.delenv("UV_TOOL_BIN_DIR",
+      raising=False)` pattern this task reuses; `test_version_status.py`'s `_which_for_fixture`/
+      `_node_tool` fixtures (lines 313-323, 397-402) never adopted it, which is the confirmed
+      root cause.
+  </read_first>
+  <action>
+    Confirmed live on this machine (2026-09-10): `uv run pytest
+    tests/test_version_status.py -k test_fresh_manager_snapshot_issues_zero_queries -q` fails
+    with `assert 'unknown' == 'pnpm'` on `statuses["mmdc"]`, and D-03 (12.1-CONTEXT.md) records
+    the same failure reproducing on an unmodified origin `b9a8876` checkout — pre-existing, not
+    introduced by the reconciliation. Root cause: this machine's real `PNPM_HOME`
+    (`/home/bazzite/.local/share/pnpm`) leaks into `installer/ownership.py::owner_dirs`, which
+    reads `os.environ.get("PNPM_HOME")` unconditionally, while the test's `_which_for_fixture`
+    hardcodes a macOS-shaped `~/Library/pnpm/mmdc` active path — a path that only matches
+    `owner_dirs`'s OWN platform-derived default (`_PNPM_DEFAULTS["macos"]`) when the real env
+    var happens to be unset. `tests/test_ownership.py` already isolates this exact env var via
+    `monkeypatch`; `test_version_status.py` never adopted that pattern for its
+    `_node_tool()`/`_which_for_fixture` fixtures.
+
+    Add `import pytest` to `tests/test_version_status.py`'s import block (it currently imports
+    no pytest symbol at all). Add a `monkeypatch: pytest.MonkeyPatch` parameter to
+    `test_fresh_manager_snapshot_issues_zero_queries`, and as its first two statements call
+    `monkeypatch.delenv("PNPM_HOME", raising=False)` and `monkeypatch.delenv("UV_TOOL_BIN_DIR",
+    raising=False)` — DELETE rather than set a specific value: `owner_dirs`'s own
+    `_PNPM_DEFAULTS["macos"]` fallback (`~/Library/pnpm`) and its default `uv_dir` (`~/.local/bin`)
+    already produce exactly the paths `_which_for_fixture` hardcodes once the real env vars
+    stop shadowing them. Do not touch `installer/ownership.py` or `installer/version_status.py`
+    production logic, and do not touch any other test function in this file — a full-suite run
+    with this one test deselected (`uv run pytest -q --deselect
+    tests/test_version_status.py::test_fresh_manager_snapshot_issues_zero_queries`, confirmed
+    2026-09-10) already passes every other test, so this is the SOLE fix this task makes.
+  </action>
+  <verify>
+    <automated>uv run pytest tests/test_version_status.py -q</automated>
+    <fails_when>any test in tests/test_version_status.py fails or errors, or
+    test_fresh_manager_snapshot_issues_zero_queries still asserts statuses["mmdc"].source is not
+    "pnpm".</fails_when>
+  </verify>
+  <acceptance_criteria>
+    - `uv run pytest -q` (full suite, no deselect) exits 0 — the branch is fully green with zero
+      known-failing tests before Phase 12.3's container e2e run (D-03's stated purpose).
+    - `git diff -- tests/test_version_status.py` touches only the one test function's signature
+      plus its two new `monkeypatch.delenv` lines and the added `import pytest` — no other test
+      in the file is modified.
+    - `git diff --stat -- installer/ownership.py installer/version_status.py` is empty.
+  </acceptance_criteria>
+  <done>The full test suite (`uv run pytest -q`) passes with zero failures — the reconciled
+  branch is unambiguously green, not merely green-except-for-one-known-pre-existing-failure,
+  closing D-03.</done>
+  <reversibility rating="reversible">A two-line test-fixture isolation change with a direct git
+  revert path; no production code, schema, or registry data touched.</reversibility>
+</task>
+
+<task type="auto">
+  <name>Task 2: Codify the tier remapping audit — one regression test asserting all 11 re-added registry rows carry the correct tier (D-02)</name>
+  <files>tests/test_registry.py</files>
+  <read_first>
+    - `installer/registry.toml`'s 11 rows re-added by commit `9f6274b` (`glab`,
+      `drawio-desktop`, `drawio-cli`, `pi`, `ponytail`, `openspec`, `superpowers`,
+      `softaworks-agent-toolkit`, `matt-pocock-skills`, `opengsd`, `spec-kit`) — read each row's
+      `tier`/`category`/`audience`/`desc` field as committed.
+    - `tests/test_registry.py`'s existing per-tool precedent tests: `gh` (lines 403-411, git
+      category, tier="user", priority="P0", audience="both"), `test_puppeteer_is_a_user_tier_node_tool_requiring_pnpm`
+      (line 571), the `mmdc` registry entry (diagram category, tier="user"), the `ai`-tier tests
+      for `graphify`/`cursor-agent`/`antigravity`/`rtk` (lines 652-749), and
+      `test_bootstrap_package_managers_are_system_tier` (lines 926-929, using the `_tools_by_id()`
+      helper this task reuses) plus `test_registry_tier_distribution_is_pinned` (lines 915-923,
+      the tripwire this task's new assertions must not perturb).
+    - `.claude/architecture.md`'s "Tier is a browsing label" section — origin's real tier
+      semantics this audit checks each row against (system = machine prerequisite, user =
+      personal-pick tool, ai = agent-facing tooling), not the porting agent's
+      skill-pack/agent→ai, everything-else→user heuristic (12.1-CONTEXT.md D-02).
+  </read_first>
+  <action>
+    Full individual audit performed (2026-09-10) against origin's real tier semantics and this
+    registry's own established precedents, not the porting heuristic:
+    - `glab` (git CLI, audience=both, priority=P0) → user: matches the existing `gh` (GitHub
+      CLI) precedent exactly — same category, same audience, same priority; `gh` is already
+      tier="user" despite agents using it too, per its own desc ("agents and users").
+    - `drawio-desktop`/`drawio-cli` (diagram render tools, audience=human/both) → user: matches
+      the existing `mmdc` precedent (diagram-category, tier="user", audience="both") — a
+      general-purpose rendering tool any developer or agent can invoke, not an agent-specific
+      harness.
+    - `pi` (own coding-agent harness, `kind="host_setup"`) → ai: matches the existing
+      `claude`/`codex`/`opencode`/`cursor-agent`/`antigravity` precedent — a standalone
+      runnable agent CLI, the same shape as those five ai-tier agent hosts.
+    - `ponytail`/`openspec`/`superpowers`/`softaworks-agent-toolkit`/`matt-pocock-skills`/
+      `opengsd`/`spec-kit` (all `kind="skill_pack"`, each installing a plugin/workflow into an
+      agent harness's own skill directory) → ai: matches the existing `codegraph`/`graphify`/
+      `rtk` precedent (ai-tier tools that exist specifically to serve agent hosts) — these are
+      agent-facing tooling by definition (their entire function is extending an AI coding
+      agent), not a personal-pick tool a human would use standalone the way `kitty`/`wezterm`/
+      `glab` are.
+    No misclassification was found in any of the 11 rows. Add ONE new test function,
+    `test_reconciliation_tier_audit_confirms_all_11_re_added_rows`, placed immediately after
+    `test_bootstrap_package_managers_are_system_tier` (line 929) and before
+    `test_gitui_is_linux_download_and_brew_only_on_macos` (line 932), using the existing
+    `_tools_by_id()` helper, asserting `.tier` for all 11 ids with the rationale above captured
+    as inline comments grouped by precedent (mirroring this file's existing per-tool assertion
+    style) — so the audit conclusion is pinned as an automated, individually-reasoned
+    regression, not a one-time claim. Do not alter `installer/registry.toml` — this task
+    confirms the existing tier values are correct, it does not change any of them.
+  </action>
+  <verify>
+    <automated>uv run pytest tests/test_registry.py -q</automated>
+    <fails_when>the full test_registry.py suite fails, OR
+    test_reconciliation_tier_audit_confirms_all_11_re_added_rows is absent, OR any of its 11
+    assertions does not match the tier value actually committed in installer/registry.toml.</fails_when>
+  </verify>
+  <acceptance_criteria>
+    - `uv run pytest tests/test_registry.py::test_registry_tier_distribution_is_pinned -q` still
+      passes unchanged (26 system / 22 ai / 41 user) — this task adds assertions, it never
+      touches the registry's tier VALUES.
+    - `git diff --stat -- installer/registry.toml` is empty.
+    - The new test asserts all 11 ids by name: glab, drawio-desktop, drawio-cli, pi, ponytail,
+      openspec, superpowers, softaworks-agent-toolkit, matt-pocock-skills, opengsd, spec-kit.
+  </acceptance_criteria>
+  <done>Every one of the 11 rows re-added by the reconciliation is individually confirmed
+  against origin's real tier semantics (not the porting heuristic) and that finding is pinned
+  as a permanent, automated regression test — closing D-02.</done>
+  <reversibility rating="reversible">Adds one test function asserting already-committed data; a
+  direct git revert path, no registry or schema change.</reversibility>
+</task>
+
+<task type="auto">
+  <name>Task 3: Static import-graph audit of the two ported-but-unwired subsystems, plus a real-terminal tmux structural smoke walkthrough of all six views (D-01, D-04)</name>
+  <files>None — verification-only; no production or test files change. A temporary script is
+  written to .planning/phases/12.1-reconciliation-merge-verification-confirm-the-layered-merge/verify-static-and-smoke.sh
+  for this task's evidence and left uncommitted afterward (mirrors 09-02-PLAN.md Task 1's
+  tier3-verify.sh precedent).</files>
+  <precondition>tmux is installed and on PATH (`command -v tmux`); this machine's
+  ~/.myshellrc and ~/.zshrc already exist so their mtimes can be recorded before and after the
+  tmux session as proof of zero mutation.</precondition>
+  <read_first>
+    - `installer/install_actions.py`, `installer/install_ownership.py` (subsystem A, ported by
+      commit `2af3a47`), `installer/agent_policy.py`, `installer/agent_env.py`,
+      `installer/agent_guidance.py` (subsystem B, ported by commit `bdcdcb4`) — the two local
+      subsystems D-04 names (`install_actions.py`/`agent_policy.py` are each subsystem's
+      representative file; their sibling modules share the same orphan status and are audited
+      together, not separately).
+    - `installer/policy.py` lines 132-209 (`agent_environment_policy`/
+      `compose_agent_environment_policy`) — confirms subsystem B IS wired one level deep (into
+      `policy.py`, following the same Policy-factory shape as `daemon_policy`/`tweak_policy`/
+      `omz_plugins_policy`) but that factory is never imported by `setup.py`'s composition root.
+    - `setup.py` lines 39-46 (Policy-factory imports) and 290-314 (`policy_inputs` composition)
+      — the real composition root this task's grep confirms neither subsystem reaches.
+    - `.claude/architecture.md` rule 5 ("No orphan helpers... Only its own test keeping it
+      covered is the tell") and `tests/test_ownership.py::test_abandoned_drift_helpers_are_absent`
+      (line 567) — this project's own prior precedent for this exact class of finding.
+      12.1-CONTEXT.md D-04 (locked) explicitly declines wiring or a TODO/architecture note here,
+      deferring the resolution to Phase 12.2 — this task performs ONLY the verify-without-blocking
+      check D-04 requires, never a fix, a TODO, or an integration test.
+    - `.planning/ONESHOT-RULES.md` Rule 5 (never mutate this machine's real shell rc files or run
+      a real install/uninstall during this check) and Rule 14's Tier 2 definition (structural
+      text-match via `capture-pane`, navigation-only, no gate needed) — the exact governing
+      rules this task's tmux script follows; Checklist item 7 — the precedent this walkthrough
+      instantiates.
+    - `installer/ui_common.py` lines 103-166 (`VIEWS`) and 188 (`GLOBAL_NAV`, `"1-6 views | ^p
+      nav | esc back | q quit"`) — the 1-6 nav keys and `q`-quit binding the tmux script drives.
+    - `installer/cli.py` line 55 (`--link-mode`) — skips the first-run "How should PATH be wired"
+      questionary prompt. Confirmed live on this machine (2026-09-10): launching `uv run
+      setup.py` with NO flags hit that live interactive prompt before reaching the catalog
+      screen; `uv run setup.py --link-mode centralized` skips it entirely and goes straight to
+      the Textual `UnifiedApp` catalog screen with zero file writes, because `_choose_tools`
+      only calls `configure_path` after the wizard's OWN confirm prompt, which this task's
+      script never reaches (it quits with `q` from inside the catalog screen first).
+  </read_first>
+  <action>
+    Part A — static import-graph check (D-04): confirmed live (2026-09-10) via `grep -rnE`
+    that NEITHER subsystem A (`install_actions.py`, `install_ownership.py`) NOR subsystem B
+    (`agent_policy.py`, `agent_env.py`, `agent_guidance.py`) is imported by `setup.py`,
+    `installer/wizard_app.py`, `installer/app.py`, `installer/catalog_tui.py`,
+    `installer/engine.py`, or `installer/ui_common.py` — their only callers are their own test
+    files (`test_install_actions.py`, `test_install_ownership.py`, `test_agent_policy.py`,
+    `test_agent_env.py`, `test_agent_environment_e2e.py`, `test_agent_environment_policy.py`)
+    and, for subsystem B only, `installer/policy.py`'s own `agent_environment_policy`/
+    `compose_agent_environment_policy` (which `setup.py` itself never calls). This matches
+    `.claude/architecture.md` rule 5's own description of an orphan helper ("only its own test
+    keeping it covered is the tell") exactly — a real, confirmed finding, not a hypothetical
+    one. Per D-04 (locked): do NOT wire either subsystem into `setup.py`, do NOT add an
+    integration test exercising them end-to-end, and do NOT add a TODO/architecture-note
+    flagging the gap (12.1-CONTEXT.md Deferred Ideas explicitly considered and declined that
+    option) — Phase 12.2 owns this decision. Confirm `make validate` (ruff/pyright/bandit/
+    vulture) and `uv run pytest --cov` (90% floor) both stay green with both subsystems present
+    and unmodified.
+
+    Part B — real-terminal tmux structural smoke walkthrough (D-01): write
+    `.planning/phases/12.1-reconciliation-merge-verification-confirm-the-layered-merge/verify-static-and-smoke.sh`
+    containing BOTH parts as one failure-propagating gate (`set -euo pipefail`), shaped as
+    follows:
+    - Record each of `~/.myshellrc` and `~/.zshrc`'s current mtime (`stat -c '%Y'` on Linux,
+      `stat -f '%m'` on macOS) BEFORE launching tmux.
+    - Part A as a script step: the grep-based orphan check above (fail the script if ANY of
+      subsystem A/B's files is matched by an import in `setup.py`/`installer/wizard_app.py`/
+      `installer/app.py`/`installer/catalog_tui.py`/`installer/engine.py`/
+      `installer/ui_common.py`), then `make validate`.
+    - Part B: `tmux new-session -d -s <unique-name> -x 220 -y 55 "uv run setup.py --link-mode
+      centralized"`; sleep ~4s for first paint; for each key in `1 2 3 4 5 6` in order: `tmux
+      send-keys`, sleep ~1.5s, `tmux capture-pane -p`, and fail immediately if the pane contains
+      `Traceback` or `Error:`. Assert view 2 (User)'s capture contains `glab` AND
+      `drawio-desktop` AND `drawio-cli`; assert view 3 (AI)'s capture contains `ponytail` AND
+      `openspec` AND `superpowers` AND `softaworks-agent-toolkit` AND `matt-pocock-skills` AND
+      `opengsd` AND `spec-kit` AND the literal description text `Minimal coding-agent harness`
+      (`pi`'s distinguishing text — the bare id `pi` is too short a substring to grep safely
+      against a full-screen capture). Assert view 6 (Policies)'s capture does NOT contain any of
+      `agent environment`/`permission audit`/`agent-policy` (confirms subsystem B's Policy
+      factory is still not surfaced in the live UI, consistent with Part A's static finding).
+      Send `q`; assert the tmux session no longer exists (clean exit, matching this project's
+      own quit binding). Finally re-`stat` `~/.myshellrc`/`~/.zshrc` and fail if either mtime
+      changed from the value recorded before the session started — the concrete, checkable
+      proof this walkthrough never mutated the real machine (ONESHOT-RULES.md Rule 5).
+
+    Run `bash verify-static-and-smoke.sh`, record its FULL output — every captured pane, per
+    ONESHOT-RULES.md Rule 14's evidence-recording convention — verbatim in the SUMMARY, then
+    delete the script (or leave it uncommitted): it is a verification tool, not production or
+    test code, mirroring 09-02-PLAN.md Task 1's `tier3-verify.sh` precedent.
+  </action>
+  <verify>
+    <automated>bash .planning/phases/12.1-reconciliation-merge-verification-confirm-the-layered-merge/verify-static-and-smoke.sh</automated>
+    <fails_when>the orphan-import grep finds ANY production caller for install_actions.py,
+    install_ownership.py, agent_policy.py, agent_env.py, or agent_guidance.py outside their own
+    tests and installer/policy.py; make validate exits non-zero; any captured tmux pane contains
+    "Traceback" or "Error:"; the User view's capture is missing "glab", "drawio-desktop", or
+    "drawio-cli"; the AI view's capture is missing any of "ponytail", "openspec", "superpowers",
+    "softaworks-agent-toolkit", "matt-pocock-skills", "opengsd", "spec-kit", or "Minimal
+    coding-agent harness"; the Policies view's capture contains "agent environment", "permission
+    audit", or "agent-policy"; the tmux session is still alive after sending "q"; or either
+    ~/.myshellrc's or ~/.zshrc's mtime changed from the value recorded before the session
+    started.</fails_when>
+  </verify>
+  <acceptance_criteria>
+    - The SUMMARY records the full verbatim tmux transcript for all six views plus Part A's
+      grep/make-validate output.
+    - `stat`'s before/after comparison for `~/.myshellrc` and `~/.zshrc` shows identical mtimes
+      — confirmed zero real-machine mutation.
+    - No production or test file changes in this task's commit (or no commit at all if the
+      evidence is folded into the phase SUMMARY) — this task is pure verification.
+  </acceptance_criteria>
+  <done>Both ported-but-unwired local subsystems are confirmed structurally inert (zero
+  production callers, make validate/coverage stay green) without being wired into the UI or
+  flagged with a TODO, per D-04's locked scope; a real tmux terminal session proves all six
+  views (System/User/AI/Doctor/Uninstall/Policies) render correctly with the 11 re-added rows
+  visible in their expected tier views, no crash, and zero real-machine mutation — closing D-01
+  and D-04.</done>
+  <reversibility rating="reversible">Verification-only; no production or test files are
+  modified by this task, and its temporary script is not committed.</reversibility>
+</task>
+
+</tasks>
+
+<threat_model>
+## Trust Boundaries
+
+| Boundary | Description |
+|----------|-------------|
+| CI/dev-machine environment variables (`PNPM_HOME`, `UV_TOOL_BIN_DIR`) → unit test assertions | A test previously let real host environment state leak into a deterministic assertion (`installer/ownership.py::owner_dirs` reads `os.environ` unconditionally), producing a host-dependent pass/fail rather than a reproducible one |
+| Task 3's temporary verification script → the real `uv run setup.py` process in a real terminal | Drives the actual production entry point through `tmux send-keys`; must never reach a key that mutates this machine's real shell rc files or performs a real install/uninstall |
+| Ported-but-unwired local subsystems (`install_actions.py`'s multi-hook `post_install`, `agent_policy.py`'s permission auditing) → production composition root (`setup.py`) | Real subprocess/file-write-capable code currently has zero live callers into the app a user actually runs — confirmed inert, not reachable from any real user action, pending Phase 12.2's wiring decision |
+
+## STRIDE Threat Register
+
+| Threat ID | Category | Component | Severity | Disposition | Mitigation Plan |
+|-----------|----------|-----------|----------|-------------|-----------------|
+| T-12.1-01 | Tampering | `tests/test_version_status.py::test_fresh_manager_snapshot_issues_zero_queries` | low | mitigate | Task 1 pins `PNPM_HOME`/`UV_TOOL_BIN_DIR` via `monkeypatch.delenv` so the test's ownership-attribution assertion is deterministic regardless of the host machine's real pnpm/uv install location (D-03). |
+| T-12.1-02 | Elevation of Privilege | `installer/install_actions.py` / `installer/agent_policy.py` — ported, unwired subsystems with real subprocess/file-write capability | medium | accept | Task 3 confirms zero production callers into `setup.py`'s composition root via a static import-graph check plus a live Policies-view smoke capture; intentionally left unwired per locked CONTEXT.md D-04 — Phase 12.2 owns the wiring decision, this phase only verifies the gap is real and bounded. |
+| T-12.1-03 | Tampering | Task 3's `verify-static-and-smoke.sh` tmux session driving the real `uv run setup.py` process | low | mitigate | The script is navigation-only (keys `1`-`6` then `q`, never `space`/`enter`); `--link-mode centralized` skips the one interactive prompt that could reach a write path; a before/after `stat` mtime check on `~/.myshellrc`/`~/.zshrc` is the script's own automated proof of zero mutation, matching ONESHOT-RULES.md Rule 5 — already verified live on this exact machine (2026-09-10, mtimes unchanged) before this plan was written. |
+
+</threat_model>
+
+<verification>
+Phase-level checks, run after all three tasks:
+
+- `uv run pytest -q` (full suite) exits 0 — zero known-failing tests (Task 1).
+- `uv run pytest tests/test_registry.py -q` exits 0, including the new
+  `test_reconciliation_tier_audit_confirms_all_11_re_added_rows` and the unchanged
+  `test_registry_tier_distribution_is_pinned` (26/22/41) (Task 2).
+- `bash .planning/phases/12.1-reconciliation-merge-verification-confirm-the-layered-merge/verify-static-and-smoke.sh`
+  (or its recorded output in the SUMMARY, if the script was deleted after running) exits 0 —
+  static orphan-import audit, `make validate`, and the six-view tmux smoke walkthrough all pass
+  with zero real-machine mutation (Task 3).
+- `make validate && make test` exits 0 on the committed tree (CLAUDE.md's definition of done).
+- `git status --short` shows no modification to any file outside this plan's declared
+  `files_modified` (`tests/test_version_status.py`, `tests/test_registry.py`) plus the phase's
+  own SUMMARY.
+- The SUMMARY confirms D-01, D-02, D-03, and D-04 are each satisfied by a specific task, per
+  `human_verify_mode: end-of-phase`'s consolidation design (ONESHOT-RULES.md).
+</verification>
+
+<success_criteria>
+The reconciled merge on `recon/tui-interaction-consistency-2026-09-07` is confirmed
+architecturally sound, not just green on `make validate`/`make test`:
+
+1. The test suite is unambiguously green — the one confirmed pre-existing failure is fixed and
+   root-caused, not silently tolerated (D-03).
+2. Every re-added registry row's tier is individually confirmed correct against origin's real
+   tier semantics, with the audit pinned as a permanent automated test rather than a one-time
+   claim (D-02).
+3. The two ported-but-unwired local subsystems are confirmed structurally inert — zero
+   production callers, `make validate`'s vulture/coverage gates stay green — without being
+   wired into the UI or flagged, honoring the locked scope boundary with Phase 12.2 (D-04).
+4. A real terminal session proves the merged TUI's six views all render correctly with zero
+   crash and zero real-machine mutation (D-01).
+</success_criteria>
+
+<output>
+Create `.planning/phases/12.1-reconciliation-merge-verification-confirm-the-layered-merge/12.1-01-SUMMARY.md` when done.
+</output>
+
+## Review Instructions
+
+**Verify against source — do not review the plan text in isolation.** The plans reference real files, migrations, routes, and tests in this repo.
+1. Open the referenced files and check each claim against the actual code.
+2. For every strength or concern, cite concrete `path/to/file:line` evidence plus the mechanism.
+3. When a plan asserts a mechanism works (a guard, a query filter, a test that exercises a path), trace whether it actually does what is claimed — do not take the plan's word for it.
+4. If you cannot read the repo (no file access), say so and downgrade that finding to an open question rather than asserting it.
+
+Findings citing `file:line` evidence are weighted far more heavily than impressionistic ones; a review that only restates the plan's own claims has low value.
+
+**Plan coverage is mandatory (#3301).** The exact list of plan ids and the total plan count for
+this review are given in the "## Plan Coverage Manifest" section below. Give **every** listed id
+its own `##`-level section headed with that id **verbatim** (e.g. `## 12.6-01`) before writing any
+cross-plan comparison, an overall risk assessment, or a consensus-style summary. A review that
+stops before every id has its own section is an incomplete review, not a summary — if you must
+stop early, say so explicitly and name which ids you did not reach.
+
+Analyze each plan and provide:
+
+1. **Summary** — One-paragraph assessment
+2. **Strengths** — What's well-designed (bullet points)
+3. **Concerns** — Potential issues, gaps, risks (bullet points with severity: HIGH/MEDIUM/LOW)
+4. **Suggestions** — Specific improvements (bullet points)
+5. **Risk Assessment** — Overall risk level (LOW/MEDIUM/HIGH) with justification
+
+Focus on:
+- Missing edge cases or error handling
+- Dependency ordering issues
+- Scope creep or over-engineering
+- Security considerations
+- Performance implications
+- Whether the plans actually achieve the phase goals
+
+This is **cycle 2** of the review for this phase. The plans were revised (commit `19131c2`) to
+incorporate cycle 1's findings, which are appended below under "## Cycle 1 Review (for reference)".
+Check specifically whether each cycle-1 HIGH/MEDIUM concern was actually addressed by the revision,
+and flag any that were not, in addition to any new issues you find.
+
+Output your review in markdown format.
+
+## Plan Coverage Manifest
+
+Total plans in this review: 1
+
+Plan ids (give each one its own `##`-level section, headed verbatim):
+- 12.1-01
+
+2026-09-10T20:02:38.219169Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:38.236473Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:38.334948Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse("HTTP 401: {\n  \"error\": {\n    \"message\": \"Provided authentication token is expired. Please try signing in again.\",\n    \"type\": null,\n    \"code\": \"token_expired\",\n    \"param\": null\n  },\n  \"status\": 401,\n  \"detail\": {\n    \"code\": \"token_expired\",\n    \"message\": \"Provided authentication token is expired. Please try signing in again.\"\n  }\n}")
+2026-09-10T20:02:38.375173Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:38.382802Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:38.390883Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:38.432547Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse("HTTP 401: {\n  \"error\": {\n    \"message\": \"Provided authentication token is expired. Please try signing in again.\",\n    \"type\": null,\n    \"code\": \"token_expired\",\n    \"param\": null\n  },\n  \"status\": 401,\n  \"detail\": {\n    \"code\": \"token_expired\",\n    \"message\": \"Provided authentication token is expired. Please try signing in again.\"\n  }\n}")
+2026-09-10T20:02:38.658143Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://chatgpt.com/backend-api/codex/responses
+2026-09-10T20:02:38.676471Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:38.683493Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:38.691221Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:38.928665Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://chatgpt.com/backend-api/codex/responses
+2026-09-10T20:02:38.948104Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:39.126156Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:39.262121Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:39.442678Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+hook: SessionStart
+hook: SessionStart Completed
+hook: UserPromptSubmit
+hook: UserPromptSubmit Completed
+2026-09-10T20:02:39.662429Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:39.678789Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:39.685688Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:39.693778Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:39.789760Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:39.970896Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://chatgpt.com/backend-api/codex/responses
+2026-09-10T20:02:39.988527Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:39.996286Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:40.004596Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:40.452208Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://chatgpt.com/backend-api/codex/responses
+ERROR: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+ERROR: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.
+2026-09-10T20:02:40.467121Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.

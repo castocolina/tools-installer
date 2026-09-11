@@ -1,0 +1,73 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": null,
+  "phases": [
+    {
+      "number": "1",
+      "name": "Catalog Tier Foundation",
+      "status": "complete"
+    },
+    {
+      "number": "2",
+      "name": "Tier-Scoped Catalog Views & Recommends",
+      "status": "complete"
+    },
+    {
+      "number": "3",
+      "name": "Install/Uninstall & Tweak Lifecycle Hardening",
+      "status": "complete"
+    },
+    {
+      "number": "4",
+      "name": "npm/npx Ban Extension & Redirect Policy",
+      "status": "complete"
+    },
+    {
+      "number": "5",
+      "name": "Registry Method Corrections (codegraph/mmdc/puppeteer)",
+      "status": "complete"
+    },
+    {
+      "number": "6",
+      "name": "SDKMAN Hardening & Registry-Authoring Guidelines",
+      "status": "complete"
+    },
+    {
+      "number": "7",
+      "name": "System & User Tier Catalog Expansion",
+      "status": "complete"
+    },
+    {
+      "number": "8",
+      "name": "AI Tier Catalog Expansion & uv-tool Executor",
+      "status": "complete"
+    },
+    {
+      "number": "9",
+      "name": "Postinstall Hooks Mechanism",
+      "status": "complete"
+    },
+    {
+      "number": "10",
+      "name": "Agent CLI Ergonomics",
+      "status": "complete"
+    },
+    {
+      "number": "11",
+      "name": "Background Maintenance Daemon",
+      "status": "complete"
+    },
+    {
+      "number": "12",
+      "name": "Version-Aware Status & Update Action",
+      "status": "complete"
+    }
+  ],
+  "next": {
+    "command": "/gsd:progress --next",
+    "label": "Advance to the next step (plan phase 12.2)",
+    "reason": "Phase 12.2 of 15 — needs a plan"
+  },
+  "updated_at": "2026-09-10T21:45:03.798Z"
+}

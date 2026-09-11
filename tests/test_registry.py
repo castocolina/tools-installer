@@ -929,6 +929,48 @@ def test_bootstrap_package_managers_are_system_tier() -> None:
         assert tools[tool_id].tier == "system"
 
 
+def test_reconciliation_tier_audit_confirms_all_11_re_added_rows() -> None:
+    # Individual audit (D-02) of the 11 rows commit 9f6274b re-added, checked
+    # against origin's real tier semantics (system = machine prerequisite,
+    # user = personal-pick tool, ai = agent-facing tooling) and this
+    # registry's own established precedents -- not the porting agent's
+    # skill-pack/agent->ai, everything-else->user heuristic.
+    tools = _tools_by_id()
+
+    # glab (git CLI, audience=both, priority=P0) matches the existing gh
+    # (GitHub CLI) precedent exactly: same category, same audience, same
+    # priority. gh is already tier="user" despite agents using it too.
+    assert tools["glab"].tier == "user"
+
+    # drawio-desktop/drawio-cli (diagram render tools, audience=human/both)
+    # match the existing mmdc precedent (diagram-category, tier="user",
+    # audience="both"): general-purpose rendering tools any developer or
+    # agent can invoke, not agent-specific harnesses.
+    assert tools["drawio-desktop"].tier == "user"
+    assert tools["drawio-cli"].tier == "user"
+
+    # pi (own coding-agent harness, kind="host_setup") matches the existing
+    # claude/codex/opencode/cursor-agent/antigravity precedent: a standalone
+    # runnable agent CLI, the same shape as those five ai-tier agent hosts.
+    assert tools["pi"].tier == "ai"
+
+    # ponytail/openspec/superpowers/softaworks-agent-toolkit/
+    # matt-pocock-skills/opengsd/spec-kit (all kind="skill_pack", each
+    # installing a plugin/workflow into an agent harness's own skill
+    # directory) match the existing codegraph/graphify/rtk precedent:
+    # ai-tier tools that exist specifically to serve agent hosts.
+    for tool_id in (
+        "ponytail",
+        "openspec",
+        "superpowers",
+        "softaworks-agent-toolkit",
+        "matt-pocock-skills",
+        "opengsd",
+        "spec-kit",
+    ):
+        assert tools[tool_id].tier == "ai"
+
+
 def test_gitui_is_linux_download_and_brew_only_on_macos() -> None:
     gitui = next(t for t in load_tools(REGISTRY) if t.id == "gitui")
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)

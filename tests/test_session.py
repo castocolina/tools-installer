@@ -91,6 +91,21 @@ def test_summarize_empty_is_all_empty():
     assert summarize([]) == Summary(installed=(), already=(), failed=(), no_method=())
 
 
+def test_summarize_buckets_manual_required() -> None:
+    outcomes = [
+        InstallOutcome(
+            "pi",
+            "manual-required",
+            method_kind="host_setup",
+            handoff=("run these commands",),
+        ),
+        InstallOutcome("rg", "installed"),
+    ]
+    summary = summarize(outcomes)
+    assert summary.manual_required == ("pi",)
+    assert summary.installed == ("rg",)
+
+
 def _mismatch_then_install() -> tuple[list[tuple[str, str]], Install]:
     """An Install fake that mismatches on the first call per tool, then installs."""
     seen: list[tuple[str, str]] = []
@@ -272,7 +287,7 @@ def test_dependency_failure_propagates_down_a_chain() -> None:
     assert calls == ["a"]
 
 
-@pytest.mark.parametrize("status", ["failed", "no-method", "checksum-mismatch"])
+@pytest.mark.parametrize("status", ["failed", "no-method", "checksum-mismatch", "manual-required"])
 def test_every_unresolved_status_blocks_a_dependent(status: str) -> None:
     calls, install = _failing_install("dep", status=status)
     outcomes = run_installs(

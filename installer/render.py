@@ -53,7 +53,8 @@ def render_summary(summary: Summary, console: Console) -> None:
         f"Failed: {len(summary.failed)}  "
         f"Dependency failed: {len(summary.dependency_failed)}  "
         f"Checksum mismatch: {len(summary.mismatched)}  "
-        f"No method: {len(summary.no_method)}"
+        f"No method: {len(summary.no_method)}  "
+        f"Manual setup required: {len(summary.manual_required)}"
     )
     for label, ids in (
         ("installed", summary.installed),
@@ -62,6 +63,7 @@ def render_summary(summary: Summary, console: Console) -> None:
         ("dependency failed", summary.dependency_failed),
         ("checksum mismatch", summary.mismatched),
         ("no method", summary.no_method),
+        ("manual setup required", summary.manual_required),
     ):
         if ids:
             console.print(f"  {label}: {', '.join(ids)}")
@@ -94,6 +96,23 @@ def render_postinstall_warnings(outcomes: list[InstallOutcome], console: Console
             console.print(
                 f"[yellow]⚠ {outcome.tool_id} postinstall warning: {outcome.postinstall_warning}[/]"
             )
+
+
+def render_handoff(outcomes: list[InstallOutcome], console: Console) -> None:
+    """Print each MANUAL_REQUIRED tool's reviewed setup instructions, in full.
+
+    render_summary only counts and names these tools ("Manual setup
+    required: 1  pi"); this is where the actual steps the user must run
+    after the installer releases the terminal live. Silent when nothing
+    needs a handoff, matching render_skipped's and
+    render_postinstall_warnings' restraint.
+    """
+    for outcome in outcomes:
+        if outcome.status is not InstallStatus.MANUAL_REQUIRED or not outcome.handoff:
+            continue
+        console.print(f"[cyan]{outcome.tool_id} — manual setup required:[/]")
+        for line in outcome.handoff:
+            console.print(f"  {line}")
 
 
 def render_troubleshooting(console: Console) -> None:

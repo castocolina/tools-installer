@@ -3,9 +3,11 @@ from pathlib import Path
 import pytest
 
 import installer.engine as engine
+from installer import executors
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.engine import install_tool
+from installer.enums import InstallStatus
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.run import CommandError
@@ -324,6 +326,22 @@ def test_app_kind_routes_to_app_executor(monkeypatch: pytest.MonkeyPatch):
     assert outcome.method_kind == "app"
     assert outcome.verified is False
     assert seen == ["app"]
+
+
+def test_host_setup_kind_routes_to_host_setup_handoff(monkeypatch: pytest.MonkeyPatch):
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+    method = Method(kind="host_setup", params={"setup_id": "pi"})
+    outcome = install_tool(
+        _tool(method),
+        _platform(),
+        runner=lambda cmd: None,
+    )
+    assert outcome.status == InstallStatus.MANUAL_REQUIRED
+    assert outcome.method_kind == "host_setup"
+    assert outcome.handoff == executors.host_setup_handoff(method)
 
 
 def test_postinstall_hook_dispatches_after_a_successful_install(

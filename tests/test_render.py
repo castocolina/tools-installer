@@ -13,6 +13,7 @@ from installer.render import (
     render_dependency_notice,
     render_guard,
     render_guard_status,
+    render_handoff,
     render_node_globals,
     render_postinstall_warnings,
     render_skipped,
@@ -80,6 +81,21 @@ def test_render_summary_counts_and_lists_dependency_failed() -> None:
     assert "java" in out and "gradle" in out
     assert "Installed:" in out
     assert "Failed:" in out
+
+
+def test_render_summary_counts_and_lists_manual_required() -> None:
+    summary = Summary(
+        installed=(),
+        already=(),
+        failed=(),
+        no_method=(),
+        manual_required=("pi",),
+    )
+    console, buf = _console()
+    render_summary(summary, console)
+    out = buf.getvalue()
+    assert "Manual setup required: 1" in out
+    assert "pi" in out
 
 
 def test_render_summary_still_reports_zero_when_nothing_was_skipped() -> None:
@@ -396,4 +412,37 @@ def test_render_postinstall_warnings_is_silent_when_nothing_warned() -> None:
     outcomes = [InstallOutcome("rg", "installed", method_kind="brew")]
     console, buf = _console()
     render_postinstall_warnings(outcomes, console)
+    assert buf.getvalue().strip() == ""
+
+
+def test_render_handoff_prints_instructions_for_manual_required_outcomes() -> None:
+    outcomes = [
+        InstallOutcome(
+            "pi",
+            "manual-required",
+            method_kind="host_setup",
+            handoff=(
+                "After leaving the installer, run these Pi setup commands in a console:",
+                "pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent",
+                "pi",
+            ),
+        ),
+        InstallOutcome("rg", "installed", method_kind="brew"),
+    ]
+    console, buf = _console()
+    render_handoff(outcomes, console)
+    out = buf.getvalue()
+    assert "pi" in out
+    assert "After leaving the installer, run these Pi setup commands in a console:" in out
+    assert "pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent" in out
+    assert "rg" not in out
+
+
+def test_render_handoff_is_silent_when_nothing_needs_one() -> None:
+    outcomes = [
+        InstallOutcome("rg", "installed", method_kind="brew"),
+        InstallOutcome("fd", "failed"),
+    ]
+    console, buf = _console()
+    render_handoff(outcomes, console)
     assert buf.getvalue().strip() == ""
