@@ -46,8 +46,8 @@ def collect_bin_dirs(
     installing brew, `brew` is not on PATH yet but /opt/homebrew/bin exists.
 
     `home`, when given, is used only to resolve a bare `~` or `~/...` default —
-    letting a caller (installer/install_actions.py's ActionContext) inject a
-    non-default home for tests, while every other path is unaffected.
+    letting a caller inject a non-default home for tests, while every other
+    path is unaffected.
     """
     resolved_home = Path.home() if home is None else home
     dirs: list[Path] = []

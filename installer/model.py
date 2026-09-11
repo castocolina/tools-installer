@@ -36,11 +36,11 @@ METHOD_KINDS = (
     "cask",
 )
 
-# Multi-hook post-install action names, dispatched by installer/install_actions.py's
-# closed handler table. Distinct from `Tool.postinstall` above: `postinstall`
-# selects a single hook from POSTINSTALL_HOOK_NAMES by name for a package-owned
-# side effect (e.g. registering an MCP server); `post_install` lists zero or more
-# of these reviewed shell/environment actions run once per tool.
+# Multi-hook post-install action names. Distinct from `Tool.postinstall` above:
+# `postinstall` selects a single hook from POSTINSTALL_HOOK_NAMES by name for a
+# package-owned side effect (e.g. registering an MCP server); `post_install`
+# lists zero or more of these reviewed shell/environment actions run once per
+# tool.
 POST_INSTALL_ACTIONS = (
     "configure_path",
     "source_shell_init",
@@ -261,8 +261,8 @@ class Tool:
     # code-owned set, so a registry edit alone can never introduce arbitrary
     # post-install execution.
     postinstall: str | None = None
-    # Multi-hook post-install list (see POST_INSTALL_ACTIONS above), dispatched
-    # by installer/install_actions.py -- distinct from `postinstall` above.
+    # Multi-hook post-install list (see POST_INSTALL_ACTIONS above) --
+    # distinct from `postinstall` above.
     post_install: tuple[str, ...] = ()
     default_enabled_sensitive_actions: tuple[str, ...] = ()
     # Ownership/skill-lifecycle attribution, dispatched by

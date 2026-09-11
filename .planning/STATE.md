@@ -1,19 +1,20 @@
 ---
 gsd_state_version: "1.0"
-current_phase: "12.2"
-current_phase_name: "Install-Actions and Agent-Policy UI Wiring Decision: decide whether local's ported install_actions.py (multi-hook post_install) and agent_policy.py (permission auditing) get surfaced in origin's Textual UI, where, and whether they duplicate/conflict with origin's own omz.py/daemon.py/update.py flows"
+current_phase: "12.3"
+current_phase_name: "Container E2E Verification of the Reconciled Branch: real end-to-end run of the reconciled installer inside a container to confirm origin's ported architecture, local's ported subsystems (host_setup/skill_lifecycle, ownership/skill-lifecycle registry fields, remapped tool tiers), and the 11 re-added registry rows all work together live, not just under unit tests"
+current_plan: Not started
 status: planning
-stopped_at: Phase 12.1 complete, ready to plan Phase 12.2
-last_updated: "2026-09-10T21:45:03.790Z"
+stopped_at: Phase 12.2 complete, ready to plan Phase 12.3
+last_updated: "2026-09-10T22:27:40.986Z"
 last_activity: 2026-09-10
-last_activity_desc: Phase 12.1 complete, transitioned to Phase 12.2
-state_head: 3dd7738035768c4cc21413885eb2fc30e2178cd6
+last_activity_desc: Phase 12.2 complete, transitioned to Phase 12.3
+state_head: a892d1e91247d6c62e99706963b518c3fdfecec5
 progress:
-  total_phases: 15
-  completed_phases: 13
-  total_plans: 35
-  completed_plans: 35
-  percent: 87
+  total_phases: 16
+  completed_phases: 14
+  total_plans: 36
+  completed_plans: 36
+  percent: 88
 ---
 
 # Project State
@@ -27,18 +28,19 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 12.2 — Install-Actions and Agent-Policy UI Wiring Decision: decide whether local's ported install_actions.py (multi-hook post_install) and agent_policy.py (permission auditing) get surfaced in origin's Textual UI, where, and whether they duplicate/conflict with origin's own omz.py/daemon.py/update.py flows
-Plan: Not started
+Phase: 12.3 — Container E2E Verification of the Reconciled Branch: real end-to-end run of the reconciled installer inside a container to confirm origin's ported architecture, local's ported subsystems (host_setup/skill_lifecycle, ownership/skill-lifecycle registry fields, remapped tool tiers), and the 11 re-added registry rows all work together live, not just under unit tests
+Current Plan: Not started
+Total Plans in Phase: 1
 Status: Ready to plan
-Last activity: 2026-09-10 — Phase 12.1 complete, transitioned to Phase 12.2
+Last activity: 2026-09-10 — Phase 12.2 complete, transitioned to Phase 12.3
 
-Progress: [█████████░] 87%
+Progress: [█████████░] 88%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 28
+- Total plans completed: 29
 - Average duration: - min
 - Total execution time: 0 hours
 
@@ -56,6 +58,7 @@ Progress: [█████████░] 87%
 | 11 | 4 | - | - |
 | 12 | 4 | - | - |
 | 12.1 | 1 | - | - |
+| 12.2 | 1 | - | - |
 
 **Recent Trend:**
 
@@ -126,5 +129,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-07T21:53:42.575Z
-Stopped at: Phase 12.1 complete, ready to plan Phase 12.2
+Stopped at: Phase 12.2 complete, ready to plan Phase 12.3
 Resume file: .planning/phases/12.1-reconciliation-merge-verification-confirm-the-layered-merge/12.1-CONTEXT.md

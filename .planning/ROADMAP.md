@@ -339,6 +339,17 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 11. Background Maintenance Daemon | 4/4 | Complete    | 2026-09-07 |
 | 12. Version-Aware Status & Update Action | 4/4 | Complete    | 2026-09-07 |
 
+### Phase 12.4: Tool Onboarding Research Skill and Registry Postinstall Audit: build a repeatable research checklist/skill for onboarding any new catalog tool (tier classification, dependency tree, postinstall/setup-per-agent-harness needs), use it to close the confirmed rtk/graphify postinstall gap (Phase 8 research documented rtk init -g/--claude/--opencode/--codex/--agent-cursor and graphify's per-host setup, never wired into installer/postinstall.py), and audit every other registry.toml entry against the same checklist for similar research-to-implementation gaps (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 12
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 12.4 to break down)
+
 ### Phase 12.3: Container E2E Verification of the Reconciled Branch: real end-to-end run of the reconciled installer inside a container to confirm origin's ported architecture, local's ported subsystems (host_setup/skill_lifecycle, ownership/skill-lifecycle registry fields, remapped tool tiers), and the 11 re-added registry rows all work together live, not just under unit tests (INSERTED)
 
 **Goal:** [Urgent work - to be planned]
@@ -352,14 +363,24 @@ Plans:
 
 ### Phase 12.2: Install-Actions and Agent-Policy UI Wiring Decision: decide whether local's ported install_actions.py (multi-hook post_install) and agent_policy.py (permission auditing) get surfaced in origin's Textual UI, where, and whether they duplicate/conflict with origin's own omz.py/daemon.py/update.py flows (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** Retire `installer/install_actions.py` entirely — origin's `installer/omz.py`/
+`installer/daemon.py`/`installer/executors.py` already cover, with more review cycles behind
+them, the "managed setup" cases it used to serve — and leave `installer/agent_policy.py` (plus
+`agent_env.py`/`agent_guidance.py`) dormant with no code change, since origin has no equivalent
+mechanism yet and wiring it now risks throwaway work ahead of the recorded `../ai-kit` migration
+backlog item. `make validate && make test` confirm zero regression from the removal.
+**Requirements**: D-01, D-01a, D-02, D-02a, D-04 (12.2-CONTEXT.md locked decisions — this
+inserted verification phase has no `REQUIREMENTS.md` entries of its own; D-03 is explicitly not
+applicable, since neither module is wired into the UI this phase)
 **Depends on:** Phase 12
-**Plans:** 0 plans
+**Plans:** 1/1 plans complete
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 12.2 to break down)
+- [x] 12.2-01-PLAN.md — Delete `installer/install_actions.py` + its test and the 3 dangling
+  comment references left behind (D-01, D-01a, D-02, D-02a, tracer); run
+  `make validate && make test` to confirm no orphaned import, dead-code, or coverage-floor
+  regression (D-04)
 
 ### Phase 12.1: Reconciliation Merge Verification: confirm the layered merge of origin's 12-phase GSD work (b9a8876) with local's independent line (985f602) on branch recon/tui-interaction-consistency-2026-09-07 is architecturally sound, not just green on make validate/test (INSERTED)
 
