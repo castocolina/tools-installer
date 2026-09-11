@@ -36,6 +36,14 @@ Usage: container-e2e-verify.sh <command> [options]
   resync                  Re-copy /repo (read-only host mount) onto
                           /home/tester/workspace. Required after any host-side
                           installer fix before re-running pass1.
+  pass2                   D-04's rerun pass against the SAME container pass1
+                          populated: a second --all --yes install over
+                          already-installed state, a full --uninstall --yes
+                          sweep, then a third --all --yes reinstall. Prints
+                          TRACER_RERUN_OK / TRACER_UNINSTALL_OK /
+                          TRACER_REINSTALL_OK per step into
+                          pass2-transcript.log (appended, in order). Tears the
+                          container down (rm -f) once all three succeed.
   -h, --help              Show this help
 
 Never allocates a pseudo-TTY on exec (no -it/-t) so sys.stdin.isatty() is
@@ -354,12 +362,91 @@ cmd_pass1() {
   return 1
 }
 
+# One --all --yes (or --uninstall --yes) step of pass2: run, append raw
+# output to $log, accumulate summary counts (a no-op for --uninstall, which
+# has no render_summary line), and report whether it was clean/explained.
+# Sets PASS2_STEP_STATUS (setup.py's own exit) as a side effect.
+run_pass2_step() {
+  local args="$1" log="$2"
+  local tmp
+  tmp="$(mktemp)"
+  set +e
+  run_setup_as_tester "$args" > "$tmp" 2>&1
+  PASS2_STEP_STATUS=$?
+  set -e
+  cat "$tmp" >> "$log"
+  accumulate_summaries "$tmp"
+  rm -f "$tmp"
+}
+
+cmd_pass2() {
+  container_running || die "container $CONTAINER_NAME is not running"
+  ensure_phase_dir
+  local log="$PHASE_DIR/pass2-transcript.log"
+  : > "$log"
+
+  # Step 1: rerun — a second full install over already-installed state.
+  ACC_INSTALLED=0; ACC_ALREADY=0; ACC_FAILED=0; ACC_DEP_FAILED=0
+  ACC_MISMATCHED=0; ACC_NO_METHOD=0; ACC_MANUAL=0
+  ACC_SKIPPED_FILE="$(mktemp)"
+  ACC_MANUAL_NAMES_FILE="$(mktemp)"
+  run_pass2_step "--all --yes" "$log"
+  if [[ "$PASS2_STEP_STATUS" -ne 0 && "$PASS2_STEP_STATUS" -ne 1 ]]; then
+    rm -f "$ACC_SKIPPED_FILE" "$ACC_MANUAL_NAMES_FILE"
+    die "pass2 step 1 (rerun) crashed: setup.py exit $PASS2_STEP_STATUS"
+  fi
+  local dep_ok=0
+  { [[ "$ACC_DEP_FAILED" -eq 0 ]] || dependency_failures_explained; } && dep_ok=1
+  rm -f "$ACC_SKIPPED_FILE" "$ACC_MANUAL_NAMES_FILE"
+  if [[ "$ACC_FAILED" -ne 0 || "$dep_ok" -ne 1 || "$ACC_MISMATCHED" -ne 0 ]]; then
+    printf 'TRACER_RERUN_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s\n' \
+      "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" >> "$log"
+    return 1
+  fi
+  printf 'TRACER_RERUN_OK installed=%s already=%s failed=%s dependency_failed=%s\n' \
+    "$ACC_INSTALLED" "$ACC_ALREADY" "$ACC_FAILED" "$ACC_DEP_FAILED" >> "$log"
+
+  # Step 2: the full uninstall sweep. --uninstall has no render_summary line,
+  # so only the exit code (and the transcript itself) is evidence here.
+  run_pass2_step "--uninstall --yes" "$log"
+  if [[ "$PASS2_STEP_STATUS" -ne 0 ]]; then
+    printf 'TRACER_UNINSTALL_INCOMPLETE exit=%s\n' "$PASS2_STEP_STATUS" >> "$log"
+    return 1
+  fi
+  printf 'TRACER_UNINSTALL_OK\n' >> "$log"
+
+  # Step 3: reinstall — catches state the uninstall sweep left stray.
+  ACC_INSTALLED=0; ACC_ALREADY=0; ACC_FAILED=0; ACC_DEP_FAILED=0
+  ACC_MISMATCHED=0; ACC_NO_METHOD=0; ACC_MANUAL=0
+  ACC_SKIPPED_FILE="$(mktemp)"
+  ACC_MANUAL_NAMES_FILE="$(mktemp)"
+  run_pass2_step "--all --yes" "$log"
+  if [[ "$PASS2_STEP_STATUS" -ne 0 && "$PASS2_STEP_STATUS" -ne 1 ]]; then
+    rm -f "$ACC_SKIPPED_FILE" "$ACC_MANUAL_NAMES_FILE"
+    die "pass2 step 3 (reinstall) crashed: setup.py exit $PASS2_STEP_STATUS"
+  fi
+  dep_ok=0
+  { [[ "$ACC_DEP_FAILED" -eq 0 ]] || dependency_failures_explained; } && dep_ok=1
+  rm -f "$ACC_SKIPPED_FILE" "$ACC_MANUAL_NAMES_FILE"
+  if [[ "$ACC_FAILED" -ne 0 || "$dep_ok" -ne 1 || "$ACC_MISMATCHED" -ne 0 ]]; then
+    printf 'TRACER_REINSTALL_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s\n' \
+      "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" >> "$log"
+    return 1
+  fi
+  printf 'TRACER_REINSTALL_OK installed=%s already=%s failed=%s dependency_failed=%s\n' \
+    "$ACC_INSTALLED" "$ACC_ALREADY" "$ACC_FAILED" "$ACC_DEP_FAILED" >> "$log"
+
+  ct rm -f "$CONTAINER_NAME" >/dev/null
+  printf 'TRACER_CONTAINER_TEARDOWN_OK\n' >> "$log"
+}
+
 main() {
   local cmd="${1:-}"
   shift || true
   case "$cmd" in
     bootstrap) cmd_bootstrap "$@" ;;
     pass1) cmd_pass1 "$@" ;;
+    pass2) cmd_pass2 "$@" ;;
     resync) cmd_resync "$@" ;;
     -h|--help) usage; exit 0 ;;
     "") usage; exit 2 ;;
