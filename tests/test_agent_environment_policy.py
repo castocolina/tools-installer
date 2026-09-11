@@ -180,5 +180,9 @@ def test_agent_environment_policy_refresh_isolates_symlink_loop(tmp_path: Path) 
     refreshed = policy.refresh()
 
     assert refreshed.state == "manual-required"
-    assert "symlink loop" in refreshed.detail.lower()
+    # "symbolic link", not the more specific "symlink loop": the message is
+    # now the kernel's own ELOOP strerror text (portable across platforms),
+    # not pathlib's Python-level phrasing, which was itself inconsistent
+    # across CPython versions -- see _resolved()'s docstring in agent_policy.py.
+    assert "symbolic link" in refreshed.detail.lower()
     assert refreshed.apply is None

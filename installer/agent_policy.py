@@ -1,6 +1,6 @@
 """Audit and apply narrowly scoped, read-only agent environment policy."""
 
-import errno
+import contextlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,22 +50,26 @@ class AgentAudit:
 
 
 def _resolved(path: Path) -> Path:
-    """Path.resolve()'s own lexical resolution -- unchanged, and still
-    tolerant of a path that doesn't exist yet (the common, valid state for
-    most adapter destinations before setup: `.resolve()` returns a best-effort
-    absolute path without requiring the target to exist).
+    """Path.resolve()'s own lexical resolution, but preceded by an explicit
+    os.stat() probe for a genuine symlink loop.
 
-    The one thing normalized here: a genuine symlink loop. Some CPython
-    versions have Path.resolve() raise RuntimeError instead of OSError for
-    that case (a documented pathlib inconsistency, not stable across Python
-    versions or platforms) -- re-raised as OSError so every caller's
-    `except OSError` catches it uniformly regardless of which CPython this
-    runs under.
+    Neither Path.resolve() nor Path.exists() can be trusted for this: some
+    CPython versions have resolve() raise RuntimeError instead of OSError for
+    a symlink loop (a documented pathlib inconsistency, not stable across
+    Python versions), and on others -- observed live on macOS CI, not just a
+    hypothetical -- resolve() tolerates the loop entirely and returns a path
+    with no exception at all, while exists() explicitly treats ELOOP as
+    "doesn't exist" (pathlib's own _ignore_error list). A raw os.stat() call
+    is the portable primitive: ELOOP detection during pathname resolution is
+    kernel-level POSIX behavior, not Python's to get inconsistent about.
+    FileNotFoundError/NotADirectoryError are swallowed -- the common, valid
+    case for most adapter destinations before setup -- so resolve() below
+    still returns a usable best-effort path for those; any other OSError
+    (ELOOP in particular) propagates to the caller uncaught.
     """
-    try:
-        return path.resolve()
-    except RuntimeError as error:
-        raise OSError(errno.ELOOP, str(error), str(path)) from error
+    with contextlib.suppress(FileNotFoundError, NotADirectoryError):
+        path.stat()
+    return path.resolve()
 
 
 def _validated_home(adapter: AgentAdapter, home: Path) -> Path:
