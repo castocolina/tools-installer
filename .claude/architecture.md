@@ -233,6 +233,96 @@ given entry's author actually did the verification is not machine-checkable —
 so it is a process discipline for code review to hold new entries against,
 not a lint rule.
 
+### Tool onboarding: tier, dependencies, and postinstall classification
+
+Before any new `registry.toml` entry ships, walk these three questions in
+order — this is the checklist that would have caught rtk/graphify's
+postinstall gap (researched in Phase 8, never wired into
+`installer/postinstall.py` until Phase 12.4) before it sat unnoticed across
+three phases.
+
+**1. Tier classification.** State explicitly which of the three tiers
+applies and why, per "Tier is a browsing label" above: `system` = a
+prerequisite other tools may depend on regardless of personal preference
+(uv/pnpm/brew/sdkman/zsh/podman-shaped); `user` = a personal-choice dev tool
+with no agent-host relationship (terminal emulators, CLI utilities,
+editors); `ai` = agent-facing tooling — an agent host itself, a tool an
+agent host consumes (MCP servers, token-reduction proxies, knowledge-graph
+builders), or an agent-ecosystem skill pack. Like the brew preference below,
+this is not automated — no lint enforces tier correctness.
+
+**2. Dependency-tree declaration.** Read the tool's own install
+documentation for its real prerequisites — never assume. If it installs via
+`pnpm add -g`/`uv tool install`/an SDKMAN candidate, its `requires` MUST name
+the manager tool (`pnpm`, `uv`, `sdkman`) so `installer/deps.py
+::resolve_dependencies` drags it in automatically; an undeclared real
+dependency silently relies on the user having installed the prerequisite
+through some other path. Worked example: `mmdc.requires = ["pnpm",
+"puppeteer"]` (Phase 5).
+
+**3. Postinstall-per-harness classification.** Ask, in order:
+
+```
+New registry tool needs post-install setup?
+│
+├─ Fully-installable, on-PATH binary/CLI after a normal Method succeeds,
+│  AND needs a non-interactive, host-detection-aware follow-up (register
+│  an MCP server, patch a per-agent config file)?
+│  -> Tool.postinstall = "<hook-name>", dispatched through
+│     installer/postinstall.py's closed POSTINSTALL_HOOKS table.
+│     Worked examples: codegraph (Phase 9), rtk/graphify (Phase 12.4).
+│
+├─ Delivered AS a skill into one or more AI-assistant hosts, where
+│  install/status/update/removal are each either fundamentally
+│  interactive or need a human trust-review step?
+│  -> [[tool.method]] kind = "skill_pack" with [tool.skill_lifecycle]
+│     (mode = "manual-required", or mode = "command" for a closed,
+│     read-only operation_id status probe).
+│     Worked examples: ponytail, openspec, opengsd, and the other
+│     skill_pack entries already in installer/registry.toml.
+│
+├─ Setup requires a live terminal or user-selected project target that
+│  cannot be safely scripted from a Textual worker thread?
+│  -> [[tool.method]] kind = "host_setup", setup_id = "<id>" resolved
+│     through installer/host_setup.py::HOST_SETUPS (a closed registry
+│     of reviewed console handoffs, displayed not executed).
+│     Worked example: pi.
+│
+└─ None of the above -> no postinstall wiring; the tool is a plain
+   binary with nothing further to do.
+```
+
+Restate explicitly: **the registry can only select a hook NAME from a
+closed, code-owned set in every one of these three mechanisms — never a
+literal command string.** A registry edit alone can never introduce
+arbitrary post-install execution (see "Phase 9: postinstall hooks" above);
+this invariant must never be relaxed to give a future entry an
+inline-command escape hatch.
+
+State D-01a's principle as a standing rule for any future postinstall hook
+this checklist routes a tool into: **detect and configure, never
+blind-overwrite.** A hook must never pass a flag that overwrites existing
+host configuration unconditionally — the confirmed real-world precedent is
+GSD's own installer writing `gsd-statusline.js` on Claude Code automatically,
+with no flag to skip it, a genuine risk for any environment running a
+separate custom statusline. Every hook in this project's dispatch table
+gates on live host presence (`present_agent_hosts()`,
+`installer/postinstall.py`) before writing anything, and every hook's own
+per-host write behavior should be verified merge-safe against pre-existing
+config before shipping — not assumed (12.4-01/12.4-02's live adversarial-seed
+verification against rtk/graphify is the worked example).
+
+Do not confuse this NAMED, singular `Tool.postinstall` mechanism with
+`installer/model.py`'s similarly-named but semantically distinct
+`Tool.post_install` (plural) field and its `POST_INSTALL_ACTIONS` tuple — the
+latter has zero production callers as of Phase 12.4 and is a separate,
+unrelated concept despite the near-identical name.
+
+The invocable skill at `.claude/skills/tool-onboarding/SKILL.md` walks this
+same three-question checklist interactively for a human or agent adding a
+new tool — it references this subsection rather than duplicating it, so
+there is exactly one canonical copy of the decision tree.
+
 ### Prefer brew
 
 For a new user-tier tool with no other constraint, Homebrew is preferred over
