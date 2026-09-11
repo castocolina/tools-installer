@@ -29,6 +29,9 @@ from installer.wizard_app import DoctorScreen, PolicyInputs, UninstallInputs
 _has_controlling_tty = setup._has_controlling_tty  # pyright: ignore[reportPrivateUsage]
 _stdin_on_tty = setup._stdin_on_tty  # pyright: ignore[reportPrivateUsage]
 _ask_select = setup._ask_select  # pyright: ignore[reportPrivateUsage]
+_darwin_select_based_asyncio = (
+    setup._darwin_select_based_asyncio  # pyright: ignore[reportPrivateUsage]
+)
 
 
 class _DummyApp:
@@ -294,6 +297,43 @@ def test_ask_select_binds_a_dev_tty_input_output_pair_without_touching_fd0(
     finally:
         for fd in (master_in, master_out):
             _REAL_OS_CLOSE(fd)
+
+
+def test_darwin_select_based_asyncio_is_a_noop_off_darwin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(setup.sys, "platform", "linux")
+    original = setup.selectors.DefaultSelector
+    with _darwin_select_based_asyncio():
+        assert setup.selectors.DefaultSelector is original
+    assert setup.selectors.DefaultSelector is original
+
+
+def test_darwin_select_based_asyncio_swaps_and_restores_the_selector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the reported bug: even a brand-new, never-redirected
+    /dev/tty fd crashes prompt_toolkit's kqueue-based asyncio loop on macOS
+    with OSError: [Errno 22] Invalid argument. select.select() handles the
+    same fd fine, so questionary prompts force SelectSelector on Darwin for
+    the duration of one .ask() call, then restore the original selector."""
+    monkeypatch.setattr(setup.sys, "platform", "darwin")
+    original = setup.selectors.DefaultSelector
+
+    with _darwin_select_based_asyncio():
+        assert setup.selectors.DefaultSelector is setup.selectors.SelectSelector
+
+    assert setup.selectors.DefaultSelector is original
+
+
+def test_darwin_select_based_asyncio_restores_selector_on_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(setup.sys, "platform", "darwin")
+    original = setup.selectors.DefaultSelector
+
+    with pytest.raises(ValueError, match="boom"), _darwin_select_based_asyncio():
+        raise ValueError("boom")
+
+    assert setup.selectors.DefaultSelector is original
 
 
 def test_main_fix_interactive_without_link_mode_opens_doctor(

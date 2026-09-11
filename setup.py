@@ -10,6 +10,7 @@ questionary boundary is isolated from the strict-typed, fully-covered core.
 import contextlib
 import io
 import os
+import selectors
 import shutil
 import sys
 from collections.abc import Iterator, Mapping, Sequence
@@ -129,9 +130,8 @@ def _has_controlling_tty() -> bool:
 
 @contextlib.contextmanager
 def _stdin_on_tty() -> Iterator[None]:
-    """Point fd 0 at the controlling terminal for the duration of one
-    interactive prompt -- a Textual app's .run() call, or one questionary
-    ask() call.
+    """Point fd 0 at the controlling terminal for the duration of one Textual
+    app's .run() call.
 
     Under `curl | sh`, the process inherits the script pipe as fd 0; Textual's
     driver reads keystrokes from `sys.__stdin__.fileno()` (fd 0) directly --
@@ -142,8 +142,7 @@ def _stdin_on_tty() -> Iterator[None]:
     which under `curl | sh` is still the user's terminal.
 
     questionary/prompt_toolkit prompts do NOT use this helper -- see
-    _questionary_tty_io()'s docstring for why a dup2'd fd 0 crashes their
-    asyncio event loop on macOS.
+    _questionary_tty_io() for why they get their own /dev/tty handle instead.
     """
     if os.isatty(0):
         yield
@@ -172,17 +171,14 @@ def _questionary_tty_io() -> Iterator[tuple[Input, Output] | None]:
     """Build a prompt_toolkit Input/Output pair bound directly to a freshly
     opened /dev/tty, for questionary's `input=`/`output=` kwargs.
 
-    Under `curl | sh`, fd 0 carries the script pipe. Redirecting fd 0 itself
-    via os.dup2() (_stdin_on_tty(), used for Textual) gets prompt_toolkit's
-    VT100 input driver to *read* correctly, but on macOS its asyncio event
-    loop then crashes registering that dup2'd fd with kqueue:
-    `OSError: [Errno 22] Invalid argument` from `loop.add_reader()` ->
-    `KqueueSelector.register()` -> `kqueue.control()`. kqueue does not
-    tolerate a file descriptor number being repointed at a different open
-    file description mid-process the way Linux's epoll does (confirmed:
-    ubuntu-latest CI never hits this, a real Mac always does). Opening a
-    brand-new fd for /dev/tty and handing prompt_toolkit that fd directly --
-    never touching fd 0 -- sidesteps the reuse entirely.
+    Under `curl | sh`, fd 0 carries the script pipe, not a terminal.
+    Redirecting fd 0 itself via os.dup2() (_stdin_on_tty(), used for
+    Textual) gets prompt_toolkit's VT100 input driver to *read* correctly,
+    but questionary needs its own file, independent of fd 0, regardless:
+    _resolve_link_mode() calls _ask_select() and the Textual catalog wizard
+    both need a working terminal in the same run, and each library owns fd 0
+    exclusively while it's driving input. See _darwin_select_based_asyncio()
+    for a second, unrelated macOS-only fix this pairs with.
 
     Yields None when fd 0 is already a TTY (a direct terminal run -- let
     questionary use its own stdin/stdout defaults) or when there is no
@@ -212,6 +208,39 @@ def _questionary_tty_io() -> Iterator[tuple[Input, Output] | None]:
         tty_out.close()
 
 
+@contextlib.contextmanager
+def _darwin_select_based_asyncio() -> Iterator[None]:
+    """Force asyncio to build its event loop on select.select() instead of
+    kqueue, for the duration of one questionary prompt. Darwin only; a no-op
+    everywhere else.
+
+    Reported live on macOS + Python 3.14.7 (Homebrew): prompt_toolkit's
+    asyncio event loop crashes registering /dev/tty's fd for reading --
+    `OSError: [Errno 22] Invalid argument` from `loop.add_reader()` ->
+    `KqueueSelector.register()` -> `kqueue.control()` -- even with a brand
+    new fd that was never dup2'd onto fd 0 (ruling out the fd-reuse theory
+    _questionary_tty_io() was originally written to fix; see its docstring).
+    ubuntu-latest CI never reproduces this, so it's a kqueue/asyncio
+    incompatibility specific to this platform+Python combination, not
+    something under this codebase's control. `select.select()` handles the
+    same fd without issue and is plenty fast for a handful of fds driving
+    one interactive prompt, so swap asyncio's selector rather than chase a
+    kqueue-level root cause. `selectors.DefaultSelector` is read fresh each
+    time a new event loop is created (asyncio never caches the class), so
+    patching the module attribute here reliably affects the loop
+    questionary's `.ask()` creates via `asyncio.run()`.
+    """
+    if sys.platform != "darwin":
+        yield
+        return
+    original = selectors.DefaultSelector
+    selectors.DefaultSelector = selectors.SelectSelector
+    try:
+        yield
+    finally:
+        selectors.DefaultSelector = original
+
+
 def _tag_class(tag: str) -> str:
     if tag == "installed":
         return "tag-installed"
@@ -233,7 +262,7 @@ def _ask_checkbox(message: str, choices: list[Choice]) -> list[str]:
     # redirect. Every ask_* helper needs this, not just the Textual .run()
     # call sites: _resolve_link_mode() calls _ask_select() before the catalog
     # wizard ever opens.
-    with _questionary_tty_io() as io_pair:
+    with _questionary_tty_io() as io_pair, _darwin_select_based_asyncio():
         kwargs = {"input": io_pair[0], "output": io_pair[1]} if io_pair else {}
         answer = questionary.checkbox(
             message,
@@ -256,7 +285,7 @@ def _ask_checkbox(message: str, choices: list[Choice]) -> list[str]:
 
 
 def _ask_confirm(message: str) -> bool:
-    with _questionary_tty_io() as io_pair:
+    with _questionary_tty_io() as io_pair, _darwin_select_based_asyncio():
         kwargs = {"input": io_pair[0], "output": io_pair[1]} if io_pair else {}
         answer = questionary.confirm(message, default=True, style=_STYLE, **kwargs).ask()
     if answer is None:  # questionary returns None on Ctrl+C / Ctrl+D at the prompt
@@ -265,7 +294,7 @@ def _ask_confirm(message: str) -> bool:
 
 
 def _ask_select(message: str, choices: list[tuple[str, str]]) -> str:
-    with _questionary_tty_io() as io_pair:
+    with _questionary_tty_io() as io_pair, _darwin_select_based_asyncio():
         kwargs = {"input": io_pair[0], "output": io_pair[1]} if io_pair else {}
         answer = questionary.select(
             message,
