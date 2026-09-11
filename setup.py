@@ -16,6 +16,8 @@ from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 
 import questionary
+from prompt_toolkit.input import Input, create_input
+from prompt_toolkit.output import Output, create_output
 from rich.console import Console
 
 from installer import daemon, pnpm_globals
@@ -131,15 +133,17 @@ def _stdin_on_tty() -> Iterator[None]:
     interactive prompt -- a Textual app's .run() call, or one questionary
     ask() call.
 
-    Under `curl | sh`, the process inherits the script pipe as fd 0; both
-    Textual's driver and prompt_toolkit (questionary's engine) read
-    keystrokes from `sys.__stdin__.fileno()` (fd 0) directly -- not from any
-    handle passed to them -- so without this neither the full-screen wizard
-    nor a single confirm/select prompt can be driven. A no-op when fd 0 is
-    already a TTY (a direct terminal run). The original fd 0 is restored on
-    exit, even on exception. Only stdin is touched: both libraries write
-    their escape sequences to stderr, which under `curl | sh` is still the
-    user's terminal.
+    Under `curl | sh`, the process inherits the script pipe as fd 0; Textual's
+    driver reads keystrokes from `sys.__stdin__.fileno()` (fd 0) directly --
+    not from any handle passed to it -- so without this the full-screen
+    wizard can't be driven. A no-op when fd 0 is already a TTY (a direct
+    terminal run). The original fd 0 is restored on exit, even on exception.
+    Only stdin is touched: Textual writes its escape sequences to stderr,
+    which under `curl | sh` is still the user's terminal.
+
+    questionary/prompt_toolkit prompts do NOT use this helper -- see
+    _questionary_tty_io()'s docstring for why a dup2'd fd 0 crashes their
+    asyncio event loop on macOS.
     """
     if os.isatty(0):
         yield
@@ -163,6 +167,51 @@ def _stdin_on_tty() -> Iterator[None]:
         os.close(saved)
 
 
+@contextlib.contextmanager
+def _questionary_tty_io() -> Iterator[tuple[Input, Output] | None]:
+    """Build a prompt_toolkit Input/Output pair bound directly to a freshly
+    opened /dev/tty, for questionary's `input=`/`output=` kwargs.
+
+    Under `curl | sh`, fd 0 carries the script pipe. Redirecting fd 0 itself
+    via os.dup2() (_stdin_on_tty(), used for Textual) gets prompt_toolkit's
+    VT100 input driver to *read* correctly, but on macOS its asyncio event
+    loop then crashes registering that dup2'd fd with kqueue:
+    `OSError: [Errno 22] Invalid argument` from `loop.add_reader()` ->
+    `KqueueSelector.register()` -> `kqueue.control()`. kqueue does not
+    tolerate a file descriptor number being repointed at a different open
+    file description mid-process the way Linux's epoll does (confirmed:
+    ubuntu-latest CI never hits this, a real Mac always does). Opening a
+    brand-new fd for /dev/tty and handing prompt_toolkit that fd directly --
+    never touching fd 0 -- sidesteps the reuse entirely.
+
+    Yields None when fd 0 is already a TTY (a direct terminal run -- let
+    questionary use its own stdin/stdout defaults) or when there is no
+    controlling terminal to open (unreachable in the current call graph;
+    every call site is already gated by _has_controlling_tty()).
+    """
+    if os.isatty(0):
+        yield None
+        return
+    try:
+        tty_in = io.TextIOWrapper(
+            io.FileIO(os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY), "r+"),
+            encoding="utf-8",
+        )
+        tty_out = io.TextIOWrapper(
+            io.FileIO(os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY), "r+"),
+            encoding="utf-8",
+            line_buffering=True,
+        )
+    except OSError:
+        yield None
+        return
+    try:
+        yield create_input(tty_in), create_output(tty_out)
+    finally:
+        tty_in.close()
+        tty_out.close()
+
+
 def _tag_class(tag: str) -> str:
     if tag == "installed":
         return "tag-installed"
@@ -179,11 +228,13 @@ def _title(choice: Choice) -> list[tuple[str, str]]:
 
 
 def _ask_checkbox(message: str, choices: list[Choice]) -> list[str]:
-    # questionary (prompt_toolkit) reads fd 0 directly, exactly like Textual --
-    # see _stdin_on_tty()'s docstring. Every ask_* helper needs the same
-    # redirect, not just the Textual .run() call sites: _resolve_link_mode()
-    # calls _ask_select() BEFORE the catalog wizard ever opens.
-    with _stdin_on_tty():
+    # See _questionary_tty_io()'s docstring for why questionary prompts get a
+    # dedicated /dev/tty Input/Output pair instead of _stdin_on_tty()'s fd 0
+    # redirect. Every ask_* helper needs this, not just the Textual .run()
+    # call sites: _resolve_link_mode() calls _ask_select() before the catalog
+    # wizard ever opens.
+    with _questionary_tty_io() as io_pair:
+        kwargs = {"input": io_pair[0], "output": io_pair[1]} if io_pair else {}
         answer = questionary.checkbox(
             message,
             choices=[
@@ -197,6 +248,7 @@ def _ask_checkbox(message: str, choices: list[Choice]) -> list[str]:
             ],
             instruction=_CHECKBOX_KEYS,
             style=_STYLE,
+            **kwargs,
         ).ask()
     if answer is None:  # questionary returns None on Ctrl+C / Ctrl+D at the prompt
         raise KeyboardInterrupt
@@ -204,19 +256,22 @@ def _ask_checkbox(message: str, choices: list[Choice]) -> list[str]:
 
 
 def _ask_confirm(message: str) -> bool:
-    with _stdin_on_tty():
-        answer = questionary.confirm(message, default=True, style=_STYLE).ask()
+    with _questionary_tty_io() as io_pair:
+        kwargs = {"input": io_pair[0], "output": io_pair[1]} if io_pair else {}
+        answer = questionary.confirm(message, default=True, style=_STYLE, **kwargs).ask()
     if answer is None:  # questionary returns None on Ctrl+C / Ctrl+D at the prompt
         raise KeyboardInterrupt
     return bool(answer)
 
 
 def _ask_select(message: str, choices: list[tuple[str, str]]) -> str:
-    with _stdin_on_tty():
+    with _questionary_tty_io() as io_pair:
+        kwargs = {"input": io_pair[0], "output": io_pair[1]} if io_pair else {}
         answer = questionary.select(
             message,
             choices=[questionary.Choice(title=title, value=value) for title, value in choices],
             style=_STYLE,
+            **kwargs,
         ).ask()
     if answer is None:  # Ctrl+C / Ctrl+D
         raise KeyboardInterrupt

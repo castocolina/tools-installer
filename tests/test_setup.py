@@ -1,6 +1,7 @@
 import importlib
 import io
 import os
+import pty
 import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -234,61 +235,65 @@ def test_main_doctor_reaches_the_interactive_tui_under_a_curl_pipe(
     assert seen  # _build_app/UnifiedApp was constructed -- the interactive path ran
 
 
-def test_ask_select_redirects_fd0_before_the_questionary_prompt(
+def test_ask_select_binds_a_dev_tty_input_output_pair_without_touching_fd0(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression for the reported bug: under `curl | sh`, _resolve_link_mode
-    calls _ask_select() BEFORE the catalog wizard's Textual .run() ever opens
-    -- wrapping only the .run() call sites left this one still reading the
-    (empty, already-consumed) script pipe on fd 0, raising EOFError.
-    _ask_select must redirect fd 0 itself, same as every other ask_* helper."""
-    calls: list[tuple[object, ...]] = []
-    fake_tty_fd, saved_fd = 9201, 9202
+    """Regression for the macOS kqueue crash reported after the fd-0-redirect
+    fix: dup2'ing /dev/tty onto fd 0 got prompt_toolkit's VT100 driver to
+    render, but its asyncio event loop then raised
+    `OSError: [Errno 22] Invalid argument` registering that repointed fd with
+    kqueue (`loop.add_reader()` -> `KqueueSelector.register()` ->
+    `kqueue.control()`). kqueue doesn't tolerate a fd number being repointed
+    at a different open file description mid-process the way epoll does.
+    _ask_select must instead build its Input/Output from a freshly opened
+    /dev/tty file (a real, never-reused fd) and never call os.dup2 on fd 0."""
+    master_in, slave_in = pty.openpty()
+    master_out, slave_out = pty.openpty()
+    opened: list[int] = []
+
+    def fake_open(path: str, flags: int) -> int:
+        if path == "/dev/tty":
+            fd = slave_in if not opened else slave_out
+            opened.append(fd)
+            return fd
+        return _REAL_OS_OPEN(path, flags)
+
+    dup2_calls: list[tuple[int, int]] = []
+
+    def fake_dup2(src: int, dst: int) -> None:
+        dup2_calls.append((src, dst))
+        _REAL_OS_DUP2(src, dst)
+
+    class _FakeQuestion:
+        def __init__(self, **kwargs: object) -> None:
+            self._kwargs = kwargs
+
+        def ask(self) -> str:
+            # The whole point of the fix: questionary gets an explicit
+            # Input/Output bound to /dev/tty, not fd 0's default streams.
+            assert self._kwargs.get("input") is not None
+            assert self._kwargs.get("output") is not None
+            return "centralized"
+
+    def fake_select(*_args: object, **kwargs: object) -> _FakeQuestion:
+        return _FakeQuestion(**kwargs)
 
     def fake_isatty(fd: int) -> bool:
         return False if fd == 0 else _REAL_OS_ISATTY(fd)
 
-    def fake_open(path: str, flags: int) -> int:
-        if path == "/dev/tty":
-            return fake_tty_fd
-        return _REAL_OS_OPEN(path, flags)
-
-    def fake_dup(fd: int) -> int:
-        return saved_fd if fd == 0 else _REAL_OS_DUP(fd)
-
-    def fake_dup2(src: int, dst: int) -> None:
-        if dst == 0:
-            calls.append(("dup2", src, dst))
-            return
-        _REAL_OS_DUP2(src, dst)
-
-    def fake_close(fd: int) -> None:
-        if fd in (fake_tty_fd, saved_fd):
-            calls.append(("close", fd))
-            return
-        _REAL_OS_CLOSE(fd)
-
-    class _FakeQuestion:
-        def ask(self) -> str:
-            # fd 0 must already be redirected by the time questionary would
-            # read a keystroke -- prove it, rather than trusting call order.
-            assert calls[:1] == [("dup2", fake_tty_fd, 0)]
-            return "centralized"
-
     monkeypatch.setattr(setup.os, "isatty", fake_isatty)
     monkeypatch.setattr(setup.os, "open", fake_open)
-    monkeypatch.setattr(setup.os, "dup", fake_dup)
     monkeypatch.setattr(setup.os, "dup2", fake_dup2)
-    monkeypatch.setattr(setup.os, "close", fake_close)
-
-    def fake_select(*_args: object, **_kwargs: object) -> _FakeQuestion:
-        return _FakeQuestion()
-
     monkeypatch.setattr(setup.sys, "stdin", _NonTtyStdin())
     monkeypatch.setattr(setup.questionary, "select", fake_select)
 
-    assert _ask_select("pick one", [("A", "a")]) == "centralized"
-    assert ("dup2", saved_fd, 0) in calls  # restored afterward
+    try:
+        assert _ask_select("pick one", [("A", "a")]) == "centralized"
+        assert dup2_calls == []  # fd 0 is never touched by the questionary path
+        assert opened == [slave_in, slave_out]
+    finally:
+        for fd in (master_in, master_out):
+            _REAL_OS_CLOSE(fd)
 
 
 def test_main_fix_interactive_without_link_mode_opens_doctor(
