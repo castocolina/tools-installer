@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
-current_phase: "12.3"
-current_plan: 4
+milestone: v0.49.0
+current_phase: "12.4"
+current_phase_name: tool-onboarding-research-skill-and-registry-postinstall-audi
+current_plan: 3
 status: executing
-stopped_at: Completed 12.3-01-PLAN.md
-last_updated: "2026-09-11T12:10:42.373Z"
-last_activity: 2026-09-10
-last_activity_desc: Phase 12.2 complete, transitioned to Phase 12.3
-state_head: 03dbd5b14ef116e3d5643291de70c19e1f90ab99
+stopped_at: Phase 12.3 complete, ready to plan Phase 12.4
+last_updated: "2026-09-11T13:40:53.954Z"
+last_activity: 2026-09-11
+last_activity_desc: Phase 12.3 complete, transitioned to Phase 12.4
+state_head: 96fe5b4949710053d461518081d6960e12bb6f30
 progress:
   total_phases: 16
-  completed_phases: 13
-  total_plans: 40
-  completed_plans: 39
-  percent: 81
-current_phase_name: "Container E2E Verification of the Reconciled Branch: real end-to-end run of the reconciled installer inside a container to confirm origin's ported architecture, local's ported subsystems (host_setup/skill_lifecycle, ownership/skill-lifecycle registry fields, remapped tool tiers), and the 11 re-added registry rows all work together live, not just under unit tests"
+  completed_phases: 12
+  total_plans: 44
+  completed_plans: 41
 ---
 
 # Project State
@@ -28,19 +28,19 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 12.3 — EXECUTING
-Current Plan: 4
+Phase: 12.4 (tool-onboarding-research-skill-and-registry-postinstall-audi) — EXECUTING
+Current Plan: 3
 Total Plans in Phase: 4
 Status: Ready to execute
-Last activity: 2026-09-10 — Completed 12.3-01-PLAN.md (detection script + wezterm tracer)
+Last activity: 2026-09-11 — Phase 12.3 complete, transitioned to Phase 12.4
 
-Progress: [████████░░] 81%
+Progress: [█████████░] 88%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 29
+- Total plans completed: 33
 - Average duration: - min
 - Total execution time: 0 hours
 
@@ -59,6 +59,7 @@ Progress: [████████░░] 81%
 | 12 | 4 | - | - |
 | 12.1 | 1 | - | - |
 | 12.2 | 1 | - | - |
+| 12.3 | 4 | - | - |
 
 **Recent Trend:**
 
@@ -132,5 +133,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-10T23:29:06.591Z
-Stopped at: Completed 12.3-01-PLAN.md
+Stopped at: Phase 12.3 complete, ready to plan Phase 12.4
 Resume file: None

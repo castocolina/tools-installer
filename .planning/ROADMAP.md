@@ -341,14 +341,32 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 
 ### Phase 12.4: Tool Onboarding Research Skill and Registry Postinstall Audit: build a repeatable research checklist/skill for onboarding any new catalog tool (tier classification, dependency tree, postinstall/setup-per-agent-harness needs), use it to close the confirmed rtk/graphify postinstall gap (Phase 8 research documented rtk init -g/--claude/--opencode/--codex/--agent-cursor and graphify's per-host setup, never wired into installer/postinstall.py), and audit every other registry.toml entry against the same checklist for similar research-to-implementation gaps (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** A repeatable, checklist-and-skill-driven onboarding process exists for any future
+`registry.toml` addition (tier classification, dependency-tree declaration, postinstall/setup-
+per-agent-harness classification); the confirmed rtk/graphify postinstall gap (researched in Phase
+8, never wired into `installer/postinstall.py`) is closed via the same non-interactive per-host
+mechanism `codegraph` already proves; and every one of the ~89 other `registry.toml` entries has
+been checked against that same checklist for a similar research-to-implementation gap.
+**Requirements**: D-01, D-01a, D-02, D-03, D-04 (12.4-CONTEXT.md locked decisions — this inserted
+phase has no `REQUIREMENTS.md` entries of its own, same convention as Phases 12.1-12.3)
 **Depends on:** Phase 12
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 12.4 to break down)
+- [ ] 12.4-01-PLAN.md — Tracer: D-03 shared `present_agent_hosts()` helper (extracted from
+  codegraph's hook) + rtk's simplest host (`claude`) wired end-to-end, live-proven against a fresh
+  v0.49.0 binary, then expanded to `opencode`/`codex`/`cursor-agent` with a live re-verification of
+  the cursor-implies-claude write risk (wave 1)
+- [ ] 12.4-02-PLAN.md — `_graphify_register()` for all four agent hosts, reusing the D-03 helper,
+  plus live adversarial merge-safety verification for the three hosts research left untested (wave
+  2, needs 12.4-01)
+- [ ] 12.4-03-PLAN.md — D-01 checklist extension in `.claude/architecture.md` (tier/dependency/
+  postinstall-mechanism decision tree) and the new `.claude/skills/tool-onboarding/SKILL.md` (wave
+  2, needs 12.4-01)
+- [ ] 12.4-04-PLAN.md — D-04 full-catalog audit (all 89 entries) producing `12.4-AUDIT.md`, decision
+  consolidation into `PROJECT.md`/`architecture.md`, final `make validate && make test` (wave 3,
+  needs 12.4-02, 12.4-03)
 
 ### Phase 12.3: Container E2E Verification of the Reconciled Branch: real end-to-end run of the reconciled installer inside a container to confirm origin's ported architecture, local's ported subsystems (host_setup/skill_lifecycle, ownership/skill-lifecycle registry fields, remapped tool tiers), and the 11 re-added registry rows all work together live, not just under unit tests (INSERTED)
 
@@ -363,7 +381,7 @@ mutating this host machine.
 decisions — this inserted verification phase has no `REQUIREMENTS.md`
 entries of its own)
 **Depends on:** Phase 12
-**Plans:** 1/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 
@@ -371,14 +389,14 @@ Plans:
   (`scripts/detect-container-runtime.sh`), the D-03 no-silent-fallback gate,
   and one real tool (`wezterm`) installed end-to-end inside a disposable
   Fedora container through the production `install_tool` path (wave 1)
-- [ ] 12.3-02-PLAN.md — Fedora-family harness: non-root Homebrew+uv-capable
+- [x] 12.3-02-PLAN.md — Fedora-family harness: non-root Homebrew+uv-capable
   container bootstrap, then Pass 1 — clean install of the full ~90-tool
   catalog via the real `uv run setup.py --all --yes` entrypoint (wave 2,
   needs 12.3-01)
-- [ ] 12.3-03-PLAN.md — Pass 2 — install/uninstall/reinstall rerun over the
+- [x] 12.3-03-PLAN.md — Pass 2 — install/uninstall/reinstall rerun over the
   already-installed container, teardown, and a whole-run host-untouched
   attestation (wave 3, needs 12.3-02)
-- [ ] 12.3-04-PLAN.md — D-06 evidence consolidation: this phase's Tier-3
+- [x] 12.3-04-PLAN.md — D-06 evidence consolidation: this phase's Tier-3
   evidence folded into `.planning/RUN-REPORT.md`, decisions recorded in
   `.planning/PROJECT.md` and `.claude/architecture.md`, final
   `make validate && make test` (wave 4, needs 12.3-03)

@@ -236,6 +236,31 @@ def test_codegraph_hook_always_passes_no_permissions(monkeypatch: pytest.MonkeyP
     assert "--no-permissions" in calls[0]
 
 
+def test_present_agent_hosts_empty_tools_returns_empty_frozenset() -> None:
+    assert pi.present_agent_hosts({}) == frozenset()
+
+
+def test_present_agent_hosts_all_four_installed_returns_all_four(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pi, "is_installed", _all_installed)
+    assert pi.present_agent_hosts(_tools()) == frozenset(_ALL_HOSTS)
+
+
+def test_present_agent_hosts_missing_id_behaves_like_present_but_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pi, "is_installed", _only_claude_installed)
+    incomplete_tools = {"claude": _tool("claude")}
+    assert pi.present_agent_hosts(incomplete_tools) == frozenset({"claude"})
+
+
+def test_present_agent_hosts_return_type_is_frozenset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pi, "is_installed", _only_claude_installed)
+    result = pi.present_agent_hosts(_tools())
+    assert isinstance(result, frozenset)
+
+
 def test_codegraph_hook_treats_a_missing_tool_id_as_absent_not_a_crash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -254,3 +279,222 @@ def test_codegraph_hook_treats_a_missing_tool_id_as_absent_not_a_crash(
     )
     assert warning is None
     assert calls[0][calls[0].index("--target") + 1] == "claude"
+
+
+def test_resolve_rtk_binary_github_release_uses_bin_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    method = Method(kind="github_release", params={})
+    expected = str(Path.home() / ".local" / "bin" / "rtk")
+    assert pi._resolve_rtk_binary(method) == expected  # pyright: ignore[reportPrivateUsage]
+
+
+def test_resolve_rtk_binary_github_release_honors_custom_bin_dir() -> None:
+    method = Method(kind="github_release", params={"bin_dir": "/custom/dir"})
+    result = pi._resolve_rtk_binary(method)  # pyright: ignore[reportPrivateUsage]
+    assert result == "/custom/dir/rtk"
+
+
+def _fake_which_found(name: str) -> str | None:
+    return "/usr/local/bin/rtk"
+
+
+def _fake_which_missing(name: str) -> str | None:
+    return None
+
+
+def test_resolve_rtk_binary_brew_uses_shutil_which(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pi.shutil, "which", _fake_which_found)
+    method = Method(kind="brew", params={})
+    result = pi._resolve_rtk_binary(method)  # pyright: ignore[reportPrivateUsage]
+    assert result == "/usr/local/bin/rtk"
+
+
+def test_resolve_rtk_binary_brew_falls_back_to_bin_dir_when_not_on_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pi.shutil, "which", _fake_which_missing)
+    method = Method(kind="brew", params={})
+    expected = str(Path.home() / ".local" / "bin" / "rtk")
+    result = pi._resolve_rtk_binary(method)  # pyright: ignore[reportPrivateUsage]
+    assert result == expected
+
+
+def test_rtk_hook_composes_init_argv_when_claude_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pi, "is_installed", _only_claude_installed)
+    calls: list[list[str]] = []
+    method = Method(kind="github_release", params={})
+    warning = pi.run_postinstall("rtk-register", method, lambda cmd: calls.append(cmd), _tools())
+    assert warning is None
+    expected_bin = str(Path.home() / ".local" / "bin" / "rtk")
+    assert calls == [[expected_bin, "init", "-g", "--auto-patch"]]
+
+
+def test_rtk_hook_noops_when_claude_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    def none_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(pi, "is_installed", none_installed)
+    calls: list[list[str]] = []
+    method = Method(kind="github_release", params={})
+    warning = pi.run_postinstall("rtk-register", method, lambda cmd: calls.append(cmd), _tools())
+    assert warning is None
+    assert calls == []
+
+
+def test_rtk_hook_ensures_claude_config_dir_exists_before_invoking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pi, "is_installed", _only_claude_installed)
+    ensure_dir_calls: list[Path] = []
+
+    def fake_ensure_dir(directory: Path) -> Path:
+        ensure_dir_calls.append(directory)
+        return directory
+
+    monkeypatch.setattr(pi, "ensure_dir", fake_ensure_dir)
+    method = Method(kind="github_release", params={})
+    pi.run_postinstall("rtk-register", method, lambda cmd: None, _tools())
+    assert ensure_dir_calls == [Path.home() / ".claude"]
+
+
+def test_rtk_hook_returns_warning_string_on_command_error_not_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pi, "is_installed", _only_claude_installed)
+
+    def failing_runner(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1)
+
+    method = Method(kind="github_release", params={})
+    warning = pi.run_postinstall("rtk-register", method, failing_runner, _tools())
+    assert warning is not None
+    assert "claude" in warning
+
+
+def test_rtk_hook_opencode_argv_includes_opencode_and_auto_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def only_opencode(tool: Tool) -> bool:
+        return tool.id == "opencode"
+
+    monkeypatch.setattr(pi, "is_installed", only_opencode)
+    calls: list[list[str]] = []
+    method = Method(kind="github_release", params={})
+    pi.run_postinstall("rtk-register", method, lambda cmd: calls.append(cmd), _tools())
+    expected_bin = str(Path.home() / ".local" / "bin" / "rtk")
+    assert calls == [[expected_bin, "init", "-g", "--opencode", "--auto-patch"]]
+
+
+def test_rtk_hook_codex_argv_never_includes_auto_patch(monkeypatch: pytest.MonkeyPatch) -> None:
+    def only_codex(tool: Tool) -> bool:
+        return tool.id == "codex"
+
+    monkeypatch.setattr(pi, "is_installed", only_codex)
+    calls: list[list[str]] = []
+    method = Method(kind="github_release", params={})
+    pi.run_postinstall("rtk-register", method, lambda cmd: calls.append(cmd), _tools())
+    expected_bin = str(Path.home() / ".local" / "bin" / "rtk")
+    assert calls == [[expected_bin, "init", "-g", "--codex"]]
+    assert "--auto-patch" not in calls[0]
+
+
+def test_rtk_hook_cursor_agent_fires_when_claude_also_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def claude_and_cursor(tool: Tool) -> bool:
+        return tool.id in ("claude", "cursor-agent")
+
+    monkeypatch.setattr(pi, "is_installed", claude_and_cursor)
+    calls: list[list[str]] = []
+    method = Method(kind="github_release", params={})
+    pi.run_postinstall("rtk-register", method, lambda cmd: calls.append(cmd), _tools())
+    expected_bin = str(Path.home() / ".local" / "bin" / "rtk")
+    assert [expected_bin, "init", "-g", "--agent", "cursor", "--auto-patch"] in calls
+
+
+def test_rtk_hook_cursor_agent_never_fires_when_claude_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def only_cursor_agent(tool: Tool) -> bool:
+        return tool.id == "cursor-agent"
+
+    monkeypatch.setattr(pi, "is_installed", only_cursor_agent)
+    calls: list[list[str]] = []
+    method = Method(kind="github_release", params={})
+    warning = pi.run_postinstall("rtk-register", method, lambda cmd: calls.append(cmd), _tools())
+    assert warning is None
+    assert calls == []
+
+
+def test_rtk_hook_ensures_cursor_config_dir_only_on_the_firing_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def claude_and_cursor(tool: Tool) -> bool:
+        return tool.id in ("claude", "cursor-agent")
+
+    monkeypatch.setattr(pi, "is_installed", claude_and_cursor)
+    ensure_dir_calls: list[Path] = []
+
+    def fake_ensure_dir(directory: Path) -> Path:
+        ensure_dir_calls.append(directory)
+        return directory
+
+    monkeypatch.setattr(pi, "ensure_dir", fake_ensure_dir)
+    method = Method(kind="github_release", params={})
+    pi.run_postinstall("rtk-register", method, lambda cmd: None, _tools())
+    assert ensure_dir_calls == [Path.home() / ".claude", Path.home() / ".cursor"]
+
+
+@pytest.mark.parametrize("present_subset", _ALL_SUBSETS, ids=lambda s: ",".join(s) or "none")
+def test_rtk_hook_matches_expected_argv_for_every_host_presence_subset(
+    monkeypatch: pytest.MonkeyPatch, present_subset: tuple[str, ...]
+) -> None:
+    """Every one of the 16 subsets of the four hosts produces either the exact
+    expected per-host argv or a documented no-op -- never a crash, and the
+    cursor-agent branch only ever fires when claude is also present."""
+    present = set(present_subset)
+
+    def fake_is_installed(tool: Tool) -> bool:
+        return tool.id in present
+
+    monkeypatch.setattr(pi, "is_installed", fake_is_installed)
+    calls: list[list[str]] = []
+    method = Method(kind="github_release", params={})
+    warning = pi.run_postinstall("rtk-register", method, lambda cmd: calls.append(cmd), _tools())
+    assert warning is None
+    expected_bin = str(Path.home() / ".local" / "bin" / "rtk")
+    expected_calls: list[list[str]] = []
+    if "claude" in present:
+        expected_calls.append([expected_bin, "init", "-g", "--auto-patch"])
+    if "opencode" in present:
+        expected_calls.append([expected_bin, "init", "-g", "--opencode", "--auto-patch"])
+    if "codex" in present:
+        expected_calls.append([expected_bin, "init", "-g", "--codex"])
+    if "cursor-agent" in present and "claude" in present:
+        expected_calls.append([expected_bin, "init", "-g", "--agent", "cursor", "--auto-patch"])
+    assert calls == expected_calls
+    for cmd in calls:
+        assert "--auto-patch" not in cmd or "--codex" not in cmd
+
+
+def test_rtk_hook_never_invokes_the_same_host_twice(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pi, "is_installed", _all_installed)
+    calls: list[list[str]] = []
+    method = Method(kind="github_release", params={})
+    pi.run_postinstall("rtk-register", method, lambda cmd: calls.append(cmd), _tools())
+    assert len(calls) == len({tuple(c) for c in calls})
+
+
+def test_rtk_hook_continues_past_a_command_error_and_captures_partial_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pi, "is_installed", _all_installed)
+
+    def failing_on_opencode(cmd: list[str]) -> None:
+        if "--opencode" in cmd:
+            raise CommandError(cmd, 1)
+
+    method = Method(kind="github_release", params={})
+    warning = pi.run_postinstall("rtk-register", method, failing_on_opencode, _tools())
+    assert warning is not None
+    assert "opencode" in warning
+    assert "claude" not in warning.split(";")[0]

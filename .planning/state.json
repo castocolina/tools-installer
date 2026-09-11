@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": null,
+  "milestone": "v0.49.0",
   "phases": [
     {
       "number": "1",
@@ -67,7 +67,7 @@
   "next": {
     "command": "/gsd:progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 12.3 of 16 · 81% · executing"
+    "reason": "Phase 12.4 of 16 · executing"
   },
-  "updated_at": "2026-09-11T12:10:42.391Z"
+  "updated_at": "2026-09-11T13:40:53.961Z"
 }

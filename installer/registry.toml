@@ -1587,6 +1587,21 @@ priority = "P1"
 audience = "ai"
 tier = "ai"
 desc = "CLI proxy that rewrites/compresses common dev-command output to cut LLM-visible token usage 60-90%."
+postinstall = "rtk-register"
+# Verified 2026-09-11: rtk v0.49.0's `claude` host registration
+# (`rtk init -g --auto-patch`) live-tested against a freshly downloaded,
+# checksum-verified binary in an isolated scratch $HOME -- confirmed
+# idempotent on rerun and merge-safe against pre-existing permissions/hooks/
+# statusLine content. See 12.4-01-SUMMARY.md for the full transcript.
+# Verified 2026-09-11: `opencode`/`codex` host registration live-tested
+# against the same v0.49.0 binary; `codex` never receives --auto-patch
+# (rejected outright: "--codex cannot be combined with --auto-patch").
+# `cursor-agent`'s `--agent cursor` mode STILL unconditionally also writes
+# Claude Code's RTK.md/settings.json as a side effect in v0.49.0 (unchanged
+# from the stale v0.44.1 research finding) -- installer/postinstall.py's
+# _rtk_register only fires the cursor-agent branch when `claude` is ALSO
+# present, to avoid writing unrequested Claude Code scaffolding on a
+# Cursor-only machine. See 12.4-01-SUMMARY.md for the full transcript.
 [[tool.method]]
 kind = "github_release"
 os = ["macos"]

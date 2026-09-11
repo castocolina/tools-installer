@@ -10,12 +10,34 @@ that never marks the tool's own install as failed, because the binary the
 succeeding method just installed is on PATH and usable regardless.
 """
 
+import shutil
 from collections.abc import Callable, Mapping
+from pathlib import Path
 
-from installer.locations import bin_dir
+from installer.locations import bin_dir, ensure_dir
 from installer.model import Method, Tool
 from installer.run import CommandError, Runner
 from installer.status import is_installed
+
+# The four canonical agent-host catalog ids every postinstall hook that needs
+# host-presence detection shares -- extracted from _codegraph_mcp_register's
+# original inline loop (D-03) so _rtk_register and any future per-host hook
+# read presence from one place instead of each re-deriving it.
+_AGENT_HOST_IDS: tuple[str, ...] = ("claude", "codex", "opencode", "cursor-agent")
+
+
+def present_agent_hosts(tools: Mapping[str, Tool]) -> frozenset[str]:
+    """Which of the four canonical agent-host catalog ids are actually installed.
+
+    A host id absent from `tools` entirely behaves exactly like a present-but-
+    not-installed host: excluded from the result, never a KeyError.
+    """
+    return frozenset(
+        host_id
+        for host_id in _AGENT_HOST_IDS
+        if (tool := tools.get(host_id)) is not None and is_installed(tool)
+    )
+
 
 # Every hook receives the succeeded Method, the Runner, and a `tools` mapping
 # of catalog id -> Tool for the hosts it may need to check presence for
@@ -81,11 +103,8 @@ def _codegraph_mcp_register(
     it unconditionally keeps this call scoped to registration only, for every
     target, without needing to special-case Claude's presence in the CSV.
     """
-    present = [
-        target
-        for tool_id, target in _CODEGRAPH_TARGETS.items()
-        if (tool := tools.get(tool_id)) is not None and is_installed(tool)
-    ]
+    present_hosts = present_agent_hosts(tools)
+    present = [target for tool_id, target in _CODEGRAPH_TARGETS.items() if tool_id in present_hosts]
     if not present:
         return None
     csv = ",".join(present)
@@ -110,8 +129,84 @@ def _codegraph_mcp_register(
     return None
 
 
+# rtk's per-host `rtk init` argv, live-verified against v0.49.0 (2026-09-11,
+# see installer/registry.toml's rtk entry for the dated comment) in an
+# isolated scratch $HOME -- never this argv table run against the current
+# process's real $HOME. `codex` never receives --auto-patch: `--codex`
+# mode never patches settings.json, and rtk rejects the combination outright
+# (`rtk: --codex cannot be combined with --auto-patch`, confirmed live).
+_RTK_HOST_ARGS: dict[str, tuple[str, ...]] = {
+    "claude": ("-g", "--auto-patch"),
+    "opencode": ("-g", "--opencode", "--auto-patch"),
+    "codex": ("-g", "--codex"),
+    "cursor-agent": ("-g", "--agent", "cursor", "--auto-patch"),
+}
+
+# Live-verified (2026-09-11, v0.49.0): `rtk init -g --auto-patch` fails with
+# exit 1 ("Failed to write RTK.md ... No such file or directory") when
+# ~/.claude/ does not already exist -- it never creates the directory
+# itself. In practice Claude Code creates this directory on first run, so a
+# host where is_installed("claude") is true almost always already has it;
+# ensure_dir is a cheap, non-destructive guard against the rare case it does
+# not. Same finding for `--agent cursor` and ~/.cursor/ (Pitfall 3).
+_RTK_HOST_CONFIG_DIR: dict[str, str] = {
+    "claude": ".claude",
+    "cursor-agent": ".cursor",
+}
+
+
+def _resolve_rtk_binary(method: Method) -> str:
+    """Resolve rtk's absolute binary path: `shutil.which` for a brew install
+    (brew puts it on PATH itself), else the method's declared/default bin_dir
+    (mirrors _codegraph_mcp_register's own github_release resolution)."""
+    if method.kind == "brew":
+        found = shutil.which("rtk")
+        if found:
+            return found
+    bin_dir_param = method.params.get("bin_dir")
+    override = bin_dir_param if isinstance(bin_dir_param, str) and bin_dir_param else None
+    return str(bin_dir(override) / "rtk")
+
+
+def _rtk_register(method: Method, runner: Runner, tools: Mapping[str, Tool]) -> str | None:
+    """Register rtk's hook for every already-installed agent host in
+    _RTK_HOST_ARGS's declared order. A CommandError on one host is captured
+    as a partial warning while the loop continues to the remaining hosts --
+    unlike codegraph's single CSV call, each host gets its own `rtk init`
+    invocation (they are independent commands, not one composed argv).
+
+    `cursor-agent`'s branch is gated on `claude` ALSO being present: live
+    verification against v0.49.0 confirmed rtk's `--agent cursor` mode still
+    unconditionally also writes Claude Code's RTK.md/settings.json as a side
+    effect (Pitfall 1, unchanged from the stale v0.44.1 research) -- writing
+    Claude-Code-specific scaffolding on a machine that never selected/
+    installed Claude Code would be exactly the D-01a violation this phase
+    exists to prevent, so this is a documented, silent narrowing rather than
+    an unconditional call.
+    """
+    present = present_agent_hosts(tools)
+    if not present:
+        return None
+    rtk_bin = _resolve_rtk_binary(method)
+    errors: list[str] = []
+    for host_id in _RTK_HOST_ARGS:
+        if host_id not in present:
+            continue
+        if host_id == "cursor-agent" and "claude" not in present:
+            continue
+        config_dir = _RTK_HOST_CONFIG_DIR.get(host_id)
+        if config_dir:
+            ensure_dir(Path.home() / config_dir)
+        try:
+            runner([rtk_bin, "init", *_RTK_HOST_ARGS[host_id]])
+        except CommandError as exc:
+            errors.append(f"{host_id}: {exc}")
+    return "; ".join(errors) if errors else None
+
+
 POSTINSTALL_HOOKS: dict[str, PostinstallHook] = {
     "codegraph-mcp-register": _codegraph_mcp_register,
+    "rtk-register": _rtk_register,
 }
 
 
