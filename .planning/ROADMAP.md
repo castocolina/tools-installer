@@ -352,14 +352,36 @@ Plans:
 
 ### Phase 12.3: Container E2E Verification of the Reconciled Branch: real end-to-end run of the reconciled installer inside a container to confirm origin's ported architecture, local's ported subsystems (host_setup/skill_lifecycle, ownership/skill-lifecycle registry fields, remapped tool tiers), and the 11 re-added registry rows all work together live, not just under unit tests (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** A real, disposable, Fedora-family container proves the reconciled
+branch's full `registry.toml` catalog (~90+ tools) installs, reinstalls, and
+uninstalls correctly end to end — origin's ported architecture, local's
+ported subsystems, and all 11 re-added registry rows working together live,
+not just under mocked unit tests — using a reusable, OS/arch-aware
+container-tool detection mechanism that never silently falls back to
+mutating this host machine.
+**Requirements**: D-01, D-02, D-03, D-04, D-05, D-06 (12.3-CONTEXT.md locked
+decisions — this inserted verification phase has no `REQUIREMENTS.md`
+entries of its own)
 **Depends on:** Phase 12
-**Plans:** 0 plans
+**Plans:** 1/4 plans executed
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 12.3 to break down)
+- [x] 12.3-01-PLAN.md — Tracer: OS/arch-aware container-tool detection script
+  (`scripts/detect-container-runtime.sh`), the D-03 no-silent-fallback gate,
+  and one real tool (`wezterm`) installed end-to-end inside a disposable
+  Fedora container through the production `install_tool` path (wave 1)
+- [ ] 12.3-02-PLAN.md — Fedora-family harness: non-root Homebrew+uv-capable
+  container bootstrap, then Pass 1 — clean install of the full ~90-tool
+  catalog via the real `uv run setup.py --all --yes` entrypoint (wave 2,
+  needs 12.3-01)
+- [ ] 12.3-03-PLAN.md — Pass 2 — install/uninstall/reinstall rerun over the
+  already-installed container, teardown, and a whole-run host-untouched
+  attestation (wave 3, needs 12.3-02)
+- [ ] 12.3-04-PLAN.md — D-06 evidence consolidation: this phase's Tier-3
+  evidence folded into `.planning/RUN-REPORT.md`, decisions recorded in
+  `.planning/PROJECT.md` and `.claude/architecture.md`, final
+  `make validate && make test` (wave 4, needs 12.3-03)
 
 ### Phase 12.2: Install-Actions and Agent-Policy UI Wiring Decision: decide whether local's ported install_actions.py (multi-hook post_install) and agent_policy.py (permission auditing) get surfaced in origin's Textual UI, where, and whether they duplicate/conflict with origin's own omz.py/daemon.py/update.py flows (INSERTED)
 

@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
 current_phase: "12.3"
-current_phase_name: "Container E2E Verification of the Reconciled Branch: real end-to-end run of the reconciled installer inside a container to confirm origin's ported architecture, local's ported subsystems (host_setup/skill_lifecycle, ownership/skill-lifecycle registry fields, remapped tool tiers), and the 11 re-added registry rows all work together live, not just under unit tests"
-current_plan: Not started
-status: planning
-stopped_at: Phase 12.2 complete, ready to plan Phase 12.3
-last_updated: "2026-09-10T22:27:40.986Z"
+current_plan: 3
+status: executing
+stopped_at: Completed 12.3-01-PLAN.md
+last_updated: "2026-09-10T23:30:17.436Z"
 last_activity: 2026-09-10
 last_activity_desc: Phase 12.2 complete, transitioned to Phase 12.3
-state_head: a892d1e91247d6c62e99706963b518c3fdfecec5
+state_head: f44e9fb7a1fa19cd2a577c829cc4961b0a96b6f0
 progress:
   total_phases: 16
   completed_phases: 14
-  total_plans: 36
-  completed_plans: 36
+  total_plans: 40
+  completed_plans: 37
   percent: 88
+current_phase_name: "Container E2E Verification of the Reconciled Branch: real end-to-end run of the reconciled installer inside a container to confirm origin's ported architecture, local's ported subsystems (host_setup/skill_lifecycle, ownership/skill-lifecycle registry fields, remapped tool tiers), and the 11 re-added registry rows all work together live, not just under unit tests"
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 12.3 — Container E2E Verification of the Reconciled Branch: real end-to-end run of the reconciled installer inside a container to confirm origin's ported architecture, local's ported subsystems (host_setup/skill_lifecycle, ownership/skill-lifecycle registry fields, remapped tool tiers), and the 11 re-added registry rows all work together live, not just under unit tests
-Current Plan: Not started
-Total Plans in Phase: 1
-Status: Ready to plan
-Last activity: 2026-09-10 — Phase 12.2 complete, transitioned to Phase 12.3
+Phase: 12.3 — EXECUTING
+Current Plan: 2
+Total Plans in Phase: 4
+Status: In Progress
+Last activity: 2026-09-10 — Completed 12.3-01-PLAN.md (detection script + wezterm tracer)
 
 Progress: [█████████░] 88%
 
@@ -73,6 +73,7 @@ Progress: [█████████░] 88%
 |------|----------|-------|-------|
 | Phase 09 P02 | 25 | 2 tasks | 2 files |
 | Phase 10 P01 | 25min | 3 tasks | 8 files |
+| Phase 12.3 P01 | 14 min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -100,6 +101,8 @@ Recent decisions affecting current work:
 - [09-01, 2026-09-06]: `Tool.postinstall` is a closed dispatch-hook NAME (mirroring `smoke`), not a literal command string; `installer/engine.py::install_tool` dispatches it Method-aware, isolated in its own try/except, immediately after success and never on `ALREADY_INSTALLED`; codegraph's hook never passes `--target auto` (confirmed unsafe by live source read) and maps `cursor-agent` -> codegraph's own `cursor` id via live `is_installed` checks.
 - [09-02, 2026-09-06]: Tier-3 disposable-container run (colima+docker) proved the postinstall mechanism end to end against a real filesystem: composed `--target claude,cursor` CSV matched exactly, real `~/.claude.json`/`~/.cursor/mcp.json` `mcpServers.codegraph` entries were found, and the zero-hosts case proved the documented no-op (no install call, no config file). Phase 9 now fully complete; four decisions consolidated into PROJECT.md's Key Decisions table and the mechanism documented in `.claude/architecture.md`.
 - [Phase 10]: [10-01, 2026-09-06]: codex-skip/opencode-auto/cursor-agent-model added as plain TweakBundle entries; tweak_policy's reload hint split (enable vs disable) and gained ensure_sourced_from so every tweak reaches a real shell under split PATH link mode, wired from both of setup.py's _build_app call sites
+- [12.3-01, 2026-09-10]: Container-tool detection is `scripts/detect-container-runtime.sh`; live proof is a real alpine `run --rm`, never `--version`; D-03 refuse() exits 3 with the three-option text and never falls back to the host
+- [12.3-01, 2026-09-10]: wezterm tracer proved `install_tool` checksum-verified inside disposable Fedora 44 (`fedora:latest` digest sha256:c1e938afd5dfd7f172fac9168ba8e148fdf41c0517c04849072a15e4bd34eac6); host rc files and `~/.local/bin/wezterm` unchanged
 
 ### Pending Todos
 
@@ -128,6 +131,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-07T21:53:42.575Z
-Stopped at: Phase 12.2 complete, ready to plan Phase 12.3
-Resume file: .planning/phases/12.1-reconciliation-merge-verification-confirm-the-layered-merge/12.1-CONTEXT.md
+Last session: 2026-09-10T23:29:06.591Z
+Stopped at: Completed 12.3-01-PLAN.md
+Resume file: None
