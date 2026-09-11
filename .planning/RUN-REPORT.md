@@ -271,6 +271,67 @@ carry new regression tests; full disposition table in
 
 ---
 
+## Phase 12.4 — Tool Onboarding Research Skill and Registry Postinstall Audit
+
+**What it ships:** a repeatable onboarding checklist/skill (`.claude/skills/tool-onboarding/SKILL.md`)
+for classifying any new `registry.toml` catalog entry's tier, dependency tree, and
+postinstall/setup-per-agent-harness needs; uses it to close the confirmed rtk/graphify postinstall
+gap Phase 8's research had documented but never wired into `installer/postinstall.py`; and audits all
+89 registry entries against the same checklist for similar research-to-implementation gaps.
+
+### Findings and implementation
+
+Added `present_agent_hosts()` (D-03) as a single shared host-presence helper, extracted from
+`_codegraph_mcp_register`'s original inline loop, now reused by three postinstall hooks. Wired
+`rtk-register` (D-01) with live-verified per-host argv (`claude`: `-g --auto-patch`; `opencode`:
+`-g --opencode --auto-patch`; `codex`: `-g --codex`, never `--auto-patch` — rejected outright;
+`cursor-agent`: `-g --agent cursor --auto-patch`, gated on `claude` also being present because
+`--agent cursor` still unconditionally writes Claude Code's files too, a pitfall confirmed still
+present in the current rtk 0.49.0, not just stale earlier research) and discovered rtk's own gap:
+`rtk init` fails outright if `~/.claude/`/`~/.cursor/` doesn't already exist — fixed with
+`ensure_dir()` guards. Wired `graphify-register` (D-02) with the real `graphify <host> install`
+per-host subcommand form, confirmed live against all four hosts, with adversarial pre-existing
+content on `AGENTS.md`, `.opencode/opencode.json`, and `.cursor/rules/` all surviving byte-for-byte
+merges, idempotent on rerun. A full 89-entry audit (D-04, `12.4-AUDIT.md`) found zero further
+postinstall-mechanism gaps; one live finding (`spec-kit`'s upstream now documents
+`--non-interactive`) did not change its manual-required classification, since the real blocker is a
+user-approved project-directory target, not prompt interactivity.
+
+### Cross-AI execution (Rule 12)
+
+Cross-AI dispatch (`opencode run --model router-env/my-coding --auto`) remained down throughout this
+phase's entire execution window — the same grok-cli quota-exhaustion / `deepseek-v4-flash`
+connection-expiry condition documented in Phase 12.3 persisted with no recovery. Plan 01 made an
+actual dispatch attempt and recorded the failure; Plans 02–04 each re-checked `podman logs omniroute`
+fresh before falling back and found an unchanged failure signature with no new activity since the
+prior check minutes earlier, correctly treated as sufficient demonstrated-failure evidence per Rule
+12 without wastefully re-dispatching against a backend already proven down this session. Each
+disposition recorded in its own scratchpad file.
+
+### Post-execution code review — internal lane only
+
+Per the established pattern, all 5 external CLI reviewer backends remained confirmed broken this
+session; the internal `gsd-code-reviewer` lane ran alone. It found two real, previously-undetected
+issues: `_resolve_rtk_binary`'s brew fallback resolved to the unrelated userspace `~/.local/bin`
+rather than a real brew prefix when `shutil.which` missed — a reachable production path since rtk's
+`github_release` method (rank 20) can fall through to `brew` (rank 40) — fixed with disk-presence
+checked `_BREW_BIN_DIRS` candidates, mirroring `installer/shellrc.py`'s existing pattern; and a
+triplicated `bin_dir`-override-resolution snippet across three functions, deduplicated into
+`_resolve_bin_override`. A third, documentation-only finding (a shared helper's docstring not
+restating an inherited PATH-detection-lag caveat) was also fixed. Re-verified:
+`make validate && make test` — 1875 passed, 1 skipped, 95.35% coverage.
+
+### Verification
+
+`gsd-verifier`'s goal-backward analysis: 9/9 must-haves verified, no gaps found, phase goal achieved
+(`12.4-VERIFICATION.md`). `gsd-audit-uat` cross-phase scan on the final tree: all clear, zero
+outstanding UAT/verification items across all phases.
+
+This was the milestone's final phase — no Phase 12.5 exists in `ROADMAP.md`; `state.json` confirms
+all phases complete and recommends starting a new milestone.
+
+---
+
 ## Post-execution bookkeeping fixed in this run
 
 `.planning/REQUIREMENTS.md`'s checklist and status table had a documentation-sync gap (the same

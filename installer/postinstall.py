@@ -31,12 +31,25 @@ def present_agent_hosts(tools: Mapping[str, Tool]) -> frozenset[str]:
 
     A host id absent from `tools` entirely behaves exactly like a present-but-
     not-installed host: excluded from the result, never a KeyError.
+
+    This is PATH-probe-based (`installer.status.is_installed` -> `shutil.which`),
+    so a host installed EARLIER IN THE SAME wizard run may not yet be reflected
+    if its own bin dir was not prepended to this process's PATH before this
+    check runs (the same same-run detection-lag caveat originally documented
+    on codegraph's registry comment -- now shared by every hook that calls
+    this function).
     """
     return frozenset(
         host_id
         for host_id in _AGENT_HOST_IDS
         if (tool := tools.get(host_id)) is not None and is_installed(tool)
     )
+
+
+def _resolve_bin_override(method: Method) -> str | None:
+    """A method's declared `bin_dir` param, or None to fall back to the default."""
+    raw = method.params.get("bin_dir")
+    return raw if isinstance(raw, str) and raw else None
 
 
 # Every hook receives the succeeded Method, the Runner, and a `tools` mapping
@@ -108,9 +121,7 @@ def _codegraph_mcp_register(
     if not present:
         return None
     csv = ",".join(present)
-    bin_dir_param = method.params.get("bin_dir")
-    bin_dir_override = bin_dir_param if isinstance(bin_dir_param, str) and bin_dir_param else None
-    codegraph_bin = str(bin_dir(bin_dir_override) / "codegraph")
+    codegraph_bin = str(bin_dir(_resolve_bin_override(method)) / "codegraph")
     try:
         runner(
             [
@@ -155,17 +166,37 @@ _RTK_HOST_CONFIG_DIR: dict[str, str] = {
 }
 
 
+# Well-known Homebrew prefixes, checked by disk presence rather than PATH
+# probing -- the same "bootstrap chicken-and-egg" reasoning
+# installer/shellrc.py::collect_bin_dirs already documents: right after a
+# brew install, `brew`'s own bin dir may not yet be on THIS process's PATH,
+# but the directory itself already exists on disk. `bin_dir(None)`
+# (~/.local/bin) is this project's own userspace install location for
+# github_release-installed tools -- a brew install never writes there, so
+# falling back to it when shutil.which misses would resolve to a path
+# guaranteed not to contain the binary.
+_BREW_BIN_DIRS: tuple[Path, ...] = (
+    Path("/opt/homebrew/bin"),  # Apple Silicon
+    Path("/usr/local/bin"),  # Intel macOS
+    Path("/home/linuxbrew/.linuxbrew/bin"),  # Linuxbrew
+)
+
+
 def _resolve_rtk_binary(method: Method) -> str:
     """Resolve rtk's absolute binary path: `shutil.which` for a brew install
-    (brew puts it on PATH itself), else the method's declared/default bin_dir
-    (mirrors _codegraph_mcp_register's own github_release resolution)."""
+    already on PATH, else a well-known brew prefix checked by disk presence,
+    else the method's declared/default bin_dir (mirrors
+    _codegraph_mcp_register's own github_release resolution -- only reached
+    for a github_release method, which brew never uses)."""
     if method.kind == "brew":
         found = shutil.which("rtk")
         if found:
             return found
-    bin_dir_param = method.params.get("bin_dir")
-    override = bin_dir_param if isinstance(bin_dir_param, str) and bin_dir_param else None
-    return str(bin_dir(override) / "rtk")
+        for brew_dir in _BREW_BIN_DIRS:
+            candidate = brew_dir / "rtk"
+            if candidate.exists():
+                return str(candidate)
+    return str(bin_dir(_resolve_bin_override(method)) / "rtk")
 
 
 def _rtk_register(method: Method, runner: Runner, tools: Mapping[str, Tool]) -> str | None:
@@ -226,9 +257,7 @@ def _graphify_register(method: Method, runner: Runner, tools: Mapping[str, Tool]
     present = present_agent_hosts(tools)
     if not present:
         return None
-    bin_dir_param = method.params.get("bin_dir")
-    override = bin_dir_param if isinstance(bin_dir_param, str) and bin_dir_param else None
-    graphify_bin = str(bin_dir(override) / "graphify")
+    graphify_bin = str(bin_dir(_resolve_bin_override(method)) / "graphify")
     errors: list[str] = []
     for host_id, subcommand in _GRAPHIFY_HOST_SUBCOMMANDS.items():
         if host_id not in present:

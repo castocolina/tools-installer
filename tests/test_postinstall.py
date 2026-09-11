@@ -308,14 +308,32 @@ def test_resolve_rtk_binary_brew_uses_shutil_which(monkeypatch: pytest.MonkeyPat
     assert result == "/usr/local/bin/rtk"
 
 
-def test_resolve_rtk_binary_brew_falls_back_to_bin_dir_when_not_on_path(
-    monkeypatch: pytest.MonkeyPatch,
+def test_resolve_rtk_binary_brew_falls_back_to_userspace_bin_dir_when_no_brew_prefix_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(pi.shutil, "which", _fake_which_missing)
+    monkeypatch.setattr(pi, "_BREW_BIN_DIRS", (tmp_path / "nonexistent",))
     method = Method(kind="brew", params={})
     expected = str(Path.home() / ".local" / "bin" / "rtk")
     result = pi._resolve_rtk_binary(method)  # pyright: ignore[reportPrivateUsage]
     assert result == expected
+
+
+def test_resolve_rtk_binary_brew_finds_a_well_known_prefix_by_disk_presence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """WR-01: a brew install's binary is never at the userspace bin_dir
+    (~/.local/bin) -- when shutil.which misses (not yet re-exported into
+    this process's PATH), a well-known brew prefix that DOES exist on disk
+    must be preferred over the unrelated userspace fallback."""
+    monkeypatch.setattr(pi.shutil, "which", _fake_which_missing)
+    brew_dir = tmp_path / "brew-prefix"
+    brew_dir.mkdir()
+    (brew_dir / "rtk").touch()
+    monkeypatch.setattr(pi, "_BREW_BIN_DIRS", (tmp_path / "nonexistent", brew_dir))
+    method = Method(kind="brew", params={})
+    result = pi._resolve_rtk_binary(method)  # pyright: ignore[reportPrivateUsage]
+    assert result == str(brew_dir / "rtk")
 
 
 def test_rtk_hook_composes_init_argv_when_claude_present(monkeypatch: pytest.MonkeyPatch) -> None:

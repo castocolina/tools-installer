@@ -350,21 +350,21 @@ been checked against that same checklist for a similar research-to-implementatio
 **Requirements**: D-01, D-01a, D-02, D-03, D-04 (12.4-CONTEXT.md locked decisions — this inserted
 phase has no `REQUIREMENTS.md` entries of its own, same convention as Phases 12.1-12.3)
 **Depends on:** Phase 12
-**Plans:** 4 plans
+**Plans:** 4/4 plans complete
 
 Plans:
 
-- [ ] 12.4-01-PLAN.md — Tracer: D-03 shared `present_agent_hosts()` helper (extracted from
+- [x] 12.4-01-PLAN.md — Tracer: D-03 shared `present_agent_hosts()` helper (extracted from
   codegraph's hook) + rtk's simplest host (`claude`) wired end-to-end, live-proven against a fresh
   v0.49.0 binary, then expanded to `opencode`/`codex`/`cursor-agent` with a live re-verification of
   the cursor-implies-claude write risk (wave 1)
-- [ ] 12.4-02-PLAN.md — `_graphify_register()` for all four agent hosts, reusing the D-03 helper,
+- [x] 12.4-02-PLAN.md — `_graphify_register()` for all four agent hosts, reusing the D-03 helper,
   plus live adversarial merge-safety verification for the three hosts research left untested (wave
   2, needs 12.4-01)
-- [ ] 12.4-03-PLAN.md — D-01 checklist extension in `.claude/architecture.md` (tier/dependency/
+- [x] 12.4-03-PLAN.md — D-01 checklist extension in `.claude/architecture.md` (tier/dependency/
   postinstall-mechanism decision tree) and the new `.claude/skills/tool-onboarding/SKILL.md` (wave
   2, needs 12.4-01)
-- [ ] 12.4-04-PLAN.md — D-04 full-catalog audit (all 89 entries) producing `12.4-AUDIT.md`, decision
+- [x] 12.4-04-PLAN.md — D-04 full-catalog audit (all 89 entries) producing `12.4-AUDIT.md`, decision
   consolidation into `PROJECT.md`/`architecture.md`, final `make validate && make test` (wave 3,
   needs 12.4-02, 12.4-03)
 
