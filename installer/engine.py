@@ -143,15 +143,15 @@ def install_tool(
                     method_kind=method.kind,
                     handoff=handoff,
                 )
+            raw_bin_dir = method.params.get("bin_dir")
+            if isinstance(raw_bin_dir, str) and raw_bin_dir:
+                prepend_path(bin_dir(raw_bin_dir))
             warning = None
             if tool.postinstall:
                 try:
                     warning = run_postinstall(tool.postinstall, method, runner, tools or {})
                 except Exception as exc:  # noqa: BLE001 -- isolation boundary, see design_decisions
                     warning = f"postinstall hook {tool.postinstall!r} crashed: {exc}"
-            raw_bin_dir = method.params.get("bin_dir")
-            if isinstance(raw_bin_dir, str) and raw_bin_dir:
-                prepend_path(bin_dir(raw_bin_dir))
             return InstallOutcome(
                 tool.id,
                 InstallStatus.INSTALLED,

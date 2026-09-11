@@ -405,6 +405,39 @@ def test_postinstall_hook_dispatches_after_a_successful_install(
     assert called_tools is tools
 
 
+def test_postinstall_hook_sees_the_same_tools_freshly_prepended_bin_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """bin_dir must be on PATH before the tool's own postinstall hook runs.
+
+    A hook that resolves its own just-installed binary via PATH (rather than
+    an explicit bin_dir path) must see it — prepend_path has to run before
+    postinstall dispatch, not after.
+    """
+    _not_installed(monkeypatch)
+    monkeypatch.setenv("PATH", "/usr/bin")
+    dest = tmp_path / "tool-bin"
+    dest.mkdir()
+    seen_path: list[str] = []
+
+    def fake_run_postinstall(name: str, method: Method, runner: object, tools: object) -> None:
+        seen_path.append(os.environ["PATH"])
+        return None
+
+    monkeypatch.setattr(engine, "run_postinstall", fake_run_postinstall)
+    outcome = install_tool(
+        _tool(
+            Method(kind="dnf", params={"package": "ripgrep", "bin_dir": str(dest)}),
+            postinstall="codegraph-mcp-register",
+        ),
+        _platform(),
+        runner=lambda cmd: None,
+    )
+    assert outcome.status == "installed"
+    assert seen_path == [os.environ["PATH"]]
+    assert seen_path[0].split(os.pathsep)[0] == str(dest)
+
+
 def test_postinstall_failure_does_not_fail_the_install(monkeypatch: pytest.MonkeyPatch) -> None:
     _not_installed(monkeypatch)
 

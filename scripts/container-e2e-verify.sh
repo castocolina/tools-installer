@@ -229,12 +229,15 @@ parse_summary_line() {
 run_setup_as_tester() {
   local args="$1"
   # COLUMNS is forced wide so Rich's non-tty Console (default width 80) never
-  # wraps render_summary's one-line output across two lines in the transcript
-  # — accumulate_summaries' SUMMARY_RE requires the whole summary on one line.
+  # wraps a one-line transcript output across two physical lines —
+  # accumulate_summaries' SUMMARY_RE and its dependency/manual-required line
+  # captures all require the whole line intact. 2000 gives real headroom over
+  # the ~90-tool catalog's longest joined tool-id list, not just the summary
+  # line that first surfaced this bug class.
   exec_tester "set -euo pipefail
 eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"
 export PATH=\"\$HOME/.local/bin:\$PATH\"
-export COLUMNS=200
+export COLUMNS=2000
 cd /home/tester/workspace
 uv run setup.py ${args}
 "
@@ -313,6 +316,12 @@ cmd_pass1() {
       cat="${cat#"${cat%%[![:space:]]*}"}"
       cat="${cat%"${cat##*[![:space:]]}"}"
       [[ -n "$cat" ]] || continue
+      # Interpolated verbatim into a shell script string executed via
+      # `su -c` inside the container (run_setup_as_tester) — never accept a
+      # value outside registry.toml's own category charset (lowercase
+      # alnum + hyphen), or a value like `devtools;rm -rf /` would run as
+      # tester (passwordless sudo) instead of being rejected.
+      [[ "$cat" =~ ^[a-z0-9-]+$ ]] || die "invalid --categories value: $cat"
       printf '=== pass1 category=%s ===\n' "$cat"
       : > "$tmp"
       set +e

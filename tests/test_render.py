@@ -127,6 +127,22 @@ def test_render_failure_details_falls_back_without_a_captured_error() -> None:
     assert "puppeteer failed: no method succeeded" in buf.getvalue()
 
 
+def test_render_failure_details_escapes_bracketed_error_text() -> None:
+    console, buf = _console()
+    render_failure_details(
+        [
+            InstallOutcome(
+                "curl-tool",
+                "failed",
+                errors=(RuntimeError("unexpected error [not-supported] while resolving"),),
+            )
+        ],
+        console,
+    )
+    out = buf.getvalue()
+    assert "[not-supported]" in out
+
+
 def test_render_skipped_names_the_tool_and_its_blockers() -> None:
     console, buf = _console()
     render_skipped(
@@ -270,6 +286,21 @@ def test_render_verification_prints_mismatch_error():
     assert "rg" in text
     assert "12345678" in text
     assert "fedcba98" in text
+
+
+def test_render_verification_escapes_bracketed_mismatch_error() -> None:
+    console = Console(record=True)
+    outcomes = [
+        InstallOutcome(
+            "rg",
+            "checksum-mismatch",
+            method_kind="github_release",
+            errors=(RuntimeError("digest mismatch [rate-limited] retry later"),),
+        )
+    ]
+    render_verification(outcomes, console)
+    text = console.export_text()
+    assert "[rate-limited]" in text
 
 
 def test_render_summary_includes_mismatch_bucket():

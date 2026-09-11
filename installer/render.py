@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
@@ -80,8 +81,8 @@ def render_failure_details(outcomes: list[InstallOutcome], console: Console) -> 
     for outcome in outcomes:
         if outcome.status is not InstallStatus.FAILED:
             continue
-        detail = outcome.errors[-1] if outcome.errors else "no method succeeded"
-        console.print(f"[red]✗ {outcome.tool_id} failed: {detail}[/]")
+        detail = str(outcome.errors[-1]) if outcome.errors else "no method succeeded"
+        console.print(f"[red]✗ {outcome.tool_id} failed: {escape(detail)}[/]")
 
 
 def render_skipped(outcomes: list[InstallOutcome], console: Console) -> None:
@@ -221,4 +222,4 @@ def render_verification(outcomes: list[InstallOutcome], console: Console) -> Non
             # The engine always carries the ChecksumMismatch in errors[0] for
             # this status; a malformed outcome should fail loudly here rather
             # than print a vague line (same philosophy as session.summarize).
-            console.print(f"  {outcome.tool_id}: {outcome.errors[0]}")
+            console.print(f"  {outcome.tool_id}: {escape(str(outcome.errors[0]))}")

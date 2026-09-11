@@ -423,4 +423,48 @@ cannot observe an uninstalled brew alternative, the registry has no
 qualifying row, and an unwired helper would violate rule 5. The full
 record is in `.planning/REQUIREMENTS.md`.
 
+## Phase 12.3: container e2e verification of the reconciled branch
+
+`scripts/detect-container-runtime.sh` is the reusable entry point every
+future Tier-3 container-based e2e phase should call rather than
+re-deriving OS/arch container-tool detection from scratch. It picks a
+container tool the same way a human operator would reason about it — OS
+via `uname -s` (Darwin -> macos, Linux -> linux), arch via `uname -m`
+mirroring `installer/platform.py`'s own amd64/arm64 mapping — and never
+trusts a bare `which <tool>`: the candidate is live-proved by actually
+running a throwaway container (`run --rm docker.io/library/alpine:latest
+true`) before it is accepted. On success it prints `CONTAINER_TOOL=<tool>`
+on stdout and exits 0; a caller sources or captures that single line. On
+Linux this resolves to `podman` when present and provable, `docker`
+otherwise. On macOS it tries `colima`+`docker` first, then a provable
+`docker` or `podman` alone.
+
+The D-03 gate is the script's own no-silent-fallback contract: when
+nothing on the host both exists AND live-proves successfully, `refuse()`
+exits 3 with a fixed, three-option verbatim message (install one of
+podman/docker/colima, or skip this phase's e2e verification) — it never
+guesses a runtime that turned out not to actually work, and it never
+substitutes a different tool than the one it told the caller it detected.
+
+`scripts/container-e2e-verify.sh` is the harness built on top of that
+detection script for this phase's specific full-catalog proof: it
+bootstraps a named, long-lived Fedora 44 container
+(`tools-installer-e2e-12-3`) with a non-root sudo-capable tester user,
+Homebrew, and uv — never touching the host — then drives the real `uv run
+setup.py --all --yes` / `--uninstall --yes` entrypoints against it through
+three subcommands. `pass1` runs one clean-install pass and gates success on
+`failed == 0`, `mismatched == 0`, and every `dependency_failed` blocker
+being cross-checked (not assumed) against the same run's own
+`manual_required` list. `pass2` runs a second install over already-
+installed state, a full uninstall sweep, and a third reinstall — the
+idempotency and uninstall-correctness properties a single clean-install
+pass and the mocked unit-test suite structurally cannot surface — using
+the identical acceptance gate for its rerun and reinstall steps, and tears
+the container down once all three steps pass. `resync` re-copies the
+host's read-only `/repo` mount onto the container's writable workspace,
+required after any host-side fix before re-running either pass. A future
+e2e phase for a different distro family should add a new pass1/pass2-style
+subcommand reusing this same detection-script + named-container pattern,
+not invent a parallel harness.
+
 

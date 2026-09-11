@@ -153,6 +153,124 @@ pins that no such orphan helper exists.
 
 ---
 
+## Phase 12.3 — Container E2E Verification of the Reconciled Branch
+
+**What it ships:** no new user-facing feature — this phase's job is proving the reconciled
+post-merge branch (Phases 1–12) actually installs cleanly through the real `uv run setup.py`
+entrypoint on a real machine, since the entire mocked-`Runner` unit-test suite structurally cannot
+observe cross-tool PATH visibility, rc-file corruption, or uninstall-sweep idempotency at
+full-catalog scale. Adds a reusable, OS/arch-aware container-tool detection script
+(`scripts/detect-container-runtime.sh`) and a disposable-container test harness
+(`scripts/container-e2e-verify.sh`) that drives the full `~90`-tool `registry.toml` catalog
+through install → rerun → uninstall → reinstall inside a throwaway Fedora 44 container, with the
+real host's `$HOME` proven untouched throughout.
+
+### Tier-3 real-machine verification findings (significant)
+
+Plan 12.3-01 first proved the container boundary itself: `scripts/detect-container-runtime.sh`
+live-proves the chosen tool (`podman run --rm docker.io/library/alpine:latest true`) rather than
+trusting a bare `which` check, and its D-03 gate refuses to silently fall back to a different
+container tool than the one the user's PATH actually offers. A one-tool tracer (`wezterm`,
+`github_release` method) installed cleanly inside the container with `verified=True`, and the
+host's `~/.myshellrc`, `~/.zshrc`, `~/.bashrc`, and `~/.local/bin/wezterm` were byte-identical
+(inode, mtime, sha256) before and after — `TRACER_WEZTERM_INSTALL_OK`.
+
+Plan 12.3-02 then drove the entire catalog through `uv run setup.py --all --yes` for the first
+time as a genuine process, not a mock — `TRACER_HARNESS_READY_OK` confirmed the harness itself
+(non-root sudo-capable tester user, Homebrew + uv bootstrapped, zero host mutation). This
+surfaced a real, 100%-reproducing bug the unit-test suite could not have caught by construction:
+`puppeteer` failed with a garbled, unhelpful message. Root cause, across three layers:
+
+1. `installer/render.py` never printed a `FAILED` outcome's actual underlying exception (only
+   `CHECKSUM_MISMATCH` did) — so the real error (`pnpm ... does not meet the required minimum
+   10.4.0`) was invisible until `render_failure_details` was added.
+2. The real cause: `installer/engine.py` never re-exported a freshly-installed tool's declared
+   `bin_dir` onto the *current process's* live `PATH`. `puppeteer`'s Node-version check needed
+   `pnpm`, installed earlier in the *same* `--all --yes` run — but without a shell restart between
+   them, the later tool fell through to Volta's unrelated placeholder shim instead of finding the
+   real, freshly-installed binary. Fixed: `engine.py` now calls `prepend_path()` after every
+   successful install that declared a `bin_dir`.
+3. `installer/registry.toml`'s pnpm `bin_dir` was stale (missing the `/bin` suffix pnpm's current
+   installer actually uses) — corrected and independently confirmed against the live
+   installer-generated `.bashrc`.
+
+The same full-catalog run also surfaced a second, unrelated but actively-destructive bug:
+`installer/rcclean.py`'s duplicate-PATH-line stripper matched an *indented* PATH-export line
+embedded inside Fedora's default `.bashrc`'s own `if ! [[ "$PATH" =~ ... ]]; then ... fi` block
+and stripped only the indented body line, leaving an empty `then`-clause — a bash syntax error
+that broke every later login shell in the container. Fixed: an indented PATH-export line is never
+treated as a strip candidate, since this installer/bun/fnm always append at column 0.
+
+**Re-verified clean:** `TRACER_CLEAN_INSTALL_OK installed=69 already=1 failed=0
+dependency_failed=1(explained) mismatched=0 no_method=0 manual_required=7`. The one
+`dependency_failed` (`superpowers`, blocked by `pi`) is machine-verified against the same run's
+`manual_required` list — `pi`'s own postinstall needs interactive auth and cannot run under
+`--yes`, a structural handoff unrelated to the puppeteer bug.
+
+Plan 12.3-03 then proved idempotency at full-catalog scale — a property no single clean-install
+pass or mocked test can surface: a second `--all --yes` over already-installed state
+(`TRACER_RERUN_OK installed=2 already=1 failed=0 dependency_failed=1(explained)`), a full
+`--uninstall --yes` sweep (`TRACER_UNINSTALL_OK`), and a third `--all --yes` reinstall
+(`TRACER_REINSTALL_OK installed=15 already=1 failed=0 dependency_failed=1(explained)`) all
+completed clean — zero real idempotency or uninstall bugs found. The first reinstall attempt hit
+an external, non-code condition: GitHub's unauthenticated `api.github.com` rate limit (60
+req/hour/IP), exhausted by this run's own back-to-back container cycles sharing one egress IP —
+confirmed via `curl -s https://api.github.com/rate_limit` (0/60 remaining) and root-caused to
+`installer/versions.py`'s `resolve_github_tag()`, the sole call site that hits the constrained
+metadata endpoint (the actual release-asset download is a separate, unthrottled path). Waiting
+for the hourly window to reset and retrying — with no code changes — produced a clean pass.
+
+This phase's work was Fedora-family only (D-05) — a deliberate, documented scope reduction for
+this phase, not a claim of cross-distro or macOS coverage.
+
+### Cross-AI execution (Rule 12)
+
+Every plan from 12.2 onward was dispatched first to the configured cross-AI backend
+(`opencode run --model router-env/my-coding --auto`) per `workflow.cross_ai_execution`. Plan
+12.3-02's dispatch ran ~1h37m and correctly diagnosed the puppeteer/pnpm/Volta root cause, but its
+own fix was partially over-broad (a `guards.py` change that could not distinguish a broken
+unpinned Volta shim from a working pinned one, regressing tests on hosts — like this one — where
+Volta's pnpm shim is legitimately pinned) and it exhausted its model-router quota mid-loop before
+committing. Plans 12.3-03 and 12.3-04's dispatch attempts failed immediately and identically —
+`Service temporarily unavailable: all targets were skipped by pre-dispatch filters` — root-caused
+via the local router's own logs to all 3 backend targets of the `my-coding` combo being
+unavailable (Grok CLI quota-exhausted, `deepseek-v4-flash` connection expired, requiring the
+user's own re-authentication). Each failure was demonstrated and recorded before falling back to
+direct execution, per Rule 12 — never defaulted to a general-purpose executor as the primary path.
+
+### Post-execution code review — single-lane, with 5 external reviewer backends exhausted
+
+Per Rule 15, an independent second review lane was attempted after the internal `gsd-code-reviewer`
+lane, the same dual-lane pattern that caught Phase 12's 4 Critical safety bugs. Five distinct CLI
+backends were tried in sequence and each failed for a genuine, session-unfixable external reason:
+`opencode`/omniroute (Grok quota exhausted, `deepseek-v4-flash` connection expired — the same
+condition blocking Plans 12.3-03/04's own dispatch), `codex` (expired auth refresh token), `gemini`
+(free tier no longer eligible, requires migrating to Antigravity), `cursor-agent` (hit its own usage
+limit), and `agy`/Antigravity (account not eligible, requires browser verification). Review therefore
+proceeded on the internal lane alone — every finding was still personally re-verified against the
+actual current source (not accepted on the agent's self-report) before any fix, the same bar Phase
+12's reconciliation used for disputed findings.
+
+The internal lane found and this run confirmed two real, previously-undetected issues in code this
+phase itself introduced: `installer/render.py`'s new `render_failure_details` interpolated a raw
+captured exception message into Rich's markup-enabled `console.print` — reproduced live, a message
+containing `[not-supported]` was silently swallowed rather than printed, exactly the "an operator
+never sees a garbled error" failure mode this phase's own puppeteer investigation existed to fix.
+And `scripts/container-e2e-verify.sh`'s `--categories` CLI argument was interpolated unescaped into
+a shell string executed via `su -c` inside the container (where `tester` holds passwordless sudo) —
+a real shell-injection pattern, low-exploitability today (only this session's own orchestrator
+invokes the script) but a genuine defensive-coding gap. Both fixed: `rich.markup.escape()` on the
+interpolated text (plus the same fix applied to a pre-existing sibling line,
+`render_verification`'s `CHECKSUM_MISMATCH` detail, sharing the identical vulnerability class); a
+`^[a-z0-9-]+$` charset validation on the category value before use. A third, lower-severity finding
+(`prepend_path` running after rather than before a tool's own `postinstall` hook dispatch — no
+active bug, but a latent trap for a future PATH-dependent hook) was also fixed. All three fixes
+carry new regression tests; full disposition table in
+`.planning/phases/12.3-.../12.3-REVIEW.md`. Re-verified: `make validate && make test` — 1817 passed,
+1 skipped, 95.31% coverage.
+
+---
+
 ## Post-execution bookkeeping fixed in this run
 
 `.planning/REQUIREMENTS.md`'s checklist and status table had a documentation-sync gap (the same
