@@ -123,6 +123,79 @@ def test_tarball_uses_url_verbatim_and_strip_defaults_to_zero(
     ]
 
 
+def test_tar_flag_covers_gzip_default_and_xz_for_all_three_extract_sites() -> None:
+    """_tar_flag() backs _install_unverified, _extract_into (update path), and
+    _place_verified (verified path) alike -- one unit test at this level
+    covers the archive-format decision for all three."""
+    gzip_default = Method(kind="tarball", params={"url": "https://x/y.tar.gz", "member": "y"})
+    xz = Method(
+        kind="tarball", params={"url": "https://x/y.tar.xz", "member": "y", "archive": "xz"}
+    )
+    assert download._tar_flag(gzip_default) == "z"  # pyright: ignore[reportPrivateUsage]
+    assert download._tar_flag(xz) == "J"  # pyright: ignore[reportPrivateUsage]
+
+
+def test_tarball_archive_xz_uses_tar_capital_j_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression: some vendors (e.g. Sublime Text's official Linux build)
+    only ship `.tar.xz`, not `.tar.gz` -- `archive = "xz"` must extract with
+    `tar -xJf`, not the gzip-only `-xzf` every other tarball entry uses."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    calls, runner = _record()
+    bin_dir = tmp_path / "bin"
+    method = Method(
+        kind="tarball",
+        params={
+            "url": "https://x/sublime_text.tar.xz",
+            "member": "sublime_text",
+            "archive": "xz",
+            "bin_dir": str(bin_dir),
+        },
+    )
+    install_download(method, _ctx(runner))
+    opt = tmp_path / ".local" / "opt" / "sublime_text"
+    binary = opt / "sublime_text"
+    link = bin_dir / "sublime_text"
+    extract = (
+        "tmp=$(mktemp) && trap 'rm -f \"$tmp\"' EXIT"
+        f' && curl -fsSL -o "$tmp" -- {shlex.quote("https://x/sublime_text.tar.xz")}'
+        f' && tar -xJf "$tmp" -C {shlex.quote(str(opt))} --strip-components=0'
+    )
+    assert calls == [
+        ["sh", "-c", extract],
+        ["chmod", "+x", str(binary)],
+        ["ln", "-sf", str(binary), str(link)],
+    ]
+
+
+def test_tarball_bin_name_overrides_the_symlink_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression: Sublime Text's Linux tarball ships only a `sublime_text`
+    binary, no `subl` alongside it -- `bin_name` must let the registry expose
+    it on PATH under the name `tool.cmd` ("subl") actually expects."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    calls, runner = _record()
+    bin_dir = tmp_path / "bin"
+    method = Method(
+        kind="tarball",
+        params={
+            "url": "https://download.sublimetext.com/sublime_text_build_4200_x64.tar.xz",
+            "member": "sublime_text",
+            "bin_name": "subl",
+            "archive": "xz",
+            "bin_dir": str(bin_dir),
+        },
+    )
+    install_download(method, _ctx(runner))
+    opt = tmp_path / ".local" / "opt" / "subl"
+    binary = opt / "sublime_text"
+    link = bin_dir / "subl"
+    assert calls[-1] == ["ln", "-sf", str(binary), str(link)]
+    assert link.name == "subl"
+
+
 def test_github_release_bare_tag_no_v_in_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     calls, runner = _record()

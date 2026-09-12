@@ -60,6 +60,18 @@ def _opt_int(method: Method, key: str, default: int) -> int:
     return value
 
 
+def _tar_flag(method: Method) -> str:
+    """tar's decompression flag for this method's `archive` param.
+
+    Registry-driven, not sniffed from the URL: `archive = "zip"` routes to
+    unzip entirely (never reaches this), so this only distinguishes gzip
+    (the long-standing default, still unset in every existing registry entry)
+    from xz -- needed for vendors that only ship `.tar.xz` (e.g. Sublime
+    Text's official Linux build; there's no `.tar.gz` alternative upstream).
+    """
+    return "J" if _opt_str(method, "archive") == "xz" else "z"
+
+
 @dataclass(frozen=True)
 class DownloadTarget:
     """A resolved download: where to fetch, what to extract, how to verify."""
@@ -122,9 +134,14 @@ def install_download(method: Method, ctx: ExecContext) -> bool:
     checksum, False otherwise. Raw single-file assets go straight into the
     bin dir; archives unpack into ~/.local/opt/<binary>/ with the binary
     symlinked into the bin dir (the PRD's opt+symlink location policy).
+
+    The symlink is named after `member`'s basename unless `bin_name` is set --
+    needed when the archive's own binary name doesn't match `tool.cmd` (e.g.
+    Sublime Text's Linux tarball ships only `sublime_text`, with no `subl`
+    alongside it the way its macOS bundle provides one).
     """
     target = _resolve_target(method, ctx)
-    binname = PurePosixPath(target.member).name
+    binname = _opt_str(method, "bin_name") or PurePosixPath(target.member).name
     try:
         dest = ensure_dir(bin_dir(_opt_str(method, "bin_dir")))
     except OSError as exc:
@@ -165,7 +182,8 @@ def _install_unverified(
         extract = (
             "tmp=$(mktemp) && trap 'rm -f \"$tmp\"' EXIT"
             f' && curl -fsSL -o "$tmp" -- {quoted_url}'
-            f' && tar -xzf "$tmp" -C {quoted_opt} --strip-components={strip}'
+            f' && tar -x{_tar_flag(method)}f "$tmp" -C {quoted_opt}'
+            f" --strip-components={strip}"
         )
     ctx.runner(["sh", "-c", extract])
     ctx.runner(["chmod", "+x", str(binary)])
@@ -221,7 +239,7 @@ def update_download(method: Method, ctx: ExecContext) -> UpdateExecResult:
     any of those steps restores the prior tree AND the captured symlink.
     """
     target = _resolve_target(method, ctx)
-    binname = PurePosixPath(target.member).name
+    binname = _opt_str(method, "bin_name") or PurePosixPath(target.member).name
     try:
         dest = ensure_dir(bin_dir(_opt_str(method, "bin_dir")))
     except OSError as exc:
@@ -329,7 +347,16 @@ def _extract_into(
         ctx.runner(["unzip", "-q", "-o", str(asset_path), target.member, "-d", str(dest)])
         return
     strip = _opt_int(method, "strip", 0)
-    ctx.runner(["tar", "-xzf", str(asset_path), "-C", str(dest), f"--strip-components={strip}"])
+    ctx.runner(
+        [
+            "tar",
+            f"-x{_tar_flag(method)}f",
+            str(asset_path),
+            "-C",
+            str(dest),
+            f"--strip-components={strip}",
+        ]
+    )
 
 
 def _undo_archive_swap(
@@ -363,6 +390,15 @@ def _place_verified(
         ctx.runner(["unzip", "-q", "-o", str(asset_path), target.member, "-d", str(opt)])
     else:
         strip = _opt_int(method, "strip", 0)
-        ctx.runner(["tar", "-xzf", str(asset_path), "-C", str(opt), f"--strip-components={strip}"])
+        ctx.runner(
+            [
+                "tar",
+                f"-x{_tar_flag(method)}f",
+                str(asset_path),
+                "-C",
+                str(opt),
+                f"--strip-components={strip}",
+            ]
+        )
     ctx.runner(["chmod", "+x", str(binary)])
     ctx.runner(["ln", "-sf", str(binary), str(link)])

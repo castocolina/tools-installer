@@ -226,14 +226,19 @@ def test_watch_resolves_on_immutable_linux_through_brew() -> None:
     assert [m.kind for m in resolve_methods(watch, immutable_fedora)] == ["brew"]
 
 
-def test_jetbrains_toolbox_is_macos_cask_only() -> None:
+def test_jetbrains_toolbox_installs_on_macos_and_linux() -> None:
     tools = _tools_by_id()
     toolbox = tools["jetbrains-toolbox"]
     assert toolbox.cmd == "jetbrains-toolbox"
     assert toolbox.category == "editor"
-    assert [m.kind for m in toolbox.methods] == ["cask"]
-    assert toolbox.methods[0].params["cask"] == "jetbrains-toolbox"
-    assert toolbox.methods[0].params["app"] == "JetBrains Toolbox.app"
+    assert {m.kind for m in toolbox.methods} == {"cask", "tarball"}
+    cask = next(m for m in toolbox.methods if m.kind == "cask")
+    assert cask.params["cask"] == "jetbrains-toolbox"
+    assert cask.params["app"] == "JetBrains Toolbox.app"
+    tarball = next(m for m in toolbox.methods if m.kind == "tarball")
+    assert "debian" in tarball.os and "fedora" in tarball.os and "arch" in tarball.os
+    linux_amd64 = Platform(os="fedora", arch="amd64", immutable=True, has_brew=False)
+    assert [m.kind for m in resolve_methods(toolbox, linux_amd64)] == ["tarball"]
 
 
 def test_registry_includes_homebrew_with_os_targeted_install() -> None:
@@ -458,15 +463,20 @@ def test_download_tools_resolve_github_release_then_brew_on_macos() -> None:
         assert kinds == ["github_release", "brew"], tool_id
 
 
-# GUI apps with no Linux install method yet (VS Code tar.gz / Sublime tarball
-# are a future batch). Every other tool must resolve on every platform.
-MACOS_ONLY = {"vscode", "sublime", "jetbrains-toolbox", "gnu-bash"}
+# GUI apps with no Linux install method: gnu-bash exists specifically to
+# patch macOS's ancient system bash, so it has nothing to install on Linux
+# (already at a modern bash). vscode/sublime/jetbrains-toolbox all gained
+# official Linux tarball methods -- see their registry entries.
+MACOS_ONLY = {"gnu-bash"}
 # Apple Containers: Homebrew itself requires macos>=26 and arch=arm64. Membership
 # means the tool cannot work on that platform+arch, not that packaging is inconvenient.
 MACOS_ARM64_ONLY = {"container"}
 # Membership means the tool provably cannot work on that platform+arch, not
 # that its packaging is inconvenient there.
-NO_LINUX_ARM64 = {"puppeteer"}
+# jetbrains-toolbox: Toolbox App 2.3+ ships a native Linux arm64 build, but no
+# stable arm64-specific download URL for data.services.jetbrains.com's
+# "latest" redirect could be confirmed -- left undeclared rather than guessed.
+NO_LINUX_ARM64 = {"puppeteer", "jetbrains-toolbox"}
 # wezterm: Arch arm64 IS covered (its pacman method declares no arch list),
 # but Debian/Fedora arm64 have no path — this session's live check of
 # api.github.com/repos/wezterm/wezterm/releases/latest found only .deb arm64

@@ -2091,7 +2091,7 @@ cmd = "code"
 priority = "P1"
 audience = "both"
 tier = "user"
-desc = "GUI editor with a `code` CLI; on Bazzite prefer Flatpak or containers when native app writes are unsafe."
+desc = "GUI editor with a `code` CLI; on Linux this installs the official tarball to ~/.local/opt (userspace, safe on immutable distros like Bazzite)."
 # Arch-split `latest` aliases (each 302s to the current build's CDN zip); the
 # universal zip is ~120 MB larger per download and ~2x on disk -> not used.
 [[tool.method]]
@@ -2108,6 +2108,24 @@ arch = ["amd64"]
 url = "https://update.code.visualstudio.com/latest/darwin/stable"
 app = "Visual Studio Code.app"
 cli = "Contents/Resources/app/bin/code"
+# Official Linux tarball, same "latest/<platform>/stable" API as the darwin
+# entries above. Each archive's top-level dir (VSCode-linux-<arch>/) is
+# stripped; the wrapper script at bin/code is what's meant to run, not the
+# bare `code` binary next to it.
+[[tool.method]]
+kind = "tarball"
+os = ["debian", "arch", "fedora"]
+arch = ["arm64"]
+url = "https://update.code.visualstudio.com/latest/linux-arm64/stable"
+member = "bin/code"
+strip = 1
+[[tool.method]]
+kind = "tarball"
+os = ["debian", "arch", "fedora"]
+arch = ["amd64"]
+url = "https://update.code.visualstudio.com/latest/linux-x64/stable"
+member = "bin/code"
+strip = 1
 [[tool.method]]
 kind = "cask"
 os = ["macos"]
@@ -2127,6 +2145,17 @@ kind = "cask"
 os = ["macos"]
 cask = "jetbrains-toolbox"
 app = "JetBrains Toolbox.app"
+# Official "latest" redirect (data.services.jetbrains.com/products/download);
+# amd64 only -- Toolbox App 2.3+ ships a native arm64 Linux build too, but no
+# stable arm64-specific URL for this endpoint could be confirmed, so it's
+# left undeclared rather than guessed. Extracted to ~/.local/opt (userspace).
+[[tool.method]]
+kind = "tarball"
+os = ["debian", "arch", "fedora"]
+arch = ["amd64"]
+url = "https://data.services.jetbrains.com/products/download?platform=linux&code=TBA"
+member = "jetbrains-toolbox"
+strip = 1
 
 [[tool]]
 id = "sublime"
@@ -2149,6 +2178,28 @@ cli = "Contents/SharedSupport/bin/subl"
 kind = "cask"
 os = ["macos"]
 cask = "sublime-text"
+# Official Linux build (pinned to the same 4200 build as the mac zip above;
+# no `latest` URL exists here either). Upstream ships only .tar.xz for Linux
+# -- archive = "xz" is required, tar's default gzip flag would fail to read
+# it. The archive's own binary is named sublime_text, with no `subl`
+# alongside it the way the macOS bundle provides -- bin_name renames the
+# symlink to match `cmd` so it's reachable the same way on every platform.
+[[tool.method]]
+kind = "tarball"
+os = ["debian", "arch", "fedora"]
+arch = ["amd64"]
+url = "https://download.sublimetext.com/sublime_text_build_4200_x64.tar.xz"
+member = "sublime_text"
+bin_name = "subl"
+archive = "xz"
+[[tool.method]]
+kind = "tarball"
+os = ["debian", "arch", "fedora"]
+arch = ["arm64"]
+url = "https://download.sublimetext.com/sublime_text_build_4200_arm64.tar.xz"
+member = "sublime_text"
+bin_name = "subl"
+archive = "xz"
 
 # Install-method decision (2026-09-05, this phase's research): mmdc stays on
 # pnpm (`kind = "node"`). Homebrew is rejected because upstream mermaid-cli's
