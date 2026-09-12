@@ -2955,7 +2955,10 @@ async def test_version_refresh_runs_off_the_event_loop(tmp_path: Path) -> None:
         assert screen.version_refreshing is False
 
 
-async def test_version_unknown_on_network_failure(tmp_path: Path) -> None:
+async def test_version_shows_probed_install_when_latest_fetch_fails(tmp_path: Path) -> None:
+    """A failed 'latest' fetch must not discard an installed version we DID
+    manage to probe -- that's real information the user still wants to see."""
+
     def boom(repo: str) -> str:
         del repo
         raise VersionError("github unavailable")
@@ -2966,7 +2969,7 @@ async def test_version_unknown_on_network_failure(tmp_path: Path) -> None:
         await _settle_versions(app, pilot)
         assert app.is_running
         cell = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver")
-        assert cell.plain == "unknown"
+        assert cell.plain == "1.2.0"
         await pilot.press("space")
         assert app.is_running
         assert app.catalog.selected == {"codegraph"}

@@ -22,6 +22,7 @@ from installer.enums import Audience, Priority
 from installer.model import Tool
 from installer.ownership import MUTATION_GRADE
 from installer.selection import select_tools, unstaged_recommends
+from installer.status import is_default_shell
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import AppScreen, StatusLine, mark, run_live
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
@@ -297,8 +298,14 @@ class CatalogScreen(AppScreen):
         if not self._installed.get(tool.id, False):
             return Text("")
         status = self._version_statuses.get(tool.id)
-        if status is None or status.installed is None or status.latest is None:
+        if status is None or status.installed is None:
             return Text("unknown", style="dim")
+        if status.latest is None:
+            # A probed version with no comparison source (e.g. a dnf/apt/pacman
+            # package -- ownership.py deliberately doesn't track those managers,
+            # so there is no "latest" to diff against) is still real information;
+            # showing "unknown" here threw away a version we already have.
+            return Text(status.installed, style="dim")
         if status.outdated is True:
             base = f"{status.installed} -> {status.latest}"
             color = "yellow"
@@ -364,6 +371,12 @@ class CatalogScreen(AppScreen):
             detail += f"  |  pairs well with {', '.join(tool.recommends)}"
         if self._unavailable.get(tool.id, False):
             detail += "  |  (not available on this machine)"
+        if self._installed.get(tool.id, False):
+            default_shell = is_default_shell(tool)
+            if default_shell is True:
+                detail += "  |  this is your default shell"
+            elif default_shell is False:
+                detail += "  |  installed, but not your default shell"
         detail += self._version_detail(tool)
         return detail
 

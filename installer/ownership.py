@@ -62,6 +62,7 @@ Owner = Literal["installer", "brew", "cask", "pnpm", "uv", "unknown"]
 Confidence = Literal["direct", "by-elimination", "none"]
 
 MUTATION_GRADE: frozenset[str] = frozenset({"direct", "by-elimination"})
+_NATIVE_PACKAGE_MANAGER_KINDS = frozenset({"dnf", "apt", "pacman"})
 
 _UV_NAME_VERSION = re.compile(r"^(\S+) v(\S+)$")
 _UV_NO_TOOLS = "no tools installed"
@@ -339,6 +340,7 @@ def resolve_ownership(
                 unreadable=unreadable,
                 active_path=active_path,
                 candidates=candidates,
+                applicable=applicable,
             ),
         )
     if len(candidates) == 1 and not unreadable:
@@ -378,6 +380,7 @@ def resolve_ownership(
             unreadable=unreadable,
             active_path=active_path,
             candidates=candidates,
+            applicable=applicable,
         ),
     )
 
@@ -530,10 +533,22 @@ def _unknown_reason(
     unreadable: frozenset[Owner],
     active_path: Path | None,
     candidates: tuple[OwnershipCandidate, ...],
+    applicable: Sequence[Method] = (),
 ) -> str:
     if unreadable:
         names = ", ".join(sorted(unreadable))
         return f"the {names} inventory could not be read"
+    # No tracked manager (brew/cask/pnpm/uv/installer) claims this tool at all,
+    # but the registry declares a native package-manager method for it -- the
+    # live binary almost certainly came from dnf/apt/pacman, which this module
+    # deliberately doesn't track (see module docstring). Naming the likely
+    # source beats the generic "not attributable to any candidate" below,
+    # which told the user nothing about how the tool actually got there.
+    if not candidates and any(m.kind in _NATIVE_PACKAGE_MANAGER_KINDS for m in applicable):
+        return (
+            "likely installed via the OS package manager (dnf/apt/pacman); "
+            "this installer does not track that manager's inventory"
+        )
     if active_path is not None:
         return f"the active binary at {active_path} is not attributable to any candidate"
     if len(candidates) > 1:

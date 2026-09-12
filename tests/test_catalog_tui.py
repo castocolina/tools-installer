@@ -909,6 +909,41 @@ def test_stale_marker_is_visible_on_rendered_ver_cell() -> None:
     assert not fresh.endswith(" ~")
 
 
+def test_ver_cell_shows_probed_version_with_no_latest_to_compare() -> None:
+    """Regression: a dnf/apt/pacman-owned tool has a real probed version but no
+    'latest' source (ownership.py doesn't track those managers) -- the cell
+    must show that version, not discard it as "unknown"."""
+    tool = _tool("rg")
+    screen = _screen([tool], {"rg": True})
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "rg": VersionStatus(
+            tool_id="rg",
+            installed="14.1.0",
+            latest=None,
+            outdated=None,
+            stale=False,
+            source="unknown",
+        )
+    }
+    assert screen._ver_cell(tool).plain == "14.1.0"  # pyright: ignore[reportPrivateUsage]
+
+
+def test_ver_cell_shows_unknown_only_when_no_version_was_probed_at_all() -> None:
+    tool = _tool("rg")
+    screen = _screen([tool], {"rg": True})
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "rg": VersionStatus(
+            tool_id="rg",
+            installed=None,
+            latest=None,
+            outdated=None,
+            stale=True,
+            source="unknown",
+        )
+    }
+    assert screen._ver_cell(tool).plain == "unknown"  # pyright: ignore[reportPrivateUsage]
+
+
 def test_epoch_guard_drops_a_superseded_version_refresh(tmp_path: Path) -> None:
     tool = _tool("rg")
     service = _offline_service(
@@ -1174,6 +1209,23 @@ def test_detail_line_names_competing_manager_and_active_path(tmp_path: Path) -> 
     assert str(path) in text
 
 
+def test_detail_text_flags_installed_shell_as_default_or_not(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    zsh = _tool("zsh", category="shell")
+    screen = _screen([zsh], {"zsh": True})
+    monkeypatch.setenv("SHELL", "/usr/bin/zsh")
+    assert "this is your default shell" in screen._detail_text(zsh)  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    assert "installed, but not your default shell" in screen._detail_text(zsh)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_detail_text_omits_default_shell_note_for_non_shell_tools() -> None:
+    rg = _tool("rg", category="search")
+    screen = _screen([rg], {"rg": True})
+    assert "default shell" not in screen._detail_text(rg)  # pyright: ignore[reportPrivateUsage]
+
+
 def test_unknown_owner_detail_contains_unknown_reason(tmp_path: Path) -> None:
     tool = _tool("rg")
     reason = "the brew inventory could not be read"
@@ -1199,8 +1251,11 @@ def test_unknown_owner_detail_contains_unknown_reason(tmp_path: Path) -> None:
     text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert reason in text
     cell = screen._ver_cell(tool)  # pyright: ignore[reportPrivateUsage]
-    assert cell.plain == "unknown"
-    assert " ~" not in cell.plain
+    # A probed version is real information even with no "latest" to diff
+    # against (e.g. a dnf/apt/pacman package -- ownership.py deliberately
+    # doesn't track those managers) -- showing "unknown" here would discard
+    # a version we already have.
+    assert cell.plain == "14.1.0"
     assert "re-check is pending" not in text
 
 

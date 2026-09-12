@@ -1,7 +1,9 @@
 """Whether a tool is already installed: command on PATH, its .app bundle
 present, or a declared detect_path marker file present."""
 
+import os
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 
 from installer.model import Tool
@@ -38,3 +40,24 @@ def is_installed(tool: Tool, app_roots: tuple[Path, ...] | None = None) -> bool:
         if any((root / app).is_dir() for root in roots):
             return True
     return False
+
+
+def is_default_shell(tool: Tool, *, env: Mapping[str, str] | None = None) -> bool | None:
+    """True/False when `tool` is a shell (category "shell") and $SHELL is set;
+    None when the question doesn't apply (not a shell tool) or can't be
+    answered ($SHELL unset -- e.g. a non-interactive/CI environment).
+
+    A shell binary being on PATH (is_installed's job) says nothing about
+    whether logging in actually starts it -- that's a login-shell property
+    ($SHELL / the passwd entry chsh writes), not a package-presence fact.
+    $SHELL is read here rather than /etc/passwd because it reflects the
+    *running* session's login shell directly and needs no platform-specific
+    passwd-database lookup (getpwuid differs enough between glibc and macOS's
+    Directory Services to not be worth it for a display-only hint).
+    """
+    if tool.category != "shell":
+        return None
+    shell = (env if env is not None else os.environ).get("SHELL")
+    if not shell:
+        return None
+    return Path(shell).name == tool.cmd

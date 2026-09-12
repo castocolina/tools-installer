@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from installer.model import Method, Tool, load_tools
-from installer.status import is_installed
+from installer.status import is_default_shell, is_installed
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -246,3 +246,29 @@ def test_gnu_bash_status_is_not_fooled_by_macos_system_bash(
         desc=gnu_bash.desc,
     )
     assert is_installed(probed) is False
+
+
+def _shell_tool(cmd: str) -> Tool:
+    return Tool(
+        id=cmd,
+        name=cmd,
+        category="shell",
+        cmd=cmd,
+        methods=(Method(kind="brew", params={"formula": cmd}),),
+    )
+
+
+def test_is_default_shell_none_for_a_non_shell_category_tool() -> None:
+    assert is_default_shell(_tool("zsh"), env={"SHELL": "/bin/zsh"}) is None
+
+
+def test_is_default_shell_none_when_shell_env_is_unset() -> None:
+    assert is_default_shell(_shell_tool("zsh"), env={}) is None
+
+
+def test_is_default_shell_true_when_shell_env_basename_matches_cmd() -> None:
+    assert is_default_shell(_shell_tool("zsh"), env={"SHELL": "/usr/bin/zsh"}) is True
+
+
+def test_is_default_shell_false_when_shell_env_basename_differs() -> None:
+    assert is_default_shell(_shell_tool("zsh"), env={"SHELL": "/bin/bash"}) is False
