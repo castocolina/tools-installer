@@ -21,6 +21,10 @@ batch 4/4). This roadmap's 12 phases are the complete scope of that
 planning batch — no further PRD-ingest passes are expected to append phases
 here, though future planning work outside this batch could still do so.
 
+Phases 13-15 are out-of-batch, post-milestone urgent work discovered by
+running the shipped v0.49.0 installer on a real machine — NOT part of the
+7-PRD planning batch.
+
 **Batch 2/7 (`package-manager-policy`) added Phases 4-6**: extending the
 `npm`/`pip` ban to `npx` with a redirect policy, correcting `codegraph`'s and
 `mmdc`'s install methods (plus the puppeteer/chrome-headless-shell chain
@@ -65,6 +69,9 @@ waiting on this Phase 12 mechanism — see Phase 4's scope note.
 - [x] **Phase 10: Agent CLI Ergonomics** - Add `codex-skip`/`opencode-auto` tweaks and a durable, live-verified cursor-agent default-model wrapper (completed 2026-09-06)
 - [x] **Phase 11: Background Maintenance Daemon** - Wrap the existing tmpdir-prune script as a toggleable, macOS-only LaunchAgent with visible logs (completed 2026-09-07)
 - [x] **Phase 12: Version-Aware Status & Update Action** - Add version-aware status, a cached/staleness-tracked version check, and a manager-delegated update action (unblocks the automatic trigger for REQ-pnpm-global-reinstall-mitigation) (completed 2026-09-07)
+- [ ] **Phase 13: Live in-TUI Install Execution & Persistent Wizard Settings** - Run installs inside the Textual app via a worker thread with a streaming output widget, headless-capable, and persist/expose the link-mode preference in the TUI instead of re-prompting every run
+- [ ] **Phase 14: Install/Update Engine Correctness & Default-Shell Action** - Fix the silent no-op when confirming install on tools with an available update, and implement the "set zsh as default shell" action
+- [ ] **Phase 15: Catalog Accuracy — Doctor Refresh, Version Parsing, Ownership Attribution, Tier Fixes** - Fix Doctor's stale post-fix guidance, jq-style version-string parsing, wire the existing but disconnected dnf/apt/pacman ownership probes into the live UI, and correct residual tier misclassifications
 
 ## Phase Details
 
@@ -442,3 +449,36 @@ Plans:
   the 11-row tier remapping audit as a permanent regression test (D-02); static import-graph
   audit of the two ported-but-unwired local subsystems plus a real-terminal tmux structural
   smoke walkthrough of all six views (D-01, D-04)
+
+### Phase 13: Live in-TUI install execution & persistent wizard settings: install execution (confirm, run commands, wire PATH, verify) has always dropped out of the Textual TUI to plain console -- the in-TUI live-execution design was explicitly deferred in unified-ui-redesign-v1.0-prd.md and never built. Implement it: run installs inside the app via a worker thread with a streaming output widget, and make the whole flow genuinely headless-capable via the existing --all/--categories/--yes/--link-mode flags for unattended runs. Separately, the link-mode (centralized/single/split) prompt re-asks every run with no persisted preference and no in-UI control to change it later (setup.py's _resolve_link_mode always prompts; no settings file exists; no screen in wizard_app.py exposes it) -- persist the first choice and surface it as an adjustable setting inside the TUI, ideally as part of the same first-run wizard rather than a separate pre-TUI CLI prompt. (INSERTED)
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 12
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 13 to break down)
+
+### Phase 14: Install/update engine correctness & default-shell action: selecting tools that show an available update and confirming install silently does nothing because resolve_dependencies (installer/deps.py) and engine.py's ALREADY_INSTALLED short-circuit skip any tool that is merely present, regardless of outdated status, with no notice explaining why -- the only real update path today is the separate, disconnected per-row 'u' keybind (action_update_tool); unify or clearly bridge these two paths so selecting an outdated tool in the main select+enter flow actually updates it (or explicitly tells the user it won't, and why). Separately, 'set as default shell' (set_login_shell) is unimplemented scaffolding -- validated in installer/model.py's schema, dispatched nowhere, no tool declares it -- implement it carefully: oh-my-zsh's registry entry deliberately disables auto-chsh (CHSH=no) for a documented Bazzite/KDE-SDDM login-failure bug (ublue-os/bazzite#4159) that any implementation must keep guarded, e.g. an explicit confirm step and never automatic on immutable/atomic distros (INSERTED)
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 12
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 14 to break down)
+
+### Phase 15: Catalog accuracy: Doctor refresh, version parsing, ownership attribution, tier fixes: four related 'the catalog/doctor shows something untrue' bugs. (1) Doctor's fix action applies successfully but the screen shows stale pre-fix guidance next to the success line, because DoctorScreen.action_apply never calls _refresh_guidance() after a successful fix -- fix the refresh call, and make the (deliberately frozen-until-shell-restart) PATH check's messaging explicit instead of looking broken. (2) Version detection shows 'unknown' for tools whose --version output isn't a bare semver (jq prints 'jq-1.8.1', confirmed live) due to an anchored regex in installer/versions.py's _OBSERVED_VERSION -- fix the extraction and audit the registry for other tools with a similar non-standard --version format. (3) Real OS-package-manager ownership detection (dnf/apt/pacman via rpm -q/dpkg-query/pacman -Qq) already exists and works in installer/install_ownership.py but is fully disconnected from the running app (installer/ownership.py and version_status.py never call it, and always resolve such tools to owner=unknown) -- wire it into the live ownership-resolution path, and add detection for Bazzite's rpm-ostree/just-layering equivalent, which has none today. (4) A few registry tools still look tier-misclassified under this session's corrected tier definition: ast-grep (tier=user, but same family as rg/fd which are tier=ai) and puppeteer (tier=user, but is a runtime library dependency of mmdc, not human-driven) are the clearest; mmdc/gitleaks/vale/drawio-cli are borderline and worth a second look. Also fix installer/ui_common.py's stale AI-tab comment still describing claude/codex as living in that tier (they moved to user tier earlier this session) (INSERTED)
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 12
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 15 to break down)

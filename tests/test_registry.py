@@ -70,6 +70,9 @@ def test_human_agent_clis_are_p0_human_tools() -> None:
         assert tool.priority == "P0"
         assert tool.audience == "human"
         assert tool.category == "ai"
+        # The human launches and drives these directly -- tier="user" tracks
+        # exactly that, independent of their "ai" category/audience.
+        assert tool.tier == "user"
 
 
 def test_high_use_agent_utilities_are_p0() -> None:
@@ -699,7 +702,7 @@ def test_cursor_agent_uses_the_legacy_collision_safe_cmd_name() -> None:
     assert cursor_agent.cmd != "agent"
     assert cursor_agent.priority == "P0"
     assert cursor_agent.audience == "human"
-    assert cursor_agent.tier == "ai"
+    assert cursor_agent.tier == "user"
     assert cursor_agent.recommends == ("codegraph", "graphify", "rtk")
     assert len(cursor_agent.methods) == 1
     assert cursor_agent.methods[0].kind == "script"
@@ -715,7 +718,7 @@ def test_antigravity_installs_via_official_script_with_no_recommends() -> None:
     assert antigravity.cmd == "agy"
     assert antigravity.priority == "P1"
     assert antigravity.audience == "human"
-    assert antigravity.tier == "ai"
+    assert antigravity.tier == "user"
     assert antigravity.recommends == ()
     assert len(antigravity.methods) == 1
     assert antigravity.methods[0].kind == "script"
@@ -928,8 +931,8 @@ def test_registry_tier_distribution_is_pinned() -> None:
     # commit that changes the catalog.
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 26,
-        "ai": 22,
-        "user": 41,
+        "ai": 15,
+        "user": 48,
     }
 
 
@@ -942,9 +945,12 @@ def test_bootstrap_package_managers_are_system_tier() -> None:
 def test_reconciliation_tier_audit_confirms_all_11_re_added_rows() -> None:
     # Individual audit (D-02) of the 11 rows commit 9f6274b re-added, checked
     # against origin's real tier semantics (system = machine prerequisite,
-    # user = personal-pick tool, ai = agent-facing tooling) and this
-    # registry's own established precedents -- not the porting agent's
-    # skill-pack/agent->ai, everything-else->user heuristic.
+    # user = a tool the human runs and drives directly -- including an AI
+    # agent harness/CLI -- ai = tooling that operates underneath or is
+    # consumed BY an agent session, never launched directly by the human as
+    # their own interface) and this registry's own established precedents --
+    # not the porting agent's skill-pack/agent->ai, everything-else->user
+    # heuristic.
     tools = _tools_by_id()
 
     # glab (git CLI, audience=both, priority=P0) matches the existing gh
@@ -959,10 +965,11 @@ def test_reconciliation_tier_audit_confirms_all_11_re_added_rows() -> None:
     assert tools["drawio-desktop"].tier == "user"
     assert tools["drawio-cli"].tier == "user"
 
-    # pi (own coding-agent harness, kind="host_setup") matches the existing
-    # claude/codex/opencode/cursor-agent/antigravity precedent: a standalone
-    # runnable agent CLI, the same shape as those five ai-tier agent hosts.
-    assert tools["pi"].tier == "ai"
+    # pi (own coding-agent harness, kind="host_setup") is a standalone,
+    # human-driven agent CLI -- the same shape as claude/codex/opencode/
+    # cursor-agent/antigravity/aichat, all tier="user": the human launches
+    # and drives it directly, which is what tier="user" now tracks.
+    assert tools["pi"].tier == "user"
 
     # ponytail/openspec/superpowers/softaworks-agent-toolkit/
     # matt-pocock-skills/opengsd/spec-kit (all kind="skill_pack", each

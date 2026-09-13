@@ -530,15 +530,18 @@ async def test_selection_made_in_one_tier_view_resolves_against_the_whole_catalo
     assert [tool.id for tool in result.order] == ["pnpm", "agent"]
 
 
-async def test_marking_claude_in_the_ai_view_offers_its_recommends_and_r_stages_them() -> None:
+async def test_marking_claude_in_the_user_view_offers_its_recommends_and_r_stages_them() -> None:
+    # claude is tier="user" (the human launches and drives it directly) but
+    # recommends tier="ai" tooling (codegraph/graphify/rtk) -- proving a
+    # cross-tier recommend still surfaces and stages correctly.
     tools = load_tools(REGISTRY)
     blurbs = load_categories(REGISTRY)
     installed = {tool.id: False for tool in tools}
     app = _unified_app(tools, installed, blurbs)
     async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("2")
         await pilot.pause()
-        screen = app.catalog_for("ai")
+        screen = app.catalog_for("user")
         table = screen.query_one(DataTable[Any])
         table.move_cursor(row=table.get_row_index("claude"))
         await pilot.pause()

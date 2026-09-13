@@ -204,6 +204,19 @@ plausible-sounding guess — and confirmed independently for EACH `os`/`arch`
 the entry declares. A prerequisite that is a no-op on one platform is not
 assumed to behave the same way on another.
 
+This also means checking, up front, WHICH platforms belong in that list in
+the first place — not only verifying the ones already written down. `vscode`,
+`jetbrains-toolbox`, and `sublime` shipped with macOS-only methods for a
+while despite all three vendors having official Linux tarball/apt/rpm
+distributions, because the entries were authored and verified from a macOS
+session and Linux was never checked at all — a gap, not a deliberate
+exclusion. Read the vendor's own install docs for every OS it officially
+supports (macOS, and Linux per-distro/per-arch — amd64 and arm64
+separately) before writing methods, and declare one for each platform that
+is genuinely feasible to support. If a platform is knowingly left out
+(unconfirmed vendor URL, no stable Linux arm64 build, etc.), say so in the
+`# Verified` comment rather than silently omitting it.
+
 The recording mechanism is a `# Verified {date}: ...` prose comment directly
 above the `[[tool]]` block it documents (D-01) — never a checked-in excerpt
 or snapshot of the verified external source. A comment is lower-friction and
@@ -244,12 +257,21 @@ three phases.
 **1. Tier classification.** State explicitly which of the three tiers
 applies and why, per "Tier is a browsing label" above: `system` = a
 prerequisite other tools may depend on regardless of personal preference
-(uv/pnpm/brew/sdkman/zsh/podman-shaped); `user` = a personal-choice dev tool
-with no agent-host relationship (terminal emulators, CLI utilities,
-editors); `ai` = agent-facing tooling — an agent host itself, a tool an
-agent host consumes (MCP servers, token-reduction proxies, knowledge-graph
-builders), or an agent-ecosystem skill pack. Like the brew preference below,
-this is not automated — no lint enforces tier correctness.
+(uv/pnpm/brew/sdkman/zsh/podman-shaped); `user` = a tool the human runs and
+drives directly — a personal-choice dev tool (terminal emulators, CLI
+utilities, editors) **or an AI agent harness/CLI** (claude, codex, opencode,
+cursor-agent, antigravity, pi, aichat): being AI-branded does not by itself
+make something `ai`-tier, what matters is whether the human is the one
+typing into it; `ai` = tooling that operates underneath or is consumed BY an
+agent session, never launched directly by the human as their own interface —
+MCP servers, token-reduction proxies, knowledge-graph builders (codegraph,
+graphify, rtk), agent-oriented CLI utilities (rg, fd, sd, bat, eza), or an
+agent-ecosystem skill pack (ponytail, superpowers, opengsd, openspec,
+spec-kit, softaworks-agent-toolkit, matt-pocock-skills). `Tool.audience`
+(`human`/`ai`/`both`) is a separate, independent field recording who
+*benefits* from a tool regardless of tier — it is not derived from tier and
+tier is not derived from it. Like the brew preference below, tier
+classification is not automated — no lint enforces tier correctness.
 
 **2. Dependency-tree declaration.** Read the tool's own install
 documentation for its real prerequisites — never assume. If it installs via
