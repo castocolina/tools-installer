@@ -1,17 +1,17 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: "12.4"
+current_phase: 13
 current_plan: Not started
-status: completed
-stopped_at: Phase 12.4 complete — all phases complete
-last_updated: "2026-09-11T14:13:39.554Z"
+status: in_progress
+stopped_at: Phase 13 context gathered
+last_updated: "2026-09-13T21:43:39.885Z"
 last_activity: 2026-09-11
 last_activity_desc: Phase 12.4 complete
-state_head: cff3371bb9c873a8359e5335a50cc26ee6a17da8
+state_head: e5e407c4b2ac20545475c3a1c36d3c722d180821
 progress:
-  total_phases: 16
-  completed_phases: 13
+  total_phases: 19
+  completed_phases: 12
   total_plans: 44
   completed_plans: 44
 ---
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-04)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 12.1 — Reconciliation Merge Verification
+**Current focus:** Phase 13 — Live in-TUI Install Execution & Persistent Wizard Settings (Phases 14-15 also pending planning)
 
 ## Current Position
 
-Phase: 12.4
+Phase: 13
 Current Plan: Not started
 Total Plans in Phase: 4
-Status: All phases complete
+Status: in_progress
 Last activity: 2026-09-11 — Phase 12.4 complete
 
 Progress: [█████████░] 88%
@@ -121,6 +121,9 @@ None yet.
 - Phase 12.1 inserted after Phase 12: Reconciliation merge verification after adopting origin b9a8876 (12-phase GSD milestone) as base and porting local's unique subsystems on branch recon/tui-interaction-consistency-2026-09-07 (URGENT)
 - Phase 12.2 inserted after Phase 12: Install-actions/agent-policy UI wiring decision left open by the reconciliation merge (URGENT)
 - Phase 12.3 inserted after Phase 12: Container e2e verification of the reconciled branch (URGENT)
+- Phase 13 inserted after Phase 12: Live in-TUI install execution & persistent wizard settings (F1+F2, found running the shipped v0.49.0 installer end-to-end) (URGENT)
+- Phase 14 inserted after Phase 12: Install/update engine correctness & default-shell action (F3+F4) (URGENT)
+- Phase 15 inserted after Phase 12: Catalog accuracy: Doctor refresh, version parsing, ownership attribution, tier fixes (F5+F6+F7+F8) (URGENT)
 
 ## Deferred Items
 
@@ -132,6 +135,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-10T23:29:06.591Z
-Stopped at: Phase 12.4 complete — all phases complete
-Resume file: None
+Last session: 2026-09-13T21:43:39.774Z
+Stopped at: Phase 13 context gathered
+Resume file: .planning/phases/13-live-in-tui-install-execution-persistent-wizard-settings-ins/13-CONTEXT.md
