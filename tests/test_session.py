@@ -1,3 +1,4 @@
+import inspect
 from collections.abc import Mapping
 
 import pytest
@@ -463,3 +464,107 @@ def test_run_installs_catalog_defaults_to_none_for_untouched_callers() -> None:
 
     run_installs([_tool("rg")], _platform(), lambda cmd: None, lambda repo: "1.0.0", install)
     assert seen == [None]
+
+
+def test_run_installs_preexisting_parameters_stay_positional() -> None:
+    params = inspect.signature(run_installs).parameters
+    positional = [
+        name
+        for name, value in params.items()
+        if value.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    ]
+    assert positional == [
+        "tools",
+        "platform",
+        "runner",
+        "resolve_tag",
+        "install",
+        "on_mismatch",
+        "catalog",
+    ]
+    assert params["should_continue"].kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_run_installs_should_continue_stops_between_tools() -> None:
+    called: list[str] = []
+
+    def fake_install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        called.append(tool.id)
+        return InstallOutcome(tool.id, "installed", method_kind="brew")
+
+    remaining = [True, True, False]
+
+    def should_continue() -> bool:
+        return remaining.pop(0)
+
+    tools = [_tool("rg"), _tool("jq"), _tool("fd")]
+    outcomes = run_installs(
+        tools,
+        _platform(),
+        lambda cmd: None,
+        lambda repo: "1.0.0",
+        fake_install,
+        should_continue=should_continue,
+    )
+    assert [o.tool_id for o in outcomes] == ["rg", "jq"]
+    assert called == ["rg", "jq"]
+    not_attempted = [tool.id for tool in tools if tool.id not in {o.tool_id for o in outcomes}]
+    assert not_attempted == ["fd"]
+
+
+def test_run_installs_should_continue_is_checked_before_dependency_blocked() -> None:
+    called: list[str] = []
+
+    def fake_install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        called.append(tool.id)
+        return InstallOutcome(tool.id, "failed")
+
+    remaining = [True, False]
+
+    def should_continue() -> bool:
+        return remaining.pop(0)
+
+    outcomes = run_installs(
+        [_tool("sdkman"), _tool("java", requires=("sdkman",))],
+        _platform(),
+        lambda cmd: None,
+        lambda repo: "1.0.0",
+        fake_install,
+        should_continue=should_continue,
+    )
+    assert [o.tool_id for o in outcomes] == ["sdkman"]
+    assert outcomes[0].status == "failed"
+    assert called == ["sdkman"]
+    assert all(o.status != "dependency-failed" for o in outcomes)
+
+
+def test_summarize_over_truncated_outcomes_still_buckets() -> None:
+    summary = summarize(
+        [
+            InstallOutcome("rg", "installed"),
+            InstallOutcome("jq", "failed"),
+        ]
+    )
+    assert summary.installed == ("rg",)
+    assert summary.failed == ("jq",)
+    assert summary.already == ()
+    assert summary.no_method == ()
+    assert summary.mismatched == ()
+    assert summary.dependency_failed == ()
+    assert summary.manual_required == ()

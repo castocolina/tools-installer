@@ -74,6 +74,8 @@ def run_installs(
     install: Install = install_tool,
     on_mismatch: OnMismatch | None = None,
     catalog: Mapping[str, Tool] | None = None,
+    *,
+    should_continue: Callable[[], bool] | None = None,
 ) -> list[InstallOutcome]:
     """Install each tool in turn, collecting one outcome per tool.
 
@@ -97,10 +99,19 @@ def run_installs(
     `tools` keyword — this is how a postinstall hook's host-presence check
     reaches the full loaded catalog without run_installs needing to know
     anything about postinstall itself.
+
+    `should_continue`, when given, is checked between tools and never during
+    one. Returning False stops queuing the remainder and returns the
+    outcomes gathered so far; tools never reached are absent from that list
+    rather than given a new status. This is a weak cancel: an in-flight
+    child is allowed to finish, because killing a half-written install is
+    worse than waiting.
     """
     outcomes: list[InstallOutcome] = []
     unresolved: set[str] = set()
     for tool in tools:
+        if should_continue is not None and not should_continue():
+            break
         blocked = tuple(dep_id for dep_id in dict.fromkeys(tool.requires) if dep_id in unresolved)
         if blocked:
             outcome = InstallOutcome(tool.id, InstallStatus.DEPENDENCY_FAILED, blocked_by=blocked)
