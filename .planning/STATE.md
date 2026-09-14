@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: 13
 current_phase_name: live-in-tui-install-execution-persistent-wizard-settings-ins
-current_plan: 5
+current_plan: 6
 status: executing
-stopped_at: Completed 13-04-PLAN.md
-last_updated: "2026-09-14T06:31:19.778Z"
+stopped_at: Completed 13-05-PLAN.md
+last_updated: "2026-09-14T07:18:53.278Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 13 execution started
-state_head: fb7c39fc90764ebc1ecbb47c10b001f48ba07fda
+state_head: 1b987ac37cb9e74e5617716f936ee9e39686bc52
 progress:
   total_phases: 19
   completed_phases: 15
   total_plans: 51
-  completed_plans: 47
+  completed_plans: 49
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 13 (live-in-tui-install-execution-persistent-wizard-settings-ins) — EXECUTING
-Current Plan: 5
+Current Plan: 6
 Total Plans in Phase: 7
 Status: Ready to execute
 Last activity: 2026-09-14 — Phase 13 execution started
@@ -73,12 +73,10 @@ Progress: [█████████░] 88%
 
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
-| Phase 09 P02 | 25 | 2 tasks | 2 files |
-| Phase 10 P01 | 25min | 3 tasks | 8 files |
-| Phase 12.3 P01 | 14 min | 2 tasks | 1 files |
 | Phase 13 P01 | 30 min | 3 tasks | 2 files |
 | Phase 13 P02 | 14 min | 2 tasks | 4 files |
 | Phase 13 P03 | 10 min | 2 tasks | 2 files |
+| Phase 13 P05 | 36 min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -115,6 +113,7 @@ Recent decisions affecting current work:
 - [Phase 13]: Settings.link_mode=None is never-chosen, distinct from DEFAULT_LINK_MODE. — Collapsing it would either re-prompt forever or never prompt at all.
 - [Phase 13]: An explicit --link-mode applies to that run only and never rewrites the stored preference (DD-3). — Honouring a flag must not also call set_link_mode.
 - [Phase 13]: SettingsStore.set_link_mode does not catch OSError. — run_live is the one place a screen-triggered core mutation's failure becomes a message.
+- [Phase 13]: ask_from_worker is MECHANISM=A (call_from_thread + push_screen_wait); a dismissed mismatch prompt resolves to skip and says so; c under the mismatch modal is inert. — 13-VALIDATION.md recorded A; MismatchChoice has no cancelled member so skip is the only option that does not install an unverified artifact; the worker is blocked on the answer anyway.
 
 ### Pending Todos
 
@@ -146,6 +145,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-14T05:23:58.000Z
-Stopped at: Completed 13-03-PLAN.md
+Last session: 2026-09-14T07:18:42.932Z
+Stopped at: Completed 13-05-PLAN.md
 Resume file: None
