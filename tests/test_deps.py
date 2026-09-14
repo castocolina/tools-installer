@@ -69,6 +69,37 @@ def test_already_installed_dependency_is_not_dragged_in() -> None:
     assert [t.id for t in result.order] == ["mmdc"]
 
 
+def test_explicitly_selected_installed_tool_is_excluded_from_order() -> None:
+    """Excluding a selected, already-installed tool is deliberate.
+
+    The outdated-vs-current decision lives one layer up in
+    installer/execute_screen.py: the resolver has no version or ownership
+    state and must not invent a judgement it cannot make correctly.
+    """
+    rg = _tool("rg")
+    result = _resolve([rg], [rg], installed_ids=["rg"])
+    assert [t.id for t in result.order] == []
+    assert result.dragged_in == ()
+    assert result.warnings == ()
+
+
+def test_selection_of_only_installed_tools_yields_empty_order() -> None:
+    rg = _tool("rg")
+    fd = _tool("fd")
+    result = _resolve([rg, fd], [rg, fd], installed_ids=["rg", "fd"])
+    assert result.order == ()
+    assert result.dragged_in == ()
+    assert result.warnings == ()
+
+
+def test_resolver_source_names_neither_version_status_nor_ownership() -> None:
+    source = Path(__file__).resolve().parent.parent / "installer" / "deps.py"
+    lines = source.read_text(encoding="utf-8").splitlines()
+    uncommented = "\n".join(line for line in lines if not line.lstrip().startswith("#"))
+    assert "VersionStatus" not in uncommented
+    assert "ManagerOwnership" not in uncommented
+
+
 def test_transitive_chain_orders_deepest_first() -> None:
     a = _tool("a", "b")
     b = _tool("b", "c")
