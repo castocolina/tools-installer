@@ -507,7 +507,7 @@ Plans:
 **Goal:** Everything the catalog and Doctor assert about a tool is true: the Doctor screen renders post-fix state and says which part of it cannot move yet, a tool that prints its version in its own format is read rather than shown as unknown, a tool the OS package manager owns is attributed to that manager and cleanly refused by the update action instead of silently mutated or mislabelled, and each of the three tier tabs lists exactly what its own definition says it lists.
 **Requirements**: D-01, D-02, D-03, D-04, D-05, D-06, D-07, D-08, D-09, D-10 (CONTEXT.md decision IDs; this phase has no REQUIREMENTS.md ids, matching Phase 14's precedent)
 **Depends on:** Phase 12
-**Plans:** 5 plans
+**Plans:** 1/5 plans executed
 
 Plans:
 
@@ -515,7 +515,7 @@ Plans:
 
 - [ ] 15-01-PLAN.md — Doctor refresh ordering and the conditional frozen-PATH note (D-01, D-02)
 - [ ] 15-02-PLAN.md — Shared name-prefix version fallback in both parsers, plus the recorded registry audit (D-03, D-04)
-- [ ] 15-03-PLAN.md — ast-grep/puppeteer tier corrections, the pinned tier tripwires, and the AI-tab comment (D-07..D-10)
+- [x] 15-03-PLAN.md — ast-grep/puppeteer tier corrections, the pinned tier tripwires, and the AI-tab comment (D-07..D-10)
 
 **Wave 2** *(blocked on Wave 1: shares registry.toml and tests/test_registry.py with 15-03)*
 
