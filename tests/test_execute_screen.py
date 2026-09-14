@@ -14,7 +14,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.pilot import Pilot
 from textual.screen import ModalScreen
-from textual.widgets import Label, ListItem, ListView
+from textual.widgets import Label, ListItem, ListView, Static
 
 from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
@@ -378,3 +378,72 @@ async def test_a_broken_batch_still_finishes_with_an_empty_summary() -> None:
         assert screen.summary.already == ()
         assert "disk full" in _log_text(screen)
         assert screen.not_attempted == ["rg", "fd"]
+
+
+def _head_text(screen: ExecuteScreen) -> str:
+    return str(screen.query_one("#execute-head", Static).render())
+
+
+async def test_preflight_head_names_a_dragged_in_dependency_before_any_keypress() -> None:
+    tools = [_tool("rg", requires=("fd",)), _tool("fd")]
+    captured: list[str] = []
+    inputs = _inputs(tools=tools, install=_install_with_output(captured))
+    app = _host(inputs, tools)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        head = _head_text(screen)
+        assert head
+        assert "fd" in head
+        assert "2" in head
+        assert "enter" in head.lower()
+        assert "esc" in head.lower()
+        assert screen.started is False
+        assert captured == []
+        for _ in range(10):
+            await pilot.pause()
+        assert screen.started is False
+        assert captured == []
+
+
+async def test_unattended_renders_the_head_before_the_worker_starts() -> None:
+    captured: list[str] = []
+    started_with_head: list[str] = []
+    original = _install_with_output(captured)
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        return original(
+            tool,
+            platform,
+            runner,
+            resolve_tag,
+            checksum_policy=checksum_policy,
+            tools=tools,
+        )
+
+    inputs = _inputs(install=install, unattended=True)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        for _ in range(400):
+            screen = app.screen
+            if isinstance(screen, ExecuteScreen) and screen.started:
+                started_with_head.append(_head_text(screen))
+                break
+            await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert started_with_head
+        assert started_with_head[0]
+        assert "enter" in started_with_head[0].lower()
+        await _settle_execute(screen, pilot)

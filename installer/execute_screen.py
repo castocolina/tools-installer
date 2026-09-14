@@ -22,11 +22,12 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import RichLog, Static
 
+from installer.audit import audit
 from installer.deps import resolve_dependencies
 from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
 from installer.model import Tool
 from installer.platform import Platform
-from installer.render import render_summary
+from installer.render import render_audit, render_dependency_notice, render_summary
 from installer.resolve import resolve_methods
 from installer.run import Runner, StreamingRunner
 from installer.selection import select_tools
@@ -205,10 +206,15 @@ class ExecuteScreen(ModalScreen[None]):
         )
         self._ordered = list(resolved.order)
         self._by_id = {tool.id: tool for tool in self._inputs.catalog}
-        count = len(self._ordered)
-        self.query_one("#execute-head", Static).update(
-            f"Install {count} tools? enter start · esc cancel"
-        )
+
+        def render_head(console: Console) -> None:
+            render_dependency_notice(resolved.dragged_in, resolved.warnings, console)
+            render_audit(audit(self._ordered, self._inputs.installed), console)
+            console.print(f"Install {len(self._ordered)} tools? enter start · esc cancel")
+
+        self.query_one("#execute-head", Static).update(self._render_captured(render_head))
+        if self._inputs.unattended:
+            self.action_start()
 
     def action_start(self) -> None:
         if self.finished:
