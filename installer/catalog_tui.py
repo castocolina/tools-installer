@@ -394,6 +394,14 @@ class CatalogScreen(AppScreen):
                 "pnpm": "managed by pnpm",
                 "uv": "managed by uv",
                 "installer": "installed by this installer",
+                # D-05: every NATIVE_OWNERS member needs an entry here, or the
+                # row loses the explanation unknown_reason used to give it
+                # and gains nothing -- both the manager name and the
+                # no-update fact are required (Round 1 review, L160@ab432e9).
+                "dnf": "managed by dnf — this installer will not update it",
+                "apt": "managed by apt — this installer will not update it",
+                "pacman": "managed by pacman — this installer will not update it",
+                "rpm-ostree": "managed by rpm-ostree — this installer will not update it",
             }
             label = labels.get(ownership.owner)
             if label:
