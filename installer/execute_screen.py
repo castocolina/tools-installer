@@ -12,15 +12,15 @@ from __future__ import annotations
 import io
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from rich.console import Console
 from textual import work
-from textual.app import ComposeResult
+from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import RichLog, Static
+from textual.widgets import Label, ListItem, ListView, RichLog, Static
 
 from installer.audit import audit
 from installer.deps import resolve_dependencies
@@ -31,13 +31,22 @@ from installer.render import render_audit, render_dependency_notice, render_summ
 from installer.resolve import resolve_methods
 from installer.run import Runner, StreamingRunner
 from installer.selection import select_tools
-from installer.session import Install, Summary, order_for_install, run_installs, summarize
+from installer.session import (
+    Install,
+    MismatchChoice,
+    Summary,
+    order_for_install,
+    run_installs,
+    summarize,
+)
 from installer.status import is_installed
 from installer.ui_common import StatusLine, run_live
 from installer.versions import TagResolver, resolve_github_tag
 
 _C0_EXCEPT_TAB = frozenset(range(32)) - {9}
 _DEL = 127
+_MISMATCH_CHOICES: frozenset[str] = frozenset({"retry", "skip", "fallback"})
+_DISMISSAL_SKIP = "{tool_id}: checksum-mismatch prompt dismissed; the tool was therefore skipped."
 
 
 def sanitize_log_line(line: str) -> str:
@@ -49,6 +58,67 @@ def sanitize_log_line(line: str) -> str:
     return "".join(
         ch for ch in line if ord(ch) != _DEL and (ord(ch) not in _C0_EXCEPT_TAB or ch == "\t")
     )
+
+
+class ChecksumMismatchScreen(ModalScreen[str | None]):
+    """Three-way checksum-mismatch prompt, word-for-word from setup.py::_ask_mismatch.
+
+    Letter-prefixed ListItem ids (`opt-retry`) because a raw value like a
+    leading-digit id is an invalid Textual identifier — the same convention
+    TimePickerScreen uses.
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "cancel", "close", show=False),
+    ]
+    DEFAULT_CSS = """
+    ChecksumMismatchScreen { align: center middle; }
+    ChecksumMismatchScreen > Label { width: 72; padding: 1 1 0 1; }
+    ChecksumMismatchScreen > ListView { width: 72; height: 8; border: round $accent; }
+    """
+
+    def __init__(self, tool_id: str) -> None:
+        super().__init__()
+        self.tool_id = tool_id
+
+    def compose(self) -> ComposeResult:
+        yield Label(
+            f"Checksum mismatch for {self.tool_id} — "
+            "the download may be corrupted or tampered with."
+        )
+        yield ListView(
+            ListItem(Label("Retry the download"), id="opt-retry"),
+            ListItem(Label("Skip this tool"), id="opt-skip"),
+            ListItem(Label("Fall back to another install method (brew/native)"), id="opt-fallback"),
+        )
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item_id = event.item.id
+        if item_id is None:
+            return
+        choice = item_id.removeprefix("opt-")
+        if choice not in _MISMATCH_CHOICES:
+            return
+        self.dismiss(choice)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+def ask_from_worker(app: App[object], screen: ModalScreen[str | None]) -> str | None:
+    """Ask the user from a thread worker via MECHANISM=A (call_from_thread + push_screen_wait).
+
+    The choice was made by a spike rather than assumed; see
+    `.planning/phases/13-live-in-tui-install-execution-persistent-wizard-settings-ins/13-VALIDATION.md`
+    section ``## Worker-to-modal mechanism``. This is the documented exception
+    to `.claude/architecture.md` rule 2: rule 2 governs main-thread callers; a
+    thread worker has no callback to return into.
+    """
+
+    async def coro_fn() -> str | None:
+        return await app.push_screen_wait(screen)
+
+    return app.call_from_thread(coro_fn)
 
 
 def attributed_install(streaming: StreamingRunner, install: Install = install_tool) -> Install:
@@ -157,6 +227,9 @@ class ExecuteScreen(ModalScreen[None]):
     in plan 13-05; until then the run cannot be stopped safely.
     """
 
+    if TYPE_CHECKING:
+        app: App[object]
+
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "start", "start", show=True, priority=True),
         Binding("escape", "close", "close", show=True),
@@ -248,6 +321,7 @@ class ExecuteScreen(ModalScreen[None]):
                 self.post_message(InstallLogLine(tool_id, line))
 
             runner = StreamingRunner(emit)
+            on_mismatch = None if self._inputs.unattended else self._ask_mismatch
             result, message = run_live(
                 lambda: run_installs(
                     self._ordered,
@@ -255,7 +329,7 @@ class ExecuteScreen(ModalScreen[None]):
                     runner,
                     self._inputs.resolve_tag,
                     attributed_install(runner, self._inputs.install),
-                    on_mismatch=None,
+                    on_mismatch=on_mismatch,
                     catalog=self._by_id,
                     should_continue=lambda: True,
                 )
@@ -284,12 +358,23 @@ class ExecuteScreen(ModalScreen[None]):
                 InstallRunFinished(summary, outcomes, not_attempted, path_text, verify_text, error)
             )
 
+    def _ask_mismatch(self, tool_id: str) -> MismatchChoice:
+        answer = ask_from_worker(self.app, ChecksumMismatchScreen(tool_id))
+        if answer == "retry" or answer == "skip" or answer == "fallback":
+            return answer
+        sentence = _DISMISSAL_SKIP.format(tool_id=tool_id)
+        self.post_message(InstallLogLine(tool_id, sentence))
+        return "skip"
+
     def on_install_log_line(self, message: InstallLogLine) -> None:
         log = self.query_one("#execute-log", RichLog)
         if message.tool_id != self._last_tool_id:
             log.write(f"── {message.tool_id} ──")
             self._last_tool_id = message.tool_id
-        log.write(f"{message.tool_id} │ {sanitize_log_line(message.line)}")
+        cleaned = sanitize_log_line(message.line)
+        log.write(f"{message.tool_id} │ {cleaned}")
+        if message.line == _DISMISSAL_SKIP.format(tool_id=message.tool_id):
+            self.status.set(cleaned, "warn")
 
     def on_install_run_finished(self, message: InstallRunFinished) -> None:
         self.finished = True

@@ -19,6 +19,7 @@ from textual.widgets import Label, ListItem, ListView, Static
 from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.execute_screen import (
+    ChecksumMismatchScreen,
     ExecuteInputs,
     ExecuteScreen,
     sanitize_log_line,
@@ -447,3 +448,206 @@ async def test_unattended_renders_the_head_before_the_worker_starts() -> None:
         assert started_with_head[0]
         assert "enter" in started_with_head[0].lower()
         await _settle_execute(screen, pilot)
+
+
+def _mismatch_then_ok() -> tuple[list[tuple[str, str]], Install]:
+    seen: list[tuple[str, str]] = []
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, tools
+        seen.append((tool.id, checksum_policy))
+        if len([row for row in seen if row[0] == tool.id]) == 1 and checksum_policy == "fail":
+            return InstallOutcome(tool.id, "checksum-mismatch", method_kind="github_release")
+        return InstallOutcome(tool.id, "installed", method_kind="github_release")
+
+    return seen, install
+
+
+async def _settle_until_mismatch(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> None:
+    for _ in range(400):
+        if isinstance(app.screen, ChecksumMismatchScreen):
+            break
+        await pilot.pause()
+    await pilot.pause()
+
+
+def _mismatch_labels(screen: ChecksumMismatchScreen) -> str:
+    parts = [str(label.render()) for label in screen.query(Label)]
+    return "\n".join(parts)
+
+
+async def test_checksum_mismatch_screen_shows_tool_id_and_three_options() -> None:
+    captured: list[str | None] = []
+    app = _host(_inputs())
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ChecksumMismatchScreen("rg"), captured.append)
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ChecksumMismatchScreen)
+        text = _mismatch_labels(screen)
+        assert "rg" in text
+        assert "Checksum mismatch for rg" in text
+        assert "Retry the download" in text
+        assert "Skip this tool" in text
+        assert "Fall back to another install method (brew/native)" in text
+        await pilot.press("enter")
+        await pilot.pause()
+    assert captured == ["retry"]
+
+    captured = []
+    app = _host(_inputs())
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ChecksumMismatchScreen("rg"), captured.append)
+        await pilot.pause()
+        await pilot.press("down", "enter")
+        await pilot.pause()
+    assert captured == ["skip"]
+
+    captured = []
+    app = _host(_inputs())
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ChecksumMismatchScreen("rg"), captured.append)
+        await pilot.pause()
+        await pilot.press("down", "down", "enter")
+        await pilot.pause()
+    assert captured == ["fallback"]
+
+    captured = []
+    app = _host(_inputs())
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ChecksumMismatchScreen("rg"), captured.append)
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+    assert captured == [None]
+
+
+async def test_retrying_a_mismatch_installs_twice_and_summarizes_installed() -> None:
+    seen, install = _mismatch_then_ok()
+    inputs = _inputs(install=install)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_until_mismatch(app, pilot)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert seen == [("rg", "fail"), ("rg", "fail")]
+        assert screen.summary is not None
+        assert screen.summary.installed == ("rg",)
+        assert screen.summary.mismatched == ()
+
+
+async def test_skipping_a_mismatch_leaves_the_tool_in_mismatched() -> None:
+    seen, install = _mismatch_then_ok()
+    inputs = _inputs(install=install)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_until_mismatch(app, pilot)
+        await pilot.press("down", "enter")
+        await _settle_execute(screen, pilot)
+        assert seen == [("rg", "fail")]
+        assert screen.summary is not None
+        assert screen.summary.mismatched == ("rg",)
+        assert screen.summary.installed == ()
+
+
+async def test_fallback_mismatch_reinstalls_with_continue_policy() -> None:
+    seen, install = _mismatch_then_ok()
+    inputs = _inputs(install=install)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_until_mismatch(app, pilot)
+        await pilot.press("down", "down", "enter")
+        await _settle_execute(screen, pilot)
+        assert seen == [("rg", "fail"), ("rg", "continue")]
+        assert screen.summary is not None
+        assert screen.summary.installed == ("rg",)
+
+
+async def test_escaping_mismatch_skips_and_explains_the_dismissal() -> None:
+    seen, install = _mismatch_then_ok()
+    inputs = _inputs(install=install)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_until_mismatch(app, pilot)
+        await pilot.press("escape")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        assert "rg" in log
+        assert "dismissed" in log.lower()
+        assert "skip" in log.lower()
+        assert screen.status.text != ""
+        assert seen == [("rg", "fail")]
+        assert screen.summary is not None
+        assert "rg" in screen.summary.mismatched
+
+
+async def test_unattended_mismatch_never_opens_the_modal_and_hard_fails() -> None:
+    seen, install = _mismatch_then_ok()
+    inputs = _inputs(install=install, unattended=True)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        for _ in range(400):
+            if screen.finished:
+                break
+            assert not isinstance(app.screen, ChecksumMismatchScreen)
+            await pilot.pause()
+        await _settle_execute(screen, pilot)
+        assert not isinstance(app.screen, ChecksumMismatchScreen)
+        assert seen == [("rg", "fail")]
+        assert screen.summary is not None
+        assert screen.summary.mismatched == ("rg",)
+        assert screen.summary.installed == ()
+
+
+async def test_the_event_loop_keeps_running_while_the_mismatch_prompt_is_open() -> None:
+    seen, install = _mismatch_then_ok()
+    inputs = _inputs(install=install)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_until_mismatch(app, pilot)
+        ticks = 0
+        for _ in range(20):
+            ticks += 1
+            await pilot.pause()
+            assert isinstance(app.screen, ChecksumMismatchScreen)
+            assert screen.finished is False
+        assert ticks == 20
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert seen == [("rg", "fail"), ("rg", "fail")]
