@@ -1417,3 +1417,18 @@ def test_non_interactive_fix_with_link_mode_flag_writes_split_and_stores_nothing
     assert written == ["split"]
     assert not path.exists()
     assert load_settings(path).link_mode is None
+
+
+# -- D-05/Task 2: setup.py is excluded from pyright and coverage by design
+# (see the Makefile's own comment), so a read of the committed composition
+# root is how this repository pins the two native_probe wiring sites -- the
+# display-path VersionRefreshService construction and the mutation-path
+# _reresolve_ownership closure. Only wiring both prevents the catalog from
+# showing an owner the mutation path re-resolves as unknown a moment later.
+
+
+def test_native_probe_is_wired_at_both_the_display_and_mutation_sites() -> None:
+    source = Path(setup.__file__).read_text()
+    assert source.count("native_probe=") == 2, source.count("native_probe=")
+    assert "run_probe" in source
+    assert "install_ownership import run_probe" in source
