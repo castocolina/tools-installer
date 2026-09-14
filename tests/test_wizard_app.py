@@ -177,6 +177,7 @@ def _app(
     daemon_default: Callable[[], bool] | None = None,
     daemon_default_policy_id: str | None = None,
     execute: ExecuteInputs | None = None,
+    prompt_link_mode: bool = False,
 ) -> UnifiedApp:
     tools = [_tool("rg"), _tool("fd")]
     installed: Mapping[str, bool] = {"rg": True, "fd": False}
@@ -198,6 +199,7 @@ def _app(
         daemon_default=daemon_default,
         daemon_default_policy_id=daemon_default_policy_id,
         execute=execute,
+        prompt_link_mode=prompt_link_mode,
     )
 
 
@@ -1482,7 +1484,8 @@ async def test_link_mode_picker_escape_warns_and_does_not_call_the_setter() -> N
         assert isinstance(app.screen, PoliciesScreen)
         assert calls == []
         assert screen.status.text
-        assert "unchanged" in screen.status.text.lower() or "cancelled" in screen.status.text.lower()
+        lowered = screen.status.text.lower()
+        assert "unchanged" in lowered or "cancelled" in lowered
 
 
 async def test_link_mode_setter_oserror_surfaces_and_leaves_the_line_unchanged() -> None:
@@ -1533,6 +1536,116 @@ async def test_doctor_rereads_callable_fix_preview_on_enter_view() -> None:
         body = str(app.screen.query_one("#doctor-body", Static).render())
         assert "second preview text" in body
         assert "first preview text" not in body
+
+
+async def test_first_run_picker_is_the_last_modal_even_with_a_daemon_default() -> None:
+    app = _app(
+        policies=_policy_inputs(link_mode=lambda: "centralized", set_link_mode=lambda _mode: None),
+        prompt_link_mode=True,
+        daemon_default=lambda: True,
+        daemon_default_policy_id="daemon",
+    )
+    async with app.run_test(size=(100, 30)):
+        assert isinstance(app.screen, LinkModeScreen)
+
+
+async def test_first_run_picker_is_not_pushed_by_default() -> None:
+    app = _app(
+        policies=_policy_inputs(link_mode=lambda: "centralized", set_link_mode=lambda _mode: None),
+    )
+    async with app.run_test(size=(100, 30)):
+        assert not isinstance(app.screen, LinkModeScreen)
+
+
+async def test_first_run_escape_explains_on_the_catalog() -> None:
+    calls: list[str] = []
+    app = _app(
+        policies=_policy_inputs(
+            link_mode=lambda: "centralized",
+            set_link_mode=lambda value: calls.append(value),
+        ),
+        prompt_link_mode=True,
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, LinkModeScreen)
+        await pilot.press("escape")
+        assert calls == []
+        assert app.catalog.status.text
+        assert "centralized" in app.catalog.status.text.lower()
+
+
+async def test_first_run_escape_on_make_fix_explains_on_the_doctor() -> None:
+    app = _app(
+        policies=_policy_inputs(link_mode=lambda: "centralized", set_link_mode=lambda _mode: None),
+        initial_view="doctor",
+        prompt_link_mode=True,
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, LinkModeScreen)
+        await pilot.press("escape")
+        doctor = app.screen
+        assert isinstance(doctor, DoctorScreen)
+        assert doctor.status.text
+
+
+async def test_first_run_selecting_split_saves_and_names_it_on_the_visible_screen() -> None:
+    calls: list[str] = []
+    app = _app(
+        policies=_policy_inputs(
+            link_mode=lambda: "centralized",
+            set_link_mode=lambda value: calls.append(value),
+        ),
+        prompt_link_mode=True,
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, LinkModeScreen)
+        await pilot.press("down", "down", "enter")
+        assert calls == ["split"]
+        assert "split" in app.catalog.status.text
+        assert "saved" in app.catalog.status.text.lower()
+
+
+async def test_first_run_picker_is_pushed_at_most_once() -> None:
+    app = _app(
+        policies=_policy_inputs(link_mode=lambda: "centralized", set_link_mode=lambda _mode: None),
+        prompt_link_mode=True,
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, LinkModeScreen)
+        await pilot.press("escape")
+        await pilot.press("4")
+        await pilot.press("escape")
+        assert not isinstance(app.screen, LinkModeScreen)
+
+
+async def test_dismissed_first_run_picker_persists_nothing(tmp_path: Path) -> None:
+    from installer.settings import SettingsStore, load_settings
+
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path, link_mode="centralized")
+    app = _app(
+        policies=_policy_inputs(
+            link_mode=lambda: store.link_mode, set_link_mode=store.set_link_mode
+        ),
+        prompt_link_mode=True,
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, LinkModeScreen)
+        await pilot.press("escape")
+    assert not path.exists() or load_settings(path).link_mode is None
+
+
+async def test_first_run_setter_oserror_surfaces_on_the_visible_screen() -> None:
+    def boom(_value: str) -> None:
+        raise OSError("disk full")
+
+    app = _app(
+        policies=_policy_inputs(link_mode=lambda: "centralized", set_link_mode=boom),
+        prompt_link_mode=True,
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("enter")
+        assert "disk full" in app.catalog.status.text
 
 
 async def test_policy_toggle_disables_active_policy() -> None:

@@ -1356,6 +1356,25 @@ def test_doctor_uninstall_and_guard_wire_the_store_but_never_prompt(
         assert kwargs.get("prompt_link_mode") is False
 
 
+def test_all_yes_and_no_tty_never_prompt_for_link_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen = _capture_app(monkeypatch)
+    _stub_install_run(monkeypatch, Summary(installed=("fd",), already=(), failed=(), no_method=()))
+    assert setup.main(["--all", "--yes"]) == 0
+    assert all(kwargs.get("prompt_link_mode") is not True for kwargs in seen)
+
+    seen.clear()
+    monkeypatch.setattr(setup.sys, "stdin", _NonTtyStdin())
+
+    def fake_open(_path: str, _flags: int) -> int:
+        raise OSError("no controlling terminal")
+
+    monkeypatch.setattr(setup.os, "open", fake_open)
+    assert setup.main([]) == 2
+    assert all(kwargs.get("prompt_link_mode") is not True for kwargs in seen)
+
+
 def test_non_interactive_fix_with_link_mode_flag_writes_split_and_stores_nothing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

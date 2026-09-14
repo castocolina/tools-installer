@@ -1549,6 +1549,9 @@ class UnifiedApp(App[list[str] | None]):
         self._staged: set[str] = set()
         self._execute = execute
         self._prompt_link_mode = prompt_link_mode
+        self._set_link_mode = policies.set_link_mode
+        self._read_link_mode = policies.link_mode
+        self._link_mode_prompted = False
         # The exit code answers "did everything this session asked for succeed",
         # not "did the last thing succeed" — merge each run field-wise in order.
         self.install_summary: Summary | None = None
@@ -1641,6 +1644,16 @@ class UnifiedApp(App[list[str] | None]):
             await self.show_view(self._initial_view)
         if self._daemon_default is not None:
             self._apply_daemon_default_worker()
+        # Last in on_mount so a first-run user answers exactly one question;
+        # the daemon worker's completion status lands behind this picker, not
+        # on top of it.
+        if (
+            self._prompt_link_mode
+            and self._set_link_mode is not None
+            and not self._link_mode_prompted
+        ):
+            self._link_mode_prompted = True
+            self.push_screen(LinkModeScreen(), self._first_link_mode_picked)
 
     # exit_on_error=False (Textual's own worker.py defaults this True, which
     # calls App._handle_exception -- crashing the whole app -- on any
@@ -1764,6 +1777,37 @@ class UnifiedApp(App[list[str] | None]):
         # palette tests asserting current_view immediately after enter do not need pilot.pause().
         if name is not None:
             await self.show_view(name)
+
+    def _first_link_mode_picked(self, value: str | None) -> None:
+        # make fix opens with initial_view="doctor", so the Doctor AppScreen is
+        # on top and the catalog is hidden. Write D-05.3's explanation onto
+        # the screen the user is looking at, never a hard catalog fallback:
+        # if a future Textual version fired this callback while LinkModeScreen
+        # were still current, self.screen would not be an AppScreen and a hard
+        # catalog fallback would reintroduce the silent-dismissal defect.
+        current = self.screen
+        target = (
+            current
+            if isinstance(current, AppScreen)
+            else (self._views.get(self.current_view) or self.catalog)
+        )
+        if value is None:
+            mode = self._read_link_mode() if self._read_link_mode is not None else "centralized"
+            policies_key = str(VIEW_ORDER.index("policies") + 1)
+            target.status.set(
+                f"Link mode unchanged; this run uses {mode}. "
+                f"Press {policies_key} then m to change it later.",
+                "warn",
+            )
+            return
+        setter = self._set_link_mode
+        if setter is None:
+            return
+        _, error = run_live(lambda: setter(value))
+        if error is not None:
+            target.status.set(error, "error")
+            return
+        target.status.set(f"Link mode saved: {value}.", "ok")
 
     def on_catalog_screen_decided(self, message: CatalogScreen.Decided) -> None:
         if self._execute is None or message.result is None:
