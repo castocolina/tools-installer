@@ -403,9 +403,7 @@ def _dnf_tool(*, package: str = "jq", owner_probes: tuple[str, ...] = ("dnf",)) 
     )
 
 
-def _verifying_dnf_probe(
-    package: str, calls: list[list[str]]
-) -> Callable[[list[str]], str]:
+def _verifying_dnf_probe(package: str, calls: list[list[str]]) -> Callable[[list[str]], str]:
     def probe(command: list[str]) -> str:
         calls.append(command)
         return f"{package}\n"
