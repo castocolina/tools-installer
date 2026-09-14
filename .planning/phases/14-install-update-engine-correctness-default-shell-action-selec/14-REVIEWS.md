@@ -21,7 +21,28 @@ failed_lanes:
 <!-- gsd:plan-revision-conflicts:begin -->
 ## Plan-Revision Conflicts
 
-(none — no prior substantive REVIEWS.md existed for this phase; the immediately prior 14-REVIEWS.md was a total-failure stub with no conflict entries)
+**Round 1 (5e6e1ac) — none.** All thirteen findings (2 HIGH, 5 MEDIUM, 6 LOW) were checked against
+`14-CONTEXT.md`'s seven locked decisions before revision. None of them asks for anything a locked
+decision forbids: every HIGH and MEDIUM is a mechanical defect in a plan's own test spec, gate or
+sequencing, and the LOWs are stale counts plus two confirmations that existing design choices are
+correct. Nothing in the review proposes changing which mechanism is reused (D-01), where consent
+comes from (D-02, D-05), what a refusal says (D-03), the immutable block (D-04), the dispatch site
+(D-06) or the zsh-only scope (D-07). Every finding was either incorporated into a PLAN.md or
+dispositioned in that plan's `## Review Dispositions Ledger`; none was deferred.
+
+Two reviewer claims were partially corrected during verification against the live tree, and both
+corrections are recorded in the relevant plan's ledger rather than here, because neither is a
+conflict with a user decision:
+
+- **14-04 HIGH, vulture.** The recommended fix (move the dead-code gate to Task 3) was taken, but the
+  stated mechanism was wrong: this project pins `min_confidence = 80` (`pyproject.toml:60`) and
+  vulture reports unused functions and classes at 60% confidence, so the Task 2 gate was passing
+  vacuously rather than failing. Verified empirically in this checkout.
+- **14-05 LOW, fake-install count.** "Eleven" was correct, not nine: `grep -c ') -> InstallOutcome:'
+  tests/test_execute_screen.py` returns 11; only nine of the eleven are literally named `install`,
+  which is exactly the trap. The plan now names the two odd ones and tells the executor to enumerate
+  by return type.
+
 <!-- gsd:plan-revision-conflicts:end -->
 
 > **Reviewer-availability note:** the project's configured default reviewer instance
