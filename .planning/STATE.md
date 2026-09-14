@@ -2,18 +2,18 @@
 gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: 14
-current_phase_name: "Install/update engine correctness & default-shell action: selecting tools that show an available update and confirming install silently does nothing because resolve_dependencies (installer/deps.py) and engine.py's ALREADY_INSTALLED short-circuit skip any tool that is merely present, regardless of outdated status, with no notice explaining why -- the only real update path today is the separate, disconnected per-row 'u' keybind (action_update_tool); unify or clearly bridge these two paths so selecting an outdated tool in the main select+enter flow actually updates it (or explicitly tells the user it won't, and why). Separately, 'set as default shell' (set_login_shell) is unimplemented scaffolding -- validated in installer/model.py's schema, dispatched nowhere, no tool declares it -- implement it carefully: oh-my-zsh's registry entry deliberately disables auto-chsh (CHSH=no) for a documented Bazzite/KDE-SDDM login-failure bug (ublue-os/bazzite#4159) that any implementation must keep guarded, e.g. an explicit confirm step and never automatic on immutable/atomic distros"
+current_phase_name: install-update-engine-correctness-default-shell-action-selec
 current_plan: Not started
-status: planning
+status: executing
 stopped_at: Phase 13 complete, ready to plan Phase 14
-last_updated: "2026-09-14T09:47:53.427Z"
+last_updated: "2026-09-14T10:49:33.884Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 13 complete, transitioned to Phase 14
-state_head: cdfdf690d62729d2acd800c10c456e86a280182f
+state_head: f465833da75af5826238fce8b0a74f7a059e51af
 progress:
   total_phases: 19
   completed_phases: 13
-  total_plans: 51
+  total_plans: 56
   completed_plans: 51
 ---
 
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 14 — Install/update engine correctness & default-shell action: selecting tools that show an available update and confirming install silently does nothing because resolve_dependencies (installer/deps.py) and engine.py's ALREADY_INSTALLED short-circuit skip any tool that is merely present, regardless of outdated status, with no notice explaining why -- the only real update path today is the separate, disconnected per-row 'u' keybind (action_update_tool); unify or clearly bridge these two paths so selecting an outdated tool in the main select+enter flow actually updates it (or explicitly tells the user it won't, and why). Separately, 'set as default shell' (set_login_shell) is unimplemented scaffolding -- validated in installer/model.py's schema, dispatched nowhere, no tool declares it -- implement it carefully: oh-my-zsh's registry entry deliberately disables auto-chsh (CHSH=no) for a documented Bazzite/KDE-SDDM login-failure bug (ublue-os/bazzite#4159) that any implementation must keep guarded, e.g. an explicit confirm step and never automatic on immutable/atomic distros
+Phase: 14 (install-update-engine-correctness-default-shell-action-selec) — READY TO EXECUTE
 Current Plan: Not started
-Total Plans in Phase: 7
-Status: Ready to plan
+Total Plans in Phase: 5
+Status: Ready to execute
 Last activity: 2026-09-14 — Phase 13 complete, transitioned to Phase 14
 
 Progress: [█████████░] 88%
