@@ -391,6 +391,12 @@ class DoctorScreen(AppScreen):
             return
         _, self.error = run_live(self._fix)
         self.applied = self.error is None
+        # Unconditional, not success-gated: run_live runs the callable BEFORE
+        # mapping an exception to self.error, so a failed fix can already have
+        # moved the guard state by the time we get here. Recompute the
+        # guidance list before rendering it, exactly like the three sibling
+        # events (on_mount, enter_view, on_globals_audited) already do.
+        self._refresh_guidance()
         self._refresh_body()
 
     def action_reinstall_globals(self) -> None:
