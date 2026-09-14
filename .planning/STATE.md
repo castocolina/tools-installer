@@ -2,18 +2,18 @@
 gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: 13
-current_phase_name: "Live in-TUI install execution & persistent wizard settings: install execution (confirm, run commands, wire PATH, verify) has always dropped out of the Textual TUI to plain console -- the in-TUI live-execution design was explicitly deferred in unified-ui-redesign-v1.0-prd.md and never built. Implement it: run installs inside the app via a worker thread with a streaming output widget, and make the whole flow genuinely headless-capable via the existing --all/--categories/--yes/--link-mode flags for unattended runs. Separately, the link-mode (centralized/single/split) prompt re-asks every run with no persisted preference and no in-UI control to change it later (setup.py's _resolve_link_mode always prompts; no settings file exists; no screen in wizard_app.py exposes it) -- persist the first choice and surface it as an adjustable setting inside the TUI, ideally as part of the same first-run wizard rather than a separate pre-TUI CLI prompt."
+current_phase_name: live-in-tui-install-execution-persistent-wizard-settings-ins
 current_plan: Not started
-status: planning
+status: executing
 stopped_at: Phase 12.4 complete, ready to plan Phase 13
-last_updated: "2026-09-13T23:48:48.233Z"
+last_updated: "2026-09-14T01:00:19.041Z"
 last_activity: 2026-09-13
 last_activity_desc: Phase 12.4 complete, transitioned to Phase 13
-state_head: 11b7de0f6533fde9e52c96837b7315a0a4003a41
+state_head: 99081621635d22aef20c7da13b271269de40f706
 progress:
   total_phases: 19
   completed_phases: 16
-  total_plans: 44
+  total_plans: 51
   completed_plans: 44
 ---
 
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 13 — Live in-TUI install execution & persistent wizard settings: install execution (confirm, run commands, wire PATH, verify) has always dropped out of the Textual TUI to plain console -- the in-TUI live-execution design was explicitly deferred in unified-ui-redesign-v1.0-prd.md and never built. Implement it: run installs inside the app via a worker thread with a streaming output widget, and make the whole flow genuinely headless-capable via the existing --all/--categories/--yes/--link-mode flags for unattended runs. Separately, the link-mode (centralized/single/split) prompt re-asks every run with no persisted preference and no in-UI control to change it later (setup.py's _resolve_link_mode always prompts; no settings file exists; no screen in wizard_app.py exposes it) -- persist the first choice and surface it as an adjustable setting inside the TUI, ideally as part of the same first-run wizard rather than a separate pre-TUI CLI prompt.
+Phase: 13 (live-in-tui-install-execution-persistent-wizard-settings-ins) — READY TO EXECUTE
 Current Plan: Not started
-Total Plans in Phase: 4
-Status: Ready to plan
+Total Plans in Phase: 7
+Status: Ready to execute
 Last activity: 2026-09-13 — Phase 12.4 complete, transitioned to Phase 13
 
 Progress: [█████████░] 88%

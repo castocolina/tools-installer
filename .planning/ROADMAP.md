@@ -458,13 +458,26 @@ Plans:
 **Plans:** 7 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 13-01-PLAN.md — Wave 0: prove the worker-to-modal mechanism and record it in 13-VALIDATION.md
 - [ ] 13-02-PLAN.md — StreamingRunner and a between-tools cancel predicate for run_installs (pure core)
 - [ ] 13-03-PLAN.md — installer/settings.py: persisted, validated link-mode preference (pure core)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 13-04-PLAN.md — Tracer: one tool installs end-to-end inside the app, plus the setup.py seam split
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 13-05-PLAN.md — Checksum-mismatch modal, per-tool status list, cancel, and the full post-run report
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 13-06-PLAN.md — Settings wiring: no pre-TUI prompt, a Policies link-mode picker, live re-reads
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 13-07-PLAN.md — architecture.md and PRD record, plus the full-suite phase gate
 
 ### Phase 14: Install/update engine correctness & default-shell action: selecting tools that show an available update and confirming install silently does nothing because resolve_dependencies (installer/deps.py) and engine.py's ALREADY_INSTALLED short-circuit skip any tool that is merely present, regardless of outdated status, with no notice explaining why -- the only real update path today is the separate, disconnected per-row 'u' keybind (action_update_tool); unify or clearly bridge these two paths so selecting an outdated tool in the main select+enter flow actually updates it (or explicitly tells the user it won't, and why). Separately, 'set as default shell' (set_login_shell) is unimplemented scaffolding -- validated in installer/model.py's schema, dispatched nowhere, no tool declares it -- implement it carefully: oh-my-zsh's registry entry deliberately disables auto-chsh (CHSH=no) for a documented Bazzite/KDE-SDDM login-failure bug (ublue-os/bazzite#4159) that any implementation must keep guarded, e.g. an explicit confirm step and never automatic on immutable/atomic distros (INSERTED)
