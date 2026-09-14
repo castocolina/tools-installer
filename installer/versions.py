@@ -28,6 +28,22 @@ _DECLARED_VERSION = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$")
 # unparseable, which is the point — see parse_version.
 _OBSERVED_VERSION = re.compile(r"^[vV]?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
 
+# Verified 2026-09-14: every installed registry tool's `--version` output was
+# run live on a real host during this phase's research (~50 tools). `jq` was
+# the ONLY tool whose output glues its own name onto the version with a
+# hyphen and no separating whitespace (`jq-1.8.1`) — the exact shape the
+# `_match_observed_version` fallback below exists for.
+#
+# Not covered: two other tools fail to parse for DIFFERENT reasons this
+# mechanism deliberately leaves alone. `procs`'s numeric core is preceded by
+# a double quote rather than a hyphen or whitespace, so
+# `_NAME_PREFIX_BOUNDARY`'s boundary character class never matches it.
+# `bash`'s extra characters follow the numeric core instead of preceding it
+# (`GNU bash, version 5.3.9(1)-release (...)`), so no leading-prefix strip
+# can reach them. Widening the boundary character class to catch either one
+# would reintroduce the free-substring-search false-positive risk this
+# mechanism was chosen over instead.
+#
 # Finds the LAST '-' or whitespace character immediately followed by a digit
 # or v/V. Greedy `.*` backtracks from the right, so it naturally prefers the
 # rightmost valid split point: `jq-1.8.1` isolates at "1.8.1" (the only '-'),
