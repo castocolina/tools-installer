@@ -400,6 +400,8 @@ def _capture_app(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
     seen: list[dict[str, object]] = []
 
     class _App:
+        install_summary = None
+
         def __init__(self, *_args: object, **kwargs: object) -> None:
             seen.append(dict(kwargs))
 
@@ -558,13 +560,13 @@ def test_daemon_default_is_wired_only_for_the_genuine_setup_wizard_entry_point(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """apply_daemon_default's ALLOWLIST gate (11-REVIEWS.md cycle 2 finding
-    #14): only the default/no-flag path (_select_catalog's own call site --
-    the genuine, normal interactive `make setup` wizard flow) ever wires a
-    real daemon_default callback into UnifiedApp. `--doctor` (read-only,
-    Makefile:19), `--uninstall`, and `--guard`'s interactive Policies view
-    must never auto-apply -- proven against _capture_app's own CAPTURED
-    kwargs, not merely that an injected callback was never invoked
-    (11-REVIEWS.md cycle 2 finding #20)."""
+    #14): only the default/no-flag path (_run_interactive_wizard's own call
+    site -- the genuine, normal interactive `make setup` wizard flow) ever
+    wires a real daemon_default callback into UnifiedApp. `--doctor`
+    (read-only, Makefile:19), `--uninstall`, and `--guard`'s interactive
+    Policies view must never auto-apply -- proven against _capture_app's
+    own CAPTURED kwargs, not merely that an injected callback was never
+    invoked (11-REVIEWS.md cycle 2 finding #20)."""
     _sandbox(monkeypatch, tmp_path)
     seen = _capture_app(monkeypatch)
     monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
@@ -1034,3 +1036,169 @@ def test_build_app_reresolve_reads_live_inventory_not_cache(
     second = updates._reresolve_ownership(tool)  # pyright: ignore[reportPrivateUsage]
     assert second.owner == "brew"
     assert second.current_version == "14.1.1"
+
+
+def test_interactive_main_never_calls_run_wizard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
+    seen = _capture_app(monkeypatch)
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("interactive path must not call run_wizard")
+
+    monkeypatch.setattr(setup, "run_wizard", boom)
+    assert setup.main([]) == 0
+    assert seen  # UnifiedApp was constructed
+
+
+def test_headless_all_never_constructs_unified_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("headless --all must not construct UnifiedApp")
+
+    rendered = _stub_install_run(
+        monkeypatch, Summary(installed=("fd",), already=(), failed=(), no_method=())
+    )
+    monkeypatch.setattr(setup, "_build_app", boom)
+    assert setup.main(["--all", "--yes"]) == 0
+    assert rendered == []
+
+
+def test_interactive_app_is_built_with_execute_and_daemon_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
+    seen = _capture_app(monkeypatch)
+    assert setup.main([]) == 0
+    assert seen[0]["execute"] is not None
+    assert callable(seen[0]["daemon_default"])
+
+
+def test_execute_inputs_wire_path_calls_configure_path_and_returns_captured_text(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    def fake_configure_path(tools: object, console: Console, **kwargs: object) -> None:
+        captured.append({"tools": tools, "console": console, **kwargs})
+        console.print("PATH configured")
+
+    monkeypatch.setattr(setup, "configure_path", fake_configure_path)
+    monkeypatch.setattr(setup, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
+    monkeypatch.setattr(setup, "_MYSHELLRC", tmp_path / ".myshellrc")
+    monkeypatch.setattr(setup, "_SHELL", "/bin/zsh")
+    inputs = setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
+        [], _platform(), link_mode="single", unattended=True
+    )
+    text = inputs.wire_path()
+    assert "PATH configured" in text
+    assert captured
+    assert captured[0]["link_mode"] == "single"
+    rc_paths = captured[0]["rc_paths"]
+    assert isinstance(rc_paths, list)
+    assert all(isinstance(path, Path) for path in rc_paths)
+
+
+def test_execute_inputs_verify_calls_run_doctor_and_returns_captured_text(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    def fake_run_doctor(tools: object, console: Console, **kwargs: object) -> object:
+        captured.append({"tools": tools, "console": console, **kwargs})
+        console.print("PATH audit")
+        return object()
+
+    monkeypatch.setattr(setup, "run_doctor", fake_run_doctor)
+    monkeypatch.setattr(setup, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
+    inputs = setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
+        [], _platform(), link_mode="centralized", unattended=False
+    )
+    text = inputs.verify()
+    assert "PATH audit" in text
+    assert captured
+    assert captured[0]["path_value"] == os.environ.get("PATH", "")
+    assert captured[0]["exists"] is Path.is_dir
+
+
+def test_interactive_none_summary_prints_aborted_and_returns_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
+    buffer = io.StringIO()
+    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
+    _capture_app(monkeypatch)
+    assert setup.main([]) == 0
+    assert "Aborted." in buffer.getvalue()
+
+
+def test_interactive_failed_summary_renders_troubleshooting_and_returns_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
+    rendered: list[str] = []
+    monkeypatch.setattr(setup, "render_troubleshooting", lambda _console: rendered.append("shown"))
+    monkeypatch.setattr(setup, "clean_rc_duplicates", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(setup, "collect_bin_dirs", lambda *_args, **_kwargs: [])
+
+    class _FailedApp:
+        install_summary = Summary(installed=(), already=(), failed=("rg",), no_method=())
+
+        def run(self) -> None:
+            return None
+
+    monkeypatch.setattr(setup, "_build_app", lambda *_args, **_kwargs: _FailedApp())
+    assert setup.main([]) == 1
+    assert rendered == ["shown"]
+
+
+def test_interactive_clean_summary_returns_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
+    rendered: list[str] = []
+    monkeypatch.setattr(setup, "render_troubleshooting", lambda _console: rendered.append("shown"))
+    monkeypatch.setattr(setup, "clean_rc_duplicates", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(setup, "collect_bin_dirs", lambda *_args, **_kwargs: [])
+
+    class _CleanApp:
+        install_summary = Summary(installed=("rg",), already=(), failed=(), no_method=())
+
+        def run(self) -> None:
+            return None
+
+    monkeypatch.setattr(setup, "_build_app", lambda *_args, **_kwargs: _CleanApp())
+    assert setup.main([]) == 0
+    assert rendered == []
+
+
+def test_interactive_path_cleans_rc_duplicates_without_re_running_doctor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
+    cleaned: list[str] = []
+    doctors: list[str] = []
+    monkeypatch.setattr(
+        setup,
+        "clean_rc_duplicates",
+        lambda *_args, **_kwargs: cleaned.append("cleaned") or {},
+    )
+    monkeypatch.setattr(setup, "run_doctor", lambda *_args, **_kwargs: doctors.append("doctor"))
+    monkeypatch.setattr(setup, "collect_bin_dirs", lambda *_args, **_kwargs: [])
+
+    class _CleanApp:
+        install_summary = Summary(installed=("rg",), already=(), failed=(), no_method=())
+
+        def run(self) -> None:
+            return None
+
+    monkeypatch.setattr(setup, "_build_app", lambda *_args, **_kwargs: _CleanApp())
+    assert setup.main([]) == 0
+    assert cleaned == ["cleaned"]
+    assert doctors == []

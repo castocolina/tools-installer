@@ -34,7 +34,8 @@ from installer.app import (
     run_uninstall,
     run_wizard,
 )
-from installer.cli import parse_args
+from installer.cli import Options, parse_args
+from installer.execute_screen import ExecuteInputs
 from installer.locations import all_ban_rc_paths, ban_rc_paths, rc_paths_for_mode, zshrc_path
 from installer.model import Tool, load_categories, load_tools
 from installer.omz import omz_present
@@ -371,6 +372,7 @@ def _build_app(
     initial_view: str = BASE_VIEW,
     link_mode: str = "centralized",
     apply_daemon_default: bool = False,
+    execute: ExecuteInputs | None = None,
 ) -> UnifiedApp:
     installed = {tool.id: is_installed(tool) for tool in tools}
     unavailable = {tool.id: not platform_could_support(tool, platform) for tool in tools}
@@ -520,12 +522,12 @@ def _build_app(
     # wrongly auto-apply for "doctor"/"policies" too (11-REVIEWS.md cycle 2
     # finding #14) -- make doctor is documented read-only (Makefile:19), and
     # --guard/--unguard's interactive branch must not silently register a
-    # background deletion LaunchAgent either. Only _select_catalog's own call
-    # site (the genuine, normal interactive make setup wizard flow) passes
-    # apply_daemon_default=True. The daemon Policy object itself is still
-    # appended to policy_inputs.policies above regardless of this flag, so it
-    # remains visible/toggleable from every entry point -- only the ON-BY-
-    # DEFAULT CALLBACK is gated here.
+    # background deletion LaunchAgent either. Only _run_interactive_wizard's
+    # own call site (the genuine, normal interactive make setup wizard flow)
+    # passes apply_daemon_default=True. The daemon Policy object itself is
+    # still appended to policy_inputs.policies above regardless of this flag,
+    # so it remains visible/toggleable from every entry point -- only the
+    # ON-BY-DEFAULT CALLBACK is gated here.
     daemon_default = None
     daemon_default_policy_id = None
     if daemon is not None and apply_daemon_default:
@@ -590,12 +592,88 @@ def _build_app(
         daemon_default_policy_id=daemon_default_policy_id,
         version_refresh=version_refresh,
         updates=updates,
+        execute=execute,
     )
 
 
-def _select_catalog(tools: list[Tool], *, link_mode: str = "centralized") -> list[str] | None:
+def _execute_inputs(
+    tools: list[Tool],
+    platform: Platform,
+    *,
+    link_mode: str,
+    unattended: bool,
+) -> ExecuteInputs:
+    rc_paths = rc_paths_for_mode(link_mode, _SHELL)
+
+    def wire_path() -> str:
+        buffer = io.StringIO()
+        configure_path(
+            tools,
+            Console(file=buffer),
+            platform=platform,
+            default_bin_dir=_DEFAULT_BIN_DIR,
+            myshellrc_path=_MYSHELLRC,
+            rc_paths=rc_paths,
+            link_mode=link_mode,
+        )
+        return buffer.getvalue()
+
+    def verify() -> str:
+        buffer = io.StringIO()
+        run_doctor(
+            tools,
+            Console(file=buffer),
+            platform=platform,
+            default_bin_dir=_DEFAULT_BIN_DIR,
+            path_value=os.environ.get("PATH", ""),
+            exists=Path.is_dir,
+        )
+        return buffer.getvalue()
+
+    return ExecuteInputs(
+        catalog=tools,
+        platform=platform,
+        wire_path=wire_path,
+        verify=verify,
+        unattended=unattended,
+    )
+
+
+def _run_interactive_wizard(
+    tools: list[Tool],
+    platform: Platform,
+    console: Console,
+    options: Options,
+    *,
+    link_mode: str,
+) -> int:
     with _stdin_on_tty():
-        return _build_app(tools, detect(), link_mode=link_mode, apply_daemon_default=True).run()
+        # Only the genuine interactive wizard flow auto-applies the daemon
+        # default (allowlist at the _build_app call site).
+        app = _build_app(
+            tools,
+            platform,
+            link_mode=link_mode,
+            apply_daemon_default=True,
+            execute=_execute_inputs(tools, platform, link_mode=link_mode, unattended=options.yes),
+        )
+        app.run()
+    summary = app.install_summary
+    if summary is None:
+        console.print("Aborted.")
+        return 0
+    # run_doctor is deliberately NOT re-run here: the app already rendered
+    # the read-only audit inside the execute screen. clean_rc_duplicates
+    # stays on the console per 13-RESEARCH.md assumption A1 — it is a
+    # separate destructive action with a confirm, and rebuilding it as a
+    # third in-app confirm surface is out of scope.
+    managed = set(collect_bin_dirs(tools, platform, _DEFAULT_BIN_DIR))
+    confirm = (lambda _message: True) if options.yes else _ask_confirm
+    clean_rc_duplicates(_RC_PATHS, managed, os.environ, console, confirm=confirm)
+    if summary.failed or summary.mismatched or summary.dependency_failed:
+        render_troubleshooting(console)
+        return 1
+    return 0
 
 
 def _resolve_link_mode(link_mode_option: str | None) -> str:
@@ -758,9 +836,11 @@ def main(argv: list[str]) -> int:
     prompter = CallbackPrompter(ask_checkbox=_ask_checkbox, ask_confirm=_ask_confirm)
     # Resolved once, before the catalog/Policies TUI opens: that same UnifiedApp
     # instance's Policies screen is where a tweak could be toggled mid-session,
-    # so link_mode must be real BEFORE _select_catalog builds it, not only
-    # before the later configure_path call.
+    # so link_mode must be real BEFORE the interactive app is built, not only
+    # before the later configure_path call on the headless path.
     link_mode = _resolve_link_mode(options.link_mode)
+    if not options.all and not options.categories:
+        return _run_interactive_wizard(tools, platform, console, options, link_mode=link_mode)
     summary = run_wizard(
         tools,
         platform,
@@ -769,7 +849,6 @@ def main(argv: list[str]) -> int:
         options,
         on_mismatch=_ask_mismatch,
         category_blurbs=load_categories(_REGISTRY),
-        select_catalog=lambda catalog_tools: _select_catalog(catalog_tools, link_mode=link_mode),
     )
     if summary is None:
         console.print("Aborted.")
