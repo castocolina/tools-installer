@@ -7,6 +7,8 @@ from collections import deque
 from collections.abc import Callable, Collection, Mapping
 from typing import Protocol, runtime_checkable
 
+from installer.sanitize import sanitize_log_line
+
 # An executor calls a Runner with an argv list. The runner raises CommandError on failure.
 Runner = Callable[[list[str]], None]
 # A caller that needs to READ a command's answer rather than only run it.
@@ -157,7 +159,7 @@ class StreamingRunner:
                 for raw in stdout:
                     line = raw.rstrip("\n")
                     self._emit(self._current(), line)
-                    tail.append(line)
+                    tail.append(sanitize_log_line(line))
             returncode = proc.wait()
         finally:
             # Drain then reap. Read remaining stdout to EOF and wait; never

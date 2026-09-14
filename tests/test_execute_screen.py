@@ -26,7 +26,7 @@ from installer.execute_screen import (
 )
 from installer.model import Method, Tool
 from installer.platform import Platform
-from installer.run import Runner
+from installer.run import CommandError, Runner
 from installer.session import Install
 from installer.uninstall import SweepResult
 from installer.versions import TagResolver
@@ -1044,6 +1044,51 @@ async def test_post_run_log_carries_every_renderer_in_wizard_order() -> None:
         assert screen.status.text != ""
         assert "catalog" in screen.status.text.lower()
         assert "enter" in screen.status.text.lower() or "esc" in screen.status.text.lower()
+
+
+def _ansi_bomb_install() -> Install:
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools
+        error = CommandError(
+            [tool.id, "--install"], 1, detail="normal output\x1b[2J\x1b[31mred\x1b]0;pwned\x07"
+        )
+        return InstallOutcome(tool.id, "failed", errors=(error,))
+
+    return install
+
+
+async def test_failed_install_report_never_carries_raw_escape_sequences() -> None:
+    """CR-01 regression: sanitize_log_line must run on the FAILURE path too.
+
+    Streaming output already went through sanitize_log_line
+    (test_streamed_lines_are_html_escaped_and_control_stripped); this pins the
+    second, previously-unsanitized route — CommandError.detail -> InstallOutcome.errors
+    -> render_failure_details -> the post-run report written into the log.
+    """
+    tools = [_tool("fd")]
+    inputs = _inputs(tools=tools, install=_ansi_bomb_install())
+    app = _host(inputs, tools)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        assert "\x1b" not in log
+        assert "\x07" not in log
+        assert "normal output" in log
+        assert "red" in log
+        assert "pwned" in log
 
 
 async def test_wire_path_oserror_names_the_section_and_still_finishes() -> None:

@@ -42,6 +42,7 @@ from installer.render import (
 )
 from installer.resolve import resolve_methods
 from installer.run import Runner, StreamingRunner
+from installer.sanitize import sanitize_log_line
 from installer.selection import select_tools
 from installer.session import (
     Install,
@@ -55,8 +56,6 @@ from installer.status import is_installed
 from installer.ui_common import SEVERITY_STYLE, StatusLine, run_live
 from installer.versions import TagResolver, resolve_github_tag
 
-_C0_EXCEPT_TAB = frozenset(range(32)) - {9}
-_DEL = 127
 _MISMATCH_CHOICES: frozenset[str] = frozenset({"retry", "skip", "fallback"})
 _DISMISSAL_SKIP = "{tool_id}: checksum-mismatch prompt dismissed; the tool was therefore skipped."
 _EXECUTE_KEYS = (
@@ -75,17 +74,6 @@ _PROGRESS_GLYPH: dict[ProgressState, tuple[str, str, str]] = {
     "not-done": ("✖", SEVERITY_STYLE[Severity.ERROR], "not done"),
     "skipped": ("○", "dim", "not attempted"),
 }
-
-
-def sanitize_log_line(line: str) -> str:
-    """Strip ASCII control characters other than tab from child-process output.
-
-    An install script's escape sequences must not be able to reposition the
-    cursor or recolour the running frame.
-    """
-    return "".join(
-        ch for ch in line if ord(ch) != _DEL and (ord(ch) not in _C0_EXCEPT_TAB or ch == "\t")
-    )
 
 
 class ChecksumMismatchScreen(ModalScreen[str | None]):
@@ -561,4 +549,8 @@ class ExecuteScreen(ModalScreen[None]):
     def _render_captured(self, render: Callable[[Console], None]) -> str:
         buffer = io.StringIO()
         render(Console(file=buffer, width=80, no_color=True))
-        return buffer.getvalue()
+        # Defense-in-depth: render() prints outcome.errors, which carries
+        # untrusted child-process output (CommandError.detail). run.py
+        # already sanitizes its own tail; this catches any other producer
+        # that writes into the report console without going through it.
+        return sanitize_log_line(buffer.getvalue())

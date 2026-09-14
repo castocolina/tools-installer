@@ -15,6 +15,7 @@ from installer.enums import InstallStatus
 from installer.guidance import Guidance, doctor_guidance, guard_guidance, node_globals_guidance
 from installer.links import TROUBLESHOOTING_URL
 from installer.pnpm_globals import NodeGlobalsReport
+from installer.sanitize import sanitize_log_line
 from installer.session import Summary
 from installer.ui_common import SEVERITY_STYLE
 
@@ -82,7 +83,7 @@ def render_failure_details(outcomes: list[InstallOutcome], console: Console) -> 
         if outcome.status is not InstallStatus.FAILED:
             continue
         detail = str(outcome.errors[-1]) if outcome.errors else "no method succeeded"
-        console.print(f"[red]✗ {outcome.tool_id} failed: {escape(detail)}[/]")
+        console.print(f"[red]✗ {outcome.tool_id} failed: {escape(sanitize_log_line(detail))}[/]")
 
 
 def render_skipped(outcomes: list[InstallOutcome], console: Console) -> None:
