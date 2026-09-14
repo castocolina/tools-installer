@@ -1838,7 +1838,9 @@ category = "search"
 cmd = "ast-grep"
 priority = "P3"
 audience = "both"
-tier = "user"
+# Same category = "search" family as rg/fd, both already tier = "ai": a
+# structural-search tool an agent invokes, not one the human types (D-07).
+tier = "ai"
 desc = "Fast structural search, lint, and rewrite tool for code"
 # The zip bundles both `sg` and `ast-grep`; we install `ast-grep` (the `sg`
 # short alias collides with the system setgroups tool).
@@ -2403,7 +2405,9 @@ category = "dev"
 cmd = "puppeteer"
 priority = "P3"
 audience = "both"
-tier = "user"
+# Runtime dependency of mmdc, never launched by the human directly — its own
+# desc above already says so (D-08).
+tier = "ai"
 desc = "Headless-Chrome automation library; downloads its own Chrome and chrome-headless-shell. Required at runtime by mmdc."
 requires = ["pnpm"]
 [[tool.method]]

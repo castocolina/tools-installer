@@ -274,3 +274,61 @@ def test_catalog_footer_actions_match_effective_bindings() -> None:
             if len(token) == 1:
                 action_keys.add(token)
     assert shown == action_keys
+
+
+def test_ai_tab_comment_only_cites_ai_tier_tools() -> None:
+    """D-10: the AI tab's own source comment, and the palette copy the user
+    reads in ctrl+p, must each cite only tools that are tier="ai" today --
+    re-derived from the live registry so the comment cannot drift again."""
+    import re
+    from pathlib import Path
+
+    import installer.ui_common as ui_common_module
+    from installer.model import load_tools
+    from installer.ui_common import VIEW_BY_NAME
+
+    registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+    backtick = chr(96)
+    source = Path(ui_common_module.__file__).read_text()
+    block = source.split('name="ai"')[1].split("palette=")[0]
+    comment = "\n".join(line.strip() for line in block.splitlines() if line.strip().startswith("#"))
+    assert comment, "the AI view row carries no comment at all"
+
+    tiers = {tool.id: tool.tier for tool in load_tools(registry)}
+
+    # Positive contract: every backticked token in the comment that is a
+    # registry id must be an example this tab actually contains.
+    cited = {
+        token
+        for token in re.findall(f"{backtick}([^{backtick}]+){backtick}", comment)
+        if token in tiers
+    }
+    assert len(cited) >= 2, sorted(cited)
+    assert all(tiers[tool_id] == "ai" for tool_id in cited), sorted(
+        tool_id for tool_id in cited if tiers[tool_id] != "ai"
+    )
+
+    ai_view = VIEW_BY_NAME["ai"]
+
+    # Residual sweep: an UNBACKTICKED catalog id in the comment or palette
+    # would mean the claim drifted back without being marked as a citation.
+    # Restricted to ids of 5+ characters, minus the longer ids that are also
+    # ordinary English words -- a whole-word sweep over every short id would
+    # fail an honest comment (`just`, `git`, `bat`, `sd`, `pi` are all <5
+    # chars and excluded by the length floor alone).
+    english_collisions = {"watch", "delta", "container", "superpowers"}
+    words = {
+        word.strip(".,:;()[]")
+        for word in re.split(r"[^A-Za-z0-9._+-]+", comment + " " + ai_view.palette)
+    }
+    loose = {
+        tool_id
+        for tool_id in tiers
+        if len(tool_id) >= 5 and tool_id not in english_collisions and tool_id in words
+    }
+    bad = sorted(tool_id for tool_id in cited | loose if tiers[tool_id] != "ai")
+    assert not bad, bad
+
+    # The palette is the ctrl+p copy the user reads -- same claim, same gate.
+    assert ai_view.palette.startswith("AI - ")
+    assert "agents you run" not in ai_view.palette

@@ -3,13 +3,13 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: 15
 current_phase_name: catalog-accuracy-doctor-refresh-version-parsing-ownership-at
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 15-02-PLAN.md
-last_updated: "2026-09-14T22:56:07.072Z"
+stopped_at: Completed 15-03-PLAN.md
+last_updated: "2026-09-14T23:01:01.286Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 14 complete, transitioned to Phase 15
-state_head: a2f248810d8323aa2b1a70876c03b395fd6d3913
+state_head: 303ffd477329d091122da54cef807b41beabcc4d
 progress:
   total_phases: 19
   completed_phases: 12
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 15 (catalog-accuracy-doctor-refresh-version-parsing-ownership-at) — EXECUTING
-Current Plan: 3
+Current Plan: 4
 Total Plans in Phase: 5
 Status: Ready to execute
 Last activity: 2026-09-14 — Phase 14 complete, transitioned to Phase 15
@@ -84,6 +84,7 @@ Progress: [█████████░] 88%
 | Phase 14 P01 | 36 min | 3 tasks | 5 files |
 | Phase 15 P01 | 15min | 2 tasks | 2 files |
 | Phase 15 P02 | 10min | 2 tasks | 2 files |
+| Phase 15 P03 | 13min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -132,6 +133,7 @@ Recent decisions affecting current work:
 - [Phase 15]: 15-01: action_apply's guidance refresh is unconditional (never success-gated), matching the three sibling call sites
 - [Phase 15]: 15-01: the frozen-PATH note lives only in wizard_app.py's applied branch, not in the pure installer/guidance.py layer
 - [Phase 15]: [15-02, 2026-09-14]: D-03 shared _match_observed_version fallback wired into both parse_version and parse_status_version in the same commit (avoids Pitfall 1's one-sided fix); D-04 registry-wide audit recorded as a dated, test-protected comment in installer/versions.py naming jq as fixed and procs/bash as intentionally-uncovered residuals
+- [Phase 15]: [15-03, 2026-09-14]: ast-grep/puppeteer moved user->ai tier (D-07/D-08); D-09 borderline (mmdc/gitleaks/vale/drawio-cli stay user) pinned by a dedicated group test; AI-tab comment+palette rewritten to cite only ai-tier tools via a backtick-citation gate (D-10)
 
 ### Pending Todos
 
@@ -163,6 +165,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-14T22:56:06.937Z
-Stopped at: Completed 15-02-PLAN.md
+Last session: 2026-09-14T23:01:01.145Z
+Stopped at: Completed 15-03-PLAN.md
 Resume file: None
