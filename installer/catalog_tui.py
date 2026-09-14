@@ -192,7 +192,9 @@ class CatalogScreen(AppScreen):
 
     class Decided(Message):
         """The user resolved the catalog: `result` is the selected ids in catalog
-        order, or None when aborted. The host app forwards it to App.exit."""
+        order, or None when aborted. The host app forwards it to App.exit when
+        `execute=` is omitted; with `execute=` set it pushes an ExecuteScreen
+        instead (and still exits on abort)."""
 
         def __init__(self, result: list[str] | None) -> None:
             super().__init__()

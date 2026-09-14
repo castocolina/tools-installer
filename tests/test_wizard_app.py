@@ -11,6 +11,8 @@ from installer import daemon
 from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
+from installer.engine import ChecksumPolicy, InstallOutcome
+from installer.execute_screen import ExecuteInputs, ExecuteScreen
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import ManagerInventory, ManagerOwnership, Owner, OwnershipCandidate
@@ -24,12 +26,13 @@ from installer.policy import (
     ensure_daemon_default,
     omz_plugins_policy,
 )
-from installer.run import CommandError
+from installer.run import CommandError, Runner
+from installer.session import Install, Summary
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, ToolRow
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import VersionRefreshService, VersionStatus
-from installer.versions import VersionError
+from installer.versions import TagResolver, VersionError
 from installer.wizard_app import (
     VIEW_ORDER,
     ConfirmUninstall,
@@ -163,6 +166,7 @@ def _app(
     initial_view: str = BASE_VIEW,
     daemon_default: Callable[[], bool] | None = None,
     daemon_default_policy_id: str | None = None,
+    execute: ExecuteInputs | None = None,
 ) -> UnifiedApp:
     tools = [_tool("rg"), _tool("fd")]
     installed: Mapping[str, bool] = {"rg": True, "fd": False}
@@ -183,6 +187,7 @@ def _app(
         initial_view=initial_view,
         daemon_default=daemon_default,
         daemon_default_policy_id=daemon_default_policy_id,
+        execute=execute,
     )
 
 
@@ -3785,3 +3790,112 @@ async def test_update_runs_off_the_event_loop_with_no_confirmation(tmp_path: Pat
         release.set()
         await _settle_update(app, pilot)
         assert len(app.screen_stack) == depth
+
+
+def _execute_inputs(
+    *,
+    install: Install | None = None,
+) -> ExecuteInputs:
+    def _ok_install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools
+        return InstallOutcome(tool.id, "installed")
+
+    return ExecuteInputs(
+        catalog=[_tool("rg"), _tool("fd")],
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        wire_path=lambda: "PATH wired",
+        verify=lambda: "PATH verified",
+        installed=lambda _tool: False,
+        install=install if install is not None else _ok_install,
+    )
+
+
+async def _settle_execute_screen(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> None:
+    for _ in range(400):
+        screen = app.screen
+        if isinstance(screen, ExecuteScreen) and screen.finished:
+            break
+        await pilot.pause()
+    await pilot.pause()
+
+
+async def test_accepting_the_catalog_with_execute_pushes_the_screen_and_keeps_running() -> None:
+    app = _app(execute=_execute_inputs())
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.catalog.selected.add("rg")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        assert app.is_running is True
+        screen = app.screen
+        assert screen.started is False
+
+
+async def test_accepting_the_catalog_without_execute_still_exits_with_ids() -> None:
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.catalog.selected.add("rg")
+        await pilot.press("enter")
+    assert app.return_value == ["rg"]
+
+
+async def test_escape_after_completion_returns_to_an_empty_catalog() -> None:
+    app = _app(execute=_execute_inputs())
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.catalog.selected.add("rg")
+        await pilot.press("enter")
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, CatalogScreen)
+        assert app.catalog.selected == set()
+
+
+async def test_two_runs_accumulate_failures_into_install_summary() -> None:
+    outcomes: list[str] = ["failed", "installed"]
+
+    def sequenced(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools
+        return InstallOutcome(tool.id, outcomes.pop(0))
+
+    app = _app(execute=_execute_inputs(install=sequenced))
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.catalog.selected.add("rg")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        first = app.install_summary
+        assert first is not None
+        assert first.failed == ("rg",)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, CatalogScreen)
+        app.catalog.selected.add("fd")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        merged = app.install_summary
+        assert merged is not None
+        assert merged.failed == ("rg",)
+        assert merged.installed == ("fd",)
+        assert isinstance(merged, Summary)

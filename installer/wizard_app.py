@@ -30,11 +30,13 @@ from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
 from installer.enums import Tier, UninstallState
+from installer.execute_screen import ExecuteInputs, ExecuteScreen, InstallRunFinished
 from installer.guidance import Guidance, doctor_guidance, guard_guidance, node_globals_guidance
 from installer.model import Tool
 from installer.pnpm_globals import NodeGlobalsReport, reinstall_preview
 from installer.policy import Policy, PolicyResult
 from installer.render import guidance_text
+from installer.session import Summary
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import (
     BASE_VIEW,
@@ -1450,9 +1452,14 @@ class UnifiedApp(App[list[str] | None]):
         daemon_default_policy_id: str | None = None,
         version_refresh: VersionRefreshService | None = None,
         updates: UpdateService | None = None,
+        execute: ExecuteInputs | None = None,
     ) -> None:
         super().__init__()
         self._staged: set[str] = set()
+        self._execute = execute
+        # The exit code answers "did everything this session asked for succeed",
+        # not "did the last thing succeed" — merge each run field-wise in order.
+        self.install_summary: Summary | None = None
         self._version_refresh = version_refresh
         self._updates = updates
         self._catalogs: dict[str, CatalogScreen] = {
@@ -1473,7 +1480,7 @@ class UnifiedApp(App[list[str] | None]):
         self._views: dict[str, AppScreen] = {
             name: screen for name, screen in self._catalogs.items() if name != BASE_VIEW
         }
-        # Nine UnifiedApp(...) constructions exist outside setup.py. Required
+        # Fifteen UnifiedApp(...) constructions exist outside setup.py. Required
         # kwargs would TypeError at every one of them; those modules are
         # deliberately not edited here. The cost of the default is that a
         # UnifiedApp built without the closures silently reports a healthy set,
@@ -1667,7 +1674,32 @@ class UnifiedApp(App[list[str] | None]):
             await self.show_view(name)
 
     def on_catalog_screen_decided(self, message: CatalogScreen.Decided) -> None:
-        self.exit(message.result)
+        if self._execute is None or message.result is None:
+            self.exit(message.result)
+            return
+        self.push_screen(ExecuteScreen(message.result, self._execute), self._install_closed)
+
+    def _install_closed(self, _result: None) -> None:
+        self._staged.clear()
+
+    def on_install_run_finished(self, message: InstallRunFinished) -> None:
+        incoming = message.summary
+        existing = self.install_summary
+        if existing is None:
+            self.install_summary = incoming
+            return
+        # Exit code answers "did everything this session asked for succeed",
+        # not "did the last thing succeed" — do not simplify this back to an
+        # assignment.
+        self.install_summary = Summary(
+            installed=existing.installed + incoming.installed,
+            already=existing.already + incoming.already,
+            failed=existing.failed + incoming.failed,
+            no_method=existing.no_method + incoming.no_method,
+            mismatched=existing.mismatched + incoming.mismatched,
+            dependency_failed=existing.dependency_failed + incoming.dependency_failed,
+            manual_required=existing.manual_required + incoming.manual_required,
+        )
 
     def action_abort(self) -> None:
         # The soft quit (q). Guarded so a priority q binding does not quit out from
