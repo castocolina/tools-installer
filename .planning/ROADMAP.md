@@ -504,11 +504,23 @@ Plans:
 
 ### Phase 15: Catalog accuracy: Doctor refresh, version parsing, ownership attribution, tier fixes: four related 'the catalog/doctor shows something untrue' bugs. (1) Doctor's fix action applies successfully but the screen shows stale pre-fix guidance next to the success line, because DoctorScreen.action_apply never calls _refresh_guidance() after a successful fix -- fix the refresh call, and make the (deliberately frozen-until-shell-restart) PATH check's messaging explicit instead of looking broken. (2) Version detection shows 'unknown' for tools whose --version output isn't a bare semver (jq prints 'jq-1.8.1', confirmed live) due to an anchored regex in installer/versions.py's _OBSERVED_VERSION -- fix the extraction and audit the registry for other tools with a similar non-standard --version format. (3) Real OS-package-manager ownership detection (dnf/apt/pacman via rpm -q/dpkg-query/pacman -Qq) already exists and works in installer/install_ownership.py but is fully disconnected from the running app (installer/ownership.py and version_status.py never call it, and always resolve such tools to owner=unknown) -- wire it into the live ownership-resolution path, and add detection for Bazzite's rpm-ostree/just-layering equivalent, which has none today. (4) A few registry tools still look tier-misclassified under this session's corrected tier definition: ast-grep (tier=user, but same family as rg/fd which are tier=ai) and puppeteer (tier=user, but is a runtime library dependency of mmdc, not human-driven) are the clearest; mmdc/gitleaks/vale/drawio-cli are borderline and worth a second look. Also fix installer/ui_common.py's stale AI-tab comment still describing claude/codex as living in that tier (they moved to user tier earlier this session) (INSERTED)
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Everything the catalog and Doctor assert about a tool is true: the Doctor screen renders post-fix state and says which part of it cannot move yet, a tool that prints its version in its own format is read rather than shown as unknown, a tool the OS package manager owns is attributed to that manager and cleanly refused by the update action instead of silently mutated or mislabelled, and each of the three tier tabs lists exactly what its own definition says it lists.
+**Requirements**: D-01, D-02, D-03, D-04, D-05, D-06, D-07, D-08, D-09, D-10 (CONTEXT.md decision IDs; this phase has no REQUIREMENTS.md ids, matching Phase 14's precedent)
 **Depends on:** Phase 12
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 15 to break down)
+**Wave 1** *(parallel — disjoint files)*
+
+- [ ] 15-01-PLAN.md — Doctor refresh ordering and the conditional frozen-PATH note (D-01, D-02)
+- [ ] 15-02-PLAN.md — Shared name-prefix version fallback in both parsers, plus the recorded registry audit (D-03, D-04)
+- [ ] 15-03-PLAN.md — ast-grep/puppeteer tier corrections, the pinned tier tripwires, and the AI-tab comment (D-07..D-10)
+
+**Wave 2** *(blocked on Wave 1: shares registry.toml and tests/test_registry.py with 15-03)*
+
+- [ ] 15-04-PLAN.md — rpm-ostree ownership probe, OWNER_PROBES schema, and owner_probes on the ten native-manager rows (D-06, D-05)
+
+**Wave 3** *(blocked on Wave 2: consumes the probe and the registry opt-in)*
+
+- [ ] 15-05-PLAN.md — Native-owner adapter in resolve_ownership, widened Owner, update refusal branch, production wiring, catalog label (D-05)
