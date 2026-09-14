@@ -30,7 +30,16 @@ from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
 from installer.enums import InstallStatus, Severity
 from installer.model import Tool
 from installer.platform import Platform
-from installer.render import render_audit, render_dependency_notice, render_summary
+from installer.render import (
+    render_audit,
+    render_dependency_notice,
+    render_failure_details,
+    render_handoff,
+    render_postinstall_warnings,
+    render_skipped,
+    render_summary,
+    render_verification,
+)
 from installer.resolve import resolve_methods
 from installer.run import Runner, StreamingRunner
 from installer.selection import select_tools
@@ -226,6 +235,8 @@ class InstallRunFinished(Message):
         path_text: str,
         verify_text: str,
         error: str | None,
+        path_error: str | None = None,
+        verify_error: str | None = None,
     ) -> None:
         self.summary = summary
         self.outcomes = outcomes
@@ -233,6 +244,8 @@ class InstallRunFinished(Message):
         self.path_text = path_text
         self.verify_text = verify_text
         self.error = error
+        self.path_error = path_error
+        self.verify_error = verify_error
         super().__init__()
 
 
@@ -382,6 +395,8 @@ class ExecuteScreen(ModalScreen[None]):
         path_text = ""
         verify_text = ""
         error: str | None = None
+        path_error: str | None = None
+        verify_error: str | None = None
         try:
 
             def emit(tool_id: str, line: str) -> None:
@@ -412,21 +427,32 @@ class ExecuteScreen(ModalScreen[None]):
                 summary = summarize(outcomes)
                 seen = {outcome.tool_id for outcome in outcomes}
                 not_attempted = [tool.id for tool in self._ordered if tool.id not in seen]
-                path_result, path_error = run_live(self._inputs.wire_path)
+                path_result, path_fail = run_live(self._inputs.wire_path)
                 if path_result is None:
+                    path_error = path_fail
                     if error is None:
-                        error = path_error
+                        error = path_fail
                 else:
                     path_text = path_result
-                verify_result, verify_error = run_live(self._inputs.verify)
+                verify_result, verify_fail = run_live(self._inputs.verify)
                 if verify_result is None:
+                    verify_error = verify_fail
                     if error is None:
-                        error = verify_error
+                        error = verify_fail
                 else:
                     verify_text = verify_result
         finally:
             self.post_message(
-                InstallRunFinished(summary, outcomes, not_attempted, path_text, verify_text, error)
+                InstallRunFinished(
+                    summary,
+                    outcomes,
+                    not_attempted,
+                    path_text,
+                    verify_text,
+                    error,
+                    path_error,
+                    verify_error,
+                )
             )
 
     def _should_continue(self) -> bool:
@@ -482,17 +508,32 @@ class ExecuteScreen(ModalScreen[None]):
             self._progress[tool_id] = "skipped"
         self._refresh_progress()
         log = self.query_one("#execute-log", RichLog)
-        log.write(self._render_captured(lambda console: render_summary(message.summary, console)))
+
+        def render_report(console: Console) -> None:
+            render_summary(message.summary, console)
+            render_failure_details(message.outcomes, console)
+            render_skipped(message.outcomes, console)
+            render_handoff(message.outcomes, console)
+            render_postinstall_warnings(message.outcomes, console)
+            render_verification(message.outcomes, console)
+
+        log.write(self._render_captured(render_report))
         if message.not_attempted:
             log.write("Not attempted: " + ", ".join(message.not_attempted))
         if message.path_text:
+            log.write("PATH wiring")
             log.write(message.path_text)
+        elif message.path_error:
+            log.write(f"PATH wiring could not be completed: {message.path_error}")
         if message.verify_text:
+            log.write("PATH audit")
             log.write(message.verify_text)
-        if message.error:
+        elif message.verify_error:
+            log.write(f"PATH audit could not be completed: {message.verify_error}")
+        if message.error and not message.path_error and not message.verify_error:
             log.write(message.error)
-        self.status.set("Done. enter or esc to return.", "ok")
-        self.query_one("#execute-keys", Static).update("enter / esc return")
+        self.status.set("Done. enter or esc returns to the catalog.", "ok")
+        self.query_one("#execute-keys", Static).update("enter / esc return to catalog")
         # Do not event.stop(): this message must keep bubbling to UnifiedApp,
         # which records the summary for the process exit code. A future stop()
         # added for tidiness would silently break that exit code.

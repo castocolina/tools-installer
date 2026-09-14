@@ -465,7 +465,12 @@ def _mismatch_then_ok() -> tuple[list[tuple[str, str]], Install]:
         del platform, runner, resolve_tag, tools
         seen.append((tool.id, checksum_policy))
         if len([row for row in seen if row[0] == tool.id]) == 1 and checksum_policy == "fail":
-            return InstallOutcome(tool.id, "checksum-mismatch", method_kind="github_release")
+            return InstallOutcome(
+                tool.id,
+                "checksum-mismatch",
+                method_kind="github_release",
+                errors=(RuntimeError("checksum mismatch"),),
+            )
         return InstallOutcome(tool.id, "installed", method_kind="github_release")
 
     return seen, install
@@ -958,3 +963,105 @@ async def test_execute_keys_names_escape_c_and_ctrl_c_with_distinct_meanings() -
         assert "leave" in keys or "does not" in keys
         assert "between" in keys or "in-flight" in keys or "in flight" in keys
         assert "half-installed" in keys or "half installed" in keys
+
+
+def _mixed_report_install() -> Install:
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools
+        if tool.id == "rg":
+            return InstallOutcome(tool.id, "installed", method_kind="github_release", verified=True)
+        if tool.id == "fd":
+            return InstallOutcome(tool.id, "failed", errors=(RuntimeError("disk exploded"),))
+        if tool.id == "pi":
+            return InstallOutcome(
+                tool.id,
+                "manual-required",
+                method_kind="host_setup",
+                handoff=("After leaving the installer, run these Pi setup commands.",),
+            )
+        if tool.id == "codegraph":
+            return InstallOutcome(
+                tool.id,
+                "installed",
+                method_kind="github_release",
+                postinstall_warning="codegraph MCP registration failed: exit 1",
+            )
+        return InstallOutcome(tool.id, "installed")
+
+    return install
+
+
+async def test_post_run_log_carries_every_renderer_in_wizard_order() -> None:
+    tools = [
+        _tool("rg"),
+        _tool("fd"),
+        _tool("bat", requires=("fd",)),
+        _tool("pi"),
+        _tool("codegraph"),
+    ]
+    inputs = _inputs(
+        tools=tools,
+        install=_mixed_report_install(),
+        wire_path=lambda: "PATH wired",
+        verify=lambda: "PATH verified",
+    )
+    app = _host(inputs, tools)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd", "bat", "pi", "codegraph"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        assert "disk exploded" in log
+        assert "skipped — dependency failed: fd" in log or "skipped -- dependency failed: fd" in log
+        assert "After leaving the installer, run these Pi setup commands." in log
+        assert "codegraph MCP registration failed: exit 1" in log
+        assert "sha256" in log
+        assert "PATH wired" in log
+        assert "PATH verified" in log
+        summary_at = log.index("Installed:")
+        fail_at = log.index("disk exploded")
+        skip_at = log.lower().index("skipped")
+        handoff_at = log.index("After leaving the installer")
+        warn_at = log.index("postinstall warning")
+        verify_at = log.index("sha256")
+        path_at = log.index("PATH wired")
+        audit_at = log.index("PATH verified")
+        assert summary_at < fail_at < skip_at < handoff_at < warn_at < verify_at
+        assert verify_at < path_at < audit_at
+        assert "PATH wiring" in log
+        assert "PATH audit" in log or "Read-only audit" in log
+        assert screen.status.text != ""
+        assert "catalog" in screen.status.text.lower()
+        assert "enter" in screen.status.text.lower() or "esc" in screen.status.text.lower()
+
+
+async def test_wire_path_oserror_names_the_section_and_still_finishes() -> None:
+    def boom() -> str:
+        raise OSError("read-only file system")
+
+    inputs = _inputs(wire_path=boom)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        assert "read-only file system" in log
+        assert "PATH wiring" in log or "path" in log.lower()
+        assert screen.finished is True
+        assert screen.status.text != ""
+        assert "catalog" in screen.status.text.lower()
