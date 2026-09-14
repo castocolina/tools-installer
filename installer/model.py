@@ -59,6 +59,7 @@ OWNER_PROBES = (
     "apt",
     "dnf",
     "pacman",
+    "rpm-ostree",
     "pnpm",
     "sdkman",
 )

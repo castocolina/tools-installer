@@ -116,6 +116,54 @@ def _dnf(tool: Tool, probe: ProbeRunner) -> Ownership | None:
     return None
 
 
+def _rpm_ostree(tool: Tool, probe: ProbeRunner) -> Ownership | None:
+    """rpm-ostree/just-layering equivalent of `_dnf`.
+
+    No registry row declares `kind = "rpm_ostree"` for INSTALL: resolve.py's
+    `_applies` returns `False` for that kind unconditionally, because a
+    layered package needs a reboot and breaks atomicity -- a deliberate,
+    documented install-time choice with no bearing on OWNERSHIP. This probe
+    answers a different question ("did the user explicitly layer this RPM on
+    the booted deployment?"), so it reads the tool's declared `dnf` method's
+    package name instead -- rpm-ostree layers RPMs from the same
+    Fedora/Bazzite repositories dnf installs from, and inventing a second
+    registry field for the same string would be an unrequested schema change.
+    Only the BOOTED deployment's `requested-packages` (explicitly layered,
+    not merely present in the base image) counts as evidence; a rollback
+    target or an older deployment is not the system the user is running.
+    """
+    packages = _method_values(tool, {"dnf"}, "package")
+    if not packages:
+        return None
+    output = _run(probe, ["rpm-ostree", "status", "--json"])
+    if output is None:
+        return None
+    try:
+        parsed = json.loads(output)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    deployments = cast(dict[str, object], parsed).get("deployments")
+    if not isinstance(deployments, list):
+        return None
+    booted: dict[str, object] | None = None
+    for entry in cast(list[object], deployments):
+        if isinstance(entry, dict) and cast(dict[str, object], entry).get("booted") is True:
+            booted = cast(dict[str, object], entry)
+            break
+    if booted is None:
+        return None
+    layered = booted.get("requested-packages")
+    if not isinstance(layered, list):
+        return None
+    layered_names = cast(list[object], layered)
+    for package in packages:
+        if package in layered_names:
+            return Ownership("rpm-ostree", "verified", f"rpm-ostree layers {package}")
+    return None
+
+
 def _pacman(tool: Tool, probe: ProbeRunner) -> Ownership | None:
     for package in _method_values(tool, {"pacman"}, "package"):
         output = _run(probe, ["pacman", "-Qq", package])
@@ -171,6 +219,7 @@ _PROBES: dict[str, Callable[[Tool, ProbeRunner], Ownership | None]] = {
     "apt": _apt,
     "dnf": _dnf,
     "pacman": _pacman,
+    "rpm-ostree": _rpm_ostree,
     "pnpm": _pnpm,
     "sdkman": _sdkman,
 }

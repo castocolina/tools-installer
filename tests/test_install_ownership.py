@@ -230,7 +230,9 @@ def test_rpm_ostree_owner_does_not_credit_a_non_booted_deployments_layered_packa
 
 
 def test_rpm_ostree_owner_returns_none_without_a_booted_deployment() -> None:
-    status = _rpm_ostree_status([{"booted": False, "packages": ["jq"], "requested-packages": ["jq"]}])
+    status = _rpm_ostree_status(
+        [{"booted": False, "packages": ["jq"], "requested-packages": ["jq"]}]
+    )
     owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": status}))
     assert owner == Ownership(None, "unknown", "no verified manager")
 
@@ -282,6 +284,9 @@ def test_owner_probes_closed_set_and_probe_registry_are_the_same_set() -> None:
     # that calls it. Assert both directions as separate statements so a
     # failure names which side is short.
     declarable = set(OWNER_PROBES)
-    implemented = set(ownership._PROBES)
+    # Deliberate private-member access: this test's whole purpose is pinning
+    # the internal probe registry against the public closed set, so it must
+    # reach _PROBES directly rather than through any public wrapper.
+    implemented = set(ownership._PROBES)  # pyright: ignore[reportPrivateUsage]
     assert declarable <= implemented, sorted(declarable - implemented)
     assert implemented <= declarable, sorted(implemented - declarable)
