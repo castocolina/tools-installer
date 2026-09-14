@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -334,3 +335,29 @@ def test_probe_version_output_returns_none_on_error_or_whitespace(
 
     monkeypatch.setattr(versions, "run_output", blank)
     assert probe_version_output(["empty", "--version"]) is None
+
+
+def test_versions_module_records_the_registry_wide_audit_finding() -> None:
+    """D-04: the live audit's result is recorded in code, not dropped. Deleting
+    or hollowing out the comment turns this test red — the comment is the
+    mechanism, this test is what keeps it from rotting away unnoticed
+    (.claude/architecture.md, "Registry-authoring guidelines").
+    """
+    import installer.versions as versions
+
+    text = Path(versions.__file__).read_text(encoding="utf-8")
+    assert "Verified" in text
+    assert "Not covered:" in text
+    assert "procs" in text
+    assert "5.3.9(1)-release" in text
+
+
+def test_extract_observed_version_still_refuses_the_known_residual_shapes() -> None:
+    """`procs` and `bash` fail to parse for reasons D-03's mechanism does not
+    address: `procs` glues its version to a leading double quote (not `-` or
+    whitespace), and `bash`'s extra characters follow the numeric core rather
+    than precede it. Widening the boundary class to catch either would
+    reintroduce the free-substring-search false-positive risk D-03 rejected.
+    """
+    assert extract_observed_version('procs "0.14.12') is None
+    assert extract_observed_version("GNU bash, version 5.3.9(1)-release") is None
