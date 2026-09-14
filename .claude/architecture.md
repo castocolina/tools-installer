@@ -627,4 +627,53 @@ callers, confusingly similar name to the live `Tool.postinstall` singular
 mechanism) was logged as a pending todo rather than fixed in-phase. Full
 findings: `.planning/phases/12.4-tool-onboarding-research-skill-and-registry-postinstall-audi/12.4-AUDIT.md`.
 
+## Phase 13: live in-TUI install execution and persisted wizard settings
+
+`installer/execute_screen.py` is an IO adapter, not a second decision
+layer. `resolve_dependencies`, `audit`, `run_installs`, `install_tool`,
+`configure_path` and `run_doctor` remain the sole owners of install
+control flow; the screen formats their output and streams it. The
+abandoned `feat/install-experience` branch split that responsibility
+across three modules with no owning seam, and this phase's audit rated
+that split a real defect.
+
+The execute screen is a `ModalScreen` and not a registered view.
+`AppScreen` requires a `VIEWS` row; a row would give the screen a number
+key and a palette entry; a navigable execution screen breaks the
+`[catalog] / [catalog, <view>]` stack invariant `UnifiedApp._navigable`
+protects. A pushed non-navigable screen is the established shape here
+(`ConfirmUninstall`, `NavScreen`, `TimePickerScreen`).
+
+`installer/run.py::StreamingRunner` is the only `Runner` in this project
+that reads a child's output incrementally. It is installed through the
+same single `Runner` seam every executor already calls. Attribution is
+structural: `attributed_install` sets the tool through `run_installs`'
+existing `Install` parameter, so there is no optional argument whose
+absence can drop it. The checksum-mismatch seam is `push_screen_wait`
+(`ask_from_worker` wraps `call_from_thread` + `push_screen_wait`). That
+is a deliberate, documented exception to rule 2 rather than a violation
+of it: rule 2 governs main-thread callers, and a thread worker has no
+callback to return into.
+
+A failure never aborts the batch. `should_continue` is checked between
+tools and never during one; an in-flight child is always allowed to
+finish; "not attempted" is derived by differencing the resolved ids
+against the returned outcomes rather than by adding an `InstallStatus`
+member. The weak form was chosen because killing a half-written install
+is worse than a slow one, and terminating children would pull subprocess
+lifecycle management into a phase that otherwise needs none.
+
+The link mode lives in `installer/settings.py`. It is asked at most once
+inside the app, is adjustable from `PoliciesScreen` with no new view, and
+an explicit `--link-mode` overrides for one run without rewriting the
+stored value.
+
+Every consumer of the link mode re-reads it rather than capturing it at
+construction time — the Doctor preview and fix, the execute screen's
+PATH wiring, `ban_policy`'s alias targets and `tweak_policy`'s source
+targets. A ban enabled after switching to split mode would otherwise
+write aliases into a `~/.myshellrc` nothing sources, with nothing on
+screen to reveal it. This is the same predicate-not-its-result reasoning
+the `guard_state` parameter already carries.
+
 

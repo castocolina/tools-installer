@@ -134,8 +134,11 @@
 - **Deferred fork — operador en vivo.** Running installs/doctor/fix live inside
   the UI with real-time progress is a richer UX but requires Textual workers,
   moving execution across the IO boundary, and rethinking how the 100%-covered
-  core is exercised. It is **documented and parked**, not chosen. The single-app
-  shell built here does not preclude it; a future session may revisit it.
+  core is exercised. It was **documented and parked**, not chosen, when this
+  PRD was written: the single-app shell built here did not preclude it, and a
+  future session was expected to revisit it. Phase 13 delivered that session
+  as `installer/execute_screen.py`. The pure core stayed behind the same IO
+  boundary this bullet worried about — the worker calls it unchanged.
 
 - **Key Components** (existing files the phases touch):
   - `installer/catalog_tui.py` — the `CatalogApp` (`App[list[str] | None]`).
