@@ -1,7 +1,7 @@
 ---
 phase: 13
 reviewers: [opencode-fallback]
-reviewed_at: 2026-09-14T01:32:23Z
+reviewed_at: 2026-09-14T03:36:02Z
 plans_reviewed:
   - .planning/phases/13-live-in-tui-install-execution-persistent-wizard-settings-ins/13-01-PLAN.md
   - .planning/phases/13-live-in-tui-install-execution-persistent-wizard-settings-ins/13-02-PLAN.md
@@ -15,11 +15,11 @@ models:
 model_sources:
   opencode-fallback: "pinned"
 failed_lanes:
-  opencode-plan-review: "configured default reviewer instance (opencode, model router-env/my-plan-review) — router backend reports the mapped model 'claude/claude-opus-5' unavailable; reproduced 3x directly with `opencode run --model router-env/my-plan-review`"
-  gemini: "gemini CLI binary is broken on this host — MODULE_NOT_FOUND for @google/gemini-cli/bundle/gemini.js under the pnpm global install; reproduced directly with `gemini --version`"
-  codex: "codex CLI auth token expired/reused (401 refresh_token_reused) — requires `codex login` on this host, out of scope for this review run"
-  cursor: "cursor-agent hit its account usage limit (ActionRequiredError: monthly Agent usage limit)"
-  antigravity: "agy account not eligible for Antigravity (Google account verification required)"
+  opencode-plan-review: "configured default reviewer instance (opencode, model router-env/my-plan-review) — retried twice this cycle after cycle 1's router-unavailability was confirmed fixed (direct `opencode run --model router-env/my-plan-review` smoke test returned 'OK'). Attempt 1 hit the lane's outer wall-clock timeout (660s default; raised to 1500s via review.timeouts.opencode and retried) with 'spawn error: ETIMEDOUT'. Attempt 2 at the raised timeout ran for ~25 min and exited status 1 with 'OpenCode review returned no assistant text (#1936: agent ended its turn with no final message)' after 870 output tokens of tool-calls only — the agent never emitted a final assistant message for this prompt size/effort combination on this host."
+  gemini: "gemini CLI binary is still broken on this host — MODULE_NOT_FOUND for @google/gemini-cli/bundle/gemini.js under the pnpm global install; reproduced directly with `gemini --version` this cycle, unchanged from cycle 1"
+  codex: "codex CLI auth token still expired/reused (401 refresh_token_reused via wss://chatgpt.com/backend-api/codex/responses); reproduced directly with `codex exec --json`, requires `codex login` on this host, out of scope for this review run"
+  cursor: "cursor-agent is now logged in (castocolina.dev@gmail.com, previously blocked at the login step) but still hits its account usage limit (ActionRequiredError: 'You've hit your usage limit'); reproduced directly with `cursor-agent -p`"
+  antigravity: "not re-probed this cycle (binary responds to --version but was not otherwise exercised); cycle 1 reported account ineligibility (Google account verification required) and no fix was reported"
 ---
 
 # Cross-AI Plan Review — Phase 13
@@ -29,223 +29,257 @@ failed_lanes:
 (none recorded)
 <!-- gsd:plan-revision-conflicts:end -->
 
-> **Reviewer-availability note:** the project's configured `review.default_reviewers` (`opencode-plan-review`, pinned to `router-env/my-plan-review`) could not run — the router backend reports the model it maps to (`claude/claude-opus-5`) as unavailable, reproduced 3 times outside this workflow. Every other detected reviewer CLI on this host also failed for host-local reasons unrelated to phase 13's plans: `gemini` (broken pnpm install, `MODULE_NOT_FOUND`), `codex` (expired/reused OAuth refresh token), `cursor` (monthly Agent usage limit reached), and `agy`/Antigravity (account not eligible). To avoid a zero-reviewer outcome, one fallback pass was run through the already-available `opencode` adapter using an alternate configured router model (`router-env/my-coding`, confirmed reachable) instead of the broken `my-plan-review` alias. This is a single-reviewer, source-grounded review — treat it as directional, not as a substitute for restoring the intended multi-CLI review roster once the router/auth/billing issues above are fixed.
+> **Reviewer-availability note (cycle 2):** the project's configured `review.default_reviewers`
+> (`opencode-plan-review`, pinned to `router-env/my-plan-review`) was retried synchronously this
+> cycle after confirming the cycle-1 router-unavailability was resolved (the model now answers a
+> direct smoke-test prompt). It still could not produce a usable review: a first attempt hit the
+> lane's outer timeout on this large, source-grounded, high-effort prompt; a second attempt, run
+> after raising `review.timeouts.opencode` from its 660s default to 1500s, ran for roughly 25
+> minutes and then exited with the CLI's own `#1936` failure mode (the agent ended its turn after
+> tool calls with no final assistant message) rather than a router or auth error. `gemini` remains
+> broken by a broken pnpm install (`MODULE_NOT_FOUND`, unchanged from cycle 1). `codex` remains
+> blocked by an expired/reused OAuth refresh token. `cursor` is now logged in (previously blocked
+> earlier in the login flow) but still hits its account's monthly Agent usage limit. `agy`/
+> Antigravity was not re-probed for account eligibility this cycle. As in cycle 1, one fallback
+> pass was run through the already-available `opencode` adapter using the alternate configured
+> router model (`router-env/my-coding`, confirmed reachable and confirmed to complete this
+> cycle's prompt end-to-end) instead of the still-unusable `my-plan-review` lane. This is again a
+> single-reviewer, source-grounded review — treat it as directional, not as a substitute for
+> restoring the intended multi-CLI review roster once the router/auth/billing/CLI issues above are
+> fixed.
 
 ## OpenCode Review (opencode-fallback)
 
-# Phase 13 Plan Review
-
-Grounded against the live tree (`installer/run.py`, `session.py`, `engine.py`, `wizard_app.py`, `ui_common.py`, `setup.py`, `app.py`, `policy.py`, `catalog_tui.py`, `cli.py`, `locations.py`, `version_cache.py`, `render.py`, `tests/test_docs.py`, `pyproject.toml`, `.claude/architecture.md`, the PRD deferred-fork note).
+I'll load the plan-review skills, then verify each disposition against the referenced source instead of taking the ledger at its word.
+The first glob missed the phase dir — I'll locate the plans and load the remaining review references.
+The phase directory is there; glob missed it. I'll list the plans and ground the review against the source they cite.
+This is a cycle-2 disposition audit, not a fresh first-pass review. I'll read the ledgers and ground each claimed fix in the source.
+I've got the first three plans and cycle 1's report. Next I'll read 13-04–13-07 and check each ledger claim against the live source.
+I'll ground each ledger claim against the live source—signatures, vulture config, and the line numbers the plans cite.
+I need the live signatures and the cited line ranges before I can judge whether each ledger row actually closes the concern.
+Several ledger claims need a second look in the live files—especially `run_live`, `AppScreen` status, `_run_fix`, and the vulture scoring story.
+A few ledger claims look shaky—I'll verify vulture scoring, the `self.screen` callback timing, and the `finally: wait()` deadlock.
+I'll verify vulture's confidence scoring and a few remaining cited line ranges before writing the report.
+I'll confirm vulture's scoring and a couple of remaining cited ranges before writing the report.
+There's a leftover `2 passed` gate in 13-07. I'll confirm vulture scoring and a few remaining cited ranges.
+Vulture's constructor doesn't take `min_confidence` that way — I'll inspect the 2.16 API so the Wave-1 dead-code claim is actually measured.
+Cycle 2 audit of all 7 ledgers against live source (`session.py`, `run.py`, `ui_common.py`, `wizard_app.py`, `setup.py`, `pyproject.toml`, vulture 2.16). Cycle-1 HIGHs are closed; one new MEDIUM from the `finally: wait()` revision.
 
 ## 13-01
 
-### Summary
-Wave 0 does the right thing: prove the one unexercised Textual combination (`call_from_thread` + `push_screen_wait`) before any production helper exists, pin it with three green characterisation tests, and write the choice into `13-VALIDATION.md` so 13-05 cannot re-decide. That matches architecture rule 5 and RESEARCH Pitfall 1.
+**Summary.** Wave 0 still de-risks the unexercised worker-to-modal combo before any production helper exists. Both cycle-1 LOWs are in Task 3's action, acceptance, and grep gates, and 13-07 is named as the architecture.md follow-through.
 
-### Strengths
-- Spike is throwaway; `git status --porcelain -- installer tests setup.py` must stay clean.
-- Tests live in `tests/test_execute_screen.py` and import nothing from `installer.execute_screen` — rule 5 is explicit, not a slogan.
-- Test 2 (`None` on escape) is the property D-05.3 needs; Test 3 is T-13-07 (loop stays live).
-- DD-1 / DD-2 / DD-3 are recorded here and copied into the validation artifact, which CONTEXT.md required.
-- Wave 0 boxes that this plan does not itself create are ticked only with a destination plan/task — that is how a validation contract stays honest.
+**Strengths**
+- Spike stays throwaway; characterisation tests import nothing from `installer.execute_screen`.
+- Rule-2 ruling is now a required sentence (`MECHANISM=A` exception vs `MECHANISM=B` is the rule-2 shape), matching `.claude/architecture.md:16-17`.
+- Three test names are pinned so 13-04/13-05 cannot silently drop them.
 
-### Concerns
-- **LOW — architecture.md rule 2 vs mechanism A.** Rule 2 says modals return only via `push_screen(modal, callback)` (`.claude/architecture.md` lines 16–17). Mechanism A is `push_screen_wait`. If the spike picks A, 13-07 must record the exception or 13-05 will look like a rule break.
-- **LOW — file reuse.** The same `tests/test_execute_screen.py` is the 13-04/13-05 dump. The three characterisation tests must keep passing when that file grows; the plan does not say so out loud.
+**Concerns**
+- None new. Both ledger rows check out.
 
-### Suggestions
-- In Task 3's `## Worker-to-modal mechanism` section, add one sentence: if A, this is a documented exception to architecture rule 2; if B, it is the rule-2 shape.
-- State that 13-04/13-05 must not rename or skip the three characterisation tests.
+**Suggestions**
+- None.
 
-### Risk Assessment
-**LOW.** Correct de-risking order. Failure mode is a hung spike (timeout 120), which the verify block already treats as a fail.
+**Risk Assessment:** LOW.
+
+**Dispositions Ledger Audit**
+| Concern | Disposition | Verdict |
+|---|---|---|
+| Rule 2 vs mechanism A | incorporated | **RESOLVED** — Task 3 requires a `rule 2` sentence and a 13-07 write-down (`.planning/phases/13-live-in-tui-install-execution-persistent-wizard-settings-ins/13-01-PLAN.md:240-248`, `:289-291`). |
+| Characterisation tests must survive file growth | incorporated | **RESOLVED** — same section plus 13-05 Task 2 `grep -q` of the three `def test_a_*` names (`13-05-PLAN.md:174-181`, `:288-294`). |
 
 ## 13-02
 
-### Summary
-The right seam: a Popen `StreamingRunner` on the existing `Runner` / `MethodAwareRunner` protocols (`installer/run.py:15-21`, `installer/engine.py:126-127`) plus a between-tools `should_continue` on `run_installs` (`installer/session.py:69-125`). No engine/executor edits. DD-1's weak cancel is expressed as "not attempted = input ids minus outcomes," which avoids a new `InstallStatus` and a `summarize`/`render` cascade.
+**Summary.** Seam choice is still right: Popen `StreamingRunner` on `MethodAwareRunner` (`installer/run.py:15-21`, `installer/engine.py:126-127`) and a keyword-only `should_continue` appended after `catalog` (`installer/session.py:69-76`). Cycle-1 HIGH/MEDIUMs are substantively closed. The new `finally: wait()` text creates a pipe-deadlock on the path it was meant to fix.
 
-### Strengths
-- `emit` is a required constructor argument; `_current()` raises if `set_tool` was not called — that is D-05.2 as structure, not a comment. The abandoned branch's `captured_runner=None` path cannot recur.
-- `stdin=DEVNULL`, `stderr=STDOUT`, same-thread read loop match RESEARCH Pitfall 3. `OSError` → `CommandError(..., 127)` matches `run_command` (`installer/run.py:48-49`) and `run_output` (`:85-86`).
-- No timeout, with the same rationale already in `run_output` (`:74-76`).
-- `should_continue` default `None` keeps `run_wizard` (`installer/app.py:151-158`) and existing `tests/test_session.py` positional calls working — *if* it is appended as keyword-only after `catalog`, not inserted between `on_mismatch` and `catalog`.
-- Engine-untouched gate plus the "wrong merge-base" precondition is the right kind of paranoia on this branch.
+**Strengths**
+- Vulture half of the HIGH is measured, not argued: vulture 2.16 `DEFAULT_CONFIDENCE` is 60, imports are 90 (`.../vulture/core.py:15`, `:420`); `[tool.vulture] min_confidence = 80` (`pyproject.toml:59-61`). A probe unused class/const/method/attr is silent at 80 and reported at 60. Task 1 now asserts `uv run vulture` with `pyproject.toml` unmodified.
+- Incremental child is now `python -u` + `flush=True`, and the docstring records that vendor tools on a pipe may still burst.
+- `should_continue` tail is `catalog=..., *, should_continue=...` with an `inspect.signature` gate (`13-02-PLAN.md:272-282`, `:307`). Live signature has `catalog` last and positional (`session.py:69-76`).
+- Rule 5 is named and enforced at 13-07, not waived.
 
-### Concerns
-- **HIGH — Wave 1 `make validate` / vulture vs rule 5.** `[tool.vulture] paths = ["installer"]` (`pyproject.toml:59-61`). After this plan, `StreamingRunner` and `STREAM_DETAIL_LINES` have no production caller until 13-04 (Wave 2). Plan-level verification still requires `make validate`. Vulture does not look at tests. 13-01 avoided this on purpose; this plan does not. Silencing vulture is forbidden.
-- **MEDIUM — "live" lines vs pipe buffering.** `text=True, bufsize=1` line-buffers the *parent*. A child writing to a pipe is typically fully buffered. `print()` without `flush=True` will not deliver the first line before `sleep`. Vendor tools (`pnpm`, SDKMAN) often detect a non-TTY and burst. D-03 can look green in tests and still be burst-at-exit in production unless the test child uses `flush=True` / `-u`, and the plan should say the production runner cannot force vendor scripts to line-buffer.
-- **MEDIUM — `should_continue` placement.** "Keyword-only, after `on_mismatch` and before `catalog`" cannot both be true without a `*` that also makes `catalog` keyword-only. Today `catalog` is the last positional (`session.py:69-76`). Inserting a new positional between them would steal a 7th positional argument. Put `*, should_continue=None` *after* `catalog`.
-- **LOW — Popen without `finally: wait()`.** If `emit` raises, the child can be orphaned. Wrap the read/`wait` in `try/finally`.
+**Concerns**
+- **MEDIUM — `finally: proc.wait()` can deadlock if `emit` raises.** Cycle-1 asked to reap the child. The revision waits without draining or closing stdout (`13-02-PLAN.md:215-221`, `:243`). If `emit` raises mid-stream, unread pipe data can fill the OS buffer, the child blocks on write, `wait()` never returns, and 13-04's worker `try/finally` never posts `InstallRunFinished` — the stuck-"Installing..." mode T-13-07 exists to prevent (`13-04-PLAN.md:218-220`). `wait()`-only also cannot terminate (DD-1 forbids that); the missing step is drain-then-wait.
 
-### Suggestions
-- Drop `make validate` from this plan's verification; keep `pyright`/`ruff` on the two files. Re-run full `make validate` in 13-04 (first caller) and 13-07.
-- Specify the incremental test child as `python -u -c "print('a', flush=True); ..."` so the timestamp gap actually measures streaming.
-- Write the new parameter as `catalog=..., *, should_continue: Callable[[], bool] | None = None`.
+**Suggestions**
+- In `__call__`'s `finally`, drain `proc.stdout` (or close-and-then-wait after a bounded drain) before `wait()`. Keep the `terminate`/`kill` grep at 0.
 
-### Risk Assessment
-**MEDIUM.** Seam choice is sound; Wave 1 cannot pass its own vulture gate, and streaming tests can pass without proving live delivery.
+**Risk Assessment:** MEDIUM (new hang path on the emit-raises case).
+
+**Dispositions Ledger Audit**
+| Concern | Disposition | Verdict |
+|---|---|---|
+| Wave-1 vulture / rule 5 HIGH | incorporated (vulture measured; rule 5 → 13-07) | **RESOLVED** — `pyproject.toml:59-61`, vulture 2.16 scores, 13-07 Task 2 greps (`13-07-PLAN.md:236-245`, `:289`). |
+| Live lines vs pipe buffering | incorporated | **RESOLVED** — `-u` + `flush=True` plus honest burst docstring (`13-02-PLAN.md:174-175`, `:223-229`). |
+| `should_continue` placement | incorporated | **RESOLVED** — append after `catalog`; signature gate (`session.py:69-76`, `13-02-PLAN.md:272-282`). |
+| Popen without `finally: wait()` | incorporated | **PARTIALLY-RESOLVED** — `finally: wait()` is specified; drain is not, so the emit-raises path can hang instead of orphan. |
+| Drop `make validate` from Wave 1 | rejected | **RESOLVED** — rejection is correct given the vulture measurement; keeping the gate is the `CLAUDE.md` rule. |
 
 ## 13-03
 
-### Summary
-Pure-core settings module mirroring `installer/version_cache.py:154-197` (`{"version": 1, ...}`, `ensure_dir` + `atomic_write_text`, degrade on `OSError`/`JSONDecodeError`). Closed-set check against `LINK_MODES` matches `installer/cli.py:54-59` and protects `rc_paths_for_mode` / `ban_rc_paths` (`installer/locations.py:45-65`). DD-3 as two tested functions is the right place for the rule (architecture rule 4).
+**Summary.** Persistence still mirrors `version_cache.py` (`installer/version_cache.py:137-175`, `:196-197`) with a closed set matching `installer/cli.py:54-59`. The HIGH is the same measured vulture story as 13-02; JSON `null` round-trip is now a required test.
 
-### Strengths
-- `Settings.link_mode=None` vs `"centralized"` is the whole first-run prompt. Collapsing them would re-prompt forever or never prompt.
-- Two-way `LINK_MODES` vs CLI `choices=` (`parse_args` round-trip + `ast` of the literal) is the assertion that actually prevents drift; skipping argparse's "invalid choice" text is correct for 3.11 vs 3.12.
-- `SettingsStore.set_link_mode` does not catch `OSError` — `run_live` (`installer/ui_common.py:41-50`) is the one apply workflow.
-- Flag override never calls `set_link_mode`. That is DD-3 as code, not as a `setup.py` if-chain.
-- `grep -c "open("` gate forces `Path.read_text()` / `atomic_write_text`, matching `version_cache.py`.
+**Strengths**
+- `Settings.link_mode=None` vs `"centralized"` stays the first-run discriminator.
+- Two-way `LINK_MODES` vs CLI `choices=` (parse_args + `ast`) is still the drift check.
+- `set_link_mode` does not catch `OSError`; `run_live` (`installer/ui_common.py:41-50`) remains the one apply workflow.
+- Every export is mapped to a 13-06 adopter; 13-07 greps `SettingsStore` / `link_mode_needs_choice` in `setup.py`.
 
-### Concerns
-- **HIGH — same Wave 1 vulture / rule 5 hole, worse.** The entire module is unused by production until 13-06 (Wave 4). Task 2's "every symbol is either exported for 13-06 or covered by a test" does not satisfy vulture (`paths = ["installer"]`). `make validate` in this plan's acceptance will fail, and architecture rule 5 is the rule 13-01 was written to obey.
-- **LOW — `save_settings` of `Settings()`.** Envelope becomes `{"version": 1, "link_mode": null}`. `load_settings` must treat JSON `null` as "never chosen," not as a type error that also returns `Settings()`. Say so in the load contract.
+**Concerns**
+- **LOW — load-contract wording fights itself.** Task 1 action says require `link_mode` to be a `str` (`13-03-PLAN.md:188-190`) and also that JSON `null` must take the missing-key path (`:192-198`). Both return `Settings()`. An executor who implements only the `str` check still passes the new test; the "missing-key vs type-rejection" distinction is documentation-only.
 
-### Suggestions
-- Do not run vulture until 13-06 lands the composition-root caller, or land `settings.py` in 13-06 Task 1 instead of Wave 1. Do not whitelist symbols.
-- One test: `save_settings(path, Settings())` then `load_settings(path).link_mode is None`.
+**Suggestions**
+- Write the load steps as: missing/null key → `Settings()`; present but not a `LINK_MODES` member → `Settings()`. Drop "must be a str" as a prior gate.
 
-### Risk Assessment
-**MEDIUM.** Design is the one this repo already uses for `versions.json`. Sequencing fights rule 5 and the Wave 1 quality gate.
+**Risk Assessment:** LOW.
+
+**Dispositions Ledger Audit**
+| Concern | Disposition | Verdict |
+|---|---|---|
+| Wave-1 vulture / rule 5 HIGH | incorporated | **RESOLVED** — same measurement as 13-02; 13-07 adoption greps (`13-03-PLAN.md:89-119`, `13-07-PLAN.md:289`). |
+| `save_settings(Settings())` / JSON `null` | incorporated | **RESOLVED** — own behavior bullet and test (`13-03-PLAN.md:162-163`). Observable contract holds even if null is classed as type-rejection. |
+| Land settings.py in 13-06 / skip vulture | rejected | **RESOLVED** — context-budget reason is explicit; orphan property moves to 13-07. |
 
 ## 13-04
 
-### Summary
-The tracer is the phase. `CatalogScreen.Decided` currently does `self.exit(message.result)` (`installer/wizard_app.py:1669-1670`). Pushing a `ModalScreen` instead of an `AppScreen` is the correct reading of D-01: `AppScreen` indexes `VIEW_BY_NAME` (`installer/ui_common.py:339`) and would add a seventh nav target, breaking `_navigable` (`wizard_app.py:1630-1636`). Splitting the interactive path so it never calls `run_wizard` is RESEARCH Pitfall 2 option (b) and matches `_choose_tools` (`installer/app.py:94-97`): `--all` / `--categories` never touch `select_catalog`.
+**Summary.** Tracer architecture is unchanged and still right: `ModalScreen` not `AppScreen` (`installer/ui_common.py:308-339`, `installer/wizard_app.py:1630-1636`), interactive path never calls `run_wizard` (`installer/app.py:94-97`). All five cycle-1 items are in the task text with tests. Construction-site count now matches the tree.
 
-### Strengths
-- Confirm text is rendered in `on_mount` and the worker starts only on `action_start` (or after that render when `unattended=True`). That is D-05.1 / audit finding A, and it is testable ("fake install not invoked before enter").
-- `attributed_install` sets the tool through the existing `Install` seam (`session.py:38-50`) before `install(...)`. Attribution cannot vanish behind an optional runner.
-- Same-worker `wire_path` + `verify` via `Console(file=io.StringIO())` is the `_apply_fix` pattern (`setup.py:473-486`).
-- `exit_on_error=False` + try/finally posting `InstallRunFinished` copies `_apply_daemon_default_worker` (`wizard_app.py:1546-1578`).
-- `execute=None` keeps today's exit-with-ids for every existing `UnifiedApp(...)` site (comment at `wizard_app.py:1476-1480`).
-- `grep -c "_select_catalog" setup.py` is 0 is the right gate: the name is in comments at `setup.py:523` and `:761` today, not only in the def.
-- A1 (`clean_rc_duplicates` stays console after `.run()`) is an explicit scope cut, not a miss. `_verify_and_clean` (`setup.py:705-718`) is the current pair; dropping the second `run_doctor` on the interactive path is correct if the screen already rendered it.
+**Strengths**
+- `run_live` `(None, message)` path now posts `InstallRunFinished` with `summarize([])`, never `None` (`installer/ui_common.py:41-50`, `installer/engine.py:136`).
+- `install_summary` accumulates; `setup.py:791-793` would otherwise report only the last batch.
+- `catalog_tui.py` is in `files_modified`; `Decided` docstring currently claims unconditional `App.exit` (`installer/catalog_tui.py:193-195`) and the plan rewrites both branches.
+- Live count: 16 `UnifiedApp(` sites (1 in `setup.py`, 15 in tests) plus the class statement; comment at `wizard_app.py:1476` still says nine; plan now requires that comment gone.
 
-### Concerns
-- **MEDIUM — `run_live(run_installs)` error path.** `run_live` only catches `OSError` and `CommandError` (`ui_common.py:41-50`). `install_tool` already swallows `CommandError` (`engine.py:136`). If something still raises, `run_live` returns `(None, message)`. The worker must still post `InstallRunFinished` with a usable `summary`/`error`. The plan names the `error` field and does not specify the empty-outcomes case.
-- **MEDIUM — `ctrl+c` during a run.** `action_hard_abort` always `exit(None)` (`wizard_app.py:1679-1681`). That tears down the app on top of a live `Popen`. DD-1 refuses `terminate()`; hard abort is a worse kill. At least document that ctrl+c is process abort, not weak cancel, and that the child may be orphaned.
-- **MEDIUM — last `install_summary` wins.** After D-02's keypress the screen pops to the catalog; the app keeps running. A second batch overwrites `install_summary`. `main`'s exit code (`setup.py:791-793`) then reflects only the last run. Say that, or exit the app after the first completed run.
-- **LOW — stale `Decided` docstring.** `catalog_tui.py:193-195` still says the host forwards the message to `App.exit`. `files_modified` omits that file.
-- **LOW — "seventeen" vs "nine".** Plan says seventeen `UnifiedApp(...)` sites; the class comment says nine outside `setup.py` (`wizard_app.py:1476`). Count before writing the compatibility sentence.
+**Concerns**
+- None that reopen cycle 1. Ctrl+c disclosure + 13-07 residual is the right branch: `action_hard_abort` is unguarded and priority (`wizard_app.py:1417-1420`, `:1679-1681`).
 
-### Suggestions
-- If `run_live` returns `None` for the install step, post `InstallRunFinished` with `outcomes=[]`, `error=the message`, `finished=True`.
-- Bind hard abort during a run to the same status line as mid-run escape, or document the orphan-child risk in 13-07 residual scope.
-- One-line update to `CatalogScreen.Decided`'s docstring: host pushes `ExecuteScreen` when `execute=` is set.
+**Suggestions**
+- None beyond 13-02's drain-then-wait, which this worker will sit behind.
 
-### Risk Assessment
-**MEDIUM.** Architecture is right (ModalScreen, option b, one worker). The underspecified `run_live` failure path and post-run app lifetime are the ways a tracer can look green and still mis-exit.
+**Risk Assessment:** LOW.
+
+**Dispositions Ledger Audit**
+| Concern | Disposition | Verdict |
+|---|---|---|
+| `run_live` empty-outcomes | incorporated | **RESOLVED** — explicit failure paragraph + Pilot (`13-04-PLAN.md:235-247`, `:332`). |
+| ctrl+c orphans child | incorporated (disclose, don't guard) | **RESOLVED** — status line + T-13-24 + 13-07 residual (`13-04-PLAN.md:267-279`; `wizard_app.py:1679-1681`). |
+| last `install_summary` wins | incorporated | **RESOLVED** — merge, not overwrite (`13-04-PLAN.md:298-307`, `:331`). |
+| Stale `Decided` docstring | incorporated | **RESOLVED** — `catalog_tui.py` in `files_modified`; `grep -q ExecuteScreen` (`13-04-PLAN.md:8-11`, `:308-314`). |
+| Seventeen vs nine | incorporated | **RESOLVED** — 16 constructions counted; `grep -c "Nine UnifiedApp"` gate (`13-04-PLAN.md:287-296`). |
+| Bind hard abort to status line | partially adopted | **RESOLVED** — disclosure taken; rebinding rejected with a recorded reason. |
 
 ## 13-05
 
-### Summary
-This plan closes the capability gap the tracer left: in-app `_ask_mismatch` (`setup.py:310-317`), DD-1's status list and weak cancel, and the post-run `render_*` sequence (`installer/app.py:160-169`). Dismissal → `skip` plus an attributed log line is the conservative security default (T-13-13) and D-05.3 made concrete.
+**Summary.** Capability gap after the tracer is still the right scope. Cycle-1 items (rule-2 production use, `c` under the mismatch modal, three stop keys, characterisation-test preservation) are in Task 1–2 with Pilot gates.
 
-### Strengths
-- `ask_from_worker` is "whatever 13-VALIDATION.md recorded," not a second spike. 13-01 exists so this task cannot waffle.
-- Labels are verbatim from `_ask_mismatch`. Nested `ModalScreen` on `ExecuteScreen` matches `TimePickerScreen` on Policies (`wizard_app.py:1353-1386`), including letter-prefixed ids.
-- `on_mismatch=None if inputs.unattended else self._ask_mismatch` is `run_wizard` line 157.
-- `on_outcome` default `None` keeps 13-04's `attributed_install` callers working.
-- Not-attempted stays a set difference, not `InstallStatus.CANCELLED` — `summarize`'s closed bucket map (`session.py:135-143`) does not need a new key.
-- Post-run order asserted by `index()` on the log text, using the same `render_*` helpers, so the in-app words cannot drift from the console words.
-- `c` is added to `execute-keys`, not only `BINDINGS` — same reason the `u` key had to land in `VIEWS`.
+**Strengths**
+- `ask_from_worker` is "whatever 13-VALIDATION.md recorded," not a second spike.
+- Labels stay verbatim from `_ask_mismatch` (`setup.py:310-317`); `on_mismatch=None if unattended` matches `run_wizard` (`installer/app.py:157`).
+- Dismissal → `skip` is the only `MismatchChoice` that does not install an unverified artifact (`installer/session.py:16-17`, `:109-121`).
+- Not-attempted stays a set difference; `summarize`'s closed map is untouched (`session.py:135-143`).
 
-### Concerns
-- **MEDIUM — mechanism A vs rule 2, now in production.** If 13-01 picked A, `ask_from_worker` is the first production `push_screen_wait`. 13-07 must write that down. If B, the worker `event.wait()` plus a main-thread callback is the proven shape; do not also keep a `push_screen_wait` branch.
-- **LOW — cancel vs mismatch modal.** While `ChecksumMismatchScreen` is on top, ExecuteScreen's `c` does not fire. Worst case is one in-flight tool plus one unanswered prompt — acceptable, but the status line should say the modal is waiting, not that cancel is available.
-- **LOW — escape vs `c`.** 13-04: escape mid-run does not pop. 13-05: `c` cancels the batch. Two "stop" keys with different meanings. `execute-keys` must name both.
+**Concerns**
+- None new. Nested-modal `c` is chosen and tested (`13-05-PLAN.md:264-272`, `:285`).
 
-### Suggestions
-- One Pilot case: mismatch modal visible ⇒ `c` does not set the cancel event until the modal dismisses (or it does — pick one and test it).
-- Keep the three 13-01 characterisation tests; lift shape, don't delete the throwaway app until `ask_from_worker` is what they call.
+**Suggestions**
+- None.
 
-### Risk Assessment
-**MEDIUM.** Behavior is specified well. Residual risk is the worker-to-modal combination and nested-modal key routing, which 13-01 is supposed to have already paid for.
+**Risk Assessment:** LOW.
+
+**Dispositions Ledger Audit**
+| Concern | Disposition | Verdict |
+|---|---|---|
+| Mechanism A vs rule 2 in production | incorporated | **RESOLVED** — two-branch ruling in design decisions + Task 1 (`13-05-PLAN.md:93-108`, `:165-172`). |
+| `c` while mismatch modal is up | incorporated | **RESOLVED** — pick-and-test: event stays unset; status names the waiting prompt (`13-05-PLAN.md:231`, `:264-272`). |
+| Escape vs `c` vs ctrl+c | incorporated | **RESOLVED** — `execute-keys` names three distinct effects (`13-05-PLAN.md:232`, `:256-262`). |
+| Keep 13-01 characterisation tests | incorporated | **RESOLVED** — names kept; throwaway App stays; Task 2 `grep -q` of all three defs (`13-05-PLAN.md:174-181`, `:288-294`). |
 
 ## 13-06
 
-### Summary
-This is the persistence half, and it correctly treats "persist `link_mode`" as insufficient: `_build_app` snapshots `link_mode` into `rc_paths` (`setup.py:392`), `ban_policy(apply_rc_paths=...)` (`:447-449`), `tweak_policy(ensure_sourced_from=...)` (`:460`), `_apply_fix` (`:484-485`), and the preview string (`:488-492`). A mid-session change that does not re-read those is a silent no-op (aliases in a `~/.myshellrc` split mode never sources). Folding the picker into Policies with no new `VIEWS` row is DD-2 and rules 1–2.
+**Summary.** Persistence half still treats live re-read as the real bug (`setup.py:392` snapshots `rc_paths` today). The cycle-1 HIGH is closed: first-run status goes to the visible `AppScreen.status` (`installer/ui_common.py:315-319`), with a dedicated `initial_view="doctor"` Pilot matching `_run_fix` (`setup.py:640-645`, `wizard_app.py:1541-1542`).
 
-### Strengths
-- `ban_policy` / `tweak_policy` accept value-or-callable and normalize to a reader called at apply time. Existing list/tuple call sites in `tests/test_policy.py` stay valid — same optional-kwargs convention as `UnifiedApp` (`wizard_app.py:1476-1480`).
-- `_time_picked`'s `if value is None: return` (`wizard_app.py:1257-1258`) is the silent-cancel anti-pattern. `_link_mode_picked` is specified as the same structure *except* that branch sets a warn status. That is D-05.3 with a cited counterpart.
-- `m` in the `policies` `View.actions` string (`ui_common.py:170` is currently `"space toggle"`) is mandatory: `FooterBar.render_text` (`:208-210`) is the only footer the user sees.
-- `DoctorScreen._fix_preview` is a `str` appended in `_refresh_body` (`wizard_app.py:300`); `enter_view` already calls `_refresh_body` (`:247-262`). Widening to `str | Callable[[], str]` is the same "predicate, not its result" comment already on `guard_state` (`:189-192`).
-- Flag does not persist; only the picker calls `set_link_mode`. Test reads the file back. DD-3.
-- `prompt_link_mode` allowlist matches `apply_daemon_default` (`setup.py:519-528`): wizard + interactive `make fix` only.
-- Rewording `_questionary_tty_io` / `_ask_checkbox` instead of deleting them is load-bearing: those blocks are why questionary gets `/dev/tty` (`setup.py:169-187`, `:259-265`). The grep gate ("each library owns fd 0", "Every ask_* helper needs this") is the right way to keep the rationale.
+**Strengths**
+- `ban_policy` / `tweak_policy` value-or-callable keeps existing list/tuple call sites (`installer/policy.py:218-225`).
+- `_link_mode_picked` copies `_time_picked` except the `None` branch sets a warn (`wizard_app.py:1256-1258`).
+- `m` is unbound in `installer/` today; Policies already has `l`/`t` (`wizard_app.py:932-935`); Catalog has `r`/`d`/`u` (`catalog_tui.py:201-205`). Footer comes from `View.actions` (`ui_common.py:170`, `:208-210`).
+- `prompt_link_mode` allowlist matches `apply_daemon_default` (`setup.py:519-528`).
+- Picker is last in `on_mount` and asserted with daemon default also wired.
 
-### Concerns
-- **HIGH — first-run status is posted on the catalog while `make fix` is on Doctor.** `_run_fix` opens `_build_app(..., initial_view="doctor")` (`setup.py:640-645`). Task 3 always writes OK/warn/error onto the catalog `StatusLine`. After dismiss, the user is looking at Doctor (`show_view("doctor")` in `on_mount`, `wizard_app.py:1541-1542`). The explanation D-05.3 requires is on a hidden screen. Post to `self.screen`'s status (the visible `AppScreen`), not `self.catalog.status`.
-- **MEDIUM — first-run picker vs daemon worker.** `on_mount` starts `_apply_daemon_default_worker` then (as planned) pushes `LinkModeScreen`. Two overlapping first-run surfaces. Probably harmless (daemon is macOS, independent of link mode) but the picker should be last and the only modal.
-- **LOW — "asked at most once" vs dismiss.** Dismiss does not persist, so the next launch prompts again. That matches `link_mode_needs_choice`. Don't claim "once per machine" in success criteria without "once answered."
-- **LOW — `PoliciesScreen.BINDINGS` already has `l` and `t`.** `m` is free. Confirm no catalog-level `m`.
+**Concerns**
+- **LOW — callback fallback reintroduces the HIGH if timing is wrong.** `_first_link_mode_picked` uses `self.screen` when it is an `AppScreen`, else `self.catalog.status` (`13-06-PLAN.md:366-376`). Textual invokes the callback after dismiss, so `self.screen` should be Doctor on `make fix`. If a future Textual change fires the callback while `LinkModeScreen` is still current, the fallback writes the catalog again. The new Doctor Pilot is the tripwire; keep it.
 
-### Suggestions
-- `_first_link_mode_picked`: `screen = self.screen; if isinstance(screen, AppScreen): screen.status.set(...)`. Catalog is the fallback, not the only target.
-- One `tests/test_setup.py` Pilot (or unit on the callback) with `initial_view="doctor"` + `prompt_link_mode=True` + escape, asserting Doctor's `StatusLine.text` is non-empty.
-- Keep `_ask_mismatch` / `_ask_select` for the headless path; the `questionary.select` count gate of 1 is correct.
+**Suggestions**
+- Prefer `self.screen` if `AppScreen`, else `self._views.get(self.current_view) or self.catalog`, not a hard catalog fallback.
 
-### Risk Assessment
-**MEDIUM.** Live re-read of ban/tweak/fix/preview is the important correctness fix. The first-run message on the wrong screen is a D-05.3 miss on the `make fix` entry point.
+**Risk Assessment:** LOW.
+
+**Dispositions Ledger Audit**
+| Concern | Disposition | Verdict |
+|---|---|---|
+| First-run status on hidden catalog (HIGH) | incorporated | **RESOLVED** — visible `AppScreen.status`; Doctor Pilot (`setup.py:640-645`, `ui_common.py:319`, `13-06-PLAN.md:366-376`, `:398`). |
+| Picker vs daemon worker | incorporated | **RESOLVED** — last in `on_mount`; `app.screen is LinkModeScreen` with daemon wired (`wizard_app.py:1543-1544`, `13-06-PLAN.md:358-364`, `:396`). |
+| "Once per machine" vs dismiss | incorporated | **RESOLVED** — "once per ANSWER"; file stays null (`13-06-PLAN.md:29`, `:348`). |
+| Confirm `m` is free | incorporated | **RESOLVED** — live grep empty; re-grep before bind; one-file gate (`13-06-PLAN.md:276-281`). |
+| Keep `_ask_mismatch` / `_ask_select` | no action (endorsement) | **RESOLVED** — `questionary.select` count stays 1 (`setup.py:299`). |
 
 ## 13-07
 
-### Summary
-Close-out is in the right place: `.claude/architecture.md` after Phase 12.4 (`:582`), PRD deferred-fork bullet (`docs/prds/unified-ui-redesign-v1.0-prd.md:134-138`) corrected in place, `tests/test_docs.py` gains a second phrase-pin test matching the Phase 12 pattern (`tests/test_docs.py:5-26`). Residual scope (A1, weak cancel, `link_mode`-only) is written as decisions. The engine-untouched diff is only meaningful here, where it sees every plan's commits.
+**Summary.** Close-out is in the right place (architecture.md after Phase 12.4 at `.claude/architecture.md:582`, PRD deferred-fork at `docs/prds/unified-ui-redesign-v1.0-prd.md:134-138`, `tests/test_docs.py:5-26`). Cycle-1 items are in Task 1–2, including the rule-5 adoption greps that close 13-02/13-03.
 
-### Strengths
-- Six architecture paragraphs match what a later contributor cannot infer: IO adapter not a second engine, ModalScreen not a view, structural attribution, weak cancel, DD-2/DD-3, live-read of link mode.
-- PRD keeps the original trade-off and appends the outcome — it does not rewrite history.
-- Phase-diff assertion against new skip/xfail/noqa/`type: ignore` is the anti-bypass gate `CLAUDE.md` wants. Pre-existing `BLE001` in `engine.py` is correctly excluded.
-- Residual scope names `clean_rc_duplicates`, child-kill, and extra settings keys with decision ids.
+**Strengths**
+- Engine-untouched `fails_when` now says a pre-Phase-13 diff is a wrong baseline, never a reason to edit `engine.py` (`13-07-PLAN.md:294`).
+- Worker-to-modal name joins the Phase 13 phrase tuple when A shipped.
+- Residual scope names `clean_rc_duplicates`, weak cancel, `link_mode`-only, ctrl+c orphan (`action_hard_abort` grep), and dismissed-picker reprompt.
+- `pyproject.toml` must be byte-identical across the phase (`fail_under = 90`, `min_confidence = 80`).
 
-### Concerns
-- **MEDIUM — engine-untouched merge-base.** Both 13-02 and 13-07 measure from `git merge-base HEAD feat/tui-interaction-consistency`. The 13-02 precondition already warns this range can include pre-Phase-13 churn. If 13-07 sees a non-empty diff, the plan says "narrow BASE, don't edit the engine." Repeat that in Task 2's verify `fails_when` so an executor does not "fix" the gate by touching `engine.py`.
-- **LOW — record the worker-to-modal exception.** If 13-01 picked A, architecture.md must mention `push_screen_wait` as the checksum-mismatch seam, or rule 2 will be used to rip it out later.
-- **LOW — `test_docs.py` "exactly two test functions."** Fragile if another phase adds a third. Prefer "a Phase 13 test exists and the Phase 12 test is unchanged."
+**Concerns**
+- **LOW — leftover `2 passed` in plan-level `<verification>`.** Task 1 correctly dropped the function-count assertion (`13-07-PLAN.md:190-197`, `:203`). `<verification>` still says `uv run pytest tests/test_docs.py -q` reports 2 passed (`13-07-PLAN.md:323`). An executor treating that block as a gate reintroduces the fragility Task 1 removed.
+- **LOW — `sanitize_log_line` in the rule-5 grep is tautological.** It is defined in `installer/execute_screen.py` (13-04), so `grep -q sanitize_log_line installer/execute_screen.py` cannot prove a caller. `StreamingRunner` / `should_continue` / `SettingsStore` greps are cross-module and real.
 
-### Suggestions
-- Add `call_from_thread` / recorded mechanism name to the required-phrase tuple if A shipped.
-- Put ctrl+c-orphans-child in residual scope if 13-04 does not bind hard abort.
+**Suggestions**
+- Delete the `2 passed` line from `<verification>`.
+- Drop `sanitize_log_line` from the adoption list, or grep a use that is not the `def`.
 
-### Risk Assessment
-**LOW.** This plan cannot save a wrong 13-04/13-06, but it records the design in the place this repo actually reads.
+**Risk Assessment:** LOW.
+
+**Dispositions Ledger Audit**
+| Concern | Disposition | Verdict |
+|---|---|---|
+| Engine-untouched `fails_when` | incorporated | **RESOLVED** — guidance sits in `fails_when`, where a red gate is tempting to "fix" (`13-07-PLAN.md:294`). Automated command still cannot auto-narrow `BASE`; that is documented, not silent. |
+| Record `push_screen_wait` if A | incorporated | **RESOLVED** — Task 1 two-branch + phrase tuple (`13-07-PLAN.md:180-188`). |
+| `test_docs.py` exactly-two count | incorporated | **PARTIALLY-RESOLVED** — Task 1/acceptance/automated fixed; plan-level `<verification>` still says `2 passed` (`13-07-PLAN.md:323`). |
+| 13-02/13-03 rule-5 HIGH | incorporated here | **RESOLVED** — production greps + T-13-25 (`13-07-PLAN.md:236-245`, `:289`, `:316`). |
+| ctrl+c in residual scope | incorporated | **RESOLVED** — named entry + `grep -q action_hard_abort` (`13-07-PLAN.md:270-276`, `:294`). |
 
 ---
 
-## Overall risk assessment
+## Cross-plan
 
-**MEDIUM.**
+DD-1 / DD-2 / DD-3 stay consistent across all seven files. Interactive vs headless split (13-04 option b) still isolates `--all`/`--yes` (`app.py:94-97`). No new view row (`ui_common.py:162-171`).
 
-The phase is an IO-adapter job and the plans treat it that way: existing `run_installs` / `install_tool` / `configure_path` stay owners; `StreamingRunner` is the one new I/O primitive; `feat/install-experience` is reference-only; D-05.1–3 are tested, not hoped for. DD-1/2/3 are consistent across all seven files.
+**New in this revision (not cycle 1):**
+1. **MEDIUM** — 13-02 `finally: wait()` without drain can hang the 13-04 worker if `emit` raises.
+2. **LOW** — 13-07 `<verification>` still requires `2 passed`.
+3. **LOW** — 13-03 load steps say both "must be a str" and "null is missing-key".
 
-What keeps this from LOW:
+## Overall risk: LOW
 
-1. **Wave 1 cannot pass `make validate` as written.** `StreamingRunner` (13-02) and `installer/settings.py` (13-03) have no production caller until Waves 2 and 4. Vulture scans `installer/` only (`pyproject.toml:59-61`). 13-01 already solved this for `ask_from_worker`; 13-02/13-03 reintroduce it. Fix: drop vulture from Wave 1 plan gates, or don't land those modules until their first caller.
-2. **13-06 first-run status on catalog while `make fix` shows Doctor** (`setup.py:640-645`, `wizard_app.py:1541-1542`) — a D-05.3 hole on a real entry point.
-3. **Streaming "liveness" is easy to test-cheat** without `flush=True` / `python -u`, and vendor children on a pipe may still burst.
-4. **`should_continue`'s "keyword-only between `on_mismatch` and `catalog`" fights the current positional signature** (`session.py:69-76`).
-
-Do those four and the rest is executable: tracer in 13-04, mismatch/cancel/report in 13-05, live settings in 13-06, record in 13-07. Headless `--all` / `--yes` stays the console `run_wizard` path (`app.py:94-97`, `setup.py:764-786`) and is structurally isolated.
+Cycle-1's three HIGHs are closed in source, not just in ledger rows: vulture 2.16 at `min_confidence = 80` does not flag unused classes (`pyproject.toml:59-61`); first-run status targets the visible `AppScreen` (`ui_common.py:319`, `setup.py:640-645`); rule 5 is checked at phase end (`13-07-PLAN.md:289`). Remaining work is the drain-before-wait hole and two leftover inconsistencies. Not a replan of the architecture.
 
 ---
 
 ## Consensus Summary
 
-Only one reviewer lane produced a usable, source-grounded review this cycle (`opencode-fallback`); every other detected reviewer CLI failed on this host for infrastructure/auth/billing reasons unrelated to the plans (see the frontmatter `failed_lanes` and the reviewer-availability note above). There is no cross-reviewer agreement to synthesize — treat every finding below as single-reviewer, source-grounded, and not yet corroborated.
+Single-reviewer cycle (see the reviewer-availability note above) — no cross-reviewer consensus
+computation applies. Treat the findings below as one grounded, source-verified pass, not a
+multi-model consensus.
 
 ### Agreed Strengths
-Not applicable — only one reviewer ran.
+Not applicable — only one reviewer produced a result this cycle.
 
 ### Agreed Concerns
-Not applicable — only one reviewer ran. The reviewer's own three HIGH findings are:
-- 13-02: `StreamingRunner`/`STREAM_DETAIL_LINES` have no production caller until Wave 2, so Wave 1's `make validate` (vulture, `installer/` only) fails as currently scoped.
-- 13-03: `installer/settings.py` has no production caller until Wave 4 (13-06), same vulture failure mode, worse because the whole module is unused.
-- 13-06: first-run link-mode status is posted to the catalog `StatusLine`, but `make fix` opens the app on the Doctor view — the status lands on a screen the user isn't looking at.
+Not applicable — only one reviewer produced a result this cycle. See "Cross-plan" above for the
+full concern list from the single reviewer that ran.
 
 ### Divergent Views
-Not applicable — only one reviewer ran.
+Not applicable — only one reviewer produced a result this cycle.
