@@ -1098,7 +1098,8 @@ def test_execute_inputs_wire_path_calls_configure_path_and_returns_captured_text
     assert captured[0]["link_mode"] == "single"
     rc_paths = captured[0]["rc_paths"]
     assert isinstance(rc_paths, list)
-    assert all(isinstance(path, Path) for path in rc_paths)
+    rc_paths_list = cast("list[object]", rc_paths)
+    assert all(isinstance(path, Path) for path in rc_paths_list)
 
 
 def test_execute_inputs_verify_calls_run_doctor_and_returns_captured_text(
@@ -1135,23 +1136,48 @@ def test_interactive_none_summary_prints_aborted_and_returns_zero(
     assert "Aborted." in buffer.getvalue()
 
 
-def test_interactive_failed_summary_renders_troubleshooting_and_returns_one(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+class _SummaryApp:
+    def __init__(self, summary: Summary | None) -> None:
+        self.install_summary = summary
+
+    def run(self) -> None:
+        return None
+
+
+def _wire_interactive_summary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, app: _SummaryApp
+) -> list[str]:
     _sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
     rendered: list[str] = []
-    monkeypatch.setattr(setup, "render_troubleshooting", lambda _console: rendered.append("shown"))
-    monkeypatch.setattr(setup, "clean_rc_duplicates", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(setup, "collect_bin_dirs", lambda *_args, **_kwargs: [])
 
-    class _FailedApp:
-        install_summary = Summary(installed=(), already=(), failed=("rg",), no_method=())
+    def fake_render_troubleshooting(_console: object) -> None:
+        rendered.append("shown")
 
-        def run(self) -> None:
-            return None
+    def fake_clean(*_args: object, **_kwargs: object) -> dict[Path, list[str]]:
+        return {}
 
-    monkeypatch.setattr(setup, "_build_app", lambda *_args, **_kwargs: _FailedApp())
+    def fake_collect(*_args: object, **_kwargs: object) -> list[Path]:
+        return []
+
+    def fake_build(*_args: object, **_kwargs: object) -> _SummaryApp:
+        return app
+
+    monkeypatch.setattr(setup, "render_troubleshooting", fake_render_troubleshooting)
+    monkeypatch.setattr(setup, "clean_rc_duplicates", fake_clean)
+    monkeypatch.setattr(setup, "collect_bin_dirs", fake_collect)
+    monkeypatch.setattr(setup, "_build_app", fake_build)
+    return rendered
+
+
+def test_interactive_failed_summary_renders_troubleshooting_and_returns_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    rendered = _wire_interactive_summary(
+        monkeypatch,
+        tmp_path,
+        _SummaryApp(Summary(installed=(), already=(), failed=("rg",), no_method=())),
+    )
     assert setup.main([]) == 1
     assert rendered == ["shown"]
 
@@ -1159,20 +1185,11 @@ def test_interactive_failed_summary_renders_troubleshooting_and_returns_one(
 def test_interactive_clean_summary_returns_zero(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    _sandbox(monkeypatch, tmp_path)
-    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
-    rendered: list[str] = []
-    monkeypatch.setattr(setup, "render_troubleshooting", lambda _console: rendered.append("shown"))
-    monkeypatch.setattr(setup, "clean_rc_duplicates", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(setup, "collect_bin_dirs", lambda *_args, **_kwargs: [])
-
-    class _CleanApp:
-        install_summary = Summary(installed=("rg",), already=(), failed=(), no_method=())
-
-        def run(self) -> None:
-            return None
-
-    monkeypatch.setattr(setup, "_build_app", lambda *_args, **_kwargs: _CleanApp())
+    rendered = _wire_interactive_summary(
+        monkeypatch,
+        tmp_path,
+        _SummaryApp(Summary(installed=("rg",), already=(), failed=(), no_method=())),
+    )
     assert setup.main([]) == 0
     assert rendered == []
 
@@ -1180,25 +1197,28 @@ def test_interactive_clean_summary_returns_zero(
 def test_interactive_path_cleans_rc_duplicates_without_re_running_doctor(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    _sandbox(monkeypatch, tmp_path)
-    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
     cleaned: list[str] = []
     doctors: list[str] = []
-    monkeypatch.setattr(
-        setup,
-        "clean_rc_duplicates",
-        lambda *_args, **_kwargs: cleaned.append("cleaned") or {},
-    )
-    monkeypatch.setattr(setup, "run_doctor", lambda *_args, **_kwargs: doctors.append("doctor"))
-    monkeypatch.setattr(setup, "collect_bin_dirs", lambda *_args, **_kwargs: [])
 
-    class _CleanApp:
-        install_summary = Summary(installed=("rg",), already=(), failed=(), no_method=())
+    def fake_clean(*_args: object, **_kwargs: object) -> dict[Path, list[str]]:
+        cleaned.append("cleaned")
+        return {}
 
-        def run(self) -> None:
-            return None
+    def fake_doctor(*_args: object, **_kwargs: object) -> None:
+        doctors.append("doctor")
 
-    monkeypatch.setattr(setup, "_build_app", lambda *_args, **_kwargs: _CleanApp())
+    def fake_collect(*_args: object, **_kwargs: object) -> list[Path]:
+        return []
+
+    def fake_build(*_args: object, **_kwargs: object) -> _SummaryApp:
+        return _SummaryApp(Summary(installed=("rg",), already=(), failed=(), no_method=()))
+
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
+    monkeypatch.setattr(setup, "clean_rc_duplicates", fake_clean)
+    monkeypatch.setattr(setup, "run_doctor", fake_doctor)
+    monkeypatch.setattr(setup, "collect_bin_dirs", fake_collect)
+    monkeypatch.setattr(setup, "_build_app", fake_build)
     assert setup.main([]) == 0
     assert cleaned == ["cleaned"]
     assert doctors == []
