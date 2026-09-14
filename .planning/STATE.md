@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: 13
 current_phase_name: live-in-tui-install-execution-persistent-wizard-settings-ins
-current_plan: 6
+current_plan: 7
 status: executing
-stopped_at: Completed 13-05-PLAN.md
-last_updated: "2026-09-14T07:18:53.278Z"
+stopped_at: Completed 13-06-PLAN.md
+last_updated: "2026-09-14T08:59:59.077Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 13 execution started
-state_head: 1b987ac37cb9e74e5617716f936ee9e39686bc52
+state_head: f8b156242bfece9f6e376615a27c79de5dc0f291
 progress:
   total_phases: 19
-  completed_phases: 15
+  completed_phases: 14
   total_plans: 51
-  completed_plans: 49
+  completed_plans: 50
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 13 (live-in-tui-install-execution-persistent-wizard-settings-ins) — EXECUTING
-Current Plan: 6
+Current Plan: 7
 Total Plans in Phase: 7
 Status: Ready to execute
 Last activity: 2026-09-14 — Phase 13 execution started
@@ -77,6 +77,7 @@ Progress: [█████████░] 88%
 | Phase 13 P02 | 14 min | 2 tasks | 4 files |
 | Phase 13 P03 | 10 min | 2 tasks | 2 files |
 | Phase 13 P05 | 36 min | 3 tasks | 2 files |
+| Phase 13 P06 | 30 min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -114,6 +115,10 @@ Recent decisions affecting current work:
 - [Phase 13]: An explicit --link-mode applies to that run only and never rewrites the stored preference (DD-3). — Honouring a flag must not also call set_link_mode.
 - [Phase 13]: SettingsStore.set_link_mode does not catch OSError. — run_live is the one place a screen-triggered core mutation's failure becomes a message.
 - [Phase 13]: ask_from_worker is MECHANISM=A (call_from_thread + push_screen_wait); a dismissed mismatch prompt resolves to skip and says so; c under the mismatch modal is inert. — 13-VALIDATION.md recorded A; MismatchChoice has no cancelled member so skip is the only option that does not install an unverified artifact; the worker is blocked on the answer anyway.
+- [Phase 13]: Asked at most once per ANSWER, not once per machine. — A dismissed picker stores nothing; the next launch prompts again. That is link_mode_needs_choice contract.
+- [Phase 13]: No seventh VIEWS row: the picker lives on PoliciesScreen; m is in the policies actions string. — Architecture rules 1 and 2: one view registry, one nav path. Footer is rendered from View.actions.
+- [Phase 13]: First-run status lands on the visible AppScreen; fallback is the view registry, never a hard catalog. — make fix opens Doctor; a hard catalog fallback would put D-05.3 explanation on a hidden screen (T-13-17).
+- [Phase 13]: prompt_link_mode is passed only from make setup and make fix interactive branch. — --doctor/--uninstall/--guard/--all and no-TTY never see it so a picker nobody can answer cannot wedge an unattended run (T-13-18).
 
 ### Pending Todos
 
@@ -145,6 +150,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-14T07:18:42.932Z
-Stopped at: Completed 13-05-PLAN.md
+Last session: 2026-09-14T08:59:41.366Z
+Stopped at: Completed 13-06-PLAN.md
 Resume file: None

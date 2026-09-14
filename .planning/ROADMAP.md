@@ -455,7 +455,7 @@ Plans:
 **Goal:** Install execution — confirm, run, wire PATH, verify — happens inside the Textual app, with each child process's output streaming live into a log widget attributed to the tool that produced it, while the link-mode preference is asked once inside that app, persisted, and adjustable afterwards from the Policies view.
 **Requirements**: D-01, D-02, D-03, D-04, D-05 (13-CONTEXT.md decision ids — this inserted phase has no REQUIREMENTS.md traceability ids)
 **Depends on:** Phase 12
-**Plans:** 5/7 plans executed
+**Plans:** 6/7 plans executed
 
 Plans:
 **Wave 1**
@@ -474,7 +474,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 13-06-PLAN.md — Settings wiring: no pre-TUI prompt, a Policies link-mode picker, live re-reads
+- [x] 13-06-PLAN.md — Settings wiring: no pre-TUI prompt, a Policies link-mode picker, live re-reads
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
