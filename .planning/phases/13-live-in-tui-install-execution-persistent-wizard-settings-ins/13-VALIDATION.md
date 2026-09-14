@@ -135,3 +135,37 @@ Each item is a recorded decision, not an oversight.
 - **A first-run link-mode picker that is dismissed persists nothing and therefore asks again on the next launch.** That is `link_mode_needs_choice`'s contract, not a bug: writing a default the user declined to choose would silently answer the question on their behalf. "Asked once" is never "asked once per machine" (DD-3, plan 13-06).
 
 The merge-base `git merge-base HEAD feat/tui-interaction-consistency` is `3e3cdc8`, which predates Phase 13 and carries ~1163 lines of engine/executor/download/apps/postinstall churn from Phases 1–12.4. That is a wrong baseline, not an engine edit. Re-run with `BASE` at `0fb4b10^` (this phase's first production commit): empty. No file under `installer/engine.py`, `executors.py`, `download.py`, `apps.py`, or `postinstall.py` was edited in this phase.
+
+## Code review disposition (13-REVIEW.md)
+
+`13-REVIEW.md` (internal `gsd-code-reviewer`, opus) found 1 Critical and 6 Warnings. A
+parallel cross-AI review pass was independently dispatched but timed out after 3600s
+mid-investigation without producing a findings artifact; its research trace was
+converging on the same defect areas (encoding, link-mode staleness, OSError handling)
+as the internal review, but produced no independently-committable output.
+
+- **CR-01 (Critical) — fixed, commit `d7e5da4`.** `sanitize_log_line` guarded only the
+  streaming success path; `CommandError.detail` (the raw child-process tail) reached
+  the post-run report unsanitized on the failure path, letting a failing install
+  script's ANSI/OSC escapes reach a live `RichLog`. Moved to a leaf module
+  (`installer/sanitize.py`) and applied at `run.py` (tail capture), `execute_screen.py`
+  (report capture), and `render.py` (`render_failure_details`), plus a regression test.
+- **WR-01 through WR-06 — deferred, not fixed in this phase.** Recorded here as residual
+  scope rather than silently dropped:
+  - WR-01: an out-of-contract worker exception (outside `(OSError, CommandError)`)
+    reports a false-success empty summary and exit 0 instead of surfacing the error.
+  - WR-02: the catalog is not repainted after an in-app run (stale ✓/installed cells).
+  - WR-03: `esc` on the not-yet-started confirm screen silently discards the staged
+    selection with no undo.
+  - WR-04: the first-run link-mode picker leaves the Doctor fix-preview describing the
+    pre-pick mode until the screen is re-entered.
+  - WR-05: switching link mode on the Policies screen does not re-apply already-enabled
+    policies, so an enabled ban can silently stop working under the new mode.
+  - WR-06: `load_settings` does not catch `UnicodeDecodeError` and reads with locale
+    encoding while `save_settings` writes UTF-8 (shared with `version_cache.py`).
+
+  None of these six is a security-severity defect; each is a real UX/correctness gap
+  in the phase's own newly-introduced app-persists-across-a-run lifetime. They are
+  candidates for a follow-up phase or a dedicated fix pass, not blockers for Phase 13
+  sign-off — `code_review_gate` in `execute-phase.md` is explicitly advisory for
+  non-TDD-gate findings.
