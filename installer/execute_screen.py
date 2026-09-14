@@ -201,6 +201,15 @@ class InstallToolFinished(Message):
         super().__init__()
 
 
+class UpdateToolFinished(Message):
+    """One tool's update() returned; posted from the worker thread."""
+
+    def __init__(self, tool_id: str, state: ProgressState) -> None:
+        self.tool_id = tool_id
+        self.state = state
+        super().__init__()
+
+
 class MismatchPromptOpen(Message):
     """The worker is blocked on (or has just left) the checksum-mismatch modal."""
 
@@ -341,13 +350,13 @@ class ExecuteScreen(ModalScreen[None]):
         self._ordered = list(resolved.order)
         self._to_update = self._update_targets(selected)
         self._by_id = {tool.id: tool for tool in self._inputs.catalog}
-        self._progress = {tool.id: "pending" for tool in self._ordered}
+        self._progress = {tool.id: "pending" for tool in (*self._ordered, *self._to_update)}
         self._refresh_progress()
 
         def render_head(console: Console) -> None:
             render_dependency_notice(resolved.dragged_in, resolved.warnings, console)
             render_audit(audit(self._ordered, self._inputs.installed), console)
-            console.print(f"Install {len(self._ordered)} tools? enter start · esc cancel")
+            console.print(self._preflight_prompt())
 
         self.query_one("#execute-head", Static).update(self._render_captured(render_head))
         if self._inputs.unattended:
@@ -488,7 +497,11 @@ class ExecuteScreen(ModalScreen[None]):
                 continue
             try:
                 target = UpdateTarget(tool=tool, ownership=ownership)
-                run_live(partial(updates.run, target))
+                result, _fail = run_live(partial(updates.run, target))
+                state: ProgressState = (
+                    "done" if result is not None and result.status == "updated" else "not-done"
+                )
+                self.post_message(UpdateToolFinished(tool.id, state))
             finally:
                 updates.end()
 
@@ -521,6 +534,10 @@ class ExecuteScreen(ModalScreen[None]):
         self._progress[message.tool_id] = "done" if message.status in _DONE_STATUSES else "not-done"
         self._refresh_progress()
 
+    def on_update_tool_finished(self, message: UpdateToolFinished) -> None:
+        self._progress[message.tool_id] = message.state
+        self._refresh_progress()
+
     def on_mismatch_prompt_open(self, message: MismatchPromptOpen) -> None:
         if message.waiting:
             self._waiting_prompt = message.tool_id
@@ -543,6 +560,11 @@ class ExecuteScreen(ModalScreen[None]):
             )
         for tool_id in message.not_attempted:
             self._progress[tool_id] = "skipped"
+        for tool in self._to_update:
+            if self._progress.get(tool.id) == "pending":
+                self._progress[tool.id] = "skipped"
+                if tool.id not in self.not_attempted:
+                    self.not_attempted.append(tool.id)
         self._refresh_progress()
         log = self.query_one("#execute-log", RichLog)
 
@@ -555,8 +577,8 @@ class ExecuteScreen(ModalScreen[None]):
             render_verification(message.outcomes, console)
 
         log.write(self._render_captured(render_report))
-        if message.not_attempted:
-            log.write("Not attempted: " + ", ".join(message.not_attempted))
+        if self.not_attempted:
+            log.write("Not attempted: " + ", ".join(self.not_attempted))
         if message.path_text:
             log.write("PATH wiring")
             log.write(message.path_text)
@@ -585,14 +607,33 @@ class ExecuteScreen(ModalScreen[None]):
             "warn",
         )
 
+    def _preflight_prompt(self) -> str:
+        install_n = len(self._ordered)
+        update_n = len(self._to_update)
+        hint = "enter start · esc cancel"
+        if install_n and update_n:
+            return f"Install {install_n} tools, update {update_n}? {hint}"
+        if update_n:
+            return f"Update {update_n} tools? {hint}"
+        return f"Install {install_n} tools? {hint}"
+
     def _refresh_progress(self) -> None:
         rows = Text()
-        for index, tool in enumerate(self._ordered):
-            if index:
+        first = True
+        for tool in self._ordered:
+            if not first:
                 rows.append("\n")
+            first = False
             state = self._progress.get(tool.id, "pending")
             glyph, style, label = _PROGRESS_GLYPH[state]
             rows.append(f"{glyph} {tool.id} [{label}]", style=style)
+        for tool in self._to_update:
+            if not first:
+                rows.append("\n")
+            first = False
+            state = self._progress.get(tool.id, "pending")
+            glyph, style, label = _PROGRESS_GLYPH[state]
+            rows.append(f"{glyph} {tool.id} update [{label}]", style=style)
         self.query_one("#execute-progress", Static).update(rows)
 
     def _render_captured(self, render: Callable[[Console], None]) -> str:

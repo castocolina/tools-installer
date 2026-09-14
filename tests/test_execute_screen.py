@@ -1476,3 +1476,312 @@ def test_update_dispatch_opens_no_confirm_prompt_of_its_own() -> None:
     )
     assert "ask_from_worker" not in run_updates
     assert "push_screen_wait" not in run_updates
+
+
+def _assert_head_hint(head: str) -> None:
+    lowered = head.lower()
+    assert "enter start" in lowered
+    assert "esc cancel" in lowered
+
+
+async def test_preflight_head_names_install_and_outdated_update_counts_before_any_keypress(
+    tmp_path: Path,
+) -> None:
+    rg = _tool("rg")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[rg, fd],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        head = _head_text(screen)
+        _assert_head_hint(head)
+        lowered = head.lower()
+        assert "install" in lowered
+        assert "update" in lowered
+        assert "1" in head
+        assert "Install 0" not in head
+        progress = _progress_text(screen)
+        assert "rg" in progress
+        assert "fd" in progress
+        assert "update" in progress.lower()
+        assert "[pending]" in progress
+        assert screen.started is False
+        assert updates.recorded == []
+        for _ in range(10):
+            await pilot.pause()
+        assert screen.started is False
+        assert updates.recorded == []
+
+
+async def test_update_only_outdated_preflight_does_not_read_as_zero_work(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        head = _head_text(screen)
+        _assert_head_hint(head)
+        assert "Install 0" not in head
+        assert "0" not in head.split("?")[0]
+        assert "update" in head.lower()
+        progress = _progress_text(screen)
+        assert "rg" in progress
+        assert "update" in progress.lower()
+        assert "[pending]" in progress
+        assert screen.started is False
+        assert updates.recorded == []
+
+
+async def test_queued_outdated_update_progress_row_leaves_pending_when_update_returns(
+    tmp_path: Path,
+) -> None:
+    first_started = threading.Event()
+    first_release = threading.Event()
+    second_started = threading.Event()
+    second_release = threading.Event()
+    rg = _tool("rg")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    _seed_refresh(refresh, fd, outdated=True)
+
+    class _GatedUpdateService(_RecordingUpdateService):
+        def run(self, target: UpdateTarget) -> UpdateOutcome:
+            if target.tool.id == "rg":
+                first_started.set()
+                assert first_release.wait(timeout=5)
+            else:
+                second_started.set()
+                assert second_release.wait(timeout=5)
+            return super().run(target)
+
+    updates = _GatedUpdateService()
+    inputs = _inputs(
+        tools=[rg, fd],
+        installed=lambda _tool: True,
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        before = _progress_text(screen)
+        assert before.count("[pending]") >= 2
+        await pilot.press("enter")
+        for _ in range(400):
+            if first_started.is_set():
+                break
+            await pilot.pause()
+        assert first_started.is_set()
+        first_release.set()
+        for _ in range(400):
+            if second_started.is_set():
+                break
+            await pilot.pause()
+        await pilot.pause()
+        assert second_started.is_set()
+        mid = _progress_text(screen)
+        rg_line = next(line for line in mid.splitlines() if "rg" in line)
+        fd_line = next(line for line in mid.splitlines() if "fd" in line)
+        assert "[pending]" not in rg_line
+        assert "[pending]" in fd_line
+        second_release.set()
+        await _settle_execute(screen, pilot)
+        final = _progress_text(screen)
+        assert "[pending]" not in final
+        assert [target.tool.id for target in updates.recorded] == ["rg", "fd"]
+
+
+async def test_undisturbed_outdated_run_dispatches_exactly_the_disclosed_update_ids(
+    tmp_path: Path,
+) -> None:
+    """FIXTURE A — equality of disclosed and dispatched update ids."""
+    rg = _tool("rg")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    _seed_refresh(refresh, fd, ownership=True)
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[rg, fd],
+        installed=lambda _tool: True,
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        head = _head_text(screen)
+        progress = _progress_text(screen)
+        disclosed = [tool.id for tool in screen._to_update]  # pyright: ignore[reportPrivateUsage]
+        assert disclosed == ["rg", "fd"]
+        assert "2" in head
+        assert "update" in head.lower()
+        for tool_id in disclosed:
+            assert tool_id in progress
+            line = next(row for row in progress.splitlines() if tool_id in row)
+            assert "update" in line.lower()
+            assert "[pending]" in line
+        assert screen.started is False
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        dispatched = [target.tool.id for target in updates.recorded]
+        assert dispatched == disclosed
+
+
+async def test_cancel_mid_update_tail_sweeps_unreached_outdated_row_to_skipped(
+    tmp_path: Path,
+) -> None:
+    """FIXTURE B — skip reporting only; dispatched is a strict subset."""
+    first_started = threading.Event()
+    first_release = threading.Event()
+    rg = _tool("rg")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    _seed_refresh(refresh, fd, outdated=True)
+
+    class _GatedUpdateService(_RecordingUpdateService):
+        def run(self, target: UpdateTarget) -> UpdateOutcome:
+            if target.tool.id == "rg":
+                first_started.set()
+                assert first_release.wait(timeout=5)
+            return super().run(target)
+
+    updates = _GatedUpdateService()
+    inputs = _inputs(
+        tools=[rg, fd],
+        installed=lambda _tool: True,
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        disclosed = [tool.id for tool in screen._to_update]  # pyright: ignore[reportPrivateUsage]
+        await pilot.press("enter")
+        for _ in range(400):
+            if first_started.is_set():
+                break
+            await pilot.pause()
+        assert first_started.is_set()
+        await pilot.press("c")
+        await pilot.pause()
+        first_release.set()
+        await _settle_execute(screen, pilot)
+        dispatched = [target.tool.id for target in updates.recorded]
+        assert dispatched == ["rg"]
+        assert set(dispatched).issubset(set(disclosed))
+        assert "fd" in screen.not_attempted
+        final = _progress_text(screen)
+        fd_line = next(line for line in final.splitlines() if "fd" in line)
+        assert "[pending]" not in fd_line
+        assert "not attempted" in fd_line
+        assert "[pending]" not in final
+
+
+async def test_latch_refused_outdated_update_row_is_swept_to_skipped(tmp_path: Path) -> None:
+    """FIXTURE C — latch refusal skip reporting; run is never called."""
+    rg = _tool("rg")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _RecordingUpdateService()
+    assert updates.begin("other") is True
+    inputs = _inputs(
+        tools=[rg, fd],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert updates.recorded == []
+        assert "rg" in screen.not_attempted
+        final = _progress_text(screen)
+        rg_line = next(line for line in final.splitlines() if "rg" in line)
+        assert "[pending]" not in rg_line
+        assert "not attempted" in rg_line
+        assert updates.in_flight == "other"
+
+
+async def test_error_before_outdated_update_tail_sweeps_pending_update_rows(
+    tmp_path: Path,
+) -> None:
+    rg = _tool("rg")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _RecordingUpdateService()
+
+    def boom(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        del tool, platform, runner, resolve_tag, checksum_policy, tools
+        raise OSError("disk full")
+
+    inputs = _inputs(
+        tools=[rg, fd],
+        install=boom,
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert screen.finished is True
+        assert updates.recorded == []
+        assert "rg" in screen.not_attempted
+        final = _progress_text(screen)
+        assert "[pending]" not in final
+        rg_line = next(line for line in final.splitlines() if "rg" in line)
+        assert "not attempted" in rg_line
