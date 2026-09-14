@@ -3,9 +3,11 @@ from collections.abc import Mapping
 
 import pytest
 
+import installer.engine as engine
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.model import Method, Tool
 from installer.platform import Platform
+from installer.post_install import ConfirmSensitiveAction
 from installer.run import Runner
 from installer.session import (
     Install,
@@ -14,6 +16,7 @@ from installer.session import (
     order_for_install,
     run_installs,
     summarize,
+    with_sensitive_confirm,
 )
 from installer.versions import TagResolver
 
@@ -568,3 +571,96 @@ def test_summarize_over_truncated_outcomes_still_buckets() -> None:
     assert summary.mismatched == ()
     assert summary.dependency_failed == ()
     assert summary.manual_required == ()
+
+
+def _login_shell_tool() -> Tool:
+    return Tool(
+        id="oh-my-zsh",
+        name="o",
+        category="shell",
+        cmd="omz",
+        methods=(Method(kind="script", params={"url": "u"}),),
+        post_install=("set_login_shell",),
+    )
+
+
+def _mutable_platform() -> Platform:
+    return Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
+
+
+def test_with_sensitive_confirm_reaches_post_install_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(engine, "is_installed", lambda tool: False)
+    tool = _login_shell_tool()
+    platform = _mutable_platform()
+    yes = with_sensitive_confirm(lambda _id, _action: True)
+    no = with_sensitive_confirm(lambda _id, _action: False)
+    yes_outcomes = run_installs(
+        [tool], platform, lambda cmd: None, lambda *_a, **_k: "", yes
+    )
+    no_outcomes = run_installs(
+        [tool], platform, lambda cmd: None, lambda *_a, **_k: "", no
+    )
+    assert yes_outcomes[0].post_install_handoff
+    assert no_outcomes[0].post_install_handoff == ()
+
+
+def test_with_sensitive_confirm_forwards_bound_confirmation_and_unchanged_kwargs() -> None:
+    seen: list[tuple[ChecksumPolicy, Mapping[str, Tool] | None, ConfirmSensitiveAction | None]] = []
+
+    def recording_install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        seen.append((checksum_policy, tools, confirm_sensitive_action))
+        return InstallOutcome(tool.id, "installed", method_kind="brew")
+
+    def confirm(tool_id: str, action: str) -> bool:
+        return True
+
+    catalog = {"rg": _tool("rg")}
+    bound = with_sensitive_confirm(confirm, recording_install)
+    run_installs(
+        [_tool("rg")],
+        _platform(),
+        lambda cmd: None,
+        lambda repo: "1.0.0",
+        bound,
+        catalog=catalog,
+    )
+    assert seen == [("fail", catalog, confirm)]
+
+
+def test_with_sensitive_confirm_none_is_callable_and_produces_no_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(engine, "is_installed", lambda tool: False)
+    bound = with_sensitive_confirm(None)
+    outcomes = run_installs(
+        [_login_shell_tool()],
+        _mutable_platform(),
+        lambda cmd: None,
+        lambda *_a, **_k: "",
+        bound,
+    )
+    assert outcomes[0].post_install_handoff == ()
+
+
+def test_install_protocol_parameters_are_unchanged() -> None:
+    params = list(inspect.signature(Install.__call__).parameters)
+    assert params == [
+        "self",
+        "tool",
+        "platform",
+        "runner",
+        "resolve_tag",
+        "checksum_policy",
+        "tools",
+    ]

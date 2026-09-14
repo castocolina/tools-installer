@@ -8,6 +8,7 @@ from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
 from installer.enums import InstallStatus, Priority
 from installer.model import Tool
 from installer.platform import Platform
+from installer.post_install import ConfirmSensitiveAction
 from installer.run import Runner, run_command
 from installer.versions import TagResolver, resolve_github_tag
 
@@ -48,6 +49,57 @@ class Install(Protocol):
         checksum_policy: ChecksumPolicy = ...,
         tools: Mapping[str, Tool] | None = ...,
     ) -> InstallOutcome: ...
+
+
+class SensitiveInstall(Protocol):
+    """An install callable that also accepts a sensitive-action confirmation."""
+
+    def __call__(
+        self,
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = ...,
+        tools: Mapping[str, Tool] | None = ...,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = ...,
+    ) -> InstallOutcome: ...
+
+
+def with_sensitive_confirm(
+    confirm: ConfirmSensitiveAction | None,
+    install: SensitiveInstall = install_tool,
+) -> Install:
+    """Bind a confirmation onto an install without widening ``Install``.
+
+    Adding ``confirm_sensitive_action`` to the shared ``Install`` protocol
+    would force a mechanical edit into every fake install in the suite and
+    into ``attributed_install``. Binding at a composition point instead
+    leaves that protocol byte-identical. Callers: ``run_wizard`` (plan
+    14-04) and the in-TUI execute path (plan 14-05).
+    """
+
+    def bound(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        return install(
+            tool,
+            platform,
+            runner,
+            resolve_tag,
+            checksum_policy=checksum_policy,
+            tools=tools,
+            confirm_sensitive_action=confirm,
+        )
+
+    return bound
 
 
 @dataclass(frozen=True)
