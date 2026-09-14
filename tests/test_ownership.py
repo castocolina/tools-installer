@@ -1,3 +1,5 @@
+import typing
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -5,8 +7,11 @@ import pytest
 from installer.model import Method, Tool
 from installer.ownership import (
     MUTATION_GRADE,
+    NATIVE_OWNERS,
     ManagerInventory,
     ManagerOwnership,
+    Owner,
+    OwnershipCandidate,
     attribute_path,
     owner_dirs,
     parse_brew_list_versions,
@@ -66,6 +71,7 @@ def _resolve(
     which: str | None = None,
     managed_bin_dir: Path = _MANAGED,
     platform: Platform = _MAC,
+    native_probe: Callable[[list[str]], str] | None = None,
 ) -> ManagerOwnership:
     def lookup(_cmd: str) -> str | None:
         return which
@@ -77,6 +83,7 @@ def _resolve(
         artifacts=artifacts or (),
         which=lookup,
         managed_bin_dir=managed_bin_dir,
+        native_probe=native_probe,
     )
 
 
@@ -379,6 +386,195 @@ def test_linux_system_package_manager_is_unknown_by_design(kind: str) -> None:
     assert result.confidence == "none"
     assert result.method is None
     assert result.unknown_reason
+
+
+# -- D-05: install_ownership.detect_owner adapted for the four native
+# package managers. -k native is 15-VALIDATION.md's pinned gate. ------------
+
+
+def _dnf_tool(*, package: str = "jq", owner_probes: tuple[str, ...] = ("dnf",)) -> Tool:
+    return Tool(
+        id="jq",
+        name="jq",
+        category="data",
+        cmd="jq",
+        methods=(Method(kind="dnf", params={"package": package}),),
+        owner_probes=owner_probes,
+    )
+
+
+def _verifying_dnf_probe(
+    package: str, calls: list[list[str]]
+) -> Callable[[list[str]], str]:
+    def probe(command: list[str]) -> str:
+        calls.append(command)
+        return f"{package}\n"
+
+    return probe
+
+
+def test_native_owner_resolves_from_unattributable_live_path() -> None:
+    """THE CASE THAT MATTERS: a real dnf-installed tool has a live
+    /usr/bin/<cmd> that attribute_path cannot attribute to any tracked
+    owner, so resolve_ownership returns from this earlier unknown branch on
+    a real machine -- a fallback placed only at the function's final
+    `_unknown(...)` would never run for this case."""
+    tool = _dnf_tool()
+    calls: list[list[str]] = []
+    result = _resolve(
+        tool,
+        inventory=_empty_readable(),
+        which="/usr/bin/jq",
+        native_probe=_verifying_dnf_probe("jq", calls),
+    )
+    assert result.owner == "dnf"
+    assert result.confidence == "direct"
+    assert result.confidence in MUTATION_GRADE
+    # Self-consistent record: the winner is present in its own candidates
+    # tuple (catalog_tui.py:401-406 iterates this field) and shadowed is
+    # False, because exactly one manager claims this tool.
+    assert result.candidates == (
+        OwnershipCandidate(
+            owner="dnf",
+            method=None,
+            package=None,
+            current_version=None,
+            evidence="dnf lists jq",
+        ),
+    )
+    assert result.shadowed is False
+    assert result.active_candidate is None
+    assert result.active_path == Path("/usr/bin/jq")
+    assert calls  # the probe really was consulted
+
+
+def test_native_owner_resolves_with_no_active_path() -> None:
+    """Both fallthroughs are covered by the one call site: `which` reporting
+    nothing at all also reaches the native adapter."""
+    tool = _dnf_tool()
+    calls: list[list[str]] = []
+    result = _resolve(
+        tool,
+        inventory=_empty_readable(),
+        which=None,
+        native_probe=_verifying_dnf_probe("jq", calls),
+    )
+    assert result.owner == "dnf"
+    assert result.confidence == "direct"
+    assert result.active_path is None
+    assert calls
+
+
+def test_native_owner_requires_complete_negative_evidence() -> None:
+    """An unreadable tracked-manager inventory is incomplete negative
+    evidence, not a claim -- the native probe must not even run."""
+    tool = Tool(
+        id="jq",
+        name="jq",
+        category="data",
+        cmd="jq",
+        methods=(
+            Method(kind="dnf", params={"package": "jq"}),
+            Method(kind="brew", params={"formula": "jq"}),
+        ),
+        owner_probes=("dnf",),
+    )
+    calls: list[list[str]] = []
+    result = _resolve(
+        tool,
+        inventory=ManagerInventory(
+            brew_formulae=None,
+            brew_casks={},
+            pnpm_globals=frozenset(),
+            uv_tools={},
+            brew_prefix=_BREW_PREFIX,
+        ),
+        which=None,
+        native_probe=_verifying_dnf_probe("jq", calls),
+    )
+    assert result.owner == "unknown"
+    assert result.unknown_reason
+    assert "brew" in result.unknown_reason.lower()
+    assert calls == []
+
+
+def test_native_owner_suppressed_by_leftover_installer_artifact() -> None:
+    """A machine holding BOTH a stale installer artifact and a live
+    native-manager install resolves to unknown, on purpose, with the probe
+    never run -- the candidate guard is the evidence rule failing closed.
+    This is a recorded decision, not an undocumented side effect."""
+    tool = _dnf_tool()
+    calls: list[list[str]] = []
+    result = _resolve(
+        tool,
+        inventory=_empty_readable(),
+        artifacts=[_MANAGED / "jq"],
+        which="/usr/bin/jq",
+        native_probe=_verifying_dnf_probe("jq", calls),
+    )
+    assert result.owner == "unknown"
+    assert result.unknown_reason
+    assert "/usr/bin/jq" in result.unknown_reason
+    assert calls == []
+
+
+def test_native_owner_never_overrides_tracked_manager_precedence() -> None:
+    """A tracked manager that both claims the tool and owns the live
+    executable wins outright, and the native probe is never called at all."""
+    tool = Tool(
+        id="jq",
+        name="jq",
+        category="data",
+        cmd="jq",
+        methods=(
+            Method(kind="dnf", params={"package": "jq"}),
+            Method(kind="brew", params={"formula": "jq"}),
+        ),
+        owner_probes=("dnf",),
+    )
+    calls: list[list[str]] = []
+    result = _resolve(
+        tool,
+        inventory=_readable(brew_formulae={"jq": "1.7"}),
+        which=str(_BREW_PREFIX / "bin" / "jq"),
+        native_probe=_verifying_dnf_probe("jq", calls),
+    )
+    assert result.owner == "brew"
+    assert calls == []
+
+
+def test_native_owner_adapter_ignores_non_native_verified_manager() -> None:
+    """The adapter maps only the four native manager names and ignores
+    anything else `detect_owner` can verify (Homebrew, pnpm, SDKMAN,
+    managed download, host setup) -- those have their own evidence paths."""
+    tool = Tool(
+        id="ghost",
+        name="ghost",
+        category="dev",
+        cmd="ghost",
+        methods=(Method(kind="brew", params={"formula": "ghost"}),),
+        owner_probes=("brew",),
+    )
+
+    def verifies_non_native(command: list[str]) -> str:
+        assert command[0] == "brew"
+        return "ghost 1.0\n"
+
+    result = _resolve(
+        tool,
+        inventory=_readable(brew_formulae={}),
+        which=None,
+        native_probe=verifies_non_native,
+    )
+    assert result.owner == "unknown"
+
+
+def test_native_owners_tuple_is_the_four_widened_values() -> None:
+    """The membership decision is written once: NATIVE_OWNERS is what both
+    this module's adapter and update.py's refusal branch read."""
+    assert set(NATIVE_OWNERS) == {"dnf", "apt", "pacman", "rpm-ostree"}
+    assert len(NATIVE_OWNERS) == 4
+    assert set(NATIVE_OWNERS) <= set(typing.get_args(Owner))
 
 
 def test_parse_brew_list_versions_takes_last_token() -> None:

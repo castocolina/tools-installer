@@ -1,3 +1,4 @@
+import typing
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from installer.executors import ExecutorError
 from installer.model import Method, Tool
 from installer.ownership import (
     MUTATION_GRADE,
+    NATIVE_OWNERS,
     Confidence,
     ManagerOwnership,
     Owner,
@@ -213,6 +215,33 @@ def test_sdkman_owned_is_unsupported() -> None:
     assert outcome.status == "unsupported"
     assert "sdk" in outcome.detail.lower()
     assert calls == []
+
+
+# -- D-05/T-15-15: a native-owned tool now clears MUTATION_GRADE (`direct` is
+# a member), so `_perform` needs an explicit refusal BEFORE the owner-dispatch
+# ladder or it hits `else: raise UpdateError(f"unsupported owner ...")`. ----
+
+
+@pytest.mark.parametrize("native_owner", NATIVE_OWNERS)
+def test_native_owner_is_refused_with_concrete_manager_named(native_owner: Owner) -> None:
+    """Parameterized over all four owners, not one representative: the
+    failure this guards against is a branch condition that enumerates three
+    of the four, leaving the omitted one reaching the ladder's final `else`."""
+    tool = _tool("jq", Method(kind="dnf", params={"package": "jq"}))
+    calls: list[list[str]] = []
+    outcome = _perform(_target(tool, native_owner), calls.append)
+    assert outcome.status == "unsupported"
+    assert native_owner in outcome.detail
+    assert calls == []
+
+
+def test_native_owners_tuple_is_exactly_the_four_widened_values() -> None:
+    """The membership decision is written once, as ownership.py's
+    NATIVE_OWNERS, and this module reaches it by import rather than
+    restating the names -- so a fifth owner is refused automatically."""
+    assert set(NATIVE_OWNERS) == {"dnf", "apt", "pacman", "rpm-ostree"}
+    assert len(NATIVE_OWNERS) == 4
+    assert set(NATIVE_OWNERS) <= set(typing.get_args(Owner))
 
 
 def test_pnpm_owned_update_reuses_node_executor_invariants(
