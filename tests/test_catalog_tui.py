@@ -1262,6 +1262,79 @@ def test_unknown_owner_detail_contains_unknown_reason(tmp_path: Path) -> None:
     assert "re-check is pending" not in text
 
 
+# -- D-05/Task 3: the catalog detail line names the OS manager that owns
+# the row, and the update key still routes through the update service, not
+# a second screen-local gate. -----------------------------------------------
+
+
+def test_native_owner_detail_names_manager_and_no_update_fact(tmp_path: Path) -> None:
+    tool = _tool("jq")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"jq": _ownership(tool, owner="dnf")}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"jq": True}, version_refresh=service)
+    text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    assert "dnf" in text
+    assert "not update" in text.lower()
+
+
+async def test_native_owner_update_key_reaches_the_service_and_renders_its_refusal(
+    tmp_path: Path,
+) -> None:
+    """Proves no second gate was added: a screen-local short-circuit would
+    show a message without the service ever being asked."""
+    tool = _tool("jq")
+    ownership = _ownership(tool, owner="dnf")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    reresolve_calls: list[str] = []
+
+    def reresolve(target: Tool) -> ManagerOwnership:
+        reresolve_calls.append(target.id)
+        return ownership
+
+    runner_calls: list[list[str]] = []
+
+    def recording_runner(argv: list[str]) -> None:
+        runner_calls.append(argv)
+
+    updates = UpdateService(
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        runner=recording_runner,
+        resolve_tag=lambda _repo: "v1",
+        tools={},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=reresolve,
+    )
+    app = _unified_app([tool], {"jq": True}, _BLURBS, version_refresh=service, updates=updates)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        service._ownership = {"jq": ownership}  # pyright: ignore[reportPrivateUsage]
+        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+            "jq": VersionStatus(
+                tool_id="jq",
+                installed="1.7",
+                latest=None,
+                outdated=None,
+                stale=True,
+                source="unknown",
+            )
+        }
+        app.catalog._browser.highlighted_id = lambda: "jq"  # type: ignore[method-assign]
+        await pilot.press("u")
+        await _wait_until(pilot, lambda: reresolve_calls == ["jq"])
+        await _wait_until(pilot, lambda: "dnf" in app.catalog.status_text)
+    assert "dnf" in app.catalog.status_text
+    assert runner_calls == []
+
+
 def test_pinned_spec_appears_in_detail_line(tmp_path: Path) -> None:
     tool = _tool("mmdc")
     service = _offline_service(
