@@ -51,6 +51,40 @@ plan-internal test-spec/gate defects (a typing mismatch, a vacuous source-index 
 14-05 of the same shape 14-04 just fixed, a markup-handling contradiction between a task's action and
 behavior text, one test-fixture split). No `## Plan-Revision Conflicts` entry required.
 
+**Round 3 (this revision) — none.** All six cycle-2 findings (0 HIGH, 3 MEDIUM, 3 LOW) were checked
+against `14-CONTEXT.md`'s seven locked decisions before revising, rather than assuming the cycle-2
+reviewer's own "none of which touches a locked CONTEXT.md decision" claim. The check holds: the two
+14-01 findings are about how a test constructs its doubles and about documenting a call-site
+difference, and neither changes which mechanism the batch path reuses (D-01) or where consent comes
+from (D-02); the 14-02 finding splits one test fixture into three and does not touch D-03's reason
+wording; the two 14-04 findings are a renderer's markup handling and a test helper's constructor,
+neither of which touches D-05's confirmation requirement or D-06's dispatch site; and the 14-05
+finding deletes a verify gate while strengthening the enforcement of D-05's unattended rule, moving
+it from a source-order string comparison to a behavioural pilot test. Nothing was deferred and
+nothing was rejected; every finding was incorporated and dispositioned in the relevant plan's
+`## Review Dispositions Ledger` under `### Round 2 — e23d32a`.
+
+Every cycle-2 claim was re-verified against the live tree before being acted on, as in Round 1. All
+six were accurate this cycle; three were extended during verification, and those extensions are
+recorded in the plans' ledgers rather than here, because none is a conflict with a user decision:
+
+- **14-01 MEDIUM, typing.** Accurate, and the fix was widened to all three of the reviewer's options
+  at once rather than one: concrete annotations kept (matching `installer/catalog_tui.py:219-220`),
+  doubles respecified as subclasses of the real services, and `uv run pyright` added to Task 1's own
+  verify. Confirmed `uv run pyright` currently exits `0 errors, 0 warnings` on the untouched tree, so
+  the new wave-1 gate is not red by construction. The same fix also removed a latent second problem
+  the reviewer did not name: the latch-refusal fixture told the executor to make the acquire method
+  answer `False`, which a real-service subclass would have had to fake anyway — it now takes the real
+  latch for another tool, which is both simpler and a stronger assertion.
+- **14-04 LOW, `FakePrompter`.** Accurate, and it is against Task 3, not Task 1 as the review's
+  heading implies — `FakePrompter` is extended in Task 3's action. Quantified while verifying:
+  fifteen call sites, not "other wizard tests" in the abstract, and the plan now cites all fifteen
+  line numbers and gates the count.
+- **14-05 MEDIUM, vacuous gate.** Accurate. The reviewer's fallback suggestion (match the full unique
+  expression instead of the bare word) was recorded but deliberately not adopted — it pins the
+  implementation's line formatting and adds nothing over the behavioural pilot, which is what 14-04
+  concluded for the same defect one cycle earlier.
+
 <!-- gsd:plan-revision-conflicts:end -->
 
 
