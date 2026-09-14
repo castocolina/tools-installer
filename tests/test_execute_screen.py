@@ -1242,6 +1242,16 @@ def _mixed_report_install() -> SensitiveInstall:
                 method_kind="github_release",
                 postinstall_warning="codegraph MCP registration failed: exit 1",
             )
+        if tool.id == "oh-my-zsh":
+            return InstallOutcome(
+                tool.id,
+                "installed",
+                method_kind="script",
+                post_install_handoff=(
+                    "chsh -s /bin/zsh",
+                    "run this\x1b[31mred\x07 after the installer exits",
+                ),
+            )
         return InstallOutcome(tool.id, "installed")
 
     return install
@@ -1253,6 +1263,7 @@ async def test_post_run_log_carries_every_renderer_in_wizard_order() -> None:
         _tool("fd"),
         _tool("bat", requires=("fd",)),
         _tool("pi"),
+        _tool("oh-my-zsh"),
         _tool("codegraph"),
     ]
     inputs = _inputs(
@@ -1263,7 +1274,7 @@ async def test_post_run_log_carries_every_renderer_in_wizard_order() -> None:
     )
     app = _host(inputs, tools)
     async with app.run_test(size=(120, 40)) as pilot:
-        app.push_screen(ExecuteScreen(["rg", "fd", "bat", "pi", "codegraph"], inputs))
+        app.push_screen(ExecuteScreen(["rg", "fd", "bat", "pi", "oh-my-zsh", "codegraph"], inputs))
         await pilot.pause()
         screen = app.screen
         assert isinstance(screen, ExecuteScreen)
@@ -1273,6 +1284,15 @@ async def test_post_run_log_carries_every_renderer_in_wizard_order() -> None:
         assert "disk exploded" in log
         assert "skipped — dependency failed: fd" in log or "skipped -- dependency failed: fd" in log
         assert "After leaving the installer, run these Pi setup commands." in log
+        assert "chsh -s /bin/zsh" in log
+        assert "oh-my-zsh" in log
+        assert "after install" in log.lower()
+        assert "run this" in log
+        assert "red" in log
+        assert "after the installer exits" in log
+        assert "\x1b" not in log
+        assert "\x07" not in log
+        assert log.lower().count("after install") == 1
         assert "codegraph MCP registration failed: exit 1" in log
         assert "sha256" in log
         assert "PATH wired" in log
@@ -1281,11 +1301,12 @@ async def test_post_run_log_carries_every_renderer_in_wizard_order() -> None:
         fail_at = log.index("disk exploded")
         skip_at = log.lower().index("skipped")
         handoff_at = log.index("After leaving the installer")
+        post_install_at = log.index("chsh -s /bin/zsh")
         warn_at = log.index("postinstall warning")
         verify_at = log.index("sha256")
         path_at = log.index("PATH wired")
         audit_at = log.index("PATH verified")
-        assert summary_at < fail_at < skip_at < handoff_at < warn_at < verify_at
+        assert summary_at < fail_at < skip_at < handoff_at < post_install_at < warn_at < verify_at
         assert verify_at < path_at < audit_at
         assert "PATH wiring" in log
         assert "PATH audit" in log or "Read-only audit" in log

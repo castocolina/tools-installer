@@ -36,6 +36,7 @@ from installer.render import (
     render_dependency_notice,
     render_failure_details,
     render_handoff,
+    render_post_install_handoff,
     render_postinstall_warnings,
     render_skipped,
     render_summary,
@@ -678,6 +679,7 @@ class ExecuteScreen(ModalScreen[None]):
             render_failure_details(message.outcomes, console)
             render_skipped(message.outcomes, console)
             render_handoff(message.outcomes, console)
+            render_post_install_handoff(message.outcomes, console)
             render_postinstall_warnings(message.outcomes, console)
             render_verification(message.outcomes, console)
             self._render_updates(
