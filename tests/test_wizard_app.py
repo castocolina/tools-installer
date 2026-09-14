@@ -365,6 +365,57 @@ async def test_doctor_apply_failure_shows_error_and_allows_retry() -> None:
         assert screen.error is None
 
 
+async def test_doctor_enter_applies_fix_and_refreshes_guidance() -> None:
+    """A guard reading that flips as a SIDE EFFECT of the fix must be visible in
+    the same rendered frame as the success line — action_apply cannot render
+    guidance it computed before the fix ran (D-01)."""
+    calls: list[str] = []
+    status = {"pip": False, "npm": False}
+
+    def fix() -> None:
+        calls.append("fix")
+        status["pip"] = True
+
+    app = _app(guard_status=lambda: status, fix=fix, initial_view="doctor")
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, DoctorScreen)
+        body_before = str(app.screen.query_one("#doctor-body", Static).render())
+        assert "Package manager guards active" not in body_before
+        await pilot.press("enter")
+        assert calls == ["fix"]
+        assert isinstance(app.screen, DoctorScreen)
+        screen = app.screen
+        assert screen.applied is True
+        assert screen.error is None
+        body_after = str(screen.query_one("#doctor-body", Static).render())
+        assert "Package manager guards active" in body_after
+
+
+async def test_doctor_enter_applies_failed_fix_still_refreshes_guidance() -> None:
+    """The refresh is unconditional, not success-gated: a fix that moves the
+    guard state and then raises must still render the moved state (D-01).
+    run_live runs the callable before it maps the exception, so a failed fix
+    can already have touched the machine by the time self.error is set."""
+    status = {"pip": False, "npm": False}
+
+    def fix() -> None:
+        status["pip"] = True
+        raise OSError("boom")
+
+    app = _app(guard_status=lambda: status, fix=fix, initial_view="doctor")
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("enter")
+        assert isinstance(app.screen, DoctorScreen)
+        screen = app.screen
+        assert screen.applied is False
+        assert screen.error == "boom"
+        body = str(screen.query_one("#doctor-body", Static).render())
+        assert "Fix failed." in body
+        assert "Package manager guards active" in body
+
+
 async def test_initial_view_opens_on_that_view() -> None:
     app = _app(initial_view="doctor")
     async with app.run_test(size=(100, 30)):
