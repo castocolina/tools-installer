@@ -69,6 +69,45 @@ def _installer_owned_service(
     )
 
 
+def _native_owned_service(
+    cache_path: Path,
+    *,
+    resolve_tag: Callable[[str], str],
+    probe_output: Callable[[list[str]], str | None],
+    now: Callable[[], datetime],
+    native_probe: Callable[[list[str]], str] | None,
+) -> VersionRefreshService:
+    return VersionRefreshService(
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        cache_path=cache_path,
+        resolve_tag=resolve_tag,
+        probe_output=probe_output,
+        now=now,
+        managed_bin_dir=_MANAGED,
+        # An unattributable live path -- THE CASE THAT MATTERS: a real
+        # dnf-installed tool has a live /usr/bin/<cmd> attribute_path cannot
+        # map to any tracked owner.
+        which=lambda cmd: f"/usr/bin/{cmd}",
+        artifacts_for=lambda tool: [],
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+        pnpm_packages=lambda: (),
+        query=lambda *_args, **_kwargs: "",
+        native_probe=native_probe,
+    )
+
+
+def _jq_tool() -> Tool:
+    return Tool(
+        id="jq",
+        name="jq",
+        category="data",
+        cmd="jq",
+        methods=(Method(kind="dnf", params={"package": "jq"}),),
+        owner_probes=("dnf",),
+    )
+
+
 def _codegraph() -> Tool:
     return Tool(
         id="codegraph",
@@ -892,3 +931,69 @@ def test_ownership_of_returns_last_pass_and_none_for_missing(tmp_path: Path) -> 
     service.refresh([_brew_tool()])
     assert service.ownership_of("rg") is not None
     assert service.ownership_of("missing") is None
+
+
+# -- D-05/Task 2: a real probe injected at the service seam reaches
+# resolve_ownership for the display path, and resolve_status's untouched
+# final branch is pinned field by field, not by an ownership-only proxy. ---
+
+
+def test_native_probe_service_resolves_owner_and_status_stays_on_final_branch(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 9, 14, tzinfo=UTC)
+    probe_calls: list[list[str]] = []
+
+    def native_probe(command: list[str]) -> str:
+        probe_calls.append(command)
+        assert command[:2] == ["rpm", "-q"]
+        return "jq\n"
+
+    service = _native_owned_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1.0.0",
+        probe_output=lambda argv: "1.8.1",
+        now=lambda: now,
+        native_probe=native_probe,
+    )
+    tool = _jq_tool()
+    statuses = service.refresh([tool])
+
+    ownership = service.ownership_of("jq")
+    assert ownership is not None
+    assert ownership.owner == "dnf"
+    assert ownership.confidence == "direct"
+    assert probe_calls  # the injected probe was actually consulted
+
+    # resolve_status's FINAL branch (version_status.py:324-336), asserted
+    # field by field: there is no outdated report for a native owner, and
+    # this plan deliberately changes nothing about that -- but the widened
+    # Owner reaches every `owner ==` ladder in this module, so it has to be
+    # pinned rather than assumed. An ownership-only assertion would stay
+    # green even if a branch started claiming a latest version for an owner
+    # this installer cannot query.
+    status = statuses["jq"]
+    assert status.installed == "1.8.1"
+    assert status.latest is None
+    assert status.outdated is None
+    assert status.stale is True
+    assert status.source == "unknown"
+
+
+def test_no_probe_default_never_acquires_a_native_subprocess(tmp_path: Path) -> None:
+    """The default is None, deliberately breaking the surrounding
+    query/which convention: a real default would put a subprocess inside
+    every unit test that constructs this service."""
+    now = datetime(2026, 9, 14, tzinfo=UTC)
+    service = _native_owned_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1.0.0",
+        probe_output=lambda argv: "1.8.1",
+        now=lambda: now,
+        native_probe=None,
+    )
+    tool = _jq_tool()
+    service.refresh([tool])
+    ownership = service.ownership_of("jq")
+    assert ownership is not None
+    assert ownership.owner == "unknown"

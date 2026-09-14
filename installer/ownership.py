@@ -7,12 +7,17 @@ the installed copy. The two must never be conflated, because a tool such as
 `rg` declares `github_release` (rank 20) and `brew` (rank 40) and a
 brew-installed copy would otherwise be treated as a GitHub download.
 
-`dnf`, `apt`, `pacman`, and `rpm_ostree` are valid `METHOD_KINDS` but are out
-of scope for Phase 12, so a tool installed through a Linux system package
-manager resolves to `owner="unknown"` by design — rendered as unknown, and
-refused by the update action — rather than being attributed to a manager this
-phase cannot query. Adding one is a matter of adding an inventory reader and
-an outdated parser; the resolver's shape does not change.
+`dnf`, `apt`, `pacman`, and `rpm_ostree` are valid `METHOD_KINDS`. Phase 12 left
+them out of scope: a tool installed through a Linux system package manager
+resolved to `owner="unknown"` by design. Phase 15 (D-05) closes that gap with
+an ADAPTER, not a native probe: `_native_owner` below calls
+`install_ownership.detect_owner` -- which already has working `apt`/`dnf`/
+`pacman`/`rpm-ostree` probes of its own -- and maps its `"verified"`
+confidence to this module's `"direct"`. The claim is still refused by the
+update action for these four managers specifically (`installer/update.py`'s
+`NATIVE_OWNERS` refusal branch), because mutating a system package needs
+privilege escalation this installer has never required; only ATTRIBUTION
+correctness is in scope here.
 
 Ownership feeds a mutating action that runs with no confirmation, so a claim
 is only made on an active-path match or on complete negative evidence, and
@@ -49,6 +54,7 @@ from typing import Literal
 
 from installer.apps import APP_KINDS
 from installer.download import DOWNLOAD_KINDS
+from installer.install_ownership import ProbeRunner, detect_owner
 from installer.locations import applications_dir, opt_dir
 from installer.model import Method, Tool
 from installer.platform import Platform
@@ -58,11 +64,27 @@ from installer.run import CommandError, run_query
 from installer.status import is_installed
 from installer.uninstall import manager_name
 
-Owner = Literal["installer", "brew", "cask", "pnpm", "uv", "unknown"]
+Owner = Literal[
+    "installer", "brew", "cask", "pnpm", "uv", "unknown", "dnf", "apt", "pacman", "rpm-ostree"
+]
 Confidence = Literal["direct", "by-elimination", "none"]
 
 MUTATION_GRADE: frozenset[str] = frozenset({"direct", "by-elimination"})
 _NATIVE_PACKAGE_MANAGER_KINDS = frozenset({"dnf", "apt", "pacman"})
+
+# D-05: the four OS package managers `install_ownership.detect_owner` can verify
+# ownership for. Declared once here and consumed by both this module's adapter
+# translation table AND installer/update.py's refusal condition, so the set of
+# owners the catalog can attribute and the set the update path refuses cannot
+# drift apart -- a fifth name added later is refused automatically.
+NATIVE_OWNERS: tuple[Owner, ...] = ("dnf", "apt", "pacman", "rpm-ostree")
+# install_ownership.Ownership.manager happens to spell these four identically
+# to the Owner values above, but the annotation is written out explicitly
+# (rather than inferred from a comprehension over NATIVE_OWNERS) because a
+# comprehension would infer dict[Owner, Owner], which pyright --strict
+# rejects where a dict[str, Owner] is required for the Ownership.manager
+# (str | None) lookup below.
+_NATIVE_OWNER_TRANSLATION: dict[str, Owner] = {name: name for name in NATIVE_OWNERS}
 
 _UV_NAME_VERSION = re.compile(r"^(\S+) v(\S+)$")
 _UV_NO_TOOLS = "no tools installed"
@@ -309,6 +331,7 @@ def resolve_ownership(
     artifacts: Sequence[Path],
     managed_bin_dir: Path,
     which: Callable[[str], str | None] = shutil.which,
+    native_probe: ProbeRunner | None = None,
 ) -> ManagerOwnership:
     applicable = resolve_methods(tool, platform)
     candidates = _collect_candidates(tool, applicable, inventory, artifacts)
@@ -330,6 +353,19 @@ def resolve_ownership(
             active_candidate=active_candidate,
             active_path=active_path,
         )
+    # D-05: consult the native-package-manager adapter HERE -- immediately
+    # after the tracked-candidate active-path branch above and immediately
+    # BEFORE the active-path unknown branch below. 15-RESEARCH.md's Pattern 3
+    # sketch places a fallback before the FINAL `return _unknown(...)` at the
+    # bottom of this function; on a real machine a dnf-installed tool has a
+    # live `/usr/bin/<cmd>` that `attribute_path` cannot attribute to any
+    # tracked owner, so this function returns from the branch immediately
+    # below and a fallback placed at the end would never execute. This one
+    # call site covers both unknown branches, both by-elimination branches,
+    # and the real-machine case.
+    native = _native_owner(tool, native_probe, candidates, unreadable, active_path)
+    if native is not None:
+        return native
     if active_path is not None:
         return _unknown(
             tool,
@@ -382,6 +418,65 @@ def resolve_ownership(
             candidates=candidates,
             applicable=applicable,
         ),
+    )
+
+
+def _native_owner(
+    tool: Tool,
+    probe: ProbeRunner | None,
+    candidates: tuple[OwnershipCandidate, ...],
+    unreadable: frozenset[Owner],
+    active_path: Path | None,
+) -> ManagerOwnership | None:
+    """D-05 adapter: `install_ownership.detect_owner` for the four native
+    package managers, never a re-implemented probe (`.claude/architecture.md`
+    rule 5).
+
+    Last-resort evidence source, gated on COMPLETE negative evidence -- the
+    same evidence rule the by-elimination branches already follow, applied to
+    a new source of positive evidence. Returns `None` unless a probe was
+    injected, no tracked manager produced a candidate, and no tracked
+    manager's inventory was unreadable: a readable brew inventory that lists
+    the tool, or an unreadable one, both mean this adapter must not run --
+    the tracked managers' own evidence always outranks or blocks it.
+    """
+    if probe is None or candidates or unreadable:
+        return None
+    verified = detect_owner(tool, probe)
+    if verified.confidence != "verified" or verified.manager is None:
+        return None
+    owner = _NATIVE_OWNER_TRANSLATION.get(verified.manager)
+    if owner is None:
+        # A verified NON-native manager (Homebrew, pnpm, SDKMAN, managed
+        # download, host setup) has its own evidence path elsewhere in this
+        # module; this adapter only ever claims the four native names.
+        return None
+    synthetic = OwnershipCandidate(
+        owner=owner,
+        method=None,
+        package=None,
+        current_version=None,
+        evidence=verified.detail,
+    )
+    # Mirrors the synthetic-script by-elimination branch above: `_owned`
+    # copies `candidates` through verbatim, so the winner must be present in
+    # its own candidate list (`candidates=(synthetic,)`, `shadowed=False`),
+    # never the empty tuple this guard just proved -- otherwise the record
+    # would claim an owner while its own candidate list said nobody claims
+    # this tool, and catalog_tui.py's candidate-iteration loop would have
+    # nothing to iterate.
+    #
+    # `active_candidate` stays `None` and `active_path` passes through
+    # unchanged: the claim rests on package-database membership, not on path
+    # attribution, so nothing here should overstate the evidence.
+    return _owned(
+        tool,
+        synthetic,
+        confidence="direct",
+        shadowed=False,
+        candidates=(synthetic,),
+        active_candidate=None,
+        active_path=active_path,
     )
 
 

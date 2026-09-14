@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import cast
 
 from installer.guards import real_pnpm
+from installer.install_ownership import ProbeRunner
 from installer.manager_versions import OutdatedReport, read_outdated
 from installer.model import Method, Tool
 from installer.ownership import (
@@ -355,6 +356,7 @@ class VersionRefreshService:
         artifacts_for: Callable[[Tool], Sequence[Path]] | None = None,
         read_inventory_fn: Callable[..., ManagerInventory] | None = None,
         read_outdated_fn: Callable[..., OutdatedReport] | None = None,
+        native_probe: ProbeRunner | None = None,
     ) -> None:
         self._platform = platform
         self._cache_path = cache_path
@@ -373,6 +375,14 @@ class VersionRefreshService:
             read_inventory_fn if read_inventory_fn is not None else read_inventory
         )
         self._read_outdated = read_outdated_fn if read_outdated_fn is not None else read_outdated
+        # Deliberately None by default, breaking the surrounding query/which
+        # convention: those defaults predate the D-05 native probes, and a
+        # real default here would put rpm -q / dpkg-query / pacman -Qq /
+        # rpm-ostree status subprocesses inside unit tests that construct
+        # this service over registry-shaped tools, which .claude/testing.md
+        # forbids ("tests must be deterministic and offline"). Production
+        # (setup.py) supplies the real runner explicitly.
+        self._native_probe = native_probe
         self._lock = threading.Lock()
         self._statuses: dict[str, VersionStatus] = {}
         self._ownership: dict[str, ManagerOwnership] = {}
@@ -515,6 +525,7 @@ class VersionRefreshService:
                 artifacts=self._artifacts(tool),
                 which=self._which,
                 managed_bin_dir=self._managed_bin_dir,
+                native_probe=self._native_probe,
             )
             ownerships[tool.id] = ownership
             entry = cache.get(tool.id)

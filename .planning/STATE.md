@@ -4,17 +4,17 @@ milestone: v0.49.0
 current_phase: 15
 current_phase_name: catalog-accuracy-doctor-refresh-version-parsing-ownership-at
 current_plan: 5
-status: executing
-stopped_at: Completed 15-04-PLAN.md
-last_updated: "2026-09-14T23:18:48.390Z"
+status: verifying
+stopped_at: Completed 15-05-PLAN.md
+last_updated: "2026-09-14T23:48:48.949Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 14 complete, transitioned to Phase 15
-state_head: b58d859645d280704140d8f8f1ec150afc68ee9a
+state_head: 5272491c671d5179f014dc75cc5e43ad10f0e6f0
 progress:
   total_phases: 19
   completed_phases: 12
   total_plans: 61
-  completed_plans: 60
+  completed_plans: 61
 ---
 
 # Project State
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 Phase: 15 (catalog-accuracy-doctor-refresh-version-parsing-ownership-at) — EXECUTING
 Current Plan: 5
 Total Plans in Phase: 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-14 — Phase 14 complete, transitioned to Phase 15
 
 Progress: [█████████░] 88%
@@ -86,6 +86,7 @@ Progress: [█████████░] 88%
 | Phase 15 P02 | 10min | 2 tasks | 2 files |
 | Phase 15 P03 | 13min | 2 tasks | 4 files |
 | Phase 15 P04 | 32min | 2 tasks | 5 files |
+| Phase 15 P05 | 29min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -137,6 +138,9 @@ Recent decisions affecting current work:
 - [Phase 15]: [15-03, 2026-09-14]: ast-grep/puppeteer moved user->ai tier (D-07/D-08); D-09 borderline (mmdc/gitleaks/vale/drawio-cli stay user) pinned by a dedicated group test; AI-tab comment+palette rewritten to cite only ai-tier tools via a backtick-citation gate (D-10)
 - [Phase 15]: D-06: _rpm_ostree probe added, registered in both OWNER_PROBES and _PROBES closed sets
 - [Phase 15]: D-05: ten native-manager registry rows now declare owner_probes, rpm-ostree first on the eight that can layer
+- [Phase 15]: 15-05: resolve_ownership's native adapter call site placed before the active-path unknown branch (not at function end), so a real dnf-installed tool's unattributable live PATH actually resolves through it
+- [Phase 15]: 15-05: NATIVE_OWNERS declared once in ownership.py, imported by update.py's refusal branch, so attribution and refusal sets cannot drift apart
+- [Phase 15]: 15-05: VersionRefreshService.native_probe defaults to None so unit tests never acquire a native-manager subprocess; setup.py wires install_ownership.run_probe at both display and mutation sites
 
 ### Pending Todos
 
@@ -168,6 +172,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-14T23:18:48.250Z
-Stopped at: Completed 15-04-PLAN.md
+Last session: 2026-09-14T23:48:48.796Z
+Stopped at: Completed 15-05-PLAN.md
 Resume file: None

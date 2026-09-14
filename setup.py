@@ -37,6 +37,7 @@ from installer.app import (
 )
 from installer.cli import Options, parse_args
 from installer.execute_screen import ExecuteInputs
+from installer.install_ownership import run_probe
 from installer.locations import all_ban_rc_paths, ban_rc_paths, rc_paths_for_mode, zshrc_path
 from installer.model import Tool, load_categories, load_tools
 from installer.omz import omz_present
@@ -576,6 +577,7 @@ def _build_app(
         resolve_tag=resolve_github_tag,
         probe_output=probe_version_output,
         managed_bin_dir=_DEFAULT_BIN_DIR,
+        native_probe=run_probe,
     )
 
     def _reresolve_ownership(tool: Tool) -> ManagerOwnership:
@@ -588,6 +590,7 @@ def _build_app(
             artifacts=artifacts,
             which=shutil.which,
             managed_bin_dir=_DEFAULT_BIN_DIR,
+            native_probe=run_probe,
         )
 
     updates = UpdateService(
