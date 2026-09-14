@@ -357,12 +357,34 @@ async def test_doctor_apply_failure_shows_error_and_allows_retry() -> None:
         screen = app.screen
         assert screen.applied is False
         assert screen.error == "read-only rc file"
-        assert "read-only rc file" in str(screen.query_one("#doctor-body", Static).render())
+        body_after_failure = str(screen.query_one("#doctor-body", Static).render())
+        assert "read-only rc file" in body_after_failure
+        assert "started with" not in body_after_failure  # nothing frozen yet to explain
         await pilot.press("enter")
         assert isinstance(app.screen, DoctorScreen)
         screen = app.screen
         assert screen.applied is True
         assert screen.error is None
+
+
+async def test_doctor_screen_adapts_the_body_with_a_frozen_path_note_once_applied() -> None:
+    """After a successful apply, the Audit block above cannot yet reflect the
+    fix -- this process never re-reads its own PATH. The body must say so
+    explicitly, framed as expected rather than as an error (D-02)."""
+    app = _app(fix=lambda: None, initial_view="doctor")
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, DoctorScreen)
+        body_before = str(app.screen.query_one("#doctor-body", Static).render())
+        assert "started with" not in body_before
+        await pilot.press("enter")
+        screen = app.screen
+        assert isinstance(screen, DoctorScreen)
+        assert screen.applied is True
+        body_after = str(screen.query_one("#doctor-body", Static).render())
+        assert "PATH wired." in body_after
+        assert "started with" in body_after
+        assert "source ~/.myshellrc" in body_after
 
 
 async def test_doctor_enter_applies_fix_and_refreshes_guidance() -> None:
