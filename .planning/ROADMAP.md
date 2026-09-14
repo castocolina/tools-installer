@@ -482,14 +482,25 @@ Plans:
 
 ### Phase 14: Install/update engine correctness & default-shell action: selecting tools that show an available update and confirming install silently does nothing because resolve_dependencies (installer/deps.py) and engine.py's ALREADY_INSTALLED short-circuit skip any tool that is merely present, regardless of outdated status, with no notice explaining why -- the only real update path today is the separate, disconnected per-row 'u' keybind (action_update_tool); unify or clearly bridge these two paths so selecting an outdated tool in the main select+enter flow actually updates it (or explicitly tells the user it won't, and why). Separately, 'set as default shell' (set_login_shell) is unimplemented scaffolding -- validated in installer/model.py's schema, dispatched nowhere, no tool declares it -- implement it carefully: oh-my-zsh's registry entry deliberately disables auto-chsh (CHSH=no) for a documented Bazzite/KDE-SDDM login-failure bug (ublue-os/bazzite#4159) that any implementation must keep guarded, e.g. an explicit confirm step and never automatic on immutable/atomic distros (INSERTED)
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Selecting a tool the catalog shows as outdated and pressing enter actually updates it through the same update service the per-row `u` keybind uses — or says, in the post-run summary and in that keybind's own words, why it will not; and `set_login_shell` becomes a real, implemented post-install action on `oh-my-zsh` alone: hard-blocked on immutable/atomic hosts before anyone is asked, silent without an explicit confirmation, and producing reviewed instructions the user runs themselves rather than a shell change launched from a worker thread.
+**Requirements**: D-01, D-02, D-03, D-04, D-05, D-06, D-07 (14-CONTEXT.md decision ids — this inserted phase has no REQUIREMENTS.md traceability ids)
 **Depends on:** Phase 12
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
+**Wave 1**
 
-- [ ] TBD (run /gsd-plan-phase 14 to break down)
+- [ ] 14-01-PLAN.md — Tracer: an outdated, installed, selected tool updates end to end through ExecuteScreen
+- [ ] 14-03-PLAN.md — set_login_shell core: closed post_install dispatch table, engine dispatch, registry declaration
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 14-02-PLAN.md — Update visibility: preflight head, progress rows, and the post-run update report including refusals
+- [ ] 14-04-PLAN.md — Reviewed-instruction renderer, confirmation-binding adapter, and the console entry point's confirm
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 14-05-PLAN.md — In-app sensitive-action prompt, instructions in the post-run log, and the architecture record
 
 ### Phase 15: Catalog accuracy: Doctor refresh, version parsing, ownership attribution, tier fixes: four related 'the catalog/doctor shows something untrue' bugs. (1) Doctor's fix action applies successfully but the screen shows stale pre-fix guidance next to the success line, because DoctorScreen.action_apply never calls _refresh_guidance() after a successful fix -- fix the refresh call, and make the (deliberately frozen-until-shell-restart) PATH check's messaging explicit instead of looking broken. (2) Version detection shows 'unknown' for tools whose --version output isn't a bare semver (jq prints 'jq-1.8.1', confirmed live) due to an anchored regex in installer/versions.py's _OBSERVED_VERSION -- fix the extraction and audit the registry for other tools with a similar non-standard --version format. (3) Real OS-package-manager ownership detection (dnf/apt/pacman via rpm -q/dpkg-query/pacman -Qq) already exists and works in installer/install_ownership.py but is fully disconnected from the running app (installer/ownership.py and version_status.py never call it, and always resolve such tools to owner=unknown) -- wire it into the live ownership-resolution path, and add detection for Bazzite's rpm-ostree/just-layering equivalent, which has none today. (4) A few registry tools still look tier-misclassified under this session's corrected tier definition: ast-grep (tier=user, but same family as rg/fd which are tier=ai) and puppeteer (tier=user, but is a runtime library dependency of mmdc, not human-driven) are the clearest; mmdc/gitleaks/vale/drawio-cli are borderline and worth a second look. Also fix installer/ui_common.py's stale AI-tab comment still describing claude/codex as living in that tier (they moved to user tier earlier this session) (INSERTED)
 
