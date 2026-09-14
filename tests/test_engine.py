@@ -611,3 +611,80 @@ def test_login_shell_action_is_not_offered_when_tool_declares_no_post_install(
     assert outcome.status == InstallStatus.INSTALLED
     assert outcome.post_install_handoff == ()
     assert asked == []
+
+
+def test_already_installed_login_shell_never_invokes_confirm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_installed(tool: Tool) -> bool:
+        return True
+
+    monkeypatch.setattr(engine, "is_installed", fake_installed)
+    asked: list[tuple[str, str]] = []
+
+    def confirm(tool_id: str, action: str) -> bool:
+        asked.append((tool_id, action))
+        return True
+
+    outcome = install_tool(
+        _tool(
+            Method(kind="script", params={"url": "u"}),
+            post_install=("set_login_shell",),
+            tool_id="oh-my-zsh",
+        ),
+        _platform(),
+        runner=lambda cmd: None,
+        confirm_sensitive_action=confirm,
+    )
+    assert outcome.status == InstallStatus.ALREADY_INSTALLED
+    assert outcome.post_install_handoff == ()
+    assert asked == []
+
+
+def test_manual_required_login_shell_never_invokes_confirm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _not_installed(monkeypatch)
+    asked: list[tuple[str, str]] = []
+
+    def confirm(tool_id: str, action: str) -> bool:
+        asked.append((tool_id, action))
+        return True
+
+    outcome = install_tool(
+        _tool(
+            Method(kind="host_setup", params={"setup_id": "pi"}),
+            post_install=("set_login_shell",),
+            tool_id="oh-my-zsh",
+        ),
+        _platform(),
+        runner=lambda cmd: None,
+        confirm_sensitive_action=confirm,
+    )
+    assert outcome.status == InstallStatus.MANUAL_REQUIRED
+    assert outcome.post_install_handoff == ()
+    assert asked == []
+
+
+def test_raising_confirm_degrades_to_named_warning_not_a_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _not_installed(monkeypatch)
+
+    def boom(tool_id: str, action: str) -> bool:
+        raise RuntimeError("confirm exploded")
+
+    outcome = install_tool(
+        _tool(
+            Method(kind="dnf", params={"package": "ripgrep"}),
+            post_install=("set_login_shell",),
+            tool_id="oh-my-zsh",
+        ),
+        _platform(),
+        runner=lambda cmd: None,
+        confirm_sensitive_action=boom,
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.post_install_handoff == ()
+    assert outcome.postinstall_warning is not None
+    assert "confirm exploded" in outcome.postinstall_warning
