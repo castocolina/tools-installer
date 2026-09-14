@@ -455,7 +455,7 @@ Plans:
 **Goal:** Install execution — confirm, run, wire PATH, verify — happens inside the Textual app, with each child process's output streaming live into a log widget attributed to the tool that produced it, while the link-mode preference is asked once inside that app, persisted, and adjustable afterwards from the Policies view.
 **Requirements**: D-01, D-02, D-03, D-04, D-05 (13-CONTEXT.md decision ids — this inserted phase has no REQUIREMENTS.md traceability ids)
 **Depends on:** Phase 12
-**Plans:** 3/7 plans executed
+**Plans:** 4/7 plans executed
 
 Plans:
 **Wave 1**
@@ -466,7 +466,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 13-04-PLAN.md — Tracer: one tool installs end-to-end inside the app, plus the setup.py seam split
+- [x] 13-04-PLAN.md — Tracer: one tool installs end-to-end inside the app, plus the setup.py seam split
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
