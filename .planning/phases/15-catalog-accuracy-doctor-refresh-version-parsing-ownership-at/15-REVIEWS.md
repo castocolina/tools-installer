@@ -1,7 +1,7 @@
 ---
 phase: 15
 reviewers: [opencode-fallback]
-reviewed_at: 2026-09-14T20:05:56Z
+reviewed_at: 2026-09-14T20:55:00Z
 plans_reviewed:
   - .planning/phases/15-catalog-accuracy-doctor-refresh-version-parsing-ownership-at/15-01-PLAN.md
   - .planning/phases/15-catalog-accuracy-doctor-refresh-version-parsing-ownership-at/15-02-PLAN.md
@@ -12,7 +12,8 @@ models:
   opencode-fallback: "router-env/my-coding (reasoning=medium)"
 model_sources:
   opencode-fallback: "pinned"
-failed_lanes: {}
+failed_lanes:
+  opencode-fallback-cycle2-attempt-1: "first attempt this cycle returned narration-only output (orchestration commentary, self-applied [reviewed-without-source-citations] marker) with no per-plan Summary/Strengths/Concerns content despite ok:true — the #1936 'no final assistant text' defect class, manifesting as premature truncation rather than an empty file. Retried immediately (attempt 2) with the identical prompt/model; attempt 2 succeeded with a complete, well-grounded review."
 ---
 
 # Cross-AI Plan Review — Phase 15
@@ -25,9 +26,18 @@ plan-internal verify-gate/scope defects or advisory confirmations — none propo
 locked CONTEXT.md decision (D-01 through D-10). Nothing here touches which refresh call the
 Doctor screen makes (D-01/D-02), the fallback shared-helper design (D-03/D-04), the ownership
 adapter/refusal mechanism (D-05/D-06), or the two tier moves (D-07/D-08). No conflict recorded.
+
+**Round 2 (this review) — none.** Cycle 2 confirms cycle 1's five findings were correctly
+incorporated (verified against the live tree, not taken on the plan's word — e.g. the
+`_NATIVE_OWNER_DETAIL` grep-stable anchor, the `candidates=(synthetic,)` self-consistency fix,
+the backtick-anchored id scanner, the palette-copy update, and the leftover-artifact test). It
+raises 2 new MEDIUM findings (15-04's one-way `OWNER_PROBES`/`_PROBES` coverage-gap assertion,
+15-05's `resolve_status` final-branch field assertion) plus advisory LOWs, none of which touches
+a locked CONTEXT.md decision — both MEDIUMs are plan-internal verify-gate completeness defects
+in newly-written gates, not design changes. No `## Plan-Revision Conflicts` entry required.
 <!-- gsd:plan-revision-conflicts:end -->
 
-## OpenCode Review (opencode-fallback)
+## OpenCode Review Round 1 (opencode-fallback)
 
 I'll review the five plans against the live code, not the plan text. Loading the review skill and reading the files they cite.
 This is a grounded plan review, not an orchestrator run. I'll check each plan's claims against the live source.
@@ -172,18 +182,125 @@ jq is the accidental end-to-end fixture: 15-02 parses `jq-1.8.1`, 15-04 opts its
 
 **Phase risk: MEDIUM**, almost entirely 15-05's mutation-surface coupling. 15-01–15-04 are low-risk if the 15-01 success-gated-refresh hole and the 15-03 palette/scanner issues are closed in-plan. Do not ship 15-04 without 15-05; together they satisfy D-05/D-06.
 
+## OpenCode Review Round 2 (opencode-fallback)
+
+### 15-01
+
+**Summary.** The plan is executable and correctly addresses both Doctor behaviors. It matches the existing refresh lifecycle and preserves the process-level PATH snapshot semantics.
+
+**Strengths**
+- Correctly identifies the missing call at `installer/wizard_app.py:389-394`; sibling refresh paths already establish `_refresh_guidance()` before `_refresh_body()` at lines 253-255 and 270-272.
+- Tests a mutable guard source rather than relying on unchanged PATH guidance.
+- Explicitly covers failed fixes that mutate state before raising, preserving `run_live`'s behavior.
+- Keeps the note screen-local, appropriate because `installer/guidance.py` is pure and `self.applied` is UI state.
+
+**Concerns**
+- **LOW** — The plan says the refresh is "after a successful fix" in several places while implementing it unconditionally. The task clarifies this adequately, but the final implementation summary should consistently call it an unconditional post-attempt refresh.
+
+**Risk:** LOW — isolated UI behavior, clear existing patterns, and strong regression tests.
+
+### 15-02
+
+**Summary.** The version-parser plan is well-grounded and correctly fixes both independent `_OBSERVED_VERSION` call sites without weakening the strict declared-version parser.
+
+**Strengths**
+- Correctly targets `installer/versions.py:70` and `:141`; both currently call `_OBSERVED_VERSION.fullmatch` independently.
+- Reuses one matcher and the existing capture groups, avoiding divergence between feature-floor parsing and outdated comparison.
+- Preserves `extract_observed_version`'s documented verbatim return contract at `installer/versions.py:116-126`.
+- Explicitly protects `parse_declared_version` at `installer/versions.py:80-91`.
+- The residual `procs` and bash cases are documented rather than incorrectly handled with broad substring parsing.
+
+**Concerns**
+- **LOW** — The audit comment is date-specific (`2026-09-14`). This is acceptable for the requested audit record, but future registry additions can make the statement stale unless the test or comment clearly states the audited registry revision/scope.
+
+**Risk:** LOW — the fallback remains fail-closed through `_OBSERVED_VERSION.fullmatch`, and both parser paths are covered.
+
+### 15-03
+
+**Summary.** The tier corrections and AI-tab documentation updates are appropriately scoped. The plan correctly treats tier as presentation metadata rather than dependency-ordering logic.
+
+**Strengths**
+- Grounds the two changes against the actual registry entries: `ast-grep` at `installer/registry.toml:1836-1841` and the existing `rg`/`fd` AI-tier entries.
+- Updates the existing puppeteer and tier-count tripwires rather than weakening them.
+- Adds explicit D-09 coverage for `mmdc`, `gitleaks`, `vale`, and `drawio-cli`.
+- The comment scanner distinguishes backticked catalog citations from ordinary English, avoiding false positives from IDs such as `git` and `watch`.
+- Correctly notices that the stale user-visible palette at `installer/ui_common.py:135` must change alongside the comment.
+
+**Concerns**
+- **LOW** — The planned source scanner uses string slicing from `name="ai"` to `palette=`. This is adequate for the current table, but it is somewhat format-sensitive and could break on harmless formatting changes.
+
+**Risk:** LOW — declarative edits only, with registry-count and dependency regression tests.
+
+### 15-04
+
+**Summary.** The rpm-ostree probe and registry opt-in plan is technically coherent and correctly preserves the existing probe architecture. Its wave dependency is appropriate because it shares registry tests with 15-03.
+
+**Strengths**
+- Reuses `_method_values`, `_run`, and `_PROBES` from `installer/install_ownership.py:42-59` and `:167-185`.
+- Correctly scopes ownership to the booted deployment's `requested-packages`.
+- Adds the new `"rpm-ostree"` value to the closed `OWNER_PROBES` set at `installer/model.py:55-64`, matching validation at `:654-660`.
+- Correctly identifies all ten native-manager rows from the registry's native method declarations.
+- Places rpm-ostree before dnf so layered packages are attributed to the mechanism that installed them.
+- Explicitly documents that `detect_owner` remains temporarily orphaned until 15-05.
+
+**Concerns**
+- **MEDIUM** — The plan's own verification gate checks `set(_PROBES) <= set(OWNER_PROBES)`, but the production contract is the reverse direction: every registry-declarable owner probe must have an implementation. The gate does not detect an `OWNER_PROBES` entry with no `_PROBES` implementation, which would make a future registry row load successfully and fail at `detect_owner`.
+- **LOW** — The plan intentionally adds registry declarations before the production caller exists. The plan documents this correctly, but execution must not treat 15-04 alone as phase-complete.
+
+**Suggestions**
+- Add an assertion for `set(OWNER_PROBES) <= set(_PROBES)` or explicitly assert equality.
+- Keep 15-05 mandatory before release verification.
+
+**Risk:** MEDIUM — implementation risk is modest, but the closed-set validation gate has a one-way coverage gap.
+
+### 15-05
+
+**Summary.** The final integration plan correctly handles the most consequential risk: verified native ownership must not accidentally authorize unsupported or privileged updates. It also places the ownership fallback before the real machine's unattributed active-path return.
+
+**Strengths**
+- Correctly identifies the live-path early return at `installer/ownership.py:333-345`; placing the adapter only before the final return would not fix real `/usr/bin/<cmd>` cases.
+- Preserves the evidence rule by requiring empty candidates and no unreadable inventories.
+- Requires a self-consistent synthetic candidate, matching the existing branch at `installer/ownership.py:356-373`.
+- Widens `Owner` instead of using casts or type ignores.
+- Adds refusal before the existing unsupported-owner exception at `installer/update.py:229-245`.
+- Injects `run_probe`, whose stdin isolation is implemented at `installer/install_ownership.py:30-39`, into both display and mutation paths.
+- Adds labels for new owners in the catalog, where the current map at `installer/catalog_tui.py:391-400` would otherwise silently omit them.
+
+**Concerns**
+- **MEDIUM** — The plan claims that a native-owned tool's `VersionStatus` should retain `stale=True`, `latest=None`, and `source="unknown"`, but the proposed tests must verify this against the actual final branch of `resolve_status`, not merely assert ownership. The plan mentions this, but it is an important integration contract because the new owner values widen every `Owner` consumer.
+- **LOW** — The `_NATIVE_OWNER_DETAIL` constant is described as naming the owning manager, but the exact proposed formatting is left open. Ensure the returned `UpdateOutcome.detail` includes the concrete owner (`dnf`, `apt`, `pacman`, or `rpm-ostree`) rather than only a generic phrase.
+- **LOW** — The plan's source-inspection assertions are brittle (`count("native_probe=") == 2`), though they are supplemental to behavioral tests.
+
+**Suggestions**
+- Add an explicit parameterized test for all four native owner labels and refusal details.
+- Assert the unchanged `VersionStatus` fields directly in the service integration test.
+- Prefer a shared native-owner tuple for update refusal and test that tuple contains exactly the four widened owner values.
+
+**Risk:** MEDIUM — cross-module integration and ownership gating are high-impact, but the plan has strong placement, safety, and regression coverage.
+
+### Overall Assessment
+
+The five plans are substantially improved and collectively cover the phase goal. No critical blockers remain. The one actionable issue is the one-way closed-set assertion in 15-04; add the reverse coverage check before execution.
+
 ## Consensus Summary
 
-Single reviewer this cycle (opencode-fallback) — no cross-reviewer corroboration to report. No HIGH-severity findings raised. Five actionable MEDIUM findings, all plan-internal verify-gate or scope-completeness defects, none touching a locked CONTEXT.md decision:
+Single reviewer both cycles (opencode-fallback) — no cross-reviewer corroboration to report. No HIGH-severity findings raised in either round.
 
-1. **15-01** — the success-gated-refresh verify gate does not fail when `_refresh_guidance()` is wrongly nested under `if self.error is None:`.
-2. **15-03** — the AI-tab `palette=` string is left stale (still names claude/codex indirectly via "agents you run"), contradicting D-10's intent even though the comment itself is fixed.
-3. **15-03** — the whole-word id-citation scan risks false positives on short/common registry ids (`just`, `code`, `git`, `pi`, `bat`, `sd`).
-4. **15-05** — the synthesized native-owner candidate must also be threaded into `candidates=(synthetic,)` for catalog-detail self-consistency, not just returned as `owner`/`confidence`.
-5. **15-05** — the interaction between a leftover installer-managed artifact and a live native-manager install should be covered by an explicit test rather than left as an implicit fail-closed side effect.
+**Round 1** (5 actionable MEDIUM, all now incorporated — see Round 1 Plan-Revision Conflicts entry above and commit `f339bd9`):
+1. 15-01 success-gated-refresh gate had no teeth.
+2. 15-03 AI-tab `palette=` left stale.
+3. 15-03 whole-word id scan risked false positives.
+4. 15-05 synthesized native-owner candidate not threaded into `candidates`.
+5. 15-05 leftover-artifact × native-attribution interaction untested.
 
-All other findings (LOW-severity or advisory) explicitly recommend no plan change ("don't fix," "don't pin," "don't expand," "don't cache," "don't split") and are treated as confirmations, not actionable items.
+**Round 2** (2 actionable MEDIUM, unresolved as of this write):
+1. **15-04** — the verify gate's closed-set assertion checks the wrong direction (`set(_PROBES) <= set(OWNER_PROBES)` instead of `set(OWNER_PROBES) <= set(_PROBES)`), leaving a real coverage gap: a future `OWNER_PROBES` entry with no matching `_PROBES` implementation would pass the gate and fail at runtime in `detect_owner`.
+2. **15-05** — the plan states the native-owned `VersionStatus` fields (`stale=True`, `latest=None`, `source="unknown"`) should stay unchanged, but no task explicitly asserts this against `resolve_status`'s actual final branch — needs a direct assertion, not just an ownership check.
+
+Additionally treated as actionable (a concrete behavioral requirement, not merely advisory): **15-05** — `UpdateOutcome.detail` must include the concrete owner name (`dnf`/`apt`/`pacman`/`rpm-ostree`), not a generic refusal phrase.
+
+All other Round 2 findings (LOW-severity) are wording/robustness suggestions the reviewer frames as optional ("adequate for the current table," "acceptable... if the comment clearly states the audited scope") — treated as confirmations, not actionable items requiring a plan change.
 
 ## Verification coverage
 
-Source-grounding: the reviewer traced every cited symbol against the live tree this session (file:line citations throughout, cross-checked against `installer/wizard_app.py`, `installer/versions.py`, `installer/ownership.py`, `installer/install_ownership.py`, `installer/update.py`, `installer/registry.toml`, `installer/ui_common.py`, `installer/catalog_tui.py`, `installer/version_status.py`, `setup.py`, and the corresponding test files). No UNCHECKABLE symbols reported. Cross-artifact fact-drift pass: no STATE.md/ROADMAP.md status divergence detected (phase newly planned, not yet executed); no CONTEXT.md/PLAN.md term contradiction found.
+Source-grounding: the reviewer traced every cited symbol against the live tree in both rounds (file:line citations throughout, cross-checked against `installer/wizard_app.py`, `installer/versions.py`, `installer/ownership.py`, `installer/install_ownership.py`, `installer/update.py`, `installer/registry.toml`, `installer/ui_common.py`, `installer/catalog_tui.py`, `installer/version_status.py`, `setup.py`, `installer/model.py`, and the corresponding test files). No UNCHECKABLE symbols reported. Cross-artifact fact-drift pass: no STATE.md/ROADMAP.md status divergence detected (phase in planning, not yet executed); no CONTEXT.md/PLAN.md term contradiction found. Round 2's first attempt at the opencode-fallback lane returned truncated narration-only output (no per-plan findings) despite `ok:true` — recorded in `failed_lanes` above; an immediate retry with the identical prompt produced this complete review.
