@@ -10,11 +10,13 @@ branch is a design reference only, never a code source (D-04).
 from __future__ import annotations
 
 import io
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from rich.console import Console
+from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
@@ -25,6 +27,7 @@ from textual.widgets import Label, ListItem, ListView, RichLog, Static
 from installer.audit import audit
 from installer.deps import resolve_dependencies
 from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
+from installer.enums import InstallStatus, Severity
 from installer.model import Tool
 from installer.platform import Platform
 from installer.render import render_audit, render_dependency_notice, render_summary
@@ -40,13 +43,29 @@ from installer.session import (
     summarize,
 )
 from installer.status import is_installed
-from installer.ui_common import StatusLine, run_live
+from installer.ui_common import SEVERITY_STYLE, StatusLine, run_live
 from installer.versions import TagResolver, resolve_github_tag
 
 _C0_EXCEPT_TAB = frozenset(range(32)) - {9}
 _DEL = 127
 _MISMATCH_CHOICES: frozenset[str] = frozenset({"retry", "skip", "fallback"})
 _DISMISSAL_SKIP = "{tool_id}: checksum-mismatch prompt dismissed; the tool was therefore skipped."
+_EXECUTE_KEYS = (
+    "enter start · esc does not leave or stop during a run · "
+    "c stops between tools, in-flight finishes · "
+    "ctrl+c aborts the app and may leave a tool half-installed"
+)
+_CANCEL_AVAILABLE = "Press c to stop after the current tool; nothing further will start."
+_CANCEL_ARMED = "The current tool will finish and nothing further will start."
+_CANCEL_IDLE = "No install is running."
+_DONE_STATUSES = frozenset({InstallStatus.INSTALLED, InstallStatus.ALREADY_INSTALLED})
+ProgressState = Literal["pending", "done", "not-done", "skipped"]
+_PROGRESS_GLYPH: dict[ProgressState, tuple[str, str, str]] = {
+    "pending": ("○", "dim", "pending"),
+    "done": ("●", SEVERITY_STYLE[Severity.OK], "done"),
+    "not-done": ("✖", SEVERITY_STYLE[Severity.ERROR], "not done"),
+    "skipped": ("○", "dim", "not attempted"),
+}
 
 
 def sanitize_log_line(line: str) -> str:
@@ -121,12 +140,18 @@ def ask_from_worker(app: App[object], screen: ModalScreen[str | None]) -> str | 
     return app.call_from_thread(coro_fn)
 
 
-def attributed_install(streaming: StreamingRunner, install: Install = install_tool) -> Install:
+def attributed_install(
+    streaming: StreamingRunner,
+    install: Install = install_tool,
+    on_outcome: Callable[[InstallOutcome], None] | None = None,
+) -> Install:
     """Return an Install that attributes every call to `streaming` first.
 
     Attribution is driven by the tool `run_installs` is about to install,
     through the existing Install seam, so there is no optional parameter whose
-    absence can silently drop it (D-05.2 / audit finding B).
+    absence can silently drop it (D-05.2 / audit finding B). `on_outcome`,
+    when given, is invoked with each returned InstallOutcome so a screen can
+    update a running status list without the worker touching widgets.
     """
 
     def wrapped(
@@ -139,7 +164,7 @@ def attributed_install(streaming: StreamingRunner, install: Install = install_to
         tools: Mapping[str, Tool] | None = None,
     ) -> InstallOutcome:
         streaming.set_tool(tool.id)
-        return install(
+        outcome = install(
             tool,
             platform,
             runner,
@@ -147,6 +172,9 @@ def attributed_install(streaming: StreamingRunner, install: Install = install_to
             checksum_policy=checksum_policy,
             tools=tools,
         )
+        if on_outcome is not None:
+            on_outcome(outcome)
+        return outcome
 
     return wrapped
 
@@ -161,6 +189,24 @@ class InstallLogLine(Message):
     def __init__(self, tool_id: str, line: str) -> None:
         self.tool_id = tool_id
         self.line = line
+        super().__init__()
+
+
+class InstallToolFinished(Message):
+    """One tool's install() returned; posted from the worker thread."""
+
+    def __init__(self, tool_id: str, status: InstallStatus) -> None:
+        self.tool_id = tool_id
+        self.status = status
+        super().__init__()
+
+
+class MismatchPromptOpen(Message):
+    """The worker is blocked on (or has just left) the checksum-mismatch modal."""
+
+    def __init__(self, tool_id: str, waiting: bool) -> None:
+        self.tool_id = tool_id
+        self.waiting = waiting
         super().__init__()
 
 
@@ -223,8 +269,9 @@ class ExecuteScreen(ModalScreen[None]):
     ctrl+c is NOT the weak cancel. UnifiedApp.action_hard_abort is unguarded
     and always calls exit(None); during a live run that tears the app down on
     top of a running Popen, so the in-flight child is orphaned mid-install.
-    The mid-run status line discloses that cost. The weak cancel (c) arrives
-    in plan 13-05; until then the run cannot be stopped safely.
+    The mid-run status line and the execute-keys hint disclose that cost.
+    The weak cancel is `c`: it stops new tools being queued and lets the
+    in-flight one finish.
     """
 
     if TYPE_CHECKING:
@@ -233,6 +280,7 @@ class ExecuteScreen(ModalScreen[None]):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "start", "start", show=True, priority=True),
         Binding("escape", "close", "close", show=True),
+        Binding("c", "cancel_run", "cancel", show=True),
     ]
     DEFAULT_CSS = """
     ExecuteScreen {
@@ -240,6 +288,7 @@ class ExecuteScreen(ModalScreen[None]):
         layout: vertical;
     }
     ExecuteScreen #execute-head { height: auto; padding: 1 2; }
+    ExecuteScreen #execute-progress { height: auto; padding: 0 2; }
     ExecuteScreen #execute-log { height: 1fr; padding: 0 1; }
     ExecuteScreen #execute-keys { height: auto; padding: 0 1; }
     """
@@ -251,6 +300,9 @@ class ExecuteScreen(ModalScreen[None]):
         self._ordered: list[Tool] = []
         self._by_id: dict[str, Tool] = {}
         self._last_tool_id: str | None = None
+        self._progress: dict[str, ProgressState] = {}
+        self._waiting_prompt: str | None = None
+        self.cancel_event = threading.Event()
         self.status = StatusLine()
         self.started = False
         self.finished = False
@@ -259,6 +311,7 @@ class ExecuteScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         yield Static(id="execute-head")
+        yield Static(id="execute-progress")
         yield RichLog(
             id="execute-log",
             markup=False,
@@ -266,7 +319,7 @@ class ExecuteScreen(ModalScreen[None]):
             auto_scroll=True,
         )
         yield self.status
-        yield Static("enter start · esc cancel", id="execute-keys")
+        yield Static(_EXECUTE_KEYS, id="execute-keys")
 
     def on_mount(self) -> None:
         selected = select_tools(self._inputs.catalog, self._ids)
@@ -279,6 +332,8 @@ class ExecuteScreen(ModalScreen[None]):
         )
         self._ordered = list(resolved.order)
         self._by_id = {tool.id: tool for tool in self._inputs.catalog}
+        self._progress = {tool.id: "pending" for tool in self._ordered}
+        self._refresh_progress()
 
         def render_head(console: Console) -> None:
             render_dependency_notice(resolved.dragged_in, resolved.warnings, console)
@@ -296,9 +351,21 @@ class ExecuteScreen(ModalScreen[None]):
         if self.started:
             return
         self.started = True
-        self.status.set(f"Installing {len(self._ordered)} tools...", "ok")
-        self.query_one("#execute-keys", Static).update("esc close (run in flight)")
+        self.status.set(_CANCEL_AVAILABLE, "ok")
         self._execute_worker()
+
+    def action_cancel_run(self) -> None:
+        if self._waiting_prompt is not None:
+            self.status.set(
+                f"Run paused on a question for {self._waiting_prompt}; answer it before cancel.",
+                "warn",
+            )
+            return
+        if not self.started or self.finished:
+            self.status.set(_CANCEL_IDLE, "warn")
+            return
+        self.cancel_event.set()
+        self.status.set(_CANCEL_ARMED, "warn")
 
     @work(thread=True, exclusive=True, group="install-execute", exit_on_error=False)
     def _execute_worker(self) -> None:
@@ -321,6 +388,10 @@ class ExecuteScreen(ModalScreen[None]):
                 self.post_message(InstallLogLine(tool_id, line))
 
             runner = StreamingRunner(emit)
+
+            def on_outcome(outcome: InstallOutcome) -> None:
+                self.post_message(InstallToolFinished(outcome.tool_id, outcome.status))
+
             on_mismatch = None if self._inputs.unattended else self._ask_mismatch
             result, message = run_live(
                 lambda: run_installs(
@@ -328,10 +399,10 @@ class ExecuteScreen(ModalScreen[None]):
                     self._inputs.platform,
                     runner,
                     self._inputs.resolve_tag,
-                    attributed_install(runner, self._inputs.install),
+                    attributed_install(runner, self._inputs.install, on_outcome),
                     on_mismatch=on_mismatch,
                     catalog=self._by_id,
-                    should_continue=lambda: True,
+                    should_continue=self._should_continue,
                 )
             )
             if result is None:
@@ -358,8 +429,15 @@ class ExecuteScreen(ModalScreen[None]):
                 InstallRunFinished(summary, outcomes, not_attempted, path_text, verify_text, error)
             )
 
+    def _should_continue(self) -> bool:
+        return not self.cancel_event.is_set()
+
     def _ask_mismatch(self, tool_id: str) -> MismatchChoice:
-        answer = ask_from_worker(self.app, ChecksumMismatchScreen(tool_id))
+        self.post_message(MismatchPromptOpen(tool_id, True))
+        try:
+            answer = ask_from_worker(self.app, ChecksumMismatchScreen(tool_id))
+        finally:
+            self.post_message(MismatchPromptOpen(tool_id, False))
         if answer == "retry" or answer == "skip" or answer == "fallback":
             return answer
         sentence = _DISMISSAL_SKIP.format(tool_id=tool_id)
@@ -376,12 +454,37 @@ class ExecuteScreen(ModalScreen[None]):
         if message.line == _DISMISSAL_SKIP.format(tool_id=message.tool_id):
             self.status.set(cleaned, "warn")
 
+    def on_install_tool_finished(self, message: InstallToolFinished) -> None:
+        self._progress[message.tool_id] = "done" if message.status in _DONE_STATUSES else "not-done"
+        self._refresh_progress()
+
+    def on_mismatch_prompt_open(self, message: MismatchPromptOpen) -> None:
+        if message.waiting:
+            self._waiting_prompt = message.tool_id
+            self.status.set(
+                f"Run paused on a question for {message.tool_id}; answer the prompt to continue.",
+                "warn",
+            )
+            return
+        self._waiting_prompt = None
+        if self.started and not self.finished and not self.cancel_event.is_set():
+            self.status.set(_CANCEL_AVAILABLE, "ok")
+
     def on_install_run_finished(self, message: InstallRunFinished) -> None:
         self.finished = True
         self.summary = message.summary
         self.not_attempted = list(message.not_attempted)
+        for outcome in message.outcomes:
+            self._progress[outcome.tool_id] = (
+                "done" if outcome.status in _DONE_STATUSES else "not-done"
+            )
+        for tool_id in message.not_attempted:
+            self._progress[tool_id] = "skipped"
+        self._refresh_progress()
         log = self.query_one("#execute-log", RichLog)
         log.write(self._render_captured(lambda console: render_summary(message.summary, console)))
+        if message.not_attempted:
+            log.write("Not attempted: " + ", ".join(message.not_attempted))
         if message.path_text:
             log.write(message.path_text)
         if message.verify_text:
@@ -399,10 +502,20 @@ class ExecuteScreen(ModalScreen[None]):
             self.dismiss()
             return
         self.status.set(
-            "Installation is still running. The run cannot be stopped safely yet. "
+            "Installation is still running. Press c to stop after the current tool. "
             "ctrl+c aborts the whole app and can leave the current tool half-installed.",
             "warn",
         )
+
+    def _refresh_progress(self) -> None:
+        rows = Text()
+        for index, tool in enumerate(self._ordered):
+            if index:
+                rows.append("\n")
+            state = self._progress.get(tool.id, "pending")
+            glyph, style, label = _PROGRESS_GLYPH[state]
+            rows.append(f"{glyph} {tool.id} [{label}]", style=style)
+        self.query_one("#execute-progress", Static).update(rows)
 
     def _render_captured(self, render: Callable[[Console], None]) -> str:
         buffer = io.StringIO()

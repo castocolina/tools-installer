@@ -651,3 +651,310 @@ async def test_the_event_loop_keeps_running_while_the_mismatch_prompt_is_open() 
         await pilot.press("enter")
         await _settle_execute(screen, pilot)
         assert seen == [("rg", "fail"), ("rg", "fail")]
+
+
+def _progress_text(screen: ExecuteScreen) -> str:
+    return str(screen.query_one("#execute-progress", Static).render())
+
+
+def _keys_text(screen: ExecuteScreen) -> str:
+    return str(screen.query_one("#execute-keys", Static).render())
+
+
+def _install_second_fails(captured: list[str]) -> Install:
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools
+        captured.append(tool.id)
+        if tool.id == "fd":
+            return InstallOutcome(tool.id, "failed")
+        return InstallOutcome(tool.id, "installed")
+
+    return install
+
+
+async def test_progress_lists_every_resolved_tool_as_pending_before_start() -> None:
+    tools = [_tool("rg"), _tool("fd"), _tool("bat")]
+    inputs = _inputs(tools=tools)
+    app = _host(inputs, tools)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd", "bat"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        progress = _progress_text(screen)
+        assert progress.index("rg") < progress.index("fd") < progress.index("bat")
+        assert progress.count("○") == 3
+        assert screen.started is False
+
+
+async def test_progress_pending_count_falls_as_each_tool_finishes() -> None:
+    rg_done = threading.Event()
+    fd_started = threading.Event()
+    fd_release = threading.Event()
+    bat_started = threading.Event()
+    bat_release = threading.Event()
+    captured: list[str] = []
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools
+        captured.append(tool.id)
+        if tool.id == "rg":
+            rg_done.set()
+            return InstallOutcome(tool.id, "installed")
+        if tool.id == "fd":
+            fd_started.set()
+            assert fd_release.wait(timeout=5)
+            return InstallOutcome(tool.id, "failed")
+        bat_started.set()
+        assert bat_release.wait(timeout=5)
+        return InstallOutcome(tool.id, "installed")
+
+    tools = [_tool("rg"), _tool("fd"), _tool("bat")]
+    inputs = _inputs(tools=tools, install=install)
+    app = _host(inputs, tools)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd", "bat"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if rg_done.is_set() and fd_started.is_set():
+                break
+            await pilot.pause()
+        await pilot.pause()
+        assert rg_done.is_set() and fd_started.is_set()
+        after_first = _progress_text(screen)
+        assert after_first.count("○") == 2
+        assert "●" in after_first
+        fd_release.set()
+        for _ in range(400):
+            if bat_started.is_set():
+                break
+            await pilot.pause()
+        await pilot.pause()
+        assert bat_started.is_set()
+        after_second = _progress_text(screen)
+        assert after_second.count("○") == 1
+        assert after_second.count("○") < after_first.count("○")
+        bat_release.set()
+        await _settle_execute(screen, pilot)
+        final = _progress_text(screen)
+        assert final.count("○") == 0
+        assert captured == ["rg", "fd", "bat"]
+
+
+async def test_a_failed_tool_does_not_stop_the_batch() -> None:
+    captured: list[str] = []
+    tools = [_tool("rg"), _tool("fd"), _tool("bat")]
+    inputs = _inputs(tools=tools, install=_install_second_fails(captured))
+    app = _host(inputs, tools)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd", "bat"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert captured == ["rg", "fd", "bat"]
+        assert screen.summary is not None
+        assert screen.summary.failed == ("fd",)
+        assert screen.summary.installed == ("rg", "bat")
+
+
+async def test_cancel_mid_run_lets_the_in_flight_tool_finish() -> None:
+    rg_done = threading.Event()
+    fd_started = threading.Event()
+    fd_release = threading.Event()
+    captured: list[str] = []
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools
+        captured.append(tool.id)
+        if tool.id == "rg":
+            rg_done.set()
+            return InstallOutcome(tool.id, "installed")
+        if tool.id == "fd":
+            fd_started.set()
+            assert fd_release.wait(timeout=5)
+            return InstallOutcome(tool.id, "installed")
+        return InstallOutcome(tool.id, "installed")
+
+    tools = [_tool("rg"), _tool("fd"), _tool("bat")]
+    inputs = _inputs(tools=tools, install=install)
+    app = _host(inputs, tools)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd", "bat"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if rg_done.is_set() and fd_started.is_set():
+                break
+            await pilot.pause()
+        await pilot.pause()
+        assert fd_started.is_set()
+        await pilot.press("c")
+        await pilot.pause()
+        assert app.screen is screen
+        assert screen.cancel_event.is_set()
+        text = screen.status.text.lower()
+        assert text
+        assert "finish" in text
+        assert "start" in text
+        fd_release.set()
+        await _settle_execute(screen, pilot)
+        assert captured == ["rg", "fd"]
+        assert screen.not_attempted == ["bat"]
+        assert screen.summary is not None
+        assert screen.summary.installed == ("rg", "fd")
+        log = _log_text(screen)
+        assert "bat" in log
+        assert "not attempted" in log.lower() or "never attempted" in log.lower()
+
+
+async def test_a_full_run_does_not_name_not_attempted_tools() -> None:
+    captured: list[str] = []
+    tools = [_tool("rg"), _tool("fd")]
+    inputs = _inputs(tools=tools, install=_install_with_output(captured))
+    app = _host(inputs, tools)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen).lower()
+        assert "not attempted" not in log
+        assert "never attempted" not in log
+        assert screen.not_attempted == []
+
+
+async def test_cancel_before_start_and_after_finish_only_sets_status() -> None:
+    captured: list[str] = []
+    inputs = _inputs(install=_install_with_output(captured))
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("c")
+        await pilot.pause()
+        assert screen.status.text != ""
+        assert screen.started is False
+        assert screen.finished is False
+        assert captured == []
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert screen.finished is True
+        await pilot.press("c")
+        await pilot.pause()
+        assert screen.status.text != ""
+        assert screen.started is True
+        assert screen.finished is True
+        assert captured == ["rg"]
+
+
+async def test_cancel_is_inert_while_the_mismatch_modal_is_open() -> None:
+    fd_started = threading.Event()
+    fd_release = threading.Event()
+    seen, mismatch_install = _mismatch_then_ok()
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+    ) -> InstallOutcome:
+        if tool.id == "rg":
+            return mismatch_install(
+                tool,
+                platform,
+                runner,
+                resolve_tag,
+                checksum_policy=checksum_policy,
+                tools=tools,
+            )
+        fd_started.set()
+        assert fd_release.wait(timeout=5)
+        return InstallOutcome(tool.id, "installed")
+
+    tools = [_tool("rg"), _tool("fd")]
+    inputs = _inputs(tools=tools, install=install)
+    app = _host(inputs, tools)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_until_mismatch(app, pilot)
+        await pilot.press("c")
+        await pilot.pause()
+        assert not screen.cancel_event.is_set()
+        waiting = screen.status.text.lower()
+        assert waiting
+        assert "prompt" in waiting or "question" in waiting or "mismatch" in waiting
+        await pilot.press("down", "enter")
+        for _ in range(400):
+            if fd_started.is_set() and not isinstance(app.screen, ChecksumMismatchScreen):
+                break
+            await pilot.pause()
+        assert fd_started.is_set()
+        restored = screen.status.text.lower()
+        assert "c" in restored or "cancel" in restored or "stop" in restored
+        await pilot.press("c")
+        await pilot.pause()
+        assert screen.cancel_event.is_set()
+        fd_release.set()
+        await _settle_execute(screen, pilot)
+        assert seen == [("rg", "fail")]
+
+
+async def test_execute_keys_names_escape_c_and_ctrl_c_with_distinct_meanings() -> None:
+    inputs = _inputs()
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        keys = _keys_text(screen).lower()
+        assert "esc" in keys
+        assert (
+            "c " in keys or keys.endswith(" c") or "· c " in keys or ", c " in keys or " c " in keys
+        )
+        assert "ctrl+c" in keys
+        assert "leave" in keys or "does not" in keys
+        assert "between" in keys or "in-flight" in keys or "in flight" in keys
+        assert "half-installed" in keys or "half installed" in keys
