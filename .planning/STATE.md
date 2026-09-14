@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: 14
 current_phase_name: install-update-engine-correctness-default-shell-action-selec
-current_plan: Not started
+current_plan: 2
 status: executing
-stopped_at: Phase 13 complete, ready to plan Phase 14
-last_updated: "2026-09-14T10:49:33.884Z"
+stopped_at: Completed 14-01-PLAN.md
+last_updated: "2026-09-14T15:00:31.779Z"
 last_activity: 2026-09-14
-last_activity_desc: Phase 13 complete, transitioned to Phase 14
-state_head: f465833da75af5826238fce8b0a74f7a059e51af
+last_activity_desc: Completed 14-01-PLAN.md
+state_head: 12efa6ea88723b3974ea13de3643aa85d5f5651c
 progress:
   total_phases: 19
   completed_phases: 13
   total_plans: 56
-  completed_plans: 51
+  completed_plans: 52
 ---
 
 # Project State
@@ -24,15 +24,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-04)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 13 — live-in-tui-install-execution-persistent-wizard-settings-ins
+**Current focus:** Phase 14 — install-update-engine-correctness-default-shell-action-selec
 
 ## Current Position
 
-Phase: 14 (install-update-engine-correctness-default-shell-action-selec) — READY TO EXECUTE
-Current Plan: Not started
+Phase: 14 (install-update-engine-correctness-default-shell-action-selec) — IN PROGRESS
+Current Plan: 2
 Total Plans in Phase: 5
-Status: Ready to execute
-Last activity: 2026-09-14 — Phase 13 complete, transitioned to Phase 14
+Status: Executing
+Last activity: 2026-09-14 — Completed 14-01-PLAN.md
 
 Progress: [█████████░] 88%
 
@@ -80,6 +80,7 @@ Progress: [█████████░] 88%
 | Phase 13 P05 | 36 min | 3 tasks | 2 files |
 | Phase 13 P06 | 30 min | 3 tasks | 9 files |
 | Phase 13 P07 | 11 min | 2 tasks | 4 files |
+| Phase 14 P01 | 36 min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -123,6 +124,8 @@ Recent decisions affecting current work:
 - [Phase 13]: prompt_link_mode is passed only from make setup and make fix interactive branch. — --doctor/--uninstall/--guard/--all and no-TTY never see it so a picker nobody can answer cannot wedge an unattended run (T-13-18).
 - [Phase 13]: MECHANISM=A (push_screen_wait) is a documented exception to architecture rule 2 — Rule 2 governs main-thread callers; a thread worker has no callback to return into.
 - [Phase 13]: Engine-untouched BASE narrowed to 0fb4b10^ because merge-base predates Phase 13 — git merge-base HEAD feat/tui-interaction-consistency is 3e3cdc8 and includes Phases 1-12.4; that is a wrong baseline, not an engine edit.
+- [Phase 14]: Batch select+enter dispatches updates through UpdateService.run; deps.py stays presence-only — One update mechanism, two call sites; ownership re-check stays inside the service (D-01)
+- [Phase 14]: Missing ownership on batch path blocks on refresh rather than returning like the u keybind — Batch runs in a thread worker; eligibility queues unresolved probes so no-snapshot is routine
 
 ### Pending Todos
 
@@ -154,6 +157,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-14T09:15:09.458Z
-Stopped at: Phase 13 complete, ready to plan Phase 14
+Last session: 2026-09-14T15:00:06.111Z
+Stopped at: Completed 14-01-PLAN.md
 Resume file: None

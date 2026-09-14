@@ -485,12 +485,12 @@ Plans:
 **Goal:** Selecting a tool the catalog shows as outdated and pressing enter actually updates it through the same update service the per-row `u` keybind uses — or says, in the post-run summary and in that keybind's own words, why it will not; and `set_login_shell` becomes a real, implemented post-install action on `oh-my-zsh` alone: hard-blocked on immutable/atomic hosts before anyone is asked, silent without an explicit confirmation, and producing reviewed instructions the user runs themselves rather than a shell change launched from a worker thread.
 **Requirements**: D-01, D-02, D-03, D-04, D-05, D-06, D-07 (14-CONTEXT.md decision ids — this inserted phase has no REQUIREMENTS.md traceability ids)
 **Depends on:** Phase 12
-**Plans:** 5 plans
+**Plans:** 1/5 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 14-01-PLAN.md — Tracer: an outdated, installed, selected tool updates end to end through ExecuteScreen
+- [x] 14-01-PLAN.md — Tracer: an outdated, installed, selected tool updates end to end through ExecuteScreen
 - [ ] 14-03-PLAN.md — set_login_shell core: closed post_install dispatch table, engine dispatch, registry declaration
 
 **Wave 2** *(blocked on Wave 1 completion)*
