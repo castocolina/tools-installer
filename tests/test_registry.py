@@ -581,7 +581,7 @@ def test_no_debian_fedora_arm64_allowlist_stays_honest() -> None:
         )
 
 
-def test_puppeteer_is_a_user_tier_node_tool_requiring_pnpm() -> None:
+def test_puppeteer_is_an_ai_tier_node_tool_requiring_pnpm() -> None:
     puppeteer = next(t for t in load_tools(REGISTRY) if t.id == "puppeteer")
     assert (
         puppeteer.name,
@@ -590,7 +590,7 @@ def test_puppeteer_is_a_user_tier_node_tool_requiring_pnpm() -> None:
         puppeteer.priority,
         puppeteer.audience,
         puppeteer.tier,
-    ) == ("Puppeteer", "dev", "puppeteer", "P3", "both", "user")
+    ) == ("Puppeteer", "dev", "puppeteer", "P3", "both", "ai")
     assert puppeteer.requires == ("pnpm",)
     assert puppeteer.recommends == ()
     assert len(puppeteer.methods) == 2
@@ -931,9 +931,21 @@ def test_registry_tier_distribution_is_pinned() -> None:
     # commit that changes the catalog.
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 26,
-        "ai": 15,
-        "user": 48,
+        "ai": 17,
+        "user": 46,
     }
+
+
+def test_d09_borderline_tools_stay_user_tier() -> None:
+    # D-09: mmdc, gitleaks, vale and drawio-cli were reviewed against
+    # .claude/architecture.md's tier criterion and confirmed correct as
+    # user-tier -- each is invoked by the human on the human's own artifact
+    # (a diagram, a repo scan, prose, an export), not infrastructure an
+    # agent consumes underneath. This closes the "borderline" review rather
+    # than leaving the decision recorded only in a discussion log.
+    tools = _tools_by_id()
+    for tool_id in ("mmdc", "gitleaks", "vale", "drawio-cli"):
+        assert tools[tool_id].tier == "user", tool_id
 
 
 def test_bootstrap_package_managers_are_system_tier() -> None:
@@ -1307,6 +1319,14 @@ def test_zip_runtime_and_tools_resolve_with_archive_zip() -> None:
 def test_ast_grep_cmd_is_ast_grep_not_sg() -> None:
     ast = next(t for t in load_tools(REGISTRY) if t.id == "ast-grep")
     assert ast.cmd == "ast-grep"  # the bundled `sg` alias collides with the system tool
+
+
+def test_ast_grep_tier_is_ai() -> None:
+    # D-07: same category = "search" family as rg/fd, both already tier =
+    # "ai" -- a structural-search tool an agent invokes, not one the human
+    # types.
+    ast = next(t for t in load_tools(REGISTRY) if t.id == "ast-grep")
+    assert ast.tier == "ai"
 
 
 def test_runtime_category_members() -> None:
