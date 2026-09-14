@@ -13,6 +13,7 @@ import io
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Literal
 
 from rich.console import Console
@@ -54,6 +55,8 @@ from installer.session import (
 )
 from installer.status import is_installed
 from installer.ui_common import SEVERITY_STYLE, StatusLine, run_live
+from installer.update import UpdateService, UpdateTarget
+from installer.version_status import VersionRefreshService
 from installer.versions import TagResolver, resolve_github_tag
 
 _MISMATCH_CHOICES: frozenset[str] = frozenset({"retry", "skip", "fallback"})
@@ -252,6 +255,8 @@ class ExecuteInputs:
     resolve_tag: TagResolver = resolve_github_tag
     install: Install = install_tool
     unattended: bool = False
+    version_refresh: VersionRefreshService | None = None
+    updates: UpdateService | None = None
 
 
 class ExecuteScreen(ModalScreen[None]):
@@ -299,6 +304,7 @@ class ExecuteScreen(ModalScreen[None]):
         self._ids = list(ids)
         self._inputs = inputs
         self._ordered: list[Tool] = []
+        self._to_update: list[Tool] = []
         self._by_id: dict[str, Tool] = {}
         self._last_tool_id: str | None = None
         self._progress: dict[str, ProgressState] = {}
@@ -309,6 +315,7 @@ class ExecuteScreen(ModalScreen[None]):
         self.finished = False
         self.summary: Summary | None = None
         self.not_attempted: list[str] = []
+        self.update_skips: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield Static(id="execute-head")
@@ -332,6 +339,7 @@ class ExecuteScreen(ModalScreen[None]):
             is_installed=self._inputs.installed,
         )
         self._ordered = list(resolved.order)
+        self._to_update = self._update_targets(selected)
         self._by_id = {tool.id: tool for tool in self._inputs.catalog}
         self._progress = {tool.id: "pending" for tool in self._ordered}
         self._refresh_progress()
@@ -344,6 +352,22 @@ class ExecuteScreen(ModalScreen[None]):
         self.query_one("#execute-head", Static).update(self._render_captured(render_head))
         if self._inputs.unattended:
             self.action_start()
+
+    def _update_targets(self, selected: list[Tool]) -> list[Tool]:
+        refresh = self._inputs.version_refresh
+        updates = self._inputs.updates
+        if refresh is None or updates is None:
+            return []
+        statuses = refresh.statuses
+        targets: list[Tool] = []
+        for tool in selected:
+            if not self._inputs.installed(tool):
+                continue
+            status = statuses.get(tool.id)
+            if status is not None and status.outdated is False:
+                continue
+            targets.append(tool)
+        return targets
 
     def action_start(self) -> None:
         if self.finished:
@@ -415,6 +439,7 @@ class ExecuteScreen(ModalScreen[None]):
                 summary = summarize(outcomes)
                 seen = {outcome.tool_id for outcome in outcomes}
                 not_attempted = [tool.id for tool in self._ordered if tool.id not in seen]
+                self._run_updates()
                 path_result, path_fail = run_live(self._inputs.wire_path)
                 if path_result is None:
                     path_error = path_fail
@@ -442,6 +467,30 @@ class ExecuteScreen(ModalScreen[None]):
                     verify_error,
                 )
             )
+
+    def _run_updates(self) -> None:
+        refresh = self._inputs.version_refresh
+        updates = self._inputs.updates
+        if refresh is None or updates is None:
+            return
+        for tool in self._to_update:
+            if not self._should_continue():
+                return
+            ownership = refresh.ownership_of(tool.id)
+            if ownership is None:
+                refresh.refresh([tool])
+                ownership = refresh.ownership_of(tool.id)
+            if ownership is None:
+                continue
+            if not updates.begin(tool.id):
+                in_flight = updates.in_flight or "another tool"
+                self.update_skips.append(f"update already in flight for {in_flight}")
+                continue
+            try:
+                target = UpdateTarget(tool=tool, ownership=ownership)
+                run_live(partial(updates.run, target))
+            finally:
+                updates.end()
 
     def _should_continue(self) -> bool:
         return not self.cancel_event.is_set()

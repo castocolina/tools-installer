@@ -14,6 +14,7 @@ import selectors
 import shutil
 import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import questionary
@@ -599,6 +600,9 @@ def _build_app(
         reresolve_ownership=_reresolve_ownership,
         invalidate=version_refresh.invalidate,
     )
+
+    if execute is not None:
+        execute = replace(execute, version_refresh=version_refresh, updates=updates)
 
     return UnifiedApp(
         tools,

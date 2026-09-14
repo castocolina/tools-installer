@@ -6,7 +6,8 @@ package manager or shell rc file.
 """
 
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import ClassVar
 
 from textual import work
@@ -24,11 +25,15 @@ from installer.execute_screen import (
     ExecuteScreen,
     sanitize_log_line,
 )
+from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
+from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
 from installer.run import CommandError, Runner
 from installer.session import Install
 from installer.uninstall import SweepResult
+from installer.update import UpdateOutcome, UpdateService, UpdateTarget
+from installer.version_status import VersionRefreshService, VersionStatus
 from installer.versions import TagResolver
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 
@@ -189,6 +194,8 @@ def _inputs(
     verify: Callable[[], str] | None = None,
     installed: Callable[[Tool], bool] | None = None,
     unattended: bool = False,
+    version_refresh: VersionRefreshService | None = None,
+    updates: UpdateService | None = None,
 ) -> ExecuteInputs:
     catalog = tools if tools is not None else [_tool("rg"), _tool("fd")]
     return ExecuteInputs(
@@ -199,6 +206,8 @@ def _inputs(
         installed=installed if installed is not None else (lambda _tool: False),
         install=install if install is not None else _install_with_output([]),
         unattended=unattended,
+        version_refresh=version_refresh,
+        updates=updates,
     )
 
 
@@ -1110,3 +1119,272 @@ async def test_wire_path_oserror_names_the_section_and_still_finishes() -> None:
         assert screen.finished is True
         assert screen.status.text != ""
         assert "catalog" in screen.status.text.lower()
+
+
+_MANAGED = Path("/tmp/tools-installer-bin")
+
+
+def _empty_inventory(**_kwargs: object) -> ManagerInventory:
+    return ManagerInventory(
+        brew_formulae={},
+        brew_casks={},
+        pnpm_globals=frozenset(),
+        uv_tools={},
+        brew_prefix=None,
+    )
+
+
+def _empty_outdated(**_kwargs: object) -> OutdatedReport:
+    return OutdatedReport(brew={}, cask={}, pnpm={}, uv={})
+
+
+def _brew_ownership(tool: Tool) -> ManagerOwnership:
+    method = tool.methods[0] if tool.methods else None
+    return ManagerOwnership(
+        tool_id=tool.id,
+        owner="brew",
+        method=method,
+        package=tool.id,
+        current_version=None,
+        confidence="direct",
+        shadowed=False,
+        candidates=(
+            OwnershipCandidate(
+                owner="brew",
+                method=method,
+                package=tool.id,
+                current_version=None,
+                evidence="test",
+            ),
+        ),
+        active_candidate="brew",
+        active_path=None,
+        unknown_reason=None,
+    )
+
+
+def _outdated_status(tool_id: str, *, outdated: bool | None) -> VersionStatus:
+    return VersionStatus(
+        tool_id=tool_id,
+        installed="14.1.0",
+        latest="14.1.1" if outdated is not False else "14.1.0",
+        outdated=outdated,
+        stale=False,
+        source="brew",
+    )
+
+
+class _RecordingRefreshService(VersionRefreshService):
+    def __init__(self, cache_path: Path) -> None:
+        super().__init__(
+            platform=_PLATFORM,
+            cache_path=cache_path,
+            resolve_tag=lambda _repo: "v1",
+            probe_output=lambda _argv: "1.0",
+            managed_bin_dir=_MANAGED,
+            which=lambda cmd: str(_MANAGED / cmd),
+            artifacts_for=lambda tool: [_MANAGED / tool.cmd],
+            read_inventory_fn=_empty_inventory,
+            read_outdated_fn=_empty_outdated,
+            pnpm_packages=lambda: (),
+            query=lambda *_a, **_k: "",
+        )
+        self.asked: list[str] = []
+
+    def refresh(self, tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+        statuses: dict[str, VersionStatus] = {}
+        for tool in tools:
+            self.asked.append(tool.id)
+            self._ownership[tool.id] = _brew_ownership(tool)  # pyright: ignore[reportPrivateUsage]
+            status = _outdated_status(tool.id, outdated=True)
+            self._statuses[tool.id] = status  # pyright: ignore[reportPrivateUsage]
+            statuses[tool.id] = status
+        return statuses
+
+
+class _RecordingUpdateService(UpdateService):
+    def __init__(self) -> None:
+        super().__init__(
+            platform=_PLATFORM,
+            runner=lambda _cmd: None,
+            resolve_tag=lambda _repo: "v1",
+            tools={},
+            managed_packages=lambda: (),
+            replay_globals=lambda packages: tuple(packages),
+            reresolve_ownership=_brew_ownership,
+        )
+        self.recorded: list[UpdateTarget] = []
+
+    def run(self, target: UpdateTarget) -> UpdateOutcome:
+        self.recorded.append(target)
+        return UpdateOutcome(
+            tool_id=target.tool.id,
+            status="updated",
+            owner=target.ownership.owner,
+        )
+
+
+def _seed_refresh(
+    refresh: VersionRefreshService,
+    tool: Tool,
+    *,
+    outdated: bool | None | object = ...,
+    ownership: bool = True,
+) -> None:
+    if ownership:
+        refresh._ownership[tool.id] = _brew_ownership(tool)  # pyright: ignore[reportPrivateUsage]
+    if outdated is not ...:
+        refresh._statuses[tool.id] = _outdated_status(  # pyright: ignore[reportPrivateUsage]
+            tool.id, outdated=outdated if isinstance(outdated, bool) or outdated is None else True
+        )
+
+
+async def _run_execute(
+    inputs: ExecuteInputs, ids: list[str]
+) -> tuple[ExecuteScreen, _RecordingUpdateService | None]:
+    app = _host(inputs, list(inputs.catalog))
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(ids, inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        updates = inputs.updates
+        recorded = updates if isinstance(updates, _RecordingUpdateService) else None
+        return screen, recorded
+
+
+async def test_outdated_installed_selected_tool_is_dispatched_through_update_service(
+    tmp_path: Path,
+) -> None:
+    rg = _tool("rg")
+    fd = _tool("fd")
+    captured: list[str] = []
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[rg, fd],
+        install=_install_with_output(captured),
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    screen, recorded = await _run_execute(inputs, ["rg", "fd"])
+    assert screen.finished is True
+    assert recorded is not None
+    assert [target.tool.id for target in recorded.recorded] == ["rg"]
+    assert captured == ["fd"]
+
+
+async def test_confirmed_current_tool_is_not_dispatched_as_outdated(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    fd = _tool("fd")
+    captured: list[str] = []
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=False)
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[rg, fd],
+        install=_install_with_output(captured),
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    screen, recorded = await _run_execute(inputs, ["rg", "fd"])
+    assert screen.finished is True
+    assert recorded is not None
+    assert recorded.recorded == []
+    assert captured == ["fd"]
+
+
+async def test_missing_version_status_still_dispatches_an_outdated_update(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    fd = _tool("fd")
+    captured: list[str] = []
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, ownership=True)
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[rg, fd],
+        install=_install_with_output(captured),
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    screen, recorded = await _run_execute(inputs, ["rg", "fd"])
+    assert screen.finished is True
+    assert recorded is not None
+    assert [target.tool.id for target in recorded.recorded] == ["rg"]
+    assert captured == ["fd"]
+
+
+async def test_missing_ownership_snapshot_refreshes_then_dispatches_outdated_update(
+    tmp_path: Path,
+) -> None:
+    rg = _tool("rg")
+    fd = _tool("fd")
+    captured: list[str] = []
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    refresh._statuses[rg.id] = _outdated_status(  # pyright: ignore[reportPrivateUsage]
+        rg.id, outdated=True
+    )
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[rg, fd],
+        install=_install_with_output(captured),
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    screen, recorded = await _run_execute(inputs, ["rg", "fd"])
+    assert screen.finished is True
+    assert refresh.asked == ["rg"]
+    assert recorded is not None
+    assert [target.tool.id for target in recorded.recorded] == ["rg"]
+
+
+async def test_only_outdated_selection_still_starts_and_dispatches(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    captured: list[str] = []
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        install=_install_with_output(captured),
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    screen, recorded = await _run_execute(inputs, ["rg"])
+    assert screen.started is True
+    assert screen.finished is True
+    assert recorded is not None
+    assert [target.tool.id for target in recorded.recorded] == ["rg"]
+    assert captured == []
+
+
+async def test_in_flight_latch_skips_outdated_update_and_keeps_the_holder(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    fd = _tool("fd")
+    captured: list[str] = []
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _RecordingUpdateService()
+    assert updates.begin("other") is True
+    inputs = _inputs(
+        tools=[rg, fd],
+        install=_install_with_output(captured),
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    screen, recorded = await _run_execute(inputs, ["rg", "fd"])
+    assert screen.finished is True
+    assert recorded is not None
+    assert recorded.recorded == []
+    assert updates.in_flight == "other"
+    assert any("update already in flight for other" in skip for skip in screen.update_skips)
+    assert captured == ["fd"]

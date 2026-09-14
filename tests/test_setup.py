@@ -972,6 +972,33 @@ def test_build_app_shares_one_update_service_and_invalidate(
     assert updates._replay_globals is doctor._reinstall_globals  # pyright: ignore[reportPrivateUsage]
 
 
+def test_build_app_rebinds_execute_onto_shared_services_when_execute_is_passed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    platform = _platform()
+    execute = setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
+        [], platform, link_mode="centralized", unattended=False
+    )
+    app = setup._build_app(  # pyright: ignore[reportPrivateUsage]
+        [], platform, execute=execute
+    )
+    assert app._execute is not None  # pyright: ignore[reportPrivateUsage]
+    assert app._execute.updates is app.catalog._updates  # pyright: ignore[reportPrivateUsage]
+    assert (
+        app._execute.version_refresh is app.catalog._version_refresh  # pyright: ignore[reportPrivateUsage]
+    )
+
+
+def test_build_app_leaves_execute_none_when_caller_omits_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    platform = _platform()
+    app = setup._build_app([], platform)  # pyright: ignore[reportPrivateUsage]
+    assert app._execute is None  # pyright: ignore[reportPrivateUsage]
+
+
 def test_build_app_reresolve_reads_live_inventory_not_cache(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
