@@ -68,7 +68,7 @@
       "opencode-plan-review"
     ],
     "timeouts": {
-      "opencode": 1500
+      "opencode": 2400
     }
   },
   "ship": {
