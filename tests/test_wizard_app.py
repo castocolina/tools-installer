@@ -26,8 +26,9 @@ from installer.policy import (
     ensure_daemon_default,
     omz_plugins_policy,
 )
+from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError, Runner
-from installer.session import Install, Summary
+from installer.session import SensitiveInstall, Summary
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, ToolRow
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
@@ -4076,7 +4077,7 @@ async def test_update_runs_off_the_event_loop_with_no_confirmation(tmp_path: Pat
 
 def _execute_inputs(
     *,
-    install: Install | None = None,
+    install: SensitiveInstall | None = None,
 ) -> ExecuteInputs:
     def _ok_install(
         tool: Tool,
@@ -4086,8 +4087,9 @@ def _execute_inputs(
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
         return InstallOutcome(tool.id, "installed")
 
     return ExecuteInputs(
@@ -4154,8 +4156,9 @@ async def test_two_runs_accumulate_failures_into_install_summary() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
         return InstallOutcome(tool.id, outcomes.pop(0))
 
     app = _app(execute=_execute_inputs(install=sequenced))

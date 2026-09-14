@@ -48,10 +48,12 @@ from installer.selection import select_tools
 from installer.session import (
     Install,
     MismatchChoice,
+    SensitiveInstall,
     Summary,
     order_for_install,
     run_installs,
     summarize,
+    with_sensitive_confirm,
 )
 from installer.status import is_installed
 from installer.ui_common import SEVERITY_STYLE, StatusLine, run_live
@@ -60,7 +62,9 @@ from installer.version_status import VersionRefreshService
 from installer.versions import TagResolver, resolve_github_tag
 
 _MISMATCH_CHOICES: frozenset[str] = frozenset({"retry", "skip", "fallback"})
+_SENSITIVE_CHOICES: frozenset[str] = frozenset({"yes", "no"})
 _DISMISSAL_SKIP = "{tool_id}: checksum-mismatch prompt dismissed; the tool was therefore skipped."
+_DISMISSAL_SENSITIVE = "{tool_id}: sensitive-action prompt dismissed; the answer was therefore no."
 _EXECUTE_KEYS = (
     "enter start · esc does not leave or stop during a run · "
     "c stops between tools, in-flight finishes · "
@@ -118,6 +122,51 @@ class ChecksumMismatchScreen(ModalScreen[str | None]):
             return
         choice = item_id.removeprefix("opt-")
         if choice not in _MISMATCH_CHOICES:
+            return
+        self.dismiss(choice)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class SensitiveActionScreen(ModalScreen[str | None]):
+    """Yes/no prompt for a sensitive post-install action.
+
+    Letter-prefixed ListItem ids (`opt-yes`) because a raw value can be an
+    invalid Textual identifier — the same convention ChecksumMismatchScreen
+    uses. Dismisses with the string values the shared worker-to-modal helper
+    is typed for; the screen's ask method converts them to bool.
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "cancel", "close", show=False),
+    ]
+    DEFAULT_CSS = """
+    SensitiveActionScreen { align: center middle; }
+    SensitiveActionScreen > Label { width: 72; padding: 1 1 0 1; }
+    SensitiveActionScreen > ListView { width: 72; height: 6; border: round $accent; }
+    """
+
+    def __init__(self, tool_id: str) -> None:
+        super().__init__()
+        self.tool_id = tool_id
+
+    def compose(self) -> ComposeResult:
+        yield Label(
+            f"Show a reviewed command to change the login shell to zsh for {self.tool_id}, "
+            "which you run in your own terminal after the installer exits?"
+        )
+        yield ListView(
+            ListItem(Label("Yes, show the reviewed command"), id="opt-yes"),
+            ListItem(Label("No, skip this"), id="opt-no"),
+        )
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item_id = event.item.id
+        if item_id is None:
+            return
+        choice = item_id.removeprefix("opt-")
+        if choice not in _SENSITIVE_CHOICES:
             return
         self.dismiss(choice)
 
@@ -211,8 +260,8 @@ class UpdateToolFinished(Message):
         super().__init__()
 
 
-class MismatchPromptOpen(Message):
-    """The worker is blocked on (or has just left) the checksum-mismatch modal."""
+class PromptOpen(Message):
+    """The worker is blocked on (or has just left) a question modal."""
 
     def __init__(self, tool_id: str, waiting: bool) -> None:
         self.tool_id = tool_id
@@ -271,7 +320,7 @@ class ExecuteInputs:
     verify: Callable[[], str]
     installed: Callable[[Tool], bool] = is_installed
     resolve_tag: TagResolver = resolve_github_tag
-    install: Install = install_tool
+    install: SensitiveInstall = install_tool
     unattended: bool = False
     version_refresh: VersionRefreshService | None = None
     updates: UpdateService | None = None
@@ -442,13 +491,18 @@ class ExecuteScreen(ModalScreen[None]):
                 self.post_message(InstallToolFinished(outcome.tool_id, outcome.status))
 
             on_mismatch = None if self._inputs.unattended else self._ask_mismatch
+            on_confirm = None if self._inputs.unattended else self._ask_sensitive_action
             result, message = run_live(
                 lambda: run_installs(
                     self._ordered,
                     self._inputs.platform,
                     runner,
                     self._inputs.resolve_tag,
-                    attributed_install(runner, self._inputs.install, on_outcome),
+                    attributed_install(
+                        runner,
+                        with_sensitive_confirm(on_confirm, self._inputs.install),
+                        on_outcome,
+                    ),
                     on_mismatch=on_mismatch,
                     catalog=self._by_id,
                     should_continue=self._should_continue,
@@ -544,16 +598,29 @@ class ExecuteScreen(ModalScreen[None]):
         return not self.cancel_event.is_set()
 
     def _ask_mismatch(self, tool_id: str) -> MismatchChoice:
-        self.post_message(MismatchPromptOpen(tool_id, True))
+        self.post_message(PromptOpen(tool_id, True))
         try:
             answer = ask_from_worker(self.app, ChecksumMismatchScreen(tool_id))
         finally:
-            self.post_message(MismatchPromptOpen(tool_id, False))
+            self.post_message(PromptOpen(tool_id, False))
         if answer == "retry" or answer == "skip" or answer == "fallback":
             return answer
         sentence = _DISMISSAL_SKIP.format(tool_id=tool_id)
         self.post_message(InstallLogLine(tool_id, sentence))
         return "skip"
+
+    def _ask_sensitive_action(self, tool_id: str, _action: str) -> bool:
+        self.post_message(PromptOpen(tool_id, True))
+        try:
+            answer = ask_from_worker(self.app, SensitiveActionScreen(tool_id))
+        finally:
+            self.post_message(PromptOpen(tool_id, False))
+        if answer == "yes":
+            return True
+        if answer is None:
+            sentence = _DISMISSAL_SENSITIVE.format(tool_id=tool_id)
+            self.post_message(InstallLogLine(tool_id, sentence))
+        return False
 
     def on_install_log_line(self, message: InstallLogLine) -> None:
         log = self.query_one("#execute-log", RichLog)
@@ -562,7 +629,10 @@ class ExecuteScreen(ModalScreen[None]):
             self._last_tool_id = message.tool_id
         cleaned = sanitize_log_line(message.line)
         log.write(f"{message.tool_id} │ {cleaned}")
-        if message.line == _DISMISSAL_SKIP.format(tool_id=message.tool_id):
+        dismissed = message.line == _DISMISSAL_SKIP.format(
+            tool_id=message.tool_id
+        ) or message.line == _DISMISSAL_SENSITIVE.format(tool_id=message.tool_id)
+        if dismissed:
             self.status.set(cleaned, "warn")
 
     def on_install_tool_finished(self, message: InstallToolFinished) -> None:
@@ -573,7 +643,7 @@ class ExecuteScreen(ModalScreen[None]):
         self._progress[message.tool_id] = message.state
         self._refresh_progress()
 
-    def on_mismatch_prompt_open(self, message: MismatchPromptOpen) -> None:
+    def on_prompt_open(self, message: PromptOpen) -> None:
         if message.waiting:
             self._waiting_prompt = message.tool_id
             self.status.set(

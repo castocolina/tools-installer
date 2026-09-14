@@ -29,8 +29,9 @@ from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
+from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError, Runner
-from installer.session import Install
+from installer.session import SensitiveInstall
 from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import VersionRefreshService, VersionStatus
@@ -168,7 +169,7 @@ def _emit_through_runner(runner: object, tool_id: str, lines: tuple[str, ...]) -
         emit(tool_id, line)
 
 
-def _install_with_output(captured: list[str]) -> Install:
+def _install_with_output(captured: list[str]) -> SensitiveInstall:
     def install(
         tool: Tool,
         platform: Platform,
@@ -177,8 +178,9 @@ def _install_with_output(captured: list[str]) -> Install:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, resolve_tag, checksum_policy, tools
+        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
         captured.append(tool.id)
         _emit_through_runner(runner, tool.id, _OUTPUTS.get(tool.id, ()))
         return InstallOutcome(tool.id, "installed")
@@ -189,7 +191,7 @@ def _install_with_output(captured: list[str]) -> Install:
 def _inputs(
     *,
     tools: list[Tool] | None = None,
-    install: Install | None = None,
+    install: SensitiveInstall | None = None,
     wire_path: Callable[[], str] | None = None,
     verify: Callable[[], str] | None = None,
     installed: Callable[[Tool], bool] | None = None,
@@ -327,8 +329,9 @@ async def test_escape_mid_run_does_not_pop_and_names_ctrl_c_cost() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
         started.set()
         assert release.wait(timeout=5)
         return InstallOutcome(tool.id, "installed")
@@ -368,8 +371,9 @@ async def test_a_broken_batch_still_finishes_with_an_empty_summary() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del tool, platform, runner, resolve_tag, checksum_policy, tools
+        del tool, platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
         raise OSError("disk full")
 
     inputs = _inputs(install=boom)
@@ -431,7 +435,9 @@ async def test_unattended_renders_the_head_before_the_worker_starts() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
+        del confirm_sensitive_action
         return original(
             tool,
             platform,
@@ -459,7 +465,7 @@ async def test_unattended_renders_the_head_before_the_worker_starts() -> None:
         await _settle_execute(screen, pilot)
 
 
-def _mismatch_then_ok() -> tuple[list[tuple[str, str]], Install]:
+def _mismatch_then_ok() -> tuple[list[tuple[str, str]], SensitiveInstall]:
     seen: list[tuple[str, str]] = []
 
     def install(
@@ -470,8 +476,9 @@ def _mismatch_then_ok() -> tuple[list[tuple[str, str]], Install]:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, tools
+        del platform, runner, resolve_tag, tools, confirm_sensitive_action
         seen.append((tool.id, checksum_policy))
         if len([row for row in seen if row[0] == tool.id]) == 1 and checksum_policy == "fail":
             return InstallOutcome(
@@ -675,7 +682,7 @@ def _keys_text(screen: ExecuteScreen) -> str:
     return str(screen.query_one("#execute-keys", Static).render())
 
 
-def _install_second_fails(captured: list[str]) -> Install:
+def _install_second_fails(captured: list[str]) -> SensitiveInstall:
     def install(
         tool: Tool,
         platform: Platform,
@@ -684,8 +691,9 @@ def _install_second_fails(captured: list[str]) -> Install:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
         captured.append(tool.id)
         if tool.id == "fd":
             return InstallOutcome(tool.id, "failed")
@@ -725,8 +733,9 @@ async def test_progress_pending_count_falls_as_each_tool_finishes() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
         captured.append(tool.id)
         if tool.id == "rg":
             rg_done.set()
@@ -806,8 +815,9 @@ async def test_cancel_mid_run_lets_the_in_flight_tool_finish() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
         captured.append(tool.id)
         if tool.id == "rg":
             rg_done.set()
@@ -909,7 +919,9 @@ async def test_cancel_is_inert_while_the_mismatch_modal_is_open() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
+        del confirm_sensitive_action
         if tool.id == "rg":
             return mismatch_install(
                 tool,
@@ -955,6 +967,232 @@ async def test_cancel_is_inert_while_the_mismatch_modal_is_open() -> None:
         assert seen == [("rg", "fail")]
 
 
+def _recording_sensitive_install() -> tuple[
+    list[ConfirmSensitiveAction | None], list[bool], SensitiveInstall
+]:
+    received: list[ConfirmSensitiveAction | None] = []
+    answers: list[bool] = []
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools
+        received.append(confirm_sensitive_action)
+        if confirm_sensitive_action is not None:
+            answers.append(confirm_sensitive_action(tool.id, "set_login_shell"))
+        return InstallOutcome(tool.id, "installed")
+
+    return received, answers, install
+
+
+def _sensitive_action_screen() -> type[ModalScreen[str | None]]:
+    from installer import execute_screen as execute_module
+
+    screen_cls = getattr(execute_module, "SensitiveActionScreen", None)
+    assert screen_cls is not None, "D-05 requires SensitiveActionScreen"
+    return screen_cls
+
+
+async def _settle_until_sensitive(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> None:
+    screen_cls = _sensitive_action_screen()
+    for _ in range(400):
+        if isinstance(app.screen, screen_cls):
+            break
+        await pilot.pause()
+    await pilot.pause()
+
+
+def _sensitive_labels(screen: ModalScreen[object]) -> str:
+    parts = [str(label.render()) for label in screen.query(Label)]
+    return "\n".join(parts)
+
+
+def _assert_sensitive_prompt_copy(text: str, tool_id: str) -> None:
+    lowered = text.lower()
+    assert tool_id in text
+    assert "reviewed command" in lowered
+    assert "login shell" in lowered
+    assert "zsh" in lowered
+    assert "after the installer" in lowered or "your own terminal" in lowered
+    assert "will be changed" not in lowered
+
+
+async def test_sensitive_action_screen_names_the_tool_and_the_reviewed_command() -> None:
+    screen_cls = _sensitive_action_screen()
+    captured: list[str | None] = []
+    app = _host(_inputs())
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(screen_cls("oh-my-zsh"), captured.append)
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, screen_cls)
+        _assert_sensitive_prompt_copy(_sensitive_labels(screen), "oh-my-zsh")
+        await pilot.press("enter")
+        await pilot.pause()
+    assert captured == ["yes"]
+
+    captured = []
+    app = _host(_inputs())
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(screen_cls("oh-my-zsh"), captured.append)
+        await pilot.pause()
+        await pilot.press("down", "enter")
+        await pilot.pause()
+    assert captured == ["no"]
+
+    captured = []
+    app = _host(_inputs())
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(screen_cls("oh-my-zsh"), captured.append)
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+    assert captured == [None]
+
+
+async def test_accepting_the_login_shell_prompt_returns_true_to_the_install_seam() -> None:
+    received, answers, install = _recording_sensitive_install()
+    inputs = _inputs(install=install)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_until_sensitive(app, pilot)
+        prompt = app.screen
+        assert isinstance(prompt, _sensitive_action_screen())
+        _assert_sensitive_prompt_copy(_sensitive_labels(prompt), "rg")
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+    assert answers == [True]
+    assert received and received[0] is not None
+
+
+async def test_refusing_the_login_shell_prompt_returns_false_to_the_install_seam() -> None:
+    _received, answers, install = _recording_sensitive_install()
+    inputs = _inputs(install=install)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_until_sensitive(app, pilot)
+        await pilot.press("down", "enter")
+        await _settle_execute(screen, pilot)
+    assert answers == [False]
+
+
+async def test_escaping_the_login_shell_prompt_returns_false_and_explains() -> None:
+    _received, answers, install = _recording_sensitive_install()
+    inputs = _inputs(install=install)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_until_sensitive(app, pilot)
+        await pilot.press("escape")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        assert "rg" in log
+        assert "false" in log.lower() or "no" in log.lower() or "refused" in log.lower()
+    assert answers == [False]
+
+
+async def test_sensitive_unattended_never_opens_the_modal_and_passes_no_confirmation() -> None:
+    received, answers, install = _recording_sensitive_install()
+    inputs = _inputs(install=install, unattended=True)
+    app = _host(inputs)
+    screen_cls = _sensitive_action_screen()
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        for _ in range(400):
+            if screen.finished:
+                break
+            assert not isinstance(app.screen, screen_cls)
+            await pilot.pause()
+        await _settle_execute(screen, pilot)
+        assert not isinstance(app.screen, screen_cls)
+    assert answers == []
+    assert received == [None]
+
+
+async def test_cancel_is_inert_while_the_sensitive_prompt_is_open() -> None:
+    fd_started = threading.Event()
+    fd_release = threading.Event()
+    _received, answers, sensitive_install = _recording_sensitive_install()
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        if tool.id == "rg":
+            return sensitive_install(
+                tool,
+                platform,
+                runner,
+                resolve_tag,
+                checksum_policy=checksum_policy,
+                tools=tools,
+                confirm_sensitive_action=confirm_sensitive_action,
+            )
+        fd_started.set()
+        assert fd_release.wait(timeout=5)
+        return InstallOutcome(tool.id, "installed")
+
+    tools = [_tool("rg"), _tool("fd")]
+    inputs = _inputs(tools=tools, install=install)
+    app = _host(inputs, tools)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_until_sensitive(app, pilot)
+        await pilot.press("c")
+        await pilot.pause()
+        assert not screen.cancel_event.is_set()
+        waiting = screen.status.text.lower()
+        assert waiting
+        assert "prompt" in waiting or "question" in waiting
+        await pilot.press("down", "enter")
+        for _ in range(400):
+            if fd_started.is_set() and not isinstance(app.screen, _sensitive_action_screen()):
+                break
+            await pilot.pause()
+        assert fd_started.is_set()
+        restored = screen.status.text.lower()
+        assert "c" in restored or "cancel" in restored or "stop" in restored
+        await pilot.press("c")
+        await pilot.pause()
+        assert screen.cancel_event.is_set()
+        fd_release.set()
+        await _settle_execute(screen, pilot)
+    assert answers == [False]
+
+
 async def test_execute_keys_names_escape_c_and_ctrl_c_with_distinct_meanings() -> None:
     inputs = _inputs()
     app = _host(inputs)
@@ -974,7 +1212,7 @@ async def test_execute_keys_names_escape_c_and_ctrl_c_with_distinct_meanings() -
         assert "half-installed" in keys or "half installed" in keys
 
 
-def _mixed_report_install() -> Install:
+def _mixed_report_install() -> SensitiveInstall:
     def install(
         tool: Tool,
         platform: Platform,
@@ -983,8 +1221,9 @@ def _mixed_report_install() -> Install:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
         if tool.id == "rg":
             return InstallOutcome(tool.id, "installed", method_kind="github_release", verified=True)
         if tool.id == "fd":
@@ -1055,7 +1294,7 @@ async def test_post_run_log_carries_every_renderer_in_wizard_order() -> None:
         assert "enter" in screen.status.text.lower() or "esc" in screen.status.text.lower()
 
 
-def _ansi_bomb_install() -> Install:
+def _ansi_bomb_install() -> SensitiveInstall:
     def install(
         tool: Tool,
         platform: Platform,
@@ -1064,8 +1303,9 @@ def _ansi_bomb_install() -> Install:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
         error = CommandError(
             [tool.id, "--install"], 1, detail="normal output\x1b[2J\x1b[31mred\x1b]0;pwned\x07"
         )
@@ -1759,8 +1999,9 @@ async def test_error_before_outdated_update_tail_sweeps_pending_update_rows(
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del tool, platform, runner, resolve_tag, checksum_policy, tools
+        del tool, platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
         raise OSError("disk full")
 
     inputs = _inputs(
