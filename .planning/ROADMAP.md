@@ -70,7 +70,7 @@ waiting on this Phase 12 mechanism — see Phase 4's scope note.
 - [x] **Phase 11: Background Maintenance Daemon** - Wrap the existing tmpdir-prune script as a toggleable, macOS-only LaunchAgent with visible logs (completed 2026-09-07)
 - [x] **Phase 12: Version-Aware Status & Update Action** - Add version-aware status, a cached/staleness-tracked version check, and a manager-delegated update action (unblocks the automatic trigger for REQ-pnpm-global-reinstall-mitigation) (completed 2026-09-07)
 - [x] **Phase 13: Live in-TUI Install Execution & Persistent Wizard Settings** - Run installs inside the Textual app via a worker thread with a streaming output widget, headless-capable, and persist/expose the link-mode preference in the TUI instead of re-prompting every run (completed 2026-09-14)
-- [ ] **Phase 14: Install/Update Engine Correctness & Default-Shell Action** - Fix the silent no-op when confirming install on tools with an available update, and implement the "set zsh as default shell" action
+- [x] **Phase 14: Install/Update Engine Correctness & Default-Shell Action** - Fix the silent no-op when confirming install on tools with an available update, and implement the "set zsh as default shell" action (completed 2026-09-14)
 - [ ] **Phase 15: Catalog Accuracy — Doctor Refresh, Version Parsing, Ownership Attribution, Tier Fixes** - Fix Doctor's stale post-fix guidance, jq-style version-string parsing, wire the existing but disconnected dnf/apt/pacman ownership probes into the live UI, and correct residual tier misclassifications
 
 ## Phase Details
@@ -485,22 +485,22 @@ Plans:
 **Goal:** Selecting a tool the catalog shows as outdated and pressing enter actually updates it through the same update service the per-row `u` keybind uses — or says, in the post-run summary and in that keybind's own words, why it will not; and `set_login_shell` becomes a real, implemented post-install action on `oh-my-zsh` alone: hard-blocked on immutable/atomic hosts before anyone is asked, silent without an explicit confirmation, and producing reviewed instructions the user runs themselves rather than a shell change launched from a worker thread.
 **Requirements**: D-01, D-02, D-03, D-04, D-05, D-06, D-07 (14-CONTEXT.md decision ids — this inserted phase has no REQUIREMENTS.md traceability ids)
 **Depends on:** Phase 12
-**Plans:** 1/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
 **Wave 1**
 
 - [x] 14-01-PLAN.md — Tracer: an outdated, installed, selected tool updates end to end through ExecuteScreen
-- [ ] 14-03-PLAN.md — set_login_shell core: closed post_install dispatch table, engine dispatch, registry declaration
+- [x] 14-03-PLAN.md — set_login_shell core: closed post_install dispatch table, engine dispatch, registry declaration
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 14-02-PLAN.md — Update visibility: preflight head, progress rows, and the post-run update report including refusals
-- [ ] 14-04-PLAN.md — Reviewed-instruction renderer, confirmation-binding adapter, and the console entry point's confirm
+- [x] 14-02-PLAN.md — Update visibility: preflight head, progress rows, and the post-run update report including refusals
+- [x] 14-04-PLAN.md — Reviewed-instruction renderer, confirmation-binding adapter, and the console entry point's confirm
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 14-05-PLAN.md — In-app sensitive-action prompt, instructions in the post-run log, and the architecture record
+- [x] 14-05-PLAN.md — In-app sensitive-action prompt, instructions in the post-run log, and the architecture record
 
 ### Phase 15: Catalog accuracy: Doctor refresh, version parsing, ownership attribution, tier fixes: four related 'the catalog/doctor shows something untrue' bugs. (1) Doctor's fix action applies successfully but the screen shows stale pre-fix guidance next to the success line, because DoctorScreen.action_apply never calls _refresh_guidance() after a successful fix -- fix the refresh call, and make the (deliberately frozen-until-shell-restart) PATH check's messaging explicit instead of looking broken. (2) Version detection shows 'unknown' for tools whose --version output isn't a bare semver (jq prints 'jq-1.8.1', confirmed live) due to an anchored regex in installer/versions.py's _OBSERVED_VERSION -- fix the extraction and audit the registry for other tools with a similar non-standard --version format. (3) Real OS-package-manager ownership detection (dnf/apt/pacman via rpm -q/dpkg-query/pacman -Qq) already exists and works in installer/install_ownership.py but is fully disconnected from the running app (installer/ownership.py and version_status.py never call it, and always resolve such tools to owner=unknown) -- wire it into the live ownership-resolution path, and add detection for Bazzite's rpm-ostree/just-layering equivalent, which has none today. (4) A few registry tools still look tier-misclassified under this session's corrected tier definition: ast-grep (tier=user, but same family as rg/fd which are tier=ai) and puppeteer (tier=user, but is a runtime library dependency of mmdc, not human-driven) are the clearest; mmdc/gitleaks/vale/drawio-cli are borderline and worth a second look. Also fix installer/ui_common.py's stale AI-tab comment still describing claude/codex as living in that tier (they moved to user tier earlier this session) (INSERTED)
 

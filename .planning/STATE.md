@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: 14
-current_phase_name: install-update-engine-correctness-default-shell-action-selec
-current_plan: 2
-status: executing
-stopped_at: Completed 14-01-PLAN.md
-last_updated: "2026-09-14T15:00:31.779Z"
+current_phase: 15
+current_phase_name: "Catalog accuracy: Doctor refresh, version parsing, ownership attribution, tier fixes: four related 'the catalog/doctor shows something untrue' bugs. (1) Doctor's fix action applies successfully but the screen shows stale pre-fix guidance next to the success line, because DoctorScreen.action_apply never calls _refresh_guidance() after a successful fix -- fix the refresh call, and make the (deliberately frozen-until-shell-restart) PATH check's messaging explicit instead of looking broken. (2) Version detection shows 'unknown' for tools whose --version output isn't a bare semver (jq prints 'jq-1.8.1', confirmed live) due to an anchored regex in installer/versions.py's _OBSERVED_VERSION -- fix the extraction and audit the registry for other tools with a similar non-standard --version format. (3) Real OS-package-manager ownership detection (dnf/apt/pacman via rpm -q/dpkg-query/pacman -Qq) already exists and works in installer/install_ownership.py but is fully disconnected from the running app (installer/ownership.py and version_status.py never call it, and always resolve such tools to owner=unknown) -- wire it into the live ownership-resolution path, and add detection for Bazzite's rpm-ostree/just-layering equivalent, which has none today. (4) A few registry tools still look tier-misclassified under this session's corrected tier definition: ast-grep (tier=user, but same family as rg/fd which are tier=ai) and puppeteer (tier=user, but is a runtime library dependency of mmdc, not human-driven) are the clearest; mmdc/gitleaks/vale/drawio-cli are borderline and worth a second look. Also fix installer/ui_common.py's stale AI-tab comment still describing claude/codex as living in that tier (they moved to user tier earlier this session)"
+current_plan: Not started
+status: planning
+stopped_at: Phase 14 complete, ready to plan Phase 15
+last_updated: "2026-09-14T18:49:00.476Z"
 last_activity: 2026-09-14
-last_activity_desc: Completed 14-01-PLAN.md
-state_head: 12efa6ea88723b3974ea13de3643aa85d5f5651c
+last_activity_desc: Phase 14 complete, transitioned to Phase 15
+state_head: b928c5ac5447f3fd19d1f6e21204d38f0222f806
 progress:
   total_phases: 19
   completed_phases: 13
   total_plans: 56
-  completed_plans: 52
+  completed_plans: 56
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 14 (install-update-engine-correctness-default-shell-action-selec) — IN PROGRESS
-Current Plan: 2
+Phase: 15 — Catalog accuracy: Doctor refresh, version parsing, ownership attribution, tier fixes: four related 'the catalog/doctor shows something untrue' bugs. (1) Doctor's fix action applies successfully but the screen shows stale pre-fix guidance next to the success line, because DoctorScreen.action_apply never calls _refresh_guidance() after a successful fix -- fix the refresh call, and make the (deliberately frozen-until-shell-restart) PATH check's messaging explicit instead of looking broken. (2) Version detection shows 'unknown' for tools whose --version output isn't a bare semver (jq prints 'jq-1.8.1', confirmed live) due to an anchored regex in installer/versions.py's _OBSERVED_VERSION -- fix the extraction and audit the registry for other tools with a similar non-standard --version format. (3) Real OS-package-manager ownership detection (dnf/apt/pacman via rpm -q/dpkg-query/pacman -Qq) already exists and works in installer/install_ownership.py but is fully disconnected from the running app (installer/ownership.py and version_status.py never call it, and always resolve such tools to owner=unknown) -- wire it into the live ownership-resolution path, and add detection for Bazzite's rpm-ostree/just-layering equivalent, which has none today. (4) A few registry tools still look tier-misclassified under this session's corrected tier definition: ast-grep (tier=user, but same family as rg/fd which are tier=ai) and puppeteer (tier=user, but is a runtime library dependency of mmdc, not human-driven) are the clearest; mmdc/gitleaks/vale/drawio-cli are borderline and worth a second look. Also fix installer/ui_common.py's stale AI-tab comment still describing claude/codex as living in that tier (they moved to user tier earlier this session)
+Current Plan: Not started
 Total Plans in Phase: 5
-Status: Executing
-Last activity: 2026-09-14 — Completed 14-01-PLAN.md
+Status: Ready to plan
+Last activity: 2026-09-14 — Phase 14 complete, transitioned to Phase 15
 
 Progress: [█████████░] 88%
 
@@ -40,7 +40,7 @@ Progress: [█████████░] 88%
 
 **Velocity:**
 
-- Total plans completed: 44
+- Total plans completed: 49
 - Average duration: - min
 - Total execution time: 0 hours
 
@@ -62,6 +62,7 @@ Progress: [█████████░] 88%
 | 12.3 | 4 | - | - |
 | 12.4 | 4 | - | - |
 | 13 | 7 | - | - |
+| 14 | 5 | - | - |
 
 **Recent Trend:**
 
@@ -158,5 +159,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-14T15:00:06.111Z
-Stopped at: Completed 14-01-PLAN.md
+Stopped at: Phase 14 complete, ready to plan Phase 15
 Resume file: None
