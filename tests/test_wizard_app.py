@@ -37,6 +37,7 @@ from installer.wizard_app import (
     VIEW_ORDER,
     ConfirmUninstall,
     DoctorScreen,
+    LinkModeScreen,
     NavScreen,
     PoliciesScreen,
     PolicyInputs,
@@ -147,8 +148,17 @@ def _fake_policy(
     )
 
 
-def _policy_inputs(policies: list[Policy] | None = None) -> PolicyInputs:
-    return PolicyInputs(policies=policies if policies is not None else [_fake_policy()])
+def _policy_inputs(
+    policies: list[Policy] | None = None,
+    *,
+    link_mode: Callable[[], str] | None = None,
+    set_link_mode: Callable[[str], None] | None = None,
+) -> PolicyInputs:
+    return PolicyInputs(
+        policies=policies if policies is not None else [_fake_policy()],
+        link_mode=link_mode,
+        set_link_mode=set_link_mode,
+    )
 
 
 def _app(
@@ -156,7 +166,7 @@ def _app(
     report: DoctorReport | None = None,
     guard_status: dict[str, bool] | Callable[[], dict[str, bool]] | None = None,
     guard_warning: str | None = None,
-    fix_preview: str = "Will wire ~/.local/bin into ~/.zshrc",
+    fix_preview: str | Callable[[], str] = "Will wire ~/.local/bin into ~/.zshrc",
     fix: Callable[[], None] = lambda: None,
     uninstall: UninstallInputs | None = None,
     policies: PolicyInputs | None = None,
@@ -1364,6 +1374,165 @@ async def test_time_picker_set_schedule_failure_surfaces_on_status_line() -> Non
         await pilot.press("enter")  # select the first slot, 00:00
         assert isinstance(app.screen, PoliciesScreen)
         assert "Policy change failed" in screen.status.text
+
+
+_LINK_MODE_LABELS = (
+    "Centralized: one ~/.myshellrc, sourced from .zshrc and .bashrc",
+    "Single shell: source ~/.myshellrc from your current shell only",
+    "Split: write PATH directly into each rc file (no ~/.myshellrc)",
+)
+
+
+def test_policy_inputs_link_mode_fields_default_to_none() -> None:
+    inputs = PolicyInputs(policies=[_fake_policy()])
+    assert inputs.link_mode is None
+    assert inputs.set_link_mode is None
+
+
+def test_link_mode_picker_ids_and_labels_match_the_retired_prompt() -> None:
+    items = [
+        ListItem(Label(label), id=item_id)
+        for item_id, label in (
+            ("link-centralized", _LINK_MODE_LABELS[0]),
+            ("link-single", _LINK_MODE_LABELS[1]),
+            ("link-split", _LINK_MODE_LABELS[2]),
+        )
+    ]
+    assert [item.id for item in items] == ["link-centralized", "link-single", "link-split"]
+    # Construction is the proof the ids are valid Textual identifiers.
+    LinkModeScreen()
+
+
+async def test_policies_link_mode_line_names_the_mode_when_wired() -> None:
+    app = _app(
+        policies=_policy_inputs(link_mode=lambda: "centralized", set_link_mode=lambda _mode: None),
+        initial_view="policies",
+    )
+    async with app.run_test(size=(100, 30)):
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        line = str(screen.query_one("#link-mode-line", Static).render())
+        assert "centralized" in line
+        assert "m" in line
+
+
+async def test_policies_link_mode_line_is_empty_when_unwired() -> None:
+    app = _app(policies=_policy_inputs(), initial_view="policies")
+    async with app.run_test(size=(100, 30)):
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        line = str(screen.query_one("#link-mode-line", Static).render())
+        assert line.strip() in ("", "''")
+
+
+async def test_pressing_m_opens_link_mode_picker_with_the_three_labels() -> None:
+    app = _app(
+        policies=_policy_inputs(link_mode=lambda: "centralized", set_link_mode=lambda _mode: None),
+        initial_view="policies",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("m")
+        screen = app.screen
+        assert isinstance(screen, LinkModeScreen)
+        labels = [str(item.query_one(Label).render()) for item in screen.query(ListItem)]
+        assert labels == list(_LINK_MODE_LABELS)
+
+
+async def test_selecting_split_saves_and_sets_ok_status() -> None:
+    current = ["centralized"]
+    calls: list[str] = []
+
+    def set_mode(value: str) -> None:
+        calls.append(value)
+        current[0] = value
+
+    app = _app(
+        policies=_policy_inputs(link_mode=lambda: current[0], set_link_mode=set_mode),
+        initial_view="policies",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        await pilot.press("m")
+        assert isinstance(app.screen, LinkModeScreen)
+        await pilot.press("down", "down", "enter")
+        assert isinstance(app.screen, PoliciesScreen)
+        assert calls == ["split"]
+        assert "split" in screen.status.text
+        assert "saved" in screen.status.text.lower()
+        assert "green" in repr(screen.status.render())
+        line = str(screen.query_one("#link-mode-line", Static).render())
+        assert "split" in line
+
+
+async def test_link_mode_picker_escape_warns_and_does_not_call_the_setter() -> None:
+    calls: list[str] = []
+    app = _app(
+        policies=_policy_inputs(
+            link_mode=lambda: "centralized", set_link_mode=lambda value: calls.append(value)
+        ),
+        initial_view="policies",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        await pilot.press("m")
+        assert isinstance(app.screen, LinkModeScreen)
+        await pilot.press("escape")
+        assert isinstance(app.screen, PoliciesScreen)
+        assert calls == []
+        assert screen.status.text
+        assert "unchanged" in screen.status.text.lower() or "cancelled" in screen.status.text.lower()
+
+
+async def test_link_mode_setter_oserror_surfaces_and_leaves_the_line_unchanged() -> None:
+    def boom(_value: str) -> None:
+        raise OSError("boom")
+
+    app = _app(
+        policies=_policy_inputs(link_mode=lambda: "centralized", set_link_mode=boom),
+        initial_view="policies",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        before = str(screen.query_one("#link-mode-line", Static).render())
+        await pilot.press("m")
+        await pilot.press("enter")
+        assert isinstance(app.screen, PoliciesScreen)
+        assert "boom" in screen.status.text
+        assert str(screen.query_one("#link-mode-line", Static).render()) == before
+
+
+async def test_pressing_m_without_a_setter_explains_instead_of_opening() -> None:
+    app = _app(
+        policies=_policy_inputs(link_mode=lambda: "centralized"),
+        initial_view="policies",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        await pilot.press("m")
+        assert isinstance(app.screen, PoliciesScreen)
+        assert screen.status.text
+
+
+async def test_doctor_rereads_callable_fix_preview_on_enter_view() -> None:
+    previews = ["first preview text"]
+    app = _app(fix_preview=lambda: previews[0], initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        body = str(app.screen.query_one("#doctor-body", Static).render())
+        assert "first preview text" in body
+        previews[0] = "second preview text"
+        await pilot.press("escape")
+        await pilot.press("4")
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        body = str(app.screen.query_one("#doctor-body", Static).render())
+        assert "second preview text" in body
+        assert "first preview text" not in body
 
 
 async def test_policy_toggle_disables_active_policy() -> None:

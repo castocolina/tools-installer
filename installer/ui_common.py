@@ -167,7 +167,7 @@ VIEWS: tuple[View, ...] = (
         glyph="*",
         style="yellow",
         hint="space toggles a policy and applies it now; reversible",
-        actions="space toggle",
+        actions="space toggle | m link mode",
     ),
 )
 

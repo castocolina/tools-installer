@@ -944,9 +944,13 @@ class PoliciesScreen(AppScreen):
         Binding("space", "toggle_policy", "toggle policy", show=True, priority=True),
         Binding("l", "toggle_log", "view log", show=True),
         Binding("t", "pick_time", "set time", show=True),
+        Binding("m", "pick_link_mode", "link mode", show=True),
     ]
     DEFAULT_CSS = """
     PoliciesScreen DataTable { height: 1fr; }
+    PoliciesScreen #link-mode-line {
+        height: auto; padding: 0 1;
+    }
     PoliciesScreen #policy-detail {
         height: 11; padding: 0 1; background: $surface; overflow-y: auto;
     }
@@ -955,6 +959,8 @@ class PoliciesScreen(AppScreen):
     def __init__(self, inputs: PolicyInputs) -> None:
         super().__init__(view="policies")
         self._policies = inputs.policies
+        self._link_mode = inputs.link_mode
+        self._set_link_mode = inputs.set_link_mode
         self.active_state: dict[str, bool] = {
             policy.id: policy.active for policy in inputs.policies
         }
@@ -967,6 +973,7 @@ class PoliciesScreen(AppScreen):
         self._log_view: bool = False
 
     def compose_body(self) -> ComposeResult:
+        yield Static("", id="link-mode-line")
         yield DataTable()
         yield Static("", id="policy-detail")
 
@@ -988,6 +995,14 @@ class PoliciesScreen(AppScreen):
             )
         table.focus()
         self._set_detail(self._policies[0] if self._policies else None)
+        self._refresh_link_mode_line()
+
+    def _refresh_link_mode_line(self) -> None:
+        line = self.query_one("#link-mode-line", Static)
+        if self._link_mode is None:
+            line.update("")
+            return
+        line.update(f"PATH link mode: {self._link_mode()}  (press m to change)")
 
     def _state_cell(self, active: bool) -> Text:
         # A ●/○ glyph carries the state independent of color: the lone row is
@@ -1298,6 +1313,32 @@ class PoliciesScreen(AppScreen):
 
         return picked
 
+    def action_pick_link_mode(self) -> None:
+        if self._set_link_mode is None:
+            self.status.set(
+                "Link mode cannot be changed from this entry point.",
+                "warn",
+            )
+            return
+        self.app.push_screen(LinkModeScreen(), self._link_mode_picked)
+
+    def _link_mode_picked(self, value: str | None) -> None:
+        if value is None:
+            self.status.set(
+                "Link mode unchanged because the picker was cancelled.",
+                "warn",
+            )
+            return
+        setter = self._set_link_mode
+        if setter is None:
+            return
+        _, error = run_live(lambda: setter(value))
+        if error is not None:
+            self.status.set(error, "error")
+            return
+        self.status.set(f"Link mode saved: {value}.", "ok")
+        self._refresh_link_mode_line()
+
 
 class ConfirmUninstall(ModalScreen[bool]):
     """Confirm the one destructive, hard-to-reverse commit: deleting installed
@@ -1392,6 +1433,46 @@ class TimePickerScreen(ModalScreen[str | None]):
         if item_id is None:  # unreachable: every item above is constructed with one
             return
         self.dismiss(item_id.removeprefix("time-").replace("-", ":"))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class LinkModeScreen(ModalScreen[str | None]):
+    """Three-option PATH link-mode picker. Labels are the wording the retired
+    pre-TUI questionary prompt used, so moving the question into the app is a
+    UI relocation, not a behaviour change.
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "cancel", "close", show=False),
+    ]
+    DEFAULT_CSS = """
+    LinkModeScreen { align: center middle; }
+    LinkModeScreen > ListView { width: 80; height: 8; border: round $accent; }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield ListView(
+            ListItem(
+                Label("Centralized: one ~/.myshellrc, sourced from .zshrc and .bashrc"),
+                id="link-centralized",
+            ),
+            ListItem(
+                Label("Single shell: source ~/.myshellrc from your current shell only"),
+                id="link-single",
+            ),
+            ListItem(
+                Label("Split: write PATH directly into each rc file (no ~/.myshellrc)"),
+                id="link-split",
+            ),
+        )
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item_id = event.item.id
+        if item_id is None:  # unreachable: every item above is constructed with one
+            return
+        self.dismiss(item_id.removeprefix("link-"))
 
     def action_cancel(self) -> None:
         self.dismiss(None)

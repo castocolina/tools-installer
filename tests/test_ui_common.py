@@ -251,6 +251,13 @@ def test_catalog_views_advertise_update_key() -> None:
     assert "u update" not in VIEW_BY_NAME["policies"].actions
 
 
+def test_policies_footer_advertises_the_link_mode_key() -> None:
+    from installer.ui_common import VIEW_BY_NAME
+
+    assert "m" in VIEW_BY_NAME["policies"].actions
+    assert "m link mode" in VIEW_BY_NAME["policies"].actions
+
+
 def test_catalog_footer_actions_match_effective_bindings() -> None:
     from installer.catalog_tui import CatalogScreen
     from installer.tool_browser import ToolBrowser
