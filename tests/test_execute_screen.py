@@ -1606,6 +1606,46 @@ async def test_missing_ownership_snapshot_refreshes_then_dispatches_outdated_upd
     assert [target.tool.id for target in recorded.recorded] == ["rg"]
 
 
+async def test_refresh_failure_on_missing_ownership_reports_error_not_a_clean_run(
+    tmp_path: Path,
+) -> None:
+    """The pre-dispatch blocking refresh (missing ownership snapshot) must be
+    wrapped like every other worker I/O call: an OSError from it is a reported
+    update error, never a silently-clean run with the update skipped."""
+    rg = _tool("rg")
+    captured: list[str] = []
+
+    class _RaisingRefreshService(_RecordingRefreshService):
+        def refresh(self, tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+            self.asked.extend(tool.id for tool in tools)
+            raise OSError("disk full")
+
+    refresh = _RaisingRefreshService(tmp_path / "versions.json")
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        install=_install_with_output(captured),
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, list(inputs.catalog))
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert screen.finished is True
+        assert refresh.asked == ["rg"]
+        recorded = updates
+        assert recorded is not None
+        assert recorded.recorded == []
+        assert "disk full" in _log_text(screen)
+        assert screen.status.text != ""
+
+
 async def test_only_outdated_selection_still_starts_and_dispatches(tmp_path: Path) -> None:
     rg = _tool("rg")
     captured: list[str] = []
@@ -1642,12 +1682,20 @@ async def test_in_flight_latch_skips_outdated_update_and_keeps_the_holder(tmp_pa
         version_refresh=refresh,
         updates=updates,
     )
-    screen, recorded = await _run_execute(inputs, ["rg", "fd"])
-    assert screen.finished is True
-    assert recorded is not None
-    assert recorded.recorded == []
-    assert updates.in_flight == "other"
-    assert any("update already in flight for other" in skip for skip in screen.update_skips)
+    app = _host(inputs, list(inputs.catalog))
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        recorded = updates
+        assert screen.finished is True
+        assert recorded is not None
+        assert recorded.recorded == []
+        assert updates.in_flight == "other"
+        assert "update already in flight for other" in _log_text(screen)
     assert captured == ["fd"]
 
 

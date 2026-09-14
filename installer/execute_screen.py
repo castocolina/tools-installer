@@ -383,7 +383,6 @@ class ExecuteScreen(ModalScreen[None]):
         self.finished = False
         self.summary: Summary | None = None
         self.not_attempted: list[str] = []
-        self.update_skips: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield Static(id="execute-head")
@@ -565,15 +564,19 @@ class ExecuteScreen(ModalScreen[None]):
                 return outcomes, errors, skips, versions
             ownership = refresh.ownership_of(tool.id)
             if ownership is None:
-                refresh.refresh([tool])
+                _refreshed, refresh_fail = run_live(partial(refresh.refresh, [tool]))
+                if refresh_fail is not None:
+                    errors.append((tool.id, refresh_fail))
+                    continue
                 ownership = refresh.ownership_of(tool.id)
             if ownership is None:
+                skip = f"cannot update {tool.id}: ownership could not be resolved"
+                skips.append(skip)
                 continue
             if not updates.begin(tool.id):
                 in_flight = updates.in_flight or "another tool"
                 skip = f"update already in flight for {in_flight}"
                 skips.append(skip)
-                self.update_skips.append(skip)
                 continue
             try:
                 target = UpdateTarget(tool=tool, ownership=ownership)
