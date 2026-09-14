@@ -58,3 +58,36 @@ def test_architecture_records_phase_13_mechanisms() -> None:
     text = ARCHITECTURE.read_text(encoding="utf-8")
     for phrase in _PHASE_13_REQUIRED:
         assert phrase in text, f"missing load-bearing phrase: {phrase}"
+
+
+_PHASE_14_REQUIRED = (
+    "resolve_dependencies",
+    "cannot update",
+    "installer/post_install.py",
+    "set_login_shell",
+    "Platform.immutable",
+    "4159",
+    "with_sensitive_confirm",
+)
+
+
+def test_architecture_records_phase_14_mechanisms() -> None:
+    """The comment is the mechanism; the test keeps it from rotting away unnoticed.
+
+    Each substring anchors a paragraph whose deletion would lose a finding
+    Phase 14 produced. resolve_dependencies: the install/update split is
+    made beside the resolver, never inside it, because deps.py has no
+    version or ownership state. cannot update: a refused batch update
+    uses the same sentence the per-row u keybind already produces.
+    installer/post_install.py / set_login_shell: the plural action list
+    is a sibling of the singular hook, not an extension of it, and the
+    one action has no execution seam. Platform.immutable / 4159: the
+    login-shell action is hard-blocked on atomic hosts because
+    ublue-os/bazzite#4159 was closed with no root-cause analysis.
+    with_sensitive_confirm: confirmation is bound at a composition
+    point so the shared Install protocol — and its twenty-nine fakes —
+    stay unchanged.
+    """
+    text = ARCHITECTURE.read_text(encoding="utf-8")
+    for phrase in _PHASE_14_REQUIRED:
+        assert phrase in text, f"missing load-bearing phrase: {phrase}"

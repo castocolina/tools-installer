@@ -336,9 +336,11 @@ verification against rtk/graphify is the worked example).
 
 Do not confuse this NAMED, singular `Tool.postinstall` mechanism with
 `installer/model.py`'s similarly-named but semantically distinct
-`Tool.post_install` (plural) field and its `POST_INSTALL_ACTIONS` tuple — the
-latter has zero production callers as of Phase 12.4 and is a separate,
-unrelated concept despite the near-identical name.
+`Tool.post_install` (plural) field and its `POST_INSTALL_ACTIONS` tuple —
+the two are separate, unrelated concepts despite the near-identical name.
+The plural field is read in production by `installer/post_install.py` at
+the post-success point of the install ladder; it must never be merged into
+the singular hook table.
 
 The invocable skill at `.claude/skills/tool-onboarding/SKILL.md` walks this
 same three-question checklist interactively for a human or agent adding a
@@ -621,11 +623,13 @@ unnoticed across three phases.
 
 The D-04 full-catalog audit this checklist enables ran against all 89
 `registry.toml` entries: zero new postinstall-mechanism gaps found. One
-pre-existing, unrelated dead-code finding (`Tool.post_install` plural,
-`POST_INSTALL_ACTIONS`, `SENSITIVE_POST_INSTALL_ACTIONS` — zero production
-callers, confusingly similar name to the live `Tool.postinstall` singular
-mechanism) was logged as a pending todo rather than fixed in-phase. Full
-findings: `.planning/phases/12.4-tool-onboarding-research-skill-and-registry-postinstall-audi/12.4-AUDIT.md`.
+pre-existing, unrelated finding (`Tool.post_install` plural,
+`POST_INSTALL_ACTIONS`, `SENSITIVE_POST_INSTALL_ACTIONS` — confusingly
+similar name to the live `Tool.postinstall` singular mechanism) was
+logged as a pending todo rather than fixed in-phase; Phase 14 later
+adopted the plural field as a production dispatcher in
+`installer/post_install.py`. Full findings:
+`.planning/phases/12.4-tool-onboarding-research-skill-and-registry-postinstall-audi/12.4-AUDIT.md`.
 
 ## Phase 13: live in-TUI install execution and persisted wizard settings
 
@@ -675,5 +679,52 @@ targets. A ban enabled after switching to split mode would otherwise
 write aliases into a `~/.myshellrc` nothing sources, with nothing on
 screen to reveal it. This is the same predicate-not-its-result reasoning
 the `guard_state` parameter already carries.
+
+## Phase 14: update dispatch and the login-shell handoff
+
+Selecting an outdated, already-installed tool routes to
+`UpdateService.run` rather than the install ladder. The split is made
+beside the `resolve_dependencies` call in `ExecuteScreen.on_mount` and
+never inside the resolver: `deps.py` still treats "installed" as
+satisfied, because it has no access to version state or manager
+attribution and this phase deliberately left that contract unchanged.
+All update mutation goes through the update service's own entry point,
+which re-resolves ownership freshly and refuses on its own, so no
+caller re-implements the ownership gate. A refusal is reported with
+the same `cannot update {id}: {reason}` sentence the per-row `u`
+keybind already produces — two wordings for one refusal is how users
+learn to distrust one of them.
+
+The plural post-install action list (`Tool.post_install`,
+`POST_INSTALL_ACTIONS`, dispatched by `installer/post_install.py`) and
+the singular post-install hook (`Tool.postinstall`,
+`POSTINSTALL_HOOKS` in `installer/postinstall.py`) are two disjoint
+closed name sets in two separate modules, one character apart in
+name, and must never be merged. Wiring `set_login_shell` into the
+singular table would either invent an execution seam this phase
+refused to give the action, or smuggle a reviewed-instruction
+producer into a table whose every other entry mutates the host.
+
+`set_login_shell` is hard-blocked on `Platform.immutable` before any
+prompt is offered. The reason is ublue-os/bazzite#4159: `chsh` to zsh
+on Bazzite has been observed to break KDE/SDDM login, and that issue
+was closed "not planned" with no maintainer root-cause analysis. The
+block is therefore conservative by necessity rather than by
+preference; relaxing it for a specific atomic variant would require
+re-verifying against that issue, which currently cannot be done. The
+action produces reviewed `chsh -s $(which zsh)` instructions and the
+installer never runs the command, citing the existing host-setup
+doctrine (`installer/host_setup.py`: reviewed console handoffs, never
+launched from a worker thread). `App.suspend()` as an in-process
+alternative was considered and deferred, not overlooked.
+
+The confirmation is bound at a composition point through
+`with_sensitive_confirm` rather than by widening the shared `Install`
+protocol. Widening `Install` would have forced every existing fake
+install — twenty-nine of them, plus `attributed_install` — to grow a
+keyword they do not use. The adapter returns the original `Install`,
+so those sites stay valid; `run_wizard` and `ExecuteScreen` each wrap
+at the call into `run_installs`. Unattended (`--yes`) means no
+callback on both entry points, which the dispatcher treats as skip.
 
 
