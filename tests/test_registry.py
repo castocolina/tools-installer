@@ -1653,8 +1653,6 @@ def test_native_package_manager_rows_declare_their_owner_probes() -> None:
     # silent gap into a red test.
     native_probe_names = {"rpm-ostree", "dnf", "apt", "pacman"}
     native = {
-        tool.id
-        for tool in load_tools(REGISTRY)
-        if set(tool.owner_probes) & native_probe_names
+        tool.id for tool in load_tools(REGISTRY) if set(tool.owner_probes) & native_probe_names
     }
     assert native == set(expected)

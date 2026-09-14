@@ -86,6 +86,11 @@ priority = "P0"
 audience = "ai"
 tier = "ai"
 desc = "Replaces recursive grep with faster code search, .gitignore awareness, and focused output for agents."
+# rpm-ostree is listed FIRST on every dnf/apt/pacman-capable row below: on an
+# ostree host the rpm database still answers `rpm -q`, so probing dnf first
+# would attribute a package the user explicitly layered with rpm-ostree to
+# the wrong mechanism. See install_ownership.py's _rpm_ostree docstring (D-05/D-06).
+owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
@@ -124,6 +129,7 @@ priority = "P0"
 audience = "ai"
 tier = "user"
 desc = "Turns JSON into precise filters so agents inspect only the fields they need."
+owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
 kind = "dnf"
 package = "jq"
@@ -253,6 +259,7 @@ priority = "P0"
 audience = "both"
 tier = "user"
 desc = "Core version control for users and agents; replaces manual file snapshots with auditable history."
+owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
 kind = "dnf"
 package = "git"
@@ -497,6 +504,7 @@ priority = "P1"
 audience = "both"
 tier = "system"
 desc = "Feature-rich shell; prerequisite for Oh-My-Zsh."
+owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
 kind = "dnf"
 package = "zsh"
@@ -924,6 +932,7 @@ priority = "P1"
 audience = "both"
 tier = "system"
 desc = "Repeats commands on an interval for live terminal checks; required by the Docker shortcuts policy."
+owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
 kind = "dnf"
 package = "procps-ng"
@@ -946,6 +955,7 @@ priority = "P1"
 audience = "both"
 tier = "system"
 desc = "Controls Docker engines and contexts; agents use it to inspect containers without parsing desktop UI state."
+owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
 kind = "dnf"
 package = "docker"
@@ -968,6 +978,7 @@ priority = "P1"
 audience = "both"
 tier = "system"
 desc = "Rootless container engine often safer on Linux and immutable desktops than daemon-first workflows."
+owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
 kind = "dnf"
 package = "podman"
@@ -1373,6 +1384,7 @@ desc = "Open source coding agent for the user, useful when teams want provider-f
 # comment for the one exception where rtk's integration is instructions-based rather
 # than a runtime hook).
 recommends = ["codegraph", "graphify", "rtk"]
+owner_probes = ["pacman"]
 [[tool.method]]
 kind = "script"
 url = "https://opencode.ai/install"
@@ -2474,6 +2486,7 @@ priority = "P3"
 audience = "human"
 tier = "user"
 desc = "GPU-accelerated terminal emulator"
+owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
 kind = "dnf"
 package = "kitty"
@@ -2538,6 +2551,7 @@ priority = "P3"
 audience = "human"
 tier = "user"
 desc = "GPU-accelerated, cross-platform terminal emulator with multiplexing"
+owner_probes = ["pacman"]
 [[tool.method]]
 kind = "pacman"
 package = "wezterm"
