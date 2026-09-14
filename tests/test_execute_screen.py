@@ -1388,3 +1388,91 @@ async def test_in_flight_latch_skips_outdated_update_and_keeps_the_holder(tmp_pa
     assert updates.in_flight == "other"
     assert any("update already in flight for other" in skip for skip in screen.update_skips)
     assert captured == ["fd"]
+
+
+async def test_nothing_updates_before_the_confirm_keypress(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        for _ in range(10):
+            await pilot.pause()
+        assert screen.started is False
+        assert updates.recorded == []
+
+
+async def test_confirm_keypress_dispatches_exactly_one_outdated_update(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    screen, recorded = await _run_execute(inputs, ["rg"])
+    assert screen.finished is True
+    assert recorded is not None
+    assert [target.tool.id for target in recorded.recorded] == ["rg"]
+
+
+async def test_unattended_confirm_still_dispatches_outdated_update(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+        unattended=True,
+    )
+    app = _host(inputs, [rg])
+    started_with_head: list[str] = []
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        for _ in range(400):
+            screen = app.screen
+            if isinstance(screen, ExecuteScreen) and screen.started:
+                started_with_head.append(_head_text(screen))
+                break
+            await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert started_with_head
+        assert started_with_head[0]
+        await _settle_execute(screen, pilot)
+        assert [target.tool.id for target in updates.recorded] == ["rg"]
+
+
+def test_update_dispatch_opens_no_confirm_prompt_of_its_own() -> None:
+    import inspect
+
+    from installer import execute_screen as execute_module
+
+    source = Path(execute_module.__file__).read_text(encoding="utf-8")
+    uncommented = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert uncommented.count("push_screen_wait(") == 1
+    # Structural gate: read the method body itself, not a public wrapper.
+    run_updates = inspect.getsource(
+        ExecuteScreen._run_updates  # pyright: ignore[reportPrivateUsage]
+    )
+    assert "ask_from_worker" not in run_updates
+    assert "push_screen_wait" not in run_updates
