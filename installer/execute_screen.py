@@ -207,7 +207,7 @@ class UpdateToolFinished(Message):
 
     def __init__(self, tool_id: str, state: ProgressState) -> None:
         self.tool_id = tool_id
-        self.state = state
+        self.state: ProgressState = state
         super().__init__()
 
 
@@ -241,6 +241,7 @@ class InstallRunFinished(Message):
         update_outcomes: list[UpdateOutcome] | None = None,
         update_errors: list[tuple[str, str]] | None = None,
         update_skips: list[str] | None = None,
+        update_versions: dict[str, str | None] | None = None,
     ) -> None:
         self.summary = summary
         self.outcomes = outcomes
@@ -253,6 +254,7 @@ class InstallRunFinished(Message):
         self.update_outcomes = update_outcomes if update_outcomes is not None else []
         self.update_errors = update_errors if update_errors is not None else []
         self.update_skips = update_skips if update_skips is not None else []
+        self.update_versions = update_versions if update_versions is not None else {}
         super().__init__()
 
 
@@ -428,6 +430,7 @@ class ExecuteScreen(ModalScreen[None]):
         update_outcomes: list[UpdateOutcome] = []
         update_errors: list[tuple[str, str]] = []
         update_skips: list[str] = []
+        update_versions: dict[str, str | None] = {}
         try:
 
             def emit(tool_id: str, line: str) -> None:
@@ -458,7 +461,7 @@ class ExecuteScreen(ModalScreen[None]):
                 summary = summarize(outcomes)
                 seen = {outcome.tool_id for outcome in outcomes}
                 not_attempted = [tool.id for tool in self._ordered if tool.id not in seen]
-                update_outcomes, update_errors, update_skips = self._run_updates()
+                update_outcomes, update_errors, update_skips, update_versions = self._run_updates()
                 path_result, path_fail = run_live(self._inputs.wire_path)
                 if path_result is None:
                     path_error = path_fail
@@ -487,20 +490,24 @@ class ExecuteScreen(ModalScreen[None]):
                     update_outcomes,
                     update_errors,
                     update_skips,
+                    update_versions,
                 )
             )
 
-    def _run_updates(self) -> tuple[list[UpdateOutcome], list[tuple[str, str]], list[str]]:
+    def _run_updates(
+        self,
+    ) -> tuple[list[UpdateOutcome], list[tuple[str, str]], list[str], dict[str, str | None]]:
         outcomes: list[UpdateOutcome] = []
         errors: list[tuple[str, str]] = []
         skips: list[str] = []
+        versions: dict[str, str | None] = {}
         refresh = self._inputs.version_refresh
         updates = self._inputs.updates
         if refresh is None or updates is None:
-            return outcomes, errors, skips
+            return outcomes, errors, skips, versions
         for tool in self._to_update:
             if not self._should_continue():
-                return outcomes, errors, skips
+                return outcomes, errors, skips, versions
             ownership = refresh.ownership_of(tool.id)
             if ownership is None:
                 refresh.refresh([tool])
@@ -522,10 +529,16 @@ class ExecuteScreen(ModalScreen[None]):
                 else:
                     outcomes.append(result)
                     state = "done" if result.status == "updated" else "not-done"
+                    if result.status == "updated":
+                        refreshed, _probe_fail = run_live(partial(refresh.refresh, [tool]))
+                        if refreshed is not None:
+                            status = refreshed.get(tool.id)
+                            if status is not None:
+                                versions[tool.id] = status.installed
                 self.post_message(UpdateToolFinished(tool.id, state))
             finally:
                 updates.end()
-        return outcomes, errors, skips
+        return outcomes, errors, skips, versions
 
     def _should_continue(self) -> bool:
         return not self.cancel_event.is_set()
@@ -601,6 +614,7 @@ class ExecuteScreen(ModalScreen[None]):
                 message.update_outcomes,
                 message.update_errors,
                 message.update_skips,
+                message.update_versions,
                 console,
             )
 
@@ -640,14 +654,17 @@ class ExecuteScreen(ModalScreen[None]):
         outcomes: list[UpdateOutcome],
         errors: list[tuple[str, str]],
         skips: list[str],
+        versions: dict[str, str | None],
         console: Console,
     ) -> None:
         lines: list[str] = []
         for outcome in outcomes:
-            if outcome.status == "unknown-owner":
+            if outcome.status == "updated":
+                lines.append(self._updated_line(outcome, versions.get(outcome.tool_id)))
+            elif outcome.status == "unknown-owner":
                 reason = outcome.detail or _NO_MANAGER_CLAIMED
                 lines.append(f"cannot update {outcome.tool_id}: {reason}")
-            elif outcome.status != "updated" and outcome.detail:
+            elif outcome.detail:
                 lines.append(outcome.detail)
         for _tool_id, fail in errors:
             lines.append(fail)
@@ -657,6 +674,19 @@ class ExecuteScreen(ModalScreen[None]):
         console.print("Updates")
         for line in lines:
             console.print(line)
+
+    def _updated_line(self, outcome: UpdateOutcome, installed: str | None) -> str:
+        version = f" now {installed}" if installed else ""
+        line = f"updated {outcome.tool_id}{version}"
+        if outcome.replayed_globals:
+            line += f" — replayed {', '.join(outcome.replayed_globals)}"
+        if outcome.cleanup_warnings:
+            line += f" — {'; '.join(outcome.cleanup_warnings)}"
+        if outcome.postinstall_warning:
+            line += f" — {outcome.postinstall_warning}"
+        if outcome.detail:
+            line += f" — {outcome.detail}"
+        return line
 
     def _preflight_prompt(self) -> str:
         install_n = len(self._ordered)

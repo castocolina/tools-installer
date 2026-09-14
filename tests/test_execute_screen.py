@@ -1340,7 +1340,7 @@ async def test_missing_ownership_snapshot_refreshes_then_dispatches_outdated_upd
     )
     screen, recorded = await _run_execute(inputs, ["rg", "fd"])
     assert screen.finished is True
-    assert refresh.asked == ["rg"]
+    assert refresh.asked == ["rg", "rg"]
     assert recorded is not None
     assert [target.tool.id for target in recorded.recorded] == ["rg"]
 
@@ -1962,4 +1962,231 @@ async def test_blocked_update_latch_refusal_reuses_the_in_flight_sentence(tmp_pa
         assert "update already in flight for other" in log
         assert screen.summary is not None
         assert screen.summary.failed == ()
+        assert captured == ["fd"]
+
+
+class _SuccessUpdateService(_RecordingUpdateService):
+    def __init__(
+        self,
+        *,
+        replayed_globals: tuple[str, ...] = (),
+        cleanup_warnings: tuple[str, ...] = (),
+        postinstall_warning: str | None = None,
+        detail: str = "",
+    ) -> None:
+        super().__init__()
+        self._replayed_globals = replayed_globals
+        self._cleanup_warnings = cleanup_warnings
+        self._postinstall_warning = postinstall_warning
+        self._detail = detail
+
+    def run(self, target: UpdateTarget) -> UpdateOutcome:
+        self.recorded.append(target)
+        return UpdateOutcome(
+            tool_id=target.tool.id,
+            status="updated",
+            owner=target.ownership.owner,
+            detail=self._detail,
+            postinstall_warning=self._postinstall_warning,
+            replayed_globals=self._replayed_globals,
+            cleanup_warnings=self._cleanup_warnings,
+        )
+
+
+class _VersionedRefreshService(_RecordingRefreshService):
+    def __init__(
+        self,
+        cache_path: Path,
+        *,
+        installed: str | None = "14.1.1",
+        raise_error: OSError | None = None,
+    ) -> None:
+        super().__init__(cache_path)
+        self._installed = installed
+        self._raise_error = raise_error
+
+    def refresh(self, tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+        if self._raise_error is not None:
+            self.asked.extend(tool.id for tool in tools)
+            raise self._raise_error
+        statuses: dict[str, VersionStatus] = {}
+        for tool in tools:
+            self.asked.append(tool.id)
+            self._ownership[tool.id] = _brew_ownership(tool)  # pyright: ignore[reportPrivateUsage]
+            status = VersionStatus(
+                tool_id=tool.id,
+                installed=self._installed,
+                latest=self._installed,
+                outdated=False,
+                stale=False,
+                source="brew",
+            )
+            self._statuses[tool.id] = status  # pyright: ignore[reportPrivateUsage]
+            statuses[tool.id] = status
+        return statuses
+
+
+async def test_successful_outdated_update_is_named_in_the_post_run_log(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _VersionedRefreshService(tmp_path / "versions.json", installed="14.1.1")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _SuccessUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        assert "updated rg now 14.1.1" in log
+        assert refresh.asked == ["rg"]
+
+
+async def test_successful_outdated_update_without_a_new_version_still_reports(
+    tmp_path: Path,
+) -> None:
+    rg = _tool("rg")
+    refresh = _VersionedRefreshService(tmp_path / "versions.json", installed=None)
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _SuccessUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        assert "updated rg" in log
+        assert "now " not in log.split("updated rg", 1)[1].splitlines()[0]
+
+
+async def test_successful_outdated_update_line_carries_outcome_extras(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _VersionedRefreshService(tmp_path / "versions.json", installed="14.1.1")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _SuccessUpdateService(
+        replayed_globals=("claude", "opencode"),
+        cleanup_warnings=("left leftover",),
+        postinstall_warning="hook warned",
+        detail="brew upgraded rg",
+    )
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        assert "updated rg now 14.1.1" in log
+        assert "replayed claude, opencode" in log
+        assert "left leftover" in log
+        assert "hook warned" in log
+        assert "brew upgraded rg" in log
+
+
+async def test_blocked_update_does_not_reprobe_the_version_cache(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _VersionedRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _BlockedUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert refresh.asked == []
+        assert "cannot update rg" in _log_text(screen)
+
+
+async def test_refresh_oserror_after_outdated_update_still_produces_the_report(
+    tmp_path: Path,
+) -> None:
+    rg = _tool("rg")
+    refresh = _VersionedRefreshService(
+        tmp_path / "versions.json",
+        raise_error=OSError("probe timed out"),
+    )
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _SuccessUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        assert screen.finished is True
+        assert "updated rg" in log
+        assert "now " not in log.split("updated rg", 1)[1].splitlines()[0]
+
+
+async def test_update_section_is_silent_when_no_outdated_updates_were_queued(
+    tmp_path: Path,
+) -> None:
+    rg = _tool("rg")
+    fd = _tool("fd")
+    captured: list[str] = []
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=False)
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[rg, fd],
+        install=_install_with_output(captured),
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        assert "Updates" not in log
+        assert "updated " not in log
+        assert updates.recorded == []
         assert captured == ["fd"]
