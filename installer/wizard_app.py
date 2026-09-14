@@ -313,6 +313,15 @@ class DoctorScreen(AppScreen):
         if self.applied:
             text.append("PATH wired.", style="green")
             text.append("\nRestart your shell or run `source ~/.myshellrc` to apply.")
+            # The audit above is a process-lifetime snapshot (setup.py::_build_app
+            # reads os.environ["PATH"] once) -- it genuinely cannot reflect this
+            # fix yet. Say so explicitly, framed as expected rather than as a
+            # second warning, only once there is something frozen to explain.
+            text.append(
+                "\nThe audit above still describes the PATH this process started "
+                "with -- that's expected until you open a new shell or run "
+                "`source ~/.myshellrc`."
+            )
         elif self.error is not None:
             text.append("Fix failed.", style="red")
             text.append(f"\n{self.error}")
