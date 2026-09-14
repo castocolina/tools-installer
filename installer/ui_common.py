@@ -126,13 +126,14 @@ VIEWS: tuple[View, ...] = (
     View(
         name="ai",
         label="AI",
-        # This tab groups the whole AI-coding ecosystem, not "what the AI runs
-        # by itself": it mixes agent CLIs you drive yourself (claude, codex)
-        # with CLIs built to be called BY an agent (rg, codegraph). "Tier"
-        # here means "bootstrap-order/install-flow bucket", not "who uses
-        # it" -- that's the separate Audience tab inside this screen (human /
-        # AI / both), worth checking if that distinction matters to you.
-        palette="AI - agents you run and tools agents call",
+        # This tab is tooling that runs underneath an agent session, or is
+        # consumed BY an agent -- never launched directly by the human as
+        # their own interface. Examples living here today: `rg`, `fd`,
+        # `codegraph` and `ast-grep`. "Tier" here means "bootstrap-order/
+        # install-flow bucket", not "who uses it" -- that's the separate
+        # Audience tab inside this screen (human / AI / both), worth
+        # checking if that distinction matters to you.
+        palette="AI - tooling an agent session runs on",
         mode="STAGED",
         glyph="o",
         style="cyan",

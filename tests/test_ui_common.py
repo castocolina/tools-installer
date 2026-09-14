@@ -291,16 +291,18 @@ def test_ai_tab_comment_only_cites_ai_tier_tools() -> None:
     backtick = chr(96)
     source = Path(ui_common_module.__file__).read_text()
     block = source.split('name="ai"')[1].split("palette=")[0]
-    comment = "\n".join(
-        line.strip() for line in block.splitlines() if line.strip().startswith("#")
-    )
+    comment = "\n".join(line.strip() for line in block.splitlines() if line.strip().startswith("#"))
     assert comment, "the AI view row carries no comment at all"
 
     tiers = {tool.id: tool.tier for tool in load_tools(registry)}
 
     # Positive contract: every backticked token in the comment that is a
     # registry id must be an example this tab actually contains.
-    cited = {token for token in re.findall(f"{backtick}([^{backtick}]+){backtick}", comment) if token in tiers}
+    cited = {
+        token
+        for token in re.findall(f"{backtick}([^{backtick}]+){backtick}", comment)
+        if token in tiers
+    }
     assert len(cited) >= 2, sorted(cited)
     assert all(tiers[tool_id] == "ai" for tool_id in cited), sorted(
         tool_id for tool_id in cited if tiers[tool_id] != "ai"
