@@ -132,6 +132,24 @@ def render_handoff(outcomes: list[InstallOutcome], console: Console) -> None:
             console.print(f"  {line}")
 
 
+def render_post_install_handoff(outcomes: list[InstallOutcome], console: Console) -> None:
+    """Print reviewed follow-up steps for a tool that installed successfully.
+
+    Distinct from ``render_handoff``, which prints steps for a tool that did
+    not install (MANUAL_REQUIRED), and from ``render_postinstall_warnings``,
+    which prints problems from the singular hook mechanism. This renderer
+    prints optional follow-up instructions a successful install produced.
+    Instruction lines are printed with markup disabled so a reviewed shell
+    command's square brackets survive as literal text.
+    """
+    for outcome in outcomes:
+        if not outcome.post_install_handoff:
+            continue
+        console.print(f"[cyan]{outcome.tool_id} — after install:[/]")
+        for line in outcome.post_install_handoff:
+            console.print(f"  {line}", markup=False)
+
+
 def render_troubleshooting(console: Console) -> None:
     """Point the user at the troubleshooting guide."""
     console.print(f"Something went wrong. Troubleshooting: {TROUBLESHOOTING_URL}")

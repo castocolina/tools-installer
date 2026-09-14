@@ -16,6 +16,7 @@ from installer.render import (
     render_guard_status,
     render_handoff,
     render_node_globals,
+    render_post_install_handoff,
     render_postinstall_warnings,
     render_skipped,
     render_summary,
@@ -500,3 +501,57 @@ def test_render_handoff_is_silent_when_nothing_needs_one() -> None:
     console, buf = _console()
     render_handoff(outcomes, console)
     assert buf.getvalue().strip() == ""
+
+
+def test_render_post_install_handoff_prints_heading_and_instruction_lines() -> None:
+    outcomes = [
+        InstallOutcome(
+            "omz",
+            "installed",
+            post_install_handoff=("do [this]", "chsh -s x"),
+        ),
+        InstallOutcome("rg", "installed", method_kind="brew"),
+    ]
+    console, buf = _console()
+    render_post_install_handoff(outcomes, console)
+    out = buf.getvalue()
+    assert "omz" in out
+    assert "do [this]" in out
+    assert "chsh -s x" in out
+    heading_idx = out.index("omz")
+    first_idx = out.index("do [this]")
+    second_idx = out.index("chsh -s x")
+    assert heading_idx < first_idx < second_idx
+    assert "rg" not in out
+
+
+def test_render_post_install_handoff_is_silent_for_empty_instruction_tuple() -> None:
+    console, buf = _console()
+    render_post_install_handoff([InstallOutcome("rg", "installed")], console)
+    assert buf.getvalue() == ""
+
+
+def test_render_post_install_handoff_is_silent_for_empty_outcome_list() -> None:
+    console, buf = _console()
+    render_post_install_handoff([], console)
+    assert buf.getvalue() == ""
+
+
+def test_render_post_install_handoff_prints_installed_outcomes() -> None:
+    console, buf = _console()
+    render_post_install_handoff(
+        [InstallOutcome("omz", "installed", post_install_handoff=("chsh -s x",))],
+        console,
+    )
+    out = buf.getvalue()
+    assert "omz" in out
+    assert "chsh -s x" in out
+
+
+def test_render_post_install_handoff_preserves_bracketed_instruction_text() -> None:
+    console, buf = _console()
+    render_post_install_handoff(
+        [InstallOutcome("omz", "installed", post_install_handoff=("do [this]",))],
+        console,
+    )
+    assert "[this]" in buf.getvalue()
