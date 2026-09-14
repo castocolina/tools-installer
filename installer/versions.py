@@ -28,6 +28,44 @@ _DECLARED_VERSION = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$")
 # unparseable, which is the point — see parse_version.
 _OBSERVED_VERSION = re.compile(r"^[vV]?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
 
+# Finds the LAST '-' or whitespace character immediately followed by a digit
+# or v/V. Greedy `.*` backtracks from the right, so it naturally prefers the
+# rightmost valid split point: `jq-1.8.1` isolates at "1.8.1" (the only '-'),
+# and a token with an embedded prerelease hyphen like `tool-2.3.4-rc.1` still
+# isolates at "2.3.4-rc.1" (the *rc.1* hyphen's next character is a letter,
+# not `[vV]?\d`, so it is never a valid split point; backtracking lands on
+# the '-' before "2.3.4" instead).
+_NAME_PREFIX_BOUNDARY = re.compile(r".*[-\s](?=[vV]?\d)")
+
+
+def _strip_name_prefix(token: str) -> str:
+    """Split a glued `<name>-<version>` token down to its trailing,
+    version-shaped segment. `jq --version` prints `jq-1.8.1` as ONE
+    whitespace-delimited token [VERIFIED: live `jq --version` this session].
+    A no-op (returns `token` unchanged) when there is no such prefix, so
+    callers can run this unconditionally as a fallback with no separate
+    "did it match" branch.
+    """
+    match = _NAME_PREFIX_BOUNDARY.match(token)
+    return token[match.end() :] if match else token
+
+
+def _match_observed_version(token: str) -> re.Match[str] | None:
+    """`_OBSERVED_VERSION.fullmatch`, with one fallback: strip a glued name
+    prefix and try again. Tried second (not instead of), so an ordinary
+    `1.2.3`/`v1.2.3` token — the overwhelming common case — stays on the
+    direct, unambiguous path; the prefix-split fallback only ever runs once
+    the direct match has already failed. Deliberately reuses
+    `_OBSERVED_VERSION` itself for the retry (not a second, parallel
+    pattern) so the two named capture groups (core, prerelease) every
+    caller already reads by index stay exactly the same shape either way.
+    """
+    match = _OBSERVED_VERSION.fullmatch(token)
+    if match is not None:
+        return match
+    return _OBSERVED_VERSION.fullmatch(_strip_name_prefix(token))
+
+
 # Rank of a final release, and of the prereleases that precede it. Semver orders
 # `11.0.0-rc.1` BELOW `11.0.0`, and this installer needs that order for a real
 # reason rather than a formal one: every caller is gating on a FEATURE, and an
@@ -67,7 +105,7 @@ def parse_version(text: str) -> Version | None:
     token = text.strip().split(maxsplit=1)
     if not token:
         return None
-    match = _OBSERVED_VERSION.fullmatch(token[0])
+    match = _match_observed_version(token[0])
     if match is None:
         return None
     nums = [int(part) for part in match.group(1).split(".")[:3]]
@@ -138,7 +176,7 @@ def parse_status_version(text: str) -> StatusVersion | None:
     false `up to date`. Build metadata (`+build`) is parsed and discarded:
     semver does not include it in precedence.
     """
-    match = _OBSERVED_VERSION.fullmatch(text.strip())
+    match = _match_observed_version(text.strip())
     if match is None:
         return None
     core = tuple(int(part) for part in match.group(1).split("."))
