@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: 15
 current_phase_name: catalog-accuracy-doctor-refresh-version-parsing-ownership-at
-current_plan: Not started
+current_plan: 3
 status: executing
-stopped_at: Phase 14 complete, ready to plan Phase 15
-last_updated: "2026-09-14T19:47:17.577Z"
+stopped_at: Completed 15-02-PLAN.md
+last_updated: "2026-09-14T22:55:54.580Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 14 complete, transitioned to Phase 15
-state_head: 4565acfd88e941adb9f507834c54729a2da1d083
+state_head: a2f248810d8323aa2b1a70876c03b395fd6d3913
 progress:
   total_phases: 19
   completed_phases: 13
   total_plans: 61
-  completed_plans: 56
+  completed_plans: 57
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 15 (catalog-accuracy-doctor-refresh-version-parsing-ownership-at) — READY TO EXECUTE
-Current Plan: Not started
+Current Plan: 3
 Total Plans in Phase: 5
 Status: Ready to execute
 Last activity: 2026-09-14 — Phase 14 complete, transitioned to Phase 15
@@ -82,6 +82,7 @@ Progress: [█████████░] 88%
 | Phase 13 P06 | 30 min | 3 tasks | 9 files |
 | Phase 13 P07 | 11 min | 2 tasks | 4 files |
 | Phase 14 P01 | 36 min | 3 tasks | 5 files |
+| Phase 15 P02 | 10min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -127,6 +128,7 @@ Recent decisions affecting current work:
 - [Phase 13]: Engine-untouched BASE narrowed to 0fb4b10^ because merge-base predates Phase 13 — git merge-base HEAD feat/tui-interaction-consistency is 3e3cdc8 and includes Phases 1-12.4; that is a wrong baseline, not an engine edit.
 - [Phase 14]: Batch select+enter dispatches updates through UpdateService.run; deps.py stays presence-only — One update mechanism, two call sites; ownership re-check stays inside the service (D-01)
 - [Phase 14]: Missing ownership on batch path blocks on refresh rather than returning like the u keybind — Batch runs in a thread worker; eligibility queues unresolved probes so no-snapshot is routine
+- [Phase 15]: [15-02, 2026-09-14]: D-03 shared _match_observed_version fallback wired into both parse_version and parse_status_version in the same commit (avoids Pitfall 1's one-sided fix); D-04 registry-wide audit recorded as a dated, test-protected comment in installer/versions.py naming jq as fixed and procs/bash as intentionally-uncovered residuals
 
 ### Pending Todos
 
@@ -158,6 +160,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-14T15:00:06.111Z
-Stopped at: Phase 14 complete, ready to plan Phase 15
+Last session: 2026-09-14T22:55:54.456Z
+Stopped at: Completed 15-02-PLAN.md
 Resume file: None
