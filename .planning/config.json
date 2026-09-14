@@ -73,6 +73,9 @@
     ],
     "timeouts": {
       "opencode": 2400
+    },
+    "effort": {
+      "opencode": "medium"
     }
   },
   "ship": {
