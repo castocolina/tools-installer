@@ -313,6 +313,15 @@ class DoctorScreen(AppScreen):
         if self.applied:
             text.append("PATH wired.", style="green")
             text.append("\nRestart your shell or run `source ~/.myshellrc` to apply.")
+            # The audit above is a process-lifetime snapshot (setup.py::_build_app
+            # reads os.environ["PATH"] once) -- it genuinely cannot reflect this
+            # fix yet. Say so explicitly, framed as expected rather than as a
+            # second warning, only once there is something frozen to explain.
+            text.append(
+                "\nThe audit above still describes the PATH this process started "
+                "with -- that's expected until you open a new shell or run "
+                "`source ~/.myshellrc`."
+            )
         elif self.error is not None:
             text.append("Fix failed.", style="red")
             text.append(f"\n{self.error}")
@@ -391,6 +400,12 @@ class DoctorScreen(AppScreen):
             return
         _, self.error = run_live(self._fix)
         self.applied = self.error is None
+        # Unconditional, not success-gated: run_live runs the callable BEFORE
+        # mapping an exception to self.error, so a failed fix can already have
+        # moved the guard state by the time we get here. Recompute the
+        # guidance list before rendering it, exactly like the three sibling
+        # events (on_mount, enter_view, on_globals_audited) already do.
+        self._refresh_guidance()
         self._refresh_body()
 
     def action_reinstall_globals(self) -> None:
