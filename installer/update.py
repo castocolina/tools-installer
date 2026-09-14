@@ -85,7 +85,7 @@ from installer.download import ExecContext
 from installer.executors import ExecutorError
 from installer.locations import applications_dir
 from installer.model import Method, Tool
-from installer.ownership import MUTATION_GRADE, ManagerOwnership
+from installer.ownership import MUTATION_GRADE, NATIVE_OWNERS, ManagerOwnership
 from installer.platform import Platform
 from installer.pnpm_globals import PnpmUnavailable
 from installer.postinstall import run_postinstall
@@ -96,6 +96,17 @@ PostinstallFn = Callable[[str, Method, Runner, Mapping[str, Tool]], str | None]
 
 _FALLBACK_UNKNOWN = "no manager claimed this tool"
 _SDKMAN_DETAIL = "SDKMAN updates use `sdk upgrade <candidate>`, which this phase does not implement"
+# D-05/A2: attribution correctness is in scope; privileged system-package
+# mutation is not. Every OTHER owner here (brew, cask, pnpm, uv, installer)
+# is user-space; really updating a dnf/apt/pacman/rpm-ostree package needs
+# privilege escalation this installer has never required. `{owner}` carries
+# the CONCRETE manager -- ownership.py's `_unknown_reason` already named the
+# probable manager before this phase, so a generic phrase here would be a
+# downgrade from what these rows used to say.
+_NATIVE_OWNER_DETAIL = (
+    "{owner} owns this tool; this installer does not perform privileged system-package "
+    "updates, so update it through {owner} yourself"
+)
 
 
 class UpdateError(RuntimeError):
@@ -225,6 +236,19 @@ def _perform(
             status="unsupported",
             owner=ownership.owner,
             detail=_SDKMAN_DETAIL,
+        )
+    if ownership.owner in NATIVE_OWNERS:
+        # D-05/T-15-15: this branch must precede the owner-dispatch ladder
+        # below. `direct` is in MUTATION_GRADE, so a native-owned tool now
+        # passes the gate above and would otherwise reach the ladder's final
+        # `else: raise UpdateError(...)` -- a confusing `status="failed"`
+        # outcome, strictly worse than the clean pre-flight refusal here.
+        # Zero subprocess, zero filesystem write.
+        return UpdateOutcome(
+            tool_id=target.tool.id,
+            status="unsupported",
+            owner=ownership.owner,
+            detail=_NATIVE_OWNER_DETAIL.format(owner=ownership.owner),
         )
     owner = ownership.owner
     cleanup_warnings: tuple[str, ...] = ()
