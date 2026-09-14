@@ -1,11 +1,16 @@
 import subprocess
 import sys
+import threading
+import time
 
 import pytest
 
 from installer.run import (
+    STREAM_DETAIL_LINES,
     TIMEOUT_CODE,
     CommandError,
+    MethodAwareRunner,
+    StreamingRunner,
     run_captured,
     run_command,
     run_output,
@@ -142,3 +147,159 @@ def test_run_query_missing_binary_is_127() -> None:
     with pytest.raises(CommandError) as exc:
         run_query(["definitely-not-a-real-binary-xyz"])
     assert exc.value.returncode == 127
+
+
+def test_streaming_runner_is_method_aware() -> None:
+    assert isinstance(StreamingRunner(lambda _tool, _line: None), MethodAwareRunner)
+
+
+def test_streaming_runner_emits_attributed_lines_without_newlines() -> None:
+    seen: list[tuple[str, str]] = []
+    runner = StreamingRunner(lambda tool_id, line: seen.append((tool_id, line)))
+    runner.set_tool("rg")
+    runner([sys.executable, "-c", "print('a'); print('b')"])
+    assert seen == [("rg", "a"), ("rg", "b")]
+
+
+def test_streaming_runner_emits_incrementally_before_child_exits() -> None:
+    timestamps: list[float] = []
+
+    def emit(_tool_id: str, _line: str) -> None:
+        timestamps.append(time.monotonic())
+
+    runner = StreamingRunner(emit)
+    runner.set_tool("rg")
+    script = "print('first', flush=True); import time; time.sleep(0.3); print('second', flush=True)"
+    runner([sys.executable, "-u", "-c", script])
+    assert len(timestamps) == 2
+    assert timestamps[1] - timestamps[0] >= 0.3
+
+
+def test_streaming_runner_method_started_emits_header_under_current_tool() -> None:
+    seen: list[tuple[str, str]] = []
+    runner = StreamingRunner(lambda tool_id, line: seen.append((tool_id, line)))
+    runner.set_tool("rg")
+    runner.method_started("brew")
+    assert seen == [("rg", "-- trying brew --")]
+
+
+def test_streaming_runner_requires_set_tool_before_call() -> None:
+    runner = StreamingRunner(lambda _tool, _line: None)
+    with pytest.raises(RuntimeError, match="set_tool"):
+        runner([sys.executable, "-c", "print('x')"])
+
+
+def test_streaming_runner_requires_set_tool_before_method_started() -> None:
+    runner = StreamingRunner(lambda _tool, _line: None)
+    with pytest.raises(RuntimeError, match="set_tool"):
+        runner.method_started("brew")
+
+
+def test_streaming_runner_nonzero_exit_raises_command_error_after_emitting() -> None:
+    seen: list[tuple[str, str]] = []
+    runner = StreamingRunner(lambda tool_id, line: seen.append((tool_id, line)))
+    runner.set_tool("rg")
+    script = "print('line1'); print('line2'); raise SystemExit(3)"
+    cmd = [sys.executable, "-c", script]
+    with pytest.raises(CommandError) as exc:
+        runner(cmd)
+    assert exc.value.cmd == cmd
+    assert exc.value.returncode == 3
+    assert "line2" in exc.value.detail
+    assert seen == [("rg", "line1"), ("rg", "line2")]
+
+
+def test_streaming_runner_missing_binary_is_127(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_popen(*_args: object, **_kwargs: object) -> subprocess.Popen[str]:
+        raise FileNotFoundError("nope")
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    runner = StreamingRunner(lambda _tool, _line: None)
+    runner.set_tool("rg")
+    with pytest.raises(CommandError) as exc:
+        runner(["nope"])
+    assert exc.value.returncode == 127
+    assert exc.value.cmd == ["nope"]
+
+
+def test_streaming_runner_folds_stderr_into_the_same_stream() -> None:
+    seen: list[tuple[str, str]] = []
+    runner = StreamingRunner(lambda tool_id, line: seen.append((tool_id, line)))
+    runner.set_tool("rg")
+    script = "import sys; print('out', flush=True); print('err', file=sys.stderr, flush=True)"
+    runner([sys.executable, "-c", script])
+    assert seen == [("rg", "out"), ("rg", "err")]
+
+
+def test_streaming_runner_bounds_detail_while_emitting_every_line() -> None:
+    seen: list[tuple[str, str]] = []
+    runner = StreamingRunner(lambda tool_id, line: seen.append((tool_id, line)))
+    runner.set_tool("rg")
+    script = "import sys\nfor i in range(500):\n    print(i)\nsys.exit(1)\n"
+    with pytest.raises(CommandError) as exc:
+        runner([sys.executable, "-c", script])
+    assert [line for _tool, line in seen] == [str(i) for i in range(500)]
+    detail_lines = exc.value.detail.split("\n") if exc.value.detail else []
+    assert len(detail_lines) <= STREAM_DETAIL_LINES
+    assert len(detail_lines) == STREAM_DETAIL_LINES
+    assert detail_lines[-1] == "499"
+
+
+def test_streaming_runner_reaps_child_when_emit_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, subprocess.Popen[str]] = {}
+    original_popen = subprocess.Popen
+
+    def wrapping_popen(
+        args: list[str],
+        stdin: int | None = None,
+        stdout: int | None = None,
+        stderr: int | None = None,
+        text: bool = False,
+        bufsize: int = 0,
+    ) -> subprocess.Popen[str]:
+        proc = original_popen(
+            args,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
+            text=text,
+            bufsize=bufsize,
+        )
+        captured["proc"] = proc
+        return proc
+
+    monkeypatch.setattr(subprocess, "Popen", wrapping_popen)
+
+    def emit(_tool_id: str, line: str) -> None:
+        if line == "first":
+            raise RuntimeError("callback exploded")
+
+    runner = StreamingRunner(emit)
+    runner.set_tool("rg")
+    script = (
+        "import sys\n"
+        "print('first', flush=True)\n"
+        "chunk = 'x' * 1024\n"
+        "for _ in range(300):\n"
+        "    sys.stdout.write(chunk)\n"
+        "sys.stdout.flush()\n"
+    )
+    cmd = [sys.executable, "-u", "-c", script]
+    caught: list[BaseException] = []
+
+    def target() -> None:
+        try:
+            runner(cmd)
+        except BaseException as exc:
+            caught.append(exc)
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(30)
+    assert not thread.is_alive()
+    assert caught
+    assert isinstance(caught[0], RuntimeError)
+    assert "callback exploded" in str(caught[0])
+    assert captured["proc"].returncode is not None

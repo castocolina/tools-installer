@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+from collections import deque
 from collections.abc import Callable, Collection, Mapping
 from typing import Protocol, runtime_checkable
 
@@ -95,6 +96,86 @@ def run_captured(cmd: list[str]) -> None:
     straight into the rendered frame.
     """
     run_output(cmd)
+
+
+STREAM_DETAIL_LINES = 20
+
+
+class StreamingRunner:
+    """Runner that feeds a live log widget while the child still runs.
+
+    Exists beside run_captured rather than replacing it: the console path
+    still wants a blocking, non-streaming runner. emit is a required
+    constructor argument so every line is attributed to a tool (D-05.2).
+
+    bufsize=1 line-buffers the PARENT's reads; it cannot make a child
+    line-buffer its own writes. A vendor installer that detects a non-TTY
+    (pnpm, SDKMAN, most progress-bar-drawing scripts) will block-buffer and
+    burst at exit, so the streaming guarantee is "as live as the child
+    allows", not "always line-by-line". This module is never the thing that
+    batches output.
+    """
+
+    def __init__(self, emit: Callable[[str, str], None]) -> None:
+        self._emit = emit
+        self._tool_id: str | None = None
+
+    def set_tool(self, tool_id: str) -> None:
+        self._tool_id = tool_id
+
+    def _current(self) -> str:
+        if self._tool_id is None:
+            raise RuntimeError("StreamingRunner.set_tool must be called before running a command")
+        return self._tool_id
+
+    def method_started(self, method: str) -> None:
+        self._emit(self._current(), f"-- trying {method} --")
+
+    def __call__(self, cmd: list[str]) -> None:
+        """Run argv, emit each line as it arrives, raise CommandError on failure.
+
+        No timeout: a side-effecting install child must be allowed to take
+        minutes, matching run_output. bufsize=1 line-buffers parent reads
+        only; a child that block-buffers on a pipe still bursts at exit.
+        """
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        except OSError as exc:
+            raise CommandError(cmd, 127) from exc
+
+        tail: deque[str] = deque(maxlen=STREAM_DETAIL_LINES)
+        stdout = proc.stdout
+        try:
+            if stdout is not None:
+                for raw in stdout:
+                    line = raw.rstrip("\n")
+                    self._emit(self._current(), line)
+                    tail.append(line)
+            returncode = proc.wait()
+        finally:
+            # Drain then reap. Read remaining stdout to EOF and wait; never
+            # signal the child and never close the pipe out from under it.
+            # Closing early would deliver EPIPE, which is termination by
+            # another name. A raising emit leaves a live child whose unread
+            # pipe (~64 KiB) fills, the child blocks in write, and a bare
+            # wait never returns.
+            try:
+                if stdout is not None:
+                    for _ in stdout:
+                        pass
+                    stdout.close()
+            except OSError:
+                pass
+            proc.wait()
+        if returncode != 0:
+            raise CommandError(cmd, returncode, detail="\n".join(tail))
 
 
 QUERY_TIMEOUT = 20.0
