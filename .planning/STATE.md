@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: 13
 current_phase_name: live-in-tui-install-execution-persistent-wizard-settings-ins
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 13-01-PLAN.md
-last_updated: "2026-09-14T04:50:02.244Z"
+stopped_at: Completed 13-02-PLAN.md
+last_updated: "2026-09-14T05:11:13.818Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 13 execution started
-state_head: c4d50349618e4426d4b6c61e5e4d4999f193b960
+state_head: a6f3f6cab17361c66f79891ed36d8996f41a1615
 progress:
   total_phases: 19
-  completed_phases: 16
+  completed_phases: 15
   total_plans: 51
-  completed_plans: 45
+  completed_plans: 46
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 13 (live-in-tui-install-execution-persistent-wizard-settings-ins) — EXECUTING
-Current Plan: 2
+Current Plan: 3
 Total Plans in Phase: 7
 Status: Ready to execute
 Last activity: 2026-09-14 — Phase 13 execution started
@@ -77,6 +77,7 @@ Progress: [█████████░] 88%
 | Phase 10 P01 | 25min | 3 tasks | 8 files |
 | Phase 12.3 P01 | 14 min | 2 tasks | 1 files |
 | Phase 13 P01 | 30 min | 3 tasks | 2 files |
+| Phase 13 P02 | 14 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -107,6 +108,9 @@ Recent decisions affecting current work:
 - [12.3-01, 2026-09-10]: Container-tool detection is `scripts/detect-container-runtime.sh`; live proof is a real alpine `run --rm`, never `--version`; D-03 refuse() exits 3 with the three-option text and never falls back to the host
 - [12.3-01, 2026-09-10]: wezterm tracer proved `install_tool` checksum-verified inside disposable Fedora 44 (`fedora:latest` digest sha256:c1e938afd5dfd7f172fac9168ba8e148fdf41c0517c04849072a15e4bd34eac6); host rc files and `~/.local/bin/wezterm` unchanged
 - [Phase 13]: MECHANISM=A: call_from_thread + push_screen_wait — Spike printed MECHANISM=A; NoActiveWorker was not raised. Plan 13-05 implements this and nothing else.
+- [Phase 13]: StreamingRunner.emit is required; _current() raises when no tool is set (D-05.2). — The abandoned branch dropped attribution whenever captured_runner was None.
+- [Phase 13]: StreamingRunner finally drains stdout to EOF then wait(); never signals the child. — A raising emit plus a full pipe would hang 13-04's worker before InstallRunFinished.
+- [Phase 13]: should_continue is keyword-only after catalog so seven preexisting parameters stay positional. — Inserting it before catalog would make catalog keyword-only or steal its slot.
 
 ### Pending Todos
 
@@ -138,6 +142,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-14T04:50:02.124Z
-Stopped at: Completed 13-01-PLAN.md
+Last session: 2026-09-14T05:11:13.688Z
+Stopped at: Completed 13-02-PLAN.md
 Resume file: None
