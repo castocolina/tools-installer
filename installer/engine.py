@@ -11,6 +11,7 @@ from installer.enums import InstallStatus
 from installer.locations import bin_dir, prepend_path
 from installer.model import Method, Tool
 from installer.platform import Platform
+from installer.post_install import ConfirmSensitiveAction, run_post_install
 from installer.postinstall import run_postinstall
 from installer.resolve import resolve_methods
 from installer.run import CommandError, MethodAwareRunner, Runner, run_command
@@ -40,6 +41,9 @@ class InstallOutcome:
     # Only on MANUAL_REQUIRED (a host_setup or skill_pack method): reviewed
     # console instructions to run after the installer releases the terminal.
     handoff: tuple[str, ...] = ()
+    # Reviewed instruction lines from plural post_install actions. Never
+    # executed by the installer; the user runs them after leaving Textual.
+    post_install_handoff: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -51,6 +55,7 @@ class InstallOutcome:
         blocked_by: tuple[str, ...] = (),
         postinstall_warning: str | None = None,
         handoff: tuple[str, ...] = (),
+        post_install_handoff: tuple[str, ...] = (),
     ) -> None:
         object.__setattr__(self, "tool_id", tool_id)
         object.__setattr__(self, "status", InstallStatus(status))
@@ -60,6 +65,7 @@ class InstallOutcome:
         object.__setattr__(self, "blocked_by", blocked_by)
         object.__setattr__(self, "postinstall_warning", postinstall_warning)
         object.__setattr__(self, "handoff", handoff)
+        object.__setattr__(self, "post_install_handoff", post_install_handoff)
 
 
 def _perform(tool: Tool, method: Method, ctx: ExecContext) -> tuple[bool, tuple[str, ...]]:
@@ -94,6 +100,7 @@ def install_tool(
     *,
     checksum_policy: ChecksumPolicy = "fail",
     tools: Mapping[str, Tool] | None = None,
+    confirm_sensitive_action: ConfirmSensitiveAction | None = None,
 ) -> InstallOutcome:
     """Try each applicable method in ladder order; stop at the first success.
 
@@ -110,8 +117,12 @@ def install_tool(
     After a method succeeds, a tool declaring `postinstall` is dispatched
     immediately, before this function returns; a postinstall problem is
     carried on `postinstall_warning` and it never turns this INSTALLED outcome into a failure.
-    The ALREADY_INSTALLED short-circuit never dispatches postinstall at all
-    (D-01's single-direction trigger).
+    Declared `post_install` actions are dispatched next, producing reviewed
+    instruction lines on `post_install_handoff`. `confirm_sensitive_action` is
+    the optional confirmation callback those actions consult; `None` is the
+    unattended case and skips them. The ALREADY_INSTALLED short-circuit never
+    dispatches postinstall or post_install at all (D-01's single-direction
+    trigger).
     """
     if is_installed(tool):
         return InstallOutcome(tool.id, InstallStatus.ALREADY_INSTALLED)
@@ -152,11 +163,21 @@ def install_tool(
                     warning = run_postinstall(tool.postinstall, method, runner, tools or {})
                 except Exception as exc:  # noqa: BLE001 -- isolation boundary, see design_decisions
                     warning = f"postinstall hook {tool.postinstall!r} crashed: {exc}"
+            post_install_handoff: tuple[str, ...] = ()
+            if tool.post_install:
+                try:
+                    post_install_handoff = run_post_install(
+                        tool, platform, confirm_sensitive_action
+                    )
+                except Exception as exc:  # noqa: BLE001 -- isolation boundary, see design_decisions
+                    crash = f"post-install actions crashed: {exc}"
+                    warning = f"{warning}; {crash}" if warning else crash
             return InstallOutcome(
                 tool.id,
                 InstallStatus.INSTALLED,
                 method_kind=method.kind,
                 verified=verified,
                 postinstall_warning=warning,
+                post_install_handoff=post_install_handoff,
             )
     return InstallOutcome(tool.id, InstallStatus.FAILED, errors=tuple(errors))

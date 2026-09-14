@@ -9,7 +9,7 @@ from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.engine import install_tool
 from installer.enums import InstallStatus
-from installer.model import Method, Tool
+from installer.model import Method, Tool, load_tools
 from installer.platform import Platform
 from installer.run import CommandError
 from installer.versions import VersionError
@@ -19,14 +19,20 @@ def _platform() -> Platform:
     return Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
 
 
-def _tool(*methods: Method, postinstall: str | None = None) -> Tool:
+def _tool(
+    *methods: Method,
+    postinstall: str | None = None,
+    post_install: tuple[str, ...] = (),
+    tool_id: str = "rg",
+) -> Tool:
     return Tool(
-        id="rg",
+        id=tool_id,
         name="ripgrep",
         category="search",
         cmd="rg",
         methods=methods,
         postinstall=postinstall,
+        post_install=post_install,
     )
 
 
@@ -559,3 +565,49 @@ def test_failed_install_never_dispatches_postinstall(monkeypatch: pytest.MonkeyP
     assert outcome.status == "failed"
     assert outcome.postinstall_warning is None
     assert calls == []
+
+
+def test_login_shell_action_dispatches_reviewed_instructions_after_oh_my_zsh_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _not_installed(monkeypatch)
+    omz = next(t for t in load_tools(Path("installer/registry.toml")) if t.id == "oh-my-zsh")
+    asked: list[tuple[str, str]] = []
+    calls: list[list[str]] = []
+
+    def confirm(tool_id: str, action: str) -> bool:
+        asked.append((tool_id, action))
+        return True
+
+    outcome = install_tool(
+        omz,
+        _platform(),
+        runner=lambda cmd: calls.append(cmd),
+        confirm_sensitive_action=confirm,
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.post_install_handoff
+    assert any("chsh -s" in line for line in outcome.post_install_handoff)
+    assert asked == [("oh-my-zsh", "set_login_shell")]
+    assert len(calls) == 1
+
+
+def test_login_shell_action_is_not_offered_when_tool_declares_no_post_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _not_installed(monkeypatch)
+    asked: list[tuple[str, str]] = []
+
+    def confirm(tool_id: str, action: str) -> bool:
+        asked.append((tool_id, action))
+        return True
+
+    outcome = install_tool(
+        _tool(Method(kind="dnf", params={"package": "ripgrep"})),
+        _platform(),
+        runner=lambda cmd: None,
+        confirm_sensitive_action=confirm,
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.post_install_handoff == ()
+    assert asked == []

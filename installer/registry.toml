@@ -533,6 +533,7 @@ priority = "P2"
 audience = "both"
 tier = "system"
 requires = ["zsh", "git"]
+post_install = ["set_login_shell"]
 desc = "Zsh configuration framework; installs into ~/.oh-my-zsh and edits .zshrc, preserving it via KEEP_ZSHRC."
 [[tool.method]]
 kind = "script"
