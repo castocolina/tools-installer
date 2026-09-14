@@ -199,3 +199,34 @@ def test_policy_layer_is_frozen() -> None:
     except AttributeError:
         return
     raise AssertionError("PolicyLayer must be frozen")
+
+
+def test_ban_policy_apply_rereads_callable_apply_rc_paths(tmp_path: Path) -> None:
+    first = tmp_path / "first.rc"
+    second = tmp_path / "second.rc"
+    current = [first]
+    shim_dir = tmp_path / ".local" / "bin"
+    shim_dir.mkdir(parents=True, exist_ok=True)
+
+    def apply_rc_paths() -> list[Path]:
+        return list(current)
+
+    policy = ban_policy(
+        shim_dir=shim_dir,
+        apply_rc_paths=apply_rc_paths,
+        remove_rc_paths=[first],
+        path_value="",
+        which=lambda _name: None,
+    )
+    policy.apply()
+    assert "alias" in first.read_text()
+    assert not second.exists()
+    current[0] = second
+    policy.apply()
+    assert "alias" in second.read_text()
+
+
+def test_ban_policy_still_accepts_a_plain_list(tmp_path: Path) -> None:
+    rc = tmp_path / ".myshellrc"
+    result = _ban(tmp_path, apply_to=[rc]).apply()
+    assert str(rc) in result.layers[1].detail

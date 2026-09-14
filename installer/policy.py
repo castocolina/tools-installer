@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from installer import daemon
 from installer.agent_env import AgentAdapter
@@ -218,7 +218,7 @@ def compose_agent_environment_policy(
 def ban_policy(
     *,
     shim_dir: Path,
-    apply_rc_paths: list[Path],
+    apply_rc_paths: list[Path] | Callable[[], list[Path]],
     remove_rc_paths: list[Path],
     path_value: str,
     which: Callable[[str], str | None],
@@ -228,7 +228,19 @@ def ban_policy(
     apply writes shims into shim_dir and aliases into apply_rc_paths; remove
     clears shims and strips aliases from remove_rc_paths (the union of every
     location, so disabling leaves no stragglers regardless of link mode).
+
+    apply_rc_paths is re-read at apply time (a list or a zero-argument
+    callable returning one) because the link mode is now adjustable while the
+    app is running. A ban whose aliases land in a ~/.myshellrc that split
+    mode never sources is a silent no-op the user has no way to notice.
     """
+    if isinstance(apply_rc_paths, list):
+        captured_apply = cast("list[Path]", apply_rc_paths)
+
+        def read_apply_rc_paths() -> list[Path]:
+            return captured_apply
+    else:
+        read_apply_rc_paths = apply_rc_paths
 
     def _apply() -> PolicyResult:
         # Hard blocks first, unconditional redirects second, argv-conditional
@@ -251,9 +263,10 @@ def ban_policy(
         ]
         if degraded:
             shim_detail += f" ({'; '.join(degraded)})"
-        for rc_path in apply_rc_paths:
+        targets = read_apply_rc_paths()
+        for rc_path in targets:
             write_ban_aliases(rc_path)
-        alias_detail = "written to " + ", ".join(_display_path(p) for p in apply_rc_paths)
+        alias_detail = "written to " + ", ".join(_display_path(p) for p in targets)
         return PolicyResult(
             layers=(PolicyLayer("Shims", shim_detail), PolicyLayer("Aliases", alias_detail)),
             reload_hint=_RELOAD_HINT,
@@ -298,7 +311,7 @@ def tweak_policy(
     rc_path: Path,
     bin_dir: Path | None = None,
     installed_tools: Mapping[str, bool] | None = None,
-    ensure_sourced_from: tuple[Path, ...] = (),
+    ensure_sourced_from: tuple[Path, ...] | Callable[[], tuple[Path, ...]] = (),
 ) -> Policy:
     """A curated shell-tweak bundle as a Policy, parallel to ban_policy.
 
@@ -313,7 +326,19 @@ def tweak_policy(
     centralized/single mode — so the tweak actually reaches a real shell under
     split PATH mode too. remove needs no symmetric undo: the harmless, idempotent
     source line may still be load-bearing for another still-enabled tweak.
+
+    ensure_sourced_from is re-read at apply time (a tuple or a zero-argument
+    callable returning one) because the link mode is now adjustable while the
+    app is running. A tweak sourced only into a ~/.myshellrc that split mode
+    never sources is a silent no-op the user has no way to notice.
     """
+    if isinstance(ensure_sourced_from, tuple):
+        captured_sourced = cast("tuple[Path, ...]", ensure_sourced_from)
+
+        def read_ensure_sourced_from() -> tuple[Path, ...]:
+            return captured_sourced
+    else:
+        read_ensure_sourced_from = ensure_sourced_from
 
     def _apply() -> PolicyResult:
         target_bin_dir = _required_bin_dir(bundle, bin_dir)
@@ -327,10 +352,11 @@ def tweak_policy(
             layers.append(
                 PolicyLayer("Executable", f"installed {names} in {_display_path(target_bin_dir)}")
             )
-        if ensure_sourced_from:
-            for target in ensure_sourced_from:
+        sourced = read_ensure_sourced_from()
+        if sourced:
+            for target in sourced:
                 ensure_source(target, rc_path)
-            wired = ", ".join(_display_path(p) for p in ensure_sourced_from)
+            wired = ", ".join(_display_path(p) for p in sourced)
             layers.append(
                 PolicyLayer(
                     "Split-mode sourcing",

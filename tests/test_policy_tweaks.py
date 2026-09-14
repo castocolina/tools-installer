@@ -186,6 +186,30 @@ def test_tweak_policy_disable_hint_names_new_shell_not_source(tmp_path: Path) ->
     assert ban_result.reload_hint is not None and "hash -r" in ban_result.reload_hint
 
 
+def test_tweak_policy_ensure_sourced_from_callable_is_reread_at_apply(
+    tmp_path: Path,
+) -> None:
+    myshellrc = tmp_path / ".myshellrc"
+    first = tmp_path / ".bashrc"
+    second = tmp_path / ".zshrc"
+    current: tuple[Path, ...] = (first,)
+
+    def ensure_sourced_from() -> tuple[Path, ...]:
+        return current
+
+    policy = tweak_policy(
+        _bundle("codex-skip"),
+        rc_path=myshellrc,
+        ensure_sourced_from=ensure_sourced_from,
+    )
+    policy.apply()
+    assert str(myshellrc) in first.read_text()
+    assert not second.exists()
+    current = (second,)
+    policy.apply()
+    assert str(myshellrc) in second.read_text()
+
+
 def test_tweak_policy_ensure_sourced_from_wires_myshellrc_into_the_given_rc_path(
     tmp_path: Path,
 ) -> None:

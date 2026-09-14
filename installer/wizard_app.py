@@ -84,6 +84,8 @@ class PolicyInputs:
     apply/remove closures. The composition root builds these from the pure core."""
 
     policies: list[Policy]
+    link_mode: Callable[[], str] | None = None
+    set_link_mode: Callable[[str], None] | None = None
 
 
 # The l log-view toggle's tail length — a plain, bounded slice of the raw log,
@@ -179,7 +181,7 @@ class DoctorScreen(AppScreen):
         self,
         report: DoctorReport,
         guard_state: Callable[[], tuple[dict[str, bool], str | None]],
-        fix_preview: str,
+        fix_preview: str | Callable[[], str],
         fix: Callable[[], None],
         *,
         node_globals: Callable[[], NodeGlobalsReport],
@@ -193,7 +195,14 @@ class DoctorScreen(AppScreen):
         # that state. The PATH audit beside it stays a snapshot on purpose — the
         # process PATH cannot change until the shell restarts.
         self._guard_state = guard_state
-        self._fix_preview = fix_preview
+        # Same predicate-not-its-result reasoning the guard_state parameter
+        # already carries three lines above: the Policies view changes
+        # something the Doctor renders, one navigation step away.
+        if callable(fix_preview):
+            self._fix_preview = fix_preview
+        else:
+            preview_text = fix_preview
+            self._fix_preview = lambda: preview_text
         self._fix = fix
         # node_globals shells out to `pnpm list -g --json`, so it is NEVER
         # called from the event loop: _audit_globals_worker calls it on a thread
@@ -299,7 +308,7 @@ class DoctorScreen(AppScreen):
         text.append("Audit\n", style="bold")
         text.append(guidance_text(self._tui_guidance()))
         text.append("\n\nSafe fix preview\n", style="bold")
-        text.append(self._fix_preview)
+        text.append(self._fix_preview())
         text.append("\n\nAction\n", style="bold")
         if self.applied:
             text.append("PATH wired.", style="green")
@@ -1439,7 +1448,7 @@ class UnifiedApp(App[list[str] | None]):
         *,
         report: DoctorReport,
         guard_state: Callable[[], tuple[dict[str, bool], str | None]],
-        fix_preview: str,
+        fix_preview: str | Callable[[], str],
         fix: Callable[[], None],
         uninstall: UninstallInputs,
         policies: PolicyInputs,
@@ -1453,10 +1462,12 @@ class UnifiedApp(App[list[str] | None]):
         version_refresh: VersionRefreshService | None = None,
         updates: UpdateService | None = None,
         execute: ExecuteInputs | None = None,
+        prompt_link_mode: bool = False,
     ) -> None:
         super().__init__()
         self._staged: set[str] = set()
         self._execute = execute
+        self._prompt_link_mode = prompt_link_mode
         # The exit code answers "did everything this session asked for succeed",
         # not "did the last thing succeed" — merge each run field-wise in order.
         self.install_summary: Summary | None = None

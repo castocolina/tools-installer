@@ -13,12 +13,14 @@ from rich.console import Console
 import setup
 from installer import pnpm_globals
 from installer.app import UninstallDecision
+from installer.execute_screen import ExecuteInputs
 from installer.guards import install_shims
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
 from installer.policy import Policy
 from installer.session import Summary
+from installer.settings import Settings, SettingsStore, load_settings, save_settings
 from installer.shellrc import write_myshellrc
 from installer.tweaks import BUNDLES
 from installer.uninstall import SweepResult
@@ -338,8 +340,9 @@ def test_darwin_select_based_asyncio_restores_selector_on_exception(
 
 def test_main_fix_interactive_without_link_mode_opens_doctor(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    build_calls: list[dict[str, str]] = []
+    build_calls: list[dict[str, object]] = []
 
     def fake_load_tools(_registry: object) -> list[Tool]:
         return []
@@ -347,27 +350,27 @@ def test_main_fix_interactive_without_link_mode_opens_doctor(
     def fake_detect() -> Platform:
         return _platform()
 
-    def fake_resolve_link_mode(_option: str | None) -> str:
-        return "single"
-
     def fake_build_app(
         tools: list[Tool],
         platform: Platform,
         *,
         initial_view: str = "system",
         link_mode: str = "centralized",
+        **kwargs: object,
     ) -> _DummyApp:
         build_calls.append(
             {
                 "initial_view": initial_view,
                 "link_mode": link_mode,
+                "settings": kwargs.get("settings"),
+                "prompt_link_mode": kwargs.get("prompt_link_mode", False),
             }
         )
         return _DummyApp()
 
+    _store_link_mode(monkeypatch, tmp_path, "single")
     monkeypatch.setattr(setup, "load_tools", fake_load_tools)
     monkeypatch.setattr(setup, "detect", fake_detect)
-    monkeypatch.setattr(setup, "_resolve_link_mode", fake_resolve_link_mode)
     monkeypatch.setattr(setup, "_build_app", fake_build_app)
     monkeypatch.setattr(setup.sys, "stdin", _FakeStdin())
 
@@ -375,7 +378,11 @@ def test_main_fix_interactive_without_link_mode_opens_doctor(
     monkeypatch.setattr(setup, "Console", lambda: console)
 
     assert setup.main(["--fix"]) == 0
-    assert build_calls == [{"initial_view": "doctor", "link_mode": "single"}]
+    assert len(build_calls) == 1
+    assert build_calls[0]["initial_view"] == "doctor"
+    assert build_calls[0]["link_mode"] == "single"
+    assert build_calls[0]["settings"] is not None
+    assert build_calls[0]["prompt_link_mode"] is False
 
 
 # -- composition-root wiring -------------------------------------------------
@@ -436,6 +443,18 @@ def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(setup, "load_categories", _no_categories)
     monkeypatch.setattr(setup, "detect", _platform)
     monkeypatch.setattr(setup.sys, "stdin", _FakeStdin())
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr("installer.settings.default_settings_path", lambda: settings_path)
+    monkeypatch.setattr(setup, "default_settings_path", lambda: settings_path, raising=False)
+
+
+def _store_link_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str) -> Path:
+    path = tmp_path / "settings.json"
+    save_settings(path, Settings(mode))
+    monkeypatch.setattr("installer.settings.default_settings_path", lambda: path)
+    monkeypatch.setattr(setup, "default_settings_path", lambda: path, raising=False)
+    return path
+    monkeypatch.setattr(setup, "default_settings_path", lambda: tmp_path / "settings.json")
 
 
 def test_the_uninstall_view_is_wired_to_a_total_teardown_of_the_real_zshrc(
@@ -569,7 +588,6 @@ def test_daemon_default_is_wired_only_for_the_genuine_setup_wizard_entry_point(
     invoked (11-REVIEWS.md cycle 2 finding #20)."""
     _sandbox(monkeypatch, tmp_path)
     seen = _capture_app(monkeypatch)
-    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
 
     assert setup.main(["--doctor"]) == 0
     assert setup.main(["--uninstall"]) == 0
@@ -616,14 +634,6 @@ def test_the_policies_view_does_not_wire_split_sourcing_under_centralized_mode(
     assert not (tmp_path / ".bashrc").exists()
 
 
-def _fake_resolve_link_mode_split(_option: str | None) -> str:
-    return "split"
-
-
-def _fake_resolve_link_mode_centralized(_option: str | None) -> str:
-    return "centralized"
-
-
 def test_the_normal_interactive_flow_wires_split_mode_myshellrc_sourcing_before_catalog_opens(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -631,8 +641,8 @@ def test_the_normal_interactive_flow_wires_split_mode_myshellrc_sourcing_before_
     also thread the real link mode into the catalog/Policies UnifiedApp
     instance BEFORE it opens — not only the --guard shortcut."""
     _sandbox(monkeypatch, tmp_path)
+    _store_link_mode(monkeypatch, tmp_path, "split")
     seen = _capture_app(monkeypatch)
-    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_split)
     assert setup.main([]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
@@ -646,7 +656,6 @@ def test_the_normal_interactive_flow_does_not_wire_split_sourcing_under_centrali
 ) -> None:
     _sandbox(monkeypatch, tmp_path)
     seen = _capture_app(monkeypatch)
-    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
     assert setup.main([]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
@@ -834,9 +843,6 @@ def _stub_install_run(monkeypatch: pytest.MonkeyPatch, summary: Summary) -> list
     def fake_run_wizard(*_args: object, **_kwargs: object) -> Summary:
         return summary
 
-    def fake_resolve_link_mode(_option: str | None) -> str:
-        return "centralized"
-
     def noop(*_args: object, **_kwargs: object) -> None:
         return None
 
@@ -848,7 +854,12 @@ def _stub_install_run(monkeypatch: pytest.MonkeyPatch, summary: Summary) -> list
     monkeypatch.setattr(setup, "detect", _platform)
     monkeypatch.setattr(setup, "load_categories", fake_load_categories)
     monkeypatch.setattr(setup, "run_wizard", fake_run_wizard)
-    monkeypatch.setattr(setup, "_resolve_link_mode", fake_resolve_link_mode)
+    monkeypatch.setattr(
+        "installer.settings.default_settings_path", lambda: Path("/no/such/settings.json")
+    )
+    monkeypatch.setattr(
+        setup, "default_settings_path", lambda: Path("/no/such/settings.json"), raising=False
+    )
     monkeypatch.setattr(setup, "configure_path", noop)
     monkeypatch.setattr(setup, "_verify_and_clean", noop)
     monkeypatch.setattr(setup, "render_troubleshooting", fake_render_troubleshooting)
@@ -910,7 +921,6 @@ def test_build_app_hands_unavailable_from_platform_could_support(
     _sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(setup, "load_tools", fake_load_tools)
     monkeypatch.setattr(setup, "detect", fake_detect)
-    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
     seen = _capture_app(monkeypatch)
     assert setup.main([]) == 0
     unavailable = seen[0]["unavailable"]
@@ -1042,7 +1052,6 @@ def test_interactive_main_never_calls_run_wizard(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _sandbox(monkeypatch, tmp_path)
-    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
     seen = _capture_app(monkeypatch)
 
     def boom(*_args: object, **_kwargs: object) -> None:
@@ -1069,7 +1078,6 @@ def test_interactive_app_is_built_with_execute_and_daemon_default(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _sandbox(monkeypatch, tmp_path)
-    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
     seen = _capture_app(monkeypatch)
     assert setup.main([]) == 0
     assert seen[0]["execute"] is not None
@@ -1128,7 +1136,6 @@ def test_interactive_none_summary_prints_aborted_and_returns_zero(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _sandbox(monkeypatch, tmp_path)
-    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
     buffer = io.StringIO()
     monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
     _capture_app(monkeypatch)
@@ -1148,7 +1155,6 @@ def _wire_interactive_summary(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, app: _SummaryApp
 ) -> list[str]:
     _sandbox(monkeypatch, tmp_path)
-    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
     rendered: list[str] = []
 
     def fake_render_troubleshooting(_console: object) -> None:
@@ -1214,7 +1220,6 @@ def test_interactive_path_cleans_rc_duplicates_without_re_running_doctor(
         return _SummaryApp(Summary(installed=("rg",), already=(), failed=(), no_method=()))
 
     _sandbox(monkeypatch, tmp_path)
-    monkeypatch.setattr(setup, "_resolve_link_mode", _fake_resolve_link_mode_centralized)
     monkeypatch.setattr(setup, "clean_rc_duplicates", fake_clean)
     monkeypatch.setattr(setup, "run_doctor", fake_doctor)
     monkeypatch.setattr(setup, "collect_bin_dirs", fake_collect)
@@ -1222,3 +1227,147 @@ def test_interactive_path_cleans_rc_duplicates_without_re_running_doctor(
     assert setup.main([]) == 0
     assert cleaned == ["cleaned"]
     assert doctors == []
+
+
+def test_interactive_run_with_nothing_stored_opens_the_app_without_a_questionary_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+
+    def boom(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("interactive run must not prompt for link mode")
+
+    monkeypatch.setattr(setup, "_ask_select", boom)
+    monkeypatch.setattr(setup.questionary, "select", boom)
+    assert setup.main([]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    assert policies.link_mode is not None
+    assert policies.link_mode() == "centralized"
+    assert seen[0].get("prompt_link_mode") is True
+
+
+def test_interactive_run_uses_stored_split_and_prompts_for_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    _store_link_mode(monkeypatch, tmp_path, "split")
+    seen = _capture_app(monkeypatch)
+
+    def boom(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("stored preference must not re-prompt")
+
+    monkeypatch.setattr(setup, "_ask_select", boom)
+    assert setup.main([]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    assert policies.link_mode is not None
+    assert policies.link_mode() == "split"
+    assert seen[0].get("prompt_link_mode") is False
+
+
+def test_link_mode_flag_overrides_stored_split_without_rewriting_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    path = _store_link_mode(monkeypatch, tmp_path, "split")
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--link-mode", "single"]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    assert policies.link_mode is not None
+    assert policies.link_mode() == "single"
+    assert load_settings(path).link_mode == "split"
+    assert seen[0].get("prompt_link_mode") is False
+
+
+def test_live_set_link_mode_rereads_fix_preview_apply_execute_and_policies(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "_SHELL", "/bin/zsh")
+    seen = _capture_app(monkeypatch)
+    store = SettingsStore(tmp_path / "settings.json", link_mode="centralized")
+    setup._build_app(  # pyright: ignore[reportPrivateUsage]
+        [],
+        _platform(),
+        settings=store,
+        execute=setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
+            [], _platform(), link_mode=lambda: store.link_mode, unattended=True
+        ),
+    )
+    preview = seen[0]["fix_preview"]
+    assert callable(preview)
+    store.set_link_mode("split")
+    text = cast(Callable[[], str], preview)()
+    assert ".zshrc" in text
+    assert ".bashrc" in text
+    assert ".myshellrc" not in text
+
+    captured: list[dict[str, object]] = []
+
+    def fake_configure_path(_tools: object, _console: object, **kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr(setup, "configure_path", fake_configure_path)
+    fix = seen[0]["fix"]
+    assert callable(fix)
+    cast(Callable[[], None], fix)()
+    assert captured[0]["link_mode"] == "split"
+    rc_paths = captured[0]["rc_paths"]
+    assert isinstance(rc_paths, list)
+    names = {Path(str(path)).name for path in cast("list[object]", rc_paths)}
+    assert names == {".zshrc", ".bashrc"}
+
+    execute = seen[0]["execute"]
+    assert execute is not None
+    captured.clear()
+    cast(ExecuteInputs, execute).wire_path()
+    assert captured[0]["link_mode"] == "split"
+
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    ban = next(policy for policy in policies.policies if policy.id == "ban")
+    result = ban.apply()
+    alias_detail = result.layers[1].detail
+    assert ".zshrc" in alias_detail
+    assert ".bashrc" in alias_detail
+    assert ".myshellrc" not in alias_detail
+    tweak = next(policy for policy in policies.policies if policy.id == "tweak:codex-skip")
+    tweak.apply()
+    assert str(tmp_path / ".myshellrc") in (tmp_path / ".zshrc").read_text()
+    assert str(tmp_path / ".myshellrc") in (tmp_path / ".bashrc").read_text()
+
+
+def test_doctor_uninstall_and_guard_wire_the_store_but_never_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--doctor"]) == 0
+    assert setup.main(["--uninstall"]) == 0
+    assert setup.main(["--guard"]) == 0
+    assert len(seen) == 3
+    for kwargs in seen:
+        policies = kwargs["policies"]
+        assert isinstance(policies, PolicyInputs)
+        assert policies.set_link_mode is not None
+        assert kwargs.get("prompt_link_mode") is False
+
+
+def test_non_interactive_fix_with_link_mode_flag_writes_split_and_stores_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    written: list[str] = []
+
+    def fake_configure_path(_tools: object, _console: object, **kwargs: object) -> None:
+        written.append(str(kwargs["link_mode"]))
+
+    monkeypatch.setattr(setup, "configure_path", fake_configure_path)
+    path = tmp_path / "settings.json"
+    assert setup.main(["--fix", "--link-mode", "split"]) == 0
+    assert written == ["split"]
+    assert not path.exists()
+    assert load_settings(path).link_mode is None

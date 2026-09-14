@@ -13,7 +13,7 @@ import os
 import selectors
 import shutil
 import sys
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 
 import questionary
@@ -54,6 +54,13 @@ from installer.render import render_troubleshooting
 from installer.resolve import platform_could_support
 from installer.run import run_captured
 from installer.selection import Choice
+from installer.settings import (
+    SettingsStore,
+    default_settings_path,
+    link_mode_needs_choice,
+    load_settings,
+    resolve_link_mode,
+)
 from installer.shellrc import collect_bin_dirs, has_managed_block
 from installer.status import is_installed
 from installer.tweaks import BUNDLES, applicable_bundles
@@ -176,8 +183,8 @@ def _questionary_tty_io() -> Iterator[tuple[Input, Output] | None]:
     Redirecting fd 0 itself via os.dup2() (_stdin_on_tty(), used for
     Textual) gets prompt_toolkit's VT100 input driver to *read* correctly,
     but questionary needs its own file, independent of fd 0, regardless:
-    _resolve_link_mode() calls _ask_select() and the Textual catalog wizard
-    both need a working terminal in the same run, and each library owns fd 0
+    _run_uninstall opens _build_app(..., initial_view="uninstall").run() and
+    then calls _ask_confirm in the same run, and each library owns fd 0
     exclusively while it's driving input. See _darwin_select_based_asyncio()
     for a second, unrelated macOS-only fix this pairs with.
 
@@ -261,8 +268,8 @@ def _ask_checkbox(message: str, choices: list[Choice]) -> list[str]:
     # See _questionary_tty_io()'s docstring for why questionary prompts get a
     # dedicated /dev/tty Input/Output pair instead of _stdin_on_tty()'s fd 0
     # redirect. Every ask_* helper needs this, not just the Textual .run()
-    # call sites: _resolve_link_mode() calls _ask_select() before the catalog
-    # wizard ever opens.
+    # call sites: _run_uninstall opens the uninstall TUI and then calls
+    # _ask_confirm in the same run, and _run_guard does the same.
     with _questionary_tty_io() as io_pair, _darwin_select_based_asyncio():
         kwargs = {"input": io_pair[0], "output": io_pair[1]} if io_pair else {}
         answer = questionary.checkbox(
@@ -373,6 +380,8 @@ def _build_app(
     link_mode: str = "centralized",
     apply_daemon_default: bool = False,
     execute: ExecuteInputs | None = None,
+    settings: SettingsStore | None = None,
+    prompt_link_mode: bool = False,
 ) -> UnifiedApp:
     installed = {tool.id: is_installed(tool) for tool in tools}
     unavailable = {tool.id: not platform_could_support(tool, platform) for tool in tools}
@@ -391,7 +400,9 @@ def _build_app(
         # views can never disagree about it.
         return guard_state(_DEFAULT_BIN_DIR, os.environ.get("PATH", ""))
 
-    rc_paths = rc_paths_for_mode(link_mode, _SHELL)
+    def _current_link_mode() -> str:
+        return settings.link_mode if settings is not None else link_mode
+
     rows = classify_tools(
         tools,
         _DEFAULT_BIN_DIR,
@@ -444,11 +455,21 @@ def _build_app(
             daemon_policy=daemon,
         ),
     )
+
+    def _ban_apply_rc_paths() -> list[Path]:
+        return ban_rc_paths(_current_link_mode(), _SHELL)
+
+    def _tweak_ensure_sourced_from() -> tuple[Path, ...]:
+        mode = _current_link_mode()
+        if mode != "split":
+            return ()
+        return tuple(rc_paths_for_mode(mode, _SHELL))
+
     policy_inputs = PolicyInputs(
         policies=[
             ban_policy(
                 shim_dir=_DEFAULT_BIN_DIR,
-                apply_rc_paths=ban_rc_paths(link_mode, _SHELL),
+                apply_rc_paths=_ban_apply_rc_paths,
                 remove_rc_paths=all_ban_rc_paths(),
                 path_value=os.environ.get("PATH", ""),
                 which=shutil.which,
@@ -459,7 +480,7 @@ def _build_app(
                     rc_path=_MYSHELLRC,
                     bin_dir=_DEFAULT_BIN_DIR,
                     installed_tools=installed,
-                    ensure_sourced_from=tuple(rc_paths) if link_mode == "split" else (),
+                    ensure_sourced_from=_tweak_ensure_sourced_from,
                 )
                 for bundle in bundles
             ),
@@ -469,29 +490,35 @@ def _build_app(
                 present=omz_present(Path.home(), os.environ),
             ),
             *((daemon,) if daemon is not None else ()),
-        ]
+        ],
+        link_mode=_current_link_mode if settings is not None else None,
+        set_link_mode=settings.set_link_mode if settings is not None else None,
     )
 
     def _apply_fix() -> None:
         # Runs live inside the DoctorScreen. A quiet console keeps configure_path's
         # own prints from corrupting the running TUI; the screen renders its own
-        # result. Link mode is resolved before the app opens (never prompted while
-        # the TUI is live).
+        # result. Link mode is re-read here so a Policies-view change takes
+        # effect without rebuilding the app.
+        mode = _current_link_mode()
         configure_path(
             tools,
             Console(file=io.StringIO()),
             platform=platform,
             default_bin_dir=_DEFAULT_BIN_DIR,
             myshellrc_path=_MYSHELLRC,
-            rc_paths=rc_paths,
-            link_mode=link_mode,
+            rc_paths=rc_paths_for_mode(mode, _SHELL),
+            link_mode=mode,
         )
 
-    preview = (
-        f"Will wire the managed bin dirs into "
-        f"{', '.join(str(p) for p in rc_paths)} (mode: {link_mode}).\n"
-        'For a different layout, run `make fix ARGS="--link-mode=centralized|single|split"`.'
-    )
+    def preview() -> str:
+        mode = _current_link_mode()
+        paths = rc_paths_for_mode(mode, _SHELL)
+        return (
+            f"Will wire the managed bin dirs into "
+            f"{', '.join(str(p) for p in paths)} (mode: {mode}).\n"
+            'For a different layout, run `make fix ARGS="--link-mode=centralized|single|split"`.'
+        )
 
     # The audit asks the real pnpm what it manages globally, so it spawns a
     # process. DoctorScreen calls this only from a thread worker and holds the
@@ -593,6 +620,7 @@ def _build_app(
         version_refresh=version_refresh,
         updates=updates,
         execute=execute,
+        prompt_link_mode=prompt_link_mode,
     )
 
 
@@ -600,12 +628,14 @@ def _execute_inputs(
     tools: list[Tool],
     platform: Platform,
     *,
-    link_mode: str,
+    link_mode: str | Callable[[], str],
     unattended: bool,
 ) -> ExecuteInputs:
-    rc_paths = rc_paths_for_mode(link_mode, _SHELL)
+    def current_mode() -> str:
+        return link_mode() if callable(link_mode) else link_mode
 
     def wire_path() -> str:
+        mode = current_mode()
         buffer = io.StringIO()
         configure_path(
             tools,
@@ -613,8 +643,8 @@ def _execute_inputs(
             platform=platform,
             default_bin_dir=_DEFAULT_BIN_DIR,
             myshellrc_path=_MYSHELLRC,
-            rc_paths=rc_paths,
-            link_mode=link_mode,
+            rc_paths=rc_paths_for_mode(mode, _SHELL),
+            link_mode=mode,
         )
         return buffer.getvalue()
 
@@ -645,7 +675,8 @@ def _run_interactive_wizard(
     console: Console,
     options: Options,
     *,
-    link_mode: str,
+    settings: SettingsStore,
+    prompt_link_mode: bool,
 ) -> int:
     with _stdin_on_tty():
         # Only the genuine interactive wizard flow auto-applies the daemon
@@ -653,9 +684,13 @@ def _run_interactive_wizard(
         app = _build_app(
             tools,
             platform,
-            link_mode=link_mode,
+            link_mode=settings.link_mode,
             apply_daemon_default=True,
-            execute=_execute_inputs(tools, platform, link_mode=link_mode, unattended=options.yes),
+            execute=_execute_inputs(
+                tools, platform, link_mode=lambda: settings.link_mode, unattended=options.yes
+            ),
+            settings=settings,
+            prompt_link_mode=prompt_link_mode,
         )
         app.run()
     summary = app.install_summary
@@ -676,27 +711,21 @@ def _run_interactive_wizard(
     return 0
 
 
-def _resolve_link_mode(link_mode_option: str | None) -> str:
-    if link_mode_option is not None:
-        return link_mode_option
-    if not _has_controlling_tty():
-        return "centralized"
-    return _ask_select(
-        "How should PATH be wired into your shells?",
-        [
-            ("Centralized: one ~/.myshellrc, sourced from .zshrc and .bashrc", "centralized"),
-            ("Single shell: source ~/.myshellrc from your current shell only", "single"),
-            ("Split: write PATH directly into each rc file (no ~/.myshellrc)", "split"),
-        ],
-    )
+def _settings_store(link_mode_option: str | None) -> tuple[SettingsStore, bool]:
+    path = default_settings_path()
+    stored = load_settings(path).link_mode
+    mode = resolve_link_mode(flag=link_mode_option, stored=stored)
+    needs_choice = link_mode_needs_choice(flag=link_mode_option, stored=stored)
+    return SettingsStore(path, link_mode=mode), needs_choice
 
 
 def _run_doctor(console: Console) -> int:
     tools = load_tools(_REGISTRY)
     platform = detect()
+    store, _needs_choice = _settings_store(None)
     if _has_controlling_tty():
         with _stdin_on_tty():
-            _build_app(tools, platform, initial_view="doctor").run()
+            _build_app(tools, platform, initial_view="doctor", settings=store).run()
         return 0
     run_doctor(
         tools,
@@ -715,22 +744,26 @@ def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
     # confusion the doctor/fix split removes.
     tools = load_tools(_REGISTRY)
     platform = detect()
+    store, needs_choice = _settings_store(link_mode_option)
     if _has_controlling_tty() and link_mode_option is None:
-        # Resolve the link mode once BEFORE opening the app (the TUI cannot host a
-        # questionary prompt). The DoctorScreen then previews and applies live.
-        link_mode = _resolve_link_mode(None)
         with _stdin_on_tty():
-            _build_app(tools, platform, initial_view="doctor", link_mode=link_mode).run()
+            _build_app(
+                tools,
+                platform,
+                initial_view="doctor",
+                link_mode=store.link_mode,
+                settings=store,
+                prompt_link_mode=needs_choice,
+            ).run()
         return 0
-    link_mode = _resolve_link_mode(link_mode_option)
     configure_path(
         tools,
         console,
         platform=platform,
         default_bin_dir=_DEFAULT_BIN_DIR,
         myshellrc_path=_MYSHELLRC,
-        rc_paths=rc_paths_for_mode(link_mode, _SHELL),
-        link_mode=link_mode,
+        rc_paths=rc_paths_for_mode(store.link_mode, _SHELL),
+        link_mode=store.link_mode,
     )
     return 0
 
@@ -738,8 +771,14 @@ def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
 def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
     platform = detect()
     if _has_controlling_tty() and not assume_yes:
+        store, _needs_choice = _settings_store(None)
         with _stdin_on_tty():
-            _build_app(load_tools(_REGISTRY), platform, initial_view="uninstall").run()
+            _build_app(
+                load_tools(_REGISTRY),
+                platform,
+                initial_view="uninstall",
+                settings=store,
+            ).run()
         return 0
     confirm = (lambda _message: True) if assume_yes else _ask_confirm
     tools = load_tools(_REGISTRY)
@@ -809,17 +848,22 @@ def main(argv: list[str]) -> int:
         if _has_controlling_tty() and not options.yes:
             # Honor an explicit --link-mode so the ban's aliases land in the same
             # rc files as the rest of the wiring; default stays centralized.
-            link_mode = options.link_mode or "centralized"
+            store, _needs_choice = _settings_store(options.link_mode)
             with _stdin_on_tty():
                 _build_app(
-                    load_tools(_REGISTRY), detect(), initial_view="policies", link_mode=link_mode
+                    load_tools(_REGISTRY),
+                    detect(),
+                    initial_view="policies",
+                    link_mode=store.link_mode,
+                    settings=store,
                 ).run()
             return 0
         if options.guard:
+            store, _needs_choice = _settings_store(options.link_mode)
             return _run_guard(
                 console,
                 remove=False,
-                rc_paths=ban_rc_paths(_resolve_link_mode(options.link_mode), _SHELL),
+                rc_paths=ban_rc_paths(store.link_mode, _SHELL),
                 assume_yes=options.yes,
             )
         # Removal needs no link-mode prompt — it sweeps every rc file.
@@ -834,13 +878,16 @@ def main(argv: list[str]) -> int:
     tools = load_tools(_REGISTRY)
     platform = detect()
     prompter = CallbackPrompter(ask_checkbox=_ask_checkbox, ask_confirm=_ask_confirm)
-    # Resolved once, before the catalog/Policies TUI opens: that same UnifiedApp
-    # instance's Policies screen is where a tweak could be toggled mid-session,
-    # so link_mode must be real BEFORE the interactive app is built, not only
-    # before the later configure_path call on the headless path.
-    link_mode = _resolve_link_mode(options.link_mode)
+    store, needs_choice = _settings_store(options.link_mode)
     if not options.all and not options.categories:
-        return _run_interactive_wizard(tools, platform, console, options, link_mode=link_mode)
+        return _run_interactive_wizard(
+            tools,
+            platform,
+            console,
+            options,
+            settings=store,
+            prompt_link_mode=needs_choice,
+        )
     summary = run_wizard(
         tools,
         platform,
@@ -859,8 +906,8 @@ def main(argv: list[str]) -> int:
         platform=platform,
         default_bin_dir=_DEFAULT_BIN_DIR,
         myshellrc_path=_MYSHELLRC,
-        rc_paths=rc_paths_for_mode(link_mode, _SHELL),
-        link_mode=link_mode,
+        rc_paths=rc_paths_for_mode(store.link_mode, _SHELL),
+        link_mode=store.link_mode,
     )
     _verify_and_clean(console, tools, platform, assume_yes=options.yes)
     # dependency_failed counts as a failed run: the tool was wanted, was
