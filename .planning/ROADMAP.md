@@ -455,12 +455,12 @@ Plans:
 **Goal:** Install execution — confirm, run, wire PATH, verify — happens inside the Textual app, with each child process's output streaming live into a log widget attributed to the tool that produced it, while the link-mode preference is asked once inside that app, persisted, and adjustable afterwards from the Policies view.
 **Requirements**: D-01, D-02, D-03, D-04, D-05 (13-CONTEXT.md decision ids — this inserted phase has no REQUIREMENTS.md traceability ids)
 **Depends on:** Phase 12
-**Plans:** 7 plans
+**Plans:** 1/7 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 13-01-PLAN.md — Wave 0: prove the worker-to-modal mechanism and record it in 13-VALIDATION.md
+- [x] 13-01-PLAN.md — Wave 0: prove the worker-to-modal mechanism and record it in 13-VALIDATION.md
 - [ ] 13-02-PLAN.md — StreamingRunner and a between-tools cancel predicate for run_installs (pure core)
 - [ ] 13-03-PLAN.md — installer/settings.py: persisted, validated link-mode preference (pure core)
 
