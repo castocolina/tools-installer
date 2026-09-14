@@ -5,7 +5,7 @@ import pytest
 
 import installer.install_ownership as ownership
 from installer.install_ownership import Ownership, detect_owner
-from installer.model import Method, Tool
+from installer.model import OWNER_PROBES, Method, Tool
 
 
 def _tool(
@@ -29,6 +29,7 @@ def _manager_for(command: list[str]) -> str:
         "brew": "brew",
         "dpkg-query": "apt",
         "rpm": "dnf",
+        "rpm-ostree": "rpm-ostree",
         "pacman": "pacman",
         "pnpm": "pnpm",
         "sdk": "sdkman",
@@ -181,3 +182,106 @@ def test_owner_treats_injected_command_failure_as_unknown() -> None:
         _probe({"brew": subprocess.CalledProcessError(1, ["brew", "list", "--versions", "demo"])}),
     )
     assert owner == Ownership(None, "unknown", "no verified manager")
+
+
+def _rpm_ostree_status(deployments: list[dict[str, object]]) -> str:
+    return json.dumps({"deployments": deployments})
+
+
+def _rpm_ostree_tool(package: str = "jq") -> Tool:
+    return _tool(
+        owner_probes=("rpm-ostree",),
+        methods=(Method(kind="dnf", params={"package": package}),),
+    )
+
+
+def test_rpm_ostree_owner_verifies_the_booted_deployments_layered_package() -> None:
+    status = _rpm_ostree_status(
+        [
+            {
+                "booted": False,
+                "packages": ["podman-compose"],
+                "requested-packages": ["podman-compose"],
+            },
+            {
+                "booted": True,
+                "packages": ["jq", "podman-compose"],
+                "requested-packages": ["jq", "podman-compose"],
+            },
+        ]
+    )
+    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": status}))
+    assert owner == Ownership("rpm-ostree", "verified", "rpm-ostree layers jq")
+
+
+def test_rpm_ostree_owner_does_not_credit_a_non_booted_deployments_layered_package() -> None:
+    status = _rpm_ostree_status(
+        [
+            {"booted": False, "packages": ["jq"], "requested-packages": ["jq"]},
+            {
+                "booted": True,
+                "packages": ["podman-compose"],
+                "requested-packages": ["podman-compose"],
+            },
+        ]
+    )
+    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": status}))
+    assert owner == Ownership(None, "unknown", "no verified manager")
+
+
+def test_rpm_ostree_owner_returns_none_without_a_booted_deployment() -> None:
+    status = _rpm_ostree_status([{"booted": False, "packages": ["jq"], "requested-packages": ["jq"]}])
+    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": status}))
+    assert owner == Ownership(None, "unknown", "no verified manager")
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "not json",
+        json.dumps({"no-deployments-key": []}),
+        json.dumps({"deployments": [{"booted": True}]}),
+        json.dumps({"deployments": [{"booted": True, "requested-packages": "jq"}]}),
+    ],
+    ids=[
+        "malformed-json",
+        "missing-deployments-key",
+        "missing-requested-packages",
+        "requested-packages-not-a-list",
+    ],
+)
+def test_rpm_ostree_owner_fails_closed_on_malformed_input(status: str) -> None:
+    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": status}))
+    assert owner == Ownership(None, "unknown", "no verified manager")
+
+
+def test_rpm_ostree_owner_never_runs_the_probe_without_a_declared_dnf_package() -> None:
+    calls: list[list[str]] = []
+    tool = _tool(
+        owner_probes=("rpm-ostree",),
+        methods=(Method(kind="brew", params={"formula": "jq"}),),
+    )
+    owner = detect_owner(tool, lambda command: calls.append(command) or "{}")
+    assert owner == Ownership(None, "unknown", "no verified manager")
+    assert calls == []
+
+
+def test_rpm_ostree_owner_treats_a_missing_binary_as_unknown() -> None:
+    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": FileNotFoundError()}))
+    assert owner == Ownership(None, "unknown", "no verified manager")
+
+
+def test_owner_probes_closed_set_and_probe_registry_are_the_same_set() -> None:
+    # Addresses review concern (cycle 2, L247@ca67acb): a one-way subset check
+    # in either direction alone is not enough. `set(_PROBES) <= set(OWNER_PROBES)`
+    # would miss a probe implemented but never made declarable (inert, not
+    # dangerous). The direction that actually bites is the reverse:
+    # `detect_owner` does `_PROBES[name](tool, probe)` with no `.get` and no
+    # default, so a name present only in `OWNER_PROBES` passes registry
+    # validation at load time and then raises `KeyError` on the refresh pass
+    # that calls it. Assert both directions as separate statements so a
+    # failure names which side is short.
+    declarable = set(OWNER_PROBES)
+    implemented = set(ownership._PROBES)
+    assert declarable <= implemented, sorted(declarable - implemented)
+    assert implemented <= declarable, sorted(implemented - declarable)
