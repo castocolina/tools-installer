@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -251,6 +252,32 @@ def test_extract_observed_version_finds_the_first_parseable_token() -> None:
     assert extract_observed_version("") is None
 
 
+def test_parse_version_reads_a_hyphenated_name_prefix_via_fallback() -> None:
+    """`jq --version` prints `jq-1.8.1` as one token: the tool's own name glued
+    to its version with a hyphen and no separating whitespace. The direct
+    match fails, so the fallback strips the name prefix and retries the same
+    regex on the trailing, version-shaped segment.
+    """
+    assert parse_version("jq-1.8.1") == (1, 8, 1, 1)
+
+
+def test_extract_observed_version_returns_a_name_prefixed_token_verbatim() -> None:
+    """The fallback widens which tokens PARSE; it does not change what is
+    DISPLAYED. `extract_observed_version`'s contract is verbatim, so the name
+    prefix stays intact in the returned string, exactly as `jq` printed it.
+    """
+    assert extract_observed_version("jq-1.8.1") == "jq-1.8.1"
+
+
+def test_is_outdated_ranks_a_name_prefixed_observed_version() -> None:
+    """Proves BOTH call sites were fixed, not just `parse_version`: a one-sided
+    fix would leave `is_outdated` permanently unable to rank `jq`'s version
+    even after `installed` started displaying correctly (Pitfall 1).
+    """
+    assert is_outdated("jq-1.8.1", "1.8.2") is True
+    assert is_outdated("jq-1.8.1", "1.8.1") is False
+
+
 def test_is_outdated_ranks_full_cores_and_distinct_prereleases() -> None:
     assert is_outdated("1.2.0", "v1.6.0") is True
     assert is_outdated("15.2.0", "15.2.0") is False
@@ -308,3 +335,29 @@ def test_probe_version_output_returns_none_on_error_or_whitespace(
 
     monkeypatch.setattr(versions, "run_output", blank)
     assert probe_version_output(["empty", "--version"]) is None
+
+
+def test_versions_module_records_the_registry_wide_audit_finding() -> None:
+    """D-04: the live audit's result is recorded in code, not dropped. Deleting
+    or hollowing out the comment turns this test red — the comment is the
+    mechanism, this test is what keeps it from rotting away unnoticed
+    (.claude/architecture.md, "Registry-authoring guidelines").
+    """
+    import installer.versions as versions
+
+    text = Path(versions.__file__).read_text(encoding="utf-8")
+    assert "Verified" in text
+    assert "Not covered:" in text
+    assert "procs" in text
+    assert "5.3.9(1)-release" in text
+
+
+def test_extract_observed_version_still_refuses_the_known_residual_shapes() -> None:
+    """`procs` and `bash` fail to parse for reasons D-03's mechanism does not
+    address: `procs` glues its version to a leading double quote (not `-` or
+    whitespace), and `bash`'s extra characters follow the numeric core rather
+    than precede it. Widening the boundary class to catch either would
+    reintroduce the free-substring-search false-positive risk D-03 rejected.
+    """
+    assert extract_observed_version('procs "0.14.12') is None
+    assert extract_observed_version("GNU bash, version 5.3.9(1)-release") is None
