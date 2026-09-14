@@ -1615,3 +1615,44 @@ def test_only_codegraph_rtk_and_graphify_declare_a_postinstall_hook() -> None:
         if tool.id in ("codegraph", "rtk", "graphify"):
             continue
         assert tool.postinstall is None, f"{tool.id}: unexpected postinstall hook declared"
+
+
+def test_native_package_manager_rows_declare_their_owner_probes() -> None:
+    # D-05: exactly the ten rows that can be installed through a native
+    # OS package manager (or, for opencode/wezterm, pacman alone) declare
+    # owner_probes so detect_owner can actually answer for them.
+    # rpm-ostree is listed FIRST on the eight dnf/apt/pacman-capable rows: on
+    # an ostree host the rpm database still answers `rpm -q`, so probing dnf
+    # first would attribute a package the user explicitly layered to the
+    # wrong mechanism -- see install_ownership.py's _rpm_ostree docstring.
+    tools = _tools_by_id()
+    full = ("rpm-ostree", "dnf", "apt", "pacman")
+    expected = {
+        "rg": full,
+        "jq": full,
+        "git": full,
+        "zsh": full,
+        "watch": full,
+        "docker": full,
+        "podman": full,
+        "kitty": full,
+        "opencode": ("pacman",),
+        "wezterm": ("pacman",),
+    }
+    for tool_id, owner_probes in expected.items():
+        assert tools[tool_id].owner_probes == owner_probes, tool_id
+
+    # The three pre-existing owner_probes rows keep their values, untouched
+    # by this plan.
+    assert tools["pi"].owner_probes == ("host-setup",)
+    assert tools["drawio-desktop"].owner_probes == ("managed-download",)
+    assert tools["drawio-cli"].owner_probes == ("managed-download",)
+
+    # The second assertion is the one that matters over time: it turns
+    # "someone added a dnf-installable tool and forgot to opt it in" from a
+    # silent gap into a red test.
+    native_probe_names = {"rpm-ostree", "dnf", "apt", "pacman"}
+    native = {
+        tool.id for tool in load_tools(REGISTRY) if set(tool.owner_probes) & native_probe_names
+    }
+    assert native == set(expected)
