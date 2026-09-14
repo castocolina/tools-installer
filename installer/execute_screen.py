@@ -55,7 +55,7 @@ from installer.session import (
 )
 from installer.status import is_installed
 from installer.ui_common import SEVERITY_STYLE, StatusLine, run_live
-from installer.update import UpdateService, UpdateTarget
+from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import VersionRefreshService
 from installer.versions import TagResolver, resolve_github_tag
 
@@ -69,6 +69,7 @@ _EXECUTE_KEYS = (
 _CANCEL_AVAILABLE = "Press c to stop after the current tool; nothing further will start."
 _CANCEL_ARMED = "The current tool will finish and nothing further will start."
 _CANCEL_IDLE = "No install is running."
+_NO_MANAGER_CLAIMED = "no manager claimed this tool"
 _DONE_STATUSES = frozenset({InstallStatus.INSTALLED, InstallStatus.ALREADY_INSTALLED})
 ProgressState = Literal["pending", "done", "not-done", "skipped"]
 _PROGRESS_GLYPH: dict[ProgressState, tuple[str, str, str]] = {
@@ -237,6 +238,9 @@ class InstallRunFinished(Message):
         error: str | None,
         path_error: str | None = None,
         verify_error: str | None = None,
+        update_outcomes: list[UpdateOutcome] | None = None,
+        update_errors: list[tuple[str, str]] | None = None,
+        update_skips: list[str] | None = None,
     ) -> None:
         self.summary = summary
         self.outcomes = outcomes
@@ -246,6 +250,9 @@ class InstallRunFinished(Message):
         self.error = error
         self.path_error = path_error
         self.verify_error = verify_error
+        self.update_outcomes = update_outcomes if update_outcomes is not None else []
+        self.update_errors = update_errors if update_errors is not None else []
+        self.update_skips = update_skips if update_skips is not None else []
         super().__init__()
 
 
@@ -418,6 +425,9 @@ class ExecuteScreen(ModalScreen[None]):
         error: str | None = None
         path_error: str | None = None
         verify_error: str | None = None
+        update_outcomes: list[UpdateOutcome] = []
+        update_errors: list[tuple[str, str]] = []
+        update_skips: list[str] = []
         try:
 
             def emit(tool_id: str, line: str) -> None:
@@ -448,7 +458,7 @@ class ExecuteScreen(ModalScreen[None]):
                 summary = summarize(outcomes)
                 seen = {outcome.tool_id for outcome in outcomes}
                 not_attempted = [tool.id for tool in self._ordered if tool.id not in seen]
-                self._run_updates()
+                update_outcomes, update_errors, update_skips = self._run_updates()
                 path_result, path_fail = run_live(self._inputs.wire_path)
                 if path_result is None:
                     path_error = path_fail
@@ -474,17 +484,23 @@ class ExecuteScreen(ModalScreen[None]):
                     error,
                     path_error,
                     verify_error,
+                    update_outcomes,
+                    update_errors,
+                    update_skips,
                 )
             )
 
-    def _run_updates(self) -> None:
+    def _run_updates(self) -> tuple[list[UpdateOutcome], list[tuple[str, str]], list[str]]:
+        outcomes: list[UpdateOutcome] = []
+        errors: list[tuple[str, str]] = []
+        skips: list[str] = []
         refresh = self._inputs.version_refresh
         updates = self._inputs.updates
         if refresh is None or updates is None:
-            return
+            return outcomes, errors, skips
         for tool in self._to_update:
             if not self._should_continue():
-                return
+                return outcomes, errors, skips
             ownership = refresh.ownership_of(tool.id)
             if ownership is None:
                 refresh.refresh([tool])
@@ -493,17 +509,23 @@ class ExecuteScreen(ModalScreen[None]):
                 continue
             if not updates.begin(tool.id):
                 in_flight = updates.in_flight or "another tool"
-                self.update_skips.append(f"update already in flight for {in_flight}")
+                skip = f"update already in flight for {in_flight}"
+                skips.append(skip)
+                self.update_skips.append(skip)
                 continue
             try:
                 target = UpdateTarget(tool=tool, ownership=ownership)
-                result, _fail = run_live(partial(updates.run, target))
-                state: ProgressState = (
-                    "done" if result is not None and result.status == "updated" else "not-done"
-                )
+                result, fail = run_live(partial(updates.run, target))
+                if result is None:
+                    errors.append((tool.id, fail or "update did not complete"))
+                    state: ProgressState = "not-done"
+                else:
+                    outcomes.append(result)
+                    state = "done" if result.status == "updated" else "not-done"
                 self.post_message(UpdateToolFinished(tool.id, state))
             finally:
                 updates.end()
+        return outcomes, errors, skips
 
     def _should_continue(self) -> bool:
         return not self.cancel_event.is_set()
@@ -575,6 +597,12 @@ class ExecuteScreen(ModalScreen[None]):
             render_handoff(message.outcomes, console)
             render_postinstall_warnings(message.outcomes, console)
             render_verification(message.outcomes, console)
+            self._render_updates(
+                message.update_outcomes,
+                message.update_errors,
+                message.update_skips,
+                console,
+            )
 
         log.write(self._render_captured(render_report))
         if self.not_attempted:
@@ -606,6 +634,29 @@ class ExecuteScreen(ModalScreen[None]):
             "ctrl+c aborts the whole app and can leave the current tool half-installed.",
             "warn",
         )
+
+    def _render_updates(
+        self,
+        outcomes: list[UpdateOutcome],
+        errors: list[tuple[str, str]],
+        skips: list[str],
+        console: Console,
+    ) -> None:
+        lines: list[str] = []
+        for outcome in outcomes:
+            if outcome.status == "unknown-owner":
+                reason = outcome.detail or _NO_MANAGER_CLAIMED
+                lines.append(f"cannot update {outcome.tool_id}: {reason}")
+            elif outcome.status != "updated" and outcome.detail:
+                lines.append(outcome.detail)
+        for _tool_id, fail in errors:
+            lines.append(fail)
+        lines.extend(skips)
+        if not lines:
+            return
+        console.print("Updates")
+        for line in lines:
+            console.print(line)
 
     def _preflight_prompt(self) -> str:
         install_n = len(self._ordered)

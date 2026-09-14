@@ -1785,3 +1785,181 @@ async def test_error_before_outdated_update_tail_sweeps_pending_update_rows(
         assert "[pending]" not in final
         rg_line = next(line for line in final.splitlines() if "rg" in line)
         assert "not attempted" in rg_line
+
+
+class _BlockedUpdateService(_RecordingUpdateService):
+    def __init__(self, *, detail: str = "the brew inventory could not be read") -> None:
+        super().__init__()
+        self._detail = detail
+
+    def run(self, target: UpdateTarget) -> UpdateOutcome:
+        self.recorded.append(target)
+        return UpdateOutcome(
+            tool_id=target.tool.id,
+            status="unknown-owner",
+            owner="unknown",
+            detail=self._detail,
+        )
+
+
+class _RaisingUpdateService(_RecordingUpdateService):
+    def run(self, target: UpdateTarget) -> UpdateOutcome:
+        self.recorded.append(target)
+        raise OSError("permission denied")
+
+
+async def test_blocked_update_reason_reaches_the_post_run_log(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    fd = _tool("fd")
+    captured: list[str] = []
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _BlockedUpdateService(detail="the brew inventory could not be read")
+    inputs = _inputs(
+        tools=[rg, fd],
+        install=_install_with_output(captured),
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        assert "cannot update rg: the brew inventory could not be read" in log
+        assert screen.summary is not None
+        assert screen.summary.failed == ()
+        assert screen.summary.mismatched == ()
+        assert screen.summary.dependency_failed == ()
+        assert captured == ["fd"]
+
+
+async def test_blocked_update_without_detail_falls_back_to_no_manager_claimed(
+    tmp_path: Path,
+) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _BlockedUpdateService(detail="")
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        assert "cannot update rg: no manager claimed this tool" in log
+
+
+async def test_blocked_update_reason_is_absent_from_the_log_until_the_run_finishes(
+    tmp_path: Path,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    rg = _tool("rg")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+
+    class _GatedBlocked(_BlockedUpdateService):
+        def run(self, target: UpdateTarget) -> UpdateOutcome:
+            started.set()
+            assert release.wait(timeout=5)
+            return super().run(target)
+
+    updates = _GatedBlocked()
+    inputs = _inputs(
+        tools=[rg, fd],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        await pilot.pause()
+        assert "cannot update" not in _log_text(screen)
+        release.set()
+        await _settle_execute(screen, pilot)
+        assert "cannot update rg: the brew inventory could not be read" in _log_text(screen)
+        assert screen.summary is not None
+        assert screen.summary.failed == ()
+
+
+async def test_blocked_update_error_from_run_live_is_reported(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _RaisingUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        assert "permission denied" in log
+        assert screen.summary is not None
+        assert screen.summary.failed == ()
+        assert screen.summary.mismatched == ()
+
+
+async def test_blocked_update_latch_refusal_reuses_the_in_flight_sentence(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    fd = _tool("fd")
+    captured: list[str] = []
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _RecordingUpdateService()
+    assert updates.begin("other") is True
+    inputs = _inputs(
+        tools=[rg, fd],
+        install=_install_with_output(captured),
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert updates.recorded == []
+        log = _log_text(screen)
+        assert "update already in flight for other" in log
+        assert screen.summary is not None
+        assert screen.summary.failed == ()
+        assert captured == ["fd"]
