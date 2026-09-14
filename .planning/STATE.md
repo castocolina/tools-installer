@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: 13
-current_phase_name: live-in-tui-install-execution-persistent-wizard-settings-ins
-current_plan: 7
-status: verifying
-stopped_at: Completed 13-07-PLAN.md
-last_updated: "2026-09-14T09:15:39.868Z"
+current_phase: 14
+current_phase_name: "Install/update engine correctness & default-shell action: selecting tools that show an available update and confirming install silently does nothing because resolve_dependencies (installer/deps.py) and engine.py's ALREADY_INSTALLED short-circuit skip any tool that is merely present, regardless of outdated status, with no notice explaining why -- the only real update path today is the separate, disconnected per-row 'u' keybind (action_update_tool); unify or clearly bridge these two paths so selecting an outdated tool in the main select+enter flow actually updates it (or explicitly tells the user it won't, and why). Separately, 'set as default shell' (set_login_shell) is unimplemented scaffolding -- validated in installer/model.py's schema, dispatched nowhere, no tool declares it -- implement it carefully: oh-my-zsh's registry entry deliberately disables auto-chsh (CHSH=no) for a documented Bazzite/KDE-SDDM login-failure bug (ublue-os/bazzite#4159) that any implementation must keep guarded, e.g. an explicit confirm step and never automatic on immutable/atomic distros"
+current_plan: Not started
+status: planning
+stopped_at: Phase 13 complete, ready to plan Phase 14
+last_updated: "2026-09-14T09:47:53.427Z"
 last_activity: 2026-09-14
-last_activity_desc: Phase 13 execution started
-state_head: fb19cd1bf972793d7077e4b0be17542278a88b71
+last_activity_desc: Phase 13 complete, transitioned to Phase 14
+state_head: cdfdf690d62729d2acd800c10c456e86a280182f
 progress:
   total_phases: 19
-  completed_phases: 12
+  completed_phases: 13
   total_plans: 51
   completed_plans: 51
 ---
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 13 (live-in-tui-install-execution-persistent-wizard-settings-ins) — EXECUTING
-Current Plan: 7
+Phase: 14 — Install/update engine correctness & default-shell action: selecting tools that show an available update and confirming install silently does nothing because resolve_dependencies (installer/deps.py) and engine.py's ALREADY_INSTALLED short-circuit skip any tool that is merely present, regardless of outdated status, with no notice explaining why -- the only real update path today is the separate, disconnected per-row 'u' keybind (action_update_tool); unify or clearly bridge these two paths so selecting an outdated tool in the main select+enter flow actually updates it (or explicitly tells the user it won't, and why). Separately, 'set as default shell' (set_login_shell) is unimplemented scaffolding -- validated in installer/model.py's schema, dispatched nowhere, no tool declares it -- implement it carefully: oh-my-zsh's registry entry deliberately disables auto-chsh (CHSH=no) for a documented Bazzite/KDE-SDDM login-failure bug (ublue-os/bazzite#4159) that any implementation must keep guarded, e.g. an explicit confirm step and never automatic on immutable/atomic distros
+Current Plan: Not started
 Total Plans in Phase: 7
-Status: Phase complete — ready for verification
-Last activity: 2026-09-14 — Phase 13 execution started
+Status: Ready to plan
+Last activity: 2026-09-14 — Phase 13 complete, transitioned to Phase 14
 
 Progress: [█████████░] 88%
 
@@ -40,7 +40,7 @@ Progress: [█████████░] 88%
 
 **Velocity:**
 
-- Total plans completed: 37
+- Total plans completed: 44
 - Average duration: - min
 - Total execution time: 0 hours
 
@@ -61,6 +61,7 @@ Progress: [█████████░] 88%
 | 12.2 | 1 | - | - |
 | 12.3 | 4 | - | - |
 | 12.4 | 4 | - | - |
+| 13 | 7 | - | - |
 
 **Recent Trend:**
 
@@ -154,5 +155,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-14T09:15:09.458Z
-Stopped at: Completed 13-07-PLAN.md
+Stopped at: Phase 13 complete, ready to plan Phase 14
 Resume file: None

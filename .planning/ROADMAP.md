@@ -69,7 +69,7 @@ waiting on this Phase 12 mechanism — see Phase 4's scope note.
 - [x] **Phase 10: Agent CLI Ergonomics** - Add `codex-skip`/`opencode-auto` tweaks and a durable, live-verified cursor-agent default-model wrapper (completed 2026-09-06)
 - [x] **Phase 11: Background Maintenance Daemon** - Wrap the existing tmpdir-prune script as a toggleable, macOS-only LaunchAgent with visible logs (completed 2026-09-07)
 - [x] **Phase 12: Version-Aware Status & Update Action** - Add version-aware status, a cached/staleness-tracked version check, and a manager-delegated update action (unblocks the automatic trigger for REQ-pnpm-global-reinstall-mitigation) (completed 2026-09-07)
-- [ ] **Phase 13: Live in-TUI Install Execution & Persistent Wizard Settings** - Run installs inside the Textual app via a worker thread with a streaming output widget, headless-capable, and persist/expose the link-mode preference in the TUI instead of re-prompting every run
+- [x] **Phase 13: Live in-TUI Install Execution & Persistent Wizard Settings** - Run installs inside the Textual app via a worker thread with a streaming output widget, headless-capable, and persist/expose the link-mode preference in the TUI instead of re-prompting every run (completed 2026-09-14)
 - [ ] **Phase 14: Install/Update Engine Correctness & Default-Shell Action** - Fix the silent no-op when confirming install on tools with an available update, and implement the "set zsh as default shell" action
 - [ ] **Phase 15: Catalog Accuracy — Doctor Refresh, Version Parsing, Ownership Attribution, Tier Fixes** - Fix Doctor's stale post-fix guidance, jq-style version-string parsing, wire the existing but disconnected dnf/apt/pacman ownership probes into the live UI, and correct residual tier misclassifications
 
@@ -455,7 +455,7 @@ Plans:
 **Goal:** Install execution — confirm, run, wire PATH, verify — happens inside the Textual app, with each child process's output streaming live into a log widget attributed to the tool that produced it, while the link-mode preference is asked once inside that app, persisted, and adjustable afterwards from the Policies view.
 **Requirements**: D-01, D-02, D-03, D-04, D-05 (13-CONTEXT.md decision ids — this inserted phase has no REQUIREMENTS.md traceability ids)
 **Depends on:** Phase 12
-**Plans:** 7/7 plans executed
+**Plans:** 7/7 plans complete
 
 Plans:
 **Wave 1**
