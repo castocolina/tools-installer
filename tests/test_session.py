@@ -591,17 +591,16 @@ def _mutable_platform() -> Platform:
 def test_with_sensitive_confirm_reaches_post_install_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(engine, "is_installed", lambda tool: False)
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
     tool = _login_shell_tool()
     platform = _mutable_platform()
     yes = with_sensitive_confirm(lambda _id, _action: True)
     no = with_sensitive_confirm(lambda _id, _action: False)
-    yes_outcomes = run_installs(
-        [tool], platform, lambda cmd: None, lambda *_a, **_k: "", yes
-    )
-    no_outcomes = run_installs(
-        [tool], platform, lambda cmd: None, lambda *_a, **_k: "", no
-    )
+    yes_outcomes = run_installs([tool], platform, lambda cmd: None, lambda repo: "1.0.0", yes)
+    no_outcomes = run_installs([tool], platform, lambda cmd: None, lambda repo: "1.0.0", no)
     assert yes_outcomes[0].post_install_handoff
     assert no_outcomes[0].post_install_handoff == ()
 
@@ -641,13 +640,16 @@ def test_with_sensitive_confirm_forwards_bound_confirmation_and_unchanged_kwargs
 def test_with_sensitive_confirm_none_is_callable_and_produces_no_instructions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(engine, "is_installed", lambda tool: False)
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
     bound = with_sensitive_confirm(None)
     outcomes = run_installs(
         [_login_shell_tool()],
         _mutable_platform(),
         lambda cmd: None,
-        lambda *_a, **_k: "",
+        lambda repo: "1.0.0",
         bound,
     )
     assert outcomes[0].post_install_handoff == ()

@@ -39,6 +39,7 @@ from installer.render import (
     render_guard_status,
     render_handoff,
     render_node_globals,
+    render_post_install_handoff,
     render_postinstall_warnings,
     render_rc_duplicates,
     render_skipped,
@@ -50,12 +51,13 @@ from installer.resolve import resolve_methods
 from installer.run import Runner, run_command
 from installer.selection import category_choices, select_tools, tool_choices
 from installer.session import (
-    Install,
     OnMismatch,
+    SensitiveInstall,
     Summary,
     order_for_install,
     run_installs,
     summarize,
+    with_sensitive_confirm,
 )
 from installer.shellrc import (
     collect_bin_dirs,
@@ -116,7 +118,7 @@ def run_wizard(
     options: Options,
     runner: Runner = run_command,
     resolve_tag: TagResolver = resolve_github_tag,
-    install: Install = install_tool,
+    install: SensitiveInstall = install_tool,
     installed: Callable[[Tool], bool] = is_installed,
     on_mismatch: OnMismatch | None = None,
     category_blurbs: dict[str, str] | None = None,
@@ -148,12 +150,19 @@ def run_wizard(
     if not options.yes and not prompter.confirm("Install the selected tools?"):
         return None
     tools_by_id = {t.id: t for t in tools}
+
+    def confirm_sensitive(tool_id: str, _action: str) -> bool:
+        return prompter.confirm(
+            f"Show a reviewed command to change the login shell to zsh for {tool_id}, "
+            "which you run in your own terminal after the installer exits?"
+        )
+
     outcomes = run_installs(
         ordered,
         platform,
         runner,
         resolve_tag,
-        install,
+        with_sensitive_confirm(None if options.yes else confirm_sensitive, install),
         on_mismatch=None if options.yes else on_mismatch,
         catalog=tools_by_id,
     )
@@ -165,6 +174,7 @@ def run_wizard(
     render_skipped(outcomes, console)
     # Summary only names manual-required tools; this is where their actual setup steps live.
     render_handoff(outcomes, console)
+    render_post_install_handoff(outcomes, console)
     render_postinstall_warnings(outcomes, console)
     render_verification(outcomes, console)
     return summary

@@ -13,9 +13,10 @@ from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.policy import Policy, daemon_policy
+from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError, Runner
 from installer.selection import Choice
-from installer.session import Install, MismatchChoice, Summary
+from installer.session import Install, MismatchChoice, SensitiveInstall, Summary
 from installer.versions import TagResolver
 
 
@@ -43,12 +44,24 @@ def _console() -> tuple[Console, io.StringIO]:
     return Console(file=buf, width=100, no_color=True), buf
 
 
+_BATCH_QUESTION = "Install the selected tools?"
+
+
 class FakePrompter:
-    def __init__(self, categories: list[str], tools: list[str], confirm: bool) -> None:
+    def __init__(
+        self,
+        categories: list[str],
+        tools: list[str],
+        confirm: bool,
+        *,
+        sensitive_confirm: bool | None = None,
+    ) -> None:
         self._categories = categories
         self._tools = tools
         self._confirm = confirm
+        self._sensitive_confirm = confirm if sensitive_confirm is None else sensitive_confirm
         self.confirmed = 0
+        self.questions: list[str] = []
 
     def select_categories(self, choices: list[Choice]) -> list[str]:
         return self._categories
@@ -58,10 +71,13 @@ class FakePrompter:
 
     def confirm(self, message: str) -> bool:
         self.confirmed += 1
-        return self._confirm
+        self.questions.append(message)
+        if message == _BATCH_QUESTION:
+            return self._confirm
+        return self._sensitive_confirm
 
 
-def _recording_install() -> tuple[list[str], Install]:
+def _recording_install() -> tuple[list[str], SensitiveInstall]:
     installed: list[str] = []
 
     def install(
@@ -72,6 +88,7 @@ def _recording_install() -> tuple[list[str], Install]:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         installed.append(tool.id)
         return InstallOutcome(tool.id, "installed", method_kind="brew")
@@ -120,6 +137,7 @@ def test_failed_install_surfaces_in_summary_without_crashing():
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         return InstallOutcome(tool.id, "failed")
 
@@ -152,6 +170,7 @@ def test_run_wizard_reports_a_skipped_dependent_with_its_reason() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         called.append(tool.id)
         if tool.id == "sdkman":
@@ -574,7 +593,7 @@ def test_run_uninstall_nothing_to_remove_skips_confirm(
     assert removed == []
 
 
-def _mismatching_install() -> tuple[list[str], Install]:
+def _mismatching_install() -> tuple[list[str], SensitiveInstall]:
     attempts: list[str] = []
     exc = ChecksumMismatch("a.tar.gz", "0" * 64, "f" * 64)
 
@@ -586,6 +605,7 @@ def _mismatching_install() -> tuple[list[str], Install]:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         attempts.append(checksum_policy)
         return InstallOutcome(
@@ -1268,6 +1288,7 @@ def test_run_wizard_installs_dependencies_before_dependents() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         installed_order.append(tool.id)
         return InstallOutcome(tool.id, "installed", method_kind="node")
@@ -1916,6 +1937,7 @@ def test_run_wizard_surfaces_a_postinstall_warning_on_the_real_path() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         return InstallOutcome(
             tool.id,
@@ -1977,3 +1999,120 @@ def test_run_wizard_passes_the_full_catalog_as_tools_by_id_into_run_installs(
         installed=_never_installed,
     )
     assert seen["catalog"] == {t.id: t for t in catalog_tools}
+
+
+def _login_shell_tool() -> Tool:
+    return Tool(
+        id="oh-my-zsh",
+        name="Oh My Zsh",
+        category="shell",
+        cmd="omz",
+        methods=(Method(kind="script", params={"url": "u"}),),
+        post_install=("set_login_shell",),
+    )
+
+
+def _not_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.engine as engine
+
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+
+
+def test_run_wizard_prints_login_shell_instructions_when_sensitive_confirmed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _not_present(monkeypatch)
+    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    console, buf = _console()
+    summary = run_wizard(
+        [_login_shell_tool()],
+        _platform(),
+        prompter,
+        console,
+        Options(all=True, categories=(), yes=False),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        installed=_never_installed,
+    )
+    out = buf.getvalue()
+    assert summary is not None
+    assert summary.installed == ("oh-my-zsh",)
+    assert "chsh -s" in out
+    sensitive = [q for q in prompter.questions if q != _BATCH_QUESTION]
+    assert len(sensitive) == 1
+    question = sensitive[0]
+    assert "oh-my-zsh" in question
+    assert question != _BATCH_QUESTION
+    lowered = question.lower()
+    assert "command" in lowered
+    assert "run" in lowered
+    assert "will change" not in lowered
+    assert "will be changed" not in lowered
+
+
+def test_run_wizard_skips_login_shell_instructions_when_sensitive_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _not_present(monkeypatch)
+    prompter = FakePrompter(categories=[], tools=[], confirm=True, sensitive_confirm=False)
+    console, buf = _console()
+    summary = run_wizard(
+        [_login_shell_tool()],
+        _platform(),
+        prompter,
+        console,
+        Options(all=True, categories=(), yes=False),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        installed=_never_installed,
+    )
+    assert summary is not None
+    assert summary.installed == ("oh-my-zsh",)
+    assert "chsh -s" not in buf.getvalue()
+
+
+def test_run_wizard_sensitive_unattended_never_asks_and_prints_no_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _not_present(monkeypatch)
+    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    console, buf = _console()
+    summary = run_wizard(
+        [_login_shell_tool()],
+        _platform(),
+        prompter,
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        installed=_never_installed,
+    )
+    assert summary is not None
+    assert summary.installed == ("oh-my-zsh",)
+    assert prompter.questions == []
+    assert "chsh -s" not in buf.getvalue()
+
+
+def test_run_wizard_never_asks_sensitive_question_without_login_shell_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _not_present(monkeypatch)
+    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    console, buf = _console()
+    summary = run_wizard(
+        [_tool("rg", "search")],
+        _platform(),
+        prompter,
+        console,
+        Options(all=True, categories=(), yes=False),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        installed=_never_installed,
+    )
+    assert summary is not None
+    assert summary.installed == ("rg",)
+    assert prompter.questions == [_BATCH_QUESTION]
+    assert "chsh -s" not in buf.getvalue()
