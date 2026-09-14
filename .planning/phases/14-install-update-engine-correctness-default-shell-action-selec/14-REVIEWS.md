@@ -1,7 +1,7 @@
 ---
 phase: 14
 reviewers: [opencode-fallback]
-reviewed_at: 2026-09-14T09:32:00Z
+reviewed_at: 2026-09-14T10:07:00Z
 plans_reviewed:
   - .planning/phases/14-install-update-engine-correctness-default-shell-action-selec/14-01-PLAN.md
   - .planning/phases/14-install-update-engine-correctness-default-shell-action-selec/14-02-PLAN.md
@@ -15,6 +15,7 @@ model_sources:
 failed_lanes:
   opencode-plan-review: "still failing this project (see Round 1 note below); not retried this cycle since review.default_reviewers now points at opencode-fallback."
   opencode-fallback-cycle2-attempts-1-4: "this cycle's opencode-fallback lane failed 4 times before succeeding on the 5th attempt — attempts 1-3 (at reasoning=high) were killed by the harness's tracked-background-task low-memory heuristic before opencode could finish (~25-40min runs are apparently vulnerable to this); attempt 4 (after lowering to reasoning=medium and detaching the process from harness background-task tracking via setsid/nohup/disown to escape the memory-kill heuristic) failed fast with the same #1936 'no final assistant text' defect seen in Phase 13. Attempt 5, an immediate identical retry of the detached/medium-effort invocation, succeeded end to end."
+  opencode-fallback-cycle3-attempt-1: "cycle 3's opencode-fallback lane (detached, reasoning=medium from the start, learning from cycle 2) succeeded on its first attempt in ~15 minutes."
 ---
 
 # Cross-AI Plan Review — Phase 14
@@ -88,143 +89,151 @@ recorded in the plans' ledgers rather than here, because none is a conflict with
 <!-- gsd:plan-revision-conflicts:end -->
 
 
-> **Reviewer-availability note (cycle 2):** `opencode-plan-review` was not retried this cycle since
-> `review.default_reviewers` now points at `opencode-fallback` (see Round 1). The `opencode-fallback`
-> lane itself failed 4 times before succeeding — attempts 1-3 at `reasoning=high` were killed by the
-> harness's tracked-background-task low-memory heuristic mid-run (~25-40min invocations appear
-> vulnerable to this regardless of actual system memory availability, which stayed stable at ~13GiB
-> free throughout); attempt 4 (after lowering to `reasoning=medium` and detaching the process from
-> harness tracking via `setsid`/`nohup`/`disown` to escape the memory-kill heuristic) failed fast with
-> the same `#1936` "no final assistant text" defect documented in Phase 13. Attempt 5, an immediate
-> identical retry of the detached/medium-effort invocation, succeeded end to end and produced the full
-> 5-plan review below.
+
+> **Reviewer-availability note (cycle 3, FINAL — max_cycles=3):** the `opencode-fallback` lane
+> (detached from harness background-task tracking via `setsid`/`nohup`/`disown`, `reasoning=medium`)
+> succeeded on its first attempt this cycle, in about 15 minutes. Learning from cycle 2's 4 failed
+> attempts (3 killed by a harness low-memory heuristic at `reasoning=high`, 1 fast `#1936` failure),
+> this cycle started directly at the detached/medium-effort configuration that worked.
 
 ## OpenCode Review (opencode-fallback)
 
-I'll review the five Phase 14 plans against the live tree, starting with the review skill and the cycle-1 dispositions.
-The plans are already in the prompt; I'll ground every claim against the live tree and the cycle-1 dispositions.
-This is a cycle-2 plan review against the live tree, not an orchestrator run. I'll ground each plan's claims in the current code.
-I'll ground each plan against the live files it cites, plus the cycle-1 review ledger.
-Cycle-1 findings are recorded; I'll now check the remaining integration points those revisions could have broken.
-Checking the remaining integration points that could hide new cycle-2 issues.
-A few claim-vs-code spots still look load-bearing — I'll check those next, including the cycle-1 "vacuous gate" shape in 14-05.
-The 14-04 BIND-OK snippet may actually invoke the real script executor — I need to confirm that before calling it a finding.
-A few remaining seams look load-bearing: UnifiedApp's execute storage, the 14-04 BIND-OK snippet, and progress-id collisions.
-Checking architecture rule 5 wording and a couple of remaining verify-gate traps.
-Checking whether a few verify gates would already pass, and whether `setup.py` already imports `dataclasses`.
-Checking one remaining vacuous-gate pattern and the 14-04 fake-install line numbers.
-Checking how catalog tests fake the update service — that typing choice could make 14-01's ExecuteInputs annotations fail pyright.
-The catalog's ownership-is-None skip may contradict the unknown-status path — checking that test now.
-The 14-05 `WIRE-OK` unattended check looks like the same vacuous-gate pattern cycle 1 already caught in 14-04. Verifying that, and the signature assertion, against live code.
-Cycle 1's HIGH/MEDIUM items are actually in the revised plans. Remaining issues are new or regressions of the same vacuous-gate shape.
+I'll review the five Phase 14 plans against the live tree, starting with the review skill and the files cycle 2's findings actually touch.
+Using the GSD plan-review skill. I'll ground cycle-2's six fixes against the live tree, then check whether any fix introduced a new problem.
+Cycle 3 is a live-tree review, not another CLI dispatch. I'll ground cycle-2's six fixes against the code those plans actually name.
+Cycle 2 named six live-tree defects. I'll read those exact call sites next, then check whether the plan fixes match the code.
+The first cycle-2 sites check out. Next I'll read the remaining files those six findings actually named.
+The cycle-2 sites match the live tree. Next I'll confirm the six claimed plan fixes are actually in the plan files, and look for anything those fixes introduced.
+Cycle 2's six findings are recorded. I'll now check the plan text itself to confirm each fix actually landed, and look for anything those edits broke.
+Cycle-2 fixes are in the plan text. I'll now check the remaining live seams those edits could have broken.
+A few remaining seams could still hide a cycle-3 issue. Checking those now.
+I'll verify the remaining live-tree claims that could still hide a cycle-3 defect: FakePrompter call sites, BIND-OK's install path, and whether `setup.py` already imports dataclasses.
+
+Cycle 2's six fixes match the live tree. Checking one last host-dependent test seam, then writing the review.
+
+Cycle 2's six findings are confirmed fixed against the live tree. No new HIGH/MEDIUM. Writing the cycle-3 review.
 
 ## 14-01
 
-**Summary.** The tracer still targets the real bug path: `CatalogScreen.Decided` → `ExecuteScreen.on_mount` (`execute_screen.py:325-346`) → `resolve_dependencies` dropping installed tools (`deps.py:111-113`). Cycle 1's HIGH (`_build_app([], platform)` vs `execute is None` at `setup.py:382`) and MEDIUM (`begin` False at `catalog_tui.py:578-581`) are specified correctly now. One typing mismatch will fail pyright in a later wave.
+**Summary.** Tracer still hits the real bug path: `CatalogScreen.Decided` → `ExecuteScreen.on_mount` (`installer/execute_screen.py:325-346`) → `resolve_dependencies` dropping installed tools (`installer/deps.py:111-113`). Cycle 2's MEDIUM (concrete-class fields vs duck-typed fakes) and LOW (ownership-is-None divergence) are specified correctly now: doubles are subclasses of the real services, `uv run pyright` runs in Task 1, and the blocking-refresh vs `catalog_tui.py:571-573` early-return is a recorded decision with a test.
 
 **Strengths**
-- Split stays beside the resolver; `deps.py:1-9` remains presence-only.
-- Confirm gate is still `action_start` (`execute_screen.py:348-356`).
-- `dataclasses.replace` in `_build_app` is the right shape: `_execute_inputs` (`setup.py:627-669`) runs before the services exist (`setup.py:572-624`).
-- Latch refusal is now a skip-and-record branch, and `end()` is forbidden on the refused path.
+- Split stays beside the resolver; `installer/deps.py:1-9` remains presence-only.
+- Confirm gate is still `action_start` (`installer/execute_screen.py:348-356`).
+- `dataclasses.replace` in `_build_app` is the right shape: `_execute_inputs` (`setup.py:627-669`) runs before the services exist (`setup.py:572-624`); `execute` defaults to `None` (`setup.py:382`).
+- Latch refusal is a skip-and-record branch driven through the real `begin()` lock (`installer/update.py:355-364`), and `end()` is forbidden on the refused path.
+- `pyproject.toml:42-45` is strict over `tests/`; `_offline_service` (`tests/test_catalog_tui.py:983-1003`) and `_update_service` (`tests/test_catalog_tui.py:1358-1367`) are the right construction pattern.
 
 **Concerns**
-- **MEDIUM** — Task 1 types `ExecuteInputs.updates` / `version_refresh` as the concrete classes (`catalog_tui.py:219-220` does the same) but tells the executor to write duck-typed fakes. `tests/test_catalog_tui.py:1358-1367` constructs a real `UpdateService` with fake collaborators; a Protocol-shaped fake will not satisfy those annotations. 14-01's verify runs ruff only, so pyright does not fire until 14-05 Task 1 / `make validate`.
-- **LOW** — Catalog skips when `ownership_of` is `None` (`catalog_tui.py:571-573`); the batch path blocking-`refresh`es instead. That is necessary for the unknown-status case, but it is a real call-site difference from the `u` keybind. Say so in the SUMMARY so it is not "fixed" later.
+- None new. Cycle 2 MEDIUM/LOW are actually in the plan (subclass + pyright in Task 1 verify; `DELIBERATE DIVERGENCE` must_have + behavior bullet that the single-tool `refresh` is called).
 
 **Suggestions**
-- Reuse `_update_service()`'s pattern (real `UpdateService`, fake `reresolve`/`runner`), or type the fields as a Protocol. Do not wait for wave 3 pyright.
-- Add `uv run pyright` to Task 1's verify, or land the fakes as real service instances.
+- None required before execute.
 
-**Risk:** LOW — design is sound; the typing miss is planner-fixable and would not ship a wrong runtime path.
+**Risk:** LOW — design matches the live tree; the typing miss can no longer slip to wave 3.
 
 ## 14-02
 
-**Summary.** Closes the disclosure gap 14-01 documents (`execute_screen.py:342,539-547` still iterate `_ordered` only). Cycle 1's cancel-tail hole and the whole-file `except` gate are fixed correctly. One behavior bullet over-claims set equality.
+**Summary.** Closes the disclosure gap 14-01 documents (`installer/execute_screen.py:342,539-547` still iterate `_ordered` only). Cycle 2's LOW (set-equality and latch-refusal cannot share a fixture) is split into named fixtures A/B/C. Cycle 1's cancel-tail hole and the whole-file `except` gate stay fixed.
 
 **Strengths**
 - Head, progress, and dispatch all read the one `_to_update` list — no second eligibility computation.
-- Finish-handler sweep covers cancel, latch refusal, and a dead worker without a second worker-side list.
-- LIVE-APPLY-OK is now scoped to `_run_updates` and asserts `run_live(` positively. A `try/finally` latch (14-01) does not trip `except`.
-- Existing progress tests stay green: `_inputs()` defaults `installed` to False (`test_execute_screen.py:199`), so `_to_update` is empty for them.
-
-**Concerns**
-- **LOW** — Task 1 requires both "ids named before enter == ids the fake service receives" and "latch refusal means `run` is never called." Those cannot hold on the same fixture. Split them: set-equality is the happy path; latch/cancel assert skip + `not_attempted`.
-
-**Suggestions**
-- Two tests, two fixtures. Do not let the latch case weaken the disclosure assertion.
-
-**Risk:** LOW — remaining nit is test-spec wording, not a missing capability.
-
-## 14-03
-
-**Summary.** Still the strongest plan. Cycle 1's already-installed consequence is now a stated decision plus a docstring requirement; D-04's one-way checkpoint is recorded. No new issue against the live tree.
-
-**Strengths**
-- Closed table in a new module; `POSTINSTALL_HOOKS` (`postinstall.py:272-276`) stays disjoint from `POST_INSTALL_ACTIONS` (`model.py:46-54`).
-- Dispatch sits after the singular hook (`engine.py:149-154`) and cannot be reached from `ALREADY_INSTALLED` (`engine.py:116-117`) or `MANUAL_REQUIRED` (`engine.py:139-145`).
-- `CHSH=no` stays on the script (`registry.toml:541`); `detect_path` at `:542` is the short-circuit.
-- `Install` protocol is unchanged; `confirm_sensitive_action` is keyword-only with a default.
-- Module has no execution seam; GATES-OK constructs `Platform(immutable=True)` the way `test_engine.py:18-19` already does.
+- Finish-handler sweep covers cancel, latch refusal, and a dead worker without a second worker-side list; install-side `not_attempted` (`installer/execute_screen.py:382,416-417,495-496`) structurally cannot cover update rows.
+- LIVE-APPLY-OK is scoped to `_run_updates` and asserts `run_live(` positively. A `try/finally` latch (14-01) does not trip `except`.
+- Existing progress tests stay green: `_inputs()` defaults `installed` to False (`tests/test_execute_screen.py:199`), so `_to_update` is empty for them.
+- `read_first` now reuses 14-01's real-service subclasses rather than inventing a second pair.
 
 **Concerns**
 - None new.
+
+**Suggestions**
+- None required before execute.
+
+**Risk:** LOW — remaining work is rendering, not a missing capability.
+
+## 14-03
+
+**Summary.** Still the strongest plan. Cycle 1's already-installed consequence is a stated decision plus a docstring requirement; D-04's one-way checkpoint is recorded. No cycle-2 finding landed here, and nothing new against the live tree.
+
+**Strengths**
+- Closed table in a new module; `POSTINSTALL_HOOKS` stays disjoint from `POST_INSTALL_ACTIONS` (`installer/model.py:46-54`).
+- Dispatch sits after the singular hook (`installer/engine.py:149-154`) and cannot be reached from `ALREADY_INSTALLED` (`installer/engine.py:116-117`) or `MANUAL_REQUIRED` (`installer/engine.py:139-145`).
+- `CHSH=no` stays on the script (`installer/registry.toml:541`); `detect_path` at `:542` is the short-circuit.
+- `Install` protocol is unchanged (`installer/session.py:38-50`); `confirm_sensitive_action` is keyword-only with a default.
+- Module has no execution seam; GATES-OK constructs `Platform(immutable=True)` the way `tests/test_engine.py:18-19` already does.
+- `is_installed` monkeypatch convention is in `read_first` (`tests/test_engine.py:37`), so the real-registry e2e is host-independent if followed.
+
+**Concerns**
+- **LOW** — Task 1's behavior bullets say "`install_tool` on that real tool" without saying to monkeypatch `engine.is_installed`. `oh-my-zsh`'s `detect_path` (`installer/registry.toml:542`) makes `is_installed` (`installer/status.py:29-31`) host-dependent. `read_first` already cites the monkeypatch convention, and a miss fails closed (`()` handoff). Do not drop the patch.
+
+**Suggestions**
+- Executor: copy `tests/test_engine.py:37` on the real-registry case. Not a plan rewrite.
 
 **Risk:** LOW
 
 ## 14-04
 
-**Summary.** Cycle 1's HIGH (vulture before the caller) and MEDIUM (vacuous `options.yes` index) are actually gone: vulture is Task 3, unattended is `-k sensitive_unattended`. One action/behavior contradiction remains on markup.
+**Summary.** Cycle 2's MEDIUM (copy `render_handoff`'s markup-on print) and LOW (`FakePrompter` constructor) are actually gone: instruction lines use `markup=False`, and `FakePrompter` is extended additively with a `>= 15` call-site gate. Cycle 1's HIGH (vulture before the caller) and MEDIUM (vacuous `options.yes` index) stay gone.
 
 **Strengths**
-- Adapter keeps `Install` byte-identical (`session.py:38-50`); I counted 6 / 11 / 10 / 2 fakes across the four test files, matching the ledger.
-- `--yes` → `None` callback mirrors `app.py:157`.
-- New renderer, not a widened `render_handoff` (`render.py:118-132` is MANUAL_REQUIRED-only).
-- Fake-install list is now by return type; `grep` hits `test_app.py` at 75, 123, 155, 589, 1271, 1919.
+- Adapter keeps `Install` byte-identical (`installer/session.py:38-50`); 6 / 11 / 9 / 2 fakes across `test_app.py` / `test_execute_screen.py` / `test_session.py` / `test_wizard_app.py` still match.
+- `--yes` → `None` callback mirrors `installer/app.py:157`.
+- New renderer, not a widened `render_handoff` (`installer/render.py:118-132` is `MANUAL_REQUIRED`-only, markup enabled at `:131-132` — the one line not to copy).
+- Fifteen `FakePrompter(categories=` sites confirmed at `tests/test_app.py:96,126,165,181,199,220,610,637,684,705,729,751,1279,1931,1971`.
+- Unattended is `-k sensitive_unattended`, not a source-order string comparison.
 
 **Concerns**
-- **MEDIUM** — Task 1 action says model the new renderer on `render_handoff`, which is `console.print(f"  {line}")` with markup on (`render.py:131-132`). Behavior and RENDER-OK require `[this]` to survive. Those two instructions contradict. Copying the sibling will fail the gate.
-- **LOW** — Extending `FakePrompter` (`test_app.py:46-61`) without keeping `confirm=` and `confirmed` valid will red the existing wizard tests. Default the new answer; do not replace the constructor.
+- None new. Cycle 2 MEDIUM/LOW are in the action, the Design decisions bullet, and the verify.
 
 **Suggestions**
-- Print instruction lines with `markup=False` (or equivalent escape). Do not say "the way surrounding renderers print untrusted text" — they don't, and the verify forbids it.
-- Keep `FakePrompter(confirm=True)` working.
+- None required before execute.
 
-**Risk:** LOW — markup will fail closed at Task 1 verify; it is a plan contradiction, not a missing gate.
+**Risk:** LOW — markup will fail closed at Task 1 verify if the sibling is copied anyway.
 
 ## 14-05
 
-**Summary.** Cycle 1's modal-typing and stale-`architecture.md` findings are fixed (`HELPER-UNCHANGED` matches the live signature exactly; the Phase 12.4 clause is at `architecture.md:340`). The unattended source-order gate is the same vacuous pattern 14-04 just deleted.
+**Summary.** Cycle 2's MEDIUM (vacuous `WIRE-OK` `s.index('unattended')`) is deleted; the real gate is `-k sensitive_unattended`, matching 14-04's console path. Cycle 1's modal-typing and stale-`architecture.md` findings stay fixed (`HELPER-UNCHANGED` matches `installer/execute_screen.py:124`; the Phase 12.4 clause is at `.claude/architecture.md:340`).
 
 **Strengths**
-- One worker-to-modal helper; new screen returns `str | None` like `ChecksumMismatchScreen` (`execute_screen.py:79,124-137`).
-- `MismatchPromptOpen` has no test references (only `execute_screen.py:201,450,454,475`).
+- One worker-to-modal helper; new screen returns `str | None` like `ChecksumMismatchScreen` (`installer/execute_screen.py:79,124-137`).
+- `MismatchPromptOpen` has no test references (only `installer/execute_screen.py:201,450,454,475`).
 - 14-01's name-free modal count stays 1; this plan correctly forbids editing it.
-- Attribution stays outermost: `attributed_install` (`execute_screen.py:154-174`) does not forward `confirm_sensitive_action`, so binding must wrap the inner install.
-- Stale "zero production callers as of Phase 12.4" gate cannot collide with rule 5 (`architecture.md:23-25`).
+- Attribution stays outermost: `attributed_install` (`installer/execute_screen.py:154-174`) does not forward `confirm_sensitive_action`, so binding must wrap the inner install.
+- Stale "zero production callers as of Phase 12.4" gate cannot collide with rule 5 (`.claude/architecture.md:23-25`).
+- `WIRE-OK` is now membership-only (`with_sensitive_confirm` / `attributed_install` / `ask_from_worker`); the standing note against restoring the index comparison is load-bearing.
 
 **Concerns**
-- **MEDIUM** — WIRE-OK does `s.index('unattended') < s.index('with_sensitive_confirm')` on `_execute_worker`. That file already contains `on_mismatch = None if self._inputs.unattended else self._ask_mismatch` (`execute_screen.py:398`). `s.index('unattended')` hits that line today, so the assertion passes even if the sensitive closure never reads the flag. Same defect as 14-04's deleted ORDER-OK (cycle 1 MEDIUM). The behavioral "modal never opens when unattended" case in `fails_when` is the real gate.
+- None new.
 
 **Suggestions**
-- Delete the source-index comparison. Keep HELPER-UNCHANGED, the `ask_from_worker` membership check, and the unattended pilot assertion.
-- If a source check is wanted, match a unique snippet (`None if self._inputs.unattended else self._ask_sensitive_action`), not the bare word `unattended`.
+- None required before execute.
 
-**Risk:** LOW — D-05 is still enforced by the pilot; only the extra gate is cargo-culted.
+**Risk:** LOW — D-05 is enforced by the pilot, not by a cargo-culted source-order gate.
 
 ## Cross-plan
 
-Cycle 1's two HIGHs and five MEDIUMs are incorporated as claimed. The 14-04 vulture mechanism correction (vacuous at `min_confidence = 80`, `pyproject.toml:60`) is accurate. No revision reintroduced a locked-decision conflict.
+Cycle 2's six findings (0 HIGH, 3 MEDIUM, 3 LOW) are incorporated as claimed, re-verified against the live tree this cycle:
 
-New issues are all MEDIUM or lower: one transplanted vacuous gate (14-05), one typing/fake mismatch that pyright will catch a wave late (14-01), one renderer markup contradiction that fails closed (14-04). Wave order (01∥03 → 02∥04 → 05) still matches the code dependencies.
+| Finding | Where | Live-tree check | Disposition |
+|---|---|---|---|
+| Concrete annotations vs duck-typed fakes | 14-01 MEDIUM | `pyproject.toml:42-45`; helpers at `tests/test_catalog_tui.py:983-1003,1358-1367` | subclasses + `uv run pyright` in Task 1 |
+| `ownership_of is None` skip vs blocking refresh | 14-01 LOW | `installer/catalog_tui.py:571-573,597-599` | recorded divergence + test |
+| Set-equality vs latch-refusal on one fixture | 14-02 LOW | n/a (test-spec) | fixtures A / B / C |
+| `render_handoff` markup-on vs `[this]` must survive | 14-04 MEDIUM | `installer/render.py:131-132` | `markup=False` on instruction lines only |
+| `FakePrompter` constructor | 14-04 LOW | 15 sites, signature `(categories, tools, confirm)` at `tests/test_app.py:46-61` | additive + `>= 15` gate; finding was Task 3, not Task 1 |
+| Vacuous `WIRE-OK` `index('unattended')` | 14-05 MEDIUM | `installer/execute_screen.py:398` already contains the word | deleted; `-k sensitive_unattended` is the gate |
 
-**Overall risk: LOW** — not because nothing is left, but because nothing left is red-by-construction against the live tree the way cycle 1's two HIGHs were. The remaining misses are the same class 14-04 already learned to replace with a behavioral test.
+No revision reintroduced a locked-decision conflict. Wave order (01∥03 → 02∥04 → 05) still matches the code dependencies: 14-01/14-03 share no files; 14-02/14-04 share no files; 14-05 needs 14-02's execute-screen surface and 14-04's adapter.
+
+The one LOW left (14-03 real-registry e2e should monkeypatch `is_installed`) is fail-closed and already implied by `read_first`. It is not a reason to rewrite.
+
+**Overall risk: LOW** — cycle 2's remaining misses are gone, and nothing new is red-by-construction against the live tree the way cycle 1's two HIGHs were. Execute.
 
 ---
 
 ## Consensus Summary
 
-Single reviewer (`opencode-fallback`) this cycle — no cross-reviewer consensus to compute. Its verdict is grounded (every finding cites `path:line` against the live tree, and it explicitly re-verified that cycle 1's fixes actually landed rather than trusting the plan text) and is treated at full weight. Zero HIGH findings this cycle: cycle 1's two HIGHs are confirmed fixed. Three MEDIUM findings — a typing mismatch (14-01's fakes won't satisfy `UpdateService`'s concrete-class annotations until pyright runs in a later wave), a reintroduced vacuous source-index gate in 14-05 (the same class of defect 14-04 was just fixed to avoid), and an action/behavior contradiction on markup handling in 14-04's new renderer. Three LOW findings are narrower test-spec/documentation nits.
+Single reviewer (`opencode-fallback`) this FINAL cycle (3/3, max_cycles reached) — no cross-reviewer consensus to compute. Zero HIGH and zero MEDIUM findings this cycle; both cycle 1's and cycle 2's fixes were independently re-verified against the live tree, not taken on trust. One residual LOW remains against 14-03: its Task 1 behavior text should explicitly instruct monkeypatching `engine.is_installed` for the real-registry end-to-end test (the convention is already cited in `read_first`, and a miss fails closed rather than silently passing, so this is not blocking). Per the plan-review-convergence loop's max_cycles=3 escalation rule, the loop ends here regardless of outcome — this single LOW is carried forward as a known, non-blocking residual issue rather than triggering a fourth revision cycle.
 
 ### Agreed Strengths
 N/A — single reviewer this cycle.
