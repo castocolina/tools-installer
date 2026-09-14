@@ -1,8 +1,16 @@
 from pathlib import Path
 
-from installer.model import Method, Tool, load_tools
+from installer.model import (
+    POST_INSTALL_ACTIONS,
+    POSTINSTALL_HOOK_NAMES,
+    SENSITIVE_POST_INSTALL_ACTIONS,
+    Method,
+    Tool,
+    load_tools,
+)
 from installer.platform import Platform
-from installer.post_install import run_post_install
+from installer.post_install import POST_INSTALL_HOOKS, ConfirmSensitiveAction, run_post_install
+from installer.postinstall import POSTINSTALL_HOOKS
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -42,7 +50,7 @@ def _login_shell_tool(
     )
 
 
-def _record() -> tuple[list[tuple[str, str]], object]:
+def _record() -> tuple[list[tuple[str, str]], ConfirmSensitiveAction]:
     asked: list[tuple[str, str]] = []
 
     def confirm(tool_id: str, action: str) -> bool:
@@ -112,3 +120,17 @@ def test_unknown_post_install_action_name_is_inert() -> None:
     asked, confirm = _record()
     assert run_post_install(_tool(post_install=("not-a-real-action",)), _mutable(), confirm) == ()
     assert asked == []
+
+
+def test_post_install_tables_are_disjoint_and_match_their_schema_sets() -> None:
+    actions = set(POST_INSTALL_HOOKS)
+    hooks = set(POSTINSTALL_HOOKS)
+    hook_names = set(POSTINSTALL_HOOK_NAMES)
+    action_names = set(POST_INSTALL_ACTIONS)
+    sensitive = set(SENSITIVE_POST_INSTALL_ACTIONS)
+    assert actions & hook_names == set(), sorted(actions & hook_names)
+    assert hooks & action_names == set(), sorted(hooks & action_names)
+    assert actions <= action_names, sorted(actions - action_names)
+    assert hooks == hook_names, sorted(hooks.symmetric_difference(hook_names))
+    assert len(actions) == 1, sorted(actions)
+    assert actions <= sensitive, sorted(actions - sensitive)

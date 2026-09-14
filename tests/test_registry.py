@@ -1024,6 +1024,21 @@ def test_oh_my_zsh_requires_zsh_and_sets_safe_env() -> None:
     assert method.params["detect_path"] == "~/.oh-my-zsh/oh-my-zsh.sh"
 
 
+def test_only_oh_my_zsh_declares_a_post_install_action() -> None:
+    """D-07: a second declarer arriving unreviewed is how a guarded,
+    single-purpose action quietly becomes a general mechanism. This test is
+    the only automated thing standing between those two states.
+    """
+    declarers = [tool.id for tool in load_tools(REGISTRY) if tool.post_install]
+    assert declarers == ["oh-my-zsh"]
+    oh_my_zsh = _tools_by_id()["oh-my-zsh"]
+    assert oh_my_zsh.post_install == ("set_login_shell",)
+    assert oh_my_zsh.requires == ("zsh", "git")
+    method = oh_my_zsh.methods[0]
+    assert method.kind == "script"
+    assert method.params["env"] == {"RUNZSH": "no", "CHSH": "no", "KEEP_ZSHRC": "yes"}
+
+
 def test_selecting_oh_my_zsh_drags_in_zsh_and_git_in_deps_first_order() -> None:
     catalog = load_tools(REGISTRY)
     by_id = {tool.id: tool for tool in catalog}
