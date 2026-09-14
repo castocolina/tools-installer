@@ -69,3 +69,48 @@ def save_settings(path: Path, settings: Settings) -> None:
     payload = {"version": 1, "link_mode": settings.link_mode}
     ensure_dir(path.parent)
     atomic_write_text(path, json.dumps(payload, indent=2) + "\n")
+
+
+def resolve_link_mode(*, flag: str | None, stored: str | None) -> str:
+    """An explicit --link-mode applies to that run only and never rewrites the
+    stored preference, so the caller that honours a flag must not also call
+    set_link_mode.
+    """
+    if flag is not None:
+        return flag
+    if stored is not None:
+        return stored
+    return DEFAULT_LINK_MODE
+
+
+def link_mode_needs_choice(*, flag: str | None, stored: str | None) -> bool:
+    """True only when both a flag and a stored value are absent.
+
+    This is what drives the one-time in-TUI picker. It must stay independent
+    of TTY detection: the composition root decides whether a prompt is
+    reachable at all (setup.py::_has_controlling_tty); this function only
+    answers whether one is warranted.
+    """
+    return flag is None and stored is None
+
+
+class SettingsStore:
+    """The single live owner of the session's link mode."""
+
+    def __init__(self, path: Path, *, link_mode: str) -> None:
+        self._path = path
+        self._link_mode = link_mode
+
+    @property
+    def link_mode(self) -> str:
+        return self._link_mode
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def set_link_mode(self, value: str) -> None:
+        if value not in LINK_MODES:
+            raise ValueError(f"rejected link_mode {value!r}")
+        self._link_mode = value
+        save_settings(self._path, Settings(value))

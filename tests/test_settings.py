@@ -9,8 +9,11 @@ from installer.settings import (
     DEFAULT_LINK_MODE,
     LINK_MODES,
     Settings,
+    SettingsStore,
     default_settings_path,
+    link_mode_needs_choice,
     load_settings,
+    resolve_link_mode,
     save_settings,
 )
 from installer.version_cache import default_cache_path
@@ -121,3 +124,55 @@ def test_writing_twice_leaves_one_file_and_no_temp_sibling(tmp_path: Path) -> No
     names = sorted(p.name for p in tmp_path.iterdir())
     assert names == ["settings.json"]
     assert load_settings(path) == Settings("split")
+
+
+def test_resolve_link_mode_flag_wins_over_stored() -> None:
+    assert resolve_link_mode(flag="split", stored="single") == "split"
+
+
+def test_resolve_link_mode_stored_wins_over_default() -> None:
+    assert resolve_link_mode(flag=None, stored="single") == "single"
+
+
+def test_resolve_link_mode_falls_back_to_default() -> None:
+    assert resolve_link_mode(flag=None, stored=None) == DEFAULT_LINK_MODE
+
+
+def test_link_mode_needs_choice_only_when_both_absent() -> None:
+    assert link_mode_needs_choice(flag=None, stored=None) is True
+    assert link_mode_needs_choice(flag="split", stored=None) is False
+    assert link_mode_needs_choice(flag=None, stored="single") is False
+    assert link_mode_needs_choice(flag="split", stored="single") is False
+
+
+def test_settings_store_construction_writes_nothing(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path, link_mode="single")
+    assert store.link_mode == "single"
+    assert store.path == path
+    assert not path.exists()
+
+
+def test_set_link_mode_is_live_and_persisted(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path, link_mode="single")
+    store.set_link_mode("split")
+    assert store.link_mode == "split"
+    assert load_settings(path).link_mode == "split"
+
+
+def test_set_link_mode_rejects_unknown_value(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path, link_mode="single")
+    with pytest.raises(ValueError, match="nope"):
+        store.set_link_mode("nope")
+    assert store.link_mode == "single"
+    assert not path.exists()
+
+
+def test_set_link_mode_propagates_oserror(tmp_path: Path) -> None:
+    parent = tmp_path / "not-a-dir"
+    parent.write_text("blocker")
+    store = SettingsStore(parent / "settings.json", link_mode="single")
+    with pytest.raises(OSError):
+        store.set_link_mode("split")
