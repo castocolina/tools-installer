@@ -1,7 +1,7 @@
 ---
 phase: "13"
 slug: "live-in-tui-install-execution-persistent-wizard-settings-ins"
-status: draft
+status: complete
 nyquist_compliant: true
 wave_0_complete: true
 created: "2026-09-14"
@@ -22,6 +22,8 @@ created: "2026-09-14"
 | **Quick run command** | `uv run pytest tests/test_wizard_app.py -x -q` |
 | **Full suite command** | `make test` |
 | **Estimated runtime** | ~75 seconds |
+| **Observed full-suite runtime** | 99.10s (`make test`, 2003 passed, 1 skipped) |
+| **Observed coverage** | 95.34% (floor 90%) |
 
 ---
 
@@ -78,15 +80,15 @@ Plans 13-04 and 13-05 grow `tests/test_execute_screen.py`. The three characteris
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 13-01-T2 | 01 | 1 | D-03 / D-05.3 | T-13-06, T-13-07 | A thread worker receives the user's modal answer (or `None` on dismiss) without blocking the event loop | characterisation (Textual Pilot) | `uv run pytest tests/test_execute_screen.py -q` | ✅ | ✅ green |
-| 13-02-T1 | 02 | 2 | D-05.2 | — | Every output line is attributed to a tool, unconditionally | unit | `uv run pytest tests/test_run.py -q` | ✅ | ⬜ pending |
-| 13-03-T1 | 03 | 2 | link_mode persistence | — | Round-trip save/load, malformed and tampered files degrade safely | unit | `uv run pytest tests/test_settings.py -q` | ❌ created by 13-03 | ⬜ pending |
-| 13-03-T2 | 03 | 2 | link_mode persistence | — | Precedence functions and `SettingsStore` | unit | `uv run pytest tests/test_settings.py -q` | ❌ created by 13-03 | ⬜ pending |
-| 13-04-T1 | 04 | 3 | D-01 / D-02 / D-03 | — | Confirming install pushes a new screen, never exits to console; screen stays visible after completion until keypress | integration (Textual Pilot) | `uv run pytest tests/test_execute_screen.py tests/test_wizard_app.py -q` | ✅ | ⬜ pending |
-| 13-04-T3 | 04 | 3 | D-05.1 | — | Visible pre-flight is on screen before any subprocess runs | integration (Textual Pilot) | `uv run pytest tests/test_execute_screen.py tests/test_wizard_app.py -q` | ✅ | ⬜ pending |
-| 13-05-T1 | 05 | 4 | D-05.3 | T-13-06 | A cancelled prompt shows an explicit message, never a silent no-op | integration (Textual Pilot) | `uv run pytest tests/test_execute_screen.py -q` | ✅ | ⬜ pending |
-| 13-06-T2 | 06 | 5 | D-05.3 | — | Link-mode picker and first-run cases on the Policies view | integration (Textual Pilot) | `uv run pytest tests/test_wizard_app.py -q` | ✅ | ⬜ pending |
-| 13-06-T3 | 06 | 5 | D-05.3 | — | First-run link-mode prompt inside the app | integration (Textual Pilot) | `uv run pytest tests/test_wizard_app.py -q` | ✅ | ⬜ pending |
+| 13-01-T2 | 01 | 1 | D-03 / D-05.3 | T-13-06, T-13-07 | A thread worker receives the user's modal answer (or `None` on dismiss) without blocking the event loop | characterisation (Textual Pilot) | `uv run pytest tests/test_execute_screen.py -q` | ✅ | ✅ green (13-01 T2) |
+| 13-02-T1 | 02 | 2 | D-05.2 | — | Every output line is attributed to a tool, unconditionally | unit | `uv run pytest tests/test_run.py -q` | ✅ | ✅ green (13-02 T1) |
+| 13-03-T1 | 03 | 2 | link_mode persistence | — | Round-trip save/load, malformed and tampered files degrade safely | unit | `uv run pytest tests/test_settings.py -q` | ✅ | ✅ green (13-03 T1) |
+| 13-03-T2 | 03 | 2 | link_mode persistence | — | Precedence functions and `SettingsStore` | unit | `uv run pytest tests/test_settings.py -q` | ✅ | ✅ green (13-03 T2) |
+| 13-04-T1 | 04 | 3 | D-01 / D-02 / D-03 | — | Confirming install pushes a new screen, never exits to console; screen stays visible after completion until keypress | integration (Textual Pilot) | `uv run pytest tests/test_execute_screen.py tests/test_wizard_app.py -q` | ✅ | ✅ green (13-04 T1) |
+| 13-04-T3 | 04 | 3 | D-05.1 | — | Visible pre-flight is on screen before any subprocess runs | integration (Textual Pilot) | `uv run pytest tests/test_execute_screen.py tests/test_wizard_app.py -q` | ✅ | ✅ green (13-04 T3) |
+| 13-05-T1 | 05 | 4 | D-05.3 | T-13-06 | A cancelled prompt shows an explicit message, never a silent no-op | integration (Textual Pilot) | `uv run pytest tests/test_execute_screen.py -q` | ✅ | ✅ green (13-05 T1) |
+| 13-06-T2 | 06 | 5 | D-05.3 | — | Link-mode picker and first-run cases on the Policies view | integration (Textual Pilot) | `uv run pytest tests/test_wizard_app.py -q` | ✅ | ✅ green (13-06 T2) |
+| 13-06-T3 | 06 | 5 | D-05.3 | — | First-run link-mode prompt inside the app | integration (Textual Pilot) | `uv run pytest tests/test_wizard_app.py -q` | ✅ | ✅ green (13-06 T3) |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -119,3 +121,17 @@ This project's `CLAUDE.md` requires `make test` green on the exact tree being co
 - [x] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** recorded — autonomous run
+
+Phase-gate (13-07 Task 2): `make validate` exit 0; `make test` 2003 passed, 1 skipped, 95.34% coverage in 99.10s. Engine-untouched over the whole phase from the narrowed BASE `0fb4b10^` (see Residual scope). Rule 5: `StreamingRunner` and `should_continue` referenced from `installer/execute_screen.py`; `SettingsStore`, `load_settings`, `resolve_link_mode`, `link_mode_needs_choice`, `default_settings_path` referenced from `setup.py`. `pyproject.toml` unchanged (`min_confidence` 80, `fail_under` 90, no vulture ignore list).
+
+## Residual scope
+
+Each item is a recorded decision, not an oversight.
+
+- `installer/app.py::clean_rc_duplicates` remains a console-only confirm reached after the app exits (13-RESEARCH.md assumption A1, accepted in plan 13-04).
+- Mid-run cancellation is the weak between-tools form and never terminates a child (DD-1).
+- The settings file carries `link_mode` only; default-shell and headless-flag preferences are out of scope (DD-2).
+- **ctrl+c during a live run aborts the whole app on top of a running `Popen` and can leave the in-flight tool half-installed.** `UnifiedApp.action_hard_abort` is unguarded by design — it is the app's one always-available escape hatch, and making it conditional during the phase's longest operation would be worse than the orphan it prevents — so plan 13-04 mitigated this by disclosure (the mid-run status line and the `execute-keys` hint both name the cost) rather than by code. This is the known limit of DD-1's weak cancel, which stops new tools but was never a way to stop a running one.
+- **A first-run link-mode picker that is dismissed persists nothing and therefore asks again on the next launch.** That is `link_mode_needs_choice`'s contract, not a bug: writing a default the user declined to choose would silently answer the question on their behalf. "Asked once" is never "asked once per machine" (DD-3, plan 13-06).
+
+The merge-base `git merge-base HEAD feat/tui-interaction-consistency` is `3e3cdc8`, which predates Phase 13 and carries ~1163 lines of engine/executor/download/apps/postinstall churn from Phases 1–12.4. That is a wrong baseline, not an engine edit. Re-run with `BASE` at `0fb4b10^` (this phase's first production commit): empty. No file under `installer/engine.py`, `executors.py`, `download.py`, `apps.py`, or `postinstall.py` was edited in this phase.
