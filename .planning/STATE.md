@@ -4,17 +4,17 @@ milestone: v0.49.0
 current_phase: 13
 current_phase_name: live-in-tui-install-execution-persistent-wizard-settings-ins
 current_plan: 7
-status: executing
-stopped_at: Completed 13-06-PLAN.md
-last_updated: "2026-09-14T08:59:59.077Z"
+status: verifying
+stopped_at: Completed 13-07-PLAN.md
+last_updated: "2026-09-14T09:15:39.868Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 13 execution started
-state_head: f8b156242bfece9f6e376615a27c79de5dc0f291
+state_head: fb19cd1bf972793d7077e4b0be17542278a88b71
 progress:
   total_phases: 19
-  completed_phases: 14
+  completed_phases: 12
   total_plans: 51
-  completed_plans: 50
+  completed_plans: 51
 ---
 
 # Project State
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 Phase: 13 (live-in-tui-install-execution-persistent-wizard-settings-ins) — EXECUTING
 Current Plan: 7
 Total Plans in Phase: 7
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-14 — Phase 13 execution started
 
 Progress: [█████████░] 88%
@@ -78,6 +78,7 @@ Progress: [█████████░] 88%
 | Phase 13 P03 | 10 min | 2 tasks | 2 files |
 | Phase 13 P05 | 36 min | 3 tasks | 2 files |
 | Phase 13 P06 | 30 min | 3 tasks | 9 files |
+| Phase 13 P07 | 11 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -119,6 +120,8 @@ Recent decisions affecting current work:
 - [Phase 13]: No seventh VIEWS row: the picker lives on PoliciesScreen; m is in the policies actions string. — Architecture rules 1 and 2: one view registry, one nav path. Footer is rendered from View.actions.
 - [Phase 13]: First-run status lands on the visible AppScreen; fallback is the view registry, never a hard catalog. — make fix opens Doctor; a hard catalog fallback would put D-05.3 explanation on a hidden screen (T-13-17).
 - [Phase 13]: prompt_link_mode is passed only from make setup and make fix interactive branch. — --doctor/--uninstall/--guard/--all and no-TTY never see it so a picker nobody can answer cannot wedge an unattended run (T-13-18).
+- [Phase 13]: MECHANISM=A (push_screen_wait) is a documented exception to architecture rule 2 — Rule 2 governs main-thread callers; a thread worker has no callback to return into.
+- [Phase 13]: Engine-untouched BASE narrowed to 0fb4b10^ because merge-base predates Phase 13 — git merge-base HEAD feat/tui-interaction-consistency is 3e3cdc8 and includes Phases 1-12.4; that is a wrong baseline, not an engine edit.
 
 ### Pending Todos
 
@@ -150,6 +153,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-14T08:59:41.366Z
-Stopped at: Completed 13-06-PLAN.md
+Last session: 2026-09-14T09:15:09.458Z
+Stopped at: Completed 13-07-PLAN.md
 Resume file: None

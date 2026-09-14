@@ -455,7 +455,7 @@ Plans:
 **Goal:** Install execution — confirm, run, wire PATH, verify — happens inside the Textual app, with each child process's output streaming live into a log widget attributed to the tool that produced it, while the link-mode preference is asked once inside that app, persisted, and adjustable afterwards from the Policies view.
 **Requirements**: D-01, D-02, D-03, D-04, D-05 (13-CONTEXT.md decision ids — this inserted phase has no REQUIREMENTS.md traceability ids)
 **Depends on:** Phase 12
-**Plans:** 6/7 plans executed
+**Plans:** 7/7 plans executed
 
 Plans:
 **Wave 1**
@@ -478,7 +478,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 13-07-PLAN.md — architecture.md and PRD record, plus the full-suite phase gate
+- [x] 13-07-PLAN.md — architecture.md and PRD record, plus the full-suite phase gate
 
 ### Phase 14: Install/update engine correctness & default-shell action: selecting tools that show an available update and confirming install silently does nothing because resolve_dependencies (installer/deps.py) and engine.py's ALREADY_INSTALLED short-circuit skip any tool that is merely present, regardless of outdated status, with no notice explaining why -- the only real update path today is the separate, disconnected per-row 'u' keybind (action_update_tool); unify or clearly bridge these two paths so selecting an outdated tool in the main select+enter flow actually updates it (or explicitly tells the user it won't, and why). Separately, 'set as default shell' (set_login_shell) is unimplemented scaffolding -- validated in installer/model.py's schema, dispatched nowhere, no tool declares it -- implement it carefully: oh-my-zsh's registry entry deliberately disables auto-chsh (CHSH=no) for a documented Bazzite/KDE-SDDM login-failure bug (ublue-os/bazzite#4159) that any implementation must keep guarded, e.g. an explicit confirm step and never automatic on immutable/atomic distros (INSERTED)
 
