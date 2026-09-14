@@ -1,0 +1,9 @@
+{
+  "slug": "opencode",
+  "ok": true,
+  "stubbed": true,
+  "model": {
+    "value": "router-env/my-coding (reasoning=medium)",
+    "source": "pinned"
+  }
+}
