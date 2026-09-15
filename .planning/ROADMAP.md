@@ -524,3 +524,69 @@ Plans:
 **Wave 3** *(blocked on Wave 2: consumes the probe and the registry opt-in)*
 
 - [x] 15-05-PLAN.md — Native-owner adapter in resolve_ownership, widened Owner, update refusal branch, production wiring, catalog label (D-05)
+
+### Phase 15.6: Terminal-emulator default-shell configuration (Konsole/kitty/WezTerm on immutable Linux hosts): make zsh (+ oh-my-zsh plugins, when installed) the working shell whenever the user opens a terminal, without ever touching chsh/system login shell -- chsh is confirmed absent on Bazzite (util-linux-user removed by design, ublue-os/bazzite#4159) and Bazzite maintainers explicitly recommend configuring the terminal emulator instead of the system login shell. Scoped to Linux/immutable hosts where this problem exists (macOS is unaffected -- chsh works normally there via the existing Phase 14 flow, confirmed by user). Research leads found this session: kitty supports a launcher-level override (kitty -o shell=<path>) and WezTerm supports (wezterm start --config default_prog={<path>}) without mutating kitty.conf/wezterm.lua directly; Konsole has no equivalent single flag but supports the more universal -e <command> launch pattern as a fallback. Investigate desktop-launcher (.desktop file) level integration vs per-app config mutation. (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 15
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 15.6 to break down)
+
+### Phase 15.5: Relax set_login_shell's immutable-host block from total silence to show-with-warning: _set_login_shell (installer/post_install.py:45) returns () unconditionally when Platform.immutable is True, giving zero user feedback when the action is blocked -- confirmed live on this Bazzite host (/run/ostree-booted present, Platform.immutable=True). Phase 14's D-04 decision locked a blanket block citing an unresolved-root-cause Bazzite/KDE-SDDM login bug (ublue-os/bazzite#4159, closed 'not planned', no maintainer diagnosis -- 14-RESEARCH.md's own Assumption A2 flagged the mechanism as unconfirmed). User re-decided (2026-09-15), explicitly overriding D-04's prior 'reversibility: one-way, requires re-verifying #4159 does not reproduce' caveat: on an immutable host, still show the reviewed chsh instructions (never auto-execute -- same non-interactive, handoff-only doctrine as the non-immutable path) but prepend an explicit warning naming the known Bazzite/KDE-SDDM issue and that the outcome is unconfirmed and host-dependent, so the user gets an informed choice instead of silence. Also applies the same 'never silent, always explain why' principle to any other post-install action that could hit a platform-gated no-op in the future (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 15
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 15.5 to break down)
+
+### Phase 15.4: Catalog ownership visibility and Uninstall screen real manager attribution: add a visible Owner/package-manager column to the main catalog table (_COLUMNS/_row_cells in catalog_tui.py) reading the same ownership data _version_detail already computes, instead of ownership only appearing in the focused-row detail bar. Separately, UninstallScreen's 'Installed via'/'What gets removed' columns (wizard_app.py's _tool_entry) discard uninstall.py's own already-computed manager-name-plus-path hint (ToolRow.hint) in favor of a generic 4-value enum-keyed string ('userspace'/'managed elsewhere') -- surface the real hint in the table cell, and wire uninstall.py's manager detection (currently brew/cask-only) to the fuller install_ownership.py/ownership.py resolvers already used by update.py, so pnpm/volta/sdkman/uv/dnf/rpm-ostree-owned tools are named instead of falling through to a generic string (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 15
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 15.4 to break down)
+
+### Phase 15.3: Registry audience field audit: 63 of 89 registry.toml entries carry audience='both' (the class default in model.py), including plainly interactive/shell-UX tools an agent would never invoke directly (starship, oh-my-zsh, direnv, zsh, gnu-bash, bat, eza, zoxide, lazygit, vscode, sublime, etc.) -- do a one-time per-tool pass re-tagging genuinely human-only interactive tools as audience='human', keeping 'both' only for tools plausibly driven by agents/scripts too; this is a data-quality pass on registry.toml, not a schema or code change (tier and audience are confirmed separate, correctly-used fields, not conflated) (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 15
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 15.3 to break down)
+
+### Phase 15.2: Install output buffering and live-progress clarity: StreamingRunner (installer/run.py) already forwards child stdout line-by-line via Popen+readline, but many installers (pnpm, sdkman, curl|sh scripts) block-buffer their own stdout when not attached to a TTY, so output visibly arrives all at once at the end despite the installer streaming faithfully -- force line-buffered/unbuffered child output where feasible (stdbuf -oL, PYTHONUNBUFFERED, per-manager unbuffered flags) for known-buffering tools, and add a 'waiting for output...' indicator per in-flight tool so buffering-silence is not indistinguishable from a hang (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 15
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 15.2 to break down)
+
+### Phase 15.1: Catalog post-update refresh staleness and version-status color disambiguation: after ExecuteScreen closes, CatalogScreen's local _version_statuses snapshot never re-triggers enter_view()/_start_version_refresh() (only refresh_marks() on-screen-resume fires) so a tool that was just updated (e.g. deno) still shows the pre-update outdated Ver cell until the user fully navigates away and back -- wire the ExecuteScreen-close callback in wizard_app.py to re-enter the catalog view. Separately, _ver_cell (catalog_tui.py) renders four distinct VersionStatus situations (no data yet, latest=None/not-tracked-for-updates, outdated=None/unparseable, and the orthogonal stale flag) all as the same dim gray text with no way to distinguish 'a system package we will never manage' from 'still probing' -- give the not-tracked-for-updates case a distinct stable marker. Also add a visible, always-on color legend in the catalog UI (e.g. a status-bar or footer line) spelling out what green (up to date), orange (update available), and each distinct gray case (not tracked for updates / still checking / unparseable version) mean -- plus any other non-obvious color/symbol the catalog uses -- so a user is never left guessing what a color means without hovering or reading docs (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 15
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 15.1 to break down)

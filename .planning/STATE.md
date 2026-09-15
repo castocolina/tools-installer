@@ -5,12 +5,12 @@ current_phase: "15.5"
 current_plan: Not yet planned - context gathered, ready for /gsd-plan-phase 15.5
 status: planning
 stopped_at: Phase 15.5 context gathered (chsh-absence finding, scope split for terminal-emulator solution)
-last_updated: "2026-09-15T22:09:07.690Z"
+last_updated: "2026-09-15T22:09:30.695Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 15 marked complete
-state_head: 47e127c9f392fe84d12df40b2a0b042f6b25b9cf
+state_head: c5593f4c83750dcb31067d4106b01df3641d3da5
 progress:
-  total_phases: 24
+  total_phases: 25
   completed_phases: 13
   total_plans: 61
   completed_plans: 61
@@ -169,6 +169,7 @@ None yet.
 - Phase 15.4 inserted after Phase 15: Re-inserted with corrected flat decimal numbering (was invalid 15.1.1, then 15.3.1) after user flagged x.y.z is not valid (URGENT)
 - Phase 15.1 edited: added requirement for a visible always-on color legend explaining green/orange/gray states in the catalog UI, per user feedback
 - Phase 15.5 inserted after Phase 15: User caught set_login_shell being silently no-op on this immutable Bazzite host; investigation confirmed Platform.immutable hard-blocks with zero feedback, and D-04's cited GitHub issue has no confirmed root cause. User explicitly chose to show-with-warning instead of block-silently, overriding D-04's prior reversibility caveat (URGENT)
+- Phase 15.6 inserted after Phase 15.5: Terminal-emulator default-shell configuration -- the real fix for zsh-as-default-shell on immutable hosts, split out of 15.5 after live investigation found chsh absent on Bazzite (ublue-os/bazzite#4159)
 
 ## Deferred Items
 
