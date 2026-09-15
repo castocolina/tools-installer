@@ -946,7 +946,10 @@ def test_native_probe_service_resolves_owner_and_status_stays_on_final_branch(
 
     def native_probe(command: list[str]) -> str:
         probe_calls.append(command)
-        assert command[:2] == ["rpm", "-q"]
+        # Two legitimate rpm questions reach this seam: `rpm -q` proves the
+        # package is installed, and `rpm -qf` (CR-01) proves that package owns
+        # the live /usr/bin/jq rather than some copy earlier in PATH.
+        assert command[:2] in (["rpm", "-q"], ["rpm", "-qf"])
         return "jq\n"
 
     service = _native_owned_service(
@@ -964,6 +967,9 @@ def test_native_probe_service_resolves_owner_and_status_stays_on_final_branch(
     assert ownership.owner == "dnf"
     assert ownership.confidence == "direct"
     assert probe_calls  # the injected probe was actually consulted
+    # CR-01 end to end: the live-path confirmation runs on the real service
+    # seam, not only in the resolver's unit tests.
+    assert ["rpm", "-qf"] in [command[:2] for command in probe_calls]
 
     # resolve_status's FINAL branch (version_status.py:324-336), asserted
     # field by field: there is no outdated report for a native owner, and

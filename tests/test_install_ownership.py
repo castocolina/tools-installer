@@ -365,6 +365,100 @@ def test_native_package_manager_probes_stand_down_on_an_immutable_host(
     assert calls == []
 
 
+@pytest.mark.parametrize(
+    ("manager", "method", "argv", "owning_output"),
+    [
+        (
+            "dnf",
+            Method(kind="dnf", params={"package": "demo"}),
+            ["rpm", "-qf", "--qf", "%{NAME}\\n", "/usr/bin/demo"],
+            "demo\n",
+        ),
+        (
+            "rpm-ostree",
+            Method(kind="dnf", params={"package": "demo"}),
+            ["rpm", "-qf", "--qf", "%{NAME}\\n", "/usr/bin/demo"],
+            "demo\n",
+        ),
+        (
+            "apt",
+            Method(kind="apt", params={"package": "demo"}),
+            ["dpkg-query", "-S", "/usr/bin/demo"],
+            "demo: /usr/bin/demo\n",
+        ),
+        (
+            "pacman",
+            Method(kind="pacman", params={"package": "demo"}),
+            ["pacman", "-Qoq", "/usr/bin/demo"],
+            "demo\n",
+        ),
+    ],
+)
+def test_package_owns_path_uses_each_managers_own_file_query(
+    manager: str, method: Method, argv: list[str], owning_output: str
+) -> None:
+    """CR-01: each native manager answers "which package owns this file" in
+    its own dialect. `rpm-ostree` shares rpm's, because a layered or
+    base-image RPM lives in the same rpm database."""
+    calls: list[list[str]] = []
+    tool = _tool(methods=(method,))
+    # Keyed by the probe binary's own manager (`rpm` answers for both dnf and
+    # rpm-ostree), not by the owner name being confirmed.
+    probe = _recording_probe({_manager_for(argv): owning_output}, calls)
+    assert ownership.package_owns_path(tool, manager, "/usr/bin/demo", probe)
+    assert calls == [argv]
+
+
+@pytest.mark.parametrize(
+    ("manager", "method", "denying_output"),
+    [
+        ("dnf", Method(kind="dnf", params={"package": "demo"}), "other-package\n"),
+        ("apt", Method(kind="apt", params={"package": "demo"}), "other-package: /usr/bin/demo\n"),
+        ("pacman", Method(kind="pacman", params={"package": "demo"}), "other-package\n"),
+    ],
+)
+def test_package_owns_path_rejects_a_file_owned_by_a_different_package(
+    manager: str, method: Method, denying_output: str
+) -> None:
+    """A successful query naming SOMEONE ELSE is a denial, not a claim -- the
+    shadowing case where the live binary comes from another package."""
+    tool = _tool(methods=(method,))
+    assert not ownership.package_owns_path(
+        tool, manager, "/usr/bin/demo", _probe({manager: denying_output})
+    )
+
+
+def test_package_owns_path_fails_closed_when_the_query_cannot_run() -> None:
+    """`rpm -qf` exits non-zero for a file no package owns -- a hand-built
+    binary earlier in PATH. Unanswerable is not confirmed."""
+    tool = _tool(methods=(Method(kind="dnf", params={"package": "demo"}),))
+    assert not ownership.package_owns_path(
+        tool, "dnf", "/home/user/bin/demo", _probe({"dnf": FileNotFoundError()})
+    )
+
+
+def test_package_owns_path_rejects_a_manager_with_no_declared_file_query() -> None:
+    """Only the four native managers have a file query here; anything else
+    (Homebrew, pnpm, SDKMAN) reaches ownership through its own inventory, and
+    an unrecognized name must never confirm by default."""
+    calls: list[list[str]] = []
+    tool = _tool(methods=(Method(kind="brew", params={"formula": "demo"}),))
+    assert not ownership.package_owns_path(
+        tool, "Homebrew", "/usr/bin/demo", _recording_probe({}, calls)
+    )
+    assert calls == []
+
+
+def test_package_owns_path_rejects_a_tool_declaring_no_package_for_that_manager() -> None:
+    """No declared package name means nothing to confirm, and no subprocess."""
+    calls: list[list[str]] = []
+    tool = _tool(methods=(Method(kind="brew", params={"formula": "demo"}),))
+    assert not ownership.package_owns_path(
+        tool, "dnf", "/usr/bin/demo", _recording_probe({}, calls)
+    )
+    assert calls == []
+
+
 def _recursion_bomb_json(depth: int) -> str:
     """A syntactically legal JSON document nested past the recursion limit.
 

@@ -25,7 +25,11 @@ everything else is `unknown`. This installer will not mutate a tool it cannot
 prove it owns, and every branch that is not a proof produces `unknown`. A
 live, unattributable active path is checked and can force `unknown` BEFORE
 the by-elimination branch is ever reached, so by-elimination can never
-override contradictory live-PATH evidence. The concrete failure this prevents
+override contradictory live-PATH evidence. `_native_owner` is the one branch
+that runs ABOVE that check -- it has to, or it would never fire on a real
+machine -- so it enforces the same rule itself, by asking the claimed manager
+whether its package owns the live binary before making a claim.
+The concrete failure this prevents
 is a stale artifact this installer left in `~/.local/bin` months ago, a brew
 inventory that could not be read this pass, and a live `/opt/homebrew/bin/<cmd>`,
 which the previous design would have resolved as installer-owned and then
@@ -54,7 +58,7 @@ from typing import Literal
 
 from installer.apps import APP_KINDS
 from installer.download import DOWNLOAD_KINDS
-from installer.install_ownership import ProbeRunner, detect_owner
+from installer.install_ownership import ProbeRunner, detect_owner, package_owns_path
 from installer.locations import applications_dir, opt_dir
 from installer.model import Method, Tool
 from installer.platform import Platform
@@ -457,6 +461,21 @@ def _native_owner(
         # download, host setup) has its own evidence path elsewhere in this
         # module; this adapter only ever claims the four native names.
         return None
+    # CR-01: apply the module's own live-PATH rule here rather than relying on
+    # the branch below to apply it. This adapter must run ABOVE the
+    # active-path unknown branch (a dnf-installed tool's `/usr/bin/<cmd>` is
+    # attributable to no tracked owner, so that branch would return first and
+    # this would never fire), which means the rule -- "a live, unattributable
+    # active path forces `unknown` before any inference runs" -- is this
+    # function's to enforce. `detect_owner` proves only that the package is
+    # INSTALLED; `package_owns_path` asks the manager whether that package put
+    # THIS binary here. A hand-built copy earlier in PATH than the packaged
+    # one is contradictory evidence, and falling through to the unknown branch
+    # is the honest answer -- both because the user is told the truth about the
+    # copy they run, and because `direct` is MUTATION_GRADE and must never
+    # rest on evidence about a different file.
+    if active_path is not None and not package_owns_path(tool, owner, str(active_path), probe):
+        return None
     synthetic = OwnershipCandidate(
         owner=owner,
         method=None,
@@ -473,8 +492,10 @@ def _native_owner(
     # nothing to iterate.
     #
     # `active_candidate` stays `None` and `active_path` passes through
-    # unchanged: the claim rests on package-database membership, not on path
-    # attribution, so nothing here should overstate the evidence.
+    # unchanged: the claim rests on package-database membership plus the
+    # manager's own file query, never on this module's directory-based path
+    # attribution, and `active_candidate` names a TRACKED candidate that owns
+    # the live path. Nothing here should overstate the evidence.
     return _owned(
         tool,
         synthetic,

@@ -175,6 +175,57 @@ def _rpm_ostree(tool: Tool, probe: ProbeRunner) -> Ownership | None:
     return None
 
 
+def _rpm_owns_path(package: str, path: str, probe: ProbeRunner) -> bool:
+    output = _run(probe, ["rpm", "-qf", "--qf", "%{NAME}\\n", path])
+    return output is not None and package in _lines(output)
+
+
+def _dpkg_owns_path(package: str, path: str, probe: ProbeRunner) -> bool:
+    output = _run(probe, ["dpkg-query", "-S", path])
+    return output is not None and any(
+        line.split(":", maxsplit=1)[0] == package for line in _lines(output)
+    )
+
+
+def _pacman_owns_path(package: str, path: str, probe: ProbeRunner) -> bool:
+    output = _run(probe, ["pacman", "-Qoq", path])
+    return output is not None and package in _lines(output)
+
+
+# Manager -> (the method kind declaring its package name, that manager's own
+# "which package owns this file" query). rpm-ostree shares rpm's query and the
+# `dnf` method's package name for the same reason `_rpm_ostree` reads that
+# method: a layered or base-image RPM lives in the same rpm database.
+_PATH_QUERIES: dict[str, tuple[str, Callable[[str, str, ProbeRunner], bool]]] = {
+    "dnf": ("dnf", _rpm_owns_path),
+    "rpm-ostree": ("dnf", _rpm_owns_path),
+    "apt": ("apt", _dpkg_owns_path),
+    "pacman": ("pacman", _pacman_owns_path),
+}
+
+
+def package_owns_path(tool: Tool, manager: str, path: str, probe: ProbeRunner) -> bool:
+    """True when `manager`'s own file query says a declared package owns `path`.
+
+    "This package is installed" and "this package put the binary the user
+    actually runs there" are different claims, and the probes above only make
+    the first. `rpm -q jq` succeeds while a hand-built `jq` sits earlier in
+    `PATH`, so attributing the live binary to dnf on that evidence tells the
+    user the wrong thing about the copy they are running. This is the second
+    claim, asked in each manager's own dialect.
+
+    Fails CLOSED in every uncertain case: an unrecognized manager, a tool that
+    declares no package name for it, a query that cannot run (`rpm -qf` exits
+    non-zero for a file no package owns), and a query that answers with some
+    OTHER package's name all return `False`. Confirmation must be positive.
+    """
+    entry = _PATH_QUERIES.get(manager)
+    if entry is None:
+        return False
+    kind, query = entry
+    return any(query(package, path, probe) for package in _method_values(tool, {kind}, "package"))
+
+
 def _pacman(tool: Tool, probe: ProbeRunner) -> Ownership | None:
     for package in _method_values(tool, {"pacman"}, "package"):
         output = _run(probe, ["pacman", "-Qq", package])

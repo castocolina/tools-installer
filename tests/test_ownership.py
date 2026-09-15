@@ -1,9 +1,11 @@
+import subprocess
 import typing
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+import installer.install_ownership as install_ownership
 from installer.model import Method, Tool
 from installer.ownership import (
     MUTATION_GRADE,
@@ -444,6 +446,11 @@ def test_native_owner_resolves_from_unattributable_live_path() -> None:
     assert result.active_candidate is None
     assert result.active_path == Path("/usr/bin/jq")
     assert calls  # the probe really was consulted
+    # CR-01: the claim is only made after rpm confirms the declared package
+    # owns the live binary, not merely that the package is installed. The
+    # queried path is the RESOLVED one, so it is read back off the record
+    # rather than hardcoded (a host where /home is a symlink would differ).
+    assert ["rpm", "-qf", "--qf", "%{NAME}\\n", str(result.active_path)] in calls
 
 
 def test_native_owner_resolves_with_no_active_path() -> None:
@@ -567,6 +574,19 @@ def test_native_owner_adapter_ignores_non_native_verified_manager() -> None:
     assert result.owner == "unknown"
 
 
+def _shadowing_dnf_probe(package: str, calls: list[list[str]]) -> Callable[[list[str]], str]:
+    """`rpm -q` confirms the package is installed; `rpm -qf` denies that it
+    owns the queried file, the way rpm reports a hand-built binary."""
+
+    def probe(command: list[str]) -> str:
+        calls.append(command)
+        if "-qf" in command:
+            raise subprocess.CalledProcessError(1, command)
+        return f"{package}\n"
+
+    return probe
+
+
 _FEDORA = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
 _FEDORA_ATOMIC = Platform(os="fedora", arch="amd64", immutable=True, has_brew=False)
 
@@ -606,6 +626,59 @@ def test_native_owner_still_claims_dnf_on_a_mutable_fedora_host() -> None:
     assert result.owner == "dnf"
     assert result.confidence == "direct"
     assert calls
+
+
+def test_native_owner_refuses_to_claim_a_live_binary_the_package_does_not_own() -> None:
+    """CR-01: the module's evidence rule says a live, unattributable active
+    path forces `unknown` BEFORE by-elimination reasoning runs. The native
+    adapter sits above that check by necessity (a dnf-installed tool always
+    has an unattributable `/usr/bin/<cmd>`), so it has to apply the rule
+    itself: a hand-built jq earlier in PATH than the dnf-installed one is
+    contradictory evidence, and `rpm -qf` is what settles it. Claiming `dnf`
+    here would both tell the user the wrong thing about the binary they run
+    and hand a MUTATION_GRADE confidence to a package that does not own it."""
+    tool = _dnf_tool()
+    calls: list[list[str]] = []
+    result = _resolve(
+        tool,
+        inventory=_empty_readable(),
+        which="/home/user/bin/jq",
+        platform=_FEDORA,
+        native_probe=_shadowing_dnf_probe("jq", calls),
+    )
+    assert result.owner == "unknown"
+    assert result.confidence == "none"
+    assert result.confidence not in MUTATION_GRADE
+    assert result.unknown_reason
+    assert ["rpm", "-qf", "--qf", "%{NAME}\\n", str(result.active_path)] in calls
+
+
+def test_native_owner_path_confirmation_is_skipped_without_a_live_binary() -> None:
+    """No active path is no contradiction: with nothing on PATH there is no
+    file to confirm, and the package-database claim stands on its own."""
+    tool = _dnf_tool()
+    calls: list[list[str]] = []
+    result = _resolve(
+        tool,
+        inventory=_empty_readable(),
+        which=None,
+        platform=_FEDORA,
+        native_probe=_shadowing_dnf_probe("jq", calls),
+    )
+    assert result.owner == "dnf"
+    assert result.confidence == "direct"
+    assert all("-qf" not in command for command in calls)
+
+
+def test_native_owner_path_confirmation_covers_every_native_owner() -> None:
+    """The confirmation is only as good as its coverage: a native owner with
+    no declared file query would silently confirm nothing, which is the
+    pre-CR-01 behavior for that manager."""
+    # Deliberate private-member access: the point of this test is pinning the
+    # internal query table against the public NATIVE_OWNERS tuple, mirroring
+    # test_install_ownership.py's _PROBES/OWNER_PROBES drift guard.
+    declared = set(install_ownership._PATH_QUERIES)  # pyright: ignore[reportPrivateUsage]
+    assert set(NATIVE_OWNERS) <= declared, sorted(set(NATIVE_OWNERS) - declared)
 
 
 def test_native_owners_tuple_is_the_four_widened_values() -> None:
