@@ -604,11 +604,11 @@ Plans:
 
 ### Phase 15.1: Catalog post-update refresh staleness and version-status color disambiguation: after ExecuteScreen closes, CatalogScreen's local _version_statuses snapshot never re-triggers enter_view()/_start_version_refresh() (only refresh_marks() on-screen-resume fires) so a tool that was just updated (e.g. deno) still shows the pre-update outdated Ver cell until the user fully navigates away and back -- wire the ExecuteScreen-close callback in wizard_app.py to re-enter the catalog view. Separately, _ver_cell (catalog_tui.py) renders four distinct VersionStatus situations (no data yet, latest=None/not-tracked-for-updates, outdated=None/unparseable, and the orthogonal stale flag) all as the same dim gray text with no way to distinguish 'a system package we will never manage' from 'still probing' -- give the not-tracked-for-updates case a distinct stable marker. Also add a visible, always-on color legend in the catalog UI (e.g. a status-bar or footer line) spelling out what green (up to date), orange (update available), and each distinct gray case (not tracked for updates / still checking / unparseable version) mean -- plus any other non-obvious color/symbol the catalog uses -- so a user is never left guessing what a color means without hovering or reading docs (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** Closing an install/update run leaves the catalog tier it ran from showing freshly probed versions on the screen the user is already on, and every state that column can render — both colors, each distinct dim case, and the stale marker — says what it means and is spelled out in an always-on legend present on all three tier views.
+**Requirements**: D-01, D-02, D-03, D-04 (15.1-CONTEXT.md — this phase came from live UAT, not a REQUIREMENTS.md id)
 **Depends on:** Phase 15
-**Plans:** 0 plans
+**Plans:** 1 plan
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 15.1 to break down)
+- [ ] 15.1-01-PLAN.md — post-run catalog refresh (D-01), per-situation Ver-cell labels (D-02), always-on version legend (D-03/D-04)
