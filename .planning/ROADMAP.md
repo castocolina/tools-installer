@@ -71,7 +71,7 @@ waiting on this Phase 12 mechanism — see Phase 4's scope note.
 - [x] **Phase 12: Version-Aware Status & Update Action** - Add version-aware status, a cached/staleness-tracked version check, and a manager-delegated update action (unblocks the automatic trigger for REQ-pnpm-global-reinstall-mitigation) (completed 2026-09-07)
 - [x] **Phase 13: Live in-TUI Install Execution & Persistent Wizard Settings** - Run installs inside the Textual app via a worker thread with a streaming output widget, headless-capable, and persist/expose the link-mode preference in the TUI instead of re-prompting every run (completed 2026-09-14)
 - [x] **Phase 14: Install/Update Engine Correctness & Default-Shell Action** - Fix the silent no-op when confirming install on tools with an available update, and implement the "set zsh as default shell" action (completed 2026-09-14)
-- [ ] **Phase 15: Catalog Accuracy — Doctor Refresh, Version Parsing, Ownership Attribution, Tier Fixes** - Fix Doctor's stale post-fix guidance, jq-style version-string parsing, wire the existing but disconnected dnf/apt/pacman ownership probes into the live UI, and correct residual tier misclassifications
+- [x] **Phase 15: Catalog Accuracy — Doctor Refresh, Version Parsing, Ownership Attribution, Tier Fixes** - Fix Doctor's stale post-fix guidance, jq-style version-string parsing, wire the existing but disconnected dnf/apt/pacman ownership probes into the live UI, and correct residual tier misclassifications (completed 2026-09-14)
 
 ## Phase Details
 
