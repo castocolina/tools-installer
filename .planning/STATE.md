@@ -1,16 +1,16 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: "15.6"
+current_phase: "15.7"
 current_plan: Not yet planned - context gathered, ready for /gsd-plan-phase
 status: planning
-stopped_at: Phase 15.6 context gathered (all 6 inserted phases now have context)
-last_updated: "2026-09-15T22:17:06.766Z"
+stopped_at: Phase 15.7 context gathered; 15.8 discussion in progress (2 areas selected, not yet answered)
+last_updated: "2026-09-15T22:46:10.594Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 15 marked complete
-state_head: ee2e4e99afebf36ef73c77a67198d44a7e6ee97a
+state_head: 6092cb98efcfce532a5c039e1a35dd9e8fef04c1
 progress:
-  total_phases: 25
+  total_phases: 27
   completed_phases: 13
   total_plans: 61
   completed_plans: 61
@@ -25,11 +25,11 @@ Total Phases: 21
 See: .planning/PROJECT.md (updated 2026-09-04)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** All 6 inserted phases (15.1-15.6) have context. Next: /gsd-plan-phase for each, then execute.
+**Current focus:** 15.1-15.7 have context. 15.8 discussion started (PATH duplication fix) -- resume /gsd-discuss-phase 15.8
 
 ## Current Position
 
-Phase: 15.6-terminal-emulator-default-shell-configuration-konsole-kitty
+Phase: 15.7-unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr
 Current Plan: Not yet planned - context gathered, ready for /gsd-plan-phase
 Total Plans in Phase: 5
 Status: planning
@@ -181,6 +181,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-15T22:17:06.416Z
-Stopped at: Phase 15.6 context gathered (all 6 inserted phases now have context)
-Resume file: .planning/phases/15.6-terminal-emulator-default-shell-configuration-konsole-kitty/15.6-CONTEXT.md
+Last session: 2026-09-15T22:46:10.246Z
+Stopped at: Phase 15.7 context gathered; 15.8 discussion in progress (2 areas selected, not yet answered)
+Resume file: .planning/phases/15.7-unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr/15.7-CONTEXT.md
