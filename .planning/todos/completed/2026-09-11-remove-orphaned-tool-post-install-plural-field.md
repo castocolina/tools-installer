@@ -5,9 +5,31 @@ area: tech-debt
 severity: minor
 files:
   - installer/model.py
+resolution: obsolete
+resolved: 2026-09-15T00:00:00.000Z
 ---
 
-## Problem
+## Resolution (2026-09-15): Obsolete — do not act on this todo
+
+Phase 14 (completed 2026-09-14) wired `Tool.post_install` up live: the
+`oh-my-zsh` registry entry now declares `post_install = ["set_login_shell"]`
+(`installer/registry.toml`), and `installer/post_install.py`'s
+`_set_login_shell` is a real, production-dispatched function
+(`POST_INSTALL_HOOKS`, called from `installer/engine.py:169-171`). The
+"zero production callers, zero registry.toml usage" premise below is no
+longer true — the field has exactly one live caller and one live consumer.
+
+Phases 15.5 and 15.6 (context captured 2026-09-15, not yet planned) both
+actively extend this same mechanism further (an honest chsh-absence
+explanation, and a broader terminal-emulator shell-configuration action).
+Deleting `POST_INSTALL_ACTIONS`/`Tool.post_install` per the "Solution"
+section below would break both.
+
+This todo was repeatedly re-surfaced as a weak keyword match during
+`/gsd-discuss-phase` for 15.1 through 15.6 and flagged as stale/not-folded
+each time; moved here instead of left pending indefinitely.
+
+## Problem (historical — no longer accurate, see Resolution above)
 
 `installer/model.py` declares `Tool.post_install: tuple[str, ...]` (plural,
 line 268), its closed-set validator `POST_INSTALL_ACTIONS` (line 46,

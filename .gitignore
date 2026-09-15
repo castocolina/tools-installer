@@ -32,9 +32,18 @@ coverage.xml
 # Graphs
 .codegraph/
 graphify-out/
+.planning/graphs/
 
 # superpowers scratch artifacts (not part of the product delivery)
 .claude/handoffs/
 
 # local git worktrees
 .worktrees/
+
+# GSD tooling runtime state (dispatch sentinels, etc.) - not part of the audit trail
+.gsd/
+
+# Raw cross-AI review diagnostics (per-attempt logs/stderr feeding replanning) -
+# ephemeral working material; once findings are folded into a plan, a code fix,
+# or a -REVIEW.md/-REVIEWS.md summary, the raw dump has no ongoing value
+.review-diagnostics/

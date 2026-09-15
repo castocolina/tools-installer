@@ -7,10 +7,13 @@ checklist, gates, rules — lives in `.planning/ONESHOT-RULES.md`; this file
 only starts the run and points there.
 
 **Current milestone state (2026-09-15):** Phase 15 (Catalog accuracy, Doctor
-refresh, version parsing, ownership attribution) is complete. Six decimal
-phases (15.1-15.6) were inserted afterward from live UAT feedback on the
-shipped v1 app and already have discussed context (`{N}-CONTEXT.md` in each
-phase directory) — none are planned or executed yet:
+refresh, version parsing, ownership attribution) is complete. Eight decimal
+phases (15.1-15.8) were inserted afterward from live UAT feedback on the
+shipped v1 app (including two more real bugs found live during this same
+UAT session: a broken oh-my-zsh sourcing chain, folded into 15.6, and a real
+— not just cosmetic — PATH-duplication defect, its own new phase 15.8) and
+already have discussed context (`{N}-CONTEXT.md` in each phase directory) —
+none are planned or executed yet:
 
 - 15.1 — Catalog post-update refresh, staleness, and version-status color legend
 - 15.2 — Install output buffering and live-progress clarity (streaming)
@@ -20,9 +23,19 @@ phase directory) — none are planned or executed yet:
   explanation (chsh is confirmed absent on Bazzite; see its CONTEXT.md for the
   full root-cause investigation)
 - 15.6 — Terminal-emulator default-shell configuration (Konsole/kitty/WezTerm) —
-  the actual "zsh just works" fix split out of 15.5
+  the actual "zsh just works" fix split out of 15.5; also fixes a confirmed
+  live bug where oh-my-zsh installs but is never sourced into `.zshrc` (D-04)
+- 15.7 — Unify tmp-prune tooling into an installable Tweaks module (from a
+  pending todo) — extends the existing macOS-only daemon
+  (`installer/daemon.py`) to Linux/systemd, adds a Bun cache-redirect
+  mechanism, and a `make doctor` low-disk warning
+- 15.8 — Fix real (not cosmetic) PATH duplication: `installer/shellrc.py`'s
+  `managed_block()` emits a plain, non-runtime-idempotent `export PATH=...`
+  that accumulates duplicates across nested shells — confirmed live (5x
+  `~/.local/bin` in one real session). Fix with the self-deduping guarded
+  idiom this codebase already recognizes from pnpm's own installer output
 
-All six already have locked decisions in their CONTEXT.md files — an
+All eight already have locked decisions in their CONTEXT.md files — an
 autonomous run should go straight to `/gsd-plan-phase` for each rather than
 re-discussing scope.
 
@@ -45,14 +58,14 @@ Paste the block below as the first message, then leave it running.
 
 ▼▼▼ COPY FROM HERE ▼▼▼
 
-/gsd-autonomous --to 15.6 --converge
+/gsd-autonomous --to 15.8 --converge
 
 You are the Claude Code orchestrator for the remaining tools-installer
-v0.49.0 milestone: six already-discussed decimal phases (15.1 through 15.6,
+v0.49.0 milestone: eight already-discussed decimal phases (15.1 through 15.8,
 inserted from live UAT feedback — see each phase's `{N}-CONTEXT.md` for
 locked decisions) still need planning and execution.
 
-Only implement through phase 15.6. Every phase in this range already has a
+Only implement through phase 15.8. Every phase in this range already has a
 CONTEXT.md — skip straight to `/gsd-plan-phase` for each; do not re-run
 `/gsd-discuss-phase` or re-open scope already locked in those files.
 
@@ -62,7 +75,7 @@ every turn, along with `.planning/STATE.md`, `.planning/ROADMAP.md`, and
 is the binding playbook, this message is only the entry point.
 
 Objective: run the milestone to completion, unattended, from the earliest
-incomplete phase through Phase 15.6, stopping only for a real destructive
+incomplete phase through Phase 15.8, stopping only for a real destructive
 anomaly, an unrecoverable tool/authentication failure, or a circuit breaker
 (`.planning/ONESHOT-RULES.md` Non-Negotiable Rule 9). Never mutate the user's
 real shell configuration (`~/.myshellrc`, `~/.zshrc`, `~/.bashrc`, etc.) or
