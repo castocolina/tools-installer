@@ -1,15 +1,14 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: "15.1"
-current_phase_name: catalog-post-update-refresh-staleness-and-version-status-col
-current_plan: Not started
+current_phase: "15.4"
+current_plan: Not yet planned - context gathered, ready for /gsd-plan-phase 15.4
 status: planning
-stopped_at: Phase 15.3 context gathered
-last_updated: "2026-09-15T21:03:04.392Z"
+stopped_at: Phase 15.4 context gathered (ownership visibility + uninstall staleness fix)
+last_updated: "2026-09-15T21:14:19.281Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 15 marked complete
-state_head: da27cb790345c51c3132e010707793ab09823fe6
+state_head: 382a81cb14777f05509937b39d6668b038945e49
 progress:
   total_phases: 24
   completed_phases: 13
@@ -26,12 +25,12 @@ Total Phases: 21
 See: .planning/PROJECT.md (updated 2026-09-04)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 15.1 — catalog-post-update-refresh-staleness-and-version-status-col
+**Current focus:** Phase 15.4 context complete; Phase 15.5 still needs /gsd-discuss-phase
 
 ## Current Position
 
-Phase: 15.1 — catalog-post-update-refresh-staleness-and-version-status-col
-Current Plan: Not started
+Phase: 15.4-catalog-ownership-visibility-and-uninstall-screen-real-manag
+Current Plan: Not yet planned - context gathered, ready for /gsd-plan-phase 15.4
 Total Plans in Phase: 5
 Status: planning
 Last activity: 2026-09-14 — Phase 15 marked complete
@@ -181,6 +180,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-15T21:03:04.264Z
-Stopped at: Phase 15.3 context gathered
-Resume file: .planning/phases/15.3-registry-audience-field-audit-63-of-89-registry-toml-entries/15.3-CONTEXT.md
+Last session: 2026-09-15T21:14:18.912Z
+Stopped at: Phase 15.4 context gathered (ownership visibility + uninstall staleness fix)
+Resume file: .planning/phases/15.4-catalog-ownership-visibility-and-uninstall-screen-real-manag/15.4-CONTEXT.md
