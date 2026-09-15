@@ -1,21 +1,23 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: 15
-current_plan: 5
-status: completed
-stopped_at: Completed 15-05-PLAN.md
-last_updated: "2026-09-15T01:04:25.126Z"
+current_phase: "15.1"
+current_phase_name: catalog-post-update-refresh-staleness-and-version-status-col
+current_plan: Not started
+status: planning
+stopped_at: Phase 15.1 context gathered
+last_updated: "2026-09-15T20:49:23.577Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 15 marked complete
-state_head: aa2f01c710de9e052268c0aaf0e2496c1ab08994
+state_head: d1f1dd13df437043bdd79379d3dbee963f5144e1
 progress:
-  total_phases: 19
+  total_phases: 24
   completed_phases: 13
   total_plans: 61
   completed_plans: 61
-current_phase_name: catalog-accuracy-doctor-refresh-version-parsing-ownership-at
 ---
+
+Total Phases: 21
 
 # Project State
 
@@ -24,14 +26,14 @@ current_phase_name: catalog-accuracy-doctor-refresh-version-parsing-ownership-at
 See: .planning/PROJECT.md (updated 2026-09-04)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 14 — install-update-engine-correctness-default-shell-action-selec
+**Current focus:** Phase 15.1 — catalog-post-update-refresh-staleness-and-version-status-col
 
 ## Current Position
 
-Phase: 15 — COMPLETE
-Current Plan: 5
+Phase: 15.1 — catalog-post-update-refresh-staleness-and-version-status-col
+Current Plan: Not started
 Total Plans in Phase: 5
-Status: Phase 15 complete
+Status: planning
 Last activity: 2026-09-14 — Phase 15 marked complete
 
 Progress: [█████████░] 88%
@@ -161,6 +163,13 @@ None yet.
 - Phase 13 inserted after Phase 12: Live in-TUI install execution & persistent wizard settings (F1+F2, found running the shipped v0.49.0 installer end-to-end) (URGENT)
 - Phase 14 inserted after Phase 12: Install/update engine correctness & default-shell action (F3+F4) (URGENT)
 - Phase 15 inserted after Phase 12: Catalog accuracy: Doctor refresh, version parsing, ownership attribution, tier fixes (F5+F6+F7+F8) (URGENT)
+- Phase 15.1 inserted after Phase 15: Real UAT findings from running the built app: catalog staleness, ownership visibility, uninstall attribution, output buffering, registry data quality (URGENT)
+- Phase 15.1.1 inserted after Phase 15: Real UAT findings from running the built app: catalog staleness, ownership visibility, uninstall attribution, output buffering, registry data quality (URGENT)
+- Phase 15.2 inserted after Phase 15: Real UAT findings from running the built app: catalog staleness, ownership visibility, uninstall attribution, output buffering, registry data quality (URGENT)
+- Phase 15.3 inserted after Phase 15: Real UAT findings from running the built app: catalog staleness, ownership visibility, uninstall attribution, output buffering, registry data quality (URGENT)
+- Phase 15.4 inserted after Phase 15: Re-inserted with corrected flat decimal numbering (was invalid 15.1.1, then 15.3.1) after user flagged x.y.z is not valid (URGENT)
+- Phase 15.1 edited: added requirement for a visible always-on color legend explaining green/orange/gray states in the catalog UI, per user feedback
+- Phase 15.5 inserted after Phase 15: User caught set_login_shell being silently no-op on this immutable Bazzite host; investigation confirmed Platform.immutable hard-blocks with zero feedback, and D-04's cited GitHub issue has no confirmed root cause. User explicitly chose to show-with-warning instead of block-silently, overriding D-04's prior reversibility caveat (URGENT)
 
 ## Deferred Items
 
@@ -172,6 +181,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-14T23:48:48.796Z
-Stopped at: Completed 15-05-PLAN.md
-Resume file: None
+Last session: 2026-09-15T20:49:23.431Z
+Stopped at: Phase 15.1 context gathered
+Resume file: .planning/phases/15.1-catalog-post-update-refresh-staleness-and-version-status-col/15.1-CONTEXT.md
