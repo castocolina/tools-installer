@@ -76,12 +76,15 @@ def test_owner_uses_first_successful_declared_probe() -> None:
     owner = detect_owner(
         _tool(owner_probes=("sdkman", "brew")),
         _probe({"sdkman": "", "brew": "demo 1.2.3\n"}),
+        immutable=False,
     )
     assert owner == Ownership("Homebrew", "verified", "brew lists demo")
 
 
 def test_owner_does_not_guess_from_command_path() -> None:
-    assert detect_owner(_tool(), _probe({})) == Ownership(None, "unknown", "no verified manager")
+    assert detect_owner(_tool(), _probe({}), immutable=False) == Ownership(
+        None, "unknown", "no verified manager"
+    )
 
 
 def test_host_setup_owner_uses_the_reviewed_setup_probe() -> None:
@@ -94,6 +97,7 @@ def test_host_setup_owner_uses_the_reviewed_setup_probe() -> None:
     owner = detect_owner(
         tool,
         lambda command: commands.append(command) or "@earendil-works/pi-coding-agent\n",
+        immutable=False,
     )
 
     assert owner == Ownership("pnpm", "verified", "host setup lists pi")
@@ -161,8 +165,11 @@ def test_owner_verifies_each_manager_from_its_own_output(
     manager: str,
     detail: str,
 ) -> None:
+    """Mutable host: every declared probe answers from its own manager's
+    output. The dnf/apt/pacman rows here are the counterpart to
+    `test_native_package_manager_probes_stand_down_on_an_immutable_host`."""
     assert detect_owner(
-        _tool(owner_probes=(probe,), methods=methods), _probe({probe: output})
+        _tool(owner_probes=(probe,), methods=methods), _probe({probe: output}), immutable=False
     ) == Ownership(manager, "verified", detail)
 
 
@@ -172,7 +179,7 @@ def test_owner_verifies_each_manager_from_its_own_output(
 def test_owner_treats_unavailable_failed_or_unparseable_probes_as_unknown(
     response: str | Exception,
 ) -> None:
-    owner = detect_owner(_tool(owner_probes=("brew",)), _probe({"brew": response}))
+    owner = detect_owner(_tool(owner_probes=("brew",)), _probe({"brew": response}), immutable=False)
     assert owner == Ownership(None, "unknown", "no verified manager")
 
 
@@ -180,6 +187,7 @@ def test_owner_treats_injected_command_failure_as_unknown() -> None:
     owner = detect_owner(
         _tool(owner_probes=("brew",)),
         _probe({"brew": subprocess.CalledProcessError(1, ["brew", "list", "--versions", "demo"])}),
+        immutable=False,
     )
     assert owner == Ownership(None, "unknown", "no verified manager")
 
@@ -210,7 +218,7 @@ def test_rpm_ostree_owner_verifies_the_booted_deployments_layered_package() -> N
             },
         ]
     )
-    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": status}))
+    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": status}), immutable=True)
     assert owner == Ownership("rpm-ostree", "verified", "rpm-ostree layers jq")
 
 
@@ -225,7 +233,7 @@ def test_rpm_ostree_owner_does_not_credit_a_non_booted_deployments_layered_packa
             },
         ]
     )
-    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": status}))
+    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": status}), immutable=True)
     assert owner == Ownership(None, "unknown", "no verified manager")
 
 
@@ -233,7 +241,7 @@ def test_rpm_ostree_owner_returns_none_without_a_booted_deployment() -> None:
     status = _rpm_ostree_status(
         [{"booted": False, "packages": ["jq"], "requested-packages": ["jq"]}]
     )
-    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": status}))
+    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": status}), immutable=True)
     assert owner == Ownership(None, "unknown", "no verified manager")
 
 
@@ -253,7 +261,7 @@ def test_rpm_ostree_owner_returns_none_without_a_booted_deployment() -> None:
     ],
 )
 def test_rpm_ostree_owner_fails_closed_on_malformed_input(status: str) -> None:
-    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": status}))
+    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": status}), immutable=True)
     assert owner == Ownership(None, "unknown", "no verified manager")
 
 
@@ -263,14 +271,98 @@ def test_rpm_ostree_owner_never_runs_the_probe_without_a_declared_dnf_package() 
         owner_probes=("rpm-ostree",),
         methods=(Method(kind="brew", params={"formula": "jq"}),),
     )
-    owner = detect_owner(tool, lambda command: calls.append(command) or "{}")
+    owner = detect_owner(tool, lambda command: calls.append(command) or "{}", immutable=True)
     assert owner == Ownership(None, "unknown", "no verified manager")
     assert calls == []
 
 
 def test_rpm_ostree_owner_treats_a_missing_binary_as_unknown() -> None:
-    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": FileNotFoundError()}))
+    owner = detect_owner(
+        _rpm_ostree_tool(), _probe({"rpm-ostree": FileNotFoundError()}), immutable=True
+    )
     assert owner == Ownership(None, "unknown", "no verified manager")
+
+
+def _recording_probe(results: dict[str, str | Exception], calls: list[list[str]]):
+    inner = _probe(results)
+
+    def run(command: list[str]) -> str:
+        calls.append(command)
+        return inner(command)
+
+    return run
+
+
+def _base_image_status(package: str) -> str:
+    """A booted ostree deployment that SHIPS `package` in its base image.
+
+    Present in `packages`, absent from `requested-packages`: the user never
+    layered it, so `_rpm_ostree` has no explicit-layering evidence to report.
+    This is what `git`/`jq`/`zsh`/`podman` look like on Bazzite or Silverblue.
+    """
+    return _rpm_ostree_status([{"booted": True, "packages": [package], "requested-packages": []}])
+
+
+def test_dnf_probe_stands_down_for_a_base_image_package_on_an_immutable_host() -> None:
+    """CR-02: the booted deployment's rpmdb answers `rpm -q` for every package
+    in the base image, so `_dnf` used to claim `git`/`jq`/`zsh`/`podman` on an
+    ostree host and tell the user to "update it through dnf" -- a command that
+    does not manage that package there. `resolve._applies` already refuses to
+    INSTALL through dnf on such a host for the same reason; attribution now
+    agrees. Only `_rpm_ostree`'s explicit-layering evidence counts, and a
+    base-image package is honestly unknown rather than wrongly dnf's."""
+    calls: list[list[str]] = []
+    tool = _tool(
+        owner_probes=("rpm-ostree", "dnf"),
+        methods=(Method(kind="dnf", params={"package": "jq"}),),
+    )
+    owner = detect_owner(
+        tool,
+        _recording_probe({"rpm-ostree": _base_image_status("jq"), "dnf": "jq\n"}, calls),
+        immutable=True,
+    )
+    assert owner == Ownership(None, "unknown", "no verified manager")
+    # rpm-ostree was asked and answered "not layered"; `rpm -q` was never run.
+    assert [command[0] for command in calls] == ["rpm-ostree"]
+
+
+def test_dnf_probe_still_answers_for_the_same_package_on_a_mutable_host() -> None:
+    """The gate is about the host, not the package: on a normal Fedora box the
+    identical rpmdb evidence is the right answer, and dnf really is the manager
+    of record."""
+    calls: list[list[str]] = []
+    tool = _tool(
+        owner_probes=("rpm-ostree", "dnf"),
+        methods=(Method(kind="dnf", params={"package": "jq"}),),
+    )
+    owner = detect_owner(
+        tool,
+        _recording_probe({"rpm-ostree": FileNotFoundError(), "dnf": "jq\n"}, calls),
+        immutable=False,
+    )
+    assert owner == Ownership("dnf", "verified", "dnf lists jq")
+    assert [command[0] for command in calls] == ["rpm-ostree", "rpm"]
+
+
+@pytest.mark.parametrize(
+    ("probe_name", "method"),
+    [
+        ("dnf", Method(kind="dnf", params={"package": "demo"})),
+        ("apt", Method(kind="apt", params={"package": "demo"})),
+        ("pacman", Method(kind="pacman", params={"package": "demo"})),
+    ],
+)
+def test_native_package_manager_probes_stand_down_on_an_immutable_host(
+    probe_name: str, method: Method
+) -> None:
+    """The gate covers all three native managers, mirroring `resolve._applies`,
+    which returns False for dnf/apt/pacman alike on an immutable host -- not
+    just for dnf. None of them is the manager of record on an atomic system."""
+    calls: list[list[str]] = []
+    tool = _tool(owner_probes=(probe_name,), methods=(method,))
+    owner = detect_owner(tool, _recording_probe({probe_name: "demo\n"}, calls), immutable=True)
+    assert owner == Ownership(None, "unknown", "no verified manager")
+    assert calls == []
 
 
 def _recursion_bomb_json(depth: int) -> str:
@@ -290,7 +382,9 @@ def test_rpm_ostree_owner_fails_closed_on_a_recursion_bomb_from_the_probe() -> N
     which is not a `ValueError`. An uncaught one would propagate out of the
     catalog refresh worker instead of failing closed the way every other
     malformed-probe-output case in this module already does."""
-    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": _recursion_bomb_json(20_000)}))
+    owner = detect_owner(
+        _rpm_ostree_tool(), _probe({"rpm-ostree": _recursion_bomb_json(20_000)}), immutable=True
+    )
     assert owner == Ownership(None, "unknown", "no verified manager")
 
 
@@ -303,7 +397,7 @@ def test_pnpm_owner_fails_closed_on_a_recursion_bomb_from_the_probe() -> None:
         owner_probes=("pnpm",),
         methods=(Method(kind="node", params={"npm_pkg": "demo"}),),
     )
-    owner = detect_owner(tool, _probe({"pnpm": _recursion_bomb_json(5_000)}))
+    owner = detect_owner(tool, _probe({"pnpm": _recursion_bomb_json(5_000)}), immutable=False)
     assert owner == Ownership(None, "unknown", "no verified manager")
 
 

@@ -363,7 +363,7 @@ def resolve_ownership(
     # below and a fallback placed at the end would never execute. This one
     # call site covers both unknown branches, both by-elimination branches,
     # and the real-machine case.
-    native = _native_owner(tool, native_probe, candidates, unreadable, active_path)
+    native = _native_owner(tool, native_probe, candidates, unreadable, active_path, platform)
     if native is not None:
         return native
     if active_path is not None:
@@ -427,6 +427,7 @@ def _native_owner(
     candidates: tuple[OwnershipCandidate, ...],
     unreadable: frozenset[Owner],
     active_path: Path | None,
+    platform: Platform,
 ) -> ManagerOwnership | None:
     """D-05 adapter: `install_ownership.detect_owner` for the four native
     package managers, never a re-implemented probe (`.claude/architecture.md`
@@ -439,10 +440,15 @@ def _native_owner(
     manager's inventory was unreadable: a readable brew inventory that lists
     the tool, or an unreadable one, both mean this adapter must not run --
     the tracked managers' own evidence always outranks or blocks it.
+
+    `platform.immutable` is forwarded to `detect_owner`, which stands the
+    dnf/apt/pacman probes down on an ostree host (D-06/CR-02): the rpm
+    database there answers for the whole base image, so those probes cannot
+    tell a package the host merely ships from one a manager actually manages.
     """
     if probe is None or candidates or unreadable:
         return None
-    verified = detect_owner(tool, probe)
+    verified = detect_owner(tool, probe, immutable=platform.immutable)
     if verified.confidence != "verified" or verified.manager is None:
         return None
     owner = _NATIVE_OWNER_TRANSLATION.get(verified.manager)

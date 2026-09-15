@@ -567,6 +567,47 @@ def test_native_owner_adapter_ignores_non_native_verified_manager() -> None:
     assert result.owner == "unknown"
 
 
+_FEDORA = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
+_FEDORA_ATOMIC = Platform(os="fedora", arch="amd64", immutable=True, has_brew=False)
+
+
+def test_native_owner_does_not_claim_dnf_on_an_immutable_host() -> None:
+    """CR-02: on Bazzite/Silverblue the booted deployment's rpmdb answers
+    `rpm -q` for every package in the base image, so a base-image `jq` used to
+    resolve to `dnf` and the UI told the user to update it through dnf --
+    which is not the package manager of record on an atomic host. The honest
+    answer is `unknown`: this installer cannot manage that package either way,
+    and a wrong remediation is worse than no remediation."""
+    tool = _dnf_tool()
+    calls: list[list[str]] = []
+    result = _resolve(
+        tool,
+        inventory=_empty_readable(),
+        which="/usr/bin/jq",
+        platform=_FEDORA_ATOMIC,
+        native_probe=_verifying_dnf_probe("jq", calls),
+    )
+    assert result.owner == "unknown"
+    assert calls == []  # the dnf probe is not even run on an immutable host
+
+
+def test_native_owner_still_claims_dnf_on_a_mutable_fedora_host() -> None:
+    """The immutability gate is about the host, not the evidence: the same
+    tool, probe and live path on a normal Fedora box still resolves to dnf."""
+    tool = _dnf_tool()
+    calls: list[list[str]] = []
+    result = _resolve(
+        tool,
+        inventory=_empty_readable(),
+        which="/usr/bin/jq",
+        platform=_FEDORA,
+        native_probe=_verifying_dnf_probe("jq", calls),
+    )
+    assert result.owner == "dnf"
+    assert result.confidence == "direct"
+    assert calls
+
+
 def test_native_owners_tuple_is_the_four_widened_values() -> None:
     """The membership decision is written once: NATIVE_OWNERS is what both
     this module's adapter and update.py's refusal branch read."""

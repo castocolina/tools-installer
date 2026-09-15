@@ -236,9 +236,33 @@ _PROBES: dict[str, Callable[[Tool, ProbeRunner], Ownership | None]] = {
 }
 
 
-def detect_owner(tool: Tool, probe: ProbeRunner) -> Ownership:
-    """Return the first declared manager that produces ownership evidence."""
+# D-06/CR-02: probes that can only speak for a MUTABLE host. On an ostree
+# system the booted deployment's rpm database still answers `rpm -q` for every
+# package in the base image (`git`, `jq`, `zsh`, `podman` on Bazzite and
+# Silverblue), so `_dnf` would claim them -- and the catalog would tell the
+# user to "update it through dnf", a command that does not manage that package
+# there. Probe ORDERING alone does not fix this: `_rpm_ostree` reports only
+# explicitly layered packages, so a base-image package falls straight through
+# to `_dnf`. `resolve._applies` already returns False for all three of
+# dnf/apt/pacman on an immutable host, for the same reason; attribution now
+# agrees with installation. On such a host only `_rpm_ostree`'s
+# explicit-layering evidence counts, and a base-image package resolves to "no
+# verified manager" -- honest, because this installer cannot manage it either
+# way, and a wrong remediation is worse than none.
+_MUTABLE_HOST_ONLY_PROBES = frozenset({"dnf", "apt", "pacman"})
+
+
+def detect_owner(tool: Tool, probe: ProbeRunner, *, immutable: bool) -> Ownership:
+    """Return the first declared manager that produces ownership evidence.
+
+    `immutable` is the host's `Platform.immutable`. It is keyword-only and has
+    no default on purpose: the wrong value silently mis-attributes every
+    base-image package on an atomic host, which is not a failure a caller
+    should be able to fall into by omission.
+    """
     for name in tool.owner_probes:
+        if immutable and name in _MUTABLE_HOST_ONLY_PROBES:
+            continue
         owner = _PROBES[name](tool, probe)
         if owner is not None:
             return owner
