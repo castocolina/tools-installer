@@ -21,6 +21,16 @@ findings:
   info: 5
   total: 17
 status: issues_found
+fix_outcomes:
+  reviewed_at: 2026-09-14T00:00:00Z
+  fixed_at: 2026-09-14T23:59:00Z
+  fix_commit: merge(15) f2c1766..HEAD, code-review fix branch worktree-agent-a5af306eafbc030b7
+  CR-01: fixed — installer/install_ownership.py::package_owns_path confirms the claimed manager actually owns the resolved active_path (rpm -qf / dpkg-query -S / pacman -Qoq) before _native_owner returns confidence="direct"; falls through to unknown when it doesn't. New shadowing test pins the fix.
+  CR-02: fixed — detect_owner takes a defaultless keyword-only immutable flag and skips dnf/apt/pacman probes on an immutable (ostree) host, mirroring resolve._applies's existing parity; a base-image package on Bazzite now resolves to unknown instead of a wrong dnf claim.
+  WR-05: fixed — both JSON guards in installer/install_ownership.py now catch RecursionError alongside TypeError/ValueError, failing closed on adversarial deeply-nested probe output instead of crashing the refresh worker.
+  WR-10: no_change_needed — verified against 15-05-PLAN.md's must_haves: the VersionStatus tail (stale=True, latest=None, source="unknown") for native-owned tools is deliberate, separate from the Ownership.manager label, and already covered by the STATUS-TAIL-PINNED gate.
+  WR-01_through_WR-04_WR-06_through_WR-09_INFO: deferred — out of scope for this fix pass, lower priority, left for a future pass if requested.
+  regression_gate: make validate && make test both green after the fix merge — 2134 passed, 1 skipped, 95.40% coverage.
 ---
 
 # Phase 15: Code Review Report
