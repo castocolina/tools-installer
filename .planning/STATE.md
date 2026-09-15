@@ -1,14 +1,14 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: "15.4"
-current_plan: Not yet planned - context gathered, ready for /gsd-plan-phase 15.4
+current_phase: "15.5"
+current_plan: Not yet planned - context gathered, ready for /gsd-plan-phase 15.5
 status: planning
-stopped_at: Phase 15.4 context gathered (ownership visibility + uninstall staleness fix)
-last_updated: "2026-09-15T21:14:19.281Z"
+stopped_at: Phase 15.5 context gathered (chsh-absence finding, scope split for terminal-emulator solution)
+last_updated: "2026-09-15T22:09:07.690Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 15 marked complete
-state_head: 382a81cb14777f05509937b39d6668b038945e49
+state_head: 47e127c9f392fe84d12df40b2a0b042f6b25b9cf
 progress:
   total_phases: 24
   completed_phases: 13
@@ -25,12 +25,12 @@ Total Phases: 21
 See: .planning/PROJECT.md (updated 2026-09-04)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 15.4 context complete; Phase 15.5 still needs /gsd-discuss-phase
+**Current focus:** All 5 inserted phases (15.1-15.5) now have context; next: insert new terminal-emulator-shell phase, then planning
 
 ## Current Position
 
-Phase: 15.4-catalog-ownership-visibility-and-uninstall-screen-real-manag
-Current Plan: Not yet planned - context gathered, ready for /gsd-plan-phase 15.4
+Phase: 15.5-relax-set-login-shell-s-immutable-host-block-from-total-sile
+Current Plan: Not yet planned - context gathered, ready for /gsd-plan-phase 15.5
 Total Plans in Phase: 5
 Status: planning
 Last activity: 2026-09-14 — Phase 15 marked complete
@@ -180,6 +180,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-15T21:14:18.912Z
-Stopped at: Phase 15.4 context gathered (ownership visibility + uninstall staleness fix)
-Resume file: .planning/phases/15.4-catalog-ownership-visibility-and-uninstall-screen-real-manag/15.4-CONTEXT.md
+Last session: 2026-09-15T22:09:07.342Z
+Stopped at: Phase 15.5 context gathered (chsh-absence finding, scope split for terminal-emulator solution)
+Resume file: .planning/phases/15.5-relax-set-login-shell-s-immutable-host-block-from-total-sile/15.5-CONTEXT.md
