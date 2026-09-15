@@ -89,7 +89,11 @@ desc = "Replaces recursive grep with faster code search, .gitignore awareness, a
 # rpm-ostree is listed FIRST on every dnf/apt/pacman-capable row below: on an
 # ostree host the rpm database still answers `rpm -q`, so probing dnf first
 # would attribute a package the user explicitly layered with rpm-ostree to
-# the wrong mechanism. See install_ownership.py's _rpm_ostree docstring (D-05/D-06).
+# the wrong mechanism. Ordering settles only that LAYERED case -- a base-image
+# package is in no deployment's `requested-packages` at all, so it is
+# `detect_owner`'s `immutable` gate, not this ordering, that stops dnf from
+# claiming it. See install_ownership.py's _rpm_ostree docstring and
+# _MUTABLE_HOST_ONLY_PROBES (D-05/D-06).
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
 kind = "github_release"

@@ -3,6 +3,17 @@
 Ownership is intentionally not inferred from a resolved executable path. A
 manager is reported only after its declared probe returns manager-specific
 evidence through the injected command runner.
+
+Probe stdout is untrusted input. The binaries are resolved through the user's
+`PATH`, which this installer prepends a managed bin dir to by design, so a
+planted or merely corrupted `rpm-ostree`/`pnpm` can put arbitrary bytes on
+stdout. Every probe therefore fails CLOSED -- returning `None`, never raising
+-- and the JSON guards catch `RecursionError` alongside `TypeError`/
+`ValueError`: deeply nested input exhausts the interpreter stack inside
+`json.loads` (and, for pnpm, inside the recursive `_pnpm_packages` walk),
+and `RecursionError` is neither of the other two. `detect_owner` runs on the
+catalog refresh worker, so an escaping exception there is a crashed refresh
+rather than an unattributed tool.
 """
 
 import json
@@ -140,7 +151,7 @@ def _rpm_ostree(tool: Tool, probe: ProbeRunner) -> Ownership | None:
         return None
     try:
         parsed = json.loads(output)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return None
     if not isinstance(parsed, dict):
         return None
@@ -162,6 +173,57 @@ def _rpm_ostree(tool: Tool, probe: ProbeRunner) -> Ownership | None:
         if package in layered_names:
             return Ownership("rpm-ostree", "verified", f"rpm-ostree layers {package}")
     return None
+
+
+def _rpm_owns_path(package: str, path: str, probe: ProbeRunner) -> bool:
+    output = _run(probe, ["rpm", "-qf", "--qf", "%{NAME}\\n", path])
+    return output is not None and package in _lines(output)
+
+
+def _dpkg_owns_path(package: str, path: str, probe: ProbeRunner) -> bool:
+    output = _run(probe, ["dpkg-query", "-S", path])
+    return output is not None and any(
+        line.split(":", maxsplit=1)[0] == package for line in _lines(output)
+    )
+
+
+def _pacman_owns_path(package: str, path: str, probe: ProbeRunner) -> bool:
+    output = _run(probe, ["pacman", "-Qoq", path])
+    return output is not None and package in _lines(output)
+
+
+# Manager -> (the method kind declaring its package name, that manager's own
+# "which package owns this file" query). rpm-ostree shares rpm's query and the
+# `dnf` method's package name for the same reason `_rpm_ostree` reads that
+# method: a layered or base-image RPM lives in the same rpm database.
+_PATH_QUERIES: dict[str, tuple[str, Callable[[str, str, ProbeRunner], bool]]] = {
+    "dnf": ("dnf", _rpm_owns_path),
+    "rpm-ostree": ("dnf", _rpm_owns_path),
+    "apt": ("apt", _dpkg_owns_path),
+    "pacman": ("pacman", _pacman_owns_path),
+}
+
+
+def package_owns_path(tool: Tool, manager: str, path: str, probe: ProbeRunner) -> bool:
+    """True when `manager`'s own file query says a declared package owns `path`.
+
+    "This package is installed" and "this package put the binary the user
+    actually runs there" are different claims, and the probes above only make
+    the first. `rpm -q jq` succeeds while a hand-built `jq` sits earlier in
+    `PATH`, so attributing the live binary to dnf on that evidence tells the
+    user the wrong thing about the copy they are running. This is the second
+    claim, asked in each manager's own dialect.
+
+    Fails CLOSED in every uncertain case: an unrecognized manager, a tool that
+    declares no package name for it, a query that cannot run (`rpm -qf` exits
+    non-zero for a file no package owns), and a query that answers with some
+    OTHER package's name all return `False`. Confirmation must be positive.
+    """
+    entry = _PATH_QUERIES.get(manager)
+    if entry is None:
+        return False
+    kind, query = entry
+    return any(query(package, path, probe) for package in _method_values(tool, {kind}, "package"))
 
 
 def _pacman(tool: Tool, probe: ProbeRunner) -> Ownership | None:
@@ -195,7 +257,7 @@ def _pnpm(tool: Tool, probe: ProbeRunner) -> Ownership | None:
         return None
     try:
         listed = set(_pnpm_packages(json.loads(output)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return None
     for package in packages:
         if package in listed:
@@ -225,9 +287,33 @@ _PROBES: dict[str, Callable[[Tool, ProbeRunner], Ownership | None]] = {
 }
 
 
-def detect_owner(tool: Tool, probe: ProbeRunner) -> Ownership:
-    """Return the first declared manager that produces ownership evidence."""
+# D-06/CR-02: probes that can only speak for a MUTABLE host. On an ostree
+# system the booted deployment's rpm database still answers `rpm -q` for every
+# package in the base image (`git`, `jq`, `zsh`, `podman` on Bazzite and
+# Silverblue), so `_dnf` would claim them -- and the catalog would tell the
+# user to "update it through dnf", a command that does not manage that package
+# there. Probe ORDERING alone does not fix this: `_rpm_ostree` reports only
+# explicitly layered packages, so a base-image package falls straight through
+# to `_dnf`. `resolve._applies` already returns False for all three of
+# dnf/apt/pacman on an immutable host, for the same reason; attribution now
+# agrees with installation. On such a host only `_rpm_ostree`'s
+# explicit-layering evidence counts, and a base-image package resolves to "no
+# verified manager" -- honest, because this installer cannot manage it either
+# way, and a wrong remediation is worse than none.
+_MUTABLE_HOST_ONLY_PROBES = frozenset({"dnf", "apt", "pacman"})
+
+
+def detect_owner(tool: Tool, probe: ProbeRunner, *, immutable: bool) -> Ownership:
+    """Return the first declared manager that produces ownership evidence.
+
+    `immutable` is the host's `Platform.immutable`. It is keyword-only and has
+    no default on purpose: the wrong value silently mis-attributes every
+    base-image package on an atomic host, which is not a failure a caller
+    should be able to fall into by omission.
+    """
     for name in tool.owner_probes:
+        if immutable and name in _MUTABLE_HOST_ONLY_PROBES:
+            continue
         owner = _PROBES[name](tool, probe)
         if owner is not None:
             return owner
