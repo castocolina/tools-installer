@@ -273,6 +273,40 @@ def test_rpm_ostree_owner_treats_a_missing_binary_as_unknown() -> None:
     assert owner == Ownership(None, "unknown", "no verified manager")
 
 
+def _recursion_bomb_json(depth: int) -> str:
+    """A syntactically legal JSON document nested past the recursion limit.
+
+    Probe binaries are looked up through the user's `PATH`, and this installer
+    prepends a managed bin dir to that `PATH` by design, so a planted or
+    corrupted `rpm-ostree`/`pnpm` can put arbitrary bytes on stdout. Deep
+    nesting is the cheapest way to turn that stdout into an exception that is
+    neither `TypeError` nor `ValueError`.
+    """
+    return "[" * depth + "]" * depth
+
+
+def test_rpm_ostree_owner_fails_closed_on_a_recursion_bomb_from_the_probe() -> None:
+    """WR-05: `json.loads` raises `RecursionError` on deeply nested input,
+    which is not a `ValueError`. An uncaught one would propagate out of the
+    catalog refresh worker instead of failing closed the way every other
+    malformed-probe-output case in this module already does."""
+    owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": _recursion_bomb_json(20_000)}))
+    assert owner == Ownership(None, "unknown", "no verified manager")
+
+
+def test_pnpm_owner_fails_closed_on_a_recursion_bomb_from_the_probe() -> None:
+    """WR-05, the other half: `_pnpm_packages` walks the parsed document
+    recursively, so input shallow enough for `json.loads` can still exhaust
+    the interpreter's stack inside the walk. The guard has to cover the parse
+    AND the walk, not just the parse."""
+    tool = _tool(
+        owner_probes=("pnpm",),
+        methods=(Method(kind="node", params={"npm_pkg": "demo"}),),
+    )
+    owner = detect_owner(tool, _probe({"pnpm": _recursion_bomb_json(5_000)}))
+    assert owner == Ownership(None, "unknown", "no verified manager")
+
+
 def test_owner_probes_closed_set_and_probe_registry_are_the_same_set() -> None:
     # Addresses review concern (cycle 2, L247@ca67acb): a one-way subset check
     # in either direction alone is not enough. `set(_PROBES) <= set(OWNER_PROBES)`

@@ -3,6 +3,17 @@
 Ownership is intentionally not inferred from a resolved executable path. A
 manager is reported only after its declared probe returns manager-specific
 evidence through the injected command runner.
+
+Probe stdout is untrusted input. The binaries are resolved through the user's
+`PATH`, which this installer prepends a managed bin dir to by design, so a
+planted or merely corrupted `rpm-ostree`/`pnpm` can put arbitrary bytes on
+stdout. Every probe therefore fails CLOSED -- returning `None`, never raising
+-- and the JSON guards catch `RecursionError` alongside `TypeError`/
+`ValueError`: deeply nested input exhausts the interpreter stack inside
+`json.loads` (and, for pnpm, inside the recursive `_pnpm_packages` walk),
+and `RecursionError` is neither of the other two. `detect_owner` runs on the
+catalog refresh worker, so an escaping exception there is a crashed refresh
+rather than an unattributed tool.
 """
 
 import json
@@ -140,7 +151,7 @@ def _rpm_ostree(tool: Tool, probe: ProbeRunner) -> Ownership | None:
         return None
     try:
         parsed = json.loads(output)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return None
     if not isinstance(parsed, dict):
         return None
@@ -195,7 +206,7 @@ def _pnpm(tool: Tool, probe: ProbeRunner) -> Ownership | None:
         return None
     try:
         listed = set(_pnpm_packages(json.loads(output)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return None
     for package in packages:
         if package in listed:
