@@ -1,14 +1,14 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: "15.7"
+current_phase: "15.8"
 current_plan: Not yet planned - context gathered, ready for /gsd-plan-phase
 status: planning
-stopped_at: Phase 15.7 context gathered; 15.8 discussion in progress (2 areas selected, not yet answered)
-last_updated: "2026-09-15T22:46:10.594Z"
+stopped_at: Phase 15.8 context gathered. All 8 phases (15.1-15.8) now have context.
+last_updated: "2026-09-15T22:49:23.576Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 15 marked complete
-state_head: 6092cb98efcfce532a5c039e1a35dd9e8fef04c1
+state_head: bcbe0cc9f5f115c4e92ac113472e066e4b15d377
 progress:
   total_phases: 27
   completed_phases: 13
@@ -25,11 +25,11 @@ Total Phases: 21
 See: .planning/PROJECT.md (updated 2026-09-04)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** 15.1-15.7 have context. 15.8 discussion started (PATH duplication fix) -- resume /gsd-discuss-phase 15.8
+**Current focus:** All 8 phases (15.1-15.8) have context. Next: /gsd-plan-phase for each, then execute.
 
 ## Current Position
 
-Phase: 15.7-unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr
+Phase: 15.8-fix-real-not-just-cosmetic-path-duplication-from-managed-blo
 Current Plan: Not yet planned - context gathered, ready for /gsd-plan-phase
 Total Plans in Phase: 5
 Status: planning
@@ -181,6 +181,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-15T22:46:10.246Z
-Stopped at: Phase 15.7 context gathered; 15.8 discussion in progress (2 areas selected, not yet answered)
-Resume file: .planning/phases/15.7-unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr/15.7-CONTEXT.md
+Last session: 2026-09-15T22:49:23.224Z
+Stopped at: Phase 15.8 context gathered. All 8 phases (15.1-15.8) now have context.
+Resume file: .planning/phases/15.8-fix-real-not-just-cosmetic-path-duplication-from-managed-blo/15.8-CONTEXT.md
