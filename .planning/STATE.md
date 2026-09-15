@@ -5,11 +5,11 @@ current_phase: "15.1"
 current_phase_name: catalog-post-update-refresh-staleness-and-version-status-col
 current_plan: Not started
 status: planning
-stopped_at: Phase 15.1 context gathered
-last_updated: "2026-09-15T20:49:23.577Z"
+stopped_at: Phase 15.2 context gathered
+last_updated: "2026-09-15T20:59:22.602Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 15 marked complete
-state_head: d1f1dd13df437043bdd79379d3dbee963f5144e1
+state_head: 3e0c86f842e6b60cc5c49ec709ca32e76f832689
 progress:
   total_phases: 24
   completed_phases: 13
@@ -181,6 +181,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-15T20:49:23.431Z
-Stopped at: Phase 15.1 context gathered
-Resume file: .planning/phases/15.1-catalog-post-update-refresh-staleness-and-version-status-col/15.1-CONTEXT.md
+Last session: 2026-09-15T20:59:22.450Z
+Stopped at: Phase 15.2 context gathered
+Resume file: .planning/phases/15.2-install-output-buffering-and-live-progress-clarity-streaming/15.2-CONTEXT.md
