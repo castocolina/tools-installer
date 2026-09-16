@@ -169,10 +169,8 @@ _COLUMNS = (
 # the same thing, and _ver_cell's six dim branches map onto exactly these
 # four (the two no-readable-version branches share _VER_NO_VERSION, and the
 # two nothing-to-compare branches share _VER_NO_COMPARISON; no other pair
-# collides). These four already read as plain English on their own -- the
-# cell renders them verbatim -- so _LEGEND (below) does not re-list them
-# individually; it covers them with one terminal "other dim: self-explains" note
-# instead of restating each label (see _LEGEND's own comment).
+# collides). D-03/D-04 lock a per-state legend entry for each of these four
+# labels (plus the `~` suffix) -- _LEGEND (below) lists all four verbatim.
 _VER_CHECKING = "checking…"
 _VER_NO_VERSION = "no version"
 # Named after status.source, not a conclusion about the tool: the fallthrough
@@ -196,40 +194,37 @@ _VER_STALE = "~"
 #
 # UAT correction (2026-09-16, live user report during Phase 15.1 closure): a
 # "legend" reads as a per-color/symbol KEY, not continuous prose -- soft-wrap
-# at an arbitrary column loses group boundaries, and re-glossing four already
-# self-explanatory dim labels ("checking… still checking") wasted the row
-# budget on restating text the cell already shows verbatim. Fixed by (1)
-# explicit \n at each group boundary instead of relying on wrap, so each of
-# the three available rows is one self-contained key line (Pri / Aud+State /
-# Ver), and (2) collapsing the four spelled-out dim entries into one terminal
-# note -- a legend decodes things the reader CANNOT decode alone (colors,
-# ✓/○, P0-style codes, ~), not a cell's own literal text read back at them.
-#
-# Budget: #browser-legend is `dock: bottom` with `max-height: 3`, so every
-# legend row comes straight out of the DataTable's 1fr -- at this project's
-# tested minimum terminal size (80x20) an unwrapped-prose legend measured 7
-# rows and left the table -- the app's primary screen, listing 89 tools -- 3.
-# test_legend_keeps_the_catalog_table_usable_at_the_minimum_size asserts both
-# halves (legend fits 3 rows, table stays usable) at exactly that size.
+# at an arbitrary column loses group boundaries. Fixed with explicit \n at
+# each group boundary so each of the three available rows is one
+# self-contained key line -- but every rendered dim label still gets its own
+# spelled-out entry (D-03/D-04 lock this; a single collapsed "self-explains"
+# note was tried and rejected -- it violated the locked per-state requirement,
+# see 15.1-VERIFICATION.md's second pass). The three lines are grouped by
+# BUDGET, not strict semantics, because the Ver group's own content (all four
+# dim labels + the two colored states + the stale marker) cannot fit in a
+# single 78-column row alongside anything else: line 1 is Priorities alone;
+# line 2 is Audience/State plus the two colored Ver states (their combined
+# length fits the leftover budget); line 3 is the four dim labels plus the
+# stale marker. Each line is plain-text-measured (Rich markup stripped) to
+# stay at or under 78 columns -- the confirmed usable width of
+# #browser-legend's `dock: bottom` / `max-height: 3` box at this project's
+# tested minimum terminal size (80x20; `padding: 0 1` costs 2 columns).
+# Exceeding 78 on any line causes Rich to soft-wrap that line onto a 4th row,
+# which `max-height: 3` then silently clips -- not reflows. See the widened
+# test_legend_keeps_the_catalog_table_usable_at_the_minimum_size /
+# test_legend_widget_paints_every_marker_at_full_width for the regression
+# test that would now fail loudly if any line grows past this budget again.
 #
 # The stale marker keeps its `dim` style, matching how _ver_cell renders it.
 _LEGEND = (
     "[bold red]P0[/] essential · [bold yellow]P1[/] recommended · [blue]P2[/] nice-to-have"
     " · [dim]P3[/] niche\n"
     "[bold cyan]AI[/] / [magenta]human[/] / both"
-    "  |  [green]✓ installed[/] · [yellow]○ missing[/]\n"
-    "Ver: [green]up to date[/] · [yellow]update available[/]"
-    # "cached latest" is true of BOTH cells that render the suffix: the yellow
-    # cell shows installed -> latest, but the green cell shows only the
-    # installed version and never prints a latest at all, so the gloss names
-    # the cached latest the COMPARISON rested on, not a shown value and not
-    # the installed version (which is re-probed live every pass and is never
-    # the thing going stale) -- see 15.1-CONTEXT.md's D-04 Correction. The
-    # full sentence ("at or past STALE_AFTER, not re-confirmed this pass")
-    # belongs to the detail bar, which has a line to spend; the legend names
-    # the marker.
-    f" · [dim]{_VER_STALE}[/] cached latest"
-    " · other dim: self-explains"
+    " · [green]✓ installed[/] · [yellow]○ missing[/]"
+    " · Ver: [green]up to date[/] · [yellow]update avail[/]\n"
+    f"[dim]{_VER_CHECKING}[/] · [dim]{_VER_NO_VERSION}[/]"
+    f" · [dim]{_VER_SOURCE_UNKNOWN}[/] · [dim]{_VER_NO_COMPARISON}[/]"
+    f" · [dim]{_VER_STALE}[/] cached"
 )
 
 

@@ -1,4 +1,5 @@
 import html
+import re
 import threading
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
@@ -1418,16 +1419,20 @@ async def test_refresh_cursor_survives_both_repaints_of_one_cycle(tmp_path: Path
 
 
 def test_legend_names_every_ver_cell_marker_and_style_token() -> None:
-    # UAT correction (2026-09-16): the four already-self-explanatory dim
-    # labels (checking…/no version/(source unknown)/(no comparison)) are no
-    # longer individually re-listed in the legend -- a legend decodes things
-    # the reader cannot decode alone (colors, ✓/○, P0-codes, ~), not a
-    # cell's own literal text read back at them. Only the bare-symbol `~`
-    # marker still gets its own entry; the rest are covered by one note.
-    assert _VER_STALE in _LEGEND
-    assert "other dim" in _LEGEND
-    for marker in (_VER_CHECKING, _VER_NO_VERSION, _VER_SOURCE_UNKNOWN, _VER_NO_COMPARISON):
-        assert marker not in _LEGEND, marker
+    # D-03/D-04 (locked): every rendered Ver state -- both colored states,
+    # each of the four dim gray cases, and the `~` suffix -- has its own
+    # findable legend entry. A prior attempt (2026-09-16) collapsed the four
+    # dim labels into one generic "self-explains" note; the phase verifier
+    # flagged that as a violation of this locked requirement, so all four are
+    # spelled out verbatim again.
+    for marker in (
+        _VER_CHECKING,
+        _VER_NO_VERSION,
+        _VER_SOURCE_UNKNOWN,
+        _VER_NO_COMPARISON,
+        _VER_STALE,
+    ):
+        assert marker in _LEGEND, marker
     assert "green" in _LEGEND
     assert "yellow" in _LEGEND
     # The stale entry's gloss must be about the cached LATEST the comparison
@@ -1435,22 +1440,35 @@ def test_legend_names_every_ver_cell_marker_and_style_token() -> None:
     # green cell (shows no latest at all) and the yellow cell (D-04 as
     # corrected 2026-09-16, 15.1-CONTEXT.md). Assert this on the entry that
     # actually carries the marker, not on the whole constant: _LEGEND
-    # mentions "latest" elsewhere too, so a whole-string substring check
-    # would prove nothing.
+    # mentions "latest" elsewhere too (in "update avail"), so a whole-string
+    # substring check would prove nothing.
     entries = _LEGEND.replace("\n", "·").split("·")
     stale_entry = next(entry for entry in entries if _VER_STALE in entry)
-    assert "latest" in stale_entry
+    assert "cached" in stale_entry
 
 
 def test_legend_uses_explicit_line_breaks_per_group() -> None:
     # UAT correction (2026-09-16): soft-wrap at an arbitrary column loses
-    # group boundaries (Pri / Aud+State / Ver) -- each group must be its own
-    # explicit line so the legend reads as a key, not wrapped prose.
+    # group boundaries -- each group must be its own explicit line so the
+    # legend reads as a key, not wrapped prose. The groups are split by
+    # BUDGET, not strict semantics: the full Ver group (two colored states +
+    # four dim labels + stale marker) cannot fit one 78-column row alongside
+    # anything else, so its colored states share line 2 with Audience/State
+    # (which has the most slack) and its dim labels + stale marker form
+    # line 3 alone.
     lines = _LEGEND.split("\n")
     assert len(lines) == 3, lines
     assert "P0" in lines[0] and "P3" in lines[0]
-    assert "AI" in lines[1] and "installed" in lines[1]
-    assert lines[2].startswith("Ver:")
+    assert "AI" in lines[1] and "installed" in lines[1] and "up to date" in lines[1]
+    assert _VER_CHECKING in lines[2] and _VER_STALE in lines[2]
+    # Every line must fit #browser-legend's confirmed usable width (78
+    # columns: 80-column minimum terminal minus `padding: 0 1`) or it
+    # soft-wraps onto a row `max-height: 3` then silently clips -- not
+    # reflows. This is plain-text width (Rich markup stripped), matching
+    # what's actually painted.
+    for line in lines:
+        plain = re.sub(r"\[[^\]]*\]", "", line)
+        assert len(plain) <= 78, (len(plain), plain)
 
 
 def _painted_legend(legend: Static) -> str:
@@ -1487,10 +1505,23 @@ async def test_legend_widget_paints_every_marker_at_full_width() -> None:
     async with app.run_test(size=(100, 30)):
         legend = app.query_one("#browser-legend", Static)
         painted = _painted_legend(legend)
-        assert _VER_STALE in painted
-        assert "other dim" in painted
+        # Assert every marker AND the line-3 tail specifically: line 3 is the
+        # one that clipped in the 2026-09-16 regression (its dim labels sat
+        # after the point a too-long line 2 pushed onto a discarded 4th row),
+        # so a prefix-only check ("checking…" alone, say) would not have
+        # caught it -- only asserting the last label in reading order does.
+        markers = (
+            _VER_CHECKING,
+            _VER_NO_VERSION,
+            _VER_SOURCE_UNKNOWN,
+            _VER_NO_COMPARISON,
+            _VER_STALE,
+        )
+        for marker in markers:
+            assert marker in painted, marker
         assert "up to date" in painted
-        assert "update available" in painted
+        assert "update avail" in painted
+        assert "cached" in painted
         # The stale marker is painted DIM, the way _ver_cell renders it. It
         # used to sit in the default style while the cell it explains was
         # dim, so the legend did not look like the thing it describes --
@@ -1498,6 +1529,7 @@ async def test_legend_widget_paints_every_marker_at_full_width() -> None:
         # since they were written.
         dim = _dim_legend_text(legend)
         assert _VER_STALE in dim
+        assert _VER_NO_COMPARISON in dim
 
 
 async def test_legend_keeps_the_catalog_table_usable_at_the_minimum_size() -> None:
@@ -1521,10 +1553,23 @@ async def test_legend_keeps_the_catalog_table_usable_at_the_minimum_size() -> No
         legend = app.query_one("#browser-legend", Static)
         table = app.query_one(DataTable[Any])
         painted = _painted_legend(legend)
-        assert _VER_STALE in painted
-        assert "other dim" in painted
+        # Assert every marker at this exact clipping-prone size, including
+        # the line-3 tail -- a prefix-only check here would not have caught
+        # the 2026-09-16 regression, where line 3's content was pushed past
+        # the bottom of a `max-height: 3` box and silently dropped rather
+        # than reflowed.
+        markers = (
+            _VER_CHECKING,
+            _VER_NO_VERSION,
+            _VER_SOURCE_UNKNOWN,
+            _VER_NO_COMPARISON,
+            _VER_STALE,
+        )
+        for marker in markers:
+            assert marker in painted, marker
         assert "up to date" in painted
-        assert "update available" in painted
+        assert "update avail" in painted
+        assert "cached" in painted
         # The harm first, then the cause: the table has to stay usable, and
         # the legend's own budget is what keeps it that way.
         assert table.size.height >= 6, table.size.height
