@@ -3739,6 +3739,58 @@ async def test_install_closed_refresh_requeries_the_manager_inventory_after_a_ru
         assert service.epoch > before_epoch
 
 
+async def test_install_closed_reports_a_failed_presence_sweep_and_keeps_the_old_map(
+    tmp_path: Path,
+) -> None:
+    """ExecuteInputs.installed is an injected LIVE predicate -- by default
+    installer.status.is_installed, which touches PATH, `~` paths and
+    /Applications once per catalog tool (89 of them in production). Called
+    from a bare comprehension in a screen-result callback, one OSError (a stat
+    on a disconnected network path) propagates out and takes the message pump
+    down. .claude/architecture.md rule 3: a failed live core call is
+    surfaced, never a silent crash -- which is why the sweep goes through
+    run_live, the same seam every other live read from a screen uses.
+
+    The failure is injected after the run rather than before it so the sweep
+    is the only caller that sees it; ExecuteScreen reads the same predicate on
+    mount, and a predicate that failed there would prove nothing about this
+    callback.
+    """
+    tool = _gh_tool("codegraph", tier="system")
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    readable = {"ok": True}
+
+    def _presence(_tool: Tool) -> bool:
+        if not readable["ok"]:
+            raise OSError("stale file handle: /Volumes/nfs/bin")
+        return True
+
+    execute = ExecuteInputs(
+        catalog=[tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=_presence,
+        install=_tracking_install(lambda _t: None),
+    )
+    app = _version_app([tool], {"codegraph": True}, service, execute=execute)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        app.catalog.selected.add("codegraph")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        readable["ok"] = False
+        await pilot.press("escape")
+        await _settle_versions(app, pilot)
+        assert app.is_running is True
+        # The map the sweep could not replace is the map that is still there.
+        assert app.catalog._installed == {"codegraph": True}  # pyright: ignore[reportPrivateUsage]
+        assert "installed-state re-check failed" in app.catalog.status_text
+        assert "stale file handle" in app.catalog.status_text
+
+
 async def test_install_closed_degrades_when_the_active_view_is_not_a_catalog_tier(
     tmp_path: Path,
 ) -> None:

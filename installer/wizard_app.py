@@ -1872,11 +1872,28 @@ class UnifiedApp(App[list[str] | None]):
         # cross-tier dependency as missing -- "mmdc also needs pnpm" with pnpm
         # already installed. The tier filter narrows what is DISPLAYED and
         # never what is resolved (.claude/architecture.md).
+        #
+        # Rule 3 (.claude/architecture.md): the sweep goes through run_live
+        # like every other live core read a screen triggers. The predicate
+        # defaults to installer.status.is_installed, which touches PATH, `~`
+        # paths and /Applications once per catalog tool -- 89 of them in
+        # production -- so a failure here is an ordinary environment failure
+        # (an OSError stat'ing a disconnected network path), and an OSError
+        # out of a bare comprehension in a screen-result callback crashes the
+        # message pump rather than being surfaced. Through run_live it leaves
+        # the previous map in place and reports itself, exactly as the
+        # invalidate failure folded in below does.
+        warnings: list[str] = []
         if self._execute is not None:
             installed = self._execute.installed
-            fresh = {tool.id: installed(tool) for tool in self._catalog_tools}
-            for screen in self._catalogs.values():
-                screen.set_installed(fresh)
+            fresh, error = run_live(
+                lambda: {tool.id: installed(tool) for tool in self._catalog_tools}
+            )
+            if fresh is not None:
+                for screen in self._catalogs.values():
+                    screen.set_installed(fresh)
+            elif error is not None:
+                warnings.append(f"installed-state re-check failed: {error}")
         # A .get(), not an index: _catalogs is keyed by tier only
         # (system/user/ai) while current_view ranges over all six VIEWS
         # (doctor, uninstall and policies included). Only a catalog tier
@@ -1892,10 +1909,13 @@ class UnifiedApp(App[list[str] | None]):
         if active is None:
             return
         active.enter_view()
-        # Written after enter_view so the refresh cannot repaint over it.
+        # Both post-run failures land on one line, and both are written after
+        # enter_view so the refresh it starts cannot repaint over them.
         if self._invalidate_warning is not None:
-            active.status.set(self._invalidate_warning, "warn")
+            warnings.append(self._invalidate_warning)
             self._invalidate_warning = None
+        if warnings:
+            active.status.set(" · ".join(warnings), "warn")
 
     def on_install_run_finished(self, message: InstallRunFinished) -> None:
         # Every mutation this app performs calls invalidate
