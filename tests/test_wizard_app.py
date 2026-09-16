@@ -3478,9 +3478,7 @@ async def test_install_closed_refreshes_the_ver_cell_without_navigating_away(
         presence[installed_tool.id] = True
         probed[installed_tool.id] = "1.3.0"
 
-    service = _macos_service(
-        tmp_path, resolve_tag=lambda repo: "v1.3.0", probe_output=probe_output
-    )
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.3.0", probe_output=probe_output)
     execute = ExecuteInputs(
         catalog=[tool],
         platform=_install_closed_platform(),
@@ -3594,9 +3592,7 @@ async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreada
     def on_install(installed_tool: Tool) -> None:
         presence[installed_tool.id] = True
 
-    service = _macos_service(
-        tmp_path, resolve_tag=lambda repo: "v1.0.0", probe_output=probe_output
-    )
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0", probe_output=probe_output)
     execute = ExecuteInputs(
         catalog=[tool_a, tool_b],
         platform=_install_closed_platform(),
