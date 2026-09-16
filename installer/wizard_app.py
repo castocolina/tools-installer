@@ -12,7 +12,6 @@ be switched out. Navigation is therefore a stack with the base view at the
 bottom: the stack is always `[base]` or `[base, <one other view>]`.
 """
 
-import contextlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -1573,6 +1572,11 @@ class UnifiedApp(App[list[str] | None]):
         self.install_summary: Summary | None = None
         self._version_refresh = version_refresh
         self._updates = updates
+        # Set by on_install_run_finished when the post-run cache invalidation
+        # fails, consumed (and cleared) by the _install_closed that follows:
+        # the execute screen is still on top when the failure happens, so
+        # there is no catalog status line to write to yet.
+        self._invalidate_warning: str | None = None
         # The WHOLE catalog, not a tier slice. `_install_closed` re-derives the
         # installed map from this list because the map is resolved against the
         # full catalog by deps.missing_requires / selection.unstaged_recommends,
@@ -1873,7 +1877,12 @@ class UnifiedApp(App[list[str] | None]):
             fresh = {tool.id: installed(tool) for tool in self._catalog_tools}
             for screen in self._catalogs.values():
                 screen.set_installed(fresh)
-        self._catalogs[self.current_view].enter_view()
+        active = self._catalogs[self.current_view]
+        active.enter_view()
+        # Written after enter_view so the refresh cannot repaint over it.
+        if self._invalidate_warning is not None:
+            active.status.set(self._invalidate_warning, "warn")
+            self._invalidate_warning = None
 
     def on_install_run_finished(self, message: InstallRunFinished) -> None:
         # Every mutation this app performs calls invalidate
@@ -1881,18 +1890,28 @@ class UnifiedApp(App[list[str] | None]):
         # path was the one mutation that skipped it, so a tool the run just
         # handed to brew/cask/pnpm/uv was resolved against a manager
         # inventory read BEFORE the run for up to MANAGER_STALE_AFTER (6h).
-        # Mirrors UpdateService's own call (installer/update.py:436-443): a
+        # Mirrors UpdateService's own call (installer/update.py:436-443) in
+        # BOTH directions, which is the whole point of the try/except: a
         # cache-write failure is a post-mutation side effect and must never
-        # flip an already-recorded run into a reported failure, so it is
-        # isolated in its own try/except here, structurally separate from
-        # the summary-merge below.
+        # flip an already-recorded run into a reported failure, AND it is
+        # never swallowed. UpdateService folds the failure into
+        # outcome.detail; this folds it into the status line the next
+        # _install_closed writes, because a silently discarded invalidate
+        # means the manager-snapshot staleness this call exists to close
+        # comes back for up to MANAGER_STALE_AFTER with nothing on screen.
+        # It is also the only thing standing between a future signature
+        # change to invalidate() and a feature that quietly stops working.
+        #
+        # The message is held rather than shown here: ExecuteScreen is still
+        # on top at this point (InstallRunFinished is posted from
+        # _execute_worker's finally, before the user closes the screen), so
+        # the first moment a catalog status line is visible again is the
+        # close callback.
         if self._version_refresh is not None:
-            # BLE001 (bare Exception): deliberate -- a cache-write failure
-            # here is a post-mutation side effect and must never flip an
-            # already-recorded run into a reported failure (installer/
-            # update.py:436-443 does the same for UpdateService).
-            with contextlib.suppress(Exception):
+            try:
                 self._version_refresh.invalidate(reason="install run finished")
+            except Exception as exc:  # noqa: BLE001 -- post-mutation side effect, reported below
+                self._invalidate_warning = f"version cache invalidation failed: {exc}"
         incoming = message.summary
         existing = self.install_summary
         if existing is None:

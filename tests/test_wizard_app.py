@@ -3739,6 +3739,59 @@ async def test_install_closed_refresh_requeries_the_manager_inventory_after_a_ru
         assert service.epoch > before_epoch
 
 
+async def test_a_failed_post_run_cache_invalidation_is_reported_not_swallowed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A discarded invalidate silently reinstates exactly the staleness the
+    call exists to close -- every manager-owned tool resolved against the
+    pre-run inventory for up to MANAGER_STALE_AFTER (6h), with nothing on
+    screen and nothing in any log -- and hides a future signature change to
+    invalidate() on top of it.
+
+    UpdateService's own call (installer/update.py:436-443) is the precedent in
+    both directions: the failure never downgrades an already-recorded
+    mutation, and it is never swallowed either (it folds into outcome.detail).
+    Here it folds into the catalog's status line, which is the first surface
+    visible again -- InstallRunFinished arrives while ExecuteScreen is still
+    on top.
+    """
+    tool = _gh_tool("codegraph", tier="system")
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+
+    def _refuse(*, reason: str) -> int:
+        raise RuntimeError(f"cache write refused ({reason})")
+
+    monkeypatch.setattr(service, "invalidate", _refuse)
+    execute = ExecuteInputs(
+        catalog=[tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda _t: True,
+        install=_tracking_install(lambda _t: None),
+    )
+    app = _version_app([tool], {"codegraph": True}, service, execute=execute)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        app.catalog.selected.add("codegraph")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        await pilot.press("escape")
+        await _settle_versions(app, pilot)
+        # Non-fatal: the app is still running, and the summary merge that
+        # follows the invalidate call in the same handler still ran, so the
+        # run is still recorded...
+        assert app.is_running is True
+        assert app.install_summary is not None
+        # ...but the user is told, rather than left with a silently stale
+        # snapshot. The cause travels with the message, not just the symptom.
+        assert "version cache invalidation failed" in app.catalog.status_text
+        assert "cache write refused" in app.catalog.status_text
+
+
 async def test_install_closed_keeps_cross_tier_ids_in_every_installed_map(
     tmp_path: Path,
 ) -> None:
