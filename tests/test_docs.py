@@ -91,3 +91,42 @@ def test_architecture_records_phase_14_mechanisms() -> None:
     text = ARCHITECTURE.read_text(encoding="utf-8")
     for phrase in _PHASE_14_REQUIRED:
         assert phrase in text, f"missing load-bearing phrase: {phrase}"
+
+
+_PHASE_15_2_REQUIRED = (
+    "PYTHONUNBUFFERED",
+    "stdbuf -oL",
+    "LD_PRELOAD",
+    "retried unwrapped",
+    "unwrapped argv",
+    "waiting for output",
+    "silence generation",
+    "per in-flight tool",
+)
+
+
+def test_architecture_records_phase_15_2_mechanisms() -> None:
+    """The comment is the mechanism; the test keeps it from rotting away unnoticed.
+
+    Each substring anchors a paragraph whose deletion would lose a finding
+    Phase 15.2's two cross-AI review cycles produced. PYTHONUNBUFFERED: the
+    one rung that needs no availability check, because it is Python-specific
+    and a no-op elsewhere. stdbuf -oL: opt-in, resolved once, silently
+    skipped when absent, and carries no manager name -- the rung exists for
+    pnpm/SDKMAN, never a branch inside it. LD_PRELOAD: why stdbuf reaches a
+    curl | sh installer's own grandchildren and is a harmless no-op across
+    sudo's setuid boundary. retried unwrapped / unwrapped argv: a launch that
+    fails on the wrapped argv is retried unwrapped exactly once, safe only
+    because Popen raised before the target command started, and CommandError
+    always reports the unwrapped argv a user can paste back. waiting for
+    output: the UI-side indicator, produced by ExecuteScreen's self-re-arming
+    one-shot timer, that claims only liveness and waiting -- never that the
+    child is healthy. silence generation: the token every transient carries,
+    without which a stale reassurance could be rendered after the output it
+    was waiting for. per in-flight tool: the indicator is cleared by THE
+    tool that finished, matched by id, and established only by the first
+    non-transient log line for that tool -- never a global flag.
+    """
+    text = ARCHITECTURE.read_text(encoding="utf-8")
+    for phrase in _PHASE_15_2_REQUIRED:
+        assert phrase in text, f"missing load-bearing phrase: {phrase}"

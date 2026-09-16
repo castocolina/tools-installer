@@ -727,4 +727,64 @@ so those sites stay valid; `run_wizard` and `ExecuteScreen` each wrap
 at the call into `run_installs`. Unattended (`--yes`) means no
 callback on both entry points, which the dispatcher treats as skip.
 
+## Phase 15.2: forcing child output and the silence indicator
+
+`PYTHONUNBUFFERED` is set on every streamed child unconditionally and
+merged over `os.environ`, because it is Python-specific, safe, and a
+no-op elsewhere — it is the one rung that needs no availability check.
+
+`stdbuf -oL` is opt-in through `StreamingRunner`'s `unbuffer` knob,
+resolved once per runner and skipped silently when the binary is
+absent, and it is skipped for a Python child because the env var
+already covers that case. It carries no manager name: `pnpm` and
+SDKMAN are the reason the rung exists, never a branch inside it —
+Phase 6's registry-authoring guideline applied to a runner.
+
+`LD_PRELOAD` is how `stdbuf` works, which is why the effect reaches a
+`curl | sh` installer's own grandchildren, and also why it is a
+harmless no-op across `sudo`'s setuid boundary. That is stated rather
+than special-cased.
+
+A launch that fails on the wrapped argv is `retried unwrapped`, once.
+Resolving `stdbuf` in the constructor opens a window in which it can
+vanish before a later command launches, and an unavailable forcing
+mechanism must never fail an install. The retry is safe only because
+`Popen` raised before the target command started — say that, so
+nobody generalises it to the non-zero-exit path and re-runs a
+side-effecting installer.
+
+`CommandError` reports the `unwrapped argv`. A user must be able to
+paste back the command a failure names, so the wrapped list exists
+only as the value handed to `Popen`.
+
+The `waiting for output` indicator is UI-side only, produced by
+`ExecuteScreen`'s one-shot check at `SILENCE_SECONDS` and posted as a
+transient `InstallLogLine`. The timer re-arms itself for the exact
+remaining distance when a line arrived after it was armed, so it
+fires at the threshold rather than at a poll boundary, and it costs
+one pending timer rather than one per log line. `StreamingRunner`'s
+bounded `tail` is fed only by lines read from the child's stdout, so
+a failure report can never repeat it — that separation is the
+mechanism, not a filter. The copy claims only liveness and waiting,
+never that the child is healthy: from the parent, buffering and a
+hang look identical.
+
+Every transient carries the `silence generation` it was minted
+under, and the handler drops it unless that generation, the in-flight
+tool, the prompt state and the finished flag all still agree. The
+indicator is posted asynchronously into the same queue the worker
+posts real lines to, so without that token a stale reassurance could
+be rendered after the output it was waiting for.
+
+The indicator is `per in-flight tool` and never global: it is cleared
+when THAT tool — the one in flight, matched by id, not merely any
+tool — reports a terminal status, and suppressed while a prompt modal
+holds the run, because a pause the status line already explains does
+not need a second explanation. The in-flight tool is established by
+the first non-transient log line for that tool — `-- trying {method}
+--` for an install, and the `-- updating --` marker `_run_updates`
+posts for an update, which exists precisely because updates run
+through `run_captured` and would otherwise spend their whole lifetime
+with no in-flight tool and a blank log.
+
 
