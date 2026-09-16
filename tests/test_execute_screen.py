@@ -5,6 +5,7 @@ screen: a fake `install` that emits through the injected runner, never a real
 package manager or shell rc file.
 """
 
+import sys
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -21,12 +22,15 @@ from textual.widgets import Label, ListItem, ListView, Static
 
 from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
+from installer.enums import InstallStatus
 from installer.execute_screen import (
     SILENCE_SECONDS,
     ChecksumMismatchScreen,
     ExecuteInputs,
     ExecuteScreen,
     InstallLogLine,
+    InstallRunFinished,
+    InstallToolFinished,
     sanitize_log_line,
 )
 from installer.manager_versions import OutdatedReport
@@ -35,7 +39,7 @@ from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCan
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError, Runner, StreamingRunner
-from installer.session import SensitiveInstall
+from installer.session import SensitiveInstall, summarize
 from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import VersionRefreshService, VersionStatus
@@ -2735,3 +2739,607 @@ async def test_stale_generation_transient_is_dropped_without_writing_anything() 
         assert "waiting for output" not in _log_text(screen)
         release.set()
         await _settle_execute(screen, pilot)
+
+
+def _two_stage_blocking_install(
+    started1: threading.Event,
+    release1: threading.Event,
+    started2: threading.Event,
+    release2: threading.Event,
+) -> SensitiveInstall:
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        _emit_through_runner(runner, tool.id, (f"{tool.id} line 1",))
+        started1.set()
+        assert release1.wait(timeout=5)
+        _emit_through_runner(runner, tool.id, (f"{tool.id} line 2",))
+        started2.set()
+        assert release2.wait(timeout=5)
+        return InstallOutcome(tool.id, "installed")
+
+    return install
+
+
+async def test_second_indicator_appears_after_real_output_and_a_second_gap() -> None:
+    clock = _FakeClock()
+    started1 = threading.Event()
+    release1 = threading.Event()
+    started2 = threading.Event()
+    release2 = threading.Event()
+    inputs = _inputs(
+        install=_two_stage_blocking_install(started1, release1, started2, release2), now=clock
+    )
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started1.is_set():
+                break
+            await pilot.pause()
+        for _ in range(400):
+            if "rg line 1" in _log_text(screen):
+                break
+            await pilot.pause()
+
+        clock.value += SILENCE_SECONDS
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        assert _log_text(screen).count("still running; waiting for output") == 1
+
+        release1.set()
+        for _ in range(400):
+            if started2.is_set():
+                break
+            await pilot.pause()
+        for _ in range(400):
+            if "rg line 2" in _log_text(screen):
+                break
+            await pilot.pause()
+
+        clock.value += SILENCE_SECONDS
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        assert _log_text(screen).count("still running; waiting for output") == 2
+
+        release2.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_indicator_occurs_exactly_once_across_three_checks_in_one_gap() -> None:
+    clock = _FakeClock()
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(install=_blocking_install_emitting_one_line(started, release), now=clock)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _start_and_wait_for_first_line(screen, pilot, started)
+        clock.value += SILENCE_SECONDS
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        clock.value += 1.0
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        clock.value += 1.0
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        assert _log_text(screen).count("still running; waiting for output") == 1
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_transient_line_does_not_reset_last_output_at_or_in_flight() -> None:
+    clock = _FakeClock()
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(install=_blocking_install_emitting_one_line(started, release), now=clock)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _start_and_wait_for_first_line(screen, pilot, started)
+        clock.value += SILENCE_SECONDS
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        assert screen._in_flight == "rg"  # pyright: ignore[reportPrivateUsage]
+        assert screen._last_output_at == 0.0  # pyright: ignore[reportPrivateUsage]
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+def _install_first_immediate_second_blocks(
+    started: threading.Event, release: threading.Event
+) -> SensitiveInstall:
+    """rg finishes at once; fd emits one line then blocks until released."""
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        if tool.id == "rg":
+            return InstallOutcome(tool.id, "installed")
+        _emit_through_runner(runner, tool.id, (f"{tool.id} line 1",))
+        started.set()
+        assert release.wait(timeout=5)
+        return InstallOutcome(tool.id, "installed")
+
+    return install
+
+
+async def test_indicator_names_the_second_tool_when_the_first_has_finished() -> None:
+    clock = _FakeClock()
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(install=_install_first_immediate_second_blocks(started, release), now=clock)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        for _ in range(400):
+            if "fd line 1" in _log_text(screen):
+                break
+            await pilot.pause()
+        assert screen._in_flight == "fd"  # pyright: ignore[reportPrivateUsage]
+        clock.value += SILENCE_SECONDS
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        last_line = _log_text(screen).splitlines()[-1]
+        assert "fd" in last_line
+        assert "rg" not in last_line
+        assert "still running; waiting for output" in last_line
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_stale_terminal_message_for_another_tool_does_not_clear_in_flight() -> None:
+    """Regression: a terminal message for a FINISHED tool must not suppress a
+    DIFFERENT, still in-flight and silent tool's indicator (review round 2)."""
+    clock = _FakeClock()
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(install=_install_first_immediate_second_blocks(started, release), now=clock)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        for _ in range(400):
+            if "fd line 1" in _log_text(screen):
+                break
+            await pilot.pause()
+        assert screen._in_flight == "fd"  # pyright: ignore[reportPrivateUsage]
+
+        # A stale/delayed terminal message for rg -- already finished --
+        # must not clear fd's silence window.
+        screen.on_install_tool_finished(InstallToolFinished("rg", InstallStatus.INSTALLED))
+        await pilot.pause()
+        assert screen._in_flight == "fd"  # pyright: ignore[reportPrivateUsage]
+
+        clock.value += SILENCE_SECONDS
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        last_line = _log_text(screen).splitlines()[-1]
+        assert "fd" in last_line
+        assert "still running; waiting for output" in last_line
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+def _captured_transient(screen: ExecuteScreen, tool_id: str) -> InstallLogLine:
+    """The transient the check would post right now, without posting it.
+
+    Reaches the state where the indicator WOULD be written (in flight, not
+    finished, no prompt open) by latching `_silence_noted` directly, then
+    returns the identical message `_check_output_silence` would construct at
+    the current generation -- the deterministic substitute for racing the
+    real timer against a real invalidation.
+    """
+    screen._silence_noted = True  # pyright: ignore[reportPrivateUsage]
+    return InstallLogLine(
+        tool_id,
+        "-- still running; waiting for output --",
+        transient=True,
+        generation=screen._silence_generation,  # pyright: ignore[reportPrivateUsage]
+    )
+
+
+async def test_stale_transient_beaten_by_a_real_line_is_dropped() -> None:
+    clock = _FakeClock()
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(install=_blocking_install_emitting_one_line(started, release), now=clock)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _start_and_wait_for_first_line(screen, pilot, started)
+        captured = _captured_transient(screen, "rg")
+        screen.on_install_log_line(InstallLogLine("rg", "rg line 2"))
+        await pilot.pause()
+        before = _log_text(screen)
+        assert "rg line 2" in before
+        screen.on_install_log_line(captured)
+        await pilot.pause()
+        assert _log_text(screen) == before
+        assert "waiting for output" not in _log_text(screen)
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_stale_transient_beaten_by_install_tool_finished_is_dropped() -> None:
+    clock = _FakeClock()
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(install=_blocking_install_emitting_one_line(started, release), now=clock)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _start_and_wait_for_first_line(screen, pilot, started)
+        captured = _captured_transient(screen, "rg")
+        screen.on_install_tool_finished(InstallToolFinished("rg", InstallStatus.INSTALLED))
+        await pilot.pause()
+        screen.on_install_log_line(captured)
+        await pilot.pause()
+        assert "waiting for output" not in _log_text(screen)
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_stale_transient_beaten_by_run_finished_is_dropped() -> None:
+    clock = _FakeClock()
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(install=_blocking_install_emitting_one_line(started, release), now=clock)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _start_and_wait_for_first_line(screen, pilot, started)
+        captured = _captured_transient(screen, "rg")
+        screen.on_install_run_finished(InstallRunFinished(summarize([]), [], [], "", "", None))
+        await pilot.pause()
+        screen.on_install_log_line(captured)
+        await pilot.pause()
+        assert "waiting for output" not in _log_text(screen)
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_run_finished_stops_and_drops_the_silence_timer() -> None:
+    inputs = _inputs()
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert screen.finished is True
+        assert screen._silence_timer is None  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_silence_suppressed_while_prompt_open_and_restarts_after_close() -> None:
+    clock = _FakeClock()
+    seen: list[str] = []
+    started = threading.Event()
+    release = threading.Event()
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        seen.append(tool.id)
+        if len(seen) == 1:
+            return InstallOutcome(
+                tool.id,
+                "checksum-mismatch",
+                method_kind="github_release",
+                errors=(RuntimeError("checksum mismatch"),),
+            )
+        _emit_through_runner(runner, tool.id, (f"{tool.id} line 1",))
+        started.set()
+        assert release.wait(timeout=5)
+        return InstallOutcome(tool.id, "installed", method_kind="github_release")
+
+    inputs = _inputs(install=install, now=clock)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_until_mismatch(app, pilot)
+        assert screen._waiting_prompt == "rg"  # pyright: ignore[reportPrivateUsage]
+        clock.value += 5.0
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        assert "waiting for output" not in _log_text(screen)
+
+        await pilot.press("enter")  # retry
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        for _ in range(400):
+            if "rg line 1" in _log_text(screen):
+                break
+            await pilot.pause()
+        assert screen._waiting_prompt is None  # pyright: ignore[reportPrivateUsage]
+
+        # The window restarted at close, not on the stale pre-prompt timestamp.
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        assert "waiting for output" not in _log_text(screen)
+
+        clock.value += SILENCE_SECONDS
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        assert "waiting for output" in _log_text(screen)
+
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_silent_update_establishes_in_flight_tool_via_marker(tmp_path: Path) -> None:
+    clock = _FakeClock()
+    started = threading.Event()
+    release = threading.Event()
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+
+    class _BlockingUpdateService(_RecordingUpdateService):
+        def run(self, target: UpdateTarget) -> UpdateOutcome:
+            started.set()
+            assert release.wait(timeout=5)
+            return super().run(target)
+
+    updates = _BlockingUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda _tool: True,
+        version_refresh=refresh,
+        updates=updates,
+        now=clock,
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        await pilot.pause()
+        assert "-- updating --" in _log_text(screen)
+
+        clock.value += SILENCE_SECONDS
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        last_line = _log_text(screen).splitlines()[-1]
+        assert "rg" in last_line
+        assert "still running; waiting for output" in last_line
+
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_install_emitting_nothing_never_shows_an_indicator() -> None:
+    clock = _FakeClock()
+    started = threading.Event()
+    release = threading.Event()
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        started.set()
+        assert release.wait(timeout=5)
+        return InstallOutcome(tool.id, "installed")
+
+    inputs = _inputs(install=install, now=clock)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        clock.value += 5.0
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        assert "waiting for output" not in _log_text(screen)
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_install_driven_through_method_started_shows_the_indicator() -> None:
+    clock = _FakeClock()
+    started = threading.Event()
+    release = threading.Event()
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        method_started = getattr(runner, "method_started", None)
+        assert callable(method_started)
+        method_started("brew")
+        started.set()
+        assert release.wait(timeout=5)
+        return InstallOutcome(tool.id, "installed")
+
+    inputs = _inputs(install=install, now=clock)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        await pilot.pause()
+        assert "-- trying brew --" in _log_text(screen)
+
+        clock.value += SILENCE_SECONDS
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        last_line = _log_text(screen).splitlines()[-1]
+        assert "rg" in last_line
+        assert "still running; waiting for output" in last_line
+
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_failed_install_with_real_runner_shows_child_tail_and_indicator_once() -> None:
+    """Never-persisted, proved against a REAL StreamingRunner failure.
+
+    The install closure drives the runner it was HANDED (the worker's own,
+    already attributed by attributed_install) rather than a separately
+    constructed StreamingRunner -- a fresh one would raise RuntimeError from
+    _current() on its very first emitted line (installer/run.py:125-131,
+    159-162), before the child's non-zero exit is ever reached.
+    """
+    clock = _FakeClock()
+    started = threading.Event()
+    release = threading.Event()
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        try:
+            # The printed text is built from concatenated fragments so the
+            # cmd argv itself never contains "boom one"/"boom two" as a
+            # contiguous substring -- CommandError's message embeds the argv
+            # verbatim, and a literal substring there would double-count
+            # against the assertions below, which are about the CHILD's
+            # stdout reaching the log and the report, not about its argv.
+            script = "print('bo'+'om one'); print('bo'+'om two'); raise SystemExit(3)"
+            runner([sys.executable, "-c", script])
+        except CommandError as exc:
+            started.set()
+            assert release.wait(timeout=5)
+            return InstallOutcome(tool.id, "failed", errors=(exc,))
+        raise AssertionError("expected the child to fail")
+
+    inputs = _inputs(install=install, now=clock)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        for _ in range(400):
+            if "boom two" in _log_text(screen):
+                break
+            await pilot.pause()
+        assert "boom one" in _log_text(screen)
+        assert "boom two" in _log_text(screen)
+
+        clock.value += SILENCE_SECONDS
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+
+        release.set()
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        assert log.count("boom one") == 2  # once live, once in the report tail
+        assert log.count("boom two") == 2
+        assert log.count("still running; waiting for output") == 1

@@ -78,6 +78,7 @@ _CANCEL_ARMED = "The current tool will finish and nothing further will start."
 _CANCEL_IDLE = "No install is running."
 SILENCE_SECONDS = 2.0
 _WAITING_OUTPUT = "-- still running; waiting for output --"
+_UPDATE_STARTED = "-- updating --"
 _NO_MANAGER_CLAIMED = "no manager claimed this tool"
 _DONE_STATUSES = frozenset({InstallStatus.INSTALLED, InstallStatus.ALREADY_INSTALLED})
 ProgressState = Literal["pending", "done", "not-done", "skipped"]
@@ -608,6 +609,12 @@ class ExecuteScreen(ModalScreen[None]):
                 continue
             try:
                 target = UpdateTarget(tool=tool, ownership=ownership)
+                # A silent update run through run_captured (setup.py) never
+                # streams a line, so without this the live log gets nothing
+                # at all between begin and UpdateToolFinished -- no in-flight
+                # tool, no starting timestamp, and therefore no possible
+                # silence indicator however long the update takes.
+                self.post_message(InstallLogLine(tool.id, _UPDATE_STARTED))
                 result, fail = run_live(partial(updates.run, target))
                 if result is None:
                     errors.append((tool.id, fail or "update did not complete"))
@@ -745,27 +752,46 @@ class ExecuteScreen(ModalScreen[None]):
             self._note_output(message.tool_id)
 
     def on_install_tool_finished(self, message: InstallToolFinished) -> None:
+        # Defensive, not a fix for an observed failure: today's worker posts
+        # terminal messages strictly in sequence (on_outcome fires as each
+        # install returns). But a terminal message for some OTHER tool must
+        # never clear the ACTUAL in-flight tool's silence window -- that
+        # failure mode is invisible in exactly the way this phase exists to
+        # prevent. When _in_flight is None there is nothing to clear, so
+        # skipping is correct rather than merely harmless.
+        if message.tool_id == self._in_flight:
+            self._clear_in_flight()
         self._progress[message.tool_id] = "done" if message.status in _DONE_STATUSES else "not-done"
         self._refresh_progress()
 
     def on_update_tool_finished(self, message: UpdateToolFinished) -> None:
+        if message.tool_id == self._in_flight:
+            self._clear_in_flight()
         self._progress[message.tool_id] = message.state
         self._refresh_progress()
 
     def on_prompt_open(self, message: PromptOpen) -> None:
         if message.waiting:
             self._waiting_prompt = message.tool_id
+            self._silence_generation += 1
             self.status.set(
                 f"Run paused on a question for {message.tool_id}; answer the prompt to continue.",
                 "warn",
             )
             return
         self._waiting_prompt = None
+        self._last_output_at = self._inputs.now()
+        self._silence_noted = False
+        self._silence_generation += 1
         if self.started and not self.finished and not self.cancel_event.is_set():
             self.status.set(_CANCEL_AVAILABLE, "ok")
 
     def on_install_run_finished(self, message: InstallRunFinished) -> None:
         self.finished = True
+        if self._silence_timer is not None:
+            self._silence_timer.stop()
+            self._silence_timer = None
+        self._clear_in_flight()
         self.summary = message.summary
         self.not_attempted = list(message.not_attempted)
         for outcome in message.outcomes:
