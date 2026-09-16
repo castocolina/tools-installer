@@ -374,7 +374,24 @@ def test_streaming_runner_env_rung_is_unconditional_even_with_unbuffer_false(
     # The PYTHONUNBUFFERED env rung is unconditional: a runner built with
     # the default unbuffer=False still launches its child with
     # PYTHONUNBUFFERED set to "1", and PATH/HOME survive.
-    # Verify env vars are passed to the child using real execution
+    #
+    # Asserted on the `env` mapping subprocess.Popen RECEIVED, not only on what
+    # the child reports. Reading it back out of the child cannot tell an env
+    # production set from one this process already exported, so on a host or CI
+    # job with PYTHONUNBUFFERED=1 already in the environment the child-output
+    # assertion passes whether or not installer/run.py sets anything. Deleting
+    # the variable first removes the ambiguity for the child-side half too.
+    monkeypatch.delenv("PYTHONUNBUFFERED", raising=False)
+
+    recorded_env: list[Mapping[str, str]] = []
+    original_popen = subprocess.Popen
+
+    def recording_popen(argv: list[str], **kwargs: Unpack[_PopenKwargs]) -> subprocess.Popen[str]:
+        recorded_env.append(kwargs["env"])
+        return original_popen(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", recording_popen)
+
     script = (
         "import os; "
         "print(os.environ.get('PYTHONUNBUFFERED')); "
@@ -386,6 +403,12 @@ def test_streaming_runner_env_rung_is_unconditional_even_with_unbuffer_false(
     runner = StreamingRunner(lambda tool_id, line: seen.append((tool_id, line)))
     runner.set_tool("test")
     runner([sys.executable, "-c", script])
+
+    assert len(recorded_env) == 1
+    env = recorded_env[0]
+    assert env["PYTHONUNBUFFERED"] == "1", "the env rung did not reach Popen"
+    assert env["PATH"], "env replaced os.environ instead of overriding it"
+    assert env["HOME"], "env replaced os.environ instead of overriding it"
 
     lines = [line for _tool, line in seen]
     assert lines[0] == "1", f"PYTHONUNBUFFERED not set: {lines[0]}"
@@ -441,9 +464,7 @@ def test_streaming_runner_unwrapped_retry_on_popen_oserror(
     assert popen_attempts[1][0] == "sh"
 
 
-def test_streaming_runner_knob_off_never_calls_which(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_streaming_runner_knob_off_never_calls_which() -> None:
     # Not wrapped when the knob is off: which is never called.
     which_calls: list[str] = []
 
@@ -459,9 +480,7 @@ def test_streaming_runner_knob_off_never_calls_which(
     assert which_calls == []
 
 
-def test_streaming_runner_which_called_exactly_once_across_multiple_calls(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_streaming_runner_which_called_exactly_once_across_multiple_calls() -> None:
     # Resolved once: which is called once in constructor, not per __call__.
     which_calls: list[str] = []
 
