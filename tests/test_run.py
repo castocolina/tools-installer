@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 from collections.abc import Mapping
+from typing import TypedDict, Unpack
 
 import pytest
 
@@ -19,6 +20,25 @@ from installer.run import (
     run_query,
     unbuffered_argv,
 )
+
+
+class _PopenKwargs(TypedDict):
+    """The exact keyword set `StreamingRunner.__call__` hands `subprocess.Popen`.
+
+    Naming it lets every `Popen` double below declare its `**kwargs` precisely
+    and forward them to the real class, instead of the untyped `**kwargs` that
+    a bare `# type: ignore` used to paper over -- the hidden typing gap
+    `.claude/python-tooling.md` names in its own "Avoid" example. Every field is
+    required because production passes all six on every launch, so a double
+    that drops one stops compiling rather than silently diverging.
+    """
+
+    stdin: int
+    stdout: int
+    stderr: int
+    text: bool
+    bufsize: int
+    env: Mapping[str, str]
 
 
 def test_run_command_success(monkeypatch: pytest.MonkeyPatch):
@@ -93,8 +113,17 @@ def test_run_output_unbounded_by_default(monkeypatch: pytest.MonkeyPatch) -> Non
     # legitimately takes minutes; killing it half-way is worse than waiting.
     seen: dict[str, object] = {}
 
-    def fake_run(cmd: list[str], **kwargs: object):  # type: ignore
-        seen.update(kwargs)
+    def fake_run(
+        cmd: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        timeout: float | None,
+    ) -> subprocess.CompletedProcess[str]:
+        seen.update(
+            {"check": check, "capture_output": capture_output, "text": text, "timeout": timeout}
+        )
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -213,7 +242,7 @@ def test_streaming_runner_nonzero_exit_raises_command_error_after_emitting() -> 
 
 
 def test_streaming_runner_missing_binary_is_127(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_popen(*_args: object, **_kwargs: object) -> subprocess.Popen[str]:  # type: ignore
+    def fake_popen(_argv: list[str], **_kwargs: Unpack[_PopenKwargs]) -> subprocess.Popen[str]:
         raise FileNotFoundError("nope")
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
@@ -389,15 +418,15 @@ def test_streaming_runner_unwrapped_retry_on_popen_oserror(
     popen_attempts: list[list[str]] = []
     original_popen = subprocess.Popen
 
-    def tracking_popen(argv: list[str], **kwargs):  # type: ignore
+    def tracking_popen(argv: list[str], **kwargs: Unpack[_PopenKwargs]) -> subprocess.Popen[str]:
         popen_attempts.append(argv)
         # Raise for stdbuf argv, succeed for unwrapped
         if argv[0] == "/usr/bin/stdbuf":
             raise FileNotFoundError("stdbuf disappeared")
         # For the unwrapped retry
-        return original_popen(argv, **kwargs)  # type: ignore
+        return original_popen(argv, **kwargs)
 
-    monkeypatch.setattr(subprocess, "Popen", tracking_popen)  # type: ignore
+    monkeypatch.setattr(subprocess, "Popen", tracking_popen)
 
     runner = StreamingRunner(
         lambda _tool, _line: None, unbuffer=True, which=lambda _: "/usr/bin/stdbuf"
@@ -459,11 +488,12 @@ def test_streaming_runner_caller_argv_in_error_when_wrapped_command_fails(
     # reports the caller's argv, not the stdbuf-wrapped argv.
     original_popen = subprocess.Popen
 
-    def fake_popen(argv: list[str], **kwargs):  # type: ignore
+    def fake_popen(argv: list[str], **kwargs: Unpack[_PopenKwargs]) -> subprocess.Popen[str]:
+        del argv
         # Child exits 3
-        return original_popen([sys.executable, "-c", "import sys; sys.exit(3)"], **kwargs)  # type: ignore
+        return original_popen([sys.executable, "-c", "import sys; sys.exit(3)"], **kwargs)
 
-    monkeypatch.setattr(subprocess, "Popen", fake_popen)  # type: ignore
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
     runner = StreamingRunner(
         lambda _tool, _line: None, unbuffer=True, which=lambda _: "/usr/bin/stdbuf"

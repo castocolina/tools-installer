@@ -5,6 +5,7 @@ screen: a fake `install` that emits through the injected runner, never a real
 package manager or shell rc file.
 """
 
+import shutil
 import sys
 import threading
 import time
@@ -20,6 +21,7 @@ from textual.pilot import Pilot
 from textual.screen import ModalScreen
 from textual.widgets import Label, ListItem, ListView, Static
 
+import installer.execute_screen
 from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus
@@ -2526,39 +2528,42 @@ async def test_update_section_is_silent_when_no_outdated_updates_were_queued(
         assert captured == ["fd"]
 
 
-async def test_streaming_runner_in_execute_worker_opts_in_to_unbuffer() -> None:
+async def test_streaming_runner_in_execute_worker_opts_in_to_unbuffer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # The one live streaming call site (ExecuteScreen._execute_worker) constructs
     # its StreamingRunner with unbuffer=True, verified by monkeypatching the
-    # factory and recording the keyword.
+    # factory and recording the keyword. The factory mirrors StreamingRunner's
+    # real signature rather than taking an untyped **kwargs, so the recorded
+    # keyword is type-checked against the constructor it stands in for.
     captured_kwargs: list[dict[str, object]] = []
     original_streaming_runner = StreamingRunner
 
-    def recording_factory(emit: object, **kwargs: object) -> StreamingRunner:
-        captured_kwargs.append(kwargs)
-        return original_streaming_runner(emit, **kwargs)  # type: ignore
+    def recording_factory(
+        emit: Callable[[str, str], None],
+        *,
+        unbuffer: bool = False,
+        which: Callable[[str], str | None] = shutil.which,
+    ) -> StreamingRunner:
+        captured_kwargs.append({"unbuffer": unbuffer, "which": which})
+        return original_streaming_runner(emit, unbuffer=unbuffer, which=which)
 
-    import installer.execute_screen
+    monkeypatch.setattr(installer.execute_screen, "StreamingRunner", recording_factory)
 
-    original_import = installer.execute_screen.StreamingRunner
-    installer.execute_screen.StreamingRunner = recording_factory  # type: ignore
+    captured: list[str] = []
+    inputs = _inputs(install=_install_with_output(captured))
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
 
-    try:
-        captured: list[str] = []
-        inputs = _inputs(install=_install_with_output(captured))
-        app = _host(inputs)
-        async with app.run_test(size=(100, 30)) as pilot:
-            app.push_screen(ExecuteScreen(["rg"], inputs))
-            await pilot.pause()
-            screen = app.screen
-            assert isinstance(screen, ExecuteScreen)
-            await pilot.press("enter")
-            await _settle_execute(screen, pilot)
-
-        assert captured_kwargs, "StreamingRunner factory was never called"
-        kwargs = captured_kwargs[0]
-        assert kwargs.get("unbuffer") is True, f"unbuffer not True: {kwargs}"
-    finally:
-        installer.execute_screen.StreamingRunner = original_import
+    assert captured_kwargs, "StreamingRunner factory was never called"
+    kwargs = captured_kwargs[0]
+    assert kwargs.get("unbuffer") is True, f"unbuffer not True: {kwargs}"
 
 
 def _blocking_install_emitting_one_line(
