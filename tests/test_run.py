@@ -464,6 +464,69 @@ def test_streaming_runner_unwrapped_retry_on_popen_oserror(
     assert popen_attempts[1][0] == "sh"
 
 
+def test_streaming_runner_both_attempts_failing_is_still_127_with_caller_argv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Plan 01 Task 2's "both-attempts-fail-is-still-127-with-the-caller's-argv"
+    # criterion. When the unwrapped retry ALSO raises, the caller still sees a
+    # 127 naming the command they typed, exactly two launches were attempted
+    # (no retry loop), and the detail names BOTH failures -- the traceback is
+    # not on screen, and "127" alone cannot say which launch is the problem.
+    attempts: list[list[str]] = []
+
+    def always_raises(argv: list[str], **_kwargs: Unpack[_PopenKwargs]) -> subprocess.Popen[str]:
+        attempts.append(argv)
+        raise FileNotFoundError(f"vanished: {argv[0]}")
+
+    monkeypatch.setattr(subprocess, "Popen", always_raises)
+    runner = StreamingRunner(
+        lambda _tool, _line: None, unbuffer=True, which=lambda _: "/usr/bin/stdbuf"
+    )
+    runner.set_tool("rg")
+
+    cmd = ["brew", "install", "rg"]
+    with pytest.raises(CommandError) as exc:
+        runner(cmd)
+
+    assert exc.value.returncode == 127
+    assert exc.value.cmd == cmd
+    assert attempts == [["/usr/bin/stdbuf", "-oL", "brew", "install", "rg"], cmd]
+    assert "vanished: /usr/bin/stdbuf" in exc.value.detail
+    assert "vanished: brew" in exc.value.detail
+    # The first OSError survives as the chained context, not only in the text.
+    cause = exc.value.__cause__
+    assert isinstance(cause, OSError)
+    assert isinstance(cause.__context__, OSError)
+    assert "/usr/bin/stdbuf" in str(cause.__context__)
+
+
+def test_streaming_runner_knob_off_makes_exactly_one_popen_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Pins the `launch_argv is not cmd` IDENTITY branch at installer/run.py:235.
+    # A runner that never opted in must keep today's single-attempt 127
+    # behaviour byte for byte. Rewriting `unbuffered_argv`'s skip branches to
+    # `return list(cmd)` -- a natural defensive tidy-up -- would make every
+    # default-constructed runner silently launch twice on OSError, and
+    # test_streaming_runner_missing_binary_is_127 would not notice, because its
+    # double raises unconditionally and it asserts only on the final error.
+    attempts: list[list[str]] = []
+
+    def always_raises(argv: list[str], **_kwargs: Unpack[_PopenKwargs]) -> subprocess.Popen[str]:
+        attempts.append(argv)
+        raise FileNotFoundError(argv[0])
+
+    monkeypatch.setattr(subprocess, "Popen", always_raises)
+    runner = StreamingRunner(lambda _tool, _line: None)
+    runner.set_tool("rg")
+
+    with pytest.raises(CommandError) as exc:
+        runner(["nope"])
+
+    assert exc.value.returncode == 127
+    assert attempts == [["nope"]]
+
+
 def test_streaming_runner_knob_off_never_calls_which() -> None:
     # Not wrapped when the knob is off: which is never called.
     which_calls: list[str] = []

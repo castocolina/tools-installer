@@ -236,7 +236,20 @@ class StreamingRunner:
                 try:
                     proc = popen_with_env(cmd)
                 except OSError as retry_exc:
-                    raise CommandError(cmd, 127) from retry_exc
+                    # Both attempts failed. `retry_exc.__context__` is already
+                    # `exc` — Python chains implicitly for an exception raised
+                    # while another is being handled — so the traceback keeps
+                    # WHY the wrapper broke without assigning __context__ by
+                    # hand. The detail repeats both in the text a user reads,
+                    # because the traceback is not on screen and "127" alone
+                    # cannot say which of the two launches is the real problem.
+                    raise CommandError(
+                        cmd,
+                        127,
+                        detail=(
+                            f"wrapped launch failed: {exc}\nunwrapped retry failed: {retry_exc}"
+                        ),
+                    ) from retry_exc
             else:
                 raise CommandError(cmd, 127) from exc
 
