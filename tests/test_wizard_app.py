@@ -3209,6 +3209,8 @@ def _version_app(
     tools: list[Tool],
     installed: Mapping[str, bool],
     service: VersionRefreshService,
+    *,
+    execute: ExecuteInputs | None = None,
 ) -> UnifiedApp:
     return UnifiedApp(
         tools,
@@ -3221,6 +3223,7 @@ def _version_app(
         uninstall=_uninstall_inputs(),
         policies=_policy_inputs(),
         version_refresh=service,
+        execute=execute,
     )
 
 
@@ -3414,6 +3417,329 @@ async def test_version_navigation_discards_a_superseded_generation(tmp_path: Pat
         others_release.set()
         await _settle_versions(app, pilot)
         await _settle_versions(app, pilot, app.catalog_for("ai"))
+
+
+# -- D-01/Task 1: closing the execute screen refreshes the tier it ran from,
+# end to end -- and re-derives every catalog's installed map from the run's
+# own live presence predicate before that refresh repaints. -------------------
+
+
+def _tracking_install(
+    on_install: Callable[[Tool], None],
+) -> Callable[..., InstallOutcome]:
+    """A SensitiveInstall-shaped callable that records which tool it "installed"
+    (via `on_install`) and always reports success -- the seam every
+    `install_closed` test uses to flip a test's own presence/probe holders."""
+
+    def _install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        on_install(tool)
+        return InstallOutcome(tool.id, "installed")
+
+    return _install
+
+
+def _install_closed_platform() -> Platform:
+    return Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+
+
+async def test_install_closed_refreshes_the_ver_cell_without_navigating_away(
+    tmp_path: Path,
+) -> None:
+    """Tracer (D-01): an already-installed row whose version changes during a
+    run is visible in the SAME rendered Ver cell after the run closes -- no
+    tab switch, no further keypress -- the exact deno case the user reported.
+
+    The catalog's construction-time installed map says True while the
+    presence holder starts False: deliberate (it keeps the run on the plain
+    install path, since CONTEXT.md puts update execution out of scope for
+    this phase) and NOT coverage of a genuinely newly-installed row -- the
+    fourth and fifth tests below own that, with both signals starting False
+    and agreeing.
+    """
+    tool = _gh_tool("codegraph", tier="system")
+    presence = {"codegraph": False}
+    probed = {"codegraph": "1.2.0"}
+
+    def probe_output(argv: list[str]) -> str | None:
+        del argv
+        return probed["codegraph"]
+
+    def on_install(installed_tool: Tool) -> None:
+        presence[installed_tool.id] = True
+        probed[installed_tool.id] = "1.3.0"
+
+    service = _macos_service(
+        tmp_path, resolve_tag=lambda repo: "v1.3.0", probe_output=probe_output
+    )
+    execute = ExecuteInputs(
+        catalog=[tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda t: presence[t.id],
+        install=_tracking_install(on_install),
+    )
+    app = _version_app([tool], {"codegraph": True}, service, execute=execute)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        before = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver").plain
+        assert "1.2.0" in before
+        assert "->" in before
+        app.catalog.selected.add("codegraph")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        await pilot.press("escape")
+        await _settle_versions(app, pilot)
+        after = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver").plain
+        assert after != before
+        assert "1.3.0" in after
+        assert "->" not in after
+
+
+async def test_install_closed_refreshes_the_non_base_tier_it_ran_from(
+    tmp_path: Path,
+) -> None:
+    """Pitfall 1 guard: the fix must index self._catalogs (uniform across all
+    three tiers), never self._views (which drops the base tier) or a
+    show_view-style base/non-base branch."""
+    tool = _gh_tool("user-tool", tier="user")
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    execute = ExecuteInputs(
+        catalog=[tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda _t: True,
+        install=_tracking_install(lambda _t: None),
+    )
+    app = _version_app([tool], {"user-tool": True}, service, execute=execute)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.press("2")
+        assert app.current_view == "user"
+        user = app.catalog_for("user")
+        base = app.catalog
+        await _settle_versions(app, pilot, user)
+        before_user = user._version_refresh_generation  # pyright: ignore[reportPrivateUsage]
+        before_base = base._version_refresh_generation  # pyright: ignore[reportPrivateUsage]
+        user.selected.add("user-tool")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        await pilot.press("escape")
+        await _settle_versions(app, pilot, user)
+        assert user._version_refresh_generation == before_user + 1  # pyright: ignore[reportPrivateUsage]
+        assert base._version_refresh_generation == before_base  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_install_closed_refreshes_even_when_the_run_never_started(
+    tmp_path: Path,
+) -> None:
+    """The callback has no success condition to gate on: escaping before the
+    run is ever started still bumps the active tier's generation."""
+    tool = _gh_tool("codegraph", tier="system")
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.3.0")
+    execute = ExecuteInputs(
+        catalog=[tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda _t: True,
+        install=_tracking_install(lambda _t: None),
+    )
+    app = _version_app([tool], {"codegraph": True}, service, execute=execute)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        before = app.catalog._version_refresh_generation  # pyright: ignore[reportPrivateUsage]
+        app.catalog.selected.add("codegraph")
+        await pilot.press("enter")
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert screen.started is False
+        await pilot.press("escape")
+        await _settle_versions(app, pilot)
+        assert app.catalog._version_refresh_generation == before + 1  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreadable_one(
+    tmp_path: Path,
+) -> None:
+    """Round 1/round 2 gate: the installed map is re-derived from the run's
+    own presence predicate rather than promoted from VersionStatus.installed,
+    so it is correct in BOTH directions -- a tool the run installs stops
+    being suppressed (A), and a tool whose --version never answers keeps its
+    mark because presence never consulted the probe (B)."""
+    tool_a = _gh_tool("newly-installed", tier="system")
+    tool_b = _gh_tool("stays-installed", tier="system")
+    presence = {"newly-installed": False, "stays-installed": True}
+
+    def probe_output(argv: list[str]) -> str | None:
+        cmd = argv[0]
+        if cmd == "newly-installed" and presence["newly-installed"]:
+            return "1.0.0"
+        return None
+
+    def on_install(installed_tool: Tool) -> None:
+        presence[installed_tool.id] = True
+
+    service = _macos_service(
+        tmp_path, resolve_tag=lambda repo: "v1.0.0", probe_output=probe_output
+    )
+    execute = ExecuteInputs(
+        catalog=[tool_a, tool_b],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda t: presence[t.id],
+        install=_tracking_install(on_install),
+    )
+    app = _version_app(
+        [tool_a, tool_b],
+        {"newly-installed": False, "stays-installed": True},
+        service,
+        execute=execute,
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        table = app.catalog.query_one(DataTable[Any])
+        assert table.get_cell("newly-installed", "ver").plain == ""
+        assert table.get_cell("newly-installed", "inst").plain == "○"
+        assert table.get_cell("stays-installed", "inst").plain == "✓"
+        app.catalog.selected.add("newly-installed")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        await pilot.press("escape")
+        await _settle_versions(app, pilot)
+        table = app.catalog.query_one(DataTable[Any])
+        # Do not assert tool B's Ver *text* here: which dim label it lands on
+        # is Task 2's contract, not Task 1's.
+        assert table.get_cell("newly-installed", "ver").plain != ""
+        assert "1.0.0" in table.get_cell("newly-installed", "ver").plain
+        assert table.get_cell("newly-installed", "inst").plain == "✓"
+        assert table.get_cell("stays-installed", "inst").plain == "✓"
+
+
+async def test_install_closed_marks_a_detect_path_tool_that_answers_no_version(
+    tmp_path: Path,
+) -> None:
+    """Round 2 gate: a promotion keyed on VersionStatus.installed can never
+    fire for a tool whose command is a shell function no `--version` probe
+    will ever answer and whose script-kind method no manager inventory will
+    ever list -- the oh-my-zsh shape (installer/registry.toml:539-555;
+    SDKMAN is the same shape). Deliberately NOT an app/cask fixture: an
+    inventoried cask DOES carry a version (round 3's CRITICAL), so a cask
+    fixture would pin the wrong model."""
+    tool = Tool(
+        id="shell-fn-tool",
+        name="shell-fn-tool",
+        category="search",
+        cmd="shell-fn-tool",
+        methods=(Method(kind="script", params={"detect_path": "~/.shell-fn-tool/init.sh"}),),
+        priority="P1",
+        audience="both",
+        tier="system",
+        desc="",
+    )
+    presence = {"shell-fn-tool": False}
+
+    def on_install(installed_tool: Tool) -> None:
+        presence[installed_tool.id] = True
+
+    service = _macos_service(
+        tmp_path, resolve_tag=lambda repo: "v1.0.0", probe_output=lambda argv: None
+    )
+    execute = ExecuteInputs(
+        catalog=[tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda t: presence[t.id],
+        install=_tracking_install(on_install),
+    )
+    app = _version_app([tool], {"shell-fn-tool": False}, service, execute=execute)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        table = app.catalog.query_one(DataTable[Any])
+        assert table.get_cell("shell-fn-tool", "inst").plain == "○"
+        app.catalog.selected.add("shell-fn-tool")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        await pilot.press("escape")
+        await _settle_versions(app, pilot)
+        table = app.catalog.query_one(DataTable[Any])
+        assert table.get_cell("shell-fn-tool", "inst").plain == "✓"
+
+
+async def test_install_closed_refresh_requeries_the_manager_inventory_after_a_run(
+    tmp_path: Path,
+) -> None:
+    """Round 3 HIGH: without the invalidate call, a tool the run just handed
+    to brew/cask/pnpm/uv is resolved against a manager inventory read BEFORE
+    the run, for up to MANAGER_STALE_AFTER. _macos_service pairs
+    has_brew=True with _empty_inventory's brew_prefix=None, so every pass
+    trips _partial_manager_failure and persists failed_at=now -- the next
+    pass sits inside the 30-minute MANAGER_RETRY_BACKOFF and reuses the
+    snapshot UNLESS invalidate ran, which drops the persisted snapshot
+    outright so the reader is called again regardless of backoff."""
+    calls: list[int] = []
+
+    def counting_inventory(**kwargs: object) -> ManagerInventory:
+        calls.append(1)
+        return _empty_inventory(**kwargs)
+
+    tool = _gh_tool("codegraph", tier="system")
+    managed = tmp_path / "bin"
+    service = VersionRefreshService(
+        platform=_install_closed_platform(),
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1.0.0",
+        probe_output=lambda argv: "1.0.0",
+        managed_bin_dir=managed,
+        which=lambda cmd: str(managed / cmd),
+        artifacts_for=lambda tool: [managed / tool.cmd],
+        read_inventory_fn=counting_inventory,
+        read_outdated_fn=_empty_outdated,
+        pnpm_packages=lambda: (),
+        query=lambda *_a, **_k: "",
+    )
+    execute = ExecuteInputs(
+        catalog=[tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda _t: True,
+        install=_tracking_install(lambda _t: None),
+    )
+    app = _version_app([tool], {"codegraph": True}, service, execute=execute)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        before_calls = len(calls)
+        before_epoch = service.epoch
+        app.catalog.selected.add("codegraph")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        await pilot.press("escape")
+        await _settle_versions(app, pilot)
+        assert len(calls) > before_calls
+        assert service.epoch > before_epoch
 
 
 def _owned(

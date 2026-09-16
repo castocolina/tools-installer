@@ -265,6 +265,27 @@ class CatalogScreen(AppScreen):
         if self.is_mounted:
             self._start_version_refresh()
 
+    def set_installed(self, installed: Mapping[str, bool]) -> None:
+        """Replace the installed map with a fresh reading and repaint.
+
+        Called by `UnifiedApp._install_closed` with a map re-derived from the
+        run's own live presence predicate (`installer.status.is_installed`),
+        never a promotion from `VersionStatus.installed` -- presence and
+        version-readability are different questions with different answers
+        (`installer/status.py:18-42` accepts a PATH command OR a `detect_path`
+        marker OR an app/cask bundle; the version probe answers only the
+        first). A plain replacement, not a merge: `_row_cells` indexes this
+        map directly by every tool in `self.tools` (`:327`), so the map must
+        cover every one of them. No-ops when nothing changed, so the common
+        "nothing this run touched" close costs no rebuild.
+        """
+        new = dict(installed)
+        if new == self._installed:
+            return
+        self._installed = new
+        if self.is_mounted:
+            self._browser.reload(self._adapter())
+
     def _start_version_refresh(self) -> None:
         if self._version_refresh is None:
             return

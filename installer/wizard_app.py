@@ -12,6 +12,7 @@ be switched out. Navigation is therefore a stack with the base view at the
 bottom: the stack is always `[base]` or `[base, <one other view>]`.
 """
 
+import contextlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -1832,8 +1833,48 @@ class UnifiedApp(App[list[str] | None]):
 
     def _install_closed(self, _result: None) -> None:
         self._staged.clear()
+        # ExecuteScreen is modal: _navigable() returns False while it is on
+        # top, so current_view still names the catalog tier the run was
+        # launched from, and _catalogs has an entry for every tier including
+        # the base one -- no base/non-base branch needed here, unlike
+        # show_view (that method branches because it pushes/pops screens;
+        # this callback does neither).
+        #
+        # Re-derive every catalog's installed map from the run's own live
+        # presence predicate BEFORE the refresh below repaints. self._execute
+        # is guaranteed non-None whenever this callback can run at all --
+        # on_catalog_screen_decided only pushes ExecuteScreen when it is set.
+        # Presence is answered by the presence predicate and
+        # version-readability by the version probe, so this is correct in
+        # both directions (a tool installed by the run stops being
+        # suppressed; a tool whose --version stopped parsing keeps its mark)
+        # for every installation shape, including a detect_path-only tool no
+        # manager inventory lists and no `--version` probe will ever answer
+        # (oh-my-zsh, SDKMAN).
+        if self._execute is not None:
+            installed = self._execute.installed
+            for screen in self._catalogs.values():
+                screen.set_installed({tool.id: installed(tool) for tool in screen.tools})
+        self._catalogs[self.current_view].enter_view()
 
     def on_install_run_finished(self, message: InstallRunFinished) -> None:
+        # Every mutation this app performs calls invalidate
+        # (installer/version_status.py:26-30's own invariant); the install
+        # path was the one mutation that skipped it, so a tool the run just
+        # handed to brew/cask/pnpm/uv was resolved against a manager
+        # inventory read BEFORE the run for up to MANAGER_STALE_AFTER (6h).
+        # Mirrors UpdateService's own call (installer/update.py:436-443): a
+        # cache-write failure is a post-mutation side effect and must never
+        # flip an already-recorded run into a reported failure, so it is
+        # isolated in its own try/except here, structurally separate from
+        # the summary-merge below.
+        if self._version_refresh is not None:
+            # BLE001 (bare Exception): deliberate -- a cache-write failure
+            # here is a post-mutation side effect and must never flip an
+            # already-recorded run into a reported failure (installer/
+            # update.py:436-443 does the same for UpdateService).
+            with contextlib.suppress(Exception):
+                self._version_refresh.invalidate(reason="install run finished")
         incoming = message.summary
         existing = self.install_summary
         if existing is None:
