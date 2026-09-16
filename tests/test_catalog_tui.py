@@ -1442,22 +1442,83 @@ def test_legend_names_every_ver_cell_marker_and_style_token() -> None:
     assert "latest" in stale_entry
 
 
+def _painted_legend(legend: Static) -> str:
+    """Everything the legend widget actually paints, as one line.
+
+    Iterates the widget's own rendered height rather than assuming one line --
+    that is the whole point of the content-sized CSS; a clipped legend fails
+    these assertions even though every entry is present in the constant.
+
+    The wrapped lines are joined with a space and re-split, never edge to
+    edge: Rich breaks at spaces, so a two-word marker split across a wrap
+    boundary is still painted in full and must not be reported as missing.
+    """
+    lines = " ".join(
+        "".join(segment.text for segment in legend.render_line(i))
+        for i in range(legend.size.height)
+    )
+    return " ".join(lines.split())
+
+
+def _dim_legend_text(legend: Static) -> str:
+    """Only the parts of the legend actually painted with the `dim` style."""
+    dim = " ".join(
+        segment.text
+        for i in range(legend.size.height)
+        for segment in legend.render_line(i)
+        if segment.style is not None and segment.style.dim
+    )
+    return " ".join(dim.split())
+
+
 async def test_legend_widget_paints_every_marker_at_full_width() -> None:
     app = _app()
     async with app.run_test(size=(100, 30)):
         legend = app.query_one("#browser-legend", Static)
-        # Iterate the widget's own rendered height rather than assuming one
-        # line -- that is the whole point of the content-sized CSS change;
-        # a legend clipped to height:1 would fail this even though every
-        # entry is present in the underlying constant.
-        painted = "".join(
-            "".join(segment.text for segment in legend.render_line(i))
-            for i in range(legend.size.height)
-        )
+        painted = _painted_legend(legend)
         for marker in _ALL_VER_MARKERS:
             assert marker in painted, marker
         assert "up to date" in painted
         assert "update available" in painted
+        # The dim markers are painted DIM, the way _ver_cell renders them.
+        # They used to sit in the default style while the cells they explain
+        # were dim, so the legend did not look like the thing it describes --
+        # unlike the two colored entries, which have carried `green`/`yellow`
+        # since they were written.
+        dim = _dim_legend_text(legend)
+        for marker in _ALL_VER_MARKERS:
+            assert marker in dim, marker
+
+
+async def test_legend_keeps_the_catalog_table_usable_at_the_minimum_size() -> None:
+    """The legend is readable AND the table is usable at 80x20 -- this
+    project's own tested minimum terminal size (25 other tests run at it).
+
+    #browser-legend is `dock: bottom`, so every line the legend wraps to comes
+    straight out of the DataTable's `1fr`. An unwrapped-prose legend under an
+    uncapped `height: auto` measured 7 rows here and left the catalog -- the
+    app's primary screen, listing 89 tools -- 3 rows, i.e. roughly two tool
+    rows under the column header.
+
+    Both halves are asserted together on purpose, because either one alone is
+    trivially satisfiable in a way that breaks the other: capping the height
+    clips markers off the bottom, and shortening the text leaves the next
+    edit free to collapse the table again. Only at this size do they conflict
+    -- the 100x30 test above cannot fail on a squeezed table.
+    """
+    app = _app()
+    async with app.run_test(size=(80, 20)):
+        legend = app.query_one("#browser-legend", Static)
+        table = app.query_one(DataTable[Any])
+        painted = _painted_legend(legend)
+        for marker in _ALL_VER_MARKERS:
+            assert marker in painted, marker
+        assert "up to date" in painted
+        assert "update available" in painted
+        # The harm first, then the cause: the table has to stay usable, and
+        # the legend's own budget is what keeps it that way.
+        assert table.size.height >= 6, table.size.height
+        assert legend.size.height <= 3, legend.size.height
 
 
 def test_legend_is_identical_across_all_three_tier_views() -> None:

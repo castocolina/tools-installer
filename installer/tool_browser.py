@@ -96,7 +96,7 @@ class ToolBrowser(Widget, Generic[T]):
     ToolBrowser { layout: vertical; height: 1fr; }
     ToolBrowser Tabs { dock: top; }
     ToolBrowser #browser-detail { dock: bottom; height: 2; padding: 0 1; background: $surface; }
-    ToolBrowser #browser-legend { dock: bottom; height: auto; padding: 0 1; }
+    ToolBrowser #browser-legend { dock: bottom; height: auto; max-height: 3; padding: 0 1; }
     ToolBrowser DataTable { height: 1fr; }
     """
     BINDINGS: ClassVar[list[BindingType]] = [

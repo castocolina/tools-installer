@@ -171,7 +171,9 @@ _COLUMNS = (
 # two nothing-to-compare branches share _VER_NO_COMPARISON; no other pair
 # collides). _LEGEND interpolates these same constants below, so a label
 # edit here reaches the legend automatically and the two can never describe
-# different things.
+# different things -- which is also why each label has to stand on its own as
+# plain English: the legend's job is to list the vocabulary, and it has no
+# room at 80 columns to re-explain a label that does not say what it means.
 _VER_CHECKING = "checking…"
 _VER_NO_VERSION = "no version"
 # Named after status.source, not a conclusion about the tool: the fallthrough
@@ -193,27 +195,44 @@ _VER_STALE = "~"
 # `green`/`yellow` those branches use -- never the word "orange" CONTEXT.md's
 # prose uses for the update-available color, which is not a real Rich markup
 # name and would either no-op or visually mismatch the cell it explains.
+#
+# Every entry is terse ON PURPOSE. The widget is dock: bottom, so each line the
+# legend wraps to comes straight out of the DataTable's 1fr: at this project's
+# tested minimum terminal size (80x20) an unwrapped-prose legend measured 7
+# rows and left the table -- the app's primary screen, listing 89 tools -- 3.
+# The budget is three legend rows at 80 columns -- 234 plain characters, and
+# this string spends 221 of them. #browser-legend's max-height enforces the
+# cap and test_legend_keeps_the_catalog_table_usable_at_the_minimum_size
+# asserts both halves (every marker still painted, table still usable) at
+# exactly that size, so overspending here fails as a clipped marker rather
+# than as a silently collapsed table. Keep a gloss inside the budget or drop
+# it: a marker nobody can read next to a table nobody can use helps nobody.
+#
+# The four dim markers carry the `dim` style the cells render them in (they
+# were plain here while the cells were dim, so the legend did not look like
+# what it explains), and each gloss adds information instead of restating the
+# label it follows ("checking… still checking" read as a duplication bug).
 _LEGEND = (
     "[bold red]P0[/] essential · [bold yellow]P1[/] recommended · [blue]P2[/] nice-to-have"
-    " · [dim]P3[/] niche  |  for [bold cyan]AI[/] / [magenta]human[/] / both"
-    "  |  [green]✓ installed[/] · [yellow]○ missing[/]"
-    "  |  Ver: [green]up to date[/] · [yellow]update available[/]"
-    f" · {_VER_CHECKING} still checking"
-    f" · {_VER_NO_VERSION} no version could be read"
-    # The gloss names both populations status.source == "unknown" actually
-    # covers (a native package this installer never manages, and a manager
-    # inventory this pass could not read) rather than asserting the tool is
-    # permanently untracked, which VersionStatus cannot prove either way.
-    f" · {_VER_SOURCE_UNKNOWN} no update source attributed (a system"
-    " package, or a manager inventory unreadable this pass)"
-    f" · {_VER_NO_COMPARISON} the latest lookup found nothing to compare against"
-    # This gloss is true of BOTH cells that render the suffix: the yellow
+    " · [dim]P3[/] niche | [bold cyan]AI[/] / [magenta]human[/] / both"
+    " | [green]✓ installed[/] · [yellow]○ missing[/]"
+    " | Ver: [green]up to date[/] · [yellow]update available[/]"
+    # These four already say what they mean (D-02 named them for exactly that),
+    # so the legend lists them and spends its remaining width on `~`, the one
+    # marker that is a bare symbol. Re-glossing them is what produced the
+    # stuttering "checking… still checking" AND the 7-row legend.
+    f" · [dim]{_VER_CHECKING}[/] · [dim]{_VER_NO_VERSION}[/]"
+    f" · [dim]{_VER_SOURCE_UNKNOWN}[/] · [dim]{_VER_NO_COMPARISON}[/]"
+    # "cached latest" is true of BOTH cells that render the suffix: the yellow
     # cell shows installed -> latest, but the green cell shows only the
     # installed version and never prints a latest at all, so the gloss names
     # the cached latest the COMPARISON rested on, not a shown value and not
     # the installed version (which is re-probed live every pass and is never
-    # the thing going stale) -- see 15.1-CONTEXT.md's D-04 Correction.
-    f" · {_VER_STALE} the cached latest the comparison used, not re-confirmed this pass"
+    # the thing going stale) -- see 15.1-CONTEXT.md's D-04 Correction. The
+    # full sentence ("at or past STALE_AFTER, not re-confirmed this pass")
+    # belongs to the detail bar, which has a line to spend; the legend names
+    # the marker.
+    f" · [dim]{_VER_STALE}[/] cached latest"
 )
 
 
