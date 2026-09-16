@@ -749,8 +749,8 @@ A launch that fails on the wrapped argv is `retried unwrapped`, once.
 Resolving `stdbuf` in the constructor opens a window in which it can
 vanish before a later command launches, and an unavailable forcing
 mechanism must never fail an install. The retry is safe only because
-`Popen` raised before the target command started — say that, so
-nobody generalises it to the non-zero-exit path and re-runs a
+`Popen` raised before the target command started; it must never be
+generalised to the non-zero-exit path, which would re-run a
 side-effecting installer.
 
 `CommandError` reports the `unwrapped argv`. A user must be able to
