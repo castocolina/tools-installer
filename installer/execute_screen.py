@@ -485,7 +485,7 @@ class ExecuteScreen(ModalScreen[None]):
             def emit(tool_id: str, line: str) -> None:
                 self.post_message(InstallLogLine(tool_id, line))
 
-            runner = StreamingRunner(emit)
+            runner = StreamingRunner(emit, unbuffer=True)
 
             def on_outcome(outcome: InstallOutcome) -> None:
                 self.post_message(InstallToolFinished(outcome.tool_id, outcome.status))

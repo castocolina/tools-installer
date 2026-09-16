@@ -30,7 +30,7 @@ from installer.model import Method, Tool
 from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
-from installer.run import CommandError, Runner
+from installer.run import CommandError, Runner, StreamingRunner
 from installer.session import SensitiveInstall
 from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
@@ -2500,3 +2500,38 @@ async def test_update_section_is_silent_when_no_outdated_updates_were_queued(
         assert "updated " not in log
         assert updates.recorded == []
         assert captured == ["fd"]
+
+
+async def test_streaming_runner_in_execute_worker_opts_in_to_unbuffer() -> None:
+    # The one live streaming call site (ExecuteScreen._execute_worker) constructs
+    # its StreamingRunner with unbuffer=True, verified by monkeypatching the
+    # factory and recording the keyword.
+    captured_kwargs: list[dict[str, object]] = []
+    original_streaming_runner = StreamingRunner
+
+    def recording_factory(emit: object, **kwargs: object) -> StreamingRunner:
+        captured_kwargs.append(kwargs)
+        return original_streaming_runner(emit, **kwargs)  # type: ignore
+
+    import installer.execute_screen
+
+    original_import = installer.execute_screen.StreamingRunner
+    installer.execute_screen.StreamingRunner = recording_factory  # type: ignore
+
+    try:
+        captured: list[str] = []
+        inputs = _inputs(install=_install_with_output(captured))
+        app = _host(inputs)
+        async with app.run_test(size=(100, 30)) as pilot:
+            app.push_screen(ExecuteScreen(["rg"], inputs))
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ExecuteScreen)
+            await pilot.press("enter")
+            await _settle_execute(screen, pilot)
+
+        assert captured_kwargs, "StreamingRunner factory was never called"
+        kwargs = captured_kwargs[0]
+        assert kwargs.get("unbuffer") is True, f"unbuffer not True: {kwargs}"
+    finally:
+        installer.execute_screen.StreamingRunner = original_import

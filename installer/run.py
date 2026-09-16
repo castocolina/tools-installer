@@ -1,10 +1,14 @@
 """The command runner seam: executors build argv, the runner performs the side effect."""
 
+from __future__ import annotations
+
 import os
+import shutil
 import subprocess
 import sys
 from collections import deque
 from collections.abc import Callable, Collection, Mapping
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from installer.sanitize import sanitize_log_line
@@ -102,6 +106,50 @@ def run_captured(cmd: list[str]) -> None:
 
 STREAM_DETAIL_LINES = 20
 
+UNBUFFER_ENV_VAR = "PYTHONUNBUFFERED"
+STDBUF_FLAG = "-oL"
+
+
+def unbuffered_env() -> dict[str, str]:
+    """Return os.environ with PYTHONUNBUFFERED set to "1".
+
+    env is merged over os.environ (an override, never a replacement) so PATH
+    and HOME survive. This unconditional rung applies to every streamed child.
+    """
+    return {**os.environ, UNBUFFER_ENV_VAR: "1"}
+
+
+def _is_python_child(cmd: list[str]) -> bool:
+    """Return True when cmd is a Python interpreter invocation.
+
+    A best-effort heuristic: uv run python ... presents as uv and will be
+    wrapped, which is harmless, because LD_PRELOAD survives the exec and the
+    env var is set regardless. The point is to name the case rung 1 already
+    covers so rung 2 does not double-wrap it.
+    """
+    if not cmd:
+        return False
+    argv0 = cmd[0]
+    return argv0 == sys.executable or Path(argv0).name.startswith("python")
+
+
+def unbuffered_argv(cmd: list[str], stdbuf: str | None) -> list[str]:
+    """Return cmd or a stdbuf-wrapped version if applicable.
+
+    Return cmd unchanged when stdbuf is None or when _is_python_child(cmd) is
+    True; otherwise return [stdbuf, STDBUF_FLAG, *cmd]. This never wraps a
+    child the env var already covers. Only -oL is added: -eL would make
+    diagnostics arrive LATER than they do today because stderr is folded into
+    the same pipe by stderr=subprocess.STDOUT and C stderr is unbuffered by
+    default.
+
+    This returns a list to LAUNCH, and the caller keeps its own cmd for
+    anything a human will read.
+    """
+    if stdbuf is None or _is_python_child(cmd):
+        return cmd
+    return [stdbuf, STDBUF_FLAG, *cmd]
+
 
 class StreamingRunner:
     """Runner that feeds a live log widget while the child still runs.
@@ -111,16 +159,37 @@ class StreamingRunner:
     constructor argument so every line is attributed to a tool (D-05.2).
 
     bufsize=1 line-buffers the PARENT's reads; it cannot make a child
-    line-buffer its own writes. A vendor installer that detects a non-TTY
-    (pnpm, SDKMAN, most progress-bar-drawing scripts) will block-buffer and
-    burst at exit, so the streaming guarantee is "as live as the child
-    allows", not "always line-by-line". This module is never the thing that
-    batches output.
+    line-buffer its own writes. The parent also tries, best-effort, to force
+    the child to line-buffer its own writes:
+
+    - Rung 1, unconditional: PYTHONUNBUFFERED=1 in every streamed child's
+      environment. Reaches any CPython child.
+    - Rung 2, opt-in and availability-gated: stdbuf -oL wraps the child's
+      argv when the caller asked for it and the binary is on PATH. Reaches a
+      dynamically-linked stdio child, and — because stdbuf works by installing
+      LD_PRELOAD — that child's own grandchildren, making it useful for a
+      curl | sh installer that shells out repeatedly. Silently skipped when
+      stdbuf is absent.
+
+    What neither rung reaches: a statically-linked Go or Rust binary doing its
+    own buffering, a child re-exec'd through sudo (the loader drops LD_PRELOAD
+    across the setuid boundary), or any host with no stdbuf at all. A vendor
+    installer that detects a non-TTY (pnpm, SDKMAN, most progress-bar-drawing
+    scripts) still block-buffers on its side, so the streaming guarantee is
+    still "as live as the child allows", now with the parent having done what
+    it safely can. This module is never the thing that batches output.
     """
 
-    def __init__(self, emit: Callable[[str, str], None]) -> None:
+    def __init__(
+        self,
+        emit: Callable[[str, str], None],
+        *,
+        unbuffer: bool = False,
+        which: Callable[[str], str | None] = shutil.which,
+    ) -> None:
         self._emit = emit
         self._tool_id: str | None = None
+        self._stdbuf: str | None = which("stdbuf") if unbuffer else None
 
     def set_tool(self, tool_id: str) -> None:
         self._tool_id = tool_id
@@ -140,17 +209,36 @@ class StreamingRunner:
         minutes, matching run_output. bufsize=1 line-buffers parent reads
         only; a child that block-buffers on a pipe still bursts at exit.
         """
-        try:
-            proc = subprocess.Popen(
-                cmd,
+        launch_argv = unbuffered_argv(cmd, self._stdbuf)
+        env = unbuffered_env()
+
+        def popen_with_env(argv: list[str]) -> subprocess.Popen[str]:
+            return subprocess.Popen(
+                argv,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                env=env,
             )
+
+        try:
+            proc = popen_with_env(launch_argv)
         except OSError as exc:
-            raise CommandError(cmd, 127) from exc
+            # If the wrapped argv failed and it was different from the caller's
+            # argv, retry once with the caller's unwrapped argv. This handles
+            # the case where stdbuf was resolved at construction but vanished by
+            # launch time (a brew uninstall coreutils mid-run, a PATH entry
+            # unmounted). Popen raised before the target command started, so a
+            # retry is safe and only here.
+            if launch_argv is not cmd:
+                try:
+                    proc = popen_with_env(cmd)
+                except OSError as retry_exc:
+                    raise CommandError(cmd, 127) from retry_exc
+            else:
+                raise CommandError(cmd, 127) from exc
 
         tail: deque[str] = deque(maxlen=STREAM_DETAIL_LINES)
         stdout = proc.stdout

@@ -2,6 +2,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Mapping
 
 import pytest
 
@@ -258,6 +259,7 @@ def test_streaming_runner_reaps_child_when_emit_raises(
         stderr: int | None = None,
         text: bool = False,
         bufsize: int = 0,
+        env: Mapping[str, str] | None = None,
     ) -> subprocess.Popen[str]:
         proc = original_popen(
             args,
@@ -266,6 +268,7 @@ def test_streaming_runner_reaps_child_when_emit_raises(
             stderr=stderr,
             text=text,
             bufsize=bufsize,
+            env=env,
         )
         captured["proc"] = proc
         return proc
@@ -303,3 +306,57 @@ def test_streaming_runner_reaps_child_when_emit_raises(
     assert isinstance(caught[0], RuntimeError)
     assert "callback exploded" in str(caught[0])
     assert captured["proc"].returncode is not None
+
+
+def test_streaming_runner_block_buffering_child_streams_live_when_unbuffered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A child that block-buffers by default (no -u, no flush=True) streams
+    # live AT THE RUNNER when PYTHONUNBUFFERED is set in its environment.
+    # Delete PYTHONUNBUFFERED first so the property is proved by production
+    # code setting it rather than an inherited variable.
+    monkeypatch.delenv("PYTHONUNBUFFERED", raising=False)
+
+    timestamps: list[float] = []
+
+    def emit(_tool_id: str, _line: str) -> None:
+        timestamps.append(time.monotonic())
+
+    runner = StreamingRunner(emit)
+    runner.set_tool("test")
+    # Script: block-buffered (no -u, no flush), 1.0s delay between prints
+    script = "print('first'); import time; time.sleep(1.0); print('second')"
+    runner([sys.executable, "-c", script])
+
+    assert len(timestamps) == 2
+    gap = timestamps[1] - timestamps[0]
+    # Real separation is a full second, 0.5s floor leaves 0.5s scheduling slack
+    # so this test discriminates on buffering not on scheduler luck.
+    assert gap >= 0.5, (
+        f"Lines arrived {gap:.3f}s apart, expected >= 0.5s (buffering still happening)"
+    )
+
+
+def test_streaming_runner_env_rung_is_unconditional_even_with_unbuffer_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The PYTHONUNBUFFERED env rung is unconditional: a runner built with
+    # the default unbuffer=False still launches its child with
+    # PYTHONUNBUFFERED set to "1", and PATH/HOME survive.
+    # Verify env vars are passed to the child using real execution
+    script = (
+        "import os; "
+        "print(os.environ.get('PYTHONUNBUFFERED')); "
+        "print(bool(os.environ.get('PATH'))); "
+        "print(bool(os.environ.get('HOME')))"
+    )
+
+    seen: list[tuple[str, str]] = []
+    runner = StreamingRunner(lambda tool_id, line: seen.append((tool_id, line)))
+    runner.set_tool("test")
+    runner([sys.executable, "-c", script])
+
+    lines = [line for _tool, line in seen]
+    assert lines[0] == "1", f"PYTHONUNBUFFERED not set: {lines[0]}"
+    assert lines[1] == "True", f"PATH not present: {lines[1]}"
+    assert lines[2] == "True", f"HOME not present: {lines[2]}"
