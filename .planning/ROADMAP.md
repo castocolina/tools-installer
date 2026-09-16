@@ -607,8 +607,8 @@ Plans:
 **Goal:** Closing an install/update run leaves the catalog tier it ran from showing freshly probed versions on the screen the user is already on, and every state that column can render — both colors, each distinct dim case, and the stale marker — says what it means and is spelled out in an always-on legend present on all three tier views.
 **Requirements**: D-01, D-02, D-03, D-04 (15.1-CONTEXT.md — this phase came from live UAT, not a REQUIREMENTS.md id)
 **Depends on:** Phase 15
-**Plans:** 1 plan
+**Plans:** 1/1 plans executed
 
 Plans:
 
-- [ ] 15.1-01-PLAN.md — post-run catalog refresh (D-01), per-situation Ver-cell labels (D-02), always-on version legend (D-03/D-04)
+- [x] 15.1-01-PLAN.md — post-run catalog refresh (D-01), per-situation Ver-cell labels (D-02), always-on version legend (D-03/D-04)

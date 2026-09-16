@@ -1,18 +1,19 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: "15.8"
-current_plan: Not yet planned - context gathered, ready for /gsd-plan-phase
-status: planning
+current_phase: "15.1"
+current_phase_name: Catalog post-update refresh staleness and version-status color disambiguation
+current_plan: 1
+status: executing
 stopped_at: Phase 15.8 context gathered. All 8 phases (15.1-15.8) now have context.
-last_updated: "2026-09-15T22:49:23.576Z"
-last_activity: 2026-09-14
-last_activity_desc: Phase 15 marked complete
-state_head: bcbe0cc9f5f115c4e92ac113472e066e4b15d377
+last_updated: "2026-09-16T10:05:34.697Z"
+last_activity: 2026-09-16
+last_activity_desc: Phase 15.1 execution started
+state_head: 172d2d0b9a12555f86df85711cf63613762e6711
 progress:
   total_phases: 27
   completed_phases: 13
-  total_plans: 61
+  total_plans: 62
   completed_plans: 61
 ---
 
@@ -25,15 +26,15 @@ Total Phases: 21
 See: .planning/PROJECT.md (updated 2026-09-04)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** All 8 phases (15.1-15.8) have context. Next: /gsd-plan-phase for each, then execute.
+**Current focus:** Phase 15.1 — Catalog post-update refresh staleness and version-status color disambiguation
 
 ## Current Position
 
-Phase: 15.8-fix-real-not-just-cosmetic-path-duplication-from-managed-blo
-Current Plan: Not yet planned - context gathered, ready for /gsd-plan-phase
-Total Plans in Phase: 5
-Status: planning
-Last activity: 2026-09-14 — Phase 15 marked complete
+Phase: 15.1 (Catalog post-update refresh staleness and version-status color disambiguation) — EXECUTING
+Current Plan: 1
+Total Plans in Phase: 1
+Status: Executing Phase 15.1
+Last activity: 2026-09-16 — Phase 15.1 execution started
 
 Progress: [█████████░] 88%
 
