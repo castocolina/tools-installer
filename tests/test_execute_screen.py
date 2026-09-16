@@ -27,6 +27,11 @@ from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus
 from installer.execute_screen import (
+    # The indicator's exact copy, imported rather than hand-written: a test
+    # that constructs the message production posts must not be able to drift
+    # from it silently while looser `"waiting for output" in log` substring
+    # assertions elsewhere keep passing.
+    _WAITING_OUTPUT,  # pyright: ignore[reportPrivateUsage]
     SILENCE_SECONDS,
     ChecksumMismatchScreen,
     ExecuteInputs,
@@ -2783,9 +2788,7 @@ async def test_stale_generation_transient_is_dropped_without_writing_anything() 
         assert isinstance(screen, ExecuteScreen)
         await _start_and_wait_for_first_line(screen, pilot, started)
         before = _log_text(screen)
-        stale = InstallLogLine(
-            "rg", "-- still running; waiting for output --", transient=True, generation=-1
-        )
+        stale = InstallLogLine("rg", _WAITING_OUTPUT, transient=True, generation=-1)
         screen.on_install_log_line(stale)
         await pilot.pause()
         assert _log_text(screen) == before
@@ -3024,14 +3027,71 @@ def _captured_transient(screen: ExecuteScreen, tool_id: str) -> InstallLogLine:
     returns the identical message `_check_output_silence` would construct at
     the current generation -- the deterministic substitute for racing the
     real timer against a real invalidation.
+
+    `_transient_is_current` ANDs five conditions, so a caller must know which
+    one its own invalidation flips, or a passing assertion proves nothing
+    about the rest. What each caller below invalidates:
+
+    - `..._beaten_by_a_real_line_is_dropped`: `_note_output` clears
+      `_silence_noted` AND bumps `_silence_generation` -- two at once.
+    - `..._beaten_by_install_tool_finished_is_dropped`: `_clear_in_flight`
+      nulls `_in_flight`, clears `_silence_noted` and bumps the generation.
+    - `..._beaten_by_run_finished_is_dropped`: `self.finished` becomes True,
+      plus everything `_clear_in_flight` does.
+    - `test_stale_generation_alone_drops_the_transient`: the ONLY caller that
+      flips exactly one condition, and therefore the only one whose result is
+      attributable to the generation token.
     """
     screen._silence_noted = True  # pyright: ignore[reportPrivateUsage]
     return InstallLogLine(
         tool_id,
-        "-- still running; waiting for output --",
+        _WAITING_OUTPUT,
         transient=True,
         generation=screen._silence_generation,  # pyright: ignore[reportPrivateUsage]
     )
+
+
+async def test_stale_generation_alone_drops_the_transient() -> None:
+    """The generation token is the REASON the drop happens, not a bystander.
+
+    Every other race test here invalidates one of `_transient_is_current`'s
+    four remaining conditions at the same time, so the comparison is never
+    what makes the message stale -- deleting it from production leaves them
+    all green. This one holds the in-flight tool, the prompt state, the
+    finished flag and `_silence_noted` identical between two messages and
+    changes nothing but the token.
+    """
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(install=_blocking_install_emitting_one_line(started, release))
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _start_and_wait_for_first_line(screen, pilot, started)
+
+        current = _captured_transient(screen, "rg")  # latches _silence_noted = True
+        # The writable baseline: with the token matching, this message WOULD
+        # be rendered. Without it the negative assertion below could not tell
+        # the token apart from any other condition being false.
+        assert screen._transient_is_current(current)  # pyright: ignore[reportPrivateUsage]
+
+        assert current.generation is not None
+        stale = InstallLogLine(
+            "rg", _WAITING_OUTPUT, transient=True, generation=current.generation - 1
+        )
+        assert not screen._transient_is_current(stale)  # pyright: ignore[reportPrivateUsage]
+
+        before = _log_text(screen)
+        screen.on_install_log_line(stale)
+        await pilot.pause()
+        assert _log_text(screen) == before
+        assert "waiting for output" not in _log_text(screen)
+
+        release.set()
+        await _settle_execute(screen, pilot)
 
 
 async def test_stale_transient_beaten_by_a_real_line_is_dropped() -> None:
