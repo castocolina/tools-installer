@@ -47,3 +47,6 @@ graphify-out/
 # ephemeral working material; once findings are folded into a plan, a code fix,
 # or a -REVIEW.md/-REVIEWS.md summary, the raw dump has no ongoing value
 .review-diagnostics/
+
+# GSD milestone-run lock file (session id/pid/timestamp) - runtime-only, never audit trail
+.planning/milestone.lock
