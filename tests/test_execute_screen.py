@@ -3177,6 +3177,17 @@ async def test_run_finished_stops_and_drops_the_silence_timer() -> None:
         assert screen.finished is True
         assert screen._silence_timer is None  # pyright: ignore[reportPrivateUsage]
 
+        # Silent after the run, belt AND braces: a callback already dispatched
+        # before the stop landed still returns harmlessly. Without this the
+        # `return` under `if self.finished` was executed by no test in the
+        # suite, so the guarantee was asserted only as "the timer is gone" --
+        # which says nothing about a callback already in flight.
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        assert "waiting for output" not in _log_text(screen)
+        # And it did not re-arm a timer that outlives the run.
+        assert screen._silence_timer is None  # pyright: ignore[reportPrivateUsage]
+
 
 async def test_silence_suppressed_while_prompt_open_and_restarts_after_close() -> None:
     clock = _FakeClock()
