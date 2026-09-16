@@ -154,6 +154,45 @@ async def test_detail_bar_follows_highlight_and_section_rows() -> None:
         assert browser.detail_text == "group: letters"
 
 
+async def test_rebuild_cursor_falls_back_to_first_selectable_when_key_is_gone() -> None:
+    """The widened _rebuild cursor contract's missing-key half: the branch the
+    uninstall view's live re-derivation takes on a real machine. A reload
+    whose adapter no longer carries the row the user had highlighted must
+    land on the first selectable row -- today's unconditional behaviour --
+    rather than raise or silently stay wherever clear() left it."""
+    app = _Host(_adapter())
+    async with app.run_test(size=(80, 20)) as pilot:
+        browser = app.query_one(ToolBrowser[_Item])
+        table = app.query_one(DataTable[Any])
+        # rows: [#letters, alpha, beta, #numbers, one]; "one" is neither row 0
+        # nor the first selectable row (alpha).
+        table.move_cursor(row=table.get_row_index("one"))
+        browser.reload(_adapter(items=[_ITEMS[0], _ITEMS[1]]))  # drops "one"
+        await pilot.pause()
+        first = browser._first_selectable_row()  # pyright: ignore[reportPrivateUsage]
+        assert first is not None
+        assert table.cursor_row == first
+
+
+async def test_rebuild_cursor_keeps_a_surviving_section_row_under_the_cursor() -> None:
+    """The widened _rebuild cursor contract's other half: a section row is a
+    place a user can already reach with `up`, so a rebuild that still
+    produces it must leave the cursor there rather than pulling it down to
+    the first item -- today's `move_cursor(row=first)` unconditionally, which
+    this replaces."""
+    app = _Host(_adapter())
+    async with app.run_test(size=(80, 20)) as pilot:
+        browser = app.query_one(ToolBrowser[_Item])
+        table = app.query_one(DataTable[Any])
+        await pilot.press("up")  # onto the "letters" section row
+        assert browser.detail_text == "group: letters"
+        section_row = table.cursor_row
+        browser.reload(_adapter())  # same items -> "letters" section survives
+        await pilot.pause()
+        assert table.cursor_row == section_row
+        assert browser.detail_text == "group: letters"
+
+
 async def test_select_all_and_invert_preserve_cursor() -> None:
     app = _Host(_adapter())
     async with app.run_test(size=(80, 20)) as pilot:

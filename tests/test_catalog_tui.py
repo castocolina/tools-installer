@@ -1,4 +1,5 @@
 import html
+import threading
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -912,10 +913,11 @@ def test_stale_marker_is_visible_on_rendered_ver_cell() -> None:
     assert not fresh.endswith(" ~")
 
 
-def test_ver_cell_shows_probed_version_with_no_latest_to_compare() -> None:
+def test_ver_cell_shows_probed_version_with_source_unknown_marker() -> None:
     """Regression: a dnf/apt/pacman-owned tool has a real probed version but no
     'latest' source (ownership.py doesn't track those managers) -- the cell
-    must show that version, not discard it as "unknown"."""
+    must show that version, not discard it, and the marker names the missing
+    attribution rather than asserting the tool is permanently untracked."""
     tool = _tool("rg")
     screen = _screen([tool], {"rg": True})
     screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
@@ -928,10 +930,12 @@ def test_ver_cell_shows_probed_version_with_no_latest_to_compare() -> None:
             source="unknown",
         )
     }
-    assert screen._ver_cell(tool).plain == "14.1.0"  # pyright: ignore[reportPrivateUsage]
+    cell = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
+    assert "14.1.0" in cell
+    assert cell == "14.1.0 (source unknown)"
 
 
-def test_ver_cell_shows_unknown_only_when_no_version_was_probed_at_all() -> None:
+def test_ver_cell_shows_no_version_marker_when_nothing_was_probed_at_all() -> None:
     tool = _tool("rg")
     screen = _screen([tool], {"rg": True})
     screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
@@ -944,7 +948,7 @@ def test_ver_cell_shows_unknown_only_when_no_version_was_probed_at_all() -> None
             source="unknown",
         )
     }
-    assert screen._ver_cell(tool).plain == "unknown"  # pyright: ignore[reportPrivateUsage]
+    assert screen._ver_cell(tool).plain == "no version"  # pyright: ignore[reportPrivateUsage]
 
 
 def test_epoch_guard_drops_a_superseded_version_refresh(tmp_path: Path) -> None:
@@ -1017,7 +1021,9 @@ def _gh_tool(tool_id: str, *, desc: str = "") -> Tool:
     )
 
 
-async def test_unparseable_probe_output_renders_unknown(tmp_path: Path) -> None:
+async def test_ver_cell_renders_no_version_marker_for_unparseable_probe_output(
+    tmp_path: Path,
+) -> None:
     tool = _gh_tool("dasel")
     service = _offline_service(
         tmp_path / "versions.json",
@@ -1031,7 +1037,7 @@ async def test_unparseable_probe_output_renders_unknown(tmp_path: Path) -> None:
                 break
             await pilot.pause()
         cell = app.catalog.query_one(DataTable[Any]).get_cell("dasel", "ver")
-        assert cell.plain == "unknown"
+        assert cell.plain == "no version"
 
 
 async def test_stale_and_fresh_rows_differ_only_by_trailing_marker() -> None:
@@ -1073,8 +1079,333 @@ async def test_stale_and_fresh_rows_differ_only_by_trailing_marker() -> None:
     unknown_cell = screen._ver_cell(dasel).plain  # pyright: ignore[reportPrivateUsage]
     assert stale_cell == fresh_cell + " ~"
     assert not fresh_cell.endswith(" ~")
-    assert unknown_cell == "unknown"
+    assert unknown_cell == "no version"
     assert " ~" not in unknown_cell
+
+
+# -- D-02/Task 2: every dim Ver cell says which situation produced it --------
+
+
+def test_ver_cell_dim_github_source_no_latest_shows_no_comparison_marker() -> None:
+    """A github-sourced status whose latest fetch failed/was deferred is
+    labelled as having nothing to compare against, never as unmanaged --
+    that label is reserved for source == "unknown" (native packages and
+    unreadable manager inventories)."""
+    tool = _gh_tool("rg")
+    screen = _screen([tool], {"rg": True})
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "rg": VersionStatus(
+            tool_id="rg",
+            installed="14.1.0",
+            latest=None,
+            outdated=None,
+            stale=False,
+            source="github",
+        )
+    }
+    cell = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
+    assert cell == "14.1.0 (no comparison)"
+    assert "(source unknown)" not in cell
+
+
+def test_ver_cell_dim_unparseable_latest_keeps_installed_with_no_comparison_marker() -> None:
+    """The `outdated is None` branch (both versions exist but one would not
+    parse) had zero existing coverage: every prior `outdated=None` fixture
+    also had `latest=None`, which is the OTHER branch."""
+    tool = _tool("rg")
+    screen = _screen([tool], {"rg": True})
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "rg": VersionStatus(
+            tool_id="rg",
+            installed="14.1.0",
+            latest="not-a-version",
+            outdated=None,
+            stale=False,
+            source="github",
+        )
+    }
+    cell = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
+    assert cell == "14.1.0 (no comparison)"
+
+
+def test_ver_cell_dim_checking_marker_only_while_refreshing() -> None:
+    tool = _tool("rg")
+    screen = _screen([tool], {"rg": True})
+    screen.version_refreshing = True
+    assert screen._ver_cell(tool).plain == "checking…"  # pyright: ignore[reportPrivateUsage]
+    screen.version_refreshing = False
+    assert screen._ver_cell(tool).plain == "no version"  # pyright: ignore[reportPrivateUsage]
+
+
+def test_ver_cell_dim_six_situations_collapse_onto_exactly_four_texts() -> None:
+    """The six dim-producing situations collapse onto four distinct texts,
+    and the only two collapses are the named ones: S2 (no status, not
+    refreshing) equals S3 (a status whose installed version could not be
+    read), and S5 (a real source with no latest) equals S6 (both versions
+    present, outdated undetermined). Both halves -- the two equalities and
+    the four-way distinctness -- are asserted together: the distinctness
+    alone would pass a design that stopped sharing the two intended labels,
+    and the equalities alone would pass a design that collapsed everything
+    onto one label."""
+    tool = _tool("rg")
+    installed_version = "14.1.0"
+
+    def cell_for(*, refreshing: bool, status: VersionStatus | None) -> str:
+        screen = _screen([tool], {"rg": True})
+        screen.version_refreshing = refreshing
+        if status is not None:
+            screen._version_statuses = {"rg": status}  # pyright: ignore[reportPrivateUsage]
+        return screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
+
+    s1 = cell_for(refreshing=True, status=None)
+    s2 = cell_for(refreshing=False, status=None)
+    s3 = cell_for(
+        refreshing=False,
+        status=VersionStatus(
+            tool_id="rg", installed=None, latest=None, outdated=None, stale=True, source="unknown"
+        ),
+    )
+    s4 = cell_for(
+        refreshing=False,
+        status=VersionStatus(
+            tool_id="rg",
+            installed=installed_version,
+            latest=None,
+            outdated=None,
+            stale=False,
+            source="unknown",
+        ),
+    )
+    s5 = cell_for(
+        refreshing=False,
+        status=VersionStatus(
+            tool_id="rg",
+            installed=installed_version,
+            latest=None,
+            outdated=None,
+            stale=False,
+            source="github",
+        ),
+    )
+    s6 = cell_for(
+        refreshing=False,
+        status=VersionStatus(
+            tool_id="rg",
+            installed=installed_version,
+            latest="not-a-version",
+            outdated=None,
+            stale=False,
+            source="github",
+        ),
+    )
+    assert s2 == s3
+    assert s5 == s6
+    representative = (s1, s2, s4, s5)
+    assert len(set(representative)) == 4, representative
+
+
+def test_ver_cell_dim_stale_suffix_scoped_to_colored_branches_only() -> None:
+    """D-04 as interpreted 2026-09-16 (15.1-CONTEXT.md): the trailing stale
+    suffix is scoped to the two colored branches and NEVER appended on a dim
+    cell, built from statuses that all carry stale=True so the property is
+    asserted over all eight situations at once rather than one spot check --
+    the risk this guards is a single dim branch being rewritten to fall
+    through into the suffix assembly."""
+    tool = _tool("rg")
+    installed_version = "14.1.0"
+
+    def cell_for(status: VersionStatus | None, *, refreshing: bool = False) -> str:
+        screen = _screen([tool], {"rg": True})
+        screen.version_refreshing = refreshing
+        if status is not None:
+            screen._version_statuses = {"rg": status}  # pyright: ignore[reportPrivateUsage]
+        return screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
+
+    dim_cells = [
+        cell_for(None, refreshing=True),  # S1
+        cell_for(None, refreshing=False),  # S2
+        cell_for(
+            VersionStatus(
+                tool_id="rg",
+                installed=None,
+                latest=None,
+                outdated=None,
+                stale=True,
+                source="unknown",
+            )
+        ),  # S3
+        cell_for(
+            VersionStatus(
+                tool_id="rg",
+                installed=installed_version,
+                latest=None,
+                outdated=None,
+                stale=True,
+                source="unknown",
+            )
+        ),  # S4
+        cell_for(
+            VersionStatus(
+                tool_id="rg",
+                installed=installed_version,
+                latest=None,
+                outdated=None,
+                stale=True,
+                source="github",
+            )
+        ),  # S5
+        cell_for(
+            VersionStatus(
+                tool_id="rg",
+                installed=installed_version,
+                latest="not-a-version",
+                outdated=None,
+                stale=True,
+                source="github",
+            )
+        ),  # S6
+    ]
+    colored_cells = [
+        cell_for(
+            VersionStatus(
+                tool_id="rg",
+                installed=installed_version,
+                latest="15.0.0",
+                outdated=True,
+                stale=True,
+                source="github",
+            )
+        ),
+        cell_for(
+            VersionStatus(
+                tool_id="rg",
+                installed=installed_version,
+                latest=installed_version,
+                outdated=False,
+                stale=True,
+                source="github",
+            )
+        ),
+    ]
+    for dim in dim_cells:
+        assert "~" not in dim, dim
+    for colored in colored_cells:
+        assert colored.endswith(" ~"), colored
+
+
+async def test_ver_cell_dim_checking_marker_reaches_the_rendered_table(tmp_path: Path) -> None:
+    """The checking marker must be observed in a PAINTED `DataTable` cell
+    while a version-refresh worker is provably blocked, not only through a
+    direct `_ver_cell` call with `version_refreshing` forced True -- that
+    would pass against the pre-fix code, which never repaints the table when
+    a refresh starts."""
+    tool = _gh_tool("dasel")
+    started = threading.Event()
+    release = threading.Event()
+    calls = {"n": 0}
+
+    def resolve_tag(repo: str) -> str:
+        del repo
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # First pass crashes -- the worker-crash shape already used
+            # elsewhere in this file: an empty status map is posted, so the
+            # cell starts on the no-version marker, never the real version.
+            raise RuntimeError("simulated domain failure")
+        started.set()
+        assert release.wait(timeout=5)
+        return "v2.8.0"
+
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=resolve_tag,
+        probe_output=lambda argv: "1.0.0",
+    )
+    app = _unified_app([tool], {"dasel": True}, _BLURBS, version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        for _ in range(400):
+            if not app.catalog.version_refreshing:
+                break
+            await pilot.pause()
+        await pilot.pause()
+        table = app.catalog.query_one(DataTable[Any])
+        assert table.get_cell("dasel", "ver").plain == "no version"
+        app.catalog.enter_view()
+        # A blocking Event.wait() here would starve the asyncio loop of the
+        # tick it needs to actually dispatch the thread-worker submission --
+        # pilot.pause() yields control instead, so the background thread gets
+        # scheduled and can reach started.set().
+        for _ in range(500):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        assert table.get_cell("dasel", "ver").plain == "checking…"
+        release.set()
+        for _ in range(400):
+            if not app.catalog.version_refreshing:
+                break
+            await pilot.pause()
+        await pilot.pause()
+        assert "v2.8.0" in table.get_cell("dasel", "ver").plain
+
+
+async def test_refresh_cursor_survives_both_repaints_of_one_cycle(tmp_path: Path) -> None:
+    """Both repaints a refresh cycle now performs -- the start-of-refresh
+    reload and the completion reload -- must leave the user's cursor where
+    they left it, read back at both points (not only at the end, which
+    cannot tell a fix that survives only the completion rebuild apart from
+    one that also survives the start-of-refresh rebuild)."""
+    tools = [_gh_tool("alpha"), _gh_tool("beta")]
+    started = threading.Event()
+    release = threading.Event()
+    blocking = {"on": False}
+
+    def probe_output(argv: list[str]) -> str | None:
+        # probe_output runs unconditionally every pass, unlike resolve_tag
+        # (gated by the per-tool GitHub cache's own freshness window) -- the
+        # second enter_view() below would otherwise never call resolve_tag at
+        # all once the first pass has already cached a fresh entry.
+        del argv
+        if blocking["on"]:
+            started.set()
+            assert release.wait(timeout=5)
+        return "1.0.0"
+
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1.0.0",
+        probe_output=probe_output,
+    )
+    app = _unified_app(tools, {"alpha": True, "beta": True}, _BLURBS, version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        for _ in range(400):
+            if not app.catalog.version_refreshing:
+                break
+            await pilot.pause()
+        await pilot.pause()
+        table = app.catalog.query_one(DataTable[Any])
+        table.move_cursor(row=table.get_row_index("beta"))
+        await pilot.pause()
+        started_row = table.cursor_row
+        blocking["on"] = True
+        app.catalog.enter_view()
+        # See the sibling checking-marker test above: pilot.pause() (not a
+        # blocking Event.wait()) is what lets the thread-worker submission
+        # actually happen while we poll.
+        for _ in range(500):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        assert table.cursor_row == started_row
+        release.set()
+        for _ in range(400):
+            if not app.catalog.version_refreshing:
+                break
+            await pilot.pause()
+        await pilot.pause()
+        assert table.cursor_row == started_row
 
 
 async def test_budget_deferred_row_renders_stale_marker(tmp_path: Path) -> None:
@@ -1256,9 +1587,9 @@ def test_unknown_owner_detail_contains_unknown_reason(tmp_path: Path) -> None:
     cell = screen._ver_cell(tool)  # pyright: ignore[reportPrivateUsage]
     # A probed version is real information even with no "latest" to diff
     # against (e.g. a dnf/apt/pacman package -- ownership.py deliberately
-    # doesn't track those managers) -- showing "unknown" here would discard
-    # a version we already have.
-    assert cell.plain == "14.1.0"
+    # doesn't track those managers) -- discarding it would throw away a
+    # version we already have, so the marker is appended, not substituted.
+    assert cell.plain == "14.1.0 (source unknown)"
     assert "re-check is pending" not in text
 
 

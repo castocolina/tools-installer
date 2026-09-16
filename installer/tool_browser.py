@@ -18,6 +18,7 @@ from textual.css.query import NoMatches
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import DataTable, Static, Tab, Tabs
+from textual.widgets.data_table import RowDoesNotExist
 
 from installer.ui_common import highlighted_key, mark
 
@@ -137,6 +138,12 @@ class ToolBrowser(Widget, Generic[T]):
     # -- rows --------------------------------------------------------------
     def _rebuild(self) -> None:
         table = self.query_one(DataTable[Any])
+        # Capture the row key under the cursor BEFORE clear() so a rebuild
+        # (both reloads a version refresh now does, a tab switch, a column
+        # sort) does not throw the user back to row 0 every time. None on an
+        # empty table (the on_mount call site) or when nothing is
+        # highlighted yet.
+        previous_key = highlighted_key(table)
         table.clear(columns=True)
         self._section_detail.clear()
         for label, key in self._adapter.columns:
@@ -150,9 +157,24 @@ class ToolBrowser(Widget, Generic[T]):
                 self._section_detail[f"#{title}"] = detail
             for item in members:
                 table.add_row(*self._adapter.row_cells(item), key=self._adapter.item_id(item))
-        first = self._first_selectable_row()
-        if first is not None:
-            table.move_cursor(row=first)
+        # Restore the cursor to the row the user was on -- a section row that
+        # survives the rebuild is a place the user chose (they can already
+        # reach one with `up`), so landing back on it is correct, not a bug.
+        # Fall back to the first selectable row -- today's unconditional
+        # behaviour -- when there was no key to restore or the rebuilt table
+        # no longer carries it (a filtered-out row, the uninstall view's live
+        # re-derivation).
+        restored = False
+        if previous_key is not None:
+            try:
+                table.move_cursor(row=table.get_row_index(previous_key))
+                restored = True
+            except RowDoesNotExist:
+                restored = False
+        if not restored:
+            first = self._first_selectable_row()
+            if first is not None:
+                table.move_cursor(row=first)
         # DataTable keeps serving render caches measured at the previous column
         # widths after clear(columns=True); a cell mutation arriving in a later
         # render cycle flushes them (textual 8.2.7), so re-mark every row once

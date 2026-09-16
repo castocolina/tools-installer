@@ -165,6 +165,26 @@ _COLUMNS = (
     ("What it does", "desc"),
 )
 
+# Every dim Ver cell state gets its own text (D-02) -- no two of these mean
+# the same thing, and _ver_cell's six dim branches map onto exactly these
+# four (the two no-readable-version branches share _VER_NO_VERSION, and the
+# two nothing-to-compare branches share _VER_NO_COMPARISON; no other pair
+# collides). _LEGEND interpolates these same constants below, so a label
+# edit here reaches the legend automatically and the two can never describe
+# different things.
+_VER_CHECKING = "checking…"
+_VER_NO_VERSION = "no version"
+# Named after status.source, not a conclusion about the tool: the fallthrough
+# that stamps source="unknown" (installer/version_status.py:325-337) is
+# reached by both a native dnf/apt/pacman/rpm-ostree package AND a tool whose
+# manager inventory could not be read this pass -- VersionStatus carries
+# neither the owner nor unknown_reason, so the cell cannot tell them apart.
+# Follow-up: Phase 15.4's ownership column should plumb the resolved owner
+# into VersionStatus so this can split into two accurate labels.
+_VER_SOURCE_UNKNOWN = "(source unknown)"
+_VER_NO_COMPARISON = "(no comparison)"
+_VER_STALE = "~"
+
 _LEGEND = (
     "[bold red]P0[/] essential · [bold yellow]P1[/] recommended · [blue]P2[/] nice-to-have"
     " · [dim]P3[/] niche  |  for [bold cyan]AI[/] / [magenta]human[/] / both"
@@ -291,6 +311,15 @@ class CatalogScreen(AppScreen):
             return
         self._version_refresh_generation += 1
         self.version_refreshing = True
+        # Repaint through the same path the completion handler already uses
+        # so the checking marker is something a user can actually see, not
+        # only a value _ver_cell returns to a direct caller. Without this,
+        # version_refreshing flips on a screen nobody repaints until the
+        # worker finishes, so a rendered cell keeps its previous text for the
+        # whole refresh. reload's selection-pruning line is a no-op here
+        # because self.tools is unchanged between the two adapters; the
+        # on_mount call site stays safe because reload guards on is_mounted.
+        self._browser.reload(self._adapter())
         self._refresh_versions_worker(self._version_refresh_generation)
 
     @work(thread=True, exclusive=True, group="version-refresh", exit_on_error=False)
@@ -321,14 +350,25 @@ class CatalogScreen(AppScreen):
         if not self._installed.get(tool.id, False):
             return Text("")
         status = self._version_statuses.get(tool.id)
-        if status is None or status.installed is None:
-            return Text("unknown", style="dim")
+        if status is None:
+            # The screen attribute is the only thing that separates a probe
+            # that has not landed yet from one that landed with nothing (a
+            # crashed worker) -- without it this would claim to be checking
+            # forever after a crash.
+            return Text(_VER_CHECKING if self.version_refreshing else _VER_NO_VERSION, style="dim")
+        if status.installed is None:
+            return Text(_VER_NO_VERSION, style="dim")
         if status.latest is None:
             # A probed version with no comparison source (e.g. a dnf/apt/pacman
             # package -- ownership.py deliberately doesn't track those managers,
             # so there is no "latest" to diff against) is still real information;
-            # showing "unknown" here threw away a version we already have.
-            return Text(status.installed, style="dim")
+            # replacing it with a bare marker would throw away a version we
+            # already have. status.source == "unknown" is resolve_status's
+            # final fallthrough (installer/version_status.py:325-337), reached
+            # by both a native package and a manager inventory that could not
+            # be read this pass -- see _VER_SOURCE_UNKNOWN's own comment.
+            marker = _VER_SOURCE_UNKNOWN if status.source == "unknown" else _VER_NO_COMPARISON
+            return Text.assemble((status.installed, "dim"), (f" {marker}", "dim"))
         if status.outdated is True:
             base = f"{status.installed} -> {status.latest}"
             color = "yellow"
@@ -336,11 +376,23 @@ class CatalogScreen(AppScreen):
             base = status.installed
             color = "green"
         else:
-            return Text("unknown", style="dim")
-        # Trailing dim ` ~` marks a cached `latest` at or past STALE_AFTER that
-        # this pass did not re-confirm.
+            # Both versions exist but one of them would not parse -- the
+            # version is real and must survive, same reasoning as the
+            # latest-is-None branch above.
+            return Text.assemble((status.installed, "dim"), (f" {_VER_NO_COMPARISON}", "dim"))
+        # The trailing stale suffix is scoped to these two colored branches
+        # only, never appended on a dim cell (D-04 as interpreted 2026-09-16
+        # -- see 15.1-CONTEXT.md's D-04 Interpretation note). It qualifies a
+        # `latest` this cell rendered a claim about; a dim cell renders no
+        # such claim, and resolve_status hardcodes stale=True on every path
+        # that yields latest=None (installer/version_status.py:269, :290,
+        # :332), so an unconditional suffix would sit on substantially every
+        # dim cell and distinguish nothing. Pinned by
+        # tests/test_catalog_tui.py's stale-scope test (ver_cell_dim) and the
+        # pre-existing anti-regression assertion that a stale=True status
+        # with installed=None renders no suffix.
         if status.stale:
-            return Text.assemble((base, color), (" ~", "dim"))
+            return Text.assemble((base, color), (f" {_VER_STALE}", "dim"))
         return Text(base, style=color)
 
     # -- catalog data wiring for the browser adapter -----------------------

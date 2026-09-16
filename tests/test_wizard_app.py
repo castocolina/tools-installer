@@ -3333,7 +3333,7 @@ async def test_version_shows_probed_install_when_latest_fetch_fails(tmp_path: Pa
         await _settle_versions(app, pilot)
         assert app.is_running
         cell = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver")
-        assert cell.plain == "1.2.0"
+        assert cell.plain == "1.2.0 (no comparison)"
         await pilot.press("space")
         assert app.is_running
         assert app.catalog.selected == {"codegraph"}
@@ -3353,7 +3353,7 @@ async def test_version_worker_crash_clears_refreshing_and_renders_a_cell(
         assert app.is_running
         assert app.catalog.version_refreshing is False
         cell = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver")
-        assert cell.plain == "unknown"
+        assert cell.plain == "no version"
         assert cell.plain != ""
 
 
