@@ -434,6 +434,38 @@ def test_unbuffered_argv_not_double_wrapped_on_python_child() -> None:
     assert result == [sys.executable, "-c", "pass"]
 
 
+@pytest.mark.parametrize("name", ["python", "python3", "python3.12"])
+def test_unbuffered_argv_skips_a_bare_interpreter_name(name: str) -> None:
+    # The shapes PYTHONUNBUFFERED really does cover are skipped by NAME too,
+    # not only when argv[0] happens to be this process's sys.executable.
+    assert unbuffered_argv([f"/usr/bin/{name}", "-c", "pass"], "/usr/bin/stdbuf") == [
+        f"/usr/bin/{name}",
+        "-c",
+        "pass",
+    ]
+
+
+@pytest.mark.parametrize("name", ["pythonpy", "python-lsp-server", "python-tool"])
+def test_unbuffered_argv_wraps_a_python_prefixed_non_interpreter(name: str) -> None:
+    # A prefix test excluded these from rung 2 while PYTHONUNBUFFERED does
+    # nothing for them -- i.e. the exact tool this phase exists to unblock
+    # would silently keep bursting. They are real binaries, so they get wrapped.
+    assert unbuffered_argv([name, "install"], "/usr/bin/stdbuf") == [
+        "/usr/bin/stdbuf",
+        "-oL",
+        name,
+        "install",
+    ]
+
+
+def test_unbuffered_argv_on_an_empty_cmd_is_not_a_python_child() -> None:
+    # The empty-cmd guard: `_is_python_child([])` must answer False rather than
+    # raise IndexError on `cmd[0]`. Reached through the public function, which
+    # then has nothing to skip and wraps the (empty) argv.
+    assert unbuffered_argv([], "/usr/bin/stdbuf") == ["/usr/bin/stdbuf", "-oL"]
+    assert unbuffered_argv([], None) == []
+
+
 def test_streaming_runner_unwrapped_retry_on_popen_oserror(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -119,18 +120,30 @@ def unbuffered_env() -> dict[str, str]:
     return {**os.environ, UNBUFFER_ENV_VAR: "1"}
 
 
+_INTERPRETER_NAME = re.compile(r"python(\d+(\.\d+)?)?")
+
+
 def _is_python_child(cmd: list[str]) -> bool:
     """Return True when cmd is a Python interpreter invocation.
 
-    A best-effort heuristic: uv run python ... presents as uv and will be
-    wrapped, which is harmless, because LD_PRELOAD survives the exec and the
+    Matched on the interpreter SHAPES that actually honour PYTHONUNBUFFERED:
+    this process's own sys.executable, or a basename that is exactly `python`,
+    `python3`, `python3.12` and nothing more. A prefix test would also exclude
+    `pythonpy`, `python-lsp-server` or a wrapper script named `python-tool`
+    from rung 2 — real non-Python binaries the env var does nothing for, so
+    the tool this phase exists to unblock would silently keep bursting.
+
+    The residual gap is in the safe direction, and stays best-effort: an
+    interpreter this pattern misses (`uv run python ...` presents as `uv`; a
+    `python3.14t` free-threaded build) is merely wrapped as well as
+    env-configured, which is harmless — LD_PRELOAD survives the exec and the
     env var is set regardless. The point is to name the case rung 1 already
-    covers so rung 2 does not double-wrap it.
+    covers so rung 2 does not double-wrap it, never to guess wider than that.
     """
     if not cmd:
         return False
     argv0 = cmd[0]
-    return argv0 == sys.executable or Path(argv0).name.startswith("python")
+    return argv0 == sys.executable or _INTERPRETER_NAME.fullmatch(Path(argv0).name) is not None
 
 
 def unbuffered_argv(cmd: list[str], stdbuf: str | None) -> list[str]:
