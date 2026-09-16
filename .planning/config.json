@@ -59,17 +59,13 @@
         "cli": "opencode",
         "model": "openai/gpt-5.6-sol"
       },
-      "codex-sol-high": {
-        "cli": "codex",
-        "model": "gpt-5.6-sol"
-      },
       "opencode-fallback": {
         "cli": "opencode",
         "model": "router-env/my-coding"
       }
     },
     "default_reviewers": [
-      "opencode-fallback"
+      "opencode-plan-review"
     ],
     "timeouts": {
       "opencode": 2400
