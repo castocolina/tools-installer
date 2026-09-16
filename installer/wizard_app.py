@@ -1877,7 +1877,20 @@ class UnifiedApp(App[list[str] | None]):
             fresh = {tool.id: installed(tool) for tool in self._catalog_tools}
             for screen in self._catalogs.values():
                 screen.set_installed(fresh)
-        active = self._catalogs[self.current_view]
+        # A .get(), not an index: _catalogs is keyed by tier only
+        # (system/user/ai) while current_view ranges over all six VIEWS
+        # (doctor, uninstall and policies included). Only a catalog tier
+        # pushes ExecuteScreen today, but that is one call site's behaviour
+        # rather than an enforced invariant -- nothing structurally stops a
+        # future caller pushing it with this callback from the uninstall or
+        # doctor view -- and a KeyError raised inside a Textual screen-result
+        # callback takes the message pump down instead of degrading. No
+        # catalog on top means nothing to re-enter; the installed maps above
+        # were still replaced, and a pending warning is left pending for the
+        # next close that has a status line to write it to.
+        active = self._catalogs.get(self.current_view)
+        if active is None:
+            return
         active.enter_view()
         # Written after enter_view so the refresh cannot repaint over it.
         if self._invalidate_warning is not None:

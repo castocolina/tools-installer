@@ -3739,6 +3739,40 @@ async def test_install_closed_refresh_requeries_the_manager_inventory_after_a_ru
         assert service.epoch > before_epoch
 
 
+async def test_install_closed_degrades_when_the_active_view_is_not_a_catalog_tier(
+    tmp_path: Path,
+) -> None:
+    """_catalogs is keyed by tier only (system/user/ai) while current_view
+    ranges over all six VIEWS. Only a catalog tier pushes ExecuteScreen today,
+    but that is one call site's behaviour rather than an enforced invariant --
+    pushing it with this callback from the uninstall or doctor view is the
+    obvious future caller -- and a KeyError raised inside a Textual
+    screen-result callback takes the message pump down instead of degrading.
+    """
+    tool = _gh_tool("codegraph", tier="system")
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    execute = ExecuteInputs(
+        catalog=[tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda _t: True,
+        install=_tracking_install(lambda _t: None),
+    )
+    app = _version_app([tool], {"codegraph": False}, service, execute=execute)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        await pilot.press("4")
+        await pilot.pause()
+        assert app.current_view == "doctor"
+        app._install_closed(None)  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        # No KeyError: the app is still up, and the half that does not need a
+        # visible catalog -- the installed maps -- still ran.
+        assert app.is_running is True
+        assert app.catalog._installed == {"codegraph": True}  # pyright: ignore[reportPrivateUsage]
+
+
 async def test_a_failed_post_run_cache_invalidation_is_reported_not_swallowed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
