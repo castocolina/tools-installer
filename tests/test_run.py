@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import sys
 import threading
@@ -16,6 +17,7 @@ from installer.run import (
     run_command,
     run_output,
     run_query,
+    unbuffered_argv,
 )
 
 
@@ -364,24 +366,18 @@ def test_streaming_runner_env_rung_is_unconditional_even_with_unbuffer_false(
 
 def test_unbuffered_argv_wraps_when_available() -> None:
     # Wrapped when available: a runner with stdbuf path hands Popen the wrapped argv.
-    from installer.run import unbuffered_argv
-
     result = unbuffered_argv(["brew", "install", "rg"], "/usr/bin/stdbuf")
     assert result == ["/usr/bin/stdbuf", "-oL", "brew", "install", "rg"]
 
 
 def test_unbuffered_argv_skips_when_absent() -> None:
     # Skipped when absent: stdbuf=None returns caller's argv unchanged.
-    from installer.run import unbuffered_argv
-
     result = unbuffered_argv(["brew", "install", "rg"], None)
     assert result == ["brew", "install", "rg"]
 
 
 def test_unbuffered_argv_not_double_wrapped_on_python_child() -> None:
     # Not double-wrapped: Python child with available stdbuf returns unwrapped.
-    from installer.run import unbuffered_argv
-
     result = unbuffered_argv([sys.executable, "-c", "pass"], "/usr/bin/stdbuf")
     assert result == [sys.executable, "-c", "pass"]
 
@@ -483,9 +479,7 @@ def test_streaming_runner_caller_argv_in_error_when_wrapped_command_fails(
     assert "/usr/bin/stdbuf" not in exc.value.cmd
 
 
-@pytest.mark.skipif(
-    __import__("shutil").which("stdbuf") is None, reason="coreutils stdbuf not on PATH"
-)
+@pytest.mark.skipif(shutil.which("stdbuf") is None, reason="coreutils stdbuf not on PATH")
 def test_stdbuf_wrapper_is_applied_end_to_end() -> None:
     # Against the real binary: a real stdbuf was execed by the production argv
     # and configured the child's environment. The child reports _STDBUF_O=L.
@@ -493,7 +487,7 @@ def test_stdbuf_wrapper_is_applied_end_to_end() -> None:
     runner = StreamingRunner(
         lambda tool_id, line: seen.append((tool_id, line)),
         unbuffer=True,
-        which=__import__("shutil").which,
+        which=shutil.which,
     )
     runner.set_tool("test")
     # Shell command that prints the _STDBUF_O env var set by stdbuf
