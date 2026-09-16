@@ -91,7 +91,7 @@ def test_run_output_unbounded_by_default(monkeypatch: pytest.MonkeyPatch) -> Non
     # legitimately takes minutes; killing it half-way is worse than waiting.
     seen: dict[str, object] = {}
 
-    def fake_run(cmd: list[str], **kwargs: object):
+    def fake_run(cmd: list[str], **kwargs: object):  # type: ignore
         seen.update(kwargs)
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
@@ -211,7 +211,7 @@ def test_streaming_runner_nonzero_exit_raises_command_error_after_emitting() -> 
 
 
 def test_streaming_runner_missing_binary_is_127(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_popen(*_args: object, **_kwargs: object) -> subprocess.Popen[str]:
+    def fake_popen(*_args: object, **_kwargs: object) -> subprocess.Popen[str]:  # type: ignore
         raise FileNotFoundError("nope")
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
@@ -360,3 +360,144 @@ def test_streaming_runner_env_rung_is_unconditional_even_with_unbuffer_false(
     assert lines[0] == "1", f"PYTHONUNBUFFERED not set: {lines[0]}"
     assert lines[1] == "True", f"PATH not present: {lines[1]}"
     assert lines[2] == "True", f"HOME not present: {lines[2]}"
+
+
+def test_unbuffered_argv_wraps_when_available() -> None:
+    # Wrapped when available: a runner with stdbuf path hands Popen the wrapped argv.
+    from installer.run import unbuffered_argv
+
+    result = unbuffered_argv(["brew", "install", "rg"], "/usr/bin/stdbuf")
+    assert result == ["/usr/bin/stdbuf", "-oL", "brew", "install", "rg"]
+
+
+def test_unbuffered_argv_skips_when_absent() -> None:
+    # Skipped when absent: stdbuf=None returns caller's argv unchanged.
+    from installer.run import unbuffered_argv
+
+    result = unbuffered_argv(["brew", "install", "rg"], None)
+    assert result == ["brew", "install", "rg"]
+
+
+def test_unbuffered_argv_not_double_wrapped_on_python_child() -> None:
+    # Not double-wrapped: Python child with available stdbuf returns unwrapped.
+    from installer.run import unbuffered_argv
+
+    result = unbuffered_argv([sys.executable, "-c", "pass"], "/usr/bin/stdbuf")
+    assert result == [sys.executable, "-c", "pass"]
+
+
+def test_streaming_runner_unwrapped_retry_on_popen_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A stdbuf that vanishes after resolution does not fail the install.
+    popen_attempts: list[list[str]] = []
+    original_popen = subprocess.Popen
+
+    def tracking_popen(argv: list[str], **kwargs):  # type: ignore
+        popen_attempts.append(argv)
+        # Raise for stdbuf argv, succeed for unwrapped
+        if argv[0] == "/usr/bin/stdbuf":
+            raise FileNotFoundError("stdbuf disappeared")
+        # For the unwrapped retry
+        return original_popen(argv, **kwargs)  # type: ignore
+
+    monkeypatch.setattr(subprocess, "Popen", tracking_popen)  # type: ignore
+
+    runner = StreamingRunner(
+        lambda _tool, _line: None, unbuffer=True, which=lambda _: "/usr/bin/stdbuf"
+    )
+    runner.set_tool("test")
+    # Use a non-Python command so it's wrapped
+    runner(["sh", "-c", "echo ok"])
+
+    # Should have tried twice: wrapped, then unwrapped
+    assert len(popen_attempts) == 2
+    assert popen_attempts[0][0] == "/usr/bin/stdbuf"
+    assert popen_attempts[1][0] == "sh"
+
+
+def test_streaming_runner_knob_off_never_calls_which(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Not wrapped when the knob is off: which is never called.
+    which_calls: list[str] = []
+
+    def fake_which(name: str) -> str | None:
+        which_calls.append(name)
+        return "/usr/bin/stdbuf"
+
+    runner = StreamingRunner(lambda _tool, _line: None, unbuffer=False, which=fake_which)
+    runner.set_tool("test")
+    runner([sys.executable, "-c", "print('ok')"])
+
+    # which should never have been called
+    assert which_calls == []
+
+
+def test_streaming_runner_which_called_exactly_once_across_multiple_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Resolved once: which is called once in constructor, not per __call__.
+    which_calls: list[str] = []
+
+    def fake_which(name: str) -> str | None:
+        which_calls.append(name)
+        return "/usr/bin/stdbuf"
+
+    runner = StreamingRunner(lambda _tool, _line: None, unbuffer=True, which=fake_which)
+    # which already called once in constructor
+    assert which_calls == ["stdbuf"]
+
+    runner.set_tool("test")
+    runner([sys.executable, "-c", "print('1')"])
+    runner([sys.executable, "-c", "print('2')"])
+
+    # Should still be exactly one call from constructor
+    assert which_calls == ["stdbuf"]
+
+
+def test_streaming_runner_caller_argv_in_error_when_wrapped_command_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Failure text stays paste-able: wrapped command that exits non-zero
+    # reports the caller's argv, not the stdbuf-wrapped argv.
+    original_popen = subprocess.Popen
+
+    def fake_popen(argv: list[str], **kwargs):  # type: ignore
+        # Child exits 3
+        return original_popen([sys.executable, "-c", "import sys; sys.exit(3)"], **kwargs)  # type: ignore
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)  # type: ignore
+
+    runner = StreamingRunner(
+        lambda _tool, _line: None, unbuffer=True, which=lambda _: "/usr/bin/stdbuf"
+    )
+    runner.set_tool("test")
+
+    cmd = [sys.executable, "-c", "print('fail')"]
+    with pytest.raises(CommandError) as exc:
+        runner(cmd)
+
+    # CommandError must carry the caller's argv, not the wrapped one
+    assert exc.value.cmd == cmd
+    assert "/usr/bin/stdbuf" not in exc.value.cmd
+
+
+@pytest.mark.skipif(
+    __import__("shutil").which("stdbuf") is None, reason="coreutils stdbuf not on PATH"
+)
+def test_stdbuf_wrapper_is_applied_end_to_end() -> None:
+    # Against the real binary: a real stdbuf was execed by the production argv
+    # and configured the child's environment. The child reports _STDBUF_O=L.
+    seen: list[tuple[str, str]] = []
+    runner = StreamingRunner(
+        lambda tool_id, line: seen.append((tool_id, line)),
+        unbuffer=True,
+        which=__import__("shutil").which,
+    )
+    runner.set_tool("test")
+    # Shell command that prints the _STDBUF_O env var set by stdbuf
+    runner(["sh", "-c", "printf '%s\\n' \"$_STDBUF_O\""])
+
+    lines = [line for _tool, line in seen]
+    assert "L" in lines, f"stdbuf wrapper did not set _STDBUF_O=L. Lines: {lines}"
