@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import partial
@@ -23,6 +24,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.message import Message
 from textual.screen import ModalScreen
+from textual.timer import Timer
 from textual.widgets import Label, ListItem, ListView, RichLog, Static
 
 from installer.audit import audit
@@ -74,6 +76,8 @@ _EXECUTE_KEYS = (
 _CANCEL_AVAILABLE = "Press c to stop after the current tool; nothing further will start."
 _CANCEL_ARMED = "The current tool will finish and nothing further will start."
 _CANCEL_IDLE = "No install is running."
+SILENCE_SECONDS = 2.0
+_WAITING_OUTPUT = "-- still running; waiting for output --"
 _NO_MANAGER_CLAIMED = "no manager claimed this tool"
 _DONE_STATUSES = frozenset({InstallStatus.INSTALLED, InstallStatus.ALREADY_INSTALLED})
 ProgressState = Literal["pending", "done", "not-done", "skipped"]
@@ -235,11 +239,27 @@ class InstallLogLine(Message):
 
     post_message is Textual's thread-safe hand-off back to the event loop, so
     the worker never touches a widget from its own thread.
+
+    A transient line (``transient=True``) is written to the log for the user
+    to read and is NOT output: nothing downstream may treat it as evidence
+    that the child said something. ``generation`` is the silence generation
+    it was minted under -- the token the handler uses to tell a still-true
+    transient from one the world has moved past. ``generation`` is
+    meaningless on a non-transient line and stays None there.
     """
 
-    def __init__(self, tool_id: str, line: str) -> None:
+    def __init__(
+        self,
+        tool_id: str,
+        line: str,
+        *,
+        transient: bool = False,
+        generation: int | None = None,
+    ) -> None:
         self.tool_id = tool_id
         self.line = line
+        self.transient = transient
+        self.generation = generation
         super().__init__()
 
 
@@ -325,6 +345,7 @@ class ExecuteInputs:
     unattended: bool = False
     version_refresh: VersionRefreshService | None = None
     updates: UpdateService | None = None
+    now: Callable[[], float] = time.monotonic
 
 
 class ExecuteScreen(ModalScreen[None]):
@@ -377,6 +398,11 @@ class ExecuteScreen(ModalScreen[None]):
         self._last_tool_id: str | None = None
         self._progress: dict[str, ProgressState] = {}
         self._waiting_prompt: str | None = None
+        self._in_flight: str | None = None
+        self._last_output_at: float | None = None
+        self._silence_noted = False
+        self._silence_generation = 0
+        self._silence_timer: Timer | None = None
         self.cancel_event = threading.Event()
         self.status = StatusLine()
         self.started = False
@@ -444,6 +470,8 @@ class ExecuteScreen(ModalScreen[None]):
             return
         self.started = True
         self.status.set(_CANCEL_AVAILABLE, "ok")
+        self._last_output_at = self._inputs.now()
+        self._arm_silence_timer(SILENCE_SECONDS)
         self._execute_worker()
 
     def action_cancel_run(self) -> None:
@@ -601,6 +629,75 @@ class ExecuteScreen(ModalScreen[None]):
     def _should_continue(self) -> bool:
         return not self.cancel_event.is_set()
 
+    def _note_output(self, tool_id: str) -> None:
+        """Establish tool_id as the in-flight tool and reset the silence window.
+
+        The in-flight tool is established by the first NON-TRANSIENT
+        InstallLogLine for that tool, and by nothing else. Installs satisfy
+        that because install_tool calls runner.method_started(method.kind)
+        before every method (installer/engine.py:137-138), which emits
+        "-- trying {method} --" through this same path before the child is
+        ever launched; updates satisfy it because _run_updates posts
+        _UPDATE_STARTED before updates.run. A caller that streams nothing at
+        all never establishes an in-flight tool and therefore never shows an
+        indicator -- the deliberate D-08 consequence that the screen refuses
+        to name a tool it has not heard from.
+        """
+        self._in_flight = tool_id
+        self._last_output_at = self._inputs.now()
+        self._silence_noted = False
+        self._silence_generation += 1
+
+    def _clear_in_flight(self) -> None:
+        self._in_flight = None
+        self._last_output_at = None
+        self._silence_noted = False
+        self._silence_generation += 1
+
+    def _transient_is_current(self, message: InstallLogLine) -> bool:
+        return (
+            not self.finished
+            and self._waiting_prompt is None
+            and message.tool_id == self._in_flight
+            and self._silence_noted
+            and message.generation == self._silence_generation
+        )
+
+    def _arm_silence_timer(self, delay: float) -> None:
+        self._silence_timer = self.set_timer(delay, self._check_output_silence)
+
+    def _check_output_silence(self) -> None:
+        """One-shot silence check that re-arms itself; never a poll body.
+
+        Re-arming from inside this callback -- rather than resetting a timer
+        on every real log line -- keeps exactly one pending Timer at a time.
+        A 500-line burst from a chatty installer creates zero extra timers.
+        """
+        self._silence_timer = None
+        if self.finished:
+            return
+        in_flight = self._in_flight
+        last_output_at = self._last_output_at
+        if (
+            in_flight is None
+            or last_output_at is None
+            or self._waiting_prompt is not None
+            or self._silence_noted
+        ):
+            self._arm_silence_timer(SILENCE_SECONDS)
+            return
+        elapsed = self._inputs.now() - last_output_at
+        if elapsed < SILENCE_SECONDS:
+            self._arm_silence_timer(SILENCE_SECONDS - elapsed)
+            return
+        self._silence_noted = True
+        self.post_message(
+            InstallLogLine(
+                in_flight, _WAITING_OUTPUT, transient=True, generation=self._silence_generation
+            )
+        )
+        self._arm_silence_timer(SILENCE_SECONDS)
+
     def _ask_mismatch(self, tool_id: str) -> MismatchChoice:
         self.post_message(PromptOpen(tool_id, True))
         try:
@@ -627,6 +724,12 @@ class ExecuteScreen(ModalScreen[None]):
         return False
 
     def on_install_log_line(self, message: InstallLogLine) -> None:
+        if message.transient and not self._transient_is_current(message):
+            # A transient's world has moved on: a real line, a terminal
+            # message, a prompt transition or the run's end was handled
+            # between the post and this write. Drop it entirely -- no
+            # header, no line -- rather than render a stale reassurance.
+            return
         log = self.query_one("#execute-log", RichLog)
         if message.tool_id != self._last_tool_id:
             log.write(f"── {message.tool_id} ──")
@@ -638,6 +741,8 @@ class ExecuteScreen(ModalScreen[None]):
         ) or message.line == _DISMISSAL_SENSITIVE.format(tool_id=message.tool_id)
         if dismissed:
             self.status.set(cleaned, "warn")
+        if not message.transient:
+            self._note_output(message.tool_id)
 
     def on_install_tool_finished(self, message: InstallToolFinished) -> None:
         self._progress[message.tool_id] = "done" if message.status in _DONE_STATUSES else "not-done"
