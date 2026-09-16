@@ -219,8 +219,12 @@ class StreamingRunner:
         """Run argv, emit each line as it arrives, raise CommandError on failure.
 
         No timeout: a side-effecting install child must be allowed to take
-        minutes, matching run_output. bufsize=1 line-buffers parent reads
-        only; a child that block-buffers on a pipe still bursts at exit.
+        minutes, matching run_output. bufsize=1 line-buffers the PARENT's
+        reads; the child is pushed toward line-buffering its own writes by
+        unbuffered_env() and, when opted in and available, a stdbuf -oL
+        prefix — see the class docstring for what each rung reaches and what
+        neither does. Best-effort, not a guarantee: a child that block-buffers
+        past both rungs still bursts at exit.
         """
         launch_argv = unbuffered_argv(cmd, self._stdbuf)
         env = unbuffered_env()
