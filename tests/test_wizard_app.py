@@ -1,5 +1,6 @@
 import threading
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
@@ -3736,6 +3737,55 @@ async def test_install_closed_refresh_requeries_the_manager_inventory_after_a_ru
         await _settle_versions(app, pilot)
         assert len(calls) > before_calls
         assert service.epoch > before_epoch
+
+
+async def test_install_closed_keeps_cross_tier_ids_in_every_installed_map(
+    tmp_path: Path,
+) -> None:
+    """The re-derived map covers the WHOLE catalog, not the screen's own tier.
+
+    `deps.missing_requires` and `selection.unstaged_recommends` resolve against
+    the full catalog and read a missing key as "not installed"
+    (`installed.get(dep_id, False)`), so a map narrowed to one tier turns an
+    installed cross-tier dependency into the false notice "mmdc also needs
+    pnpm". The registry ships ten such pairs today (`mmdc`->`pnpm`,
+    `oh-my-zsh`->`git`, `graphify`->`uv`, ...). Two tiers are the whole point
+    of this test: a one-tool catalog cannot tell a narrowed map from a full
+    one, which is why every other install_closed test above misses this.
+    """
+    pnpm = _gh_tool("pnpm", tier="system")
+    mmdc = replace(_gh_tool("mmdc", tier="user"), requires=("pnpm",))
+    presence = {"pnpm": True, "mmdc": False}
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    execute = ExecuteInputs(
+        catalog=[pnpm, mmdc],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda t: presence[t.id],
+        install=_tracking_install(lambda _t: None),
+    )
+    app = _version_app([pnpm, mmdc], dict(presence), service, execute=execute)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.press("2")
+        assert app.current_view == "user"
+        user = app.catalog_for("user")
+        await _settle_versions(app, pilot, user)
+        user.selected.add("mmdc")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("escape")
+        await _settle_versions(app, pilot, user)
+        # Behavioural first: marking mmdc on the user view runs the real
+        # consumer, and pnpm is installed, so nothing is announced.
+        await pilot.press("space")
+        await pilot.pause()
+        assert user.selected == {"mmdc"}
+        assert "also needs pnpm" not in user.status_text
+        # Structural: both tier screens hold the same whole-catalog map, so
+        # "pnpm" is still a KEY on the user screen rather than being dropped.
+        for screen in (app.catalog_for("system"), user):
+            assert screen._installed == presence  # pyright: ignore[reportPrivateUsage]
 
 
 def _owned(

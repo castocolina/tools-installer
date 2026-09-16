@@ -1573,6 +1573,12 @@ class UnifiedApp(App[list[str] | None]):
         self.install_summary: Summary | None = None
         self._version_refresh = version_refresh
         self._updates = updates
+        # The WHOLE catalog, not a tier slice. `_install_closed` re-derives the
+        # installed map from this list because the map is resolved against the
+        # full catalog by deps.missing_requires / selection.unstaged_recommends,
+        # while each screen's own `tools` is the tier filter -- which narrows
+        # what is DISPLAYED and never what is resolved (.claude/architecture.md).
+        self._catalog_tools: list[Tool] = list(tools)
         self._catalogs: dict[str, CatalogScreen] = {
             tier.value: CatalogScreen(
                 [tool for tool in tools if tool.tier == tier],
@@ -1851,10 +1857,22 @@ class UnifiedApp(App[list[str] | None]):
         # for every installation shape, including a detect_path-only tool no
         # manager inventory lists and no `--version` probe will ever answer
         # (oh-my-zsh, SDKMAN).
+        #
+        # The map is derived over self._catalog_tools -- the WHOLE catalog --
+        # and the identical map is handed to every screen. Deriving it per
+        # screen from `screen.tools` would drop every id belonging to another
+        # tier, and `set_installed` is a plain replacement, so the two
+        # consumers that read this map against the full catalog
+        # (deps.missing_requires and selection.unstaged_recommends, both via
+        # `installed.get(dep_id, False)`) would silently read an installed
+        # cross-tier dependency as missing -- "mmdc also needs pnpm" with pnpm
+        # already installed. The tier filter narrows what is DISPLAYED and
+        # never what is resolved (.claude/architecture.md).
         if self._execute is not None:
             installed = self._execute.installed
+            fresh = {tool.id: installed(tool) for tool in self._catalog_tools}
             for screen in self._catalogs.values():
-                screen.set_installed({tool.id: installed(tool) for tool in screen.tools})
+                screen.set_installed(fresh)
         self._catalogs[self.current_view].enter_view()
 
     def on_install_run_finished(self, message: InstallRunFinished) -> None:
