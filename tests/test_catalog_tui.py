@@ -8,11 +8,17 @@ from typing import Any
 import pytest
 from rich.text import Text
 from textual.binding import Binding
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Static
 from textual.widgets.data_table import ColumnKey
 
 from installer.catalog_tui import (
     _COLUMNS,  # pyright: ignore[reportPrivateUsage]
+    _LEGEND,  # pyright: ignore[reportPrivateUsage]
+    _VER_CHECKING,  # pyright: ignore[reportPrivateUsage]
+    _VER_NO_COMPARISON,  # pyright: ignore[reportPrivateUsage]
+    _VER_NO_VERSION,  # pyright: ignore[reportPrivateUsage]
+    _VER_SOURCE_UNKNOWN,  # pyright: ignore[reportPrivateUsage]
+    _VER_STALE,  # pyright: ignore[reportPrivateUsage]
     AUDIENCE_LABEL,
     CatalogScreen,
     VersionStatusRefreshed,
@@ -1406,6 +1412,62 @@ async def test_refresh_cursor_survives_both_repaints_of_one_cycle(tmp_path: Path
             await pilot.pause()
         await pilot.pause()
         assert table.cursor_row == started_row
+
+
+# -- D-03/D-04/Task 3: an always-on legend names every version state --------
+
+_ALL_VER_MARKERS = (
+    _VER_CHECKING,
+    _VER_NO_VERSION,
+    _VER_SOURCE_UNKNOWN,
+    _VER_NO_COMPARISON,
+    _VER_STALE,
+)
+
+
+def test_legend_names_every_ver_cell_marker_and_style_token() -> None:
+    for marker in _ALL_VER_MARKERS:
+        assert marker in _LEGEND, marker
+    assert "green" in _LEGEND
+    assert "yellow" in _LEGEND
+    # The stale entry's gloss must be about the cached LATEST the comparison
+    # used, not the installed version or a shown value -- true of both the
+    # green cell (shows no latest at all) and the yellow cell (D-04 as
+    # corrected 2026-09-16, 15.1-CONTEXT.md). Assert this on the entry that
+    # actually carries the marker, not on the whole constant: _LEGEND
+    # mentions "latest" elsewhere too, so a whole-string substring check
+    # would prove nothing.
+    entries = _LEGEND.split("·")
+    stale_entry = next(entry for entry in entries if _VER_STALE in entry)
+    assert "latest" in stale_entry
+
+
+async def test_legend_widget_paints_every_marker_at_full_width() -> None:
+    app = _app()
+    async with app.run_test(size=(100, 30)):
+        legend = app.query_one("#browser-legend", Static)
+        # Iterate the widget's own rendered height rather than assuming one
+        # line -- that is the whole point of the content-sized CSS change;
+        # a legend clipped to height:1 would fail this even though every
+        # entry is present in the underlying constant.
+        painted = "".join(
+            "".join(segment.text for segment in legend.render_line(i))
+            for i in range(legend.size.height)
+        )
+        for marker in _ALL_VER_MARKERS:
+            assert marker in painted, marker
+        assert "up to date" in painted
+        assert "update available" in painted
+
+
+def test_legend_is_identical_across_all_three_tier_views() -> None:
+    tools, installed = _catalog()
+    screens = [
+        CatalogScreen(tools, installed, _BLURBS, view=tier, catalog=list(tools), staged=set())
+        for tier in ("system", "user", "ai")
+    ]
+    legends = {screen._adapter().legend for screen in screens}  # pyright: ignore[reportPrivateUsage]
+    assert legends == {_LEGEND}
 
 
 async def test_budget_deferred_row_renders_stale_marker(tmp_path: Path) -> None:

@@ -185,10 +185,35 @@ _VER_SOURCE_UNKNOWN = "(source unknown)"
 _VER_NO_COMPARISON = "(no comparison)"
 _VER_STALE = "~"
 
+# D-03/D-04: the Ver: segment below is appended to the one existing legend
+# string (never a second widget/region -- BrowserAdapter.legend / the docked
+# #browser-legend Static already renders on all three tier views, once per
+# CatalogScreen). Every marker interpolates the _VER_* constant _ver_cell
+# actually renders, and the two colored entries use the literal style tokens
+# `green`/`yellow` those branches use -- never the word "orange" CONTEXT.md's
+# prose uses for the update-available color, which is not a real Rich markup
+# name and would either no-op or visually mismatch the cell it explains.
 _LEGEND = (
     "[bold red]P0[/] essential · [bold yellow]P1[/] recommended · [blue]P2[/] nice-to-have"
     " · [dim]P3[/] niche  |  for [bold cyan]AI[/] / [magenta]human[/] / both"
     "  |  [green]✓ installed[/] · [yellow]○ missing[/]"
+    "  |  Ver: [green]up to date[/] · [yellow]update available[/]"
+    f" · {_VER_CHECKING} still checking"
+    f" · {_VER_NO_VERSION} no version could be read"
+    # The gloss names both populations status.source == "unknown" actually
+    # covers (a native package this installer never manages, and a manager
+    # inventory this pass could not read) rather than asserting the tool is
+    # permanently untracked, which VersionStatus cannot prove either way.
+    f" · {_VER_SOURCE_UNKNOWN} no update source attributed (a system"
+    " package, or a manager inventory unreadable this pass)"
+    f" · {_VER_NO_COMPARISON} the latest lookup found nothing to compare against"
+    # This gloss is true of BOTH cells that render the suffix: the yellow
+    # cell shows installed -> latest, but the green cell shows only the
+    # installed version and never prints a latest at all, so the gloss names
+    # the cached latest the COMPARISON rested on, not a shown value and not
+    # the installed version (which is re-probed live every pass and is never
+    # the thing going stale) -- see 15.1-CONTEXT.md's D-04 Correction.
+    f" · {_VER_STALE} the cached latest the comparison used, not re-confirmed this pass"
 )
 
 
