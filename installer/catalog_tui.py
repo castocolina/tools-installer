@@ -224,7 +224,7 @@ _LEGEND = (
     " · Ver: [green]up to date[/] · [yellow]update avail[/]\n"
     f"[dim]{_VER_CHECKING}[/] · [dim]{_VER_NO_VERSION}[/]"
     f" · [dim]{_VER_SOURCE_UNKNOWN}[/] · [dim]{_VER_NO_COMPARISON}[/]"
-    f" · [dim]{_VER_STALE}[/] cached"
+    f" · [dim]{_VER_STALE}[/] cached latest"
 )
 
 

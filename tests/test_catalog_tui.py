@@ -1439,12 +1439,12 @@ def test_legend_names_every_ver_cell_marker_and_style_token() -> None:
     # used, not the installed version or a shown value -- true of both the
     # green cell (shows no latest at all) and the yellow cell (D-04 as
     # corrected 2026-09-16, 15.1-CONTEXT.md). Assert this on the entry that
-    # actually carries the marker, not on the whole constant: _LEGEND
-    # mentions "latest" elsewhere too (in "update avail"), so a whole-string
-    # substring check would prove nothing.
+    # actually carries the marker, not on the whole constant, so a
+    # whole-string substring check can't be satisfied by an unrelated
+    # occurrence of "latest" elsewhere in _LEGEND.
     entries = _LEGEND.replace("\n", "·").split("·")
     stale_entry = next(entry for entry in entries if _VER_STALE in entry)
-    assert "cached" in stale_entry
+    assert "latest" in stale_entry
 
 
 def test_legend_uses_explicit_line_breaks_per_group() -> None:
@@ -1521,7 +1521,7 @@ async def test_legend_widget_paints_every_marker_at_full_width() -> None:
             assert marker in painted, marker
         assert "up to date" in painted
         assert "update avail" in painted
-        assert "cached" in painted
+        assert "cached latest" in painted
         # The stale marker is painted DIM, the way _ver_cell renders it. It
         # used to sit in the default style while the cell it explains was
         # dim, so the legend did not look like the thing it describes --
@@ -1569,7 +1569,7 @@ async def test_legend_keeps_the_catalog_table_usable_at_the_minimum_size() -> No
             assert marker in painted, marker
         assert "up to date" in painted
         assert "update avail" in painted
-        assert "cached" in painted
+        assert "cached latest" in painted
         # The harm first, then the cause: the table has to stay usable, and
         # the legend's own budget is what keeps it that way.
         assert table.size.height >= 6, table.size.height
