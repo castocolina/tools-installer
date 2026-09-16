@@ -503,13 +503,21 @@ def test_streaming_runner_which_called_exactly_once_across_multiple_calls() -> N
 def test_streaming_runner_caller_argv_in_error_when_wrapped_command_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Failure text stays paste-able: wrapped command that exits non-zero
+    # Failure text stays paste-able: a WRAPPED command that exits non-zero
     # reports the caller's argv, not the stdbuf-wrapped argv.
+    #
+    # The argv must be non-Python, or the ladder refuses to wrap it
+    # (_is_python_child short-circuits) and this test silently degrades into a
+    # second copy of test_streaming_runner_nonzero_exit_raises_command_error...,
+    # leaving the wrapped non-zero-exit path uncovered. `seen_argv` is asserted
+    # first so a future change that stops wrapping fails HERE rather than
+    # quietly turning the rest of the test vacuous.
+    seen_argv: list[list[str]] = []
     original_popen = subprocess.Popen
 
     def fake_popen(argv: list[str], **kwargs: Unpack[_PopenKwargs]) -> subprocess.Popen[str]:
-        del argv
-        # Child exits 3
+        seen_argv.append(argv)
+        # Child exits 3 whatever it was asked to launch: `brew` need not exist.
         return original_popen([sys.executable, "-c", "import sys; sys.exit(3)"], **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
@@ -517,15 +525,18 @@ def test_streaming_runner_caller_argv_in_error_when_wrapped_command_fails(
     runner = StreamingRunner(
         lambda _tool, _line: None, unbuffer=True, which=lambda _: "/usr/bin/stdbuf"
     )
-    runner.set_tool("test")
+    runner.set_tool("rg")
 
-    cmd = [sys.executable, "-c", "print('fail')"]
+    cmd = ["brew", "install", "rg"]
     with pytest.raises(CommandError) as exc:
         runner(cmd)
 
-    # CommandError must carry the caller's argv, not the wrapped one
+    # It really WAS wrapped: Popen saw the stdbuf prefix.
+    assert seen_argv == [["/usr/bin/stdbuf", "-oL", "brew", "install", "rg"]]
+    # CommandError must carry the caller's argv, not the wrapped one.
     assert exc.value.cmd == cmd
-    assert "/usr/bin/stdbuf" not in exc.value.cmd
+    assert "stdbuf" not in " ".join(exc.value.cmd)
+    assert "stdbuf" not in str(exc.value)
 
 
 @pytest.mark.skipif(shutil.which("stdbuf") is None, reason="coreutils stdbuf not on PATH")
