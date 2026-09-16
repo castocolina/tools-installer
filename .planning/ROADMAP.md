@@ -593,21 +593,22 @@ Plans:
 
 ### Phase 15.2: Install output buffering and live-progress clarity: StreamingRunner (installer/run.py) already forwards child stdout line-by-line via Popen+readline, but many installers (pnpm, sdkman, curl|sh scripts) block-buffer their own stdout when not attached to a TTY, so output visibly arrives all at once at the end despite the installer streaming faithfully -- force line-buffered/unbuffered child output where feasible (stdbuf -oL, PYTHONUNBUFFERED, per-manager unbuffered flags) for known-buffering tools, and add a 'waiting for output...' indicator per in-flight tool so buffering-silence is not indistinguishable from a hang (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** Install output reaches the live log while the installer is still running — the parent forces line-buffered/unbuffered child output wherever a safe mechanism exists, and never fails an install when one is unavailable — and when a child does go quiet, the in-flight tool's own log region says so within two seconds, so buffering-silence is never visually indistinguishable from a hang.
+**Requirements**: D-01 through D-12 (15.2-CONTEXT.md — this phase came from live UAT, not a REQUIREMENTS.md id)
 **Depends on:** Phase 15
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 15.2 to break down)
+- [ ] 15.2-01-PLAN.md — the unbuffer ladder: PYTHONUNBUFFERED unconditionally, `stdbuf -oL` opt-in and availability-gated, no manager names in the runner (D-01..D-05, D-09, D-12)
+- [ ] 15.2-02-PLAN.md — the 2-second per-in-flight-tool "waiting for output" indicator, transient through the existing InstallLogLine path, never in the persisted tail (D-06..D-08, D-10, D-11)
 
 ### Phase 15.1: Catalog post-update refresh staleness and version-status color disambiguation: after ExecuteScreen closes, CatalogScreen's local _version_statuses snapshot never re-triggers enter_view()/_start_version_refresh() (only refresh_marks() on-screen-resume fires) so a tool that was just updated (e.g. deno) still shows the pre-update outdated Ver cell until the user fully navigates away and back -- wire the ExecuteScreen-close callback in wizard_app.py to re-enter the catalog view. Separately, _ver_cell (catalog_tui.py) renders four distinct VersionStatus situations (no data yet, latest=None/not-tracked-for-updates, outdated=None/unparseable, and the orthogonal stale flag) all as the same dim gray text with no way to distinguish 'a system package we will never manage' from 'still probing' -- give the not-tracked-for-updates case a distinct stable marker. Also add a visible, always-on color legend in the catalog UI (e.g. a status-bar or footer line) spelling out what green (up to date), orange (update available), and each distinct gray case (not tracked for updates / still checking / unparseable version) mean -- plus any other non-obvious color/symbol the catalog uses -- so a user is never left guessing what a color means without hovering or reading docs (INSERTED)
 
 **Goal:** Closing an install/update run leaves the catalog tier it ran from showing freshly probed versions on the screen the user is already on, and every state that column can render — both colors, each distinct dim case, and the stale marker — says what it means and is spelled out in an always-on legend present on all three tier views.
 **Requirements**: D-01, D-02, D-03, D-04 (15.1-CONTEXT.md — this phase came from live UAT, not a REQUIREMENTS.md id)
 **Depends on:** Phase 15
-**Plans:** 1/1 plans executed
+**Plans:** 1/1 plans complete
 
 Plans:
 
