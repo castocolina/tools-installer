@@ -19,6 +19,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.pilot import Pilot
 from textual.screen import ModalScreen
+from textual.timer import Timer
 from textual.widgets import Label, ListItem, ListView, Static
 
 import installer.execute_screen
@@ -2720,6 +2721,53 @@ async def test_action_start_arms_the_real_timer_and_rearms_for_the_exact_remaind
             await _settle_execute(screen, pilot)
     finally:
         del ExecuteScreen.set_timer
+
+
+async def test_arming_the_silence_timer_stops_the_one_it_replaces(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second arming must not orphan a live Timer nobody can stop any more.
+
+    on_install_run_finished can only stop the NEWEST reference, so a replaced
+    timer that was never stopped keeps firing _check_output_silence past the
+    end of the run. Pinned on `Timer.stop` rather than on an internal flag:
+    stopping is the observable obligation, and the attribute swap alone cannot
+    prove it happened.
+    """
+    stopped: list[Timer] = []
+    original_stop = Timer.stop
+
+    def recording_stop(self: Timer) -> None:
+        stopped.append(self)
+        original_stop(self)
+
+    monkeypatch.setattr(Timer, "stop", recording_stop)
+
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(install=_blocking_install_emitting_one_line(started, release))
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _start_and_wait_for_first_line(screen, pilot, started)
+
+        first = screen._silence_timer  # pyright: ignore[reportPrivateUsage]
+        assert first is not None, "action_start did not arm a timer"
+        assert first not in stopped
+
+        screen._arm_silence_timer(SILENCE_SECONDS)  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+
+        second = screen._silence_timer  # pyright: ignore[reportPrivateUsage]
+        assert second is not None
+        assert second is not first
+        assert first in stopped, "the replaced timer was left running"
+
+        release.set()
+        await _settle_execute(screen, pilot)
 
 
 async def test_stale_generation_transient_is_dropped_without_writing_anything() -> None:

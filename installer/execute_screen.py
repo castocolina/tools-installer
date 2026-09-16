@@ -671,6 +671,20 @@ class ExecuteScreen(ModalScreen[None]):
         )
 
     def _arm_silence_timer(self, delay: float) -> None:
+        """Arm the one-shot silence check, replacing any timer already pending.
+
+        Overwriting the attribute without stopping first is safe only under an
+        invariant that is implicit and fragile: today the sole caller other
+        than action_start is _check_output_silence, which nulls the attribute
+        on its own first line AFTER its own timer has already fired. A second
+        arming site -- re-arming on a real log line, or arming again from
+        on_prompt_open's close branch -- would orphan a live Timer that
+        on_install_run_finished can no longer stop, because it only ever holds
+        the newest reference. Enforcing the invariant here costs one branch and
+        removes the trap.
+        """
+        if self._silence_timer is not None:
+            self._silence_timer.stop()
         self._silence_timer = self.set_timer(delay, self._check_output_silence)
 
     def _check_output_silence(self) -> None:
