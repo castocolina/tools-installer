@@ -169,11 +169,10 @@ _COLUMNS = (
 # the same thing, and _ver_cell's six dim branches map onto exactly these
 # four (the two no-readable-version branches share _VER_NO_VERSION, and the
 # two nothing-to-compare branches share _VER_NO_COMPARISON; no other pair
-# collides). _LEGEND interpolates these same constants below, so a label
-# edit here reaches the legend automatically and the two can never describe
-# different things -- which is also why each label has to stand on its own as
-# plain English: the legend's job is to list the vocabulary, and it has no
-# room at 80 columns to re-explain a label that does not say what it means.
+# collides). These four already read as plain English on their own -- the
+# cell renders them verbatim -- so _LEGEND (below) does not re-list them
+# individually; it covers them with one terminal "other dim: self-explains" note
+# instead of restating each label (see _LEGEND's own comment).
 _VER_CHECKING = "checking…"
 _VER_NO_VERSION = "no version"
 # Named after status.source, not a conclusion about the tool: the fallthrough
@@ -187,42 +186,39 @@ _VER_SOURCE_UNKNOWN = "(source unknown)"
 _VER_NO_COMPARISON = "(no comparison)"
 _VER_STALE = "~"
 
-# D-03/D-04: the Ver: segment below is appended to the one existing legend
-# string (never a second widget/region -- BrowserAdapter.legend / the docked
+# D-03/D-04: the Ver: line below is appended to the one existing legend string
+# (never a second widget/region -- BrowserAdapter.legend / the docked
 # #browser-legend Static already renders on all three tier views, once per
-# CatalogScreen). Every marker interpolates the _VER_* constant _ver_cell
-# actually renders, and the two colored entries use the literal style tokens
+# CatalogScreen). The two colored entries use the literal style tokens
 # `green`/`yellow` those branches use -- never the word "orange" CONTEXT.md's
 # prose uses for the update-available color, which is not a real Rich markup
 # name and would either no-op or visually mismatch the cell it explains.
 #
-# Every entry is terse ON PURPOSE. The widget is dock: bottom, so each line the
-# legend wraps to comes straight out of the DataTable's 1fr: at this project's
+# UAT correction (2026-09-16, live user report during Phase 15.1 closure): a
+# "legend" reads as a per-color/symbol KEY, not continuous prose -- soft-wrap
+# at an arbitrary column loses group boundaries, and re-glossing four already
+# self-explanatory dim labels ("checking… still checking") wasted the row
+# budget on restating text the cell already shows verbatim. Fixed by (1)
+# explicit \n at each group boundary instead of relying on wrap, so each of
+# the three available rows is one self-contained key line (Pri / Aud+State /
+# Ver), and (2) collapsing the four spelled-out dim entries into one terminal
+# note -- a legend decodes things the reader CANNOT decode alone (colors,
+# ✓/○, P0-style codes, ~), not a cell's own literal text read back at them.
+#
+# Budget: #browser-legend is `dock: bottom` with `max-height: 3`, so every
+# legend row comes straight out of the DataTable's 1fr -- at this project's
 # tested minimum terminal size (80x20) an unwrapped-prose legend measured 7
 # rows and left the table -- the app's primary screen, listing 89 tools -- 3.
-# The budget is three legend rows at 80 columns -- 234 plain characters, and
-# this string spends 221 of them. #browser-legend's max-height enforces the
-# cap and test_legend_keeps_the_catalog_table_usable_at_the_minimum_size
-# asserts both halves (every marker still painted, table still usable) at
-# exactly that size, so overspending here fails as a clipped marker rather
-# than as a silently collapsed table. Keep a gloss inside the budget or drop
-# it: a marker nobody can read next to a table nobody can use helps nobody.
+# test_legend_keeps_the_catalog_table_usable_at_the_minimum_size asserts both
+# halves (legend fits 3 rows, table stays usable) at exactly that size.
 #
-# The four dim markers carry the `dim` style the cells render them in (they
-# were plain here while the cells were dim, so the legend did not look like
-# what it explains), and each gloss adds information instead of restating the
-# label it follows ("checking… still checking" read as a duplication bug).
+# The stale marker keeps its `dim` style, matching how _ver_cell renders it.
 _LEGEND = (
     "[bold red]P0[/] essential · [bold yellow]P1[/] recommended · [blue]P2[/] nice-to-have"
-    " · [dim]P3[/] niche | [bold cyan]AI[/] / [magenta]human[/] / both"
-    " | [green]✓ installed[/] · [yellow]○ missing[/]"
-    " | Ver: [green]up to date[/] · [yellow]update available[/]"
-    # These four already say what they mean (D-02 named them for exactly that),
-    # so the legend lists them and spends its remaining width on `~`, the one
-    # marker that is a bare symbol. Re-glossing them is what produced the
-    # stuttering "checking… still checking" AND the 7-row legend.
-    f" · [dim]{_VER_CHECKING}[/] · [dim]{_VER_NO_VERSION}[/]"
-    f" · [dim]{_VER_SOURCE_UNKNOWN}[/] · [dim]{_VER_NO_COMPARISON}[/]"
+    " · [dim]P3[/] niche\n"
+    "[bold cyan]AI[/] / [magenta]human[/] / both"
+    "  |  [green]✓ installed[/] · [yellow]○ missing[/]\n"
+    "Ver: [green]up to date[/] · [yellow]update available[/]"
     # "cached latest" is true of BOTH cells that render the suffix: the yellow
     # cell shows installed -> latest, but the green cell shows only the
     # installed version and never prints a latest at all, so the gloss names
@@ -233,6 +229,7 @@ _LEGEND = (
     # belongs to the detail bar, which has a line to spend; the legend names
     # the marker.
     f" · [dim]{_VER_STALE}[/] cached latest"
+    " · other dim: self-explains"
 )
 
 
