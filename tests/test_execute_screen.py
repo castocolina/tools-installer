@@ -39,6 +39,7 @@ from installer.execute_screen import (
     InstallLogLine,
     InstallRunFinished,
     InstallToolFinished,
+    UpdateToolFinished,
     sanitize_log_line,
 )
 from installer.manager_versions import OutdatedReport
@@ -3290,6 +3291,78 @@ async def test_silent_update_establishes_in_flight_tool_via_marker(tmp_path: Pat
         await pilot.pause()
         last_line = _log_text(screen).splitlines()[-1]
         assert "rg" in last_line
+        assert "still running; waiting for output" in last_line
+
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_stale_update_terminal_message_for_another_tool_does_not_clear_in_flight(
+    tmp_path: Path,
+) -> None:
+    """The update half of the id guard, mirroring the install half at
+    `test_stale_terminal_message_for_another_tool_does_not_clear_in_flight`.
+
+    Plan 02's criterion is that BOTH `on_install_tool_finished` and
+    `on_update_tool_finished` clear the in-flight tool only when
+    `message.tool_id` is the tool currently in flight, but the regression test
+    existed only for the install path -- branch coverage reported the update
+    comparison as never evaluating False, so removing the `if` from
+    `on_update_tool_finished` left the suite green.
+    """
+    clock = _FakeClock()
+    started = threading.Event()
+    release = threading.Event()
+    rg = _tool("rg")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    _seed_refresh(refresh, fd, outdated=True)
+
+    class _SecondUpdateBlocks(_RecordingUpdateService):
+        def run(self, target: UpdateTarget) -> UpdateOutcome:
+            if target.tool.id == "fd":
+                started.set()
+                assert release.wait(timeout=5)
+            return super().run(target)
+
+    updates = _SecondUpdateBlocks()
+    inputs = _inputs(
+        tools=[rg, fd],
+        installed=lambda _tool: True,
+        version_refresh=refresh,
+        updates=updates,
+        now=clock,
+    )
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        for _ in range(400):
+            if screen._in_flight == "fd":  # pyright: ignore[reportPrivateUsage]
+                break
+            await pilot.pause()
+        assert screen._in_flight == "fd"  # pyright: ignore[reportPrivateUsage]
+
+        # A stale/delayed terminal message for rg -- whose update already
+        # returned -- must not clear fd's silence window.
+        screen.on_update_tool_finished(UpdateToolFinished("rg", "done"))
+        await pilot.pause()
+        assert screen._in_flight == "fd"  # pyright: ignore[reportPrivateUsage]
+
+        clock.value += SILENCE_SECONDS
+        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        last_line = _log_text(screen).splitlines()[-1]
+        assert "fd" in last_line
         assert "still running; waiting for output" in last_line
 
         release.set()
