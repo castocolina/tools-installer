@@ -3540,3 +3540,90 @@ async def test_failed_install_with_real_runner_shows_child_tail_and_indicator_on
         assert log.count("boom one") == 2  # once live, once in the report tail
         assert log.count("boom two") == 2
         assert log.count("still running; waiting for output") == 1
+
+
+# Prints one line WITHOUT -u and WITHOUT flush=True -- so on a pipe it sits in
+# the child's own stdio buffer unless the parent forced line buffering -- then
+# refuses to print its second line or exit until sys.argv[1] exists. Its own
+# ~30s ceiling means a red test can never leave a child running forever.
+_SENTINEL_CHILD = """
+import os, sys, time
+
+print("child line 1")
+deadline = time.monotonic() + 30.0
+while not os.path.exists(sys.argv[1]) and time.monotonic() < deadline:
+    time.sleep(0.02)
+print("child line 2")
+"""
+
+
+async def test_child_output_reaches_the_widget_while_the_child_is_still_alive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The WHOLE chain, observed before the child exits (plan 01 Task 1).
+
+    Popen env -> the child's unflushed stdout -> the parent's read -> _emit ->
+    post_message -> on_install_log_line -> RichLog. The runner-level timing
+    test stops at `_emit` and says nothing about the three hops after it.
+
+    "While the child still runs" is true by CONSTRUCTION rather than by clock:
+    at the moment the first line is asserted present, the child physically
+    cannot have exited, because it is blocked polling for a sentinel file this
+    test has not created yet -- so its second line cannot be in the log either.
+
+    Without the PYTHONUNBUFFERED rung the RED state is a real deadlock: the
+    first line stays in the child's buffer, the log never shows it, the
+    sentinel is never written by the assertion path, and the bounded poll ends
+    the test red.
+    """
+    monkeypatch.delenv("PYTHONUNBUFFERED", raising=False)
+    sentinel = tmp_path / "release-the-child"
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        # The runner it was HANDED -- the worker's own StreamingRunner, already
+        # set_tool-attributed by attributed_install. A freshly constructed one
+        # would raise RuntimeError from _current() on its first emitted line.
+        runner([sys.executable, "-c", _SENTINEL_CHILD, str(sentinel)])
+        return InstallOutcome(tool.id, "installed")
+
+    inputs = _inputs(install=install)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        try:
+            # A real delay per iteration, not a bare idle pause: an idle-only
+            # pause returns the moment the event loop has nothing left to do,
+            # so 400 of them can elapse before a freshly spawned interpreter
+            # has printed anything -- which would fail on interpreter startup
+            # rather than on buffering. 400 x 0.02s is ~8s of headroom.
+            for _ in range(400):
+                if "child line 1" in _log_text(screen):
+                    break
+                await pilot.pause(0.02)
+            assert "child line 1" in _log_text(screen), (
+                "the child's first line never reached the widget while it was still running"
+            )
+            # No race: the child cannot have printed this, the sentinel does
+            # not exist yet.
+            assert "child line 2" not in _log_text(screen)
+        finally:
+            sentinel.write_text("go", encoding="utf-8")
+
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        assert "child line 1" in log
+        assert "child line 2" in log
