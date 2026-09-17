@@ -632,10 +632,26 @@ def _native_owner(
     # rest on evidence about a different file.
     if active_path is not None and not package_owns_path(tool, owner, str(active_path), probe):
         return None
+    # Round-3 review HIGH: a wrong package name is worse than no package name
+    # on this screen -- the hint sits beside a control that deletes files, and
+    # a user who copies `dnf remove git` on a host where the binary belongs to
+    # `git-core` either gets an error or removes something they did not mean
+    # to. The guard immediately above is UNCHANGED and still decides WHETHER
+    # this branch may claim the tool; this resolution only decides WHAT NAME
+    # the claim carries -- deliberately two separate calls, because the guard
+    # must stay a fail-closed confirmation of a DECLARED name, while the
+    # inverse query below is a discovery whose answer may legitimately differ
+    # from every declared name (the git / git-core case, and exactly why
+    # reusing the guard's boolean here would not work).
+    package = None
+    if active_path is not None:
+        package = path_owner_package(platform.os, str(active_path), probe)
+    if package is None:
+        package = verified.package
     synthetic = OwnershipCandidate(
         owner=owner,
         method=None,
-        package=None,
+        package=package,
         current_version=None,
         evidence=verified.detail,
     )
@@ -1044,3 +1060,126 @@ def owner_detail(ownership: ManagerOwnership) -> str | None:
             mechanism = OWNER_LABELS["installer"]
         return template.format(mechanism=mechanism)
     return template
+
+
+# 15.4-05/D-03/D-04: `removal_hint` -- the Uninstall screen's per-owner removal
+# phrase -- lives HERE, not in `installer/uninstall.py`, and the reason is
+# structural, not stylistic: this module already imports `manager_name` FROM
+# `installer.uninstall` (`ownership.py:74`), so the dependency runs
+# ownership-to-uninstall. A removal-hint builder living on the uninstall side
+# would have to import back into this module to reuse `owner_label` and
+# `ManagerOwnership`, creating the import cycle `.claude/architecture.md`
+# rule 5 forbids. Task 2's `classify_tools` seam is a plain callable for
+# exactly this reason: `installer/uninstall.py` never imports this module.
+#
+# Removal COMMAND template per owner, `{package}` interpolated from the
+# record's OWN verified package name -- never the tool's own registry
+# command, which is exactly the wrong string for a split package (Round-3
+# review HIGH: `dnf remove rg` for `ripgrep`, `dnf remove git` for
+# `git-core`). `None` for `os-package`: its removal command is the HOST's own
+# and differs by host, so this module can never emit one -- the entry still
+# exists as a KEY so the exhaustiveness gate below still requires it to carry
+# a `_REMOVAL_DESCRIPTIONS` entry.
+_REMOVAL_COMMANDS: dict[Owner, str | None] = {
+    "brew": "brew uninstall {package}",
+    # PINNED byte-identical to `installer/uninstall.py`'s current cask
+    # sentence (Round-2 review MEDIUM): see `_LABEL_AGREEMENT_EXEMPT` below
+    # for why this phrase deliberately says "Homebrew", not the Owner
+    # column's "Homebrew cask" label, for this one owner.
+    "cask": "brew uninstall --cask {package}",
+    "pnpm": "pnpm remove --global {package}",
+    "uv": "uv tool uninstall {package}",
+    "dnf": "dnf remove {package}",
+    "apt": "apt remove {package}",
+    "pacman": "pacman -R {package}",
+    "rpm-ostree": "rpm-ostree uninstall {package}",
+    "os-package": None,
+}
+
+# The package-LESS degradation, one entry per `_REMOVAL_COMMANDS` key
+# (including `os-package`, which never has a command entry above but always
+# has one here). `{label}` is the same `owner_label` result the command
+# branch below prefixes its phrase with; `{name}` is the caller-supplied
+# `fallback_name` -- a TOOL identifier for PROSE, never interpolated into a
+# command (the previous revision of this plan had it standing in for the
+# package name, which is the defect the Round-3 review caught).
+_REMOVAL_DESCRIPTIONS: dict[Owner, str] = {
+    "brew": "managed by {label} — remove {name} with Homebrew (no verified formula name)",
+    "cask": "managed by {label} — remove {name} with Homebrew (no verified cask name)",
+    "pnpm": "managed by {label} — remove {name} with pnpm (no verified package name)",
+    "uv": "managed by {label} — remove {name} with uv (no verified package name)",
+    "dnf": "managed by {label} — remove {name} with dnf (no verified package name)",
+    "apt": "managed by {label} — remove {name} with apt (no verified package name)",
+    "pacman": "managed by {label} — remove {name} with pacman (no verified package name)",
+    "rpm-ostree": "managed by {label} — remove {name} with rpm-ostree (no verified package name)",
+    # {package} here, not {name}: os-package records always carry the REAL
+    # package name (`_os_package_owner` only synthesizes a record once the
+    # inverse query has resolved one) and the behavior contract requires
+    # naming it -- "removal_hint for an OS-package-owned record names the
+    # package and states this installer will not remove it". `removal_hint`
+    # below falls back to `fallback_name` only for the synthetic, package-less
+    # records a test can construct directly.
+    "os-package": "managed by {label} — this installer will not remove the package {package}",
+}
+
+# The two owners `removal_hint` has nothing to say for: `unknown` has no
+# manager to name, and `installer` is the case the removable-here path
+# already handles -- a managed installer-owned row must keep falling back to
+# the registry-derived phrase rather than claiming a manager that does not
+# exist.
+_NO_REMOVAL_HINT: frozenset[Owner] = frozenset({"unknown", "installer"})
+
+# The label-agreement rule below -- a removal phrase contains its owner's
+# `owner_label` -- is satisfiable for every owner but `cask`, where three
+# constraints collide: 15.4-03 requires the Owner column's labels to be
+# pairwise distinct, so cask cannot reuse "Homebrew"; 15.4-01 pins the column
+# label to the exact literal "Homebrew cask"; and this phrase must stay
+# byte-identical to `installer/uninstall.py`'s pre-existing cask sentence,
+# which contains "Homebrew" and "--cask" and no word joining them into
+# "Homebrew cask". Two alternatives were rejected in favor of a declared
+# exemption: renaming the column label to a bare "cask" (it sits beside
+# "Homebrew", "dnf" and "pnpm" in a ~12-character cell and would read as a
+# different product), and rewriting the frozen removal phrase (a user-visible
+# copy change in a phase scoped to attribution). Declaring the exemption
+# costs nothing real -- the two surfaces still name the same manager, they
+# just do not share a substring.
+_LABEL_AGREEMENT_EXEMPT: frozenset[Owner] = frozenset({"cask"})
+
+
+def removal_hint(ownership: ManagerOwnership, fallback_name: str) -> str | None:
+    """The Uninstall screen's per-owner removal phrase, built over the shared
+    `owner_label` result plus the per-owner tables declared above.
+
+    `None` for `unknown` (nothing to say) and `installer` (the removable-here
+    path already covers it) -- `_NO_REMOVAL_HINT`. Otherwise: when the record
+    carries a resolved `package` name AND this owner has a removal command
+    template, the phrase carries a backticked command built from that real
+    package name. When it does not -- `package` is `None`, or this owner's
+    command is host-specific (`os-package`) -- the phrase degrades to
+    `_REMOVAL_DESCRIPTIONS`' package-less sentence instead: it names the
+    manager, names the TOOL via `fallback_name`, and contains no backtick.
+    `fallback_name` is a prose identifier for the tool, never a stand-in for
+    the package name in a command -- the tool's own registry command is
+    exactly the wrong string for a split package (Round-3 review HIGH).
+    """
+    owner = ownership.owner
+    if owner in _NO_REMOVAL_HINT:
+        return None
+    label = owner_label(ownership)
+    # `_LABEL_AGREEMENT_EXEMPT`'s sole member: the byte-identical pin above
+    # requires "Homebrew", not `owner_label`'s "Homebrew cask" column text,
+    # as this phrase's prefix -- see that constant's comment for why.
+    prefix = "Homebrew" if owner in _LABEL_AGREEMENT_EXEMPT else label
+    command_template = _REMOVAL_COMMANDS[owner]
+    if command_template is not None and ownership.package is not None:
+        command = command_template.format(package=ownership.package)
+        return f"managed by {prefix} — `{command}`"
+    if owner == "os-package":
+        # The REAL package name, never `fallback_name`: `_os_package_owner`
+        # only ever synthesizes a record once the inverse query resolved one,
+        # so this is reachable with `package=None` only from a test building
+        # a `ManagerOwnership` directly -- degrading to `fallback_name` there
+        # keeps the phrase non-empty rather than raising a KeyError.
+        package = ownership.package if ownership.package is not None else fallback_name
+        return _REMOVAL_DESCRIPTIONS[owner].format(label=prefix, package=package)
+    return _REMOVAL_DESCRIPTIONS[owner].format(name=fallback_name, label=prefix)

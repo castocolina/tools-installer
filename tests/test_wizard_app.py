@@ -15,8 +15,15 @@ from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.execute_screen import ExecuteInputs, ExecuteScreen
 from installer.manager_versions import OutdatedReport
-from installer.model import Method, Tool
-from installer.ownership import ManagerInventory, ManagerOwnership, Owner, OwnershipCandidate
+from installer.model import Method, Tool, load_tools
+from installer.ownership import (
+    ManagerInventory,
+    ManagerOwnership,
+    Owner,
+    OwnershipCandidate,
+    removal_hint,
+    resolve_ownership,
+)
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport, reinstall_preview
 from installer.policy import (
@@ -31,7 +38,7 @@ from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError, Runner
 from installer.session import SensitiveInstall, Summary
 from installer.ui_common import BASE_VIEW
-from installer.uninstall import SweepResult, ToolRow
+from installer.uninstall import SweepResult, ToolRow, classify_tools
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import VersionRefreshService, VersionStatus
 from installer.versions import TagResolver, VersionError
@@ -48,6 +55,8 @@ from installer.wizard_app import (
     UninstallInputs,
     UninstallScreen,
 )
+
+_REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
 
 def _tool(tool_id: str) -> Tool:
@@ -4278,7 +4287,13 @@ async def test_install_closed_then_navigating_to_uninstall_shows_the_post_instal
                 tool,
                 "removable" if installed_now else "absent",
                 [Path("/opt/codegraph")] if installed_now else [],
-                "hint",
+                # 15.4-05/D-03: the "Installed via" cell now renders this hint
+                # verbatim for a removable row, so it must carry the same
+                # "userspace" wording `installer/uninstall.py::classify_tools`
+                # produces for the real removable branch -- otherwise this
+                # fake row diverges from what the row it stands in for would
+                # actually render.
+                "installed in userspace — removable here" if installed_now else "not installed",
                 installed_now,
             )
         ]
@@ -5329,3 +5344,286 @@ async def test_ownership_refreshed_preserves_a_standing_removal_summary(tmp_path
         assert screen.applied is True
         assert screen.status.text == applied_status
         assert screen.query_one(DataTable[Any]).row_count == 0
+
+
+# -- 15.4-05/D-03/D-04: the "Installed via" cell renders `row.hint` --------
+
+
+def test_tool_entry_cell_per_state_and_removes_cell_unchanged() -> None:
+    """Per-state cell coverage: the "Installed via" cell mirrors `row.hint`
+    for removable and managed rows (D-03), and keeps the short dash-style
+    label for absent and unavailable rows (15.4-RESEARCH.md Pitfall 4). The
+    "What gets removed" cell is byte-identical to today's for all four
+    states -- only `installed_via` moves."""
+    removable = ToolRow(
+        _tool("rg"), "removable", [Path("/opt/rg")], "installed in userspace — removable here", True
+    )
+    managed = ToolRow(_tool("jq"), "managed", [], "managed by dnf — `dnf remove jq`", False)
+    absent = ToolRow(_tool("fd"), "absent", [], "not installed", False)
+    unavailable = ToolRow(_tool("xyz"), "unavailable", [], "not available on debian", False)
+    inputs = _uninstall_inputs(rows=[removable, managed, absent, unavailable])
+    screen = UninstallScreen(inputs)
+    entries = {entry.key: entry for entry in screen._entries}  # pyright: ignore[reportPrivateUsage]
+
+    _VIA, _REMOVES = 3, 4
+    assert entries["rg"].cells[_VIA].plain == "installed in userspace — removable here"
+    assert entries["jq"].cells[_VIA].plain == "managed by dnf — `dnf remove jq`"
+    assert entries["fd"].cells[_VIA].plain == "—"
+    assert entries["xyz"].cells[_VIA].plain == "—"
+
+    assert entries["rg"].cells[_REMOVES].plain == "1 artifact(s)"
+    assert entries["jq"].cells[_REMOVES].plain == "nothing (managed elsewhere)"
+    assert entries["fd"].cells[_REMOVES].plain == "nothing (not installed)"
+    assert entries["xyz"].cells[_REMOVES].plain == "nothing (unavailable)"
+
+
+def _apt_tool(tool_id: str, package: str) -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="c",
+        cmd=tool_id,
+        methods=(Method(kind="apt", params={"package": package}),),
+    )
+
+
+def test_uninstall_screen_cell_falls_back_when_seam_has_no_record(tmp_path: Path) -> None:
+    """The no-record fallback, at screen level: a seam answering `None` for a
+    tool renders the platform-filtered registry phrase in the cell, never a
+    blank or a guess."""
+    rows = classify_tools(
+        [_apt_tool("ripgrep", "ripgrep")],
+        tmp_path / "bin",
+        installed={"ripgrep": True},
+        platform=Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
+        which=lambda _c: None,
+        owner_hint=lambda _tool: None,
+    )
+    screen = UninstallScreen(_uninstall_inputs(rows=rows))
+    entry = next(e for e in screen._entries if e.key == "ripgrep")  # pyright: ignore[reportPrivateUsage]
+    assert "package manager" in entry.cells[3].plain
+
+
+async def test_uninstall_screen_cell_reflects_post_run_ownership_map(tmp_path: Path) -> None:
+    """App-level freshness (D-05, arm 1): closing an install run re-enters
+    the active catalog, whose refresh worker repopulates the shared
+    ownership map, and the NEXT Uninstall entry's cell reflects it."""
+    tool = _gh_tool("codegraph", tier="system")
+    presence = {"codegraph": False}
+    owner_map: dict[str, str] = {}
+
+    def on_install(installed_tool: Tool) -> None:
+        presence[installed_tool.id] = True
+        owner_map[installed_tool.id] = "managed by dnf — `dnf remove codegraph`"
+
+    def owner_hint(t: Tool) -> str | None:
+        return owner_map.get(t.id)
+
+    def rows() -> list[ToolRow]:
+        return classify_tools(
+            [tool],
+            tmp_path / "bin",
+            installed={"codegraph": presence["codegraph"]},
+            platform=_install_closed_platform(),
+            which=lambda _c: None,
+            owner_hint=owner_hint,
+        )
+
+    execute = ExecuteInputs(
+        catalog=[tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda t: presence[t.id],
+        install=_tracking_install(on_install),
+    )
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    app = _version_app(
+        [tool],
+        {"codegraph": False},
+        service,
+        execute=execute,
+        uninstall=_uninstall_inputs(rows=rows),
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        app.catalog.selected.add("codegraph")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        await pilot.press("escape")
+        await _settle_versions(app, pilot)
+        await pilot.press("5")
+        assert isinstance(app.screen, UninstallScreen)
+        cell = app.screen.query_one(DataTable[Any]).get_cell("codegraph", "via")
+        assert "dnf remove codegraph" in cell.plain
+
+
+async def test_uninstall_next_entry_after_removal_shows_registry_phrase_not_pre_removal_attribution() -> (  # noqa: E501
+    None
+):
+    """D-05, arm 2 (screen level): after a removal performed on this screen
+    invalidates the shared ownership data, the NEXT entry into Uninstall
+    shows the platform-filtered registry fallback for a tool previously
+    attributed to a real manager -- never the pre-removal attribution."""
+    captured: list[UninstallDecision] = []
+    invalidated = {"done": False}
+
+    def invalidate() -> None:
+        invalidated["done"] = True
+
+    def rows() -> list[ToolRow]:
+        jq_hint = (
+            "managed outside this installer — remove with your package manager"
+            if invalidated["done"]
+            else "managed by dnf — `dnf remove jq`"
+        )
+        jq = ToolRow(_tool("jq"), "managed", [], jq_hint, False)
+        rg = _removable_row(_tool("rg"), [Path("/opt/rg")])
+        return [rg, jq]
+
+    app = _app(
+        uninstall=_uninstall_inputs(rows=rows, remove=_recorder(captured), invalidate=invalidate)
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        cell_before = screen.query_one(DataTable[Any]).get_cell("jq", "via")
+        assert "dnf" in cell_before.plain
+        await pilot.press("space")  # select rg
+        await pilot.press("enter")
+        await pilot.press("enter")  # confirm removal
+        await pilot.pause()
+        assert screen.applied is True
+        await pilot.press("escape")
+        await pilot.press("5")  # the next entry into Uninstall
+        screen_after = app.screen
+        assert isinstance(screen_after, UninstallScreen)
+        cell_after = screen_after.query_one(DataTable[Any]).get_cell("jq", "via")
+        assert "dnf" not in cell_after.plain
+        assert "package manager" in cell_after.plain
+
+
+async def test_uninstall_direct_initial_view_renders_registry_phrase_with_no_ownership_pass(
+    tmp_path: Path,
+) -> None:
+    """Round-1 review MEDIUM: a direct `--uninstall` start (`UnifiedApp
+    .on_mount` opening the requested view with no catalog tier ever mounted)
+    renders a complete, usable screen in which every hint is the
+    registry-derived phrase -- no ownership pass has run, so there is
+    nothing to reuse, and this is the documented best-effort outcome, not a
+    bug."""
+    dnf_tool = Tool(
+        id="jq",
+        name="jq",
+        category="data",
+        cmd="jq",
+        methods=(Method(kind="dnf", params={"package": "jq"}),),
+    )
+    brew_tool = Tool(
+        id="rectangle",
+        name="rectangle",
+        category="win",
+        cmd="rectangle",
+        methods=(Method(kind="brew", params={"formula": "rectangle"}),),
+    )
+
+    def owner_hint(_tool: Tool) -> str | None:
+        return None  # no pass has ever run
+
+    def rows() -> list[ToolRow]:
+        return classify_tools(
+            [dnf_tool, brew_tool],
+            tmp_path / "bin",
+            installed={"jq": True, "rectangle": True},
+            platform=Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
+            which=lambda _c: None,
+            owner_hint=owner_hint,
+        )
+
+    app = _app(uninstall=_uninstall_inputs(rows=rows), initial_view="uninstall")
+    async with app.run_test(size=(100, 30)):  # must not raise
+        assert isinstance(app.screen, UninstallScreen)
+        table = app.screen.query_one(DataTable[Any])
+        assert "package manager" in table.get_cell("jq", "via").plain
+        assert "package manager" in table.get_cell("rectangle", "via").plain
+
+
+async def test_uninstall_screen_renders_codex_generic_hint_on_linux_not_homebrew(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round-2 review HIGH, screen level: the platform-filtered fallback must
+    be visible on the RENDERED cell, not only through `_manager_hint`
+    directly -- the real codex registry entry, whose cask is gated
+    `os = ["macos"]`."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tools_by_id = {t.id: t for t in load_tools(_REGISTRY)}
+    codex = tools_by_id["codex"]
+    linux = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+
+    def rows() -> list[ToolRow]:
+        return classify_tools(
+            [codex],
+            tmp_path / "bin",
+            installed={"codex": True},
+            platform=linux,
+            which=lambda _c: None,
+        )
+
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    app = _version_app([codex], {"codex": True}, service, uninstall=_uninstall_inputs(rows=rows))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.press("5")
+        assert isinstance(app.screen, UninstallScreen)
+        cell = app.screen.query_one(DataTable[Any]).get_cell("codex", "via")
+        assert "package manager" in cell.plain
+        assert "Homebrew" not in cell.plain
+
+
+async def test_uninstall_screen_renders_ripgrep_not_rg_for_the_dnf_split_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round-3 review HIGH, screen level: the rendered cell must carry the
+    REAL dnf package name (`ripgrep`) -- never the tool's own `rg` cmd --
+    through the real registry entry, a faked native probe, a committed
+    ownership pass, and the rendered cell."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tools_by_id = {t.id: t for t in load_tools(_REGISTRY)}
+    rg = tools_by_id["rg"]
+    fedora = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
+
+    def native_probe(_argv: list[str]) -> str:
+        return "ripgrep\n"
+
+    def owner_hint(tool: Tool) -> str | None:
+        owned = resolve_ownership(
+            tool,
+            platform=fedora,
+            inventory=_empty_inventory(),
+            artifacts=(),
+            which=lambda _c: "/usr/bin/rg",
+            managed_bin_dir=tmp_path / "bin",
+            native_probe=native_probe,
+        )
+        return removal_hint(owned, tool.cmd)
+
+    def rows() -> list[ToolRow]:
+        return classify_tools(
+            [rg],
+            tmp_path / "bin",
+            installed={"rg": True},
+            platform=fedora,
+            which=lambda _c: None,
+            owner_hint=owner_hint,
+        )
+
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    app = _version_app([rg], {"rg": True}, service, uninstall=_uninstall_inputs(rows=rows))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.press("5")
+        assert isinstance(app.screen, UninstallScreen)
+        cell = app.screen.query_one(DataTable[Any]).get_cell("rg", "via")
+        assert "ripgrep" in cell.plain
+        assert "dnf remove rg`" not in cell.plain

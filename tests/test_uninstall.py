@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from installer.model import Method, Tool
+from installer.model import Method, Tool, load_tools
 from installer.policy import Policy, daemon_policy, omz_plugins_policy, tweak_policy
 from installer.run import CommandError
 from installer.tweaks import BUNDLES, TweakBundle
@@ -290,6 +290,7 @@ from installer.uninstall import ToolRow, classify_tools, reverse_dependencies  #
 
 _LINUX = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
 _MAC = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+_REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
 
 def _dl(tool_id: str) -> Tool:
@@ -380,9 +381,33 @@ def test_classify_managed_cask_hint(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert "brew uninstall --cask rectangle" in rows[0].hint
 
 
-def test_classify_managed_generic_hint_when_no_brew_method(
+def test_classify_managed_seam_fed_apt_hint_names_apt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Rewritten (15.4-05/D-03/D-04): the seam-fed apt case names apt and no
+    longer carries the generic phrase -- the happy-path improvement. The
+    no-seam generic fallback keeps its own regression guard immediately
+    below, so improving this path does not lose it."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rows = classify_tools(
+        [_apt("ripgrep")],
+        tmp_path / "bin",
+        installed={"ripgrep": True},
+        platform=_LINUX,
+        which=lambda _c: None,
+        owner_hint=lambda tool: f"managed by apt — `apt remove {tool.id}`",
+    )
+    assert rows[0].state == "managed"
+    assert "apt" in rows[0].hint
+    assert "package manager" not in rows[0].hint
+
+
+def test_classify_managed_generic_hint_when_no_seam_and_no_brew_method(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The no-seam generic path, kept covered on its own (15.4-05/D-03/D-04):
+    with no `owner_hint` at all, an apt-only tool still falls back to the
+    platform-filtered registry guess."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     rows = classify_tools(
         [_apt("ripgrep")],
@@ -393,6 +418,195 @@ def test_classify_managed_generic_hint_when_no_brew_method(
     )
     assert rows[0].state == "managed"
     assert "package manager" in rows[0].hint
+
+
+def test_classify_managed_seam_returning_none_falls_back_per_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A seam returning `None` for a tool falls back to the registry-derived
+    hint for THAT tool -- per tool, not per call, so one unattributable tool
+    does not degrade the rest."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rows = classify_tools(
+        [_apt("ripgrep"), _brew("jq")],
+        tmp_path / "bin",
+        installed={"ripgrep": True, "jq": True},
+        platform=_MAC,
+        which=lambda _c: None,
+        owner_hint=lambda tool: "managed by dnf — `dnf remove jq`" if tool.id == "jq" else None,
+    )
+    ripgrep_row = next(r for r in rows if r.tool.id == "ripgrep")
+    jq_row = next(r for r in rows if r.tool.id == "jq")
+    assert "package manager" in ripgrep_row.hint
+    assert "dnf remove jq" in jq_row.hint
+
+
+def test_classify_managed_seam_only_consulted_for_managed_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Removable, absent and unavailable rows never consult the seam."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "fd").write_text("x")
+    called: list[str] = []
+
+    def seam(tool: Tool) -> str | None:
+        called.append(tool.id)
+        return "managed by dnf — `dnf remove x`"
+
+    rows = classify_tools(
+        [_dl("fd"), _cask("rectangle")],
+        bin_dir,
+        installed={"fd": True, "rectangle": False},
+        platform=_LINUX,
+        owner_hint=seam,
+    )
+    assert rows[0].state == "removable"
+    assert rows[1].state == "unavailable"
+    assert called == []
+
+
+def test_classify_managed_codex_gets_generic_hint_on_linux_not_homebrew(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round-2 review HIGH, over the REAL registry entry: codex declares a
+    `script` method and a `cask` method gated `os = ["macos"]`
+    (`installer/registry.toml:1343-1350`). A Linux platform must get the
+    generic phrase, never a Homebrew instruction it cannot run."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tools = {t.id: t for t in load_tools(_REGISTRY)}
+    codex = tools["codex"]
+    rows = classify_tools(
+        [codex],
+        tmp_path / "bin",
+        installed={"codex": True},
+        platform=_LINUX,
+        which=lambda _c: None,
+    )
+    assert rows[0].state == "managed"
+    assert "package manager" in rows[0].hint
+    assert "Homebrew" not in rows[0].hint
+
+
+def test_classify_managed_codex_keeps_cask_hint_on_macos(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Paired with the Linux case above: on a macOS-with-brew platform the
+    filter narrows nothing and codex keeps its cask sentence, byte-identical
+    to today's."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tools = {t.id: t for t in load_tools(_REGISTRY)}
+    codex = tools["codex"]
+    rows = classify_tools(
+        [codex],
+        tmp_path / "bin",
+        installed={"codex": True},
+        platform=_MAC,
+        which=lambda _c: None,
+    )
+    assert rows[0].state == "managed"
+    assert "brew uninstall --cask codex" in rows[0].hint
+
+
+def test_classify_managed_brew_only_tool_gets_generic_hint_without_brew(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deliberate narrowing (Round-2 review HIGH): a brew-only tool on a host
+    with no brew now gets the generic phrase instead of an unrunnable
+    `brew uninstall` line -- the fix, not a regression."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    no_brew_linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    rows = classify_tools(
+        [_brew("jq")],
+        tmp_path / "bin",
+        installed={"jq": True},
+        platform=no_brew_linux,
+        which=lambda _c: None,
+    )
+    assert rows[0].state == "managed"
+    assert "package manager" in rows[0].hint
+    assert "brew uninstall" not in rows[0].hint
+
+
+def _linuxbrew_cask_tool() -> Tool:
+    return Tool(
+        id="jetbrains-toolbox",
+        name="jetbrains-toolbox",
+        category="c",
+        cmd="jetbrains-toolbox",
+        methods=(Method(kind="cask", params={"cask": "jetbrains-toolbox"}, os=("macos",)),),
+    )
+
+
+def test_classify_managed_linuxbrew_cask_tool_gets_generic_fallback_on_linux(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A linuxbrew-cask-owned tool gets the generic phrase from the FALLBACK
+    on Linux and its specific cask attribution from the ownership seam
+    instead -- 15.4-02's ownership-only widening lives in
+    `installer/ownership.py` and is deliberately not reachable from here."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rows = classify_tools(
+        [_linuxbrew_cask_tool()],
+        tmp_path / "bin",
+        installed={"jetbrains-toolbox": True},
+        platform=_LINUX,
+        which=lambda _c: None,
+    )
+    assert rows[0].state == "managed"
+    assert "package manager" in rows[0].hint
+
+
+def test_classify_managed_seam_hint_gets_found_at_suffix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rows = classify_tools(
+        [_apt("ripgrep")],
+        tmp_path / "bin",
+        installed={"ripgrep": True},
+        platform=_LINUX,
+        which=lambda c: f"/usr/bin/{c}",
+        owner_hint=lambda _tool: "managed by apt — `apt remove ripgrep`",
+    )
+    assert "apt remove ripgrep" in rows[0].hint
+    assert "found at /usr/bin/ripgrep" in rows[0].hint
+
+
+def _sdkman_tool() -> Tool:
+    return Tool(
+        id="java",
+        name="Java",
+        category="runtime",
+        cmd="java",
+        methods=(
+            Method(
+                kind="sdkman",
+                params={"candidate": "java", "bin_dir": "~/.sdkman/candidates/java/current/bin"},
+            ),
+        ),
+    )
+
+
+@pytest.mark.parametrize("platform", [_LINUX, _MAC])
+def test_classify_managed_sdkman_tool_names_sdkman_on_every_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: Platform
+) -> None:
+    """A tool whose only declared method is `kind = "sdkman"` gets a hint
+    naming SDKMAN and its candidate, with no seam wired at all -- on every
+    platform, because `_applies` accepts `sdkman` unconditionally."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rows = classify_tools(
+        [_sdkman_tool()],
+        tmp_path / "bin",
+        installed={"java": True},
+        platform=platform,
+        which=lambda _c: None,
+    )
+    assert rows[0].state == "managed"
+    assert "SDKMAN" in rows[0].hint
+    assert "java" in rows[0].hint
 
 
 def test_classify_managed_brew_hint_uses_formula_not_cmd(

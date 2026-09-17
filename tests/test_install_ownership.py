@@ -78,7 +78,7 @@ def test_owner_uses_first_successful_declared_probe() -> None:
         _probe({"sdkman": "", "brew": "demo 1.2.3\n"}),
         immutable=False,
     )
-    assert owner == Ownership("Homebrew", "verified", "brew lists demo")
+    assert owner == Ownership("Homebrew", "verified", "brew lists demo", package="demo")
 
 
 def test_owner_does_not_guess_from_command_path() -> None:
@@ -105,7 +105,7 @@ def test_host_setup_owner_uses_the_reviewed_setup_probe() -> None:
 
 
 @pytest.mark.parametrize(
-    ("probe", "methods", "output", "manager", "detail"),
+    ("probe", "methods", "output", "manager", "detail", "package"),
     [
         (
             "managed-download",
@@ -113,6 +113,7 @@ def test_host_setup_owner_uses_the_reviewed_setup_probe() -> None:
             "demo\n",
             "managed download",
             "managed download lists demo",
+            None,
         ),
         (
             "brew",
@@ -120,6 +121,7 @@ def test_host_setup_owner_uses_the_reviewed_setup_probe() -> None:
             "demo 1.2.3\n",
             "Homebrew",
             "brew lists demo",
+            "demo",
         ),
         (
             "apt",
@@ -127,6 +129,7 @@ def test_host_setup_owner_uses_the_reviewed_setup_probe() -> None:
             "demo\n",
             "apt",
             "apt lists demo",
+            "demo",
         ),
         (
             "dnf",
@@ -134,6 +137,7 @@ def test_host_setup_owner_uses_the_reviewed_setup_probe() -> None:
             "demo\n",
             "dnf",
             "dnf lists demo",
+            "demo",
         ),
         (
             "pacman",
@@ -141,6 +145,7 @@ def test_host_setup_owner_uses_the_reviewed_setup_probe() -> None:
             "demo\n",
             "pacman",
             "pacman lists demo",
+            "demo",
         ),
         (
             "pnpm",
@@ -148,6 +153,7 @@ def test_host_setup_owner_uses_the_reviewed_setup_probe() -> None:
             json.dumps([{"name": "@scope/demo", "version": "1.2.3"}]),
             "pnpm",
             "pnpm lists @scope/demo",
+            "@scope/demo",
         ),
         (
             "sdkman",
@@ -155,6 +161,7 @@ def test_host_setup_owner_uses_the_reviewed_setup_probe() -> None:
             "Using java version 21.0.1-tem\n",
             "SDKMAN",
             "sdkman lists java",
+            "java",
         ),
     ],
 )
@@ -164,13 +171,50 @@ def test_owner_verifies_each_manager_from_its_own_output(
     output: str,
     manager: str,
     detail: str,
+    package: str | None,
 ) -> None:
     """Mutable host: every declared probe answers from its own manager's
     output. The dnf/apt/pacman rows here are the counterpart to
-    `test_native_package_manager_probes_stand_down_on_an_immutable_host`."""
+    `test_native_package_manager_probes_stand_down_on_an_immutable_host`.
+    `package` is the matched name each probe reports -- `None` only for
+    `managed-download`, which never populates it (Round-3 review HIGH)."""
     assert detect_owner(
         _tool(owner_probes=(probe,), methods=methods), _probe({probe: output}), immutable=False
-    ) == Ownership(manager, "verified", detail)
+    ) == Ownership(manager, "verified", detail, package=package)
+
+
+@pytest.mark.parametrize(
+    ("probe", "method"),
+    [
+        ("dnf", Method(kind="dnf", params={"package": "ripgrep"})),
+        ("apt", Method(kind="apt", params={"package": "ripgrep"})),
+        ("pacman", Method(kind="pacman", params={"package": "ripgrep"})),
+        ("rpm-ostree", Method(kind="dnf", params={"package": "ripgrep"})),
+    ],
+)
+def test_native_probe_captures_a_declared_package_name_that_differs_from_cmd(
+    probe: str, method: Method
+) -> None:
+    """Round-3 review HIGH, probe level: `rg`'s cmd is `rg` but its declared
+    dnf/apt/pacman package is `ripgrep` -- the captured name must be the
+    PACKAGE the database matched, never reconstructed from the tool's own
+    cmd. `rpm-ostree` shares the `dnf` method's declared package, mirroring
+    `_rpm_ostree`'s own docstring."""
+    tool = Tool(
+        id="rg",
+        name="rg",
+        category="search",
+        cmd="rg",
+        methods=(method,),
+        owner_probes=(probe,),
+    )
+    if probe == "rpm-ostree":
+        status = json.dumps({"deployments": [{"booted": True, "requested-packages": ["ripgrep"]}]})
+        owner = detect_owner(tool, _probe({"rpm-ostree": status}), immutable=True)
+    else:
+        owner = detect_owner(tool, _probe({probe: "ripgrep\n"}), immutable=False)
+    assert owner.package == "ripgrep"
+    assert owner.package != tool.cmd
 
 
 @pytest.mark.parametrize(
@@ -219,7 +263,7 @@ def test_rpm_ostree_owner_verifies_the_booted_deployments_layered_package() -> N
         ]
     )
     owner = detect_owner(_rpm_ostree_tool(), _probe({"rpm-ostree": status}), immutable=True)
-    assert owner == Ownership("rpm-ostree", "verified", "rpm-ostree layers jq")
+    assert owner == Ownership("rpm-ostree", "verified", "rpm-ostree layers jq", package="jq")
 
 
 def test_rpm_ostree_owner_does_not_credit_a_non_booted_deployments_layered_package() -> None:
@@ -340,7 +384,7 @@ def test_dnf_probe_still_answers_for_the_same_package_on_a_mutable_host() -> Non
         _recording_probe({"rpm-ostree": FileNotFoundError(), "dnf": "jq\n"}, calls),
         immutable=False,
     )
-    assert owner == Ownership("dnf", "verified", "dnf lists jq")
+    assert owner == Ownership("dnf", "verified", "dnf lists jq", package="jq")
     assert [command[0] for command in calls] == ["rpm-ostree", "rpm"]
 
 

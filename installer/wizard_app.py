@@ -663,12 +663,18 @@ class UninstallScreen(AppScreen):
     def _tool_entry(self, row: ToolRow) -> _UninstallEntry:
         selectable = row.state == UninstallState.REMOVABLE
         style = "" if selectable else "dim"
-        installed_via = {
-            UninstallState.REMOVABLE: "userspace",
-            UninstallState.MANAGED: "package manager",
-            UninstallState.ABSENT: "—",
-            UninstallState.UNAVAILABLE: "—",
-        }[row.state]
+        # 15.4-05/D-03: the cell shows the REAL hint `uninstall.py` already
+        # computed, rather than a four-value enum lookup that collapsed every
+        # managed tool into the identical "package manager" text. Removable
+        # and managed rows read `row.hint` -- for removable this is already
+        # the same userspace sentence `detail` shows below; for managed it is
+        # the specific manager attribution (D-03/D-04) this plan exists to
+        # surface. Absent and unavailable rows keep the short dash-style
+        # label they render today (15.4-RESEARCH.md Pitfall 4): only the
+        # managed/removable half of this cell is in scope for this plan.
+        installed_via = (
+            row.hint if row.state in (UninstallState.REMOVABLE, UninstallState.MANAGED) else "—"
+        )
         removes = (
             f"{len(row.paths)} artifact(s)"
             if selectable
