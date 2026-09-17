@@ -623,11 +623,11 @@ class UninstallScreen(AppScreen):
         # reads escape before any screen or status line exists to report it
         # (Round-1 review MEDIUM). On failure the screen still constructs,
         # with an empty row list and the message stashed on
-        # `self._rows_error`; the first `enter_view`/`_resync` surfaces it as
-        # a one-time warn status and the empty list makes that same entry's
+        # `self._startup_error`; the first `enter_view`/`_resync` surfaces it
+        # as a one-time warn status and the empty list makes that same entry's
         # comparison differ from a real reading, so the screen self-heals on
         # its first display rather than staying empty forever.
-        rows, self._rows_error = run_live(self._rows_of)
+        rows, rows_error = run_live(self._rows_of)
         self._rows: list[ToolRow] = rows if rows is not None else []
         # `_resync`'s own two warn-status writes must not be silently
         # dropped when the very first `enter_view` runs BEFORE this screen
@@ -639,9 +639,26 @@ class UninstallScreen(AppScreen):
         # not yet mounted, and `on_mount` applies the stash before falling
         # back to `_show_standing_status`.
         self._pending_status: tuple[str, str] | None = None
-        self._ban_names: list[str] = self._ban_names_of()
-        self._has_path_block: bool = self._has_path_block_of()
-        self._tweak_ids: tuple[str, ...] = self._tweak_ids_of()
+        # Through the SAME seam as the rows predicate above, and for the same
+        # reason (CR-01, 15.4-REVIEW.md): these three are filesystem reads,
+        # not in-memory ones -- `has_managed_block` does `path.read_text()`,
+        # `active_tweak_ids` reads the rc files and stats the bin dir, and
+        # `guard_state` probes the managed bin dir. A bare call here raised
+        # OSError straight out of `UninstallScreen.__init__`, i.e. out of
+        # `_build_app`, before any screen existed to report it.
+        env, env_error = run_live(self._env_state)
+        empty_env: tuple[list[str], bool, tuple[str, ...]] = ([], False, ())
+        self._ban_names, self._has_path_block, self._tweak_ids = (
+            env if env is not None else empty_env
+        )
+        # One stash for BOTH construction-time reads: `_resync` surfaces it
+        # once on the first entry and then clears it, and a machine whose
+        # $HOME just became unreadable typically fails both predicates, so
+        # two separate one-time statuses would mean the user only ever sees
+        # whichever one won the precedence ladder.
+        self._startup_error: str | None = (
+            "; ".join(part for part in (rows_error, env_error) if part is not None) or None
+        )
         self._remove = inputs.remove
         self.applied = False
         self.error: str | None = None
@@ -841,24 +858,45 @@ class UninstallScreen(AppScreen):
         """
         return self._rows_predicate()
 
+    def _env_state(self) -> tuple[list[str], bool, tuple[str, ...]]:
+        """The three environment predicates another view can change while
+        this one is suspended, as one tuple.
+
+        Every one of them touches the FILESYSTEM and can therefore raise
+        (CR-01, 15.4-REVIEW.md): `has_path_block` -> `shellrc.has_managed_block`
+        -> `Path.read_text()`; `tweak_ids` -> `active_tweak_ids` ->
+        `active_policies` -> `tweak_present`/`tweak_executables_present`,
+        which read the rc files and stat the managed bin dir; `ban_names` ->
+        `guard_state`, which probes that same bin dir. They read the same
+        `$HOME` the rows predicate does, so a permission/IO fault under it
+        fails them in a CORRELATED way, never independently.
+
+        That is why this tuple exists as its own seam: both call sites
+        (`__init__` and `_resync`) evaluate it through `run_live`, so a
+        failure degrades to the last known values plus a warn status rather
+        than escaping the nav path.
+        """
+        return (
+            self._ban_names_of(),
+            self._has_path_block_of(),
+            self._tweak_ids_of(),
+        )
+
     def _live_state(self) -> tuple[list[ToolRow], list[str], bool, tuple[str, ...]]:
         """Every input another view can change while this one is suspended,
         plus the row list itself -- now a live predicate rather than a
         construction-time snapshot (D-06), read through `_rows_of`.
 
-        This method itself can raise: the row list comes from `_rows_of`'s
-        bare, unguarded predicate call. `_resync` is the caller that wraps
-        the WHOLE tuple in `run_live` and, on the exception that wrapping
-        catches, re-derives the other three (cheap, non-failing) predicates
-        directly rather than through this method, which discards its entire
-        return value on the exception `run_live` catches.
+        This method itself can raise, from EITHER half: the row list comes
+        from `_rows_of`'s bare predicate call and the other three come from
+        `_env_state`'s. `_resync` is the caller that wraps the WHOLE tuple in
+        `run_live` and, on the exception that wrapping catches, retries
+        `_env_state` alone through a SECOND `run_live` -- never bare, since
+        the three environment predicates are filesystem reads correlated
+        with the rows failure rather than the "cheap, non-failing in-memory
+        reads" a deferred Round-3 finding claimed them to be.
         """
-        return (
-            self._rows_of(),
-            self._ban_names_of(),
-            self._has_path_block_of(),
-            self._tweak_ids_of(),
-        )
+        return (self._rows_of(), *self._env_state())
 
     def _resync(self, *, clear_applied: bool) -> None:
         """Re-derive every live-state predicate and rebuild if it changed.
@@ -897,17 +935,24 @@ class UninstallScreen(AppScreen):
         refreshed, error = run_live(lambda: self._live_state())
         if error is not None:
             # A rows-predicate failure must not also freeze the three
-            # environment predicates: they are cheap, non-failing in-memory
-            # reads (Round-3 review's accepted scope -- only rows touches
-            # the filesystem), so they are re-derived directly here rather
+            # environment predicates, so they are re-derived here rather
             # than through `_live_state`, whose whole tuple was discarded by
-            # the exception `run_live` just caught.
-            refreshed = (
-                self._rows,
-                self._ban_names_of(),
-                self._has_path_block_of(),
-                self._tweak_ids_of(),
-            )
+            # the exception `run_live` just caught -- but through the SAME
+            # `run_live` seam (.claude/architecture.md rule 3), never bare.
+            # CR-01 (15.4-REVIEW.md): all three are filesystem reads (see
+            # `_env_state`'s docstring), so the very fault that triggers this
+            # branch is the one most likely to make them raise too. A bare
+            # call here escaped `enter_view` AFTER `show_view` had already
+            # popped the previous screen, leaving the stack popped and
+            # `current_view` un-updated -- a crash on the single nav path,
+            # reachable from a background `ownership_refreshed()` repaint the
+            # user never initiated. On failure the last known values are kept
+            # and both messages are reported together.
+            fallback, env_error = run_live(self._env_state)
+            if fallback is None:
+                fallback = (self._ban_names, self._has_path_block, self._tweak_ids)
+                error = f"{error}; {env_error}"
+            refreshed = (self._rows, *fallback)
         # run_live always pairs a None result with a non-None error, so
         # `refreshed` is never None here: either run_live's own call
         # succeeded, or the `error is not None` branch above just
@@ -930,15 +975,16 @@ class UninstallScreen(AppScreen):
         if error is not None:
             self._set_status(f"Could not refresh the tool list: {error}.", "warn")
             return
-        if self._rows_error is not None:
+        if self._startup_error is not None:
             # The one-time construction-time failure (Round-1 review
-            # MEDIUM, T-15.4-19): surfaced on the first entry only, then
-            # cleared. The fresh read above already re-derived (self-healed
-            # or not) regardless -- this only controls what the status line
-            # says about THIS entry.
-            stashed = self._rows_error
-            self._rows_error = None
-            self._set_status(f"Could not read the tool list at startup: {stashed}.", "warn")
+            # MEDIUM, T-15.4-19), now covering the environment predicates
+            # too (CR-01): surfaced on the first entry only, then cleared.
+            # The fresh read above already re-derived (self-healed or not)
+            # regardless -- this only controls what the status line says
+            # about THIS entry.
+            stashed = self._startup_error
+            self._startup_error = None
+            self._set_status(f"Could not read the uninstall state at startup: {stashed}.", "warn")
             return
         if not changed:
             return

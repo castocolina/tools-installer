@@ -940,6 +940,92 @@ async def test_uninstall_construction_rows_failure_yields_a_usable_screen_that_s
         assert "rg" in {r.value for r in screen.query_one(DataTable[Any]).rows}
 
 
+def test_uninstall_construction_survives_a_raising_environment_predicate() -> None:
+    """CR-01 (15.4-REVIEW.md): the three environment predicates are
+    FILESYSTEM reads, not in-memory ones, so `__init__` must evaluate them
+    through `run_live` exactly as it already does the rows predicate. Bare,
+    a raising `has_path_block` took `_build_app` itself down before any
+    screen existed to report it."""
+
+    def raising_block() -> bool:
+        raise OSError("EACCES on ~/.myshellrc")
+
+    inputs = _uninstall_inputs(
+        rows=[_removable_row(_tool("rg"), [Path("/opt/rg")])],
+        has_path_block=raising_block,
+    )
+    screen = UninstallScreen(inputs)  # must not raise
+    assert screen.remove_path_block is False
+
+
+async def test_env_predicate_failure_inside_the_rows_failure_branch_never_escapes_nav() -> None:
+    """CR-01 (15.4-REVIEW.md): the rows-failure branch re-derives the three
+    environment predicates, and they fail CORRELATED with the rows predicate
+    (same `$HOME`, same fault). Routed bare, the OSError escaped
+    `enter_view` AFTER `show_view` had already popped the previous screen --
+    a crash on the single nav path. Both messages must reach the status
+    line and the last known environment rows must survive."""
+    row = _removable_row(_tool("rg"), [Path("/opt/rg")])
+    state = {"fail": False}
+
+    def rows() -> list[ToolRow]:
+        if state["fail"]:
+            raise OSError("disconnected network mount")
+        return [row]
+
+    def has_path_block() -> bool:
+        if state["fail"]:
+            raise OSError("EACCES on ~/.myshellrc")
+        return True
+
+    app = _app(
+        uninstall=_uninstall_inputs(rows=rows, has_path_block=has_path_block),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert "#path-block" in {r.value for r in app.screen.query_one(DataTable[Any]).rows}
+        state["fail"] = True
+        await pilot.press("escape")
+        await pilot.press("5")  # must not raise out of the nav path
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert app.current_view == "uninstall"
+        assert "disconnected network mount" in screen.status.text
+        assert "EACCES on ~/.myshellrc" in screen.status.text
+        # Last known values kept: the env row is still there, not silently dropped.
+        assert "#path-block" in {r.value for r in screen.query_one(DataTable[Any]).rows}
+
+
+async def test_env_predicate_failure_during_a_background_repaint_never_escapes() -> None:
+    """CR-01 (15.4-REVIEW.md): `ownership_refreshed()` reaches the same
+    branch from a repaint the user never initiated, so the same guard has
+    to hold there."""
+    row = _removable_row(_tool("rg"), [Path("/opt/rg")])
+    state = {"fail": False}
+
+    def rows() -> list[ToolRow]:
+        if state["fail"]:
+            raise OSError("stale handle")
+        return [row]
+
+    def tweak_ids() -> tuple[str, ...]:
+        if state["fail"]:
+            raise OSError("rc file vanished")
+        return ()
+
+    app = _app(
+        uninstall=_uninstall_inputs(rows=rows, tweak_ids=tweak_ids), initial_view="uninstall"
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        state["fail"] = True
+        screen.ownership_refreshed()  # must not raise
+        await pilot.pause()
+        assert "stale handle" in screen.status.text
+        assert "rc file vanished" in screen.status.text
+
+
 def test_ownership_refreshed_is_a_noop_on_an_unmounted_screen() -> None:
     """Safe to call regardless of mount state: `ToolBrowser.reload` no-ops
     when unmounted."""
