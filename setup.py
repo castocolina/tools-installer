@@ -543,6 +543,11 @@ def _build_app(
             daemon_policy=daemon,
         ),
         invalidate=lambda: version_refresh.invalidate(reason="uninstall run finished"),
+        # WR-01: the pass that REPLACES what the invalidate above drops, off
+        # the same service the catalog's own refresh worker uses, so one
+        # vocabulary of ownership feeds both screens. Called on a thread
+        # worker by `_apply_removal` -- it re-probes every manager.
+        refresh=lambda: version_refresh.refresh(tools),
     )
 
     def _ban_apply_rc_paths() -> list[Path]:

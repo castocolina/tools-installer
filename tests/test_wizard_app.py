@@ -120,6 +120,7 @@ def _uninstall_inputs(
     remove: Callable[[UninstallDecision], SweepResult] = lambda _decision: SweepResult(),
     tweak_ids: tuple[str, ...] | Callable[[], tuple[str, ...]] = (),
     invalidate: Callable[[], object] | None = None,
+    refresh: Callable[[], object] | None = None,
 ) -> UninstallInputs:
     """`rows` joined `ban_names`/`has_path_block`/`tweak_ids` as a predicate
     for the same reason those three already were: Phase 13's live in-TUI
@@ -134,6 +135,7 @@ def _uninstall_inputs(
         remove=remove,
         tweak_ids=_predicate(tweak_ids),
         invalidate=invalidate,
+        refresh=refresh,
     )
 
 
@@ -1025,6 +1027,137 @@ async def test_env_predicate_failure_during_a_background_repaint_never_escapes()
         await pilot.pause()
         assert "stale handle" in screen.status.text
         assert "rc file vanished" in screen.status.text
+
+
+async def _wait_for(
+    pilot: Pilot[list[str] | None], predicate: Callable[[], bool], tries: int = 400
+) -> None:
+    for _ in range(tries):
+        if predicate():
+            await pilot.pause()
+            return
+        await pilot.pause()
+    raise AssertionError("condition never became true within the polling budget")
+
+
+async def test_an_env_lever_only_sweep_does_not_invalidate_ownership() -> None:
+    """WR-01 (15.4-REVIEW.md): `_apply_removal` called `invalidate`
+    unconditionally after any successful sweep -- including one that removed
+    only the pip/npm ban or the PATH block and no tool at all. That degrades
+    every managed row's attribution to the generic registry phrase in
+    exchange for nothing: an env lever is not a mutation of any tool's
+    ownership."""
+    invalidated: list[int] = []
+    captured: list[UninstallDecision] = []
+    app = _app(
+        uninstall=_uninstall_inputs(
+            rows=[],
+            ban_names=["pip"],
+            remove=_recorder(captured),
+            invalidate=lambda: invalidated.append(1),
+        ),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("space")  # the ban pseudo-row is the only entry
+        await pilot.press("enter")
+        await pilot.press("enter")  # confirm
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert screen.applied is True
+        assert captured and captured[0].remove_ban is True
+        assert invalidated == []
+
+
+async def test_a_same_session_removal_refreshes_the_attribution_its_invalidate_dropped() -> None:
+    """WR-01 (15.4-REVIEW.md): the invalidate a removal performs has to be
+    paired with the pass that replaces what it dropped. Nothing else could:
+    `OwnershipRefreshed` is posted only from `CatalogScreen`, so a user going
+    Uninstall -> remove -> Policies -> Uninstall never visits a catalog tab
+    and saw the generic phrase for every managed row for the rest of the
+    session."""
+    state = {"invalidated": False}
+    refreshed: list[int] = []
+    captured: list[UninstallDecision] = []
+
+    def invalidate() -> None:
+        state["invalidated"] = True
+
+    def refresh() -> None:
+        refreshed.append(1)
+        state["invalidated"] = False  # the replacing pass committed
+
+    def rows() -> list[ToolRow]:
+        # Both registers degrade and recover together, as setup.py's two
+        # closures do: they read the same epoch-gated record.
+        degraded = state["invalidated"]
+        return [
+            _removable_row(_tool("rg"), [Path("/opt/rg")]),
+            ToolRow(
+                _tool("jq"),
+                "managed",
+                [],
+                "managed outside this installer — remove with your package manager"
+                if degraded
+                else "managed by dnf — `dnf remove jq`",
+                False,
+                None if degraded else "dnf",
+            ),
+        ]
+
+    app = _app(
+        uninstall=_uninstall_inputs(
+            rows=rows, remove=_recorder(captured), invalidate=invalidate, refresh=refresh
+        ),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        assert table.get_cell("jq", "via").plain == "dnf"
+        await pilot.press("space")  # select rg
+        await pilot.press("enter")
+        await pilot.press("enter")  # confirm
+        await pilot.pause()
+        assert screen.applied is True
+        summary = screen.status.text
+
+        def restored() -> bool:
+            return screen.query_one(DataTable[Any]).get_cell("jq", "via").plain == "dnf"
+
+        await _wait_for(pilot, lambda: bool(refreshed))
+        await _wait_for(pilot, restored)
+        # The background repaint must NOT wipe the sentence describing the
+        # removal the user just performed (`clear_applied=False`).
+        assert screen.applied is True
+        assert screen.status.text == summary
+
+
+async def test_a_removal_with_no_refresh_seam_still_completes() -> None:
+    """The seam is optional -- every existing construction site (and the
+    `--uninstall` direct start, which builds no version service) leaves it
+    `None`, and a removal there must behave exactly as before."""
+    captured: list[UninstallDecision] = []
+    invalidated: list[int] = []
+    app = _app(
+        uninstall=_uninstall_inputs(
+            rows=[_removable_row(_tool("rg"), [Path("/opt/rg")])],
+            remove=_recorder(captured),
+            invalidate=lambda: invalidated.append(1),
+        ),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert screen.applied is True
+        assert invalidated == [1]
 
 
 def test_ownership_refreshed_is_a_noop_on_an_unmounted_screen() -> None:

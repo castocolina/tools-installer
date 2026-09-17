@@ -91,6 +91,15 @@ class UninstallInputs:
     remove: Callable[[UninstallDecision], SweepResult]
     tweak_ids: Callable[[], tuple[str, ...]] = tuple
     invalidate: Callable[[], Any] | None = None
+    # WR-01 (15.4-REVIEW.md): the pass that REPLACES what `invalidate` drops.
+    # Without it, `_apply_removal`'s invalidate degraded every managed row's
+    # attribution to the generic registry phrase with nothing on this screen
+    # able to restore it: `OwnershipRefreshed` is posted only from
+    # `CatalogScreen`, so a user who went Uninstall -> remove -> Policies ->
+    # Uninstall never visited a catalog tab and saw generic phrases for the
+    # rest of the session. BLOCKING when called -- `_apply_removal` runs it
+    # on a thread worker, never on the message loop.
+    refresh: Callable[[], Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -627,6 +636,7 @@ class UninstallScreen(AppScreen):
         self._has_path_block_of = inputs.has_path_block
         self._tweak_ids_of = inputs.tweak_ids
         self._invalidate = inputs.invalidate
+        self._refresh = inputs.refresh
         # Evaluated THROUGH run_live (.claude/architecture.md rule 3), not
         # bare: construction happens outside the nav path `enter_view` guards,
         # so a bare call would let an OSError from the per-tool filesystem
@@ -1164,7 +1174,15 @@ class UninstallScreen(AppScreen):
         self.applied = True
         tool_count = sum(1 for key in ids if key not in _ENV_KEYS)
         summary_parts = [self._applied_summary(tool_count, swept)]
-        if self._invalidate is not None:
+        # WR-01 (15.4-REVIEW.md): gated on `tool_count`, not called
+        # unconditionally. A sweep that removed only the pip/npm ban or the
+        # PATH block and no tool at all changes nothing any ownership record
+        # describes, so bumping the epoch for it degraded every managed row's
+        # attribution to the generic registry phrase in exchange for nothing.
+        # The invariant `version_status.py` states is "every MUTATION calls
+        # invalidate" -- an env-lever sweep is not a mutation of tool
+        # ownership, and reading it as one is what made this case a pure loss.
+        if self._invalidate is not None and tool_count:
             # version_status.py:26-30's own invariant: every mutation this
             # app performs calls invalidate. This screen's removal was the
             # second hole in it (alongside install, closed by
@@ -1179,7 +1197,37 @@ class UninstallScreen(AppScreen):
                 self._invalidate()
             except Exception as exc:  # noqa: BLE001 -- post-mutation side effect, appended below
                 summary_parts.append(f"version cache invalidation failed: {exc}")
+            else:
+                # WR-01: pair the invalidate with the pass that replaces what
+                # it dropped. Nothing else can: `OwnershipRefreshed` is posted
+                # only from `CatalogScreen`, so a session that never visits a
+                # catalog tab again would show the degraded generic phrase for
+                # every managed row until it exits. Only on the success path
+                # -- an invalidate that raised did not drop anything, so there
+                # is nothing to replace.
+                self._refresh_ownership_worker()
         self.status.set(multiline_summary(summary_parts), "ok")
+
+    @work(thread=True, exclusive=True, group="uninstall-ownership-refresh", exit_on_error=False)
+    def _refresh_ownership_worker(self) -> None:
+        """Re-resolve ownership after this screen's own invalidate (WR-01).
+
+        BLOCKING: the seam re-probes every manager, which is why this is a
+        thread worker and not an inline call on the message loop. Failure is
+        deliberately silent -- the screen is already showing the removal
+        summary the user asked for, the degraded-but-honest registry phrase is
+        what it falls back to, and a second error line about a background
+        repaint would bury the result they are reading. `OwnershipRefreshed`
+        is posted only when the pass actually committed, exactly as
+        `CatalogScreen` posts it, so `UnifiedApp.on_ownership_refreshed`
+        routes it back here through the one path that already exists.
+        """
+        refresh = self._refresh
+        if refresh is None:
+            return
+        _result, error = run_live(refresh)
+        if error is None:
+            self.post_message(OwnershipRefreshed())
 
     def _applied_summary(self, tool_count: int, swept: SweepResult) -> str:
         parts: list[str] = []
