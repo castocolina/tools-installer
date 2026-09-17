@@ -134,22 +134,89 @@ def manager_name(method: Method, param: str, fallback: str) -> str:
     return value if isinstance(value, str) and value else fallback
 
 
-def _manager_hint(tool: Tool) -> str:
-    for method in tool.methods:
+# The ownership seam `classify_tools` accepts (15.4-05/D-03/D-04): a plain
+# callable from `Tool` to `str | None`, never `ManagerOwnership` -- not even
+# under a `TYPE_CHECKING` guard. 15.4-RESEARCH.md Pitfall 3 offered threading
+# `platform`/`inventory`/`native_probe` into this module's own signature
+# instead; that is the shape D-05 explicitly rejects, because it would make
+# this screen run its own resolution pass. `installer/ownership.py` already
+# imports `manager_name` FROM this module (`ownership.py:74`), so the
+# dependency runs ownership-to-uninstall; importing `ManagerOwnership` here
+# would import back and create the cycle `.claude/architecture.md` rule 5
+# forbids. A plain callable keeps this module free of that import in either
+# direction -- the composition root (`setup.py`) is what actually binds the
+# seam to `VersionRefreshService.ownership_of` plus `installer.ownership
+# .removal_hint`.
+OwnerHint = Callable[[Tool], str | None]
+
+
+def _manager_hint(tool: Tool, platform: Platform) -> str:
+    """The registry-derived removal phrase for a managed tool, consulted only
+    when the ownership seam has nothing to say for it.
+
+    Scans `resolve_methods(tool, platform)` -- already imported at :20 and
+    already called by `classify_tools` for its absent/unavailable branch, so
+    this introduces no new dependency and no second copy of `_applies` --
+    rather than a raw `tool.methods` scan (Round-2 review HIGH). The raw scan
+    used to return "managed by Homebrew — `brew uninstall --cask codex`" on a
+    Linux host for codex, whose cask is gated `os = ["macos"]`
+    (`installer/registry.toml:1343-1350`) and excluded there by
+    `installer/resolve.py:67-69` -- and this is the exact path taken when the
+    ownership seam is absent or epoch-invalidated, so the "degradation is
+    generic, never wrong" claim was false until this filter.
+
+    Deliberately NOT `installer/ownership.py`'s `_method_targets_platform`:
+    importing it would create the cycle noted on `OwnerHint` above, and the
+    two helpers answer different questions -- that one deliberately WIDENS
+    attribution past the install gate for ownership evidence backed by a real
+    inventory reading, while this is a registry-only GUESS with no evidence
+    behind it and must therefore be NARROWER, not wider. A linuxbrew-cask
+    tool gets its specific attribution from the ownership seam and the
+    generic phrase from here, which is the correct division.
+
+    One deliberate narrowing versus the pre-filter behaviour: a tool
+    declaring only a brew method on a host with no brew now gets the generic
+    phrase instead of a `brew uninstall` line that was never runnable there.
+    That is the fix, not a regression -- the existing brew/cask hint tests
+    all use a macOS-with-brew platform and stay green.
+    """
+    for method in resolve_methods(tool, platform):
         if method.kind == "cask":
             name = manager_name(method, "cask", tool.cmd)
             return f"managed by Homebrew — `brew uninstall --cask {name}`"
         if method.kind == "brew":
             name = manager_name(method, "formula", tool.cmd)
             return f"managed by Homebrew — `brew uninstall {name}`"
+        if method.kind == "sdkman":
+            # No `Owner` value can ever carry "sdkman" (installer/ownership.py
+            # task 1's own docstring): no registry row declares
+            # `owner_probes = ["sdkman"]`, so `install_ownership._sdkman`
+            # never runs and the ownership seam can never produce this
+            # phrase itself. This is registry-derived, exactly like the two
+            # branches above it -- no probe, no resolver. `_applies` accepts
+            # `sdkman` unconditionally, so the platform filter above leaves
+            # this branch reachable on every platform.
+            candidate = manager_name(method, "candidate", tool.cmd)
+            return f"managed by SDKMAN — `sdk uninstall {candidate} <version>`"
     return "managed outside this installer — remove with your package manager"
 
 
-def _managed_hint(tool: Tool, which: Callable[[str], str | None]) -> str:
-    # Surface where the tool actually resolves on PATH (e.g. /opt/homebrew/bin/rg)
-    # so "managed elsewhere" is concrete: the user sees it is a real, brew/system
-    # install this installer did not place and should not delete.
-    hint = _manager_hint(tool)
+def _managed_hint(
+    tool: Tool,
+    which: Callable[[str], str | None],
+    platform: Platform,
+    owner_hint: OwnerHint | None,
+) -> str:
+    # The seam's phrase wins when it has one; a tool it cannot attribute (or
+    # no seam at all) falls back to the platform-filtered registry guess --
+    # per tool, not per call, so one unattributable tool does not degrade the
+    # rest. Surfaces where the tool actually resolves on PATH (e.g.
+    # /opt/homebrew/bin/rg) so "managed elsewhere" is concrete: the user sees
+    # it is a real, brew/system install this installer did not place and
+    # should not delete.
+    hint = owner_hint(tool) if owner_hint is not None else None
+    if hint is None:
+        hint = _manager_hint(tool, platform)
     path = which(tool.cmd)
     return f"{hint} — found at {path}" if path else hint
 
@@ -174,6 +241,7 @@ def classify_tools(
     platform: Platform,
     which: Callable[[str], str | None] = shutil.which,
     reverse_deps: dict[str, list[str]] | None = None,
+    owner_hint: OwnerHint | None = None,
 ) -> list[ToolRow]:
     """Classify every tool by removability, one ToolRow per tool in input order.
 
@@ -184,7 +252,14 @@ def classify_tools(
 
     When ``reverse_deps`` is provided, any tool that other tools depend on gets a
     "required by …" note appended to its hint — warn-but-allow, no cascade or
-    block."""
+    block.
+
+    ``owner_hint``, when given, is consulted ONLY for the managed branch: a
+    phrase it returns for a tool wins over the platform-filtered registry
+    guess (``_manager_hint``); ``None`` for a tool (or no seam at all) falls
+    back to that guess, per tool. Removable, absent and unavailable rows never
+    consult it (see ``OwnerHint``'s own docstring for why this stays a plain
+    callable rather than an ownership resolver)."""
     rows: list[ToolRow] = []
     for tool in tools:
         paths = plan_uninstall([tool], default_bin_dir)
@@ -200,7 +275,13 @@ def classify_tools(
             )
         elif installed.get(tool.id, False):
             rows.append(
-                ToolRow(tool, UninstallState.MANAGED, [], _managed_hint(tool, which), False)
+                ToolRow(
+                    tool,
+                    UninstallState.MANAGED,
+                    [],
+                    _managed_hint(tool, which, platform, owner_hint),
+                    False,
+                )
             )
         elif resolve_methods(tool, platform):
             rows.append(ToolRow(tool, UninstallState.ABSENT, [], "not installed", False))
