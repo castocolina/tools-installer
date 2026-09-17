@@ -69,6 +69,7 @@ from installer.tweaks import BUNDLES, applicable_bundles
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import (
     SweepResult,
+    ToolRow,
     active_tweak_ids,
     classify_tools,
     plan_uninstall,
@@ -405,13 +406,27 @@ def _build_app(
     def _current_link_mode() -> str:
         return settings.link_mode if settings is not None else link_mode
 
-    rows = classify_tools(
-        tools,
-        _DEFAULT_BIN_DIR,
-        installed=installed,
-        platform=platform,
-        reverse_deps=reverse_dependencies(tools),
-    )
+    # The catalog tool list never changes while the app runs -- only install
+    # state does -- so this is computed once, outside the rows closure below.
+    reverse_deps = reverse_dependencies(tools)
+
+    def _uninstall_rows() -> list[ToolRow]:
+        """Re-read presence on every call (D-06): a construction-time
+        snapshot goes stale the moment this session installs or removes a
+        tool, which Phase 13's live in-TUI install execution made routine.
+        The same three calls the old one-time assignment composed --
+        `is_installed`, `classify_tools`, `reverse_dependencies` -- just
+        re-run on demand; `reverse_deps` above is the one piece that does
+        not need re-computing per call."""
+        installed_now = {tool.id: is_installed(tool) for tool in tools}
+        return classify_tools(
+            tools,
+            _DEFAULT_BIN_DIR,
+            installed=installed_now,
+            platform=platform,
+            reverse_deps=reverse_deps,
+        )
+
     # The Policies view offers what applies HERE; the teardown sweeps every
     # bundle. A bundle whose `platforms` tuple changed between installer
     # versions, or an rc file carried between machines, would otherwise leave a
@@ -427,6 +442,20 @@ def _build_app(
     # same object.
     daemon = _build_daemon_policy(platform, installed)
 
+    # Hoisted above `uninstall_inputs` (Round-1 review HIGH's post-removal
+    # invalidation): the Uninstall screen's seam binds to this instance, so
+    # it must exist before that construction. A pure construction with no
+    # dependency on anything declared between here and its old position
+    # below -- this is a reordering and nothing else.
+    version_refresh = VersionRefreshService(
+        platform=platform,
+        cache_path=default_cache_path(),
+        resolve_tag=resolve_github_tag,
+        probe_output=probe_version_output,
+        managed_bin_dir=_DEFAULT_BIN_DIR,
+        native_probe=run_probe,
+    )
+
     def _do_uninstall(decision: UninstallDecision) -> SweepResult:
         # Runs live inside the UninstallScreen. rc_paths is the standard set so the
         # ban aliases are cleaned wherever they were written, regardless of mode.
@@ -441,11 +470,16 @@ def _build_app(
             daemon_policy=daemon,
         )
 
-    # Every environment row is a predicate, not its result: the Policies and
-    # Doctor views mutate all three live in this same session, so the Uninstall
-    # view re-evaluates them on entry (see UninstallInputs).
+    # Every field is a predicate, not its result: the Policies and Doctor
+    # views mutate the three environment fields live in this same session,
+    # and this screen's own removal action changes what `rows` returns next
+    # -- the Uninstall view re-evaluates all four on entry (see
+    # UninstallInputs). `invalidate` mirrors `UpdateService`'s own seam
+    # (below): a successful removal falsifies the shared version/ownership
+    # data exactly like an install or an update does, and this closure is
+    # what closes that hole (D-05).
     uninstall_inputs = UninstallInputs(
-        rows=rows,
+        rows=_uninstall_rows,
         ban_names=lambda: [name for name, active in _guard_state()[0].items() if active],
         has_path_block=lambda: has_managed_block(_MYSHELLRC),
         remove=_do_uninstall,
@@ -456,6 +490,7 @@ def _build_app(
             zshrc_path=_ZSHRC,
             daemon_policy=daemon,
         ),
+        invalidate=lambda: version_refresh.invalidate(reason="uninstall run finished"),
     )
 
     def _ban_apply_rc_paths() -> list[Path]:
@@ -570,15 +605,6 @@ def _build_app(
             return ensure_daemon_default(daemon_policy_instance, state_path=_DAEMON_STATE_PATH)
 
         daemon_default_policy_id = daemon.id
-
-    version_refresh = VersionRefreshService(
-        platform=platform,
-        cache_path=default_cache_path(),
-        resolve_tag=resolve_github_tag,
-        probe_output=probe_version_output,
-        managed_bin_dir=_DEFAULT_BIN_DIR,
-        native_probe=run_probe,
-    )
 
     def _reresolve_ownership(tool: Tool) -> ManagerOwnership:
         inventory = read_inventory(has_brew=platform.has_brew)

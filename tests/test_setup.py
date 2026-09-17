@@ -515,6 +515,87 @@ def test_the_uninstall_view_reads_every_environment_row_live(
     assert inputs.has_path_block() is True
 
 
+def test_the_uninstall_rows_closure_re_reads_presence_live(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The rows closure re-reads presence on every call rather than closing
+    over the startup `installed` map (D-06) -- the same live-re-read shape
+    `test_build_app_reresolve_reads_live_inventory_not_cache` already proves
+    for ownership, applied here to the row list `_build_app` hands the
+    Uninstall screen."""
+    _sandbox(monkeypatch, tmp_path)
+    tool = Tool(
+        id="fd",
+        name="fd",
+        category="search",
+        cmd="fd",
+        methods=(Method(kind="brew", params={"formula": "fd"}),),
+        tier="system",
+    )
+
+    def _one_tool(_registry: object) -> list[Tool]:
+        return [tool]
+
+    monkeypatch.setattr(setup, "load_tools", _one_tool)
+    present = {"fd": False}
+
+    def fake_is_installed(t: Tool) -> bool:
+        return present[t.id]
+
+    monkeypatch.setattr(setup, "is_installed", fake_is_installed)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--uninstall"]) == 0
+    inputs = seen[0]["uninstall"]
+    assert isinstance(inputs, UninstallInputs)
+
+    first = inputs.rows()
+    assert first[0].state.value == "absent"  # not installed, no userspace artifact
+    present["fd"] = True  # brew installed it in another terminal, mid-session
+    second = inputs.rows()
+    assert second[0].state.value == "managed"  # now reads as manager-installed
+
+
+def test_the_uninstall_rows_closure_calls_presence_once_per_catalog_tool(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No quadratic re-read (Round-1 review LOW, T-15.4-21): one `rows()` call
+    invokes the presence predicate exactly once per catalog tool, never once
+    per tool per row and never more."""
+    _sandbox(monkeypatch, tmp_path)
+    tools = [
+        Tool(
+            id=f"tool-{i}",
+            name=f"tool-{i}",
+            category="search",
+            cmd=f"tool-{i}",
+            methods=(Method(kind="brew", params={"formula": f"tool-{i}"}),),
+            tier="system",
+        )
+        for i in range(5)
+    ]
+
+    def _five_tools(_registry: object) -> list[Tool]:
+        return tools
+
+    monkeypatch.setattr(setup, "load_tools", _five_tools)
+    calls: list[str] = []
+
+    def counting_is_installed(t: Tool) -> bool:
+        calls.append(t.id)
+        return False
+
+    monkeypatch.setattr(setup, "is_installed", counting_is_installed)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--uninstall"]) == 0
+    inputs = seen[0]["uninstall"]
+    assert isinstance(inputs, UninstallInputs)
+    calls.clear()  # drop the one call _build_app itself made for the `installed` map
+
+    inputs.rows()
+    assert len(calls) == len(tools)
+    assert sorted(calls) == sorted(tool.id for tool in tools)
+
+
 def test_the_policies_view_is_wired_ban_then_tweaks_then_omz(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

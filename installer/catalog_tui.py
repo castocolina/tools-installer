@@ -129,6 +129,23 @@ class VersionStatusRefreshed(Message):
         self.epoch = epoch
 
 
+class OwnershipRefreshed(Message):
+    """The shared ownership map now holds a committed pass under the current
+    epoch -- carries no payload; that fact is its whole meaning.
+
+    Ownership is committed by `VersionRefreshService.refresh` inside the
+    threaded worker (`_refresh_versions_worker`, below), so the only moment
+    a consumer outside this screen can learn the shared map changed is the
+    moment `on_version_status_refreshed` accepts a pass. Posted ONLY from
+    that handler's commit path -- after both its existing early returns --
+    so a superseded generation and a raced epoch each post nothing: neither
+    means the shared map gained a current pass, so there is nothing for a
+    consumer to repaint to (15.4-04, Round-2 review HIGH: the async window
+    between an install run closing and a mounted Uninstall screen learning
+    the real ownership answer arrived).
+    """
+
+
 VIEWS: tuple[str, ...] = ("category", "priority", "audience", "status", "table")
 _TAB_LABELS = {
     "category": "Category",
@@ -396,6 +413,10 @@ class CatalogScreen(AppScreen):
             return
         self._version_statuses = dict(message.statuses)
         self._browser.reload(self._adapter())
+        # Commit path only -- both early returns above already discarded a
+        # superseded generation and a raced epoch, so this is the ONE point
+        # where the shared ownership map is known to hold a current pass.
+        self.post_message(OwnershipRefreshed())
 
     def _ver_cell(self, tool: Tool) -> Text:
         if not self._installed.get(tool.id, False):

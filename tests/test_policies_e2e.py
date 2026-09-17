@@ -68,7 +68,7 @@ def _build_real_app(home: Path, *, path_value: str | None = None) -> tuple[Unifi
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=[],
+            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
@@ -166,7 +166,7 @@ async def test_policies_screen_toggles_a_tweak_bundle_live(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=[],
+            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
@@ -231,7 +231,7 @@ async def test_policies_screen_toggles_omz_plugins_live(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=[],
+            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
@@ -270,7 +270,7 @@ def _omz_app(home: Path, *, present: bool, zshrc_text: str) -> tuple[UnifiedApp,
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=[],
+            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
@@ -360,7 +360,7 @@ async def test_every_policy_detail_fits_the_panel_at_80_columns(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=[],
+            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
@@ -443,7 +443,7 @@ def _daemon_app(home: Path, *, installed_tools: dict[str, bool]) -> tuple[Unifie
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=[],
+            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
