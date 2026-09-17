@@ -29,6 +29,7 @@ from installer.ownership import (
     parse_brew_list_versions,
     parse_uv_tool_list,
     read_inventory,
+    removal_hint,
     resolve_ownership,
 )
 from installer.platform import Platform
@@ -459,15 +460,19 @@ def test_native_owner_resolves_from_unattributable_live_path() -> None:
     # Self-consistent record: the winner is present in its own candidates
     # tuple (catalog_tui.py:401-406 iterates this field) and shadowed is
     # False, because exactly one manager claims this tool.
+    # package="jq": 15.4-05/Round-3 review HIGH -- `path_owner_package` has no
+    # macOS entry (this test's default platform is `_MAC`), so the resolved
+    # name falls back to the probe's own captured match, never `None`.
     assert result.candidates == (
         OwnershipCandidate(
             owner="dnf",
             method=None,
-            package=None,
+            package="jq",
             current_version=None,
             evidence="dnf lists jq",
         ),
     )
+    assert result.package == "jq"
     assert result.shadowed is False
     assert result.active_candidate is None
     assert result.active_path == Path("/usr/bin/jq")
@@ -800,6 +805,65 @@ def test_os_package_owner_resolves_git_shaped_tool_on_fedora(immutable: bool) ->
     assert result.shadowed is False
     assert result.active_candidate is None
     assert calls  # the probe really was consulted
+    # 15.4-05/Round-3 review HIGH: the resolved record's package feeds a
+    # removal phrase that names the REAL package, never `git` -- and the
+    # `os-package` owner never offers a backticked command regardless, since
+    # the command is the host's own and differs by host.
+    hint = removal_hint(result, tool.cmd)
+    assert hint is not None
+    assert "git-core" in hint
+    assert chr(96) not in hint
+    assert "git`" not in hint
+
+
+def _rg_dnf_tool() -> Tool:
+    """`rg`'s cmd is `rg`, but its declared dnf package is `ripgrep` -- the
+    resolver-level split-package tracer (15.4-RESEARCH.md Pitfall 1's other
+    half, Round-3 review HIGH)."""
+    return Tool(
+        id="rg",
+        name="ripgrep",
+        category="search",
+        cmd="rg",
+        methods=(Method(kind="dnf", params={"package": "ripgrep"}),),
+        owner_probes=("dnf",),
+    )
+
+
+def test_native_owner_resolves_ripgrep_split_package_end_to_end() -> None:
+    """Round-3 review HIGH, resolver level: `resolve_ownership` over a
+    dnf-owned, `rg`-commanded, `ripgrep`-packaged tool returns a record whose
+    `package` is `ripgrep`. Asserted on the resolved record's package AND on
+    the `removal_hint` string built from it, because the point of the pair is
+    that the second cannot be right while the first is wrong -- a command
+    built from `tool.cmd` would read `dnf remove rg`, which fails outright."""
+    tool = _rg_dnf_tool()
+    calls: list[list[str]] = []
+    result = _resolve(
+        tool,
+        inventory=_empty_readable(),
+        which="/usr/bin/rg",
+        platform=_FEDORA,
+        native_probe=_verifying_dnf_probe("ripgrep", calls),
+    )
+    assert result.owner == "dnf"
+    assert result.package == "ripgrep"
+    hint = removal_hint(result, tool.cmd)
+    assert hint is not None
+    assert "ripgrep" in hint
+    assert "`dnf remove rg`" not in hint
+    assert calls  # the probe really was consulted
+
+
+def test_native_owner_removal_hint_degrades_when_no_package_is_resolvable() -> None:
+    """Negative case (Round-3 review HIGH): a record that carries ownership
+    but no resolvable package name degrades to a description-only phrase --
+    never a guess built from the caller-supplied fallback tool identifier."""
+    record = _record("dnf", package=None)
+    hint = removal_hint(record, "rg")
+    assert hint is not None
+    assert chr(96) not in hint
+    assert "rg" in hint  # the fallback TOOL identifier, in prose only
 
 
 def _raising_probe(_command: list[str]) -> str:
@@ -1543,3 +1607,137 @@ def test_real_registry_jetbrains_toolbox_resolves_linux_cask_ownership() -> None
     assert result.owner == "cask"
     assert result.package == "jetbrains-toolbox-linux"
     assert result.confidence == "direct"
+
+
+# -- 15.4-05/D-03/D-04: removal_hint -- the Uninstall screen's per-owner
+# removal phrase, built over the shared OWNER_LABELS/owner_label vocabulary.
+# Round-3 review HIGH is the through-line: a command is only as truthful as
+# the package name it is built from, so removal_hint structurally cannot
+# emit one without a resolved package name. ---------------------------------
+
+_REMOVAL_COMMANDS = ownership._REMOVAL_COMMANDS  # pyright: ignore[reportPrivateUsage]
+_REMOVAL_DESCRIPTIONS = ownership._REMOVAL_DESCRIPTIONS  # pyright: ignore[reportPrivateUsage]
+_NO_REMOVAL_HINT = ownership._NO_REMOVAL_HINT  # pyright: ignore[reportPrivateUsage]
+_LABEL_AGREEMENT_EXEMPT = ownership._LABEL_AGREEMENT_EXEMPT  # pyright: ignore[reportPrivateUsage]
+
+_COMMAND_OWNERS: tuple[Owner, ...] = tuple(
+    owner for owner, command in _REMOVAL_COMMANDS.items() if command
+)
+
+
+def test_removal_command_and_no_hint_tables_are_exhaustive_over_owner() -> None:
+    """Mirrors OWNER_LABELS'/OWNER_DETAIL_LABELS' own exhaustiveness gate
+    shape: every Owner value is in exactly one of _REMOVAL_COMMANDS and
+    _NO_REMOVAL_HINT, so an eleventh owner value cannot ship without a
+    declared removal-hint disposition."""
+    covered = set(_REMOVAL_COMMANDS) | set(_NO_REMOVAL_HINT)
+    assert covered == set(typing.get_args(Owner))
+    assert set(_REMOVAL_COMMANDS).isdisjoint(_NO_REMOVAL_HINT)
+
+
+def test_every_removal_command_owner_also_has_a_description() -> None:
+    """An owner that CAN produce a command must also be able to say something
+    without one, because the package name is resolved at runtime and can be
+    absent for any of them."""
+    assert set(_REMOVAL_COMMANDS) <= set(_REMOVAL_DESCRIPTIONS)
+
+
+def test_no_removal_hint_holds_exactly_unknown_and_installer() -> None:
+    assert frozenset({"unknown", "installer"}) == _NO_REMOVAL_HINT
+
+
+def test_removal_hint_is_none_for_unknown_and_installer() -> None:
+    assert removal_hint(_record("unknown"), "demo") is None
+    assert removal_hint(_record("installer"), "demo") is None
+
+
+def test_removal_hint_reproduces_the_brew_sentence_byte_for_byte() -> None:
+    record = _record("brew", package="ripgrep")
+    assert removal_hint(record, "rg") == "managed by Homebrew — `brew uninstall ripgrep`"
+
+
+def test_removal_hint_reproduces_the_cask_sentence_byte_for_byte() -> None:
+    record = _record("cask", package="visual-studio-code")
+    assert (
+        removal_hint(record, "code")
+        == "managed by Homebrew — `brew uninstall --cask visual-studio-code`"
+    )
+
+
+@pytest.mark.parametrize(
+    ("owner", "package", "expected_fragment"),
+    [
+        ("pnpm", "@scope/demo", "pnpm remove --global @scope/demo"),
+        ("uv", "demo-tool", "uv tool uninstall demo-tool"),
+        ("dnf", "ripgrep", "dnf remove ripgrep"),
+        ("apt", "ripgrep", "apt remove ripgrep"),
+        ("pacman", "ripgrep", "pacman -R ripgrep"),
+        ("rpm-ostree", "ripgrep", "rpm-ostree uninstall ripgrep"),
+    ],
+)
+def test_removal_hint_names_each_managers_own_command(
+    owner: Owner, package: str, expected_fragment: str
+) -> None:
+    hint = removal_hint(_record(owner, package=package), "rg")
+    assert hint is not None
+    assert f"`{expected_fragment}`" in hint
+
+
+def test_removal_hint_for_os_package_names_the_package_with_no_command() -> None:
+    """No command, because the command is the host's own and differs by
+    host -- the package NAME is still worth naming, though."""
+    hint = removal_hint(_record("os-package", package="git-core"), "git")
+    assert hint is not None
+    assert "git-core" in hint
+    assert chr(96) not in hint
+
+
+@pytest.mark.parametrize("owner", _COMMAND_OWNERS)
+def test_removal_hint_carries_a_command_only_when_package_is_resolved(owner: Owner) -> None:
+    with_package = removal_hint(_record(owner, package="realpkg"), "toolcmd")
+    without_package = removal_hint(_record(owner, package=None), "toolcmd")
+    assert with_package is not None
+    assert chr(96) in with_package
+    assert "realpkg" in with_package
+    assert "toolcmd" not in with_package
+    assert without_package is not None
+    assert chr(96) not in without_package
+
+
+@pytest.mark.parametrize(
+    "owner",
+    [
+        o
+        for o in typing.get_args(Owner)
+        if o not in _NO_REMOVAL_HINT and o not in _LABEL_AGREEMENT_EXEMPT
+    ],
+)
+def test_removal_hint_contains_its_owners_column_label(owner: Owner) -> None:
+    """The two surfaces cannot name the same manager differently -- except
+    the one declared exemption, asserted separately below."""
+    record = _record(owner, package="demo-package")
+    hint = removal_hint(record, "demo")
+    label = owner_label(record)
+    assert hint is not None
+    assert label is not None
+    assert label in hint
+
+
+def test_removal_hint_label_agreement_exemption_is_exactly_cask() -> None:
+    assert frozenset({"cask"}) == _LABEL_AGREEMENT_EXEMPT
+
+
+def test_cask_removal_hint_and_label_both_name_homebrew_and_the_cask_concept() -> None:
+    """Cask's bespoke assertion (Round-2 review MEDIUM): the exemption is a
+    DIFFERENT assertion, not an absent one -- both surfaces still name the
+    same manager and the same cask concept, they just do not share a literal
+    substring."""
+    record = _record("cask", package="rectangle")
+    label = owner_label(record)
+    hint = removal_hint(record, "rectangle")
+    assert hint is not None
+    assert label is not None
+    assert "Homebrew" in label
+    assert "Homebrew" in hint
+    assert "cask" in label.lower()
+    assert "--cask" in hint

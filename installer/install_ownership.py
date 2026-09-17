@@ -34,6 +34,15 @@ class Ownership:
     manager: str | None
     confidence: Literal["verified", "unknown"]
     detail: str
+    # The package name THIS probe actually matched, captured as DATA rather
+    # than left buried in `detail` -- `detail` is prose for a human, and a
+    # removal COMMAND built by parsing prose is a command built on a
+    # formatting accident (Round-3 review HIGH). Defaults to `None` so
+    # `_UNKNOWN` and every pre-existing construction stay valid. Left `None`
+    # by `_managed_download` and `_host_setup` on purpose: no downstream
+    # caller ever builds a native removal command from either of those, so an
+    # absent name there is correct rather than a gap.
+    package: str | None = None
 
 
 _UNKNOWN = Ownership(None, "unknown", "no verified manager")
@@ -106,7 +115,7 @@ def _brew(tool: Tool, probe: ProbeRunner) -> Ownership | None:
         if output is not None and any(
             line.split(maxsplit=1)[0] == package for line in _lines(output)
         ):
-            return Ownership("Homebrew", "verified", f"brew lists {package}")
+            return Ownership("Homebrew", "verified", f"brew lists {package}", package=package)
     return None
 
 
@@ -116,7 +125,7 @@ def _apt(tool: Tool, probe: ProbeRunner) -> Ownership | None:
         if output is not None and any(
             line.split(":", maxsplit=1)[0] == package for line in _lines(output)
         ):
-            return Ownership("apt", "verified", f"apt lists {package}")
+            return Ownership("apt", "verified", f"apt lists {package}", package=package)
     return None
 
 
@@ -124,7 +133,7 @@ def _dnf(tool: Tool, probe: ProbeRunner) -> Ownership | None:
     for package in _method_values(tool, {"dnf"}, "package"):
         output = _run(probe, ["rpm", "-q", "--qf", "%{NAME}\\n", package])
         if output is not None and package in _lines(output):
-            return Ownership("dnf", "verified", f"dnf lists {package}")
+            return Ownership("dnf", "verified", f"dnf lists {package}", package=package)
     return None
 
 
@@ -172,7 +181,9 @@ def _rpm_ostree(tool: Tool, probe: ProbeRunner) -> Ownership | None:
     layered_names = cast(list[object], layered)
     for package in packages:
         if package in layered_names:
-            return Ownership("rpm-ostree", "verified", f"rpm-ostree layers {package}")
+            return Ownership(
+                "rpm-ostree", "verified", f"rpm-ostree layers {package}", package=package
+            )
     return None
 
 
@@ -315,7 +326,7 @@ def _pacman(tool: Tool, probe: ProbeRunner) -> Ownership | None:
     for package in _method_values(tool, {"pacman"}, "package"):
         output = _run(probe, ["pacman", "-Qq", package])
         if output is not None and package in _lines(output):
-            return Ownership("pacman", "verified", f"pacman lists {package}")
+            return Ownership("pacman", "verified", f"pacman lists {package}", package=package)
     return None
 
 
@@ -346,7 +357,7 @@ def _pnpm(tool: Tool, probe: ProbeRunner) -> Ownership | None:
         return None
     for package in packages:
         if package in listed:
-            return Ownership("pnpm", "verified", f"pnpm lists {package}")
+            return Ownership("pnpm", "verified", f"pnpm lists {package}", package=package)
     return None
 
 
@@ -355,7 +366,7 @@ def _sdkman(tool: Tool, probe: ProbeRunner) -> Ownership | None:
     for candidate in candidates:
         output = _run(probe, ["sdk", "current", candidate])
         if output is not None and f"Using {candidate} version " in output:
-            return Ownership("SDKMAN", "verified", f"sdkman lists {candidate}")
+            return Ownership("SDKMAN", "verified", f"sdkman lists {candidate}", package=candidate)
     return None
 
 
