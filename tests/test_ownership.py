@@ -9,7 +9,7 @@ import pytest
 import installer.install_ownership as install_ownership
 import installer.ownership as ownership
 import installer.resolve as resolve
-from installer.model import Method, Tool
+from installer.model import Method, Tool, load_tools
 from installer.ownership import (
     MUTATION_GRADE,
     NATIVE_OWNERS,
@@ -38,6 +38,7 @@ _MANAGED = Path("/home/user/.local/bin")
 _PNPM_HOME = Path("/home/user/Library/pnpm")
 _LINUX = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
 _LINUXBREW_PREFIX = Path("/home/linuxbrew/.linuxbrew")
+_REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
 
 def _jetbrains_toolbox(*extra_methods: Method) -> Tool:
@@ -1417,3 +1418,25 @@ def test_method_targets_platform_agrees_with_applies_across_dimension_product() 
         if targets != applies:
             mismatches.append((method, platform))
     assert not mismatches
+
+
+def test_real_registry_jetbrains_toolbox_resolves_linux_cask_ownership() -> None:
+    """15.4-02 task 2's end-to-end proof that the registry's Linux cask row
+    and task 1's ownership-only helper meet: loading the REAL registry and
+    resolving ownership for jetbrains-toolbox on a Linux platform, against a
+    fake cask inventory listing the Linux cask name and a live binary under
+    the fake brew prefix, resolves the cask owner -- exactly like the
+    fake-tool unit tests above, but over the actual committed registry data."""
+    tools = {tool.id: tool for tool in load_tools(_REGISTRY)}
+    toolbox = tools["jetbrains-toolbox"]
+    result = _resolve(
+        toolbox,
+        inventory=_readable(
+            brew_casks={"jetbrains-toolbox-linux": "2.6.2"}, brew_prefix=_LINUXBREW_PREFIX
+        ),
+        which=str(_LINUXBREW_PREFIX / "bin" / "jetbrains-toolbox"),
+        platform=_LINUX,
+    )
+    assert result.owner == "cask"
+    assert result.package == "jetbrains-toolbox-linux"
+    assert result.confidence == "direct"
