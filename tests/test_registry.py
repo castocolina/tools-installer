@@ -1646,6 +1646,40 @@ def test_vscode_is_arch_split_app_with_cask_fallback() -> None:
     )
 
 
+def test_vscode_declares_two_distinct_linux_and_macos_cask_names() -> None:
+    """15.4-VERIFICATION.md gap closure: the exact second instance of D-01's
+    dated correction, mirroring jetbrains-toolbox's fix. A second, Linux-gated
+    cask row names the cask Homebrew actually installs on Linux
+    (visual-studio-code-linux), distinct from the macOS cask token
+    (visual-studio-code). The row is ownership evidence only -- proven
+    BEHAVIOURALLY here, not just by shape: resolve_methods on Linux still
+    returns no cask method, and on macOS still returns exactly the one
+    pre-existing cask method."""
+    vscode = _tools_by_id()["vscode"]
+    casks = [m for m in vscode.methods if m.kind == "cask"]
+    assert len(casks) == 2, [m.params for m in casks]
+    names = {m.params.get("cask") for m in casks}
+    assert names == {"visual-studio-code", "visual-studio-code-linux"}
+    linux = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0")
+    assert [m for m in resolve_methods(vscode, linux) if m.kind == "cask"] == []
+    macos_casks = [m for m in resolve_methods(vscode, macos) if m.kind == "cask"]
+    assert len(macos_casks) == 1
+    assert macos_casks[0].params["cask"] == "visual-studio-code"
+
+
+def test_vscode_linux_cask_row_records_dated_verification() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    block = text.split('id = "vscode"', 1)[1].split("[[tool]]", 1)[0]
+    # Not a bare "26" -- every dated comment starts with "# Verified {date}:".
+    verified = [
+        line for line in block.splitlines() if line.lstrip().startswith("#") and "Verified" in line
+    ]
+    assert verified, block
+    assert "visual-studio-code-linux" in block
+    assert "OWNERSHIP EVIDENCE ONLY" in block
+
+
 def test_sublime_is_single_universal_app_with_cask_fallback() -> None:
     sublime = next(t for t in load_tools(REGISTRY) if t.id == "sublime")
     assert sublime.cmd == "subl"

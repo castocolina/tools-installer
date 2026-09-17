@@ -2149,6 +2149,22 @@ strip = 1
 kind = "cask"
 os = ["macos"]
 cask = "visual-studio-code"
+# Verified 2026-09-17 (15.4 gap-closure, confirmed live against this host's
+# own `ManagerInventory.brew_casks` and the real binary under
+# /home/linuxbrew/.linuxbrew/Caskroom/visual-studio-code-linux/.../bin/code):
+# on linuxbrew, this tool's cask is named visual-studio-code-linux, NOT
+# visual-studio-code (the macOS cask token above) -- the same -linux-suffix
+# pattern jetbrains-toolbox already carries, not a typo. This row is
+# OWNERSHIP EVIDENCE ONLY and can never install anything:
+# installer/resolve.py's cask branch hardcodes
+# `platform.os == "macos" and platform.has_brew`, excluding every cask
+# method outside macOS regardless of its own os list -- exactly the same
+# separate ownership-only path 15.4-02 built for jetbrains-toolbox. The
+# Linux install path for this tool remains the tarball methods above.
+[[tool.method]]
+kind = "cask"
+os = ["debian", "arch", "fedora"]
+cask = "visual-studio-code-linux"
 
 [[tool]]
 id = "jetbrains-toolbox"
