@@ -3,19 +3,18 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: "15.4"
 current_phase_name: "Catalog ownership visibility and Uninstall screen real manager attribution: add a visible Owner/package-manager column to the main catalog table (_COLUMNS/_row_cells in catalog_tui.py) reading the same ownership data _version_detail already computes, instead of ownership only appearing in the focused-row detail bar. Separately, UninstallScreen's 'Installed via'/'What gets removed' columns (wizard_app.py's _tool_entry) discard uninstall.py's own already-computed manager-name-plus-path hint (ToolRow.hint) in favor of a generic 4-value enum-keyed string ('userspace'/'managed elsewhere') -- surface the real hint in the table cell, and wire uninstall.py's manager detection (currently brew/cask-only) to the fuller install_ownership.py/ownership.py resolvers already used by update.py, so pnpm/volta/sdkman/uv/dnf/rpm-ostree-owned tools are named instead of falling through to a generic string"
-current_plan: Not started
-status: planning
-stopped_at: Phase 15.3 complete, ready to plan Phase 15.4
-last_updated: "2026-09-17T01:23:14.172Z"
-last_activity: 2026-09-16
+current_plan: 2
+status: executing
+stopped_at: Completed 15.4-01-PLAN.md
+last_updated: "2026-09-17T04:36:36.181Z"
+last_activity: 2026-09-17
 last_activity_desc: Phase 15.3 complete, transitioned to Phase 15.4
-state_head: d7a6ebb7957bf63d562aba6a7908c1a5a741345d
+state_head: c84d407478dfaa32aa0ac37dec83c9a49c821c38
 progress:
   total_phases: 27
   completed_phases: 14
-  total_plans: 65
-  completed_plans: 65
-  percent: 100
+  total_plans: 70
+  completed_plans: 66
 ---
 
 Total Phases: 21
@@ -32,10 +31,10 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 15.4 — Catalog ownership visibility and Uninstall screen real manager attribution: add a visible Owner/package-manager column to the main catalog table (_COLUMNS/_row_cells in catalog_tui.py) reading the same ownership data _version_detail already computes, instead of ownership only appearing in the focused-row detail bar. Separately, UninstallScreen's 'Installed via'/'What gets removed' columns (wizard_app.py's _tool_entry) discard uninstall.py's own already-computed manager-name-plus-path hint (ToolRow.hint) in favor of a generic 4-value enum-keyed string ('userspace'/'managed elsewhere') -- surface the real hint in the table cell, and wire uninstall.py's manager detection (currently brew/cask-only) to the fuller install_ownership.py/ownership.py resolvers already used by update.py, so pnpm/volta/sdkman/uv/dnf/rpm-ostree-owned tools are named instead of falling through to a generic string
-Current Plan: Not started
-Total Plans in Phase: 1
-Status: Ready to plan
-Last activity: 2026-09-16 — Phase 15.3 complete, transitioned to Phase 15.4
+Current Plan: 2
+Total Plans in Phase: 5
+Status: Ready to execute
+Last activity: 2026-09-17 — Phase 15.4 Plan 01 complete (os-package owner tracer + update refusal)
 
 Progress: [██████████] 100%
 
@@ -93,6 +92,7 @@ Progress: [██████████] 100%
 | Phase 15 P03 | 13min | 2 tasks | 4 files |
 | Phase 15 P04 | 32min | 2 tasks | 5 files |
 | Phase 15 P05 | 29min | 3 tasks | 10 files |
+| Phase 15.4 P01 | 25min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -147,6 +147,7 @@ Recent decisions affecting current work:
 - [Phase 15]: 15-05: resolve_ownership's native adapter call site placed before the active-path unknown branch (not at function end), so a real dnf-installed tool's unattributable live PATH actually resolves through it
 - [Phase 15]: 15-05: NATIVE_OWNERS declared once in ownership.py, imported by update.py's refusal branch, so attribution and refusal sets cannot drift apart
 - [Phase 15]: 15-05: VersionRefreshService.native_probe defaults to None so unit tests never acquire a native-manager subprocess; setup.py wires install_ownership.run_probe at both display and mutation sites
+- [Phase 15.4]: 15.4-01: os-package Owner value + inverse path_owner_package query resolve base-image tools (git/jq/zsh/podman) to a real owner instead of unknown; update.py refuses via shared UNMANAGEABLE_OWNERS set
 
 ### Pending Todos
 
@@ -186,6 +187,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-15T22:49:23.224Z
-Stopped at: Phase 15.3 complete, ready to plan Phase 15.4
-Resume file: .planning/phases/15.8-fix-real-not-just-cosmetic-path-duplication-from-managed-blo/15.8-CONTEXT.md
+Last session: 2026-09-17T04:36:36.026Z
+Stopped at: Completed 15.4-01-PLAN.md
+Resume file: None
