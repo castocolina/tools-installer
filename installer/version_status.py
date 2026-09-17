@@ -33,7 +33,11 @@ A refresh that started before an `invalidate` can still finish after it.
 Immediately before persisting, under the same lock, the current epoch is
 compared against the epoch captured before the slow manager queries; a
 mismatch discards the write so a pre-update snapshot cannot resurrect the
-evidence the update just invalidated.
+evidence the update just invalidated. Ownership is the second thing this
+epoch gates (15.4-04): a raced pass publishes no ownership record at all,
+and `ownership_of` answers `None` for any record whose own tag is not the
+CURRENT epoch, so a mutation this app performed makes every existing
+ownership record report as unavailable until a fresh pass commits one.
 """
 
 from __future__ import annotations
@@ -385,7 +389,20 @@ class VersionRefreshService:
         self._native_probe = native_probe
         self._lock = threading.Lock()
         self._statuses: dict[str, VersionStatus] = {}
-        self._ownership: dict[str, ManagerOwnership] = {}
+        # ONE map of epoch-tagged records, deliberately never a second
+        # parallel `dict[str, int]` epoch map beside a plain ownership map
+        # (Round-3 review HIGH #2): `ownership_of` below is a single
+        # unlocked `dict.get()` called once per rendered row per repaint
+        # from the UI thread, while every WRITER here takes `_lock`
+        # (`refresh`, below). Two parallel maps would let that unlocked
+        # reader observe one map updated and the other not yet -- a torn
+        # read. A single key lookup against one map returns both halves of
+        # the pair or neither, which is inherently atomic and costs no
+        # reader lock. Taking `_lock` in the reader was rejected: the
+        # worker holds it across a cache load, a merge and a
+        # `save_version_cache` write, and `ownership_of` must never block
+        # the UI thread on that.
+        self._ownership: dict[str, tuple[int, ManagerOwnership]] = {}
         self._epoch = 0
 
     @property
@@ -405,7 +422,25 @@ class VersionRefreshService:
         return self._managed_bin_dir
 
     def ownership_of(self, tool_id: str) -> ManagerOwnership | None:
-        return self._ownership.get(tool_id)
+        """A record, or `None` -- meaning either "no pass has ever covered
+        this tool" or "a mutation has happened since this record was
+        produced". Both `None` cases mean the same thing to a caller (do
+        not know), which is why they are one return value and not two.
+
+        Reads the RECORD first (the single dict lookup, returning both
+        halves of the epoch-tagged pair atomically or neither) and the
+        current epoch SECOND. An `invalidate` landing between the two reads
+        then makes the comparison fail and the call answer `None` -- the
+        fail-closed direction. Reading the epoch first would risk the
+        opposite: accepting a record the service had just superseded.
+        """
+        pair = self._ownership.get(tool_id)
+        if pair is None:
+            return None
+        epoch, ownership = pair
+        if epoch != self._epoch:
+            return None
+        return ownership
 
     def invalidate(self, *, reason: str) -> int:
         """Bump the epoch and drop the manager snapshot under the merge lock."""
@@ -554,8 +589,29 @@ class VersionRefreshService:
                 produced[tool.id] = new_entry
         with self._lock:
             if self._epoch != started_epoch:
+                # RACED: an invalidate landed while this pass was resolving.
+                # Publish NO ownership at all for this pass -- neither a
+                # record nor an epoch for any tool in it (Round-3 review
+                # HIGH #1). This deleted line used to call
+                # `self._ownership.update(ownerships)`, which looks like a
+                # harmless partial save but is not: a pass that started at
+                # epoch 0 and finishes after a newer pass already committed
+                # at epoch 1 would overwrite that newer pass's records with
+                # its own obsolete ones, and -- because the tag travels
+                # with the record -- every affected tool's `ownership_of`
+                # would then flip from a correct current answer back to
+                # `None` until yet another refresh landed. A superseded
+                # pass's ownership answers are discarded entirely;
+                # publishing them under an old tag is not a weaker form of
+                # correct, it is the bug. This is ALSO what makes the epoch
+                # gate meaningful rather than merely defensive: with this
+                # branch silent, a tagged record can only ever have come
+                # from the accepted commit path below, so the tag names the
+                # pass that actually produced the answer the map holds.
+                # Statuses are unaffected -- they are not the subject of
+                # this fix, and this pass's statuses still merge exactly as
+                # today.
                 self._statuses.update(statuses)
-                self._ownership.update(ownerships)
                 return dict(statuses)
             merged = load_version_cache(self._cache_path)
             merged.update(produced)
@@ -566,5 +622,13 @@ class VersionRefreshService:
                 managers = None
             save_version_cache(self._cache_path, merged, managers=managers)
             self._statuses.update(statuses)
-            self._ownership.update(ownerships)
+            # The ONE ownership publication point (Round-3 review HIGH #1's
+            # `EPOCH-GATED` gate counts this): tagged with `started_epoch`,
+            # which equals `self._epoch` here since the raced branch above
+            # already returned otherwise. Every record in `self._ownership`
+            # therefore carries the epoch of the pass that actually
+            # produced it -- never the raced branch's obsolete one.
+            self._ownership.update(
+                {tool_id: (started_epoch, ownership) for tool_id, ownership in ownerships.items()}
+            )
         return dict(statuses)

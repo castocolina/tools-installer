@@ -258,7 +258,7 @@ def _host(inputs: ExecuteInputs, tools: list[Tool] | None = None) -> UnifiedApp:
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=[],
+            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _decision: SweepResult(),
@@ -1489,7 +1489,10 @@ class _RecordingRefreshService(VersionRefreshService):
         statuses: dict[str, VersionStatus] = {}
         for tool in tools:
             self.asked.append(tool.id)
-            self._ownership[tool.id] = _brew_ownership(tool)  # pyright: ignore[reportPrivateUsage]
+            self._ownership[tool.id] = (  # pyright: ignore[reportPrivateUsage]
+                self.epoch,
+                _brew_ownership(tool),
+            )
             status = _outdated_status(tool.id, outdated=True)
             self._statuses[tool.id] = status  # pyright: ignore[reportPrivateUsage]
             statuses[tool.id] = status
@@ -1526,7 +1529,10 @@ def _seed_refresh(
     ownership: bool = True,
 ) -> None:
     if ownership:
-        refresh._ownership[tool.id] = _brew_ownership(tool)  # pyright: ignore[reportPrivateUsage]
+        refresh._ownership[tool.id] = (  # pyright: ignore[reportPrivateUsage]
+            refresh.epoch,
+            _brew_ownership(tool),
+        )
     if outdated is not ...:
         refresh._statuses[tool.id] = _outdated_status(  # pyright: ignore[reportPrivateUsage]
             tool.id, outdated=outdated if isinstance(outdated, bool) or outdated is None else True
@@ -2355,7 +2361,10 @@ class _VersionedRefreshService(_RecordingRefreshService):
         statuses: dict[str, VersionStatus] = {}
         for tool in tools:
             self.asked.append(tool.id)
-            self._ownership[tool.id] = _brew_ownership(tool)  # pyright: ignore[reportPrivateUsage]
+            self._ownership[tool.id] = (  # pyright: ignore[reportPrivateUsage]
+                self.epoch,
+                _brew_ownership(tool),
+            )
             status = VersionStatus(
                 tool_id=tool.id,
                 installed=self._installed,

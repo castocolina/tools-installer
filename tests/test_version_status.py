@@ -933,6 +933,212 @@ def test_ownership_of_returns_last_pass_and_none_for_missing(tmp_path: Path) -> 
     assert service.ownership_of("missing") is None
 
 
+def test_ownership_of_returns_none_for_a_record_older_than_the_current_epoch(
+    tmp_path: Path,
+) -> None:
+    """A single `invalidate` call makes every existing record report as
+    unavailable until a refresh commits new ones -- the branch the Round-1
+    review proved could never fire under the old two-map design, because
+    `_ownership` was written only inside `refresh`'s commit block."""
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    path = tmp_path / "versions.json"
+    query, _calls = _counting_query()
+    service = VersionRefreshService(
+        platform=_platform(),
+        cache_path=path,
+        resolve_tag=lambda repo: "v0",
+        probe_output=lambda argv: "14.1.0",
+        now=lambda: now,
+        managed_bin_dir=_MANAGED,
+        which=_which_for_fixture,
+        artifacts_for=lambda _tool: [],
+        query=query,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: "/opt/homebrew/bin/pnpm",
+    )
+    service.refresh([_brew_tool()])
+    assert service.ownership_of("rg") is not None
+    service.invalidate(reason="update")
+    assert service.ownership_of("rg") is None
+    service.refresh([_brew_tool()])
+    assert service.ownership_of("rg") is not None
+
+
+def test_a_raced_refresh_publishes_no_ownership_record_or_epoch(tmp_path: Path) -> None:
+    """Round-3 review HIGH #1, asserted directly on the map's own contents
+    (not only through `ownership_of`, so "published under an old tag" and
+    "not published" cannot be confused): the raced branch --
+    `self._epoch != started_epoch` -- writes NEITHER a record nor an epoch
+    for any tool in the pass. Deterministic: the invalidate is triggered
+    from inside the manager-inventory read this pass makes before its
+    per-tool loop, never by sleeping."""
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    path = tmp_path / "versions.json"
+    holder: dict[str, VersionRefreshService] = {}
+
+    def read_inv(**_kwargs: object) -> ManagerInventory:
+        holder["svc"].invalidate(reason="raced")
+        return _empty_inventory()
+
+    service = VersionRefreshService(
+        platform=_platform(),
+        cache_path=path,
+        resolve_tag=lambda repo: "v0",
+        probe_output=lambda argv: "14.1.0",
+        now=lambda: now,
+        managed_bin_dir=_MANAGED,
+        which=_which_for_fixture,
+        artifacts_for=lambda _tool: [],
+        query=lambda *_a, **_k: "",
+        pnpm_packages=lambda: (),
+        read_inventory_fn=read_inv,
+        read_outdated_fn=_empty_outdated,
+        resolve_pnpm=lambda: "/opt/homebrew/bin/pnpm",
+    )
+    holder["svc"] = service
+    service.refresh([_brew_tool()])
+    assert service._ownership == {}  # pyright: ignore[reportPrivateUsage]
+    assert service.ownership_of("rg") is None
+
+
+def test_a_superseded_refresh_publishes_no_ownership_over_a_newer_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """THE OVERWRITE CASE (Round-3 review HIGH #1). Refresh A starts at
+    epoch 0; `invalidate()` moves the service to epoch 1; refresh B starts
+    and commits at epoch 1; refresh A then finishes and takes the raced
+    branch. `ownership_of` still returns B's record -- A's obsolete answer
+    neither replaces it nor pushes it back to `None`. The interleaving is
+    driven deterministically by holding A inside its own per-tool resolve
+    step (an injected `resolve_tag` hold, the established shape) until B
+    has fully committed -- never by sleeping."""
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    path = tmp_path / "versions.json"
+    tool = _gh_tool("alpha")
+
+    a_ownership = _owned(tool, "installer", current_version="1.0.0")
+    b_ownership = _owned(tool, "pnpm", package="b-pkg", current_version="2.0.0")
+    phase = {"value": "a"}
+
+    def fake_resolve_ownership(_tool: Tool, **_kwargs: object) -> ManagerOwnership:
+        return a_ownership if phase["value"] == "a" else b_ownership
+
+    monkeypatch.setattr("installer.version_status.resolve_ownership", fake_resolve_ownership)
+
+    a_holding = threading.Event()
+    a_release = threading.Event()
+
+    def resolve_tag(repo: str) -> str:
+        # Only A's pass reaches this: `b_ownership.owner == "pnpm"` never
+        # calls resolve_tag (resolve_status's non-installer branch reads
+        # the outdated map instead), so B's refresh below runs to
+        # completion synchronously without needing its own gate.
+        a_holding.set()
+        assert a_release.wait(timeout=5)
+        return "v1.0.0"
+
+    service = _installer_owned_service(
+        path, resolve_tag=resolve_tag, probe_output=lambda argv: "0.9.0", now=lambda: now
+    )
+    errors: list[BaseException] = []
+
+    def run_a() -> None:
+        try:
+            service.refresh([tool])
+        except BaseException as exc:  # noqa: BLE001 -- collected for the join
+            errors.append(exc)
+
+    thread_a = threading.Thread(target=run_a)
+    thread_a.start()
+    assert a_holding.wait(timeout=5)  # A resolved `a_ownership`; now blocked before its commit
+
+    service.invalidate(reason="update")  # epoch 0 -> 1
+    phase["value"] = "b"
+    service.refresh([tool])  # B: resolves + commits b_ownership synchronously, under epoch 1
+
+    a_release.set()
+    thread_a.join(timeout=5)
+    assert errors == []
+
+    assert service.ownership_of(tool.id) == b_ownership
+    tag, record = service._ownership[tool.id]  # pyright: ignore[reportPrivateUsage]
+    assert tag == service.epoch
+    assert record == b_ownership
+
+
+def test_ownership_of_never_returns_a_record_paired_with_the_wrong_epoch(
+    tmp_path: Path,
+) -> None:
+    """ATOMIC-READ case (Round-3 review HIGH #2). A reader thread calls
+    `ownership_of` in a loop while a writer commits and an invalidator
+    bumps concurrently; every observed answer is either `None` or a record
+    -- `ownership_of` itself guarantees a returned record's tag equals the
+    epoch it compared against, so a reader never observing an exception or
+    a malformed value is what this test bounds, by iteration count rather
+    than wall-clock (.claude/testing.md)."""
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    path = tmp_path / "versions.json"
+    tool = _gh_tool("alpha")
+    service = _installer_owned_service(
+        path, resolve_tag=lambda repo: "v1.0.0", probe_output=lambda argv: "0.9.0", now=lambda: now
+    )
+
+    observations: list[ManagerOwnership | None] = []
+    errors: list[BaseException] = []
+    _PASSES = 15
+    _READS_PER_PASS = 20
+    # Two alternating gates make the interleaving deterministic rather than
+    # racing on scheduler luck (the same injected-hold principle the OVERWRITE
+    # test above uses): the reader samples right after each commit AND right
+    # after each invalidate, so both states are guaranteed to be observed on
+    # every one of the writer's 15 passes -- never by sleeping and hoping.
+    committed = threading.Event()
+    invalidated = threading.Event()
+    sampled = threading.Event()
+
+    def writer() -> None:
+        try:
+            for _ in range(_PASSES):
+                service.refresh([tool])
+                committed.set()
+                assert sampled.wait(timeout=5)
+                sampled.clear()
+                service.invalidate(reason="loop")
+                invalidated.set()
+                assert sampled.wait(timeout=5)
+                sampled.clear()
+        except BaseException as exc:  # noqa: BLE001 -- collected for the join
+            errors.append(exc)
+
+    def reader() -> None:
+        try:
+            for _ in range(_PASSES):
+                assert committed.wait(timeout=5)
+                committed.clear()
+                for _ in range(_READS_PER_PASS):
+                    observations.append(service.ownership_of(tool.id))
+                sampled.set()
+                assert invalidated.wait(timeout=5)
+                invalidated.clear()
+                for _ in range(_READS_PER_PASS):
+                    observations.append(service.ownership_of(tool.id))
+                sampled.set()
+        except BaseException as exc:  # noqa: BLE001 -- collected for the join
+            errors.append(exc)
+
+    reader_thread = threading.Thread(target=reader)
+    writer_thread = threading.Thread(target=writer)
+    reader_thread.start()
+    writer_thread.start()
+    reader_thread.join(timeout=15)
+    writer_thread.join(timeout=15)
+
+    assert errors == []
+    assert len(observations) == _PASSES * _READS_PER_PASS * 2
+    assert any(obs is not None for obs in observations)  # the loop did observe a committed pass
+    assert any(obs is None for obs in observations)  # and an invalidated gap between passes
+
+
 # -- D-05/Task 2: a real probe injected at the service seam reaches
 # resolve_ownership for the display path, and resolve_status's untouched
 # final branch is pinned field by field, not by an ownership-only proxy. ---

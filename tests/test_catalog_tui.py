@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from rich.text import Text
 from textual.binding import Binding
+from textual.message import Message
 from textual.widgets import DataTable, Static
 from textual.widgets.data_table import ColumnKey
 
@@ -23,6 +24,7 @@ from installer.catalog_tui import (
     _VER_STALE,  # pyright: ignore[reportPrivateUsage]
     AUDIENCE_LABEL,
     CatalogScreen,
+    OwnershipRefreshed,
     VersionStatusRefreshed,
     group_tools,
     sort_for_table,
@@ -72,7 +74,7 @@ def _unified_app(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=[],
+            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _decision: SweepResult(),
@@ -1018,6 +1020,80 @@ def test_epoch_guard_drops_a_superseded_version_refresh(tmp_path: Path) -> None:
     assert screen._version_statuses == {}  # pyright: ignore[reportPrivateUsage]
 
 
+def _posted_messages(screen: CatalogScreen, monkeypatch: pytest.MonkeyPatch) -> list[Message]:
+    """Capture every message a screen posts without needing a running app
+    (`post_message` requires a live message pump, which a bare
+    `CatalogScreen()` construction never has)."""
+    posted: list[Message] = []
+
+    def fake_post_message(message: Message) -> bool:
+        posted.append(message)
+        return True
+
+    monkeypatch.setattr(screen, "post_message", fake_post_message)
+    return posted
+
+
+def test_ownership_refreshed_is_posted_on_the_commit_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """15.4-04, Round-2 review HIGH: the commit path -- both the generation
+    and the epoch gates already passed -- is the ONE point where the shared
+    ownership map is known to hold a current pass, so it is the one point
+    that posts the completion signal a mounted Uninstall screen listens
+    for."""
+    tool = _tool("rg")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1.6.0",
+        probe_output=lambda argv: "1.2.0",
+    )
+    screen = _screen([tool], {"rg": True}, version_refresh=service)
+    screen._version_refresh_generation = 1  # pyright: ignore[reportPrivateUsage]
+    posted = _posted_messages(screen, monkeypatch)
+    screen.on_version_status_refreshed(
+        VersionStatusRefreshed({"rg": _status(stale=False)}, generation=1, epoch=service.epoch)
+    )
+    assert any(isinstance(message, OwnershipRefreshed) for message in posted)
+
+
+def test_ownership_refreshed_is_not_posted_on_a_superseded_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool = _tool("rg")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1.6.0",
+        probe_output=lambda argv: "1.2.0",
+    )
+    screen = _screen([tool], {"rg": True}, version_refresh=service)
+    screen._version_refresh_generation = 2  # pyright: ignore[reportPrivateUsage]
+    posted = _posted_messages(screen, monkeypatch)
+    screen.on_version_status_refreshed(
+        VersionStatusRefreshed({"rg": _status(stale=False)}, generation=1, epoch=service.epoch)
+    )
+    assert not any(isinstance(message, OwnershipRefreshed) for message in posted)
+
+
+def test_ownership_refreshed_is_not_posted_on_a_raced_epoch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool = _tool("rg")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1.6.0",
+        probe_output=lambda argv: "1.2.0",
+    )
+    screen = _screen([tool], {"rg": True}, version_refresh=service)
+    screen._version_refresh_generation = 1  # pyright: ignore[reportPrivateUsage]
+    service.invalidate(reason="test")
+    posted = _posted_messages(screen, monkeypatch)
+    screen.on_version_status_refreshed(
+        VersionStatusRefreshed({"rg": _status(stale=False)}, generation=1, epoch=0)
+    )
+    assert not any(isinstance(message, OwnershipRefreshed) for message in posted)
+
+
 _MANAGED = Path("/tmp/tools-installer-bin")
 
 
@@ -1137,7 +1213,7 @@ def test_owner_column_renders_every_owner_value_in_both_branches(
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
-    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    service._ownership = {"demo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([tool], {"demo": True}, version_refresh=service)
     expected = owner_label(ownership)
     assert expected
@@ -1155,7 +1231,7 @@ def test_owner_column_is_blank_for_an_unknown_record(tmp_path: Path) -> None:
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
-    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    service._ownership = {"demo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([tool], {"demo": True}, version_refresh=service)
     for unavailable in (False, True):
         screen._unavailable["demo"] = unavailable  # pyright: ignore[reportPrivateUsage]
@@ -1197,7 +1273,7 @@ def test_owner_column_dims_in_the_unavailable_branch_like_every_other_cell(
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
-    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    service._ownership = {"demo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([tool], {"demo": True}, version_refresh=service)
     screen._unavailable["demo"] = True  # pyright: ignore[reportPrivateUsage]
     cells = screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
@@ -1218,7 +1294,7 @@ def test_owner_column_does_not_gate_on_installed_state_unlike_ver_cell(
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
-    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    service._ownership = {"demo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([tool], {"demo": False}, version_refresh=service)
     cells = screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
     assert cells[7].plain == owner_label(ownership)
@@ -1807,7 +1883,7 @@ async def test_owner_cell_semantic_value_reaches_the_mounted_table(tmp_path: Pat
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
-    service._ownership = {"rg": ownership}  # pyright: ignore[reportPrivateUsage]
+    service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
     expected = owner_label(ownership)
     assert expected
     app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service)
@@ -1942,7 +2018,7 @@ def test_version_detail_reads_the_prose_register_for_every_simple_owner_value(
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
-    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    service._ownership = {"demo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([tool], {"demo": True}, version_refresh=service)
     detail = screen._version_detail(tool)  # pyright: ignore[reportPrivateUsage]
     expected = owner_detail(ownership)
@@ -1982,7 +2058,7 @@ def test_version_detail_names_every_installer_placement_mechanism(
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
-    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    service._ownership = {"demo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([tool], {"demo": True}, version_refresh=service)
     detail = screen._version_detail(tool)  # pyright: ignore[reportPrivateUsage]
     assert mechanism in detail
@@ -1999,7 +2075,7 @@ def test_version_detail_os_package_names_the_actual_package(tmp_path: Path) -> N
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
-    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    service._ownership = {"demo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([tool], {"demo": True}, version_refresh=service)
     detail = screen._version_detail(tool)  # pyright: ignore[reportPrivateUsage]
     assert "git-core" in detail
@@ -2036,7 +2112,7 @@ def test_detail_line_names_homebrew_for_brew_owned_row(tmp_path: Path) -> None:
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
-    service._ownership = {"rg": _ownership(tool, owner="brew")}  # pyright: ignore[reportPrivateUsage]
+    service._ownership = {"rg": (service.epoch, _ownership(tool, owner="brew"))}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([tool], {"rg": True}, version_refresh=service)
     screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
         "rg": VersionStatus(
@@ -2061,25 +2137,28 @@ def test_detail_line_names_competing_manager_and_active_path(tmp_path: Path) -> 
         probe_output=lambda argv: "1.0",
     )
     service._ownership = {  # pyright: ignore[reportPrivateUsage]
-        "rg": _ownership(
-            tool,
-            owner="brew",
-            shadowed=True,
-            active_path=path,
-            candidates=(
-                OwnershipCandidate(
-                    owner="installer",
-                    method=None,
-                    package=None,
-                    current_version=None,
-                    evidence="artifact",
-                ),
-                OwnershipCandidate(
-                    owner="brew",
-                    method=tool.methods[0],
-                    package="ripgrep",
-                    current_version="14.1.0",
-                    evidence="inventory",
+        "rg": (
+            service.epoch,
+            _ownership(
+                tool,
+                owner="brew",
+                shadowed=True,
+                active_path=path,
+                candidates=(
+                    OwnershipCandidate(
+                        owner="installer",
+                        method=None,
+                        package=None,
+                        current_version=None,
+                        evidence="artifact",
+                    ),
+                    OwnershipCandidate(
+                        owner="brew",
+                        method=tool.methods[0],
+                        package="ripgrep",
+                        current_version="14.1.0",
+                        evidence="inventory",
+                    ),
                 ),
             ),
         )
@@ -2116,7 +2195,7 @@ def test_unknown_owner_detail_contains_unknown_reason(tmp_path: Path) -> None:
         probe_output=lambda argv: "1.0",
     )
     service._ownership = {  # pyright: ignore[reportPrivateUsage]
-        "rg": _ownership(tool, owner="unknown", unknown_reason=reason)
+        "rg": (service.epoch, _ownership(tool, owner="unknown", unknown_reason=reason))
     }
     screen = _screen([tool], {"rg": True}, version_refresh=service)
     screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
@@ -2152,7 +2231,7 @@ def test_native_owner_detail_names_manager_and_no_update_fact(tmp_path: Path) ->
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
-    service._ownership = {"jq": _ownership(tool, owner="dnf")}  # pyright: ignore[reportPrivateUsage]
+    service._ownership = {"jq": (service.epoch, _ownership(tool, owner="dnf"))}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([tool], {"jq": True}, version_refresh=service)
     text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert "dnf" in text
@@ -2194,7 +2273,7 @@ async def test_native_owner_update_key_reaches_the_service_and_renders_its_refus
     app = _unified_app([tool], {"jq": True}, _BLURBS, version_refresh=service, updates=updates)
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {"jq": ownership}  # pyright: ignore[reportPrivateUsage]
+        service._ownership = {"jq": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
         app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
             "jq": VersionStatus(
                 tool_id="jq",
@@ -2220,7 +2299,7 @@ def test_pinned_spec_appears_in_detail_line(tmp_path: Path) -> None:
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
-    service._ownership = {"mmdc": _ownership(tool, owner="pnpm")}  # pyright: ignore[reportPrivateUsage]
+    service._ownership = {"mmdc": (service.epoch, _ownership(tool, owner="pnpm"))}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([tool], {"mmdc": True}, version_refresh=service)
     screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
         "mmdc": VersionStatus(
@@ -2244,7 +2323,7 @@ def test_stale_latest_has_marker_and_detail_explanation(tmp_path: Path) -> None:
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
-    service._ownership = {"rg": _ownership(tool, owner="brew")}  # pyright: ignore[reportPrivateUsage]
+    service._ownership = {"rg": (service.epoch, _ownership(tool, owner="brew"))}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([tool], {"rg": True}, version_refresh=service)
     stale_status = VersionStatus(
         tool_id="rg",
@@ -2288,7 +2367,7 @@ def test_installer_no_repo_detail_explains_undetermined_latest(tmp_path: Path) -
         probe_output=lambda argv: "1.0",
     )
     service._ownership = {  # pyright: ignore[reportPrivateUsage]
-        "pnpm": _ownership(tool, owner="installer")
+        "pnpm": (service.epoch, _ownership(tool, owner="installer"))
     }
     screen = _screen([tool], {"pnpm": True}, version_refresh=service)
     screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
@@ -2335,7 +2414,7 @@ def test_action_update_tool_skips_confirmed_current(tmp_path: Path) -> None:
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
-    service._ownership = {"rg": ownership}  # pyright: ignore[reportPrivateUsage]
+    service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
     started: list[str] = []
     updates = _update_service(lambda _tool: ownership)
     screen = _screen([tool], {"rg": True}, version_refresh=service, updates=updates)
@@ -2365,7 +2444,7 @@ def test_action_update_tool_refuses_non_mutation_grade(tmp_path: Path) -> None:
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
-    service._ownership = {"rg": ownership}  # pyright: ignore[reportPrivateUsage]
+    service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
     started: list[str] = []
     updates = _update_service(lambda _tool: ownership)
     screen = _screen([tool], {"rg": True}, version_refresh=service, updates=updates)
@@ -2414,7 +2493,7 @@ def test_action_update_tool_starts_worker_when_outdated_is_none(tmp_path: Path) 
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
-    service._ownership = {"pnpm": ownership}  # pyright: ignore[reportPrivateUsage]
+    service._ownership = {"pnpm": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
     started: list[str] = []
     updates = _update_service(lambda _tool: ownership)
     screen = _screen([tool], {"pnpm": True}, version_refresh=service, updates=updates)
@@ -2493,7 +2572,7 @@ async def test_update_success_renders_new_version_on_status_line(tmp_path: Path)
     app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {"rg": ownership}  # pyright: ignore[reportPrivateUsage]
+        service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
         app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
             "rg": _outdated_status("rg")
         }
@@ -2564,7 +2643,7 @@ async def test_update_success_reports_replay_cleanup_and_postinstall_warnings(
     app = _unified_app([tool], {"pnpm": True}, _BLURBS, version_refresh=service, updates=updates)
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {"pnpm": ownership}  # pyright: ignore[reportPrivateUsage]
+        service._ownership = {"pnpm": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
         app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
             "pnpm": _outdated_status("pnpm", source="installer")
         }
@@ -2601,7 +2680,7 @@ async def test_update_failure_renders_status_line(tmp_path: Path) -> None:
     app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {"rg": ownership}  # pyright: ignore[reportPrivateUsage]
+        service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
         app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
             "rg": _outdated_status("rg")
         }
@@ -2641,7 +2720,7 @@ async def test_update_unknown_owner_refusal_from_fresh_reresolution(tmp_path: Pa
     app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {"rg": cached_ownership}  # pyright: ignore[reportPrivateUsage]
+        service._ownership = {"rg": (service.epoch, cached_ownership)}  # pyright: ignore[reportPrivateUsage]
         app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
             "rg": _outdated_status("rg")
         }
@@ -2685,7 +2764,7 @@ async def test_second_update_press_shows_already_in_flight(tmp_path: Path) -> No
     app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {"rg": ownership}  # pyright: ignore[reportPrivateUsage]
+        service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
         app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
             "rg": _outdated_status("rg")
         }

@@ -15,7 +15,7 @@ bottom: the stack is always `[base]` or `[base, <one other view>]`.
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from rich.text import Text
 from textual import work
@@ -27,7 +27,7 @@ from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
 from installer import daemon
 from installer.app import UninstallDecision
-from installer.catalog_tui import CatalogScreen
+from installer.catalog_tui import CatalogScreen, OwnershipRefreshed
 from installer.doctor import DoctorReport
 from installer.enums import Tier, UninstallState
 from installer.execute_screen import ExecuteInputs, ExecuteScreen, InstallRunFinished
@@ -58,24 +58,39 @@ from installer.version_status import VersionRefreshService
 class UninstallInputs:
     """Everything the UninstallScreen needs: every classified tool (catalog
     parity, not just the removable ones), the active ban names, whether a managed
-    PATH block exists, the active shell-tweak ids, and the live removal closure
-    bound by the composition root.
+    PATH block exists, the active shell-tweak ids, the live removal closure bound
+    by the composition root, and an optional post-removal invalidate seam.
 
-    `rows` is a snapshot because nothing in this app installs or removes a tool
-    while it runs. The other three are PREDICATES, not their results, because
-    each is mutated live by another view in the same process: the Policies view
-    writes the ban's shims and aliases and toggles the tweaks, and the Doctor
-    view writes the very managed PATH block `has_path_block` detects. A value
-    frozen at construction goes stale the moment the user does — stale-False
-    leaves the lever for something they just enabled unreachable, and stale-True
+    All four of `rows`/`ban_names`/`has_path_block`/`tweak_ids` are PREDICATES,
+    not their results, for the same reason: each is mutated live by another view
+    in the same process (or, for `rows`, by this screen's own removal action).
+    `rows` used to be documented as a safe snapshot on the claim that nothing
+    installs or removes a tool while the app runs -- that claim became false the
+    moment Phase 13 shipped live in-TUI install execution, and a frozen list is
+    exactly the stale-snapshot failure the other three fields already guard
+    against: the Policies view writes the ban's shims and aliases and toggles
+    the tweaks, the Doctor view writes the very managed PATH block
+    `has_path_block` detects, and an install or removal performed anywhere in
+    the session changes what `rows` should return next. A value frozen at
+    construction goes stale the moment the user does -- stale-False leaves the
+    lever for something they just enabled/installed unreachable, and stale-True
     offers a lever that removes nothing while the summary claims it did.
-    `UninstallScreen.enter_view` re-evaluates all three on every entry."""
+    `UninstallScreen._resync` re-evaluates all four on every entry and on every
+    completed background ownership refresh.
 
-    rows: list[ToolRow]
+    `rows` is deliberately typed as strictly a callable rather than
+    `list[ToolRow] | Callable[[], list[ToolRow]]`: a union would keep the
+    stale-snapshot shape representable and type-checkable forever, so the next
+    construction site would get to reintroduce exactly the bug this migration
+    removes. Migrating every existing construction site once is cheaper than a
+    permanently ambiguous field (Round-1 review HIGH)."""
+
+    rows: Callable[[], list[ToolRow]]
     ban_names: Callable[[], list[str]]
     has_path_block: Callable[[], bool]
     remove: Callable[[UninstallDecision], SweepResult]
     tweak_ids: Callable[[], tuple[str, ...]] = tuple
+    invalidate: Callable[[], Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -597,10 +612,33 @@ class UninstallScreen(AppScreen):
 
     def __init__(self, inputs: UninstallInputs) -> None:
         super().__init__(view="uninstall", accent="red")
-        self._rows = inputs.rows
+        self._rows_predicate = inputs.rows
         self._ban_names_of = inputs.ban_names
         self._has_path_block_of = inputs.has_path_block
         self._tweak_ids_of = inputs.tweak_ids
+        self._invalidate = inputs.invalidate
+        # Evaluated THROUGH run_live (.claude/architecture.md rule 3), not
+        # bare: construction happens outside the nav path `enter_view` guards,
+        # so a bare call would let an OSError from the per-tool filesystem
+        # reads escape before any screen or status line exists to report it
+        # (Round-1 review MEDIUM). On failure the screen still constructs,
+        # with an empty row list and the message stashed on
+        # `self._rows_error`; the first `enter_view`/`_resync` surfaces it as
+        # a one-time warn status and the empty list makes that same entry's
+        # comparison differ from a real reading, so the screen self-heals on
+        # its first display rather than staying empty forever.
+        rows, self._rows_error = run_live(self._rows_of)
+        self._rows: list[ToolRow] = rows if rows is not None else []
+        # `_resync`'s own two warn-status writes must not be silently
+        # dropped when the very first `enter_view` runs BEFORE this screen
+        # is ever mounted (`show_view` calls `entering.enter_view()` before
+        # `push_screen`, matching the ordinary standing-status guard below):
+        # `on_mount`'s own call would otherwise immediately overwrite an
+        # unconditional pre-mount `status.set()` with the ordinary standing
+        # text. `_set_status` stashes here instead of writing directly when
+        # not yet mounted, and `on_mount` applies the stash before falling
+        # back to `_show_standing_status`.
+        self._pending_status: tuple[str, str] | None = None
         self._ban_names: list[str] = self._ban_names_of()
         self._has_path_block: bool = self._has_path_block_of()
         self._tweak_ids: tuple[str, ...] = self._tweak_ids_of()
@@ -764,34 +802,185 @@ class UninstallScreen(AppScreen):
         yield self._browser
 
     def on_mount(self) -> None:
-        self._show_standing_status()
+        if self._pending_status is not None:
+            text, severity = self._pending_status
+            self._pending_status = None
+            self.status.set(text, severity)
+        else:
+            self._show_standing_status()
 
-    def _live_state(self) -> tuple[list[str], bool, tuple[str, ...]]:
-        """Every input another view can change while this one is suspended."""
-        return self._ban_names_of(), self._has_path_block_of(), self._tweak_ids_of()
+    def _set_status(self, text: str, severity: str) -> None:
+        """Write a status line even before this screen has ever mounted.
+
+        `Textual`'s own `on_mount` fires on FIRST PUSH, not at
+        `install_screen` time, and `show_view` calls `entering.enter_view()`
+        BEFORE `push_screen` (the single nav path's own ordering, unrelated
+        to this screen). A warn status written on that very first entry
+        would otherwise be overwritten by `on_mount`'s subsequent call to
+        `_show_standing_status`, silently dropping it. Stashed here instead
+        when not yet mounted; `on_mount` applies it.
+        """
+        if self.is_mounted:
+            self.status.set(text, severity)
+        else:
+            self._pending_status = (text, severity)
+
+    def _rows_of(self) -> list[ToolRow]:
+        """Bare read of the rows predicate -- no failure isolation of its own.
+
+        Every caller wraps this in `ui_common.run_live` (.claude/architecture.md
+        rule 3): `__init__` directly (construction sits outside the nav path),
+        and `_resync` via `_live_state`, which is what makes this call the
+        one that touches the filesystem once per catalog tool.
+        """
+        return self._rows_predicate()
+
+    def _live_state(self) -> tuple[list[ToolRow], list[str], bool, tuple[str, ...]]:
+        """Every input another view can change while this one is suspended,
+        plus the row list itself -- now a live predicate rather than a
+        construction-time snapshot (D-06), read through `_rows_of`.
+
+        This method itself can raise: the row list comes from `_rows_of`'s
+        bare, unguarded predicate call. `_resync` is the caller that wraps
+        the WHOLE tuple in `run_live` and, on the exception that wrapping
+        catches, re-derives the other three (cheap, non-failing) predicates
+        directly rather than through this method, which discards its entire
+        return value on the exception `run_live` catches.
+        """
+        return (
+            self._rows_of(),
+            self._ban_names_of(),
+            self._has_path_block_of(),
+            self._tweak_ids_of(),
+        )
+
+    def _resync(self, *, clear_applied: bool) -> None:
+        """Re-derive every live-state predicate and rebuild if it changed.
+
+        PRECEDENCE (Round-2 review MEDIUM), a single ordered rule rather than
+        an emergent one: the three outcomes of a re-derivation -- a predicate
+        FAILURE, a CHANGED comparison, and an UNCHANGED comparison -- can all
+        coexist with a standing `applied` summary, and nothing said which
+        wins before this rule existed.
+
+        1. A rows-predicate FAILURE wins the status line, over both the
+           ordinary standing status and a standing `applied` summary, and it
+           NEVER clears `applied`. Rationale: a warning about data the
+           screen could not refresh outranks a repetition of an older
+           result, and a failed read is not evidence that the removal
+           summary stopped being true. The other three predicates are still
+           evaluated and can still rebuild the environment rows on their
+           own -- a rows failure suppresses only the row list's update, not
+           the whole entry.
+        2. Otherwise a CHANGED comparison rebuilds, conditionally clears
+           `applied` (only when `clear_applied` is true AND `applied` was
+           set), and writes the ordinary standing status.
+        3. Otherwise an UNCHANGED comparison returns early with whatever
+           message is standing -- this is what preserves the standing
+           result message after an apply.
+
+        `clear_applied` is the ONE thing the two callers legitimately
+        differ on: `enter_view` passes True (a NAV ENTRY is D-06's explicit
+        trigger for a same-session removal to stop being claimed once it no
+        longer describes the screen). `ownership_refreshed` passes False --
+        the user has not navigated, they are reading the summary of the
+        removal they just performed, and a background repaint that wipes
+        that sentence would be a regression: the fresh rows and the summary
+        agree, they do not conflict.
+        """
+        refreshed, error = run_live(lambda: self._live_state())
+        if error is not None:
+            # A rows-predicate failure must not also freeze the three
+            # environment predicates: they are cheap, non-failing in-memory
+            # reads (Round-3 review's accepted scope -- only rows touches
+            # the filesystem), so they are re-derived directly here rather
+            # than through `_live_state`, whose whole tuple was discarded by
+            # the exception `run_live` just caught.
+            refreshed = (
+                self._rows,
+                self._ban_names_of(),
+                self._has_path_block_of(),
+                self._tweak_ids_of(),
+            )
+        # run_live always pairs a None result with a non-None error, so
+        # `refreshed` is never None here: either run_live's own call
+        # succeeded, or the `error is not None` branch above just
+        # reassigned it -- a static hint only (bandit B101 rejects a
+        # runtime assert here, and none is needed: the invariant already
+        # holds structurally, not because an assert enforces it), since
+        # pyright cannot correlate the two independent tuple-unpacked
+        # variables across the branch on its own.
+        refreshed = cast(
+            "tuple[list[ToolRow], list[str], bool, tuple[str, ...]]",
+            refreshed,
+        )
+        stored = (self._rows, self._ban_names, self._has_path_block, self._tweak_ids)
+        changed = refreshed != stored
+        if changed:
+            self._rows, self._ban_names, self._has_path_block, self._tweak_ids = refreshed
+            self._entries = self._build_entries()
+            self._by_key = {entry.key: entry for entry in self._entries}
+            self._browser.reload(self._adapter())
+        if error is not None:
+            self._set_status(f"Could not refresh the tool list: {error}.", "warn")
+            return
+        if self._rows_error is not None:
+            # The one-time construction-time failure (Round-1 review
+            # MEDIUM, T-15.4-19): surfaced on the first entry only, then
+            # cleared. The fresh read above already re-derived (self-healed
+            # or not) regardless -- this only controls what the status line
+            # says about THIS entry.
+            stashed = self._rows_error
+            self._rows_error = None
+            self._set_status(f"Could not read the tool list at startup: {stashed}.", "warn")
+            return
+        if not changed:
+            return
+        if clear_applied and self.applied:
+            self.applied = False
+        # A background repaint (clear_applied=False) that finds `applied`
+        # still set must rebuild the rows -- already done above -- WITHOUT
+        # touching the status line: `_show_standing_status` would otherwise
+        # overwrite the sentence describing the removal the user just
+        # performed with the ordinary "Nothing to uninstall." / cleared
+        # standing text. A nav entry always reaches this with `applied`
+        # already False (either it was never set, or the branch above just
+        # cleared it), so the guard changes nothing on that path.
+        if self.is_mounted and not self.applied:
+            self._show_standing_status()
 
     def enter_view(self) -> None:
-        """Re-derive all three environment rows each time this view is opened.
+        """Re-derive every live-state predicate each time this view is opened.
 
-        The Policies view toggles the ban and the tweaks live and the Doctor
-        view writes the managed PATH block, all one nav step away, so each row's
-        existence and its label must be read at entry rather than frozen in
-        `__init__` — otherwise enabling something leaves its lever unreachable
-        here, and disabling it leaves a lever that removes nothing while the
-        summary claims it did. Skipped once the screen has applied: that run's
-        result is the standing message.
+        The Policies view toggles the ban and the tweaks live, the Doctor
+        view writes the managed PATH block, and this screen's own removal
+        action changes what `rows` should return -- all one nav step away
+        at most -- so every row's existence and label must be read at entry
+        rather than frozen in `__init__`. `clear_applied=True`: a nav entry
+        is D-06's trigger for a same-session removal to stop being claimed
+        once it no longer describes the screen.
         """
-        if self.applied:
-            return
-        refreshed = self._live_state()
-        if refreshed == (self._ban_names, self._has_path_block, self._tweak_ids):
-            return
-        self._ban_names, self._has_path_block, self._tweak_ids = refreshed
-        self._entries = self._build_entries()
-        self._by_key = {entry.key: entry for entry in self._entries}
-        self._browser.reload(self._adapter())
-        if self.is_mounted:
-            self._show_standing_status()
+        self._resync(clear_applied=True)
+
+    def ownership_refreshed(self) -> None:
+        """Completion signal for an asynchronous ownership refresh landing
+        while this screen may already be open.
+
+        `installer/catalog_tui.py`'s threaded version-refresh worker
+        repopulates the shared ownership map this screen's rows ultimately
+        derive from; a screen entered BEFORE that worker committed shows an
+        honest-but-stale fallback with nothing to tell it the real answer
+        later arrived. `UnifiedApp` wires this as that completion signal
+        (task 3), calling it only when this screen is the current view.
+
+        Safe to call regardless of mount state (`ToolBrowser.reload` no-ops
+        when unmounted) and safe to call when nothing changed (the ordinary
+        unchanged comparison inside `_resync` returns early). `clear_applied
+        =False`: this is a background repaint, not a navigation, so it must
+        never wipe the sentence describing a removal the user just
+        performed.
+        """
+        self._resync(clear_applied=False)
 
     def _show_standing_status(self) -> None:
         if not self._entries:
@@ -895,7 +1084,23 @@ class UninstallScreen(AppScreen):
             return
         self.applied = True
         tool_count = sum(1 for key in ids if key not in _ENV_KEYS)
-        self.status.set(self._applied_summary(tool_count, swept), "ok")
+        summary_parts = [self._applied_summary(tool_count, swept)]
+        if self._invalidate is not None:
+            # version_status.py:26-30's own invariant: every mutation this
+            # app performs calls invalidate. This screen's removal was the
+            # second hole in it (alongside install, closed by
+            # on_install_run_finished below) -- without this call, a tool
+            # the user just deleted keeps its pre-removal owner and version
+            # for up to MANAGER_STALE_AFTER, on a screen whose adjacent
+            # control deletes files. Mirrors on_install_run_finished's own
+            # both-directions contract exactly: a raising seam never flips
+            # a completed removal into a reported failure, and it is never
+            # swallowed -- it is appended to the status line instead.
+            try:
+                self._invalidate()
+            except Exception as exc:  # noqa: BLE001 -- post-mutation side effect, appended below
+                summary_parts.append(f"version cache invalidation failed: {exc}")
+        self.status.set(multiline_summary(summary_parts), "ok")
 
     def _applied_summary(self, tool_count: int, swept: SweepResult) -> str:
         parts: list[str] = []
@@ -1962,6 +2167,30 @@ class UnifiedApp(App[list[str] | None]):
             dependency_failed=existing.dependency_failed + incoming.dependency_failed,
             manual_required=existing.manual_required + incoming.manual_required,
         )
+
+    def on_ownership_refreshed(self, message: OwnershipRefreshed) -> None:
+        """The completion signal for an asynchronous ownership refresh that
+        just committed (`installer/catalog_tui.py`'s `OwnershipRefreshed`,
+        posted only from its commit path).
+
+        Hands it to the Uninstall screen ONLY when that view is the current
+        one, and does nothing at all otherwise (Round-2 review HIGH). The
+        single nav path (`show_view` -> `entering.enter_view()`) already
+        re-derives every OTHER view before it is shown, so a full-catalog
+        filesystem sweep for a screen nobody is looking at buys nothing.
+        This patches exactly one hole -- a screen entered BEFORE the async
+        refresh landed -- and is a completion callback for an in-flight
+        read, not a second navigation trigger; it does not contradict rule
+        2 or `_install_closed`'s own no-new-coupling comment above, which
+        deliberately refreshes nothing here because at THAT moment there is
+        nothing fresh yet to hand over.
+        """
+        del message  # carries no payload; its arrival is its whole meaning
+        if self.current_view != "uninstall":
+            return
+        screen = self._views.get("uninstall")
+        if isinstance(screen, UninstallScreen):
+            screen.ownership_refreshed()
 
     def action_abort(self) -> None:
         # The soft quit (q). Guarded so a priority q binding does not quit out from
