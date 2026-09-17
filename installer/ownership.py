@@ -959,3 +959,88 @@ def owner_label(ownership: ManagerOwnership) -> str | None:
                 return kind_label
         return OWNER_LABELS["installer"]
     return OWNER_LABELS[ownership.owner]
+
+
+# 15.4-03/D-02/D-02a: the focused-row detail bar's PROSE register -- a SEPARATE
+# table from `OWNER_LABELS` above (the terse COLUMN register). Both are
+# declared here, side by side, so neither surface can hand-write its own owner
+# vocabulary (`installer/catalog_tui.py`'s local `labels` dict, pre-this-plan,
+# is deleted in favor of reading this table through `owner_detail` below) and
+# neither can drift out of sync unnoticed. Exhaustiveness over `Owner` is
+# enforced by this module's own test, the same gate shape `OWNER_LABELS`
+# already carries (Round-1 review 15.4-03 HIGH/MEDIUM).
+#
+# The two registers are ALLOWED to differ, because a ~12-character cell and a
+# full sentence have different jobs: the column must distinguish `cask` from
+# `brew`, while the detail bar's pre-existing, test-asserted sentence for
+# BOTH is the identical "managed by Homebrew" string -- a cask IS a Homebrew
+# installation, so that prose is not wrong, and this phase does not change
+# user-visible copy for brew or cask. Sharing is legal but must be DECLARED:
+# see `DETAIL_PHRASE_COLLISIONS` below.
+#
+# Eight of these ten entries are lifted BYTE-IDENTICAL from
+# `catalog_tui.py`'s pre-this-plan local `labels` dict (brew, cask, pnpm, uv,
+# dnf, apt, pacman, rpm-ostree) -- pinned by `tests/test_ownership.py`'s
+# byte-identity assertions, so a later edit here that changes this
+# user-visible copy is a failing test, not a silent change. The remaining two
+# are TEMPLATES, changed deliberately (`owner_detail` interpolates them):
+# `os-package` now names the actual package the record carries (this is copy
+# 15.4-01 introduced one plan ago as a flat, non-interpolating placeholder,
+# not pre-phase copy, so the byte-identity rule does not protect it), and
+# `installer` now names the resolved placement mechanism rather than the bare
+# catch-all word "installer" (D-02a) -- mirroring `owner_label`'s own
+# `_INSTALLER_KIND_LABELS` lookup above.
+OWNER_DETAIL_LABELS: dict[Owner, str] = {
+    "brew": "managed by Homebrew",
+    "cask": "managed by Homebrew",
+    "pnpm": "managed by pnpm",
+    "uv": "managed by uv",
+    "dnf": "managed by dnf — this installer will not update it",
+    "apt": "managed by apt — this installer will not update it",
+    "pacman": "managed by pacman — this installer will not update it",
+    "rpm-ostree": "managed by rpm-ostree — this installer will not update it",
+    "os-package": "managed by the OS package {package} — this installer will not update it",
+    "installer": "installed via {mechanism}",
+}
+
+# The product rule behind the one declared sharing above: the prose register
+# MAY share a sentence between owners, but only where it is declared HERE,
+# because the alternatives are worse -- forcing column-style distinctness
+# would rewrite user-visible copy this phase has no mandate to touch (the
+# brew/cask sentence is not wrong, see the module comment above), and
+# dropping the no-duplicate rule outright would let a future eleventh owner
+# value silently borrow another owner's sentence, which is the exact D-02
+# failure ("didn't bother labeling this case") the rule exists to catch. The
+# COLUMN register (`OWNER_LABELS`) carries no equivalent constant because it
+# permits no sharing at all -- its whole job is to distinguish a cask from a
+# formula in a ~12-character cell.
+DETAIL_PHRASE_COLLISIONS: frozenset[frozenset[Owner]] = frozenset({frozenset({"brew", "cask"})})
+
+
+def owner_detail(ownership: ManagerOwnership) -> str | None:
+    """D-02/D-02a: the PROSE register counterpart to `owner_label` above --
+    `owner_label` is the terse COLUMN register (`OWNER_LABELS`), this is the
+    full-sentence detail-bar register (`OWNER_DETAIL_LABELS`), declared
+    adjacent to it so neither can drift unnoticed. They are allowed to differ
+    because a ~12-character cell and a full sentence have different jobs.
+
+    `None` for an `unknown` record; otherwise the resolved phrase, with the
+    `os-package` and `installer` templates interpolated from the record's own
+    package name / resolved placement mechanism (D-02a) -- the same
+    `_INSTALLER_KIND_LABELS` lookup `owner_label` uses, so the two registers
+    can never name a different mechanism for the same record.
+    """
+    if ownership.owner == "unknown":
+        return None
+    template = OWNER_DETAIL_LABELS[ownership.owner]
+    if ownership.owner == "os-package":
+        package = ownership.package if ownership.package is not None else "an unnamed package"
+        return template.format(package=package)
+    if ownership.owner == "installer":
+        mechanism = None
+        if ownership.method is not None:
+            mechanism = _INSTALLER_KIND_LABELS.get(ownership.method.kind)
+        if mechanism is None:
+            mechanism = OWNER_LABELS["installer"]
+        return template.format(mechanism=mechanism)
+    return template

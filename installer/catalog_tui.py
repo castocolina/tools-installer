@@ -20,7 +20,7 @@ from textual.widgets import DataTable
 from installer.deps import missing_requires
 from installer.enums import Audience, Priority
 from installer.model import Tool
-from installer.ownership import MUTATION_GRADE, owner_label
+from installer.ownership import MUTATION_GRADE, owner_detail, owner_label
 from installer.selection import select_tools, unstaged_recommends
 from installer.status import is_default_shell
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
@@ -220,6 +220,17 @@ _VER_STALE = "~"
 # test that would now fail loudly if any line grows past this budget again.
 #
 # The stale marker keeps its `dim` style, matching how _ver_cell renders it.
+#
+# 15.4-03/D-02: the Owner column (added 15.4-01, at `_COLUMNS` index 7) gets
+# NO new legend line, deliberately. The legend's job is to decode colors and
+# symbols whose meaning is not already on screen -- the four dim Ver labels,
+# the priority colors, the installed/missing marks -- but the Owner cell
+# renders the manager's literal name (`Homebrew`, `dnf`, `GitHub release`,
+# ...) with nothing to decode. There is also no budget left to spend: this
+# block's own three-line/78-column limit above is already fully allocated to
+# the keys that DO carry meaning that isn't visible in the cell itself, and a
+# fourth line would either overflow `max-height: 3` (silently clipping a line
+# that carries a real key) or force a cramped rewrite of the three that do.
 _LEGEND = (
     "[bold red]P0[/] essential · [bold yellow]P1[/] recommended · [blue]P2[/] nice-to-have"
     " · [dim]P3[/] niche\n"
@@ -437,6 +448,17 @@ class CatalogScreen(AppScreen):
 
     # -- catalog data wiring for the browser adapter -----------------------
     def _owner_cell(self, tool: Tool) -> Text:
+        # D-02: blank means exactly "genuinely don't know" -- no service
+        # wired, no ownership record produced for this tool yet, or the
+        # record itself resolved to `unknown` (owner_label returns `None`
+        # for that case). Deliberately NOT gated on `self._installed`, unlike
+        # `_ver_cell`'s early return on a not-installed tool above: ownership
+        # is resolved from the live binary path (`ownership.py`'s
+        # `active_path` evidence), not from the presence predicate this
+        # screen's `_installed` map reads, so a tool the predicate happens to
+        # read as absent can still carry a real, useful ownership record. Do
+        # not "fix" this asymmetry by adding a not-installed early return
+        # here -- it would silently throw away real evidence.
         service = self._version_refresh
         ownership = service.ownership_of(tool.id) if service is not None else None
         if ownership is None:
@@ -448,7 +470,6 @@ class CatalogScreen(AppScreen):
         installed = self._installed[tool.id]
         desc = tool.desc or tool.name
         ver = self._ver_cell(tool)
-        owner = self._owner_cell(tool)
         if self._unavailable.get(tool.id, False):
             desc = f"{desc} (not available on this machine)"
             return [
@@ -459,7 +480,7 @@ class CatalogScreen(AppScreen):
                 Text(AUDIENCE_LABEL[tool.audience], style="dim"),
                 Text("✓" if installed else "○", style="dim"),
                 Text(ver.plain, style="dim"),
-                Text(owner.plain, style="dim"),
+                Text(self._owner_cell(tool).plain, style="dim"),
                 Text(desc, style="dim"),
             ]
         return [
@@ -470,7 +491,7 @@ class CatalogScreen(AppScreen):
             Text(AUDIENCE_LABEL[tool.audience], style=_AUDIENCE_STYLE[tool.audience]),
             Text("✓", style="green") if installed else Text("○", style="yellow"),
             ver,
-            owner,
+            self._owner_cell(tool),
             Text(desc, style="dim"),
         ]
 
@@ -512,33 +533,16 @@ class CatalogScreen(AppScreen):
         ownership = service.ownership_of(tool.id) if service is not None else None
         segments: list[str] = []
         if ownership is not None and ownership.owner != "unknown":
-            labels = {
-                "brew": "managed by Homebrew",
-                "cask": "managed by Homebrew",
-                "pnpm": "managed by pnpm",
-                "uv": "managed by uv",
-                "installer": "installed by this installer",
-                # D-05: every NATIVE_OWNERS member needs an entry here, or the
-                # row loses the explanation unknown_reason used to give it
-                # and gains nothing -- both the manager name and the
-                # no-update fact are required (Round 1 review, L160@ab432e9).
-                "dnf": "managed by dnf — this installer will not update it",
-                "apt": "managed by apt — this installer will not update it",
-                "pacman": "managed by pacman — this installer will not update it",
-                "rpm-ostree": "managed by rpm-ostree — this installer will not update it",
-                # 15.4-01/D-01: a flat placeholder, deliberately with no
-                # interpolated package name. This closes the intermediate-
-                # state hole a Round-2 review flagged (this plan's Owner
-                # column would otherwise name an owner the detail bar cannot
-                # name until 15.4-03 lands). 15.4-03 T1 REPLACES this entry
-                # with a package-naming template in ownership.py's own
-                # OWNER_DETAIL_LABELS -- do not treat this string as one that
-                # must survive verbatim; it exists only to close that gap.
-                "os-package": (
-                    "an OS package provides this tool — this installer will not update it"
-                ),
-            }
-            label = labels.get(ownership.owner)
+            # D-05 (Round-1 review 15.4-03 HIGH/MEDIUM): the per-owner
+            # explanation requirement here is now satisfied by an
+            # exhaustiveness-tested table in ownership.py
+            # (OWNER_DETAIL_LABELS / owner_detail) rather than by a local
+            # dict a reader could quietly under-fill -- see ownership.py's
+            # own module comment for the register split: OWNER_LABELS is the
+            # terse COLUMN register, OWNER_DETAIL_LABELS is this PROSE
+            # register, declared adjacent to it so neither can drift
+            # unnoticed.
+            label = owner_detail(ownership)
             if label:
                 segments.append(label)
             if ownership.shadowed:

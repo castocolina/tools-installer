@@ -574,13 +574,13 @@ Plans:
 **Goal:** Every tool in the catalog says who owns it, and the Uninstall screen says it too — truthfully and currently. `installer/ownership.py` gains two real evidence sources it lacks today (an inverse "which OS package owns this live binary" query, so a base-image package such as `git`/`git-core` stops resolving to `unknown`; and a Linux-cask path that reaches linuxbrew casks without changing what the installer offers to install there), the catalog table gains an Owner column whose blank cell only ever means genuinely-don't-know, `UninstallScreen`'s "Installed via" cell shows the real per-tool hint instead of a four-value enum string with that hint fed from the same shared resolution, and both screens re-derive on entry so an install, update or removal performed during the session is never hidden behind a construction-time snapshot.
 **Requirements**: D-01, D-02, D-02a, D-03, D-04, D-05, D-06 (15.4-CONTEXT.md — inserted, roadmap-scoped phase, not a REQUIREMENTS.md id)
 **Depends on:** Phase 15
-**Plans:** 1/5 plans executed
+**Plans:** 3/5 plans executed
 
 Plans:
 
 - [x] 15.4-01-PLAN.md — OS-package ownership resolved end-to-end from an inverse package-database query to a rendered Owner cell, and refused by the update action
-- [ ] 15.4-02-PLAN.md — Linux-cask ownership evidence plus the registry name fix, with `resolve.py`'s install-time cask gate deliberately untouched
-- [ ] 15.4-03-PLAN.md — One owner vocabulary for the Owner column and the detail bar, covering every owner value, still usable at 80x20
+- [x] 15.4-02-PLAN.md — Linux-cask ownership evidence plus the registry name fix, with `resolve.py`'s install-time cask gate deliberately untouched
+- [x] 15.4-03-PLAN.md — One owner vocabulary for the Owner column and the detail bar, covering every owner value, still usable at 80x20
 - [ ] 15.4-04-PLAN.md — `UninstallScreen._rows` becomes the fourth live predicate re-derived on every entry, all 12 `UninstallInputs` construction sites migrate to callables, and a removal invalidates the shared ownership data through an epoch-gated `ownership_of`
 - [ ] 15.4-05-PLAN.md — "Installed via" shows the real hint, fed by the catalog's own ownership map, kept honest by the epoch gate, and best-effort by design on a direct `--uninstall` start
 

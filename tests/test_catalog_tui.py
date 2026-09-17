@@ -1,6 +1,7 @@
 import html
 import re
 import threading
+import typing
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,7 +32,14 @@ from installer.doctor import DoctorReport
 from installer.enums import Audience
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool, load_categories, load_tools
-from installer.ownership import ManagerInventory, ManagerOwnership, Owner, OwnershipCandidate
+from installer.ownership import (
+    ManagerInventory,
+    ManagerOwnership,
+    Owner,
+    OwnershipCandidate,
+    owner_detail,
+    owner_label,
+)
 from installer.platform import Platform
 from installer.resolve import platform_could_support
 from installer.run import CommandError
@@ -1113,6 +1121,111 @@ def test_owner_column_and_detail_paint_the_os_package_case_end_to_end(tmp_path: 
     assert "OS package" in detail
 
 
+# -- 15.4-03/D-02: the Owner COLUMN renders every non-unknown owner value in
+# BOTH `_row_cells` branches, and blank means exactly "genuinely don't know"
+# -- never "didn't bother labeling this case". -------------------------------
+
+
+@pytest.mark.parametrize("owner", [o for o in typing.get_args(Owner) if o != "unknown"])
+def test_owner_column_renders_every_owner_value_in_both_branches(
+    owner: Owner, tmp_path: Path
+) -> None:
+    tool = _tool("demo")
+    ownership = _ownership(tool, owner=owner, package="demo-pkg" if owner == "os-package" else None)
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    expected = owner_label(ownership)
+    assert expected
+    for unavailable in (False, True):
+        screen._unavailable["demo"] = unavailable  # pyright: ignore[reportPrivateUsage]
+        cells = screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
+        assert cells[7].plain == expected
+
+
+def test_owner_column_is_blank_for_an_unknown_record(tmp_path: Path) -> None:
+    tool = _tool("demo")
+    ownership = _ownership(tool, owner="unknown", unknown_reason="no manager claimed the tool")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    for unavailable in (False, True):
+        screen._unavailable["demo"] = unavailable  # pyright: ignore[reportPrivateUsage]
+        assert screen._row_cells(tool)[7].plain == ""  # pyright: ignore[reportPrivateUsage]
+
+
+def test_owner_column_is_blank_with_no_ownership_record_produced_yet(tmp_path: Path) -> None:
+    """No ownership pass has produced a record for this tool (e.g. the
+    refresh worker has not landed) -- the SAME blank as an unknown record,
+    because both genuinely mean "don't know"."""
+    tool = _tool("demo")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    # No entry in service._ownership -- ownership_of("demo") returns None.
+    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    for unavailable in (False, True):
+        screen._unavailable["demo"] = unavailable  # pyright: ignore[reportPrivateUsage]
+        assert screen._row_cells(tool)[7].plain == ""  # pyright: ignore[reportPrivateUsage]
+
+
+def test_owner_column_is_blank_with_no_version_refresh_service_wired() -> None:
+    tool = _tool("demo")
+    screen = _screen([tool], {"demo": True}, version_refresh=None)
+    for unavailable in (False, True):
+        screen._unavailable["demo"] = unavailable  # pyright: ignore[reportPrivateUsage]
+        assert screen._row_cells(tool)[7].plain == ""  # pyright: ignore[reportPrivateUsage]
+
+
+def test_owner_column_dims_in_the_unavailable_branch_like_every_other_cell(
+    tmp_path: Path,
+) -> None:
+    tool = _tool("demo")
+    ownership = _ownership(tool, owner="brew")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    screen._unavailable["demo"] = True  # pyright: ignore[reportPrivateUsage]
+    cells = screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
+    assert "dim" in str(cells[7].style)
+
+
+def test_owner_column_does_not_gate_on_installed_state_unlike_ver_cell(
+    tmp_path: Path,
+) -> None:
+    """The column does not suppress on installed-state (contrast with
+    `_ver_cell`'s deliberate not-installed early return): ownership is
+    resolved from the live binary path, and a tool the presence predicate
+    happens to read as absent can still carry a real, useful record."""
+    tool = _tool("demo")
+    ownership = _ownership(tool, owner="brew")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"demo": False}, version_refresh=service)
+    cells = screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
+    assert cells[7].plain == owner_label(ownership)
+    # The Ver cell, by contrast, DOES suppress for a not-installed tool.
+    assert cells[6].plain == ""
+
+
 def _gh_tool(tool_id: str, *, desc: str = "") -> Tool:
     return Tool(
         id=tool_id,
@@ -1675,6 +1788,56 @@ async def test_legend_keeps_the_catalog_table_usable_at_the_minimum_size() -> No
         assert legend.size.height <= 3, legend.size.height
 
 
+# -- 15.4-03/Task 3: Owner-cell coverage split in two, on purpose (Round-2
+# review LOW). A single "the Owner value is visually reachable at 80x20"
+# assertion would depend on Textual's runtime column auto-sizing and
+# horizontal-scroll position -- not this project's behaviour to pin. -------
+
+
+async def test_owner_cell_semantic_value_reaches_the_mounted_table(tmp_path: Path) -> None:
+    """SEMANTIC, deterministic: the Owner value through the table's own cell
+    data -- the adapter's `row_cells` output at index 7, AND the mounted
+    table's stored cell for that row/column -- with no size harness involved
+    at all. Answers "did this screen tell the table the owner" and nothing
+    else."""
+    tool = _tool("rg")
+    ownership = _ownership(tool, owner="brew")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"rg": ownership}  # pyright: ignore[reportPrivateUsage]
+    expected = owner_label(ownership)
+    assert expected
+    app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service)
+    async with app.run_test(size=(100, 30)):
+        row_cells = app.catalog._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
+        assert row_cells[7].plain == expected
+        table = app.catalog.query_one(DataTable[Any])
+        assert table.get_cell("rg", "owner").plain == expected
+
+
+async def test_nine_column_table_mounts_and_renders_at_the_minimum_size() -> None:
+    """LAYOUT, deterministic: only what's guaranteed at 80x20 -- the screen
+    mounts and renders nine columns without error, and the table region
+    still has room for at least one data row below the docked legend.
+
+    Deliberately NOT asserted here: which characters of which column land on
+    screen. Textual decides column auto-sizing and horizontal-scroll
+    position at runtime, so a "the Owner text is visible" assertion would pin
+    this suite to Textual's layout algorithm rather than to this project's
+    own behaviour (Round-2 review LOW). Do not "strengthen" this into a
+    rendered-text match -- see `test_owner_cell_semantic_value_reaches_the_
+    mounted_table` above for the deterministic semantic coverage instead.
+    """
+    app = _app()
+    async with app.run_test(size=(80, 20)):
+        table = app.catalog.query_one(DataTable[Any])
+        assert len(table.columns) == 9
+        assert table.size.height >= 6, table.size.height
+
+
 def test_legend_is_identical_across_all_three_tier_views() -> None:
     tools, installed = _catalog()
     screens = [
@@ -1757,6 +1920,113 @@ def _ownership(
         active_path=active_path,
         unknown_reason=unknown_reason,
     )
+
+
+# -- 15.4-03/D-02/D-02a: _version_detail hand-writes no owner prose of its
+# own -- it must read ownership.owner_detail and agree with it byte-for-byte,
+# for every Owner value, not just a representative one (Round-1 review
+# HIGH/MEDIUM). ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "owner",
+    [o for o in typing.get_args(Owner) if o not in ("unknown", "installer", "os-package")],
+)
+def test_version_detail_reads_the_prose_register_for_every_simple_owner_value(
+    owner: Owner, tmp_path: Path
+) -> None:
+    tool = _tool("demo")
+    ownership = _ownership(tool, owner=owner)
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    detail = screen._version_detail(tool)  # pyright: ignore[reportPrivateUsage]
+    expected = owner_detail(ownership)
+    assert expected is not None
+    assert expected in detail
+
+
+@pytest.mark.parametrize(
+    ("kind", "mechanism"),
+    [
+        ("github_release", "GitHub release"),
+        ("tarball", "tarball download"),
+        ("app", "downloaded app"),
+        ("script", "install script"),
+    ],
+)
+def test_version_detail_names_every_installer_placement_mechanism(
+    kind: str, mechanism: str, tmp_path: Path
+) -> None:
+    tool = _tool("demo")
+    method = Method(kind=kind, params={})
+    ownership = ManagerOwnership(
+        tool_id="demo",
+        owner="installer",
+        method=method,
+        package=None,
+        current_version=None,
+        confidence="direct",
+        shadowed=False,
+        candidates=(),
+        active_candidate="installer",
+        active_path=None,
+        unknown_reason=None,
+    )
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    detail = screen._version_detail(tool)  # pyright: ignore[reportPrivateUsage]
+    assert mechanism in detail
+    # D-02a: never the bare catch-all word that implies a package manager
+    # exists behind it.
+    assert "installed by this installer" not in detail
+
+
+def test_version_detail_os_package_names_the_actual_package(tmp_path: Path) -> None:
+    tool = _tool("demo")
+    ownership = _ownership(tool, owner="os-package", package="git-core")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    detail = screen._version_detail(tool)  # pyright: ignore[reportPrivateUsage]
+    assert "git-core" in detail
+    assert "will not update it" in detail
+
+
+def test_version_detail_hand_writes_no_owner_vocabulary_of_its_own() -> None:
+    """NO-LOCAL-DICT gate (source-inspection, mirrors this plan's <verify>):
+    `_version_detail`'s body must contain no owner-keyed label dict of its
+    own -- every owner-prose quoted literal except the `unknown`/`installer`
+    control-flow comparisons must be gone, replaced by a call to
+    `owner_detail`."""
+    import inspect
+
+    import installer.catalog_tui as catalog_tui_module
+
+    target = catalog_tui_module.CatalogScreen._version_detail  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+    body = "\n".join(
+        line for line in inspect.getsource(target).splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "owner_detail" in body
+    stray = [
+        owner
+        for owner in typing.get_args(Owner)
+        if owner not in ("unknown", "installer") and f'"{owner}"' in body
+    ]
+    assert not stray, stray
 
 
 def test_detail_line_names_homebrew_for_brew_owned_row(tmp_path: Path) -> None:

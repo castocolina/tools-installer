@@ -11,9 +11,11 @@ import installer.ownership as ownership
 import installer.resolve as resolve
 from installer.model import Method, Tool, load_tools
 from installer.ownership import (
+    DETAIL_PHRASE_COLLISIONS,
     MUTATION_GRADE,
     NATIVE_OWNERS,
     OS_PACKAGE_OWNER,
+    OWNER_DETAIL_LABELS,
     OWNER_LABELS,
     UNMANAGEABLE_OWNERS,
     ManagerInventory,
@@ -21,6 +23,7 @@ from installer.ownership import (
     Owner,
     OwnershipCandidate,
     attribute_path,
+    owner_detail,
     owner_dirs,
     owner_label,
     parse_brew_list_versions,
@@ -940,6 +943,106 @@ def test_owner_label_reads_the_resolved_method_kind_for_an_installer_owned_recor
 
 def test_owner_label_falls_back_to_the_installer_artifact_entry_with_no_method() -> None:
     assert owner_label(_record("installer", method=None)) == OWNER_LABELS["installer"]
+
+
+# -- 15.4-03/D-02/D-02a: OWNER_DETAIL_LABELS (the PROSE register) and
+# owner_detail -- the register split (see 15.4-03-PLAN.md's <design_note>):
+# OWNER_LABELS is the terse COLUMN register asserted above, OWNER_DETAIL_LABELS
+# is the full-sentence detail-bar register declared beside it. The two are
+# allowed to differ; the one place they deliberately share wording
+# (brew/cask) is DETAIL_PHRASE_COLLISIONS' sole member. ------------------------
+
+
+def test_owner_detail_prose_register_is_exhaustive() -> None:
+    assert set(OWNER_DETAIL_LABELS) == set(typing.get_args(Owner)) - {"unknown"}
+    assert all(OWNER_DETAIL_LABELS[value] for value in OWNER_DETAIL_LABELS)
+
+
+def test_owner_labels_column_register_values_are_pairwise_distinct() -> None:
+    values = list(OWNER_LABELS.values())
+    assert len(values) == len(set(values))
+
+
+def test_owner_detail_is_none_only_for_unknown() -> None:
+    assert owner_detail(_record("unknown")) is None
+
+
+@pytest.mark.parametrize(
+    ("owner", "expected"),
+    [
+        ("brew", "managed by Homebrew"),
+        ("cask", "managed by Homebrew"),
+        ("pnpm", "managed by pnpm"),
+        ("uv", "managed by uv"),
+        ("dnf", "managed by dnf — this installer will not update it"),
+        ("apt", "managed by apt — this installer will not update it"),
+        ("pacman", "managed by pacman — this installer will not update it"),
+        ("rpm-ostree", "managed by rpm-ostree — this installer will not update it"),
+    ],
+)
+def test_owner_detail_byte_identical_pre_phase_sentences(owner: Owner, expected: str) -> None:
+    """These eight sentences pre-date this phase (lifted verbatim from
+    catalog_tui.py's local `labels` dict). Pinned against literals written
+    out here, not against the source dict, so a later edit to
+    `OWNER_DETAIL_LABELS` that changes this user-visible copy is a failing
+    test rather than a silent copy change."""
+    assert owner_detail(_record(owner)) == expected
+
+
+def test_owner_detail_os_package_names_the_package() -> None:
+    detail = owner_detail(_record("os-package", package="git-core"))
+    assert detail is not None
+    assert "git-core" in detail
+    assert "will not update it" in detail
+
+
+@pytest.mark.parametrize(
+    ("kind", "mechanism"),
+    [
+        ("github_release", "GitHub release"),
+        ("tarball", "tarball download"),
+        ("app", "downloaded app"),
+        ("script", "install script"),
+    ],
+)
+def test_owner_detail_installer_names_the_placement_mechanism(kind: str, mechanism: str) -> None:
+    method = Method(kind=kind, params={})
+    detail = owner_detail(_record("installer", method=method))
+    assert detail is not None
+    assert mechanism in detail
+    # D-02a: never the bare catch-all word that implies a package manager
+    # exists behind it.
+    assert detail != "installed by this installer"
+
+
+def test_owner_detail_installer_falls_back_with_no_resolved_method() -> None:
+    detail = owner_detail(_record("installer", method=None))
+    assert detail is not None
+    assert OWNER_LABELS["installer"] in detail
+
+
+def test_owner_detail_declared_collision_is_the_only_shared_sentence() -> None:
+    """The satisfiable form of "no two owner states share a detail sentence"
+    (Round-1 review HIGH): sharing is legal but must be declared. Grouping
+    every non-unknown owner's representative sentence must produce exactly
+    one group of size > 1, and that group must be {brew, cask}."""
+    method = Method(kind="github_release", params={"repo": "owner/demo"})
+    groups: dict[str, set[Owner]] = {}
+    for owner in typing.get_args(Owner):
+        if owner == "unknown":
+            continue
+        record = _record(
+            owner,
+            method=method if owner == "installer" else None,
+            package="demo-pkg" if owner == "os-package" else None,
+        )
+        detail = owner_detail(record)
+        assert detail is not None
+        groups.setdefault(detail, set()).add(owner)
+    shared = [frozenset(owners) for owners in groups.values() if len(owners) > 1]
+    assert shared == [frozenset({"brew", "cask"})]
+    assert frozenset(shared) <= DETAIL_PHRASE_COLLISIONS
+    assert frozenset({frozenset({"brew", "cask"})}) == DETAIL_PHRASE_COLLISIONS
 
 
 def test_parse_brew_list_versions_takes_last_token() -> None:
