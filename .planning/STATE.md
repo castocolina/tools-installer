@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: "15.4"
 current_phase_name: "Catalog ownership visibility and Uninstall screen real manager attribution: add a visible Owner/package-manager column to the main catalog table (_COLUMNS/_row_cells in catalog_tui.py) reading the same ownership data _version_detail already computes, instead of ownership only appearing in the focused-row detail bar. Separately, UninstallScreen's 'Installed via'/'What gets removed' columns (wizard_app.py's _tool_entry) discard uninstall.py's own already-computed manager-name-plus-path hint (ToolRow.hint) in favor of a generic 4-value enum-keyed string ('userspace'/'managed elsewhere') -- surface the real hint in the table cell, and wire uninstall.py's manager detection (currently brew/cask-only) to the fuller install_ownership.py/ownership.py resolvers already used by update.py, so pnpm/volta/sdkman/uv/dnf/rpm-ostree-owned tools are named instead of falling through to a generic string"
-current_plan: 4
+current_plan: 5
 status: executing
-stopped_at: Completed 15.4-04-PLAN.md
-last_updated: "2026-09-17T06:32:02.256Z"
+stopped_at: Completed 15.4-05-PLAN.md
+last_updated: "2026-09-17T07:18:10.000Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 15.3 complete, transitioned to Phase 15.4
-state_head: f7bd2c1fe181fed34537ab8156425b246d351e18
+last_activity_desc: Phase 15.4 Plan 05 complete — Uninstall screen shows real manager attribution
+state_head: 9a9f58baf951f9e0fd2bf1280cf9e890d8838d1a
 progress:
   total_phases: 27
   completed_phases: 14
   total_plans: 70
-  completed_plans: 69
+  completed_plans: 70
 ---
 
 Total Phases: 21
@@ -31,10 +31,10 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 15.4 — Catalog ownership visibility and Uninstall screen real manager attribution: add a visible Owner/package-manager column to the main catalog table (_COLUMNS/_row_cells in catalog_tui.py) reading the same ownership data _version_detail already computes, instead of ownership only appearing in the focused-row detail bar. Separately, UninstallScreen's 'Installed via'/'What gets removed' columns (wizard_app.py's _tool_entry) discard uninstall.py's own already-computed manager-name-plus-path hint (ToolRow.hint) in favor of a generic 4-value enum-keyed string ('userspace'/'managed elsewhere') -- surface the real hint in the table cell, and wire uninstall.py's manager detection (currently brew/cask-only) to the fuller install_ownership.py/ownership.py resolvers already used by update.py, so pnpm/volta/sdkman/uv/dnf/rpm-ostree-owned tools are named instead of falling through to a generic string
-Current Plan: 4
+Current Plan: 5
 Total Plans in Phase: 5
 Status: Ready to execute
-Last activity: 2026-09-17 — Phase 15.4 Plan 01 complete (os-package owner tracer + update refusal)
+Last activity: 2026-09-17 — Phase 15.4 Plan 05 complete (Uninstall screen real manager attribution)
 
 Progress: [██████████] 100%
 
@@ -95,6 +95,7 @@ Progress: [██████████] 100%
 | Phase 15.4 P01 | 25min | 2 tasks | 8 files |
 | Phase 15.4 P03 | 60m | 3 tasks | 4 files |
 | Phase 15.4 P04 | 52min | 3 tasks | 11 files |
+| Phase 15.4 P05 | 58min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -154,6 +155,10 @@ Recent decisions affecting current work:
 - [Phase 15.4]: _row_cells calls self._owner_cell(tool) once per branch instead of hoisting a single shared value, matching the plan's BOTH-BRANCHES source gate; the Owner column deliberately does not gate on installed-state, unlike _ver_cell (15.4-03).
 - [Phase 15.4]: 15.4-04: single commit for all three tasks (interdependent gates); raced-refresh ownership branch drops its stale write entirely instead of re-tagging it
 - [Phase 15.4]: 15.4-04: UninstallInputs.rows migrated to Callable across all 13 real construction sites (re-grepped, not trusted from plan's stale count)
+- [Phase 15.4]: 15.4-05: native probes (`_dnf`/`_apt`/`_pacman`/`_rpm_ostree`) now capture the matched package name onto `Ownership.package`; `_native_owner` propagates it, preferring `path_owner_package`'s inverse-query answer over the probe's own declared-name match
+- [Phase 15.4]: 15.4-05: `removal_hint` lives in `installer/ownership.py` (not `uninstall.py`) to avoid the import cycle `manager_name`'s existing ownership-to-uninstall dependency would create; structurally refuses to emit a backticked command without a resolved package name
+- [Phase 15.4]: 15.4-05: `_manager_hint` scans `resolve_methods(tool, platform)` instead of raw `tool.methods`, closing the Round-2 review HIGH where a macOS-only cask (codex) could name a Homebrew command on Linux
+- [Phase 15.4]: 15.4-05: `classify_tools` gained an `owner_hint` seam (plain `Tool -> str | None` callable, never `ManagerOwnership`) consulted only on the managed branch; `setup.py` binds it to `removal_hint` over `VersionRefreshService.ownership_of`, reusing the catalog's already-computed map
 
 ### Pending Todos
 
@@ -165,6 +170,7 @@ None yet.
 
 - Six companion PRDs from the same 2026-09-04 batch (`package-manager-policy`, `postinstall-hooks`, `catalog-expansion`, `live-package-management`, `background-maintenance-daemon`, `agent-cli-ergonomics`) are queued for ingestion immediately after this roadmap — expect ROADMAP.md to grow with additional phases soon.
 - REQ-dependency-chain-requires' illustrative examples (`oh-my-zsh`, `volta`) now have both tools in `registry.toml` (`volta` since 04-02, `oh-my-zsh` since 07-01).
+- Phase 15.4's one `<human-check>` item (15.4-05 task 3, `human_verify_mode: end-of-phase`) is outstanding: run `make setup`, confirm real manager names render in the Uninstall "Installed via" column, confirm attribution sharpens in place after a background refresh, confirm codex shows no Homebrew instruction on this Linux host, confirm a split-package removal command (e.g. `git`/`git-core`) matches `rpm -qf $(command -v git)`, and confirm `make setup ARGS="--uninstall"` renders a complete generic-attribution screen. Not performed by the executor per plan instruction — end-of-phase verification.
 
 ### Roadmap Evolution
 
@@ -193,6 +199,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-17T06:32:02.101Z
-Stopped at: Completed 15.4-04-PLAN.md
+Last session: 2026-09-17T07:18:10.000Z
+Stopped at: Completed 15.4-05-PLAN.md
 Resume file: None
