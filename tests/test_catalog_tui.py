@@ -1935,6 +1935,53 @@ async def test_nine_column_table_mounts_and_renders_at_the_minimum_size() -> Non
         assert table.size.height >= 6, table.size.height
 
 
+async def test_owner_column_starts_inside_the_viewport_at_the_minimum_size() -> None:
+    """WR-03 (15.4-REVIEW.md). A DETERMINISTIC GEOMETRY assertion, which is
+    a different thing from the rendered-text assertion
+    `test_nine_column_table_mounts_and_renders_at_the_minimum_size` above
+    deliberately refuses: `get_render_width` is the number Textual lays the
+    columns out WITH, so this pins this project's own column budget rather
+    than Textual's layout algorithm.
+
+    Measured over the REAL registry at 80x20 with realistic content in the
+    two columns that sit before Owner -- a `1.22.3 -> 1.22.44 ~` Ver cell and
+    the widest Owner label -- the phase's headline column used to start at
+    x=80 in an 80-wide viewport, i.e. entirely off screen, with no horizontal
+    scroll to reach it (`left`/`right` are `priority=True` view-switch
+    bindings on `ToolBrowser`). Moving section titles out of the
+    selection-mark column (`BrowserAdapter.section_column`) bought the 10
+    columns that put it back on screen.
+    """
+    tools = load_tools(REGISTRY)
+    installed = {tool.id: True for tool in tools}
+    app = _unified_app(tools, installed, {tool.category: "" for tool in tools})
+    async with app.run_test(size=(80, 20)) as pilot:
+        catalog = app.catalog
+        catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+            tool.id: VersionStatus(
+                tool_id=tool.id,
+                installed="1.22.3",
+                latest="1.22.44",
+                outdated=True,
+                stale=True,
+                source="brew",
+            )
+            for tool in catalog.tools
+        }
+        # The widest label `OWNER_LABELS` can produce, so the assertion is
+        # made against the worst case rather than an empty column.
+        catalog._owner_cell = lambda _tool: Text("Homebrew cask")  # type: ignore[method-assign]
+        catalog._browser.reload(catalog._adapter())  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        table = app.query_one(DataTable[Any])
+        offsets: dict[str, int] = {}
+        total = 0
+        for column in table.columns.values():
+            offsets[column.label.plain] = total
+            total += column.get_render_width(table)
+        assert offsets["Owner"] < table.size.width, offsets
+
+
 def test_legend_is_identical_across_all_three_tier_views() -> None:
     tools, installed = _catalog()
     screens = [

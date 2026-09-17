@@ -52,6 +52,17 @@ class BrowserAdapter(Generic[T]):
     # tab; the catalog uses five. Tab ids equal the view names.
     views: tuple[tuple[str, str], ...]
     legend: str | None = None
+    # WR-03 (15.4-REVIEW.md): the column KEY a section-row title is rendered
+    # into. DataTable has no row spanning, so the title has to live in some
+    # real column and that column is sized to fit it. Declared rather than
+    # assumed to be column 0: the selection-mark column's real content is one
+    # character, so parking titles there sized it to 17 rendered columns on
+    # the catalog and 27 on the Uninstall screen, and every column to its
+    # right paid for it. Both adapters in this project name their tool-id
+    # column "tool", which is already sized to the longest id, so a title
+    # usually costs nothing there at all. An adapter with no such key falls
+    # back to column 0 -- the pre-WR-03 behaviour.
+    section_column: str = "tool"
     section_detail_style: str = "bold"
     detail_is_markup: bool = True
     # column key -> a callback that re-groups; the browser calls it on a header
@@ -136,6 +147,14 @@ class ToolBrowser(Widget, Generic[T]):
         self._rebuild()
 
     # -- rows --------------------------------------------------------------
+    def _section_cell_index(self) -> int:
+        """The cell a section title is rendered into -- see
+        `BrowserAdapter.section_column` for why this is not simply 0."""
+        for index, (_label, key) in enumerate(self._adapter.columns):
+            if key == self._adapter.section_column:
+                return index
+        return 0
+
     def _rebuild(self) -> None:
         table = self.query_one(DataTable[Any])
         # Capture the row key under the cursor BEFORE clear() so a rebuild
@@ -152,8 +171,9 @@ class ToolBrowser(Widget, Generic[T]):
             if title:
                 # The count guides the eye when narrow columns squeeze the rows.
                 section = Text(f"── {title} ({len(members)}) ", style="bold")
-                blanks = [""] * (len(self._adapter.columns) - 1)
-                table.add_row(section, *blanks, key=f"#{title}")
+                cells: list[str | Text] = [""] * len(self._adapter.columns)
+                cells[self._section_cell_index()] = section
+                table.add_row(*cells, key=f"#{title}")
                 self._section_detail[f"#{title}"] = detail
             for item in members:
                 table.add_row(*self._adapter.row_cells(item), key=self._adapter.item_id(item))
