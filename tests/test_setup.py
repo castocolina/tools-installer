@@ -16,6 +16,7 @@ from installer.app import UninstallDecision
 from installer.execute_screen import ExecuteInputs
 from installer.guards import install_shims
 from installer.model import Method, Tool
+from installer.ownership import ManagerOwnership
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
 from installer.policy import Policy
@@ -24,7 +25,7 @@ from installer.settings import Settings, SettingsStore, load_settings, save_sett
 from installer.shellrc import write_myshellrc
 from installer.tweaks import BUNDLES
 from installer.uninstall import SweepResult
-from installer.wizard_app import DoctorScreen, PolicyInputs, UninstallInputs
+from installer.wizard_app import DoctorScreen, PolicyInputs, UninstallInputs, UninstallScreen
 
 # Aliased once, matching tests/test_daemon.py's convention for pinning a
 # private composition-root function under test.
@@ -1154,6 +1155,97 @@ def test_build_app_reresolve_reads_live_inventory_not_cache(
     second = updates._reresolve_ownership(tool)  # pyright: ignore[reportPrivateUsage]
     assert second.owner == "brew"
     assert second.current_version == "14.1.1"
+
+
+def _always_installed(_tool: Tool) -> bool:
+    return True
+
+
+def _dnf_owned_rg() -> ManagerOwnership:
+    return ManagerOwnership(
+        tool_id="rg",
+        owner="dnf",
+        method=None,
+        package="ripgrep",
+        current_version=None,
+        confidence="direct",
+        shadowed=False,
+        candidates=(),
+        active_candidate=None,
+        active_path=None,
+        unknown_reason=None,
+    )
+
+
+def test_build_app_uninstall_hint_changes_when_the_ownership_map_changes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The rows closure's `owner_hint` binding re-reads the shared
+    `VersionRefreshService.ownership_of` map LIVE (D-05), the same
+    live-re-read shape `test_build_app_reresolve_reads_live_inventory_not_cache`
+    proves for `_reresolve_ownership`: a record populated into the map after
+    construction changes the NEXT `rows()` call's hint, with no rebuild."""
+    _sandbox(monkeypatch, tmp_path)
+    platform = _platform()
+    tool = Tool(
+        id="rg",
+        name="ripgrep",
+        category="search",
+        cmd="rg",
+        methods=(Method(kind="dnf", params={"package": "ripgrep"}),),
+        tier="system",
+    )
+    monkeypatch.setattr(setup, "is_installed", _always_installed)
+    app = setup._build_app([tool], platform)  # pyright: ignore[reportPrivateUsage]
+    screen = app._views["uninstall"]  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(screen, UninstallScreen)
+    rows_predicate = screen._rows_predicate  # pyright: ignore[reportPrivateUsage]
+    service = app._version_refresh  # pyright: ignore[reportPrivateUsage]
+    assert service is not None
+
+    before = next(r for r in rows_predicate() if r.tool.id == "rg")
+    assert "package manager" in before.hint  # no ownership pass has run yet
+
+    service._ownership["rg"] = (service.epoch, _dnf_owned_rg())  # pyright: ignore[reportPrivateUsage]
+
+    after = next(r for r in rows_predicate() if r.tool.id == "rg")
+    assert "ripgrep" in after.hint
+    assert "dnf remove ripgrep" in after.hint
+
+
+def test_build_app_uninstall_hint_reverts_after_the_service_is_invalidated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D-05: once the shared service is invalidated, the closure's hint
+    reverts to the platform-filtered registry phrase -- the epoch-gated
+    `ownership_of` reports the pre-invalidation record as unavailable rather
+    than stale-but-present."""
+    _sandbox(monkeypatch, tmp_path)
+    platform = _platform()
+    tool = Tool(
+        id="rg",
+        name="ripgrep",
+        category="search",
+        cmd="rg",
+        methods=(Method(kind="dnf", params={"package": "ripgrep"}),),
+        tier="system",
+    )
+    monkeypatch.setattr(setup, "is_installed", _always_installed)
+    app = setup._build_app([tool], platform)  # pyright: ignore[reportPrivateUsage]
+    screen = app._views["uninstall"]  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(screen, UninstallScreen)
+    rows_predicate = screen._rows_predicate  # pyright: ignore[reportPrivateUsage]
+    service = app._version_refresh  # pyright: ignore[reportPrivateUsage]
+    assert service is not None
+
+    service._ownership["rg"] = (service.epoch, _dnf_owned_rg())  # pyright: ignore[reportPrivateUsage]
+    before = next(r for r in rows_predicate() if r.tool.id == "rg")
+    assert "ripgrep" in before.hint
+
+    service.invalidate(reason="test")
+    after = next(r for r in rows_predicate() if r.tool.id == "rg")
+    assert "ripgrep" not in after.hint
+    assert "package manager" in after.hint
 
 
 def test_interactive_main_never_calls_run_wizard(

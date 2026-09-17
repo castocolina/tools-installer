@@ -41,7 +41,7 @@ from installer.install_ownership import run_probe
 from installer.locations import all_ban_rc_paths, ban_rc_paths, rc_paths_for_mode, zshrc_path
 from installer.model import Tool, load_categories, load_tools
 from installer.omz import omz_present
-from installer.ownership import ManagerOwnership, read_inventory, resolve_ownership
+from installer.ownership import ManagerOwnership, read_inventory, removal_hint, resolve_ownership
 from installer.platform import Platform, detect
 from installer.policy import (
     Policy,
@@ -410,6 +410,38 @@ def _build_app(
     # state does -- so this is computed once, outside the rows closure below.
     reverse_deps = reverse_dependencies(tools)
 
+    def _uninstall_owner_hint(tool: Tool) -> str | None:
+        # 15.4-05/D-05: reuse the catalog's ALREADY-COMPUTED ownership map
+        # rather than running a second probe pass every time this screen
+        # opens -- `version_refresh` is the same `VersionRefreshService`
+        # instance the catalog's Owner column reads (hoisted above
+        # `uninstall_inputs` below for exactly this binding), so one
+        # resolution pass now feeds two screens. `fallback_name` is the
+        # tool's own cmd, a prose TOOL identifier only -- `removal_hint`
+        # (task 1) never lets it stand in for a package name in a command,
+        # which is exactly the split-package defect (`ripgrep`/`rg`,
+        # `git-core`/`git`) the Round-3 review caught.
+        #
+        # Freshness has THREE sources, not one, now that plan 15.4-04 task 3
+        # made the protocol real: (1) `UnifiedApp._install_closed` re-enters
+        # the active catalog, whose refresh worker repopulates the map; (2)
+        # `UninstallInputs.invalidate` (bound below) makes `_apply_removal`
+        # invalidate this same service after a successful sweep, so every
+        # pre-removal record reports as unavailable through the epoch-gated
+        # `ownership_of`; and (3) a screen opened BEFORE that background
+        # refresh commits renders this fallback and then the
+        # `OwnershipRefreshed` completion signal repaints it in place -- this
+        # closure is re-called on that repaint too, never a one-shot read.
+        # `ownership_of`'s two `None` cases (no pass has covered this tool,
+        # or a mutation invalidated its record) are deliberately one return
+        # value here: to this caller they mean the same thing, and both
+        # degrade to the platform-filtered registry phrase (task 2) rather
+        # than guessing.
+        owned = version_refresh.ownership_of(tool.id)
+        if owned is None:
+            return None
+        return removal_hint(owned, tool.cmd)
+
     def _uninstall_rows() -> list[ToolRow]:
         """Re-read presence on every call (D-06): a construction-time
         snapshot goes stale the moment this session installs or removes a
@@ -425,6 +457,7 @@ def _build_app(
             installed=installed_now,
             platform=platform,
             reverse_deps=reverse_deps,
+            owner_hint=_uninstall_owner_hint,
         )
 
     # The Policies view offers what applies HERE; the teardown sweeps every
