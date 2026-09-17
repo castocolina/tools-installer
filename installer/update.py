@@ -85,7 +85,12 @@ from installer.download import ExecContext
 from installer.executors import ExecutorError
 from installer.locations import applications_dir
 from installer.model import Method, Tool
-from installer.ownership import MUTATION_GRADE, NATIVE_OWNERS, ManagerOwnership
+from installer.ownership import (
+    MUTATION_GRADE,
+    OS_PACKAGE_OWNER,
+    UNMANAGEABLE_OWNERS,
+    ManagerOwnership,
+)
 from installer.platform import Platform
 from installer.pnpm_globals import PnpmUnavailable
 from installer.postinstall import run_postinstall
@@ -106,6 +111,16 @@ _SDKMAN_DETAIL = "SDKMAN updates use `sdk upgrade <candidate>`, which this phase
 _NATIVE_OWNER_DETAIL = (
     "{owner} owns this tool; this installer does not perform privileged system-package "
     "updates, so update it through {owner} yourself"
+)
+# 15.4-01/D-01/T2: the os-package owner's own refusal sentence, distinct from
+# _NATIVE_OWNER_DETAIL above -- formatting that template with "os-package"
+# would tell the user to run a command that does not exist ("update it
+# through os-package yourself"). `{package}` is the REAL package name from
+# ownership.package (the OS package database's own answer, e.g. "git-core"),
+# never the tool's own id.
+_OS_PACKAGE_DETAIL = (
+    "an OS package ({package}) provides this tool; this installer performs no privileged "
+    "system-package updates, so the system's own update path owns it"
 )
 
 
@@ -237,18 +252,26 @@ def _perform(
             owner=ownership.owner,
             detail=_SDKMAN_DETAIL,
         )
-    if ownership.owner in NATIVE_OWNERS:
-        # D-05/T-15-15: this branch must precede the owner-dispatch ladder
-        # below. `direct` is in MUTATION_GRADE, so a native-owned tool now
-        # passes the gate above and would otherwise reach the ladder's final
-        # `else: raise UpdateError(...)` -- a confusing `status="failed"`
-        # outcome, strictly worse than the clean pre-flight refusal here.
-        # Zero subprocess, zero filesystem write.
+    if ownership.owner in UNMANAGEABLE_OWNERS:
+        # D-05/T-15-15/15.4-01: this branch must precede the owner-dispatch
+        # ladder below. `direct` is in MUTATION_GRADE, so a native- or
+        # os-package-owned tool now passes the gate above and would
+        # otherwise reach the ladder's final `else: raise UpdateError(...)`
+        # -- a confusing `status="failed"` outcome, strictly worse than the
+        # clean pre-flight refusal here. Zero subprocess, zero filesystem
+        # write. The membership test itself is `UNMANAGEABLE_OWNERS`
+        # (installer/ownership.py) -- the four native managers plus
+        # os-package -- so a sixth owner added later is refused
+        # automatically rather than reaching this `else`.
+        if ownership.owner == OS_PACKAGE_OWNER:
+            detail = _OS_PACKAGE_DETAIL.format(package=ownership.package)
+        else:
+            detail = _NATIVE_OWNER_DETAIL.format(owner=ownership.owner)
         return UpdateOutcome(
             tool_id=target.tool.id,
             status="unsupported",
             owner=ownership.owner,
-            detail=_NATIVE_OWNER_DETAIL.format(owner=ownership.owner),
+            detail=detail,
         )
     owner = ownership.owner
     cleanup_warnings: tuple[str, ...] = ()
