@@ -99,6 +99,15 @@ def test_human_agent_clis_are_p0_human_tools() -> None:
 # in a human's pipeline, and an agent inspecting an image reaches for
 # `docker history` instead.
 #
+# `gum`, `gnu-bash` and `zsh` are judged the same way. `gum` bills itself
+# as "a tool for glamorous shell scripts" and several subcommands (`style`,
+# `format`, `log`) print and exit, but what the catalog installs is the
+# interactive prompt toolkit a person's own scripts drive; an agent
+# composing output has no use for styling it. `bash -c`/`zsh -c` are how
+# agents run everything, but that runs on whatever shell the box already
+# has -- these entries install the shell a person logs into, and no agent
+# cares which one that is.
+#
 # This is the rule a NEW catalog entry should apply when choosing its
 # `audience` value, not only a record of this one pass -- the dataclass
 # default is silent, and the next entry will take it unless something
