@@ -170,15 +170,22 @@ _PRE_15_3_HUMAN_TOOLS = {
 }
 
 
+# Ids tagged `human` AFTER Phase 15.3. This is the open-ended set and the
+# only one that may grow: the two above are frozen historical records of
+# what Phase 15.3 found and what it changed, and adding a new id to either
+# would make that set's own comment false.
+_POST_15_3_HUMAN_TOOLS: set[str] = set()
+
+
 def test_audience_human_set_is_exactly_the_reviewed_tools() -> None:
     # Set equality rather than a count: a count says "expected 33, got 34"
     # and a set difference says which row moved. A phase adding a
-    # `human`-tagged catalog entry must add its id to one of these two sets
+    # `human`-tagged catalog entry appends its id to _POST_15_3_HUMAN_TOOLS
     # in the same commit -- the same standing instruction
     # test_registry_tier_distribution_is_pinned already carries for `tier`.
     tools = _tools_by_id()
     human_ids = {tool_id for tool_id, tool in tools.items() if tool.audience == "human"}
-    assert human_ids == _PRE_15_3_HUMAN_TOOLS | _INTERACTIVE_ONLY_TOOLS
+    assert human_ids == (_PRE_15_3_HUMAN_TOOLS | _INTERACTIVE_ONLY_TOOLS | _POST_15_3_HUMAN_TOOLS)
 
 
 def test_registry_audience_distribution_is_pinned() -> None:
