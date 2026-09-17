@@ -22,6 +22,7 @@ from installer.ownership import (
     Owner,
     OwnershipCandidate,
     removal_hint,
+    removal_label,
     resolve_ownership,
 )
 from installer.platform import Platform
@@ -5432,33 +5433,105 @@ async def test_ownership_refreshed_preserves_a_standing_removal_summary(tmp_path
         assert screen.query_one(DataTable[Any]).row_count == 0
 
 
-# -- 15.4-05/D-03/D-04: the "Installed via" cell renders `row.hint` --------
+def _column_offsets(table: DataTable[Any]) -> dict[str, int]:
+    """Each column's start offset in the table's VIRTUAL width, by label.
+
+    A deterministic geometry reading, never a rendered-character match:
+    `get_render_width` is the same number Textual lays the columns out with,
+    so this pins this project's own column budget rather than Textual's
+    layout algorithm (the distinction
+    `test_nine_column_table_mounts_and_renders_at_the_minimum_size` draws)."""
+    offsets: dict[str, int] = {}
+    total = 0
+    for column in table.columns.values():
+        offsets[column.label.plain] = total
+        total += column.get_render_width(table)
+    return offsets
+
+
+async def test_removes_column_starts_inside_the_viewport_at_the_minimum_size() -> None:
+    """CR-03 (15.4-REVIEW.md). Rendering `row.hint` into the "Installed via"
+    cell sized that column to the longest hint in the catalog: measured at
+    this project's own minimum tested terminal size (80x24), with one
+    removable row carrying a `required by` suffix and one managed row
+    carrying a linuxbrew cask hint plus a `found at` path, "Installed via"
+    came out 120 columns wide and "What gets removed" started at x=174 --
+    100 columns past the right edge.
+
+    It was not merely truncated but UNREACHABLE: `installer/tool_browser.py`
+    binds `left`/`right` to view switching with `priority=True`, so those
+    keys never reach the DataTable for horizontal scrolling. On a screen
+    whose Enter key deletes files, the user could not see what an entry
+    would remove."""
+    rows = [
+        ToolRow(
+            _tool("ripgrep"),
+            "removable",
+            [Path("/opt/rg")],
+            "installed in userspace — removable here · required by mmdc, codegraph, graphify",
+            True,
+        ),
+        ToolRow(
+            _tool("jetbrains-toolbox"),
+            "managed",
+            [],
+            "managed by Homebrew — `brew uninstall --cask jetbrains-toolbox`"
+            " — found at /home/user/.linuxbrew/bin/jetbrains-toolbox",
+            False,
+            "Homebrew cask",
+        ),
+        ToolRow(_tool("fd"), "absent", [], "not installed", False),
+    ]
+    app = _app(uninstall=_uninstall_inputs(rows=rows), initial_view="uninstall")
+    async with app.run_test(size=(80, 24)):
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        offsets = _column_offsets(table)
+        assert offsets["What gets removed"] < table.size.width, offsets
+
+
+# -- 15.4-05/D-03/D-04: the "Installed via" cell renders the terse label ----
 
 
 def test_tool_entry_cell_per_state_and_removes_cell_unchanged() -> None:
-    """Per-state cell coverage: the "Installed via" cell mirrors `row.hint`
-    for removable and managed rows (D-03), and keeps the short dash-style
-    label for absent and unavailable rows (15.4-RESEARCH.md Pitfall 4). The
-    "What gets removed" cell is byte-identical to today's for all four
-    states -- only `installed_via` moves."""
+    """Per-state cell coverage: the "Installed via" cell carries the TERSE
+    manager label (`ToolRow.manager`) for an attributed managed row (D-03),
+    the generic label for an unattributed one, and the short dash-style label
+    for absent and unavailable rows (15.4-RESEARCH.md Pitfall 4). The full
+    sentence stays in `detail` (CR-03). The "What gets removed" cell is
+    byte-identical to today's for all four states."""
     removable = ToolRow(
         _tool("rg"), "removable", [Path("/opt/rg")], "installed in userspace — removable here", True
     )
-    managed = ToolRow(_tool("jq"), "managed", [], "managed by dnf — `dnf remove jq`", False)
+    managed = ToolRow(_tool("jq"), "managed", [], "managed by dnf — `dnf remove jq`", False, "dnf")
+    unattributed = ToolRow(
+        _tool("bat"),
+        "managed",
+        [],
+        "managed outside this installer — remove with your package manager",
+        False,
+    )
     absent = ToolRow(_tool("fd"), "absent", [], "not installed", False)
     unavailable = ToolRow(_tool("xyz"), "unavailable", [], "not available on debian", False)
-    inputs = _uninstall_inputs(rows=[removable, managed, absent, unavailable])
+    inputs = _uninstall_inputs(rows=[removable, managed, unattributed, absent, unavailable])
     screen = UninstallScreen(inputs)
     entries = {entry.key: entry for entry in screen._entries}  # pyright: ignore[reportPrivateUsage]
 
     _VIA, _REMOVES = 3, 4
-    assert entries["rg"].cells[_VIA].plain == "installed in userspace — removable here"
-    assert entries["jq"].cells[_VIA].plain == "managed by dnf — `dnf remove jq`"
+    assert entries["rg"].cells[_VIA].plain == "userspace"
+    assert entries["jq"].cells[_VIA].plain == "dnf"
+    assert entries["bat"].cells[_VIA].plain == "package manager"
     assert entries["fd"].cells[_VIA].plain == "—"
     assert entries["xyz"].cells[_VIA].plain == "—"
 
+    # CR-03: the full sentence is not lost, it moves to the detail bar.
+    assert entries["jq"].detail == "managed by dnf — `dnf remove jq`"
+    assert entries["rg"].detail == "installed in userspace — removable here"
+
     assert entries["rg"].cells[_REMOVES].plain == "1 artifact(s)"
     assert entries["jq"].cells[_REMOVES].plain == "nothing (managed elsewhere)"
+    assert entries["bat"].cells[_REMOVES].plain == "nothing (managed elsewhere)"
     assert entries["fd"].cells[_REMOVES].plain == "nothing (not installed)"
     assert entries["xyz"].cells[_REMOVES].plain == "nothing (unavailable)"
 
@@ -5505,6 +5578,9 @@ async def test_uninstall_screen_cell_reflects_post_run_ownership_map(tmp_path: P
     def owner_hint(t: Tool) -> str | None:
         return owner_map.get(t.id)
 
+    def owner_label_hint(t: Tool) -> str | None:
+        return "dnf" if t.id in owner_map else None
+
     def rows() -> list[ToolRow]:
         return classify_tools(
             [tool],
@@ -5513,6 +5589,7 @@ async def test_uninstall_screen_cell_reflects_post_run_ownership_map(tmp_path: P
             platform=_install_closed_platform(),
             which=lambda _c: None,
             owner_hint=owner_hint,
+            owner_label_hint=owner_label_hint,
         )
 
     execute = ExecuteInputs(
@@ -5543,7 +5620,15 @@ async def test_uninstall_screen_cell_reflects_post_run_ownership_map(tmp_path: P
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
         cell = app.screen.query_one(DataTable[Any]).get_cell("codegraph", "via")
-        assert "dnf remove codegraph" in cell.plain
+        assert cell.plain == "dnf"
+        # CR-03: the command itself lives in the detail bar, which is where
+        # the full sentence already went before the cell stopped duplicating it.
+        entry = next(
+            e
+            for e in app.screen._entries  # pyright: ignore[reportPrivateUsage]
+            if e.key == "codegraph"
+        )
+        assert "dnf remove codegraph" in entry.detail
 
 
 async def test_uninstall_next_entry_after_removal_shows_registry_phrase_not_pre_removal_attribution() -> (  # noqa: E501
@@ -5560,12 +5645,15 @@ async def test_uninstall_next_entry_after_removal_shows_registry_phrase_not_pre_
         invalidated["done"] = True
 
     def rows() -> list[ToolRow]:
+        # Both registers degrade together after the invalidate, exactly as
+        # setup.py's two closures do: they read the same epoch-gated record.
         jq_hint = (
             "managed outside this installer — remove with your package manager"
             if invalidated["done"]
             else "managed by dnf — `dnf remove jq`"
         )
-        jq = ToolRow(_tool("jq"), "managed", [], jq_hint, False)
+        jq_manager = None if invalidated["done"] else "dnf"
+        jq = ToolRow(_tool("jq"), "managed", [], jq_hint, False, jq_manager)
         rg = _removable_row(_tool("rg"), [Path("/opt/rg")])
         return [rg, jq]
 
@@ -5671,10 +5759,13 @@ async def test_uninstall_screen_renders_codex_generic_hint_on_linux_not_homebrew
 async def test_uninstall_screen_renders_ripgrep_not_rg_for_the_dnf_split_package(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Round-3 review HIGH, screen level: the rendered cell must carry the
-    REAL dnf package name (`ripgrep`) -- never the tool's own `rg` cmd --
+    """Round-3 review HIGH, screen level: the REAL dnf package name
+    (`ripgrep`) -- never the tool's own `rg` cmd -- must reach the user
     through the real registry entry, a faked native probe, a committed
-    ownership pass, and the rendered cell."""
+    ownership pass, and the rendered screen. Since CR-03 the surface that
+    carries the command is the detail bar rather than the cell, so this
+    asserts on both: the cell names the manager tersely, the detail carries
+    the package-accurate command."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     tools_by_id = {t.id: t for t in load_tools(_REGISTRY)}
     rg = tools_by_id["rg"]
@@ -5695,6 +5786,20 @@ async def test_uninstall_screen_renders_ripgrep_not_rg_for_the_dnf_split_package
         )
         return removal_hint(owned, tool.cmd)
 
+    def owner_label_hint(tool: Tool) -> str | None:
+        return removal_label(_resolved(tool))
+
+    def _resolved(tool: Tool) -> ManagerOwnership:
+        return resolve_ownership(
+            tool,
+            platform=fedora,
+            inventory=_empty_inventory(),
+            artifacts=(),
+            which=lambda _c: "/usr/bin/rg",
+            managed_bin_dir=tmp_path / "bin",
+            native_probe=native_probe,
+        )
+
     def rows() -> list[ToolRow]:
         return classify_tools(
             [rg],
@@ -5703,6 +5808,7 @@ async def test_uninstall_screen_renders_ripgrep_not_rg_for_the_dnf_split_package
             platform=fedora,
             which=lambda _c: None,
             owner_hint=owner_hint,
+            owner_label_hint=owner_label_hint,
         )
 
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
@@ -5711,5 +5817,11 @@ async def test_uninstall_screen_renders_ripgrep_not_rg_for_the_dnf_split_package
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
         cell = app.screen.query_one(DataTable[Any]).get_cell("rg", "via")
-        assert "ripgrep" in cell.plain
-        assert "dnf remove rg`" not in cell.plain
+        assert cell.plain == "dnf"
+        entry = next(
+            e
+            for e in app.screen._entries  # pyright: ignore[reportPrivateUsage]
+            if e.key == "rg"
+        )
+        assert "ripgrep" in entry.detail
+        assert "dnf remove rg`" not in entry.detail

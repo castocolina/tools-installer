@@ -111,6 +111,12 @@ class ToolRow:
     paths: list[Path]
     hint: str
     selectable: bool
+    # CR-03 (15.4-REVIEW.md): the TERSE register beside `hint`'s prose one --
+    # the manager's bare name ("Homebrew", "dnf", "GitHub release"), for the
+    # table CELL, while `hint` stays the full sentence the detail bar shows.
+    # `None` means "no attribution for this row", which the screen renders as
+    # its own generic label; only the managed branch ever sets it.
+    manager: str | None
 
     def __init__(
         self,
@@ -119,12 +125,14 @@ class ToolRow:
         paths: list[Path],
         hint: str,
         selectable: bool,
+        manager: str | None = None,
     ) -> None:
         object.__setattr__(self, "tool", tool)
         object.__setattr__(self, "state", UninstallState(state))
         object.__setattr__(self, "paths", paths)
         object.__setattr__(self, "hint", hint)
         object.__setattr__(self, "selectable", selectable)
+        object.__setattr__(self, "manager", manager)
 
 
 def manager_name(method: Method, param: str, fallback: str) -> str:
@@ -148,6 +156,16 @@ def manager_name(method: Method, param: str, fallback: str) -> str:
 # seam to `VersionRefreshService.ownership_of` plus `installer.ownership
 # .removal_hint`.
 OwnerHint = Callable[[Tool], str | None]
+
+# The TERSE half of the same seam (CR-03, 15.4-REVIEW.md), bound in `setup.py`
+# to `VersionRefreshService.ownership_of` plus `installer.ownership
+# .removal_label` exactly as `OwnerHint` is bound to `removal_hint`. Two
+# callables rather than one returning a pair, for the same reason
+# `installer/ownership.py` keeps `OWNER_LABELS` and `OWNER_DETAIL_LABELS` as
+# two declared tables: a ~14-character cell and a removal sentence have
+# different jobs, and deriving one from the other by string surgery is the
+# coupling both registers exist to avoid.
+OwnerLabelHint = Callable[[Tool], str | None]
 
 
 def _manager_hint(tool: Tool, platform: Platform) -> str:
@@ -242,6 +260,7 @@ def classify_tools(
     which: Callable[[str], str | None] = shutil.which,
     reverse_deps: dict[str, list[str]] | None = None,
     owner_hint: OwnerHint | None = None,
+    owner_label_hint: OwnerLabelHint | None = None,
 ) -> list[ToolRow]:
     """Classify every tool by removability, one ToolRow per tool in input order.
 
@@ -259,7 +278,16 @@ def classify_tools(
     guess (``_manager_hint``); ``None`` for a tool (or no seam at all) falls
     back to that guess, per tool. Removable, absent and unavailable rows never
     consult it (see ``OwnerHint``'s own docstring for why this stays a plain
-    callable rather than an ownership resolver)."""
+    callable rather than an ownership resolver).
+
+    ``owner_label_hint`` is that seam's TERSE counterpart (CR-03), consulted
+    under exactly the same managed-only condition and stored on
+    ``ToolRow.manager`` for the table CELL, while ``hint`` keeps the full
+    sentence for the detail bar. There is no registry-derived fallback for
+    it: a row this seam cannot attribute carries ``None`` and the screen
+    renders its own generic label, because the registry guess behind
+    ``_manager_hint`` is a GUESS and a bare manager name in a cell reads as a
+    verified fact."""
     rows: list[ToolRow] = []
     for tool in tools:
         paths = plan_uninstall([tool], default_bin_dir)
@@ -281,6 +309,7 @@ def classify_tools(
                     [],
                     _managed_hint(tool, which, platform, owner_hint),
                     False,
+                    owner_label_hint(tool) if owner_label_hint is not None else None,
                 )
             )
         elif resolve_methods(tool, platform):

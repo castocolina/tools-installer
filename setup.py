@@ -41,7 +41,13 @@ from installer.install_ownership import run_probe
 from installer.locations import all_ban_rc_paths, ban_rc_paths, rc_paths_for_mode, zshrc_path
 from installer.model import Tool, load_categories, load_tools
 from installer.omz import omz_present
-from installer.ownership import ManagerOwnership, read_inventory, removal_hint, resolve_ownership
+from installer.ownership import (
+    ManagerOwnership,
+    read_inventory,
+    removal_hint,
+    removal_label,
+    resolve_ownership,
+)
 from installer.platform import Platform, detect
 from installer.policy import (
     Policy,
@@ -442,6 +448,18 @@ def _build_app(
             return None
         return removal_hint(owned, tool.cmd)
 
+    def _uninstall_owner_label(tool: Tool) -> str | None:
+        # CR-03: the TERSE half of the same binding, off the SAME map and the
+        # same epoch gate, so the cell and the detail bar can never disagree
+        # about which record they are describing. `removal_label` is
+        # `removal_hint`'s declared counterpart in `installer/ownership.py`
+        # and answers `None` for exactly the records `removal_hint` is silent
+        # for, so this closure needs no second condition of its own.
+        owned = version_refresh.ownership_of(tool.id)
+        if owned is None:
+            return None
+        return removal_label(owned)
+
     def _uninstall_rows() -> list[ToolRow]:
         """Re-read presence on every call (D-06): a construction-time
         snapshot goes stale the moment this session installs or removes a
@@ -458,6 +476,7 @@ def _build_app(
             platform=platform,
             reverse_deps=reverse_deps,
             owner_hint=_uninstall_owner_hint,
+            owner_label_hint=_uninstall_owner_label,
         )
 
     # The Policies view offers what applies HERE; the teardown sweeps every

@@ -1183,3 +1183,30 @@ def removal_hint(ownership: ManagerOwnership, fallback_name: str) -> str | None:
         package = ownership.package if ownership.package is not None else fallback_name
         return _REMOVAL_DESCRIPTIONS[owner].format(label=prefix, package=package)
     return _REMOVAL_DESCRIPTIONS[owner].format(name=fallback_name, label=prefix)
+
+
+def removal_label(ownership: ManagerOwnership) -> str | None:
+    """The Uninstall screen's "Installed via" CELL register -- the terse
+    counterpart to `removal_hint`'s full sentence, declared here beside it.
+
+    CR-03 (15.4-REVIEW.md). The same split this module already runs between
+    `OWNER_LABELS` (the ~14-character COLUMN register) and
+    `OWNER_DETAIL_LABELS` (the PROSE register), now applied to the second
+    screen that needs both: `removal_hint` builds the sentence the detail bar
+    shows, this builds the label the table cell shows. Rendering the sentence
+    into the cell instead sized the column to the longest hint in the catalog
+    -- 120 columns wide at 80x24, which pushed "What gets removed" to x=174,
+    off a viewport with no horizontal scroll to reach it (`left`/`right` are
+    `priority=True` view-switch bindings on `ToolBrowser`) on a screen whose
+    Enter key deletes files.
+
+    Answers `None` for exactly the two owners `removal_hint` is silent for
+    (`_NO_REMOVAL_HINT`), so the two functions speak for the same set of
+    records and a caller can pair them without a second condition. Otherwise
+    it is literally `owner_label`'s result, so the catalog's Owner column and
+    this cell name a manager with the identical string rather than with two
+    vocabularies that can drift.
+    """
+    if ownership.owner in _NO_REMOVAL_HINT:
+        return None
+    return owner_label(ownership)

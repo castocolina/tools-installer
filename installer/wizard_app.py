@@ -584,6 +584,16 @@ _BLOCK_KEY = "#path-block"
 _TWEAK_KEY = "#tweaks"
 _ENV_KEYS = (_BAN_KEY, _BLOCK_KEY, _TWEAK_KEY)
 
+# The "Installed via" cell's three non-attributed labels (CR-03). The first
+# two are byte-identical to the pre-15.4-05 enum's values for the same two
+# cases, so this column's width budget is the one it was designed with; only
+# an ATTRIBUTED managed row now reads differently, which is the whole of what
+# D-03 asked for. See `_tool_entry` for why the cell is a label and not the
+# hint.
+_VIA_USERSPACE = "userspace"
+_VIA_UNATTRIBUTED = "package manager"
+_VIA_NONE = "—"
+
 
 def _has_daemon_id(ids: tuple[str, ...]) -> bool:
     """True when any id in ids is the background daemon's own namespaced id.
@@ -680,18 +690,35 @@ class UninstallScreen(AppScreen):
     def _tool_entry(self, row: ToolRow) -> _UninstallEntry:
         selectable = row.state == UninstallState.REMOVABLE
         style = "" if selectable else "dim"
-        # 15.4-05/D-03: the cell shows the REAL hint `uninstall.py` already
-        # computed, rather than a four-value enum lookup that collapsed every
-        # managed tool into the identical "package manager" text. Removable
-        # and managed rows read `row.hint` -- for removable this is already
-        # the same userspace sentence `detail` shows below; for managed it is
-        # the specific manager attribution (D-03/D-04) this plan exists to
-        # surface. Absent and unavailable rows keep the short dash-style
-        # label they render today (15.4-RESEARCH.md Pitfall 4): only the
-        # managed/removable half of this cell is in scope for this plan.
-        installed_via = (
-            row.hint if row.state in (UninstallState.REMOVABLE, UninstallState.MANAGED) else "—"
-        )
+        # 15.4-05/D-03: the cell names the REAL manager rather than collapsing
+        # every managed tool into the identical "package manager" text -- but
+        # from `row.manager`, the TERSE register, not from `row.hint`.
+        #
+        # CR-03 (15.4-REVIEW.md): rendering `row.hint` here sized the column
+        # to the longest hint in the catalog -- including `_managed_hint`'s
+        # trailing "— found at /abs/path" and `classify_tools`' "· required by
+        # a, b, c" suffix -- which measured 120 columns wide at the project's
+        # own minimum tested size (80x24) and pushed "What gets removed" to
+        # x=174. The column was not merely truncated but UNREACHABLE:
+        # `tool_browser.py` binds `left`/`right` to view switching with
+        # `priority=True`, so those keys never reach the DataTable for
+        # horizontal scrolling, and this is the screen whose Enter key deletes
+        # files. The full sentence is not lost -- it is `detail` below, which
+        # is where it already went, so the cell is a LABEL and the detail bar
+        # is the prose, the same split `OWNER_LABELS`/`OWNER_DETAIL_LABELS`
+        # already runs for the catalog's Owner column.
+        #
+        # `_VIA_UNATTRIBUTED` and `_VIA_USERSPACE` are byte-identical to the
+        # pre-15.4-05 enum's values for those two cases: a managed row the
+        # ownership seam could not attribute is exactly what that text always
+        # meant, and D-03 asked only for the ATTRIBUTED rows to stop
+        # collapsing into it.
+        installed_via = {
+            UninstallState.REMOVABLE: _VIA_USERSPACE,
+            UninstallState.MANAGED: row.manager or _VIA_UNATTRIBUTED,
+            UninstallState.ABSENT: _VIA_NONE,
+            UninstallState.UNAVAILABLE: _VIA_NONE,
+        }[row.state]
         removes = (
             f"{len(row.paths)} artifact(s)"
             if selectable

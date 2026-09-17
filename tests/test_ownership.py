@@ -30,6 +30,7 @@ from installer.ownership import (
     parse_uv_tool_list,
     read_inventory,
     removal_hint,
+    removal_label,
     resolve_ownership,
 )
 from installer.platform import Platform
@@ -1649,6 +1650,41 @@ def test_no_removal_hint_holds_exactly_unknown_and_installer() -> None:
 def test_removal_hint_is_none_for_unknown_and_installer() -> None:
     assert removal_hint(_record("unknown"), "demo") is None
     assert removal_hint(_record("installer"), "demo") is None
+
+
+def test_removal_label_answers_for_exactly_the_records_removal_hint_answers_for() -> None:
+    """CR-03 (15.4-REVIEW.md): the two registers are a PAIR -- the cell label
+    and the detail sentence -- so a caller must never have to ask which of
+    them is silent for a given record. Both answer `None` for exactly
+    `_NO_REMOVAL_HINT` and a string for every other owner."""
+    for owner in typing.get_args(Owner):
+        record = _record(owner, package="realpkg")
+        assert (removal_label(record) is None) == (removal_hint(record, "toolcmd") is None), owner
+
+
+def test_removal_label_is_the_same_string_the_owner_column_renders() -> None:
+    """The cell and the catalog's Owner column must name a manager with the
+    identical string -- two vocabularies for one manager is how a user learns
+    to distrust one of them."""
+    for owner in typing.get_args(Owner):
+        if owner in _NO_REMOVAL_HINT:
+            continue
+        record = _record(owner, package="realpkg")
+        assert removal_label(record) == owner_label(record), owner
+
+
+def test_removal_label_stays_inside_the_cell_width_budget() -> None:
+    """CR-03: this register exists because the column has a width budget --
+    rendering the SENTENCE instead measured 120 columns at 80x24 and pushed
+    "What gets removed" off the viewport entirely. `OWNER_LABELS`' own module
+    comment sizes the column register at ~14 characters; nothing here may
+    exceed that without the layout test in `tests/test_wizard_app.py`
+    (`test_removes_column_starts_inside_the_viewport_at_the_minimum_size`)
+    being re-measured."""
+    for owner in typing.get_args(Owner):
+        label = removal_label(_record(owner, package="realpkg"))
+        if label is not None:
+            assert len(label) <= 14, (owner, label)
 
 
 def test_removal_hint_reproduces_the_brew_sentence_byte_for_byte() -> None:
