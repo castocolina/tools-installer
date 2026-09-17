@@ -919,10 +919,16 @@ def test_zsh_is_audience_human_in_the_real_catalog() -> None:
 
     groups = group_tools(tools, installed, "audience", _BLURBS)
     members_by_title = {title: {t.id for t in members} for title, _, members in groups}
+    # group_tools drops empty groups before returning, so this title-list
+    # equality IS the "all three groups are still populated" guard -- a group
+    # that emptied would vanish from the list rather than arrive empty.
     assert [title for title, _, _ in groups] == ["for AI", "for both", "for human"]
-    assert all(members_by_title[title] for title in members_by_title)
     assert "zsh" in members_by_title["for human"]
     assert "zsh" not in members_by_title["for both"]
+    # A D-02 keep, pinned on the other side of the split: the re-tag moved the
+    # interactive rows without dragging the scriptable one-shots with them.
+    assert "bat" in members_by_title["for both"]
+    assert "bat" not in members_by_title["for human"]
 
     zsh = next(t for t in tools if t.id == "zsh")
     screen = _screen(tools, installed)
