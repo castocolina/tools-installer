@@ -571,14 +571,18 @@ Plans:
 
 ### Phase 15.4: Catalog ownership visibility and Uninstall screen real manager attribution: add a visible Owner/package-manager column to the main catalog table (_COLUMNS/_row_cells in catalog_tui.py) reading the same ownership data _version_detail already computes, instead of ownership only appearing in the focused-row detail bar. Separately, UninstallScreen's 'Installed via'/'What gets removed' columns (wizard_app.py's _tool_entry) discard uninstall.py's own already-computed manager-name-plus-path hint (ToolRow.hint) in favor of a generic 4-value enum-keyed string ('userspace'/'managed elsewhere') -- surface the real hint in the table cell, and wire uninstall.py's manager detection (currently brew/cask-only) to the fuller install_ownership.py/ownership.py resolvers already used by update.py, so pnpm/volta/sdkman/uv/dnf/rpm-ostree-owned tools are named instead of falling through to a generic string (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** Every tool in the catalog says who owns it, and the Uninstall screen says it too — truthfully and currently. `installer/ownership.py` gains two real evidence sources it lacks today (an inverse "which OS package owns this live binary" query, so a base-image package such as `git`/`git-core` stops resolving to `unknown`; and a Linux-cask path that reaches linuxbrew casks without changing what the installer offers to install there), the catalog table gains an Owner column whose blank cell only ever means genuinely-don't-know, `UninstallScreen`'s "Installed via" cell shows the real per-tool hint instead of a four-value enum string with that hint fed from the same shared resolution, and both screens re-derive on entry so an install, update or removal performed during the session is never hidden behind a construction-time snapshot.
+**Requirements**: D-01, D-02, D-02a, D-03, D-04, D-05, D-06 (15.4-CONTEXT.md — inserted, roadmap-scoped phase, not a REQUIREMENTS.md id)
 **Depends on:** Phase 15
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 15.4 to break down)
+- [ ] 15.4-01-PLAN.md — OS-package ownership resolved end-to-end from an inverse package-database query to a rendered Owner cell, and refused by the update action
+- [ ] 15.4-02-PLAN.md — Linux-cask ownership evidence plus the registry name fix, with `resolve.py`'s install-time cask gate deliberately untouched
+- [ ] 15.4-03-PLAN.md — One owner vocabulary for the Owner column and the detail bar, covering every owner value, still usable at 80x20
+- [ ] 15.4-04-PLAN.md — `UninstallScreen._rows` becomes the fourth live predicate, re-derived on every entry
+- [ ] 15.4-05-PLAN.md — "Installed via" shows the real hint, fed by the catalog's own ownership map and kept fresh on the post-run trigger
 
 ### Phase 15.3: Registry audience field audit: 63 of 89 registry.toml entries carry audience='both' (the class default in model.py), including plainly interactive/shell-UX tools an agent would never invoke directly (starship, oh-my-zsh, direnv, zsh, gnu-bash, bat, eza, zoxide, lazygit, vscode, sublime, etc.) -- do a one-time per-tool pass re-tagging genuinely human-only interactive tools as audience='human', keeping 'both' only for tools plausibly driven by agents/scripts too; this is a data-quality pass on registry.toml, not a schema or code change (tier and audience are confirmed separate, correctly-used fields, not conflated) (INSERTED)
 
