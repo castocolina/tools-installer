@@ -1,20 +1,21 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: "15.3"
-current_phase_name: registry-audience-field-audit-63-of-89-registry-toml-entries
+current_phase: "15.4"
+current_phase_name: "Catalog ownership visibility and Uninstall screen real manager attribution: add a visible Owner/package-manager column to the main catalog table (_COLUMNS/_row_cells in catalog_tui.py) reading the same ownership data _version_detail already computes, instead of ownership only appearing in the focused-row detail bar. Separately, UninstallScreen's 'Installed via'/'What gets removed' columns (wizard_app.py's _tool_entry) discard uninstall.py's own already-computed manager-name-plus-path hint (ToolRow.hint) in favor of a generic 4-value enum-keyed string ('userspace'/'managed elsewhere') -- surface the real hint in the table cell, and wire uninstall.py's manager detection (currently brew/cask-only) to the fuller install_ownership.py/ownership.py resolvers already used by update.py, so pnpm/volta/sdkman/uv/dnf/rpm-ostree-owned tools are named instead of falling through to a generic string"
 current_plan: Not started
-status: executing
-stopped_at: Phase 15.2 complete, ready to plan Phase 15.3
-last_updated: "2026-09-17T00:33:06.664Z"
+status: planning
+stopped_at: Phase 15.3 complete, ready to plan Phase 15.4
+last_updated: "2026-09-17T01:23:14.172Z"
 last_activity: 2026-09-16
-last_activity_desc: Phase 15.2 complete, transitioned to Phase 15.3
-state_head: 9ca0dcc17d4a98a2fcdeae4dbee2e62bd08589f0
+last_activity_desc: Phase 15.3 complete, transitioned to Phase 15.4
+state_head: d7a6ebb7957bf63d562aba6a7908c1a5a741345d
 progress:
   total_phases: 27
   completed_phases: 14
   total_plans: 65
-  completed_plans: 64
+  completed_plans: 65
+  percent: 100
 ---
 
 Total Phases: 21
@@ -30,11 +31,11 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 15.3 (registry-audience-field-audit-63-of-89-registry-toml-entries) — READY TO EXECUTE
+Phase: 15.4 — Catalog ownership visibility and Uninstall screen real manager attribution: add a visible Owner/package-manager column to the main catalog table (_COLUMNS/_row_cells in catalog_tui.py) reading the same ownership data _version_detail already computes, instead of ownership only appearing in the focused-row detail bar. Separately, UninstallScreen's 'Installed via'/'What gets removed' columns (wizard_app.py's _tool_entry) discard uninstall.py's own already-computed manager-name-plus-path hint (ToolRow.hint) in favor of a generic 4-value enum-keyed string ('userspace'/'managed elsewhere') -- surface the real hint in the table cell, and wire uninstall.py's manager detection (currently brew/cask-only) to the fuller install_ownership.py/ownership.py resolvers already used by update.py, so pnpm/volta/sdkman/uv/dnf/rpm-ostree-owned tools are named instead of falling through to a generic string
 Current Plan: Not started
 Total Plans in Phase: 1
-Status: Ready to execute
-Last activity: 2026-09-16 — Phase 15.2 complete, transitioned to Phase 15.3
+Status: Ready to plan
+Last activity: 2026-09-16 — Phase 15.3 complete, transitioned to Phase 15.4
 
 Progress: [██████████] 100%
 
@@ -42,7 +43,7 @@ Progress: [██████████] 100%
 
 **Velocity:**
 
-- Total plans completed: 52
+- Total plans completed: 53
 - Average duration: - min
 - Total execution time: 0 hours
 
@@ -67,6 +68,7 @@ Progress: [██████████] 100%
 | 14 | 5 | - | - |
 | 15.1 | 1 | - | - |
 | 15.2 | 2 | - | - |
+| 15.3 | 1 | - | - |
 
 **Recent Trend:**
 
@@ -185,5 +187,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-15T22:49:23.224Z
-Stopped at: Phase 15.2 complete, ready to plan Phase 15.3
+Stopped at: Phase 15.3 complete, ready to plan Phase 15.4
 Resume file: .planning/phases/15.8-fix-real-not-just-cosmetic-path-duplication-from-managed-blo/15.8-CONTEXT.md

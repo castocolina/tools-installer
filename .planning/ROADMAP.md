@@ -585,11 +585,11 @@ Plans:
 **Goal:** The catalog's `For` column reports a reviewed decision instead of a dataclass default: the 16 tools a human drives interactively — shell theming and config, GUI editors, directory navigation, the git and monitor TUIs, the fuzzy finder — carry `audience = "human"` in `installer/registry.toml` and render under `for human`; every tool that can still be invoked non-interactively for a one-shot output stays `both`; and the whole field is pinned by id set and distribution so a later registry edit can neither undo the re-tag nor sweep an unreviewed row along with it.
 **Requirements**: D-01, D-02 (15.3-CONTEXT.md — inserted, roadmap-scoped phase, not a REQUIREMENTS.md id)
 **Depends on:** Phase 15
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 
-- [ ] 15.3-01-PLAN.md — re-tag the 16 reviewed tools to `audience = "human"`, prove one row end to end through `group_tools`/`AUDIENCE_LABEL`, and lock the result with a named set, D-02's seven deliberate keeps, and a 33/47/9 distribution tripwire (D-01, D-02)
+- [x] 15.3-01-PLAN.md — re-tag the 16 reviewed tools to `audience = "human"`, prove one row end to end through `group_tools`/`AUDIENCE_LABEL`, and lock the result with a named set, D-02's seven deliberate keeps, and a 33/47/9 distribution tripwire (D-01, D-02)
 
 ### Phase 15.2: Install output buffering and live-progress clarity: StreamingRunner (installer/run.py) already forwards child stdout line-by-line via Popen+readline, but many installers (pnpm, sdkman, curl|sh scripts) block-buffer their own stdout when not attached to a TTY, so output visibly arrives all at once at the end despite the installer streaming faithfully -- force line-buffered/unbuffered child output where feasible (stdbuf -oL, PYTHONUNBUFFERED, per-manager unbuffered flags) for known-buffering tools, and add a 'waiting for output...' indicator per in-flight tool so buffering-silence is not indistinguishable from a hang (INSERTED)
 
