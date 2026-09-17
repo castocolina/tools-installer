@@ -1711,6 +1711,27 @@ def test_real_registry_jetbrains_toolbox_resolves_linux_cask_ownership() -> None
     assert result.confidence == "direct"
 
 
+def test_real_registry_vscode_resolves_linux_cask_ownership() -> None:
+    """15.4-VERIFICATION.md gap closure: the same end-to-end proof as
+    jetbrains-toolbox's, over vscode's own Linux-gated cask row -- loading
+    the REAL registry and resolving ownership for vscode on a Linux platform,
+    against a fake cask inventory listing the Linux cask name and a live
+    binary under the fake brew prefix, resolves the cask owner."""
+    tools = {tool.id: tool for tool in load_tools(_REGISTRY)}
+    vscode = tools["vscode"]
+    result = _resolve(
+        vscode,
+        inventory=_readable(
+            brew_casks={"visual-studio-code-linux": "1.90.0"}, brew_prefix=_LINUXBREW_PREFIX
+        ),
+        which=str(_LINUXBREW_PREFIX / "bin" / "code"),
+        platform=_LINUX,
+    )
+    assert result.owner == "cask"
+    assert result.package == "visual-studio-code-linux"
+    assert result.confidence == "direct"
+
+
 # -- 15.4-05/D-03/D-04: removal_hint -- the Uninstall screen's per-owner
 # removal phrase, built over the shared OWNER_LABELS/owner_label vocabulary.
 # Round-3 review HIGH is the through-line: a command is only as truthful as
