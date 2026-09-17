@@ -483,7 +483,14 @@ class CatalogScreen(AppScreen):
         service = self._version_refresh
         ownership = service.ownership_of(tool.id) if service is not None else None
         if ownership is None:
-            return Text("")
+            # CR-02 (15.4-REVIEW.md): while a pass is in flight, `None` does
+            # NOT mean "genuinely don't know" -- every record in the shared
+            # map is epoch-stale by construction until that pass commits, so
+            # a blank here would say the wrong thing about the whole catalog
+            # at once. Reuses `_ver_cell`'s own `checking…` label (already in
+            # `_LEGEND`, so this needs no new legend budget) rather than
+            # inventing a second word for the same state.
+            return Text(_VER_CHECKING, style="dim") if self.version_refreshing else Text("")
         label = owner_label(ownership)
         return Text(label) if label else Text("")
 
@@ -738,6 +745,17 @@ class CatalogScreen(AppScreen):
             return
         ownership = self._version_refresh.ownership_of(tool_id)
         if ownership is None:
+            # CR-02 (15.4-REVIEW.md): never a silent return. A `None` here is
+            # overwhelmingly "a mutation bumped the epoch and the replacing
+            # pass has not committed yet" -- a transient the user recovers
+            # from by waiting, not a permanent refusal -- so it must say so.
+            # The bare `return` made `u` a no-op with no feedback at all for
+            # every tool in the catalog after one in-catalog update.
+            self.status.set(
+                f"cannot update {tool_id}: ownership data is being refreshed — "
+                "try again in a moment",
+                "warn",
+            )
             return
         if ownership.owner == "unknown" or ownership.confidence not in MUTATION_GRADE:
             reason = ownership.unknown_reason or "no manager claimed this tool"
@@ -782,6 +800,18 @@ class CatalogScreen(AppScreen):
             self._version_statuses[message.tool_id] = message.status
             self._browser.reload(self._adapter())
         outcome = message.outcome
+        if outcome is not None and outcome.status == "updated":
+            # CR-02 (15.4-REVIEW.md): `UpdateService.run` called `invalidate`,
+            # which bumped the shared epoch, and `_update_tool_worker` then
+            # re-refreshed ONLY the updated tool. Every OTHER tool's record is
+            # therefore epoch-stale, so `ownership_of` answers `None` for the
+            # whole rest of the catalog: the Owner column blanks, the detail
+            # bar drops its ownership sentence, and `u` refuses on every other
+            # row until the user navigates away and back. Kicking the full
+            # pass here is what replaces the invalidate the update performed,
+            # and it repaints through `_start_version_refresh`'s own reload so
+            # the transient window renders as `checking…` rather than blank.
+            self._start_version_refresh()
         if message.error is not None:
             self.status.set(f"update failed: {message.error}", "error")
             return

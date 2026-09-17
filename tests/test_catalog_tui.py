@@ -1255,6 +1255,27 @@ def test_owner_column_is_blank_with_no_ownership_record_produced_yet(tmp_path: P
         assert screen._row_cells(tool)[7].plain == ""  # pyright: ignore[reportPrivateUsage]
 
 
+def test_owner_column_says_checking_while_a_pass_is_in_flight(tmp_path: Path) -> None:
+    """CR-02 (15.4-REVIEW.md): while a refresh is in flight, `None` does not
+    mean "genuinely don't know" -- a mutation bumped the shared epoch, so
+    EVERY record is stale by construction until that pass commits. The cell
+    must say `checking…` (the same word `_ver_cell` already uses, already in
+    `_LEGEND`) rather than blank, which D-02 reserves for a real unknown."""
+    tool = _tool("demo")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    screen.version_refreshing = True
+    for unavailable in (False, True):
+        screen._unavailable["demo"] = unavailable  # pyright: ignore[reportPrivateUsage]
+        assert screen._row_cells(tool)[7].plain == "checking…"  # pyright: ignore[reportPrivateUsage]
+    screen.version_refreshing = False
+    assert screen._row_cells(tool)[7].plain == ""  # pyright: ignore[reportPrivateUsage]
+
+
 def test_owner_column_is_blank_with_no_version_refresh_service_wired() -> None:
     tool = _tool("demo")
     screen = _screen([tool], {"demo": True}, version_refresh=None)
@@ -2467,6 +2488,39 @@ def test_action_update_tool_refuses_non_mutation_grade(tmp_path: Path) -> None:
     assert any("brew inventory" in message for message in messages)
 
 
+def test_action_update_tool_reports_an_in_flight_refresh_instead_of_a_silent_noop(
+    tmp_path: Path,
+) -> None:
+    """CR-02 (15.4-REVIEW.md): `ownership_of` answering `None` used to be a
+    bare `return` -- no status line, no message. After one in-catalog update
+    that is the answer for every OTHER tool in the catalog, so pressing `u`
+    on any of them was a silent no-op the user had no way to interpret."""
+    tool = _tool("rg")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    ownership = _ownership(tool, owner="brew")
+    # The exact shape an epoch bump leaves behind: a record is present, but
+    # tagged with a superseded epoch, so `ownership_of` answers `None`.
+    service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    service.invalidate(reason="updated some other tool")
+    assert service.ownership_of("rg") is None
+    started: list[str] = []
+    updates = _update_service(lambda _tool: ownership)
+    screen = _screen([tool], {"rg": True}, version_refresh=service, updates=updates)
+    screen._version_statuses = {"rg": _outdated_status("rg")}  # pyright: ignore[reportPrivateUsage]
+    screen._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
+    screen._update_tool_worker = lambda tool_id: started.append(tool_id)  # type: ignore[method-assign]
+    messages: list[str] = []
+    screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
+    screen.action_update_tool()
+    assert started == []
+    assert any("cannot update rg" in message for message in messages)
+    assert any("being refreshed" in message for message in messages)
+
+
 def test_action_update_tool_starts_worker_when_outdated_is_none(tmp_path: Path) -> None:
     tool = Tool(
         id="pnpm",
@@ -2580,6 +2634,82 @@ async def test_update_success_renders_new_version_on_status_line(tmp_path: Path)
         await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
         assert "updated rg" in app.catalog.status_text
         assert "update failed" not in app.catalog.status_text
+
+
+def test_a_single_tool_refresh_after_invalidate_strands_every_other_record(
+    tmp_path: Path,
+) -> None:
+    """CR-02 (15.4-REVIEW.md), the service-level half: this pins the map
+    state `UpdateService.run` + `_update_tool_worker` actually produce, so the
+    screen-level recovery test below is provably exercising a real condition
+    and not a hypothetical one. Exactly one tool carries the current epoch;
+    every other tool's record is stranded under the previous one and
+    `ownership_of` answers `None` for it."""
+    alpha, beta = _tool("alpha"), _tool("beta")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service.refresh([alpha, beta])
+    assert service.ownership_of("alpha") is not None
+    assert service.ownership_of("beta") is not None
+    service.invalidate(reason="updated alpha")  # what UpdateService.run does
+    service.refresh([alpha])  # what _update_tool_worker does
+    assert service.ownership_of("alpha") is not None
+    assert service.ownership_of("beta") is None
+
+
+async def test_an_in_catalog_update_restores_the_whole_owner_column(tmp_path: Path) -> None:
+    """CR-02 (15.4-REVIEW.md): one `u` press on ONE tool blanked the Owner
+    column for the ENTIRE catalog and made `u` a silent no-op on every other
+    row until the user navigated away and back. `on_tool_updated` now kicks
+    the full pass that replaces the invalidate the update performed, so the
+    untouched tool's record is current again once it lands."""
+    rg, fd = _tool("rg"), _tool("fd")
+    ownership_rg = _ownership(rg, owner="brew", package="rg")
+    ownership_fd = _ownership(fd, owner="brew", package="fd")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    updates = UpdateService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        runner=lambda _argv: None,
+        resolve_tag=lambda _repo: "v1",
+        tools={},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership_rg,
+        # Wired exactly as setup.py wires it: the invalidate is what bumps the
+        # shared epoch and strands every untouched tool's record.
+        invalidate=service.invalidate,
+    )
+    app = _unified_app(
+        [rg, fd], {"rg": True, "fd": True}, _BLURBS, version_refresh=service, updates=updates
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        service._ownership = {  # pyright: ignore[reportPrivateUsage]
+            "rg": (service.epoch, ownership_rg),
+            "fd": (service.epoch, ownership_fd),
+        }
+        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+            "rg": _outdated_status("rg")
+        }
+        # Pin which row `u` acts on; the rest of the pipeline (worker,
+        # UpdateService.run, the ToolUpdated message loop) stays real.
+        app.catalog._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
+        await pilot.press("u")
+        await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
+        assert "updated rg" in app.catalog.status_text
+        await _wait_until(pilot, lambda: not app.catalog.version_refreshing)
+        # The untouched tool answers again -- without the follow-on pass it
+        # stays `None` (and its Owner cell stays blank) for the rest of the
+        # session, or until the user navigates away and back.
+        assert service.ownership_of("fd") is not None
+        assert app.catalog._row_cells(fd)[7].plain != ""  # pyright: ignore[reportPrivateUsage]
 
 
 async def test_update_success_reports_replay_cleanup_and_postinstall_warnings(
