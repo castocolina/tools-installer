@@ -581,8 +581,8 @@ Plans:
 - [ ] 15.4-01-PLAN.md — OS-package ownership resolved end-to-end from an inverse package-database query to a rendered Owner cell, and refused by the update action
 - [ ] 15.4-02-PLAN.md — Linux-cask ownership evidence plus the registry name fix, with `resolve.py`'s install-time cask gate deliberately untouched
 - [ ] 15.4-03-PLAN.md — One owner vocabulary for the Owner column and the detail bar, covering every owner value, still usable at 80x20
-- [ ] 15.4-04-PLAN.md — `UninstallScreen._rows` becomes the fourth live predicate, re-derived on every entry
-- [ ] 15.4-05-PLAN.md — "Installed via" shows the real hint, fed by the catalog's own ownership map and kept fresh on the post-run trigger
+- [ ] 15.4-04-PLAN.md — `UninstallScreen._rows` becomes the fourth live predicate re-derived on every entry, all 12 `UninstallInputs` construction sites migrate to callables, and a removal invalidates the shared ownership data through an epoch-gated `ownership_of`
+- [ ] 15.4-05-PLAN.md — "Installed via" shows the real hint, fed by the catalog's own ownership map, kept honest by the epoch gate, and best-effort by design on a direct `--uninstall` start
 
 ### Phase 15.3: Registry audience field audit: 63 of 89 registry.toml entries carry audience='both' (the class default in model.py), including plainly interactive/shell-UX tools an agent would never invoke directly (starship, oh-my-zsh, direnv, zsh, gnu-bash, bat, eza, zoxide, lazygit, vscode, sublime, etc.) -- do a one-time per-tool pass re-tagging genuinely human-only interactive tools as audience='human', keeping 'both' only for tools plausibly driven by agents/scripts too; this is a data-quality pass on registry.toml, not a schema or code change (tier and audience are confirmed separate, correctly-used fields, not conflated) (INSERTED)
 
