@@ -68,7 +68,8 @@
       "opencode-plan-review"
     ],
     "timeouts": {
-      "opencode": 2400
+      "opencode": 2400,
+      "codex": 4500
     },
     "effort": {
       "opencode": "medium"
