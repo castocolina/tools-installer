@@ -1,8 +1,10 @@
 import json
 import threading
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -1066,16 +1068,67 @@ def test_a_superseded_refresh_publishes_no_ownership_over_a_newer_pass(
     assert record == b_ownership
 
 
-def test_ownership_of_never_returns_a_record_paired_with_the_wrong_epoch(
+def test_the_service_holds_one_epoch_tagged_ownership_map_not_two(tmp_path: Path) -> None:
+    """WR-02 (15.4-REVIEW.md): the DETERMINISTIC gate for Round-3 review
+    HIGH #2's invariant -- one map of epoch-tagged records, never a plain
+    ownership map beside a parallel `dict[str, int]` of epochs.
+
+    This exists because the concurrency test below structurally CANNOT prove
+    it: the rejected two-parallel-maps design was restored by the reviewer
+    and passed that test, with the only thing in the whole suite noticing the
+    revert being an incidental `TypeError` from a different test's
+    private-attribute unpack -- a shape accident, not a semantic guard. The
+    invariant is a property of the DATA STRUCTURE (one key lookup returns
+    both halves of the pair or neither, which is atomic without a reader
+    lock), so it is asserted as one, not left to timing."""
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    service = _installer_owned_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1.0.0",
+        probe_output=lambda argv: "0.9.0",
+        now=lambda: now,
+    )
+    service.refresh([_gh_tool("alpha")])
+    ownership = service._ownership  # pyright: ignore[reportPrivateUsage]
+    assert set(ownership) == {"alpha"}
+    # The tag travels WITH the record: one lookup, one pair.
+    for key, value in ownership.items():
+        assert isinstance(value, tuple), (key, value)
+        epoch, record = value
+        assert isinstance(epoch, int), (key, value)
+        assert isinstance(record, ManagerOwnership), (key, value)
+    # ...and nothing else on the service is a second map keyed by the same
+    # tool ids holding those epochs, which is exactly the rejected design.
+    parallel: list[str] = []
+    for name, value in cast("dict[str, object]", vars(service)).items():
+        if name == "_ownership" or not isinstance(value, dict):
+            continue
+        other = cast("dict[object, object]", value)
+        if not other or not set(ownership) <= set(other):
+            continue
+        if all(isinstance(v, int) for v in other.values()):
+            parallel.append(name)
+    assert parallel == [], parallel
+
+
+def test_ownership_of_answers_fail_closed_across_commit_and_invalidate_boundaries(
     tmp_path: Path,
 ) -> None:
-    """ATOMIC-READ case (Round-3 review HIGH #2). A reader thread calls
-    `ownership_of` in a loop while a writer commits and an invalidator
-    bumps concurrently; every observed answer is either `None` or a record
-    -- `ownership_of` itself guarantees a returned record's tag equals the
-    epoch it compared against, so a reader never observing an exception or
-    a malformed value is what this test bounds, by iteration count rather
-    than wall-clock (.claude/testing.md)."""
+    """SEQUENCING case (Round-3 review HIGH #2). A reader samples
+    `ownership_of` immediately after each commit and immediately after each
+    invalidate, through two alternating gates that make the interleaving
+    deterministic rather than racing on scheduler luck -- so a committed pass
+    reads as a record and an invalidated one reads as `None`, on every pass,
+    never by sleeping and hoping.
+
+    WR-02 (15.4-REVIEW.md) renamed this: those same gates FULLY SERIALIZE the
+    reader and the writer, so there is never a window in which a read
+    overlaps a write and a torn read is structurally impossible to observe
+    here. It was named and documented as the atomic-read proof and could not
+    have been one. What it does prove -- fail-closed sequencing across both
+    boundaries -- is real and worth keeping under an honest name; the
+    structural gate above proves the atomicity, and the unsynchronized loop
+    below exercises the overlap this one excludes by construction."""
     now = datetime(2026, 9, 7, tzinfo=UTC)
     path = tmp_path / "versions.json"
     tool = _gh_tool("alpha")
@@ -1137,6 +1190,99 @@ def test_ownership_of_never_returns_a_record_paired_with_the_wrong_epoch(
     assert len(observations) == _PASSES * _READS_PER_PASS * 2
     assert any(obs is not None for obs in observations)  # the loop did observe a committed pass
     assert any(obs is None for obs in observations)  # and an invalidated gap between passes
+
+
+def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_record(
+    tmp_path: Path,
+) -> None:
+    """WR-02 (15.4-REVIEW.md): the same reader/writer pair as the sequencing
+    test above with the handshake REMOVED, so reads genuinely overlap writes
+    instead of being fenced away from them.
+
+    The assertion is the identity one the epoch tag exists to guarantee: when
+    the epoch did not move across a call (sampled either side of it), a
+    non-`None` answer must be the very record that epoch's own pass
+    committed. A design that pairs a plain ownership map with a parallel
+    epoch map can serve the PREVIOUS pass's record under the current epoch in
+    the window between its two writes, and that is what this catches.
+
+    It is a probabilistic detector, deliberately: the window is two adjacent
+    dict writes, so a passing run is not proof. It can never fail spuriously
+    (every branch is guarded on information the reader established itself),
+    and the DETERMINISTIC proof of the same invariant is the structural gate
+    at the top of this section -- not this loop. Bounded by iteration count,
+    never by wall-clock (.claude/testing.md)."""
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    tool = _gh_tool("alpha")
+    service = _installer_owned_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1.0.0",
+        probe_output=lambda argv: "0.9.0",
+        now=lambda: now,
+    )
+    errors: list[BaseException] = []
+    committed_at: dict[int, ManagerOwnership] = {}
+    seen_record = False
+    seen_none = False
+    checked = 0
+    stop = threading.Event()
+    _PASSES = 40
+
+    def writer() -> None:
+        try:
+            for _ in range(_PASSES):
+                service.refresh([tool])
+                # Published by `refresh` itself; this only records WHICH
+                # object landed, so the reader can name the expectation.
+                # The reader skips any epoch not yet recorded here.
+                record = service.ownership_of(tool.id)
+                if record is not None:
+                    committed_at[service.epoch] = record
+                # A GIL yield, never a wall-clock sleep: without it the
+                # writer runs commit->invalidate as one uninterrupted
+                # bytecode stretch and the reader is never scheduled inside
+                # the committed window at all, which would make this loop as
+                # blind as the handshake it removes.
+                time.sleep(0)
+                service.invalidate(reason="loop")
+                time.sleep(0)
+        except BaseException as exc:  # noqa: BLE001 -- collected for the join
+            errors.append(exc)
+        finally:
+            stop.set()
+
+    def reader() -> None:
+        nonlocal seen_record, seen_none, checked
+        try:
+            while not stop.is_set():
+                before = service.epoch
+                observed = service.ownership_of(tool.id)
+                after = service.epoch
+                if observed is None:
+                    seen_none = True
+                    continue
+                seen_record = True
+                if before != after:
+                    continue  # the epoch moved across the call: nothing to assert
+                expected = committed_at.get(before)
+                if expected is None:
+                    continue  # that pass's commit has not been recorded yet
+                assert observed is expected, (before, observed, expected)
+                checked += 1
+        except BaseException as exc:  # noqa: BLE001 -- collected for the join
+            errors.append(exc)
+
+    reader_thread = threading.Thread(target=reader)
+    writer_thread = threading.Thread(target=writer)
+    writer_thread.start()
+    reader_thread.start()
+    writer_thread.join(timeout=30)
+    reader_thread.join(timeout=30)
+
+    assert errors == []
+    assert seen_record, "the unsynchronized reader never overlapped a committed pass"
+    assert seen_none, "the unsynchronized reader never overlapped an invalidated gap"
+    assert checked > 0, "no observation was ever in a position to be checked"
 
 
 # -- D-05/Task 2: a real probe injected at the service seam reaches
