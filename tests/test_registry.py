@@ -75,6 +75,64 @@ def test_human_agent_clis_are_p0_human_tools() -> None:
         assert tool.tier == "user"
 
 
+# Phase 15.3 (2026-09-16): these 16 rows were re-tagged from "both" to
+# "human" under one rule. Each carried an explicit `audience = "both"` in
+# installer/registry.toml -- one that happened to match the Tool dataclass
+# default (installer/model.py:287) -- but had never been individually
+# reviewed; the default only applies when the key is absent, and none of
+# these 16 rows omitted it.
+#
+# The rule judges what a tool IS, not which flags it has: a tool is
+# `human` when its default mode is an interactive session (a TUI, or shell
+# UX a person types into) and a one-shot print is not what it is for; it
+# stays `both` when invoking it non-interactively and reading what it
+# printed IS the product -- the shape `df`, `ps`, `cat` and `ls` have. A
+# batch, filter or CI flag bolted onto an interactive tool does not by
+# itself make it `both` -- the question is whether an agent would reach
+# for the tool on its own, and a flag's existence is not an answer to it.
+#
+# `fzf` and `dive` are judged against that rule rather than waved through
+# by it: `fzf -f/--filter` prints matches for the initial query and exits,
+# and `dive --ci` skips the interactive TUI and validates against CI
+# rules. Both stay `human` anyway -- `fzf` is a picker a person drives, and
+# an agent doing the same matching has `rg`/`grep`; `dive --ci` is a gate
+# in a human's pipeline, and an agent inspecting an image reaches for
+# `docker history` instead.
+#
+# This is the rule a NEW catalog entry should apply when choosing its
+# `audience` value, not only a record of this one pass -- the dataclass
+# default is silent, and the next entry will take it unless something
+# tells its author otherwise.
+_INTERACTIVE_ONLY_TOOLS = {
+    # shell tools (D-01)
+    "direnv",
+    "gnu-bash",
+    "gum",
+    "oh-my-zsh",
+    "starship",
+    "watch",
+    "zsh",
+    # editors (D-01)
+    "sublime",
+    "vscode",
+    # nav tools (D-01)
+    "broot",
+    "zoxide",
+    # interactive TUIs (D-02)
+    "gitui",
+    "lazygit",
+    "bottom",
+    "dive",
+    "fzf",
+}
+
+
+def test_interactive_only_tools_are_audience_human() -> None:
+    tools = _tools_by_id()
+    for tool_id in sorted(_INTERACTIVE_ONLY_TOOLS):
+        assert tools[tool_id].audience == "human", tool_id
+
+
 def test_high_use_agent_utilities_are_p0() -> None:
     assert {
         "rg",
