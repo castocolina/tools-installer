@@ -220,6 +220,17 @@ _VER_STALE = "~"
 # test that would now fail loudly if any line grows past this budget again.
 #
 # The stale marker keeps its `dim` style, matching how _ver_cell renders it.
+#
+# 15.4-03/D-02: the Owner column (added 15.4-01, at `_COLUMNS` index 7) gets
+# NO new legend line, deliberately. The legend's job is to decode colors and
+# symbols whose meaning is not already on screen -- the four dim Ver labels,
+# the priority colors, the installed/missing marks -- but the Owner cell
+# renders the manager's literal name (`Homebrew`, `dnf`, `GitHub release`,
+# ...) with nothing to decode. There is also no budget left to spend: this
+# block's own three-line/78-column limit above is already fully allocated to
+# the keys that DO carry meaning that isn't visible in the cell itself, and a
+# fourth line would either overflow `max-height: 3` (silently clipping a line
+# that carries a real key) or force a cramped rewrite of the three that do.
 _LEGEND = (
     "[bold red]P0[/] essential · [bold yellow]P1[/] recommended · [blue]P2[/] nice-to-have"
     " · [dim]P3[/] niche\n"
