@@ -197,6 +197,17 @@ def _manager_hint(tool: Tool, platform: Platform) -> str:
     phrase instead of a `brew uninstall` line that was never runnable there.
     That is the fix, not a regression -- the existing brew/cask hint tests
     all use a macOS-with-brew platform and stay green.
+
+    WR-04 (15.4-REVIEW.md): `resolve_methods` also filters on `arch` and
+    `min_os_version`, a SECOND narrowing the Round-2 fix did not name. The
+    registry has three rows it bites -- gnu-bash's two arch-split brew
+    methods and `container`'s `min_os_version` one -- so on a macOS arm64
+    host below `container`'s floor a brew-installed `container` fell all the
+    way through to the generic phrase. `_ownership_only_methods` in
+    `installer/ownership.py` now covers those rows on the evidence side, so
+    the seam rescues them with a real, inventory-backed attribution and this
+    registry-only GUESS is deliberately left as the narrower of the two --
+    per this docstring's own rule that it must be NARROWER, not wider.
     """
     for method in resolve_methods(tool, platform):
         if method.kind == "cask":

@@ -155,17 +155,38 @@ _CANDIDATE_ORDER: tuple[Owner, ...] = ("installer", "brew", "cask", "pnpm", "uv"
 # from this table can never reach `_ownership_only_methods`, regardless of what
 # `_method_targets_platform` would say about it -- adding a new ownership-only
 # class is therefore a visible declaration edit here, not a silent widening
-# (Round-2 review MEDIUM). Today it holds exactly one row.
+# (Round-2 review MEDIUM).
 _OWNERSHIP_ONLY_KINDS: dict[str, tuple[str, ...]] = {
     # Mirrors os/arch/min_os_version through _method_targets_platform; skips
     # only resolve.py:67-69's `platform.os == "macos" and platform.has_brew`
     # kind-gate -- the exact verdict this ownership-only path exists to bypass
     # for ATTRIBUTION while leaving INSTALL behaviour on Linux untouched.
     "cask": ("os", "arch", "min_os_version"),
+    # WR-04 (15.4-REVIEW.md). Mirrors `os` only; skips `_applies`'s `arch` and
+    # `min_os_version` clauses, because those two bear on INSTALLABILITY and
+    # this module answers what actually owns the installed copy. The registry
+    # has three such rows today -- gnu-bash's two arch-split brew methods and
+    # `container`'s `min_os_version` one -- so on a macOS arm64 host below
+    # `container`'s floor, a genuinely brew-installed `container` used to
+    # resolve to `unknown` (no candidate, `removal_hint` -> None) and report
+    # "managed outside this installer" instead of `brew uninstall container`.
+    # The `os` dimension is still mirrored: a macOS-only formula on Linux is
+    # not evidence of anything, and this is attribution, not a guess. The
+    # evidence rule is unchanged -- a candidate produced here still has to be
+    # CONFIRMED by the real `brew list --versions` inventory in
+    # `_collect_candidates` before it becomes ownership, which is the same
+    # argument 15.4-02 made for cask.
+    "brew": ("os",),
 }
 
+# The dimensions `_method_targets_platform` checks when a caller names none --
+# every one of `resolve.py::_applies`'s three, i.e. the strictest reading.
+_APPLICABILITY_DIMENSIONS: tuple[str, ...] = ("os", "arch", "min_os_version")
 
-def _method_targets_platform(method: Method, platform: Platform) -> bool:
+
+def _method_targets_platform(
+    method: Method, platform: Platform, dimensions: tuple[str, ...] = _APPLICABILITY_DIMENSIONS
+) -> bool:
     """Ownership-only mirror of `resolve.py::_applies`'s os/arch/min_os_version
     gate, covering the same three dimensions in the same order with the
     identical `meets_minimum` comparison `resolve.py:7` imports -- so the two
@@ -185,11 +206,18 @@ def _method_targets_platform(method: Method, platform: Platform) -> bool:
     os/arch/min_os_version and platform os/arch/os_version the gate
     enumerates. A future fourth dimension added to one function and
     forgotten in the other fails that gate.
+
+    `dimensions` names the subset to CHECK, and defaults to all three so the
+    parity gate above compares like with like. Each row of
+    `_OWNERSHIP_ONLY_KINDS` supplies its own subset: a dimension left out is a
+    DECLARED bypass for that kind, never an accident (WR-04).
     """
-    if method.os and platform.os not in method.os:
+    if "os" in dimensions and method.os and platform.os not in method.os:
         return False
-    if method.arch and platform.arch not in method.arch:
+    if "arch" in dimensions and method.arch and platform.arch not in method.arch:
         return False
+    if "min_os_version" not in dimensions:
+        return True
     min_version = method.params.get("min_os_version")
     return min_version is None or (
         platform.os_version is not None and meets_minimum(platform.os_version, str(min_version))
@@ -215,22 +243,35 @@ def _ownership_only_methods(tool: Tool, platform: Platform) -> tuple[Method, ...
     `resolve.py:70-73`), so this is a continuation of an existing shape, not
     a new one.
 
-    Gated on `platform.has_brew and platform.os != "macos"`: on macOS,
-    `resolve_methods` already yields every cask method, so this helper MUST
-    contribute nothing there, or `_collect_candidates` would see the same
-    cask method twice for one tool. Without brew there is no cask inventory
-    to have read, so there is nothing to attribute either.
+    Gated on `platform.has_brew`: both kinds in the table are Homebrew ones,
+    and without brew there is no formula or cask inventory to have read, so
+    there is nothing to attribute either.
+
+    A method `resolve_methods` ALREADY returned is excluded by identity --
+    `resolve_methods` filters `tool.methods`, so the objects are the same
+    ones. That is what keeps `_collect_candidates` from seeing one method
+    twice for a tool, and it replaces the blanket `platform.os == "macos"`
+    gate this helper used to carry (WR-04, 15.4-REVIEW.md). The old gate was
+    a proxy for the same idea -- on macOS every applicable cask is already an
+    install candidate -- but it also excluded macOS entirely, which is
+    exactly where the `brew` row's arch/min_os_version bypass has to work.
+    The proxy is replaced by the thing it was standing in for; the cask
+    verdict is unchanged on every platform.
 
     Only methods whose `kind` is a key of `_OWNERSHIP_ONLY_KINDS` are
-    reachable here -- read from the table rather than hard-coding the cask
-    literal, so the declaration is load-bearing rather than decorative.
+    reachable here, each checked against its OWN declared dimension subset --
+    read from the table rather than hard-coded, so the declaration is
+    load-bearing rather than decorative.
     """
-    if not platform.has_brew or platform.os == "macos":
+    if not platform.has_brew:
         return ()
+    installable = resolve_methods(tool, platform)
     return tuple(
         method
         for method in tool.methods
-        if method.kind in _OWNERSHIP_ONLY_KINDS and _method_targets_platform(method, platform)
+        if method.kind in _OWNERSHIP_ONLY_KINDS
+        and not any(method is candidate for candidate in installable)
+        and _method_targets_platform(method, platform, _OWNERSHIP_ONLY_KINDS[method.kind])
     )
 
 

@@ -1464,41 +1464,142 @@ def test_linux_cask_unmet_min_os_version_enters_neither_surface() -> None:
 def test_ownership_only_methods_ignores_undeclared_kinds() -> None:
     """A kind absent from `_OWNERSHIP_ONLY_KINDS` never reaches the
     ownership-only path even when it targets the platform on every dimension
-    `_method_targets_platform` checks (Round-2 review MEDIUM)."""
+    that kind would have been allowed to bypass (Round-2 review MEDIUM)."""
+    method = Method(kind="dnf", params={"package": "hypothetical"}, os=("fedora",), arch=("arm64",))
     tool = Tool(
         id="hypothetical",
         name="hypothetical",
         category="dev",
         cmd="hypothetical",
-        methods=(Method(kind="brew", params={"formula": "hypothetical"}, os=("fedora",)),),
+        methods=(method,),
     )
+    # `_applies` refuses it (wrong arch), so it is not an install candidate...
+    assert resolve._applies(method, _LINUX) is False  # pyright: ignore[reportPrivateUsage]
+    # ...and the `os`-only reading that the `brew` row IS allowed accepts it,
+    # so only the kind declaration stands between this method and the path.
     assert (
-        ownership._method_targets_platform(tool.methods[0], _LINUX)  # pyright: ignore[reportPrivateUsage]
+        ownership._method_targets_platform(method, _LINUX, ("os",))  # pyright: ignore[reportPrivateUsage]
         is True
     )
     assert ownership._ownership_only_methods(tool, _LINUX) == ()  # pyright: ignore[reportPrivateUsage]
 
 
 def test_ownership_only_kinds_declaration_matches_helper_reach() -> None:
-    """The declaration table and the helper's actual reach are the same set:
-    a tool declaring one Linux-gated method of every kind in `resolve._RANK`
-    yields only the declared kinds through the ownership-only helper."""
-    assert set(ownership._OWNERSHIP_ONLY_KINDS) == {"cask"}  # pyright: ignore[reportPrivateUsage]
+    """The declaration table and the helper's actual reach are the same set.
+
+    Each DECLARED kind gets a method `resolve._applies` refuses on this
+    platform but that kind's own declared dimension subset accepts -- which is
+    the whole definition of an ownership-only method. Every other kind in
+    `resolve._RANK` gets a method `_applies` also refuses, and must stay
+    unreachable regardless."""
+    assert set(ownership._OWNERSHIP_ONLY_KINDS) == {  # pyright: ignore[reportPrivateUsage]
+        "cask",
+        "brew",
+    }
+    declared = (
+        # cask: refused by `_applies`'s macOS-and-brew kind-gate on Linux,
+        # accepted on all three of os/arch/min_os_version.
+        Method(kind="cask", params={"cask": "declared-cask"}, os=("fedora",)),
+        # brew (WR-04): refused by `_applies`'s arch clause, accepted by the
+        # `("os",)`-only subset the table declares for this kind.
+        Method(kind="brew", params={"formula": "declared-brew"}, os=("fedora",), arch=("arm64",)),
+    )
+    undeclared = tuple(
+        Method(kind=kind, os=("fedora",), arch=("arm64",))
+        for kind in resolve._RANK  # pyright: ignore[reportPrivateUsage]
+        if kind not in ownership._OWNERSHIP_ONLY_KINDS  # pyright: ignore[reportPrivateUsage]
+    )
     tool = Tool(
         id="every-kind",
         name="every-kind",
         category="dev",
         cmd="every-kind",
-        methods=tuple(
-            Method(kind=kind, os=("fedora",))
-            for kind in resolve._RANK  # pyright: ignore[reportPrivateUsage]
-        ),
+        methods=(*declared, *undeclared),
     )
+    for method in (*declared, *undeclared):
+        assert resolve._applies(method, _LINUX) is False, method.kind  # pyright: ignore[reportPrivateUsage]
     reachable = {
         method.kind
         for method in ownership._ownership_only_methods(tool, _LINUX)  # pyright: ignore[reportPrivateUsage]
     }
     assert reachable == set(ownership._OWNERSHIP_ONLY_KINDS)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_ownership_only_methods_never_repeats_an_install_candidate() -> None:
+    """The identity exclusion that replaced the blanket `os == "macos"` gate
+    (WR-04): a method `resolve_methods` already returned must not also arrive
+    through the ownership-only path, or `_collect_candidates` would see one
+    method twice for a tool."""
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.1")
+    method = Method(kind="cask", params={"cask": "visual-studio-code"}, os=("macos",))
+    tool = Tool(id="code", name="code", category="editor", cmd="code", methods=(method,))
+    assert resolve.resolve_methods(tool, macos) == [method]
+    assert ownership._ownership_only_methods(tool, macos) == ()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_brew_ownership_survives_an_unmet_min_os_version_gate() -> None:
+    """WR-04 (15.4-REVIEW.md), the case the registry actually carries: on a
+    macOS arm64 host BELOW `container`'s `min_os_version` floor,
+    `resolve_methods` returns no method at all, so a genuinely brew-installed
+    `container` produced no candidate, resolved to `unknown`, and reported
+    "managed outside this installer" instead of `brew uninstall container`.
+
+    `arch`/`min_os_version` bear on INSTALLABILITY; this module answers what
+    owns the installed copy, and the claim is still backed by the real
+    `brew list --versions` inventory, never by the registry row alone."""
+    too_old = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="15.2")
+    method = Method(
+        kind="brew",
+        params={"formula": "container", "min_os_version": "26"},
+        os=("macos",),
+        arch=("arm64",),
+    )
+    tool = Tool(
+        id="container", name="container", category="container", cmd="container", methods=(method,)
+    )
+    assert resolve.resolve_methods(tool, too_old) == []  # not installable here
+    result = _resolve(
+        tool,
+        inventory=_readable(brew_formulae={"container": "0.5.0"}),
+        platform=too_old,
+        which="/opt/homebrew/bin/container",
+    )
+    assert result.owner == "brew"
+    assert result.package == "container"
+    assert removal_hint(result, tool.cmd) == "managed by Homebrew — `brew uninstall container`"
+    assert ownership.competing_owners(tool, too_old) == frozenset({"brew"})
+
+
+def test_brew_ownership_stays_unknown_when_the_inventory_does_not_claim_it() -> None:
+    """The widening is evidence-gated, not a registry guess: the same
+    arch/min_os_version-excluded method attributes NOTHING when the real brew
+    inventory does not list the formula."""
+    too_old = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="15.2")
+    method = Method(
+        kind="brew",
+        params={"formula": "container", "min_os_version": "26"},
+        os=("macos",),
+        arch=("arm64",),
+    )
+    tool = Tool(
+        id="container", name="container", category="container", cmd="container", methods=(method,)
+    )
+    result = _resolve(
+        tool,
+        inventory=_readable(brew_formulae={}),
+        platform=too_old,
+        which="/usr/local/bin/container",
+    )
+    assert result.owner == "unknown"
+
+
+def test_brew_ownership_still_mirrors_the_os_dimension() -> None:
+    """The `brew` row declares `("os",)`: the os dimension is still mirrored,
+    so a macOS-only formula is never evidence of anything on Linux."""
+    method = Method(kind="brew", params={"formula": "macos-only"}, os=("macos",))
+    tool = Tool(id="mo", name="mo", category="dev", cmd="mo", methods=(method,))
+    assert ownership._ownership_only_methods(tool, _LINUX) == ()  # pyright: ignore[reportPrivateUsage]
+    assert ownership.competing_owners(tool, _LINUX) == frozenset()
 
 
 def test_cask_kind_absent_from_installer_kinds() -> None:
