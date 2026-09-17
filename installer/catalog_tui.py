@@ -20,7 +20,7 @@ from textual.widgets import DataTable
 from installer.deps import missing_requires
 from installer.enums import Audience, Priority
 from installer.model import Tool
-from installer.ownership import MUTATION_GRADE
+from installer.ownership import MUTATION_GRADE, owner_label
 from installer.selection import select_tools, unstaged_recommends
 from installer.status import is_default_shell
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
@@ -162,6 +162,10 @@ _COLUMNS = (
     ("For", "for"),
     ("Inst", "inst"),
     ("Ver", "ver"),
+    # 15.4-01/D-01: a non-sorting column, like sel/ver/desc -- _SORT_BY_COLUMN
+    # above is deliberately left untouched (its own comment already documents
+    # this as the default for an absent key).
+    ("Owner", "owner"),
     ("What it does", "desc"),
 )
 
@@ -432,10 +436,19 @@ class CatalogScreen(AppScreen):
         return Text(base, style=color)
 
     # -- catalog data wiring for the browser adapter -----------------------
+    def _owner_cell(self, tool: Tool) -> Text:
+        service = self._version_refresh
+        ownership = service.ownership_of(tool.id) if service is not None else None
+        if ownership is None:
+            return Text("")
+        label = owner_label(ownership)
+        return Text(label) if label else Text("")
+
     def _row_cells(self, tool: Tool) -> list[Text]:
         installed = self._installed[tool.id]
         desc = tool.desc or tool.name
         ver = self._ver_cell(tool)
+        owner = self._owner_cell(tool)
         if self._unavailable.get(tool.id, False):
             desc = f"{desc} (not available on this machine)"
             return [
@@ -446,6 +459,7 @@ class CatalogScreen(AppScreen):
                 Text(AUDIENCE_LABEL[tool.audience], style="dim"),
                 Text("✓" if installed else "○", style="dim"),
                 Text(ver.plain, style="dim"),
+                Text(owner.plain, style="dim"),
                 Text(desc, style="dim"),
             ]
         return [
@@ -456,6 +470,7 @@ class CatalogScreen(AppScreen):
             Text(AUDIENCE_LABEL[tool.audience], style=_AUDIENCE_STYLE[tool.audience]),
             Text("✓", style="green") if installed else Text("○", style="yellow"),
             ver,
+            owner,
             Text(desc, style="dim"),
         ]
 
@@ -511,6 +526,17 @@ class CatalogScreen(AppScreen):
                 "apt": "managed by apt — this installer will not update it",
                 "pacman": "managed by pacman — this installer will not update it",
                 "rpm-ostree": "managed by rpm-ostree — this installer will not update it",
+                # 15.4-01/D-01: a flat placeholder, deliberately with no
+                # interpolated package name. This closes the intermediate-
+                # state hole a Round-2 review flagged (this plan's Owner
+                # column would otherwise name an owner the detail bar cannot
+                # name until 15.4-03 lands). 15.4-03 T1 REPLACES this entry
+                # with a package-naming template in ownership.py's own
+                # OWNER_DETAIL_LABELS -- do not treat this string as one that
+                # must survive verbatim; it exists only to close that gap.
+                "os-package": (
+                    "an OS package provides this tool — this installer will not update it"
+                ),
             }
             label = labels.get(ownership.owner)
             if label:

@@ -14,6 +14,8 @@ from installer.model import Method, Tool
 from installer.ownership import (
     MUTATION_GRADE,
     NATIVE_OWNERS,
+    OS_PACKAGE_OWNER,
+    UNMANAGEABLE_OWNERS,
     Confidence,
     ManagerOwnership,
     Owner,
@@ -242,6 +244,50 @@ def test_native_owners_tuple_is_exactly_the_four_widened_values() -> None:
     assert set(NATIVE_OWNERS) == {"dnf", "apt", "pacman", "rpm-ostree"}
     assert len(NATIVE_OWNERS) == 4
     assert set(NATIVE_OWNERS) <= set(typing.get_args(Owner))
+
+
+# -- 15.4-01/D-01/T2: os-package widens the refusal, never the attribution --
+# set. `direct` is in MUTATION_GRADE, so this owner now clears the gate too
+# and needs the same explicit pre-ladder refusal the four native owners get.
+
+
+def test_os_package_owner_is_refused_with_the_real_package_named() -> None:
+    tool = _tool("git", Method(kind="dnf", params={"package": "git"}))
+    calls: list[list[str]] = []
+    outcome = _perform(_target(tool, "os-package", package="git-core"), calls.append)
+    assert outcome.status == "unsupported"
+    assert outcome.owner == "os-package"
+    assert "git-core" in outcome.detail
+    assert calls == []
+
+
+@pytest.mark.parametrize("owner", sorted(UNMANAGEABLE_OWNERS))
+def test_every_unmanageable_owner_returns_a_clean_unsupported_outcome_not_a_raise(
+    owner: Owner,
+) -> None:
+    """Ordering proof, not a source-index gate (Round-1 review 15.4-01 LOW):
+    the owner-dispatch ladder has no arm for ANY of these owners, so a
+    refusal placed AFTER the ladder would hit its terminal `else: raise
+    UpdateError(...)` instead of returning cleanly. This is a complete
+    detector for the ordering and survives a refactor that hoists the whole
+    gate into a helper."""
+    tool = _tool("jq", Method(kind="dnf", params={"package": "jq"}))
+    calls: list[list[str]] = []
+    outcome = _perform(_target(tool, owner, package="jq"), calls.append)
+    assert outcome.status == "unsupported"
+    assert calls == []
+
+
+def test_unmanageable_owners_is_the_set_update_py_actually_reads() -> None:
+    assert frozenset({*NATIVE_OWNERS, OS_PACKAGE_OWNER}) == UNMANAGEABLE_OWNERS
+    assert set(typing.get_args(Owner)) >= UNMANAGEABLE_OWNERS
+    source = Path(update.__file__).read_text()
+    assert "UNMANAGEABLE_OWNERS" in source
+
+
+def test_os_package_detail_template_names_a_package_placeholder() -> None:
+    assert isinstance(update._OS_PACKAGE_DETAIL, str)  # pyright: ignore[reportPrivateUsage]
+    assert "{package}" in update._OS_PACKAGE_DETAIL  # pyright: ignore[reportPrivateUsage]
 
 
 def test_pnpm_owned_update_reuses_node_executor_invariants(

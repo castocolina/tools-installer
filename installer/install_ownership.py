@@ -17,6 +17,7 @@ rather than an unattributed tool.
 """
 
 import json
+import re
 import subprocess
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -224,6 +225,90 @@ def package_owns_path(tool: Tool, manager: str, path: str, probe: ProbeRunner) -
         return False
     kind, query = entry
     return any(query(package, path, probe) for package in _method_values(tool, {kind}, "package"))
+
+
+# Guard for a name reported by an OS package database: an initial
+# alphanumeric followed by alphanumerics, underscore, dot, plus, or hyphen,
+# and nothing else. `path_owner_package` below treats stdout as untrusted
+# (module docstring), so this rejects anything a planted/corrupted rpm,
+# dpkg-query, or pacman could use to smuggle control characters, path
+# separators, or shell metacharacters into a name this module later hands to
+# a UI cell and to installer/update.py's refusal detail.
+_PACKAGE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
+
+
+def _one_name(names: set[str]) -> str | None:
+    """Confirmation must be positive AND singular: zero or 2+ reported names,
+    or a name that fails the guard, are all `None` -- never a guess."""
+    if len(names) != 1:
+        return None
+    (name,) = names
+    return name if _PACKAGE_NAME_RE.fullmatch(name) else None
+
+
+def _rpm_owner(path: str, probe: ProbeRunner) -> str | None:
+    output = _run(probe, ["rpm", "-qf", "--qf", "%{NAME}\\n", path])
+    return None if output is None else _one_name(_lines(output))
+
+
+def _dpkg_owner(path: str, probe: ProbeRunner) -> str | None:
+    output = _run(probe, ["dpkg-query", "-S", path])
+    if output is None:
+        return None
+    names = {line.split(":", maxsplit=1)[0] for line in _lines(output)}
+    return _one_name(names)
+
+
+def _pacman_owner(path: str, probe: ProbeRunner) -> str | None:
+    output = _run(probe, ["pacman", "-Qoq", path])
+    return None if output is None else _one_name(_lines(output))
+
+
+# Owner-discovery table, keyed by Platform.os family -- the inverse of
+# _PATH_QUERIES above. That table CONFIRMS a caller-supplied package name owns
+# a path; every entry here DISCOVERS whatever name the package database
+# reports, with no expected name supplied at all. macOS has no entry: there
+# is no OS package database to ask (Homebrew ownership is answered elsewhere
+# in installer/ownership.py, never here).
+_OWNER_QUERIES: dict[str, Callable[[str, ProbeRunner], str | None]] = {
+    "fedora": _rpm_owner,
+    "debian": _dpkg_owner,
+    "arch": _pacman_owner,
+}
+
+
+def path_owner_package(os_family: str, path: str, probe: ProbeRunner) -> str | None:
+    """Ask the OS package database which package owns `path` -- no expected name.
+
+    `package_owns_path` above CONFIRMS a caller-supplied candidate owns a
+    path, and every one of its callers derives that candidate from a tool's
+    own DECLARED package name via `_method_values`. This function asks the
+    opposite question -- "whatever this path's real owner is, name it" --
+    which a base-image tool needs precisely because the declared name and the
+    database's real answer can differ for a split package (15.4-RESEARCH.md
+    Pitfall 1: `git` declares `package = "git"` while the database answers
+    `git-core`).
+
+    This is deliberately NOT a declared `owner_probes` entry (15.4-RESEARCH.md
+    Open Question 1 / Assumption A1). Every member of `_PROBES` has the
+    signature `(Tool, ProbeRunner)` and derives its query argument from a
+    per-tool DECLARED package name via `_method_values`; this query needs the
+    resolved ACTIVE PATH and no declared name at all, so it cannot be
+    expressed through that signature without changing all nine probes. And
+    `owner_probes` is a per-tool opt-in list, while base-image membership is
+    not knowable per tool in advance -- opting in would mean back-filling a
+    probe name onto an open-ended set of registry rows, exactly the
+    unrequested schema change `_rpm_ostree`'s own docstring already rejects
+    for the identical reason. `installer/model.py`'s `OWNER_PROBES` tuple and
+    `installer/registry.toml` are therefore untouched by this function.
+
+    Fails CLOSED in every uncertain case, mirroring `package_owns_path`: an
+    unrecognized OS family (including macOS, which has no package database to
+    ask), a query that raises, a query that reports zero or two-or-more
+    names, and a name that fails the package-name guard all return `None`.
+    """
+    query = _OWNER_QUERIES.get(os_family)
+    return None if query is None else query(path, probe)
 
 
 def _pacman(tool: Tool, probe: ProbeRunner) -> Ownership | None:

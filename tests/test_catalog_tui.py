@@ -353,7 +353,10 @@ async def test_section_titles_do_not_inflate_the_sel_column():
     tools, installed = _wide_catalog()
     blurbs = {"search": "Find files and code at speed across very large source trees"}
     app = _unified_app(tools, installed, blurbs)
-    async with app.run_test(size=(120, 30)):
+    # 15.4-01/D-01: widened from 120 -- the new Owner column (_COLUMNS) takes
+    # real estate from the same row, which used to leave exactly zero margin
+    # for the wide description at 120 columns.
+    async with app.run_test(size=(130, 30)):
         assert _WIDE_DESC in _screen_text(app)
 
 
@@ -893,19 +896,20 @@ def _status(*, stale: bool) -> VersionStatus:
     )
 
 
-def test_catalog_columns_include_ver() -> None:
-    assert len(_COLUMNS) == 8
+def test_catalog_columns_include_ver_and_owner() -> None:
+    assert len(_COLUMNS) == 9
     assert _COLUMNS[5] == ("Inst", "inst")
     assert _COLUMNS[6] == ("Ver", "ver")
-    assert _COLUMNS[7] == ("What it does", "desc")
+    assert _COLUMNS[7] == ("Owner", "owner")
+    assert _COLUMNS[8] == ("What it does", "desc")
 
 
-def test_row_cells_both_branches_return_eight_cells() -> None:
+def test_row_cells_both_branches_return_nine_cells() -> None:
     tool = _tool("rg")
     screen = _screen([tool], {"rg": True})
-    assert len(screen._row_cells(tool)) == 8  # pyright: ignore[reportPrivateUsage]
+    assert len(screen._row_cells(tool)) == 9  # pyright: ignore[reportPrivateUsage]
     screen._unavailable["rg"] = True  # pyright: ignore[reportPrivateUsage]
-    assert len(screen._row_cells(tool)) == 8  # pyright: ignore[reportPrivateUsage]
+    assert len(screen._row_cells(tool)) == 9  # pyright: ignore[reportPrivateUsage]
 
 
 def test_zsh_is_audience_human_in_the_real_catalog() -> None:
@@ -1029,21 +1033,84 @@ def _offline_service(
     resolve_tag: Callable[[str], str],
     probe_output: Callable[[list[str]], str | None],
     now: Callable[[], datetime] | None = None,
+    platform: Platform | None = None,
+    which: Callable[[str], str | None] | None = None,
+    native_probe: Callable[[list[str]], str] | None = None,
+    artifacts_for: Callable[[Tool], list[Path]] | None = None,
 ) -> VersionRefreshService:
     return VersionRefreshService(
-        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        platform=platform or Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         cache_path=cache_path,
         resolve_tag=resolve_tag,
         probe_output=probe_output,
         now=now,
         managed_bin_dir=_MANAGED,
-        which=lambda cmd: str(_MANAGED / cmd),
-        artifacts_for=lambda tool: [_MANAGED / tool.cmd],
+        which=which or (lambda cmd: str(_MANAGED / cmd)),
+        artifacts_for=artifacts_for or (lambda tool: [_MANAGED / tool.cmd]),
         read_inventory_fn=_empty_inventory,
         read_outdated_fn=_empty_outdated,
         pnpm_packages=lambda: (),
         query=lambda *_a, **_k: "",
+        native_probe=native_probe,
     )
+
+
+# -- 15.4-01/D-01: tracer -- probe -> resolver -> label table -> rendered
+# cell, end to end through a real VersionRefreshService.refresh pass. -------
+
+
+def _git_shaped_tool() -> Tool:
+    return Tool(
+        id="git",
+        name="Git",
+        category="git",
+        cmd="git",
+        methods=(
+            Method(kind="dnf", params={"package": "git"}),
+            Method(kind="apt", params={"package": "git"}),
+            Method(kind="pacman", params={"package": "git"}),
+            Method(kind="brew", params={"formula": "git"}),
+        ),
+        owner_probes=("rpm-ostree", "dnf", "apt", "pacman"),
+    )
+
+
+def test_owner_column_and_detail_paint_the_os_package_case_end_to_end(tmp_path: Path) -> None:
+    tool = _git_shaped_tool()
+
+    def native_probe(_command: list[str]) -> str:
+        return "git-core\n"
+
+    def which(cmd: str) -> str | None:
+        return "/usr/bin/git" if cmd == "git" else None
+
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1.0.0",
+        probe_output=lambda argv: None,
+        platform=Platform(os="fedora", arch="amd64", immutable=True, has_brew=False),
+        which=which,
+        native_probe=native_probe,
+        artifacts_for=lambda tool: [],
+    )
+    service.refresh([tool])
+    ownership = service.ownership_of("git")
+    assert ownership is not None
+    assert ownership.owner == "os-package"
+
+    screen = _screen([tool], {"git": True}, version_refresh=service)
+    for unavailable in (False, True):
+        screen._unavailable["git"] = unavailable  # pyright: ignore[reportPrivateUsage]
+        cells = screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
+        assert cells[7].plain == "OS package"
+
+    # The intermediate-state guard (Round-2 review MEDIUM): the detail bar
+    # also names the new owner, so no surface is left blank before 15.4-03
+    # lands. Asserted behaviourally so it survives that plan's refactor.
+    screen._unavailable["git"] = False  # pyright: ignore[reportPrivateUsage]
+    detail = screen._version_detail(tool)  # pyright: ignore[reportPrivateUsage]
+    assert detail
+    assert "OS package" in detail
 
 
 def _gh_tool(tool_id: str, *, desc: str = "") -> Tool:

@@ -449,6 +449,73 @@ def test_package_owns_path_rejects_a_manager_with_no_declared_file_query() -> No
     assert calls == []
 
 
+# -- 15.4-01/D-01: path_owner_package -- the INVERSE query, no expected name.
+# The tracer proving case is git: it declares package="git" while the rpm
+# database's real answer is "git-core" (15.4-RESEARCH.md Pitfall 1). --------
+
+
+@pytest.mark.parametrize(
+    ("os_family", "argv", "output", "expected"),
+    [
+        ("fedora", ["rpm", "-qf", "--qf", "%{NAME}\\n", "/usr/bin/git"], "git-core\n", "git-core"),
+        ("debian", ["dpkg-query", "-S", "/usr/bin/git"], "git: /usr/bin/git\n", "git"),
+        ("arch", ["pacman", "-Qoq", "/usr/bin/git"], "git\n", "git"),
+    ],
+)
+def test_path_owner_package_uses_each_dialects_own_query(
+    os_family: str, argv: list[str], output: str, expected: str
+) -> None:
+    calls: list[list[str]] = []
+
+    def probe(command: list[str]) -> str:
+        calls.append(command)
+        return output
+
+    assert ownership.path_owner_package(os_family, "/usr/bin/git", probe) == expected
+    assert calls == [argv]
+
+
+def test_path_owner_package_issues_no_query_on_macos() -> None:
+    """There is no OS package database to ask on macOS -- the probe is never
+    even consulted."""
+    calls: list[list[str]] = []
+    result = ownership.path_owner_package("macos", "/usr/bin/git", _recording_probe({}, calls))
+    assert result is None
+    assert calls == []
+
+
+def test_path_owner_package_returns_none_when_the_query_raises() -> None:
+    assert (
+        ownership.path_owner_package("fedora", "/usr/bin/git", _probe({"dnf": FileNotFoundError()}))
+        is None
+    )
+
+
+def test_path_owner_package_returns_none_for_zero_reported_names() -> None:
+    assert ownership.path_owner_package("fedora", "/usr/bin/git", lambda _cmd: "") is None
+
+
+def test_path_owner_package_returns_none_for_two_or_more_reported_names() -> None:
+    """rpm -qf can report more than one owning package; positive confirmation
+    must be singular, not merely non-empty."""
+    assert (
+        ownership.path_owner_package("fedora", "/usr/bin/git", lambda _cmd: "git-core\nother\n")
+        is None
+    )
+
+
+@pytest.mark.parametrize("rogue_name", ["-rf /", "git;rm", "../escape", "git core", ""])
+def test_path_owner_package_rejects_a_guard_failing_name(rogue_name: str) -> None:
+    """Probe stdout is untrusted (module docstring): a planted rpm could
+    report a name carrying control characters, path separators, or shell
+    metacharacters, and the guard must refuse all of them."""
+
+    def probe(_command: list[str]) -> str:
+        return f"{rogue_name}\n"
+
+    assert ownership.path_owner_package("fedora", "/usr/bin/git", probe) is None
+
+
 def test_package_owns_path_rejects_a_tool_declaring_no_package_for_that_manager() -> None:
     """No declared package name means nothing to confirm, and no subprocess."""
     calls: list[list[str]] = []

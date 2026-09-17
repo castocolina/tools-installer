@@ -58,7 +58,12 @@ from typing import Literal
 
 from installer.apps import APP_KINDS
 from installer.download import DOWNLOAD_KINDS
-from installer.install_ownership import ProbeRunner, detect_owner, package_owns_path
+from installer.install_ownership import (
+    ProbeRunner,
+    detect_owner,
+    package_owns_path,
+    path_owner_package,
+)
 from installer.locations import applications_dir, opt_dir
 from installer.model import Method, Tool
 from installer.platform import Platform
@@ -69,7 +74,17 @@ from installer.status import is_installed
 from installer.uninstall import manager_name
 
 Owner = Literal[
-    "installer", "brew", "cask", "pnpm", "uv", "unknown", "dnf", "apt", "pacman", "rpm-ostree"
+    "installer",
+    "brew",
+    "cask",
+    "pnpm",
+    "uv",
+    "unknown",
+    "dnf",
+    "apt",
+    "pacman",
+    "rpm-ostree",
+    "os-package",
 ]
 Confidence = Literal["direct", "by-elimination", "none"]
 
@@ -81,7 +96,28 @@ _NATIVE_PACKAGE_MANAGER_KINDS = frozenset({"dnf", "apt", "pacman"})
 # translation table AND installer/update.py's refusal condition, so the set of
 # owners the catalog can attribute and the set the update path refuses cannot
 # drift apart -- a fifth name added later is refused automatically.
+#
+# 15.4-01/D-01: the shared-set invariant now has TWO members, not one.
+# NATIVE_OWNERS stays exactly the four managers `detect_owner` can verify
+# membership for (its own probes, above); UNMANAGEABLE_OWNERS (below) is the
+# wider set installer/update.py actually refuses, which also carries the new
+# `os-package` value -- a base-image tool no tracked manager claims, attributed
+# by `_os_package_owner` below rather than by `detect_owner`. Both are declared
+# exactly once so attribution and refusal still cannot drift apart.
 NATIVE_OWNERS: tuple[Owner, ...] = ("dnf", "apt", "pacman", "rpm-ostree")
+# 15.4-01/D-01: the OS-package owner -- a live binary the package database
+# attributes to a real package name no tracked manager (installer/brew/cask/
+# pnpm/uv) or native probe (dnf/apt/pacman/rpm-ostree) claims. Declared as its
+# own name, not folded into NATIVE_OWNERS, because it is discovered by the
+# INVERSE query `install_ownership.path_owner_package` (no declared candidate)
+# rather than by `detect_owner`'s CONFIRM-a-candidate probes.
+OS_PACKAGE_OWNER: Owner = "os-package"
+# The set installer/update.py's refusal branch actually reads: attribution
+# correctness is in scope for every member of this set, but mutating any of
+# them needs privilege escalation (native) or is simply not a package this
+# installer's own artifact tracking owns (os-package) -- this installer has
+# never required either, so every member here is refused outright.
+UNMANAGEABLE_OWNERS: frozenset[Owner] = frozenset({*NATIVE_OWNERS, OS_PACKAGE_OWNER})
 # install_ownership.Ownership.manager happens to spell these four identically
 # to the Owner values above, but the annotation is written out explicitly
 # (rather than inferred from a comprehension over NATIVE_OWNERS) because a
@@ -370,6 +406,38 @@ def resolve_ownership(
     native = _native_owner(tool, native_probe, candidates, unreadable, active_path, platform)
     if native is not None:
         return native
+    # 15.4-01/D-01: the same call-site reasoning as `_native_owner` above, one
+    # rung lower. This is the plan's resolution of 15.4-RESEARCH.md Open
+    # Question 3: a base-image tool's live `/usr/bin/<cmd>` is attributable to
+    # no tracked owner and no native manager either, so the active-path
+    # unknown branch below returns first on a real machine and a fallback
+    # placed after it would never run -- the same fact that forced
+    # `_native_owner`'s own placement. It runs AFTER `_native_owner` on
+    # purpose: an explicitly layered or explicitly installed manager is the
+    # more actionable answer, and both branches are gated on the identical
+    # complete-negative-evidence condition, so only one can ever fire for a
+    # given tool. CR-01 survives here in its STRONGEST form: unlike
+    # `_native_owner`, which proves only package membership and has to ask
+    # `package_owns_path` a second question about a possibly-different file,
+    # this branch's evidence IS the live active path itself, so it can never
+    # rest on a different file than the one it claims to own.
+    #
+    # Deliberately NOT gated on `platform.immutable`. The evidence is
+    # identical on a mutable host: 15.4-RESEARCH.md Pitfall 1's split-package
+    # case (the declared `dnf` package name and the database's real answer
+    # differ) is just as real there, `_native_owner`'s own `package_owns_path`
+    # check correctly refuses it either way, and this branch is the only
+    # remaining honest answer. Gating on immutability would render the same
+    # fact as an empty cell on a mutable Fedora box, which is the failure
+    # D-02's principle forbids. `test_os_package_owner_resolves_git_shaped_tool_on_fedora`
+    # (tests/test_ownership.py) is the parametrized immutable/mutable pair
+    # that pins this -- a reader tempted to add the gate should find that test
+    # failing before writing it.
+    os_package = _os_package_owner(
+        tool, native_probe, candidates, unreadable, active_path, platform
+    )
+    if os_package is not None:
+        return os_package
     if active_path is not None:
         return _unknown(
             tool,
@@ -496,6 +564,57 @@ def _native_owner(
     # manager's own file query, never on this module's directory-based path
     # attribution, and `active_candidate` names a TRACKED candidate that owns
     # the live path. Nothing here should overstate the evidence.
+    return _owned(
+        tool,
+        synthetic,
+        confidence="direct",
+        shadowed=False,
+        candidates=(synthetic,),
+        active_candidate=None,
+        active_path=active_path,
+    )
+
+
+def _os_package_owner(
+    tool: Tool,
+    probe: ProbeRunner | None,
+    candidates: tuple[OwnershipCandidate, ...],
+    unreadable: frozenset[Owner],
+    active_path: Path | None,
+    platform: Platform,
+) -> ManagerOwnership | None:
+    """D-01's dated correction: the base-image case `_native_owner` cannot
+    reach. `install_ownership.path_owner_package` -- an INVERSE query, no
+    declared candidate -- rather than a re-implemented probe
+    (`.claude/architecture.md` rule 5).
+
+    Same parameter shape and same complete-negative-evidence gate as
+    `_native_owner`: returns `None` when no probe was injected, when any
+    tracked candidate exists, when any tracked manager's inventory was
+    unreadable, or when there is no live active path to ask about. Only then
+    does it call `path_owner_package(platform.os, ...)`, and only a positive,
+    singular answer becomes a claim.
+
+    Note the call deliberately never reads `platform.immutable` -- see the
+    comment at this function's one call site in `resolve_ownership` for why.
+    """
+    if probe is None or candidates or unreadable or active_path is None:
+        return None
+    package = path_owner_package(platform.os, str(active_path), probe)
+    if package is None:
+        return None
+    synthetic = OwnershipCandidate(
+        owner=OS_PACKAGE_OWNER,
+        method=None,
+        package=package,
+        current_version=None,
+        evidence=f"OS package database reports {package} owns {active_path}",
+    )
+    # Mirrors _native_owner's self-consistency reasoning immediately above:
+    # the winner is present in its own single-element candidates tuple, never
+    # the empty tuple this guard just proved, and active_candidate stays None
+    # because the claim rests on the package database plus the live active
+    # path itself, never on this module's directory-based path attribution.
     return _owned(
         tool,
         synthetic,
@@ -680,3 +799,75 @@ def _unknown_reason(
             "and PATH does not resolve which one is live"
         )
     return "no manager claimed the tool"
+
+
+# D-02/D-02a (15.4-01): the Owner COLUMN register only -- one terse label per
+# non-unknown `Owner` value, exhaustiveness-tested against `typing.get_args
+# (Owner)` so an eleventh owner value cannot ship without one.
+#
+# This is a SEPARATE table from the focused-row detail bar's prose register
+# (`installer/catalog_tui.py`'s local `labels` dict today; 15.4-03 lifts it
+# into this module's own `OWNER_DETAIL_LABELS`, declared beside this one).
+# The two registers exist because the column must distinguish `cask` from
+# `brew` inside a ~12-character cell while the detail bar's existing,
+# test-asserted sentence for BOTH is the identical "managed by Homebrew"
+# string -- a cask IS a Homebrew installation, so that prose is not wrong,
+# and this phase does not change user-visible copy for brew or cask. The
+# anti-duplication rule this phase enforces is therefore "neither surface
+# hand-writes its own dict in catalog_tui.py; both read tables declared side
+# by side in this module, and both are exhaustiveness-tested over `Owner`" --
+# NOT "one table drives both surfaces" (Round-1 review 15.4-03 HIGH/MEDIUM).
+OWNER_LABELS: dict[Owner, str] = {
+    "brew": "Homebrew",
+    # PINNED, not left to judgement (Round-2 review MEDIUM): three plans
+    # constrain this literal at once. 15.4-03 requires the column register's
+    # values to be pairwise distinct, so cask cannot reuse "Homebrew". 15.4-05
+    # requires the cask REMOVAL phrase to stay byte-identical to
+    # uninstall.py:139-141's current text, which contains only "Homebrew" and
+    # "--cask". 15.4-05's label-agreement rule requires a removal phrase to
+    # contain its owner's label. "Homebrew cask" satisfies the first two and
+    # deliberately fails the third, which is why 15.4-05 T1 carries cask in a
+    # declared `_LABEL_AGREEMENT_EXEMPT` set with a bespoke assertion rather
+    # than a skip. Do not "fix" this by renaming the label to the bare word
+    # "cask" -- the column sits beside "Homebrew", "dnf" and "pnpm", and a
+    # bare "cask" there reads as a different product rather than as a
+    # Homebrew artifact.
+    "cask": "Homebrew cask",
+    "pnpm": "pnpm",
+    "uv": "uv",
+    "dnf": "dnf",
+    "apt": "apt",
+    "pacman": "pacman",
+    "rpm-ostree": "rpm-ostree",
+    "os-package": "OS package",
+    # Fallback only: `owner_label` below prefers a resolved method's own kind
+    # label (github release / tarball / app / install script) for an
+    # installer-owned record, and reaches this entry only when no method is
+    # resolved.
+    "installer": "installer artifact",
+}
+
+# The four `ManagerOwnership.method.kind` values an installer-owned record can
+# carry (`ownership.py:517-532` and `:396-413`), mapped to human text for the
+# Owner column.
+_INSTALLER_KIND_LABELS: dict[str, str] = {
+    "github_release": "GitHub release",
+    "tarball": "tarball download",
+    "app": "downloaded app",
+    "script": "install script",
+}
+
+
+def owner_label(ownership: ManagerOwnership) -> str | None:
+    """D-02: `None` is the only permitted empty cell, and it means genuinely
+    unknown -- every other `Owner` value has a label, enforced by this
+    module's own exhaustiveness test over `OWNER_LABELS`."""
+    if ownership.owner == "unknown":
+        return None
+    if ownership.owner == "installer":
+        if ownership.method is not None:
+            kind_label = _INSTALLER_KIND_LABELS.get(ownership.method.kind)
+            if kind_label is not None:
+                return kind_label
+        return OWNER_LABELS["installer"]
+    return OWNER_LABELS[ownership.owner]
