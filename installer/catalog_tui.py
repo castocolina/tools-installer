@@ -20,7 +20,7 @@ from textual.widgets import DataTable
 from installer.deps import missing_requires
 from installer.enums import Audience, Priority
 from installer.model import Tool
-from installer.ownership import MUTATION_GRADE, owner_label
+from installer.ownership import MUTATION_GRADE, owner_detail, owner_label
 from installer.selection import select_tools, unstaged_recommends
 from installer.status import is_default_shell
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
@@ -512,33 +512,16 @@ class CatalogScreen(AppScreen):
         ownership = service.ownership_of(tool.id) if service is not None else None
         segments: list[str] = []
         if ownership is not None and ownership.owner != "unknown":
-            labels = {
-                "brew": "managed by Homebrew",
-                "cask": "managed by Homebrew",
-                "pnpm": "managed by pnpm",
-                "uv": "managed by uv",
-                "installer": "installed by this installer",
-                # D-05: every NATIVE_OWNERS member needs an entry here, or the
-                # row loses the explanation unknown_reason used to give it
-                # and gains nothing -- both the manager name and the
-                # no-update fact are required (Round 1 review, L160@ab432e9).
-                "dnf": "managed by dnf — this installer will not update it",
-                "apt": "managed by apt — this installer will not update it",
-                "pacman": "managed by pacman — this installer will not update it",
-                "rpm-ostree": "managed by rpm-ostree — this installer will not update it",
-                # 15.4-01/D-01: a flat placeholder, deliberately with no
-                # interpolated package name. This closes the intermediate-
-                # state hole a Round-2 review flagged (this plan's Owner
-                # column would otherwise name an owner the detail bar cannot
-                # name until 15.4-03 lands). 15.4-03 T1 REPLACES this entry
-                # with a package-naming template in ownership.py's own
-                # OWNER_DETAIL_LABELS -- do not treat this string as one that
-                # must survive verbatim; it exists only to close that gap.
-                "os-package": (
-                    "an OS package provides this tool — this installer will not update it"
-                ),
-            }
-            label = labels.get(ownership.owner)
+            # D-05 (Round-1 review 15.4-03 HIGH/MEDIUM): the per-owner
+            # explanation requirement here is now satisfied by an
+            # exhaustiveness-tested table in ownership.py
+            # (OWNER_DETAIL_LABELS / owner_detail) rather than by a local
+            # dict a reader could quietly under-fill -- see ownership.py's
+            # own module comment for the register split: OWNER_LABELS is the
+            # terse COLUMN register, OWNER_DETAIL_LABELS is this PROSE
+            # register, declared adjacent to it so neither can drift
+            # unnoticed.
+            label = owner_detail(ownership)
             if label:
                 segments.append(label)
             if ownership.shadowed:

@@ -1,6 +1,7 @@
 import html
 import re
 import threading
+import typing
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,7 +32,13 @@ from installer.doctor import DoctorReport
 from installer.enums import Audience
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool, load_categories, load_tools
-from installer.ownership import ManagerInventory, ManagerOwnership, Owner, OwnershipCandidate
+from installer.ownership import (
+    ManagerInventory,
+    ManagerOwnership,
+    Owner,
+    OwnershipCandidate,
+    owner_detail,
+)
 from installer.platform import Platform
 from installer.resolve import platform_could_support
 from installer.run import CommandError
@@ -1757,6 +1764,113 @@ def _ownership(
         active_path=active_path,
         unknown_reason=unknown_reason,
     )
+
+
+# -- 15.4-03/D-02/D-02a: _version_detail hand-writes no owner prose of its
+# own -- it must read ownership.owner_detail and agree with it byte-for-byte,
+# for every Owner value, not just a representative one (Round-1 review
+# HIGH/MEDIUM). ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "owner",
+    [o for o in typing.get_args(Owner) if o not in ("unknown", "installer", "os-package")],
+)
+def test_version_detail_reads_the_prose_register_for_every_simple_owner_value(
+    owner: Owner, tmp_path: Path
+) -> None:
+    tool = _tool("demo")
+    ownership = _ownership(tool, owner=owner)
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    detail = screen._version_detail(tool)  # pyright: ignore[reportPrivateUsage]
+    expected = owner_detail(ownership)
+    assert expected is not None
+    assert expected in detail
+
+
+@pytest.mark.parametrize(
+    ("kind", "mechanism"),
+    [
+        ("github_release", "GitHub release"),
+        ("tarball", "tarball download"),
+        ("app", "downloaded app"),
+        ("script", "install script"),
+    ],
+)
+def test_version_detail_names_every_installer_placement_mechanism(
+    kind: str, mechanism: str, tmp_path: Path
+) -> None:
+    tool = _tool("demo")
+    method = Method(kind=kind, params={})
+    ownership = ManagerOwnership(
+        tool_id="demo",
+        owner="installer",
+        method=method,
+        package=None,
+        current_version=None,
+        confidence="direct",
+        shadowed=False,
+        candidates=(),
+        active_candidate="installer",
+        active_path=None,
+        unknown_reason=None,
+    )
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    detail = screen._version_detail(tool)  # pyright: ignore[reportPrivateUsage]
+    assert mechanism in detail
+    # D-02a: never the bare catch-all word that implies a package manager
+    # exists behind it.
+    assert "installed by this installer" not in detail
+
+
+def test_version_detail_os_package_names_the_actual_package(tmp_path: Path) -> None:
+    tool = _tool("demo")
+    ownership = _ownership(tool, owner="os-package", package="git-core")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    detail = screen._version_detail(tool)  # pyright: ignore[reportPrivateUsage]
+    assert "git-core" in detail
+    assert "will not update it" in detail
+
+
+def test_version_detail_hand_writes_no_owner_vocabulary_of_its_own() -> None:
+    """NO-LOCAL-DICT gate (source-inspection, mirrors this plan's <verify>):
+    `_version_detail`'s body must contain no owner-keyed label dict of its
+    own -- every owner-prose quoted literal except the `unknown`/`installer`
+    control-flow comparisons must be gone, replaced by a call to
+    `owner_detail`."""
+    import inspect
+
+    import installer.catalog_tui as catalog_tui_module
+
+    target = catalog_tui_module.CatalogScreen._version_detail  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+    body = "\n".join(
+        line for line in inspect.getsource(target).splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "owner_detail" in body
+    stray = [
+        owner
+        for owner in typing.get_args(Owner)
+        if owner not in ("unknown", "installer") and f'"{owner}"' in body
+    ]
+    assert not stray, stray
 
 
 def test_detail_line_names_homebrew_for_brew_owned_row(tmp_path: Path) -> None:
