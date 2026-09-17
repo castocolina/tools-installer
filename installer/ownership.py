@@ -72,6 +72,7 @@ from installer.resolve import resolve_methods
 from installer.run import CommandError, run_query
 from installer.status import is_installed
 from installer.uninstall import manager_name
+from installer.versions import meets_minimum
 
 Owner = Literal[
     "installer",
@@ -146,6 +147,91 @@ _KIND_TO_OWNER: dict[str, Owner] = {
 }
 _INSTALLER_KINDS = frozenset((*DOWNLOAD_KINDS, *APP_KINDS, "script"))
 _CANDIDATE_ORDER: tuple[Owner, ...] = ("installer", "brew", "cask", "pnpm", "uv")
+
+# 15.4-02/D-01 (second half): the closed, declared set of method kinds allowed
+# on the ownership-only path (`_ownership_only_methods` below), mapped to the
+# `resolve.py::_applies` dimensions each kind's bypass MIRRORS. Every row's own
+# comment states the ONE `_applies` clause it deliberately SKIPS. A kind absent
+# from this table can never reach `_ownership_only_methods`, regardless of what
+# `_method_targets_platform` would say about it -- adding a new ownership-only
+# class is therefore a visible declaration edit here, not a silent widening
+# (Round-2 review MEDIUM). Today it holds exactly one row.
+_OWNERSHIP_ONLY_KINDS: dict[str, tuple[str, ...]] = {
+    # Mirrors os/arch/min_os_version through _method_targets_platform; skips
+    # only resolve.py:67-69's `platform.os == "macos" and platform.has_brew`
+    # kind-gate -- the exact verdict this ownership-only path exists to bypass
+    # for ATTRIBUTION while leaving INSTALL behaviour on Linux untouched.
+    "cask": ("os", "arch", "min_os_version"),
+}
+
+
+def _method_targets_platform(method: Method, platform: Platform) -> bool:
+    """Ownership-only mirror of `resolve.py::_applies`'s os/arch/min_os_version
+    gate, covering the same three dimensions in the same order with the
+    identical `meets_minimum` comparison `resolve.py:7` imports -- so the two
+    functions never compare a `min_os_version` through two different parsers.
+
+    This is a PARALLEL predicate, not a call into `resolve._applies`: that
+    function returns `False` for every cask method outside macOS, which is
+    exactly the verdict this path must bypass, so it cannot be reused
+    wholesale. `installer/resolve.py` is deliberately left unmodified by this
+    plan, so no public applicability helper is extracted there either.
+
+    The drift risk this duplication carries is closed by this module's own
+    tests: a table-driven parity gate evaluates this function and
+    `resolve._applies` over a `kind = "script"` method -- the kind `_applies`
+    accepts unconditionally once these three checks pass, making the two
+    functions directly comparable -- across every combination of declared
+    os/arch/min_os_version and platform os/arch/os_version the gate
+    enumerates. A future fourth dimension added to one function and
+    forgotten in the other fails that gate.
+    """
+    if method.os and platform.os not in method.os:
+        return False
+    if method.arch and platform.arch not in method.arch:
+        return False
+    min_version = method.params.get("min_os_version")
+    return min_version is None or (
+        platform.os_version is not None and meets_minimum(platform.os_version, str(min_version))
+    )
+
+
+def _ownership_only_methods(tool: Tool, platform: Platform) -> tuple[Method, ...]:
+    """Methods that count as OWNERSHIP evidence but never as install
+    candidates -- 15.4-RESEARCH.md Open Question 2, resolved as option (b),
+    the narrower fork: `resolve.py::_applies`'s cask branch stays untouched
+    (macOS-and-brew only), so `resolve_methods` still returns no cask method
+    on Linux and this installer never offers `brew install --cask` there.
+    Option (a) -- loosening `_applies` itself -- was rejected because it would
+    additionally change INSTALL behaviour on Linux, which 15.4-CONTEXT.md's
+    decisions never asked for.
+
+    This module's own docstring already draws the line this helper reaches
+    across: `resolve_methods` answers "what could this installer install
+    here", this module answers "what actually owns the installed copy". The
+    precedent for reading a declared method row for ownership purposes on a
+    kind `_applies` unconditionally refuses to install already exists in
+    `_os_package_owner`'s sibling `_native_owner` machinery (`rpm_ostree`,
+    `resolve.py:70-73`), so this is a continuation of an existing shape, not
+    a new one.
+
+    Gated on `platform.has_brew and platform.os != "macos"`: on macOS,
+    `resolve_methods` already yields every cask method, so this helper MUST
+    contribute nothing there, or `_collect_candidates` would see the same
+    cask method twice for one tool. Without brew there is no cask inventory
+    to have read, so there is nothing to attribute either.
+
+    Only methods whose `kind` is a key of `_OWNERSHIP_ONLY_KINDS` are
+    reachable here -- read from the table rather than hard-coding the cask
+    literal, so the declaration is load-bearing rather than decorative.
+    """
+    if not platform.has_brew or platform.os == "macos":
+        return ()
+    return tuple(
+        method
+        for method in tool.methods
+        if method.kind in _OWNERSHIP_ONLY_KINDS and _method_targets_platform(method, platform)
+    )
 
 
 @dataclass(frozen=True)
@@ -354,7 +440,7 @@ def attribute_path(path: Path | None, dirs: Mapping[Owner, tuple[Path, ...]]) ->
 
 def competing_owners(tool: Tool, platform: Platform) -> frozenset[Owner]:
     owners: set[Owner] = set()
-    for method in resolve_methods(tool, platform):
+    for method in (*resolve_methods(tool, platform), *_ownership_only_methods(tool, platform)):
         mapped = _KIND_TO_OWNER.get(method.kind)
         if mapped is not None:
             owners.add(mapped)
@@ -374,7 +460,9 @@ def resolve_ownership(
     native_probe: ProbeRunner | None = None,
 ) -> ManagerOwnership:
     applicable = resolve_methods(tool, platform)
-    candidates = _collect_candidates(tool, applicable, inventory, artifacts)
+    candidates = _collect_candidates(
+        tool, (*applicable, *_ownership_only_methods(tool, platform)), inventory, artifacts
+    )
     unreadable = _unreadable(tool, platform, inventory)
     active_path = _resolve_active_path(which(tool.cmd))
     dirs = owner_dirs(inventory=inventory, managed_bin_dir=managed_bin_dir, platform=platform)
