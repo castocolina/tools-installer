@@ -908,6 +908,32 @@ def test_row_cells_both_branches_return_eight_cells() -> None:
     assert len(screen._row_cells(tool)) == 8  # pyright: ignore[reportPrivateUsage]
 
 
+def test_zsh_is_audience_human_in_the_real_catalog() -> None:
+    # Phase 15.3, D-01: zsh is the tracer subject for the registry-wide
+    # audience re-tag. This asserts the full path -- registry value ->
+    # group_tools placement -> the rendered `For` cell in both _row_cells
+    # branches -> the detail bar -- not just the AUDIENCE_LABEL lookup those
+    # functions share, which would stay true even if a renderer regressed.
+    tools = load_tools(REGISTRY)
+    installed = {tool.id: False for tool in tools}
+
+    groups = group_tools(tools, installed, "audience", _BLURBS)
+    members_by_title = {title: {t.id for t in members} for title, _, members in groups}
+    assert [title for title, _, _ in groups] == ["for AI", "for both", "for human"]
+    assert all(members_by_title[title] for title in members_by_title)
+    assert "zsh" in members_by_title["for human"]
+    assert "zsh" not in members_by_title["for both"]
+
+    zsh = next(t for t in tools if t.id == "zsh")
+    screen = _screen(tools, installed)
+    assert _COLUMNS[4] == ("For", "for")
+    assert screen._row_cells(zsh)[4].plain == "human"  # pyright: ignore[reportPrivateUsage]
+    screen._unavailable["zsh"] = True  # pyright: ignore[reportPrivateUsage]
+    assert screen._row_cells(zsh)[4].plain == "human"  # pyright: ignore[reportPrivateUsage]
+    screen._unavailable["zsh"] = False  # pyright: ignore[reportPrivateUsage]
+    assert "for human" in screen._detail_text(zsh)  # pyright: ignore[reportPrivateUsage]
+
+
 def test_stale_marker_is_visible_on_rendered_ver_cell() -> None:
     tool = _tool("rg")
     screen = _screen([tool], {"rg": True})
