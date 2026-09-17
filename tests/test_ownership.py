@@ -10,12 +10,16 @@ from installer.model import Method, Tool
 from installer.ownership import (
     MUTATION_GRADE,
     NATIVE_OWNERS,
+    OS_PACKAGE_OWNER,
+    OWNER_LABELS,
+    UNMANAGEABLE_OWNERS,
     ManagerInventory,
     ManagerOwnership,
     Owner,
     OwnershipCandidate,
     attribute_path,
     owner_dirs,
+    owner_label,
     parse_brew_list_versions,
     parse_uv_tool_list,
     read_inventory,
@@ -595,9 +599,18 @@ def test_native_owner_does_not_claim_dnf_on_an_immutable_host() -> None:
     """CR-02: on Bazzite/Silverblue the booted deployment's rpmdb answers
     `rpm -q` for every package in the base image, so a base-image `jq` used to
     resolve to `dnf` and the UI told the user to update it through dnf --
-    which is not the package manager of record on an atomic host. The honest
-    answer is `unknown`: this installer cannot manage that package either way,
-    and a wrong remediation is worse than no remediation."""
+    which is not the package manager of record on an atomic host.
+    `_native_owner`'s own CONFIRM probe (`_dnf`, gated by
+    `_MUTABLE_HOST_ONLY_PROBES`) is never even consulted on this host, so
+    `dnf` can never be the claimed owner here.
+
+    15.4-01/D-01 changes what the HONEST answer is, not this guarantee: the
+    same rpm database still answers the separate INVERSE query
+    `_os_package_owner` asks (no declared candidate -- just "whatever owns
+    this live path"), so a base-image package now resolves to the new
+    `os-package` owner rather than `unknown` -- refused by the update action
+    with a detail line naming the real package, never a suggestion to run a
+    command that does not work on this host."""
     tool = _dnf_tool()
     calls: list[list[str]] = []
     result = _resolve(
@@ -607,8 +620,11 @@ def test_native_owner_does_not_claim_dnf_on_an_immutable_host() -> None:
         platform=_FEDORA_ATOMIC,
         native_probe=_verifying_dnf_probe("jq", calls),
     )
-    assert result.owner == "unknown"
-    assert calls == []  # the dnf probe is not even run on an immutable host
+    assert result.owner == "os-package"
+    assert result.package == "jq"
+    # The dnf CONFIRM query (`rpm -q --qf ... jq`) never runs; only the
+    # os-package INVERSE query (`rpm -qf --qf ... /usr/bin/jq`) does.
+    assert calls == [["rpm", "-qf", "--qf", "%{NAME}\\n", "/usr/bin/jq"]]
 
 
 def test_native_owner_still_claims_dnf_on_a_mutable_fedora_host() -> None:
@@ -687,6 +703,224 @@ def test_native_owners_tuple_is_the_four_widened_values() -> None:
     assert set(NATIVE_OWNERS) == {"dnf", "apt", "pacman", "rpm-ostree"}
     assert len(NATIVE_OWNERS) == 4
     assert set(NATIVE_OWNERS) <= set(typing.get_args(Owner))
+
+
+# -- 15.4-01/D-01: _os_package_owner -- the base-image case _native_owner
+# cannot reach. git is the tracer subject: it declares package="git" while
+# install_ownership.path_owner_package's real answer is "git-core"
+# (15.4-RESEARCH.md Pitfall 1). -k os_package is this plan's pinned gate. ----
+
+
+def _git_shaped_tool() -> Tool:
+    return Tool(
+        id="git",
+        name="Git",
+        category="git",
+        cmd="git",
+        methods=(
+            Method(kind="dnf", params={"package": "git"}),
+            Method(kind="apt", params={"package": "git"}),
+            Method(kind="pacman", params={"package": "git"}),
+            Method(kind="brew", params={"formula": "git"}),
+        ),
+        owner_probes=("rpm-ostree", "dnf", "apt", "pacman"),
+    )
+
+
+def _os_package_probe(package: str, calls: list[list[str]]) -> Callable[[list[str]], str]:
+    """Answers every query with `package` -- including install_ownership's
+    OWN rpm-ostree/dnf/apt/pacman probes, which is deliberate: those probes
+    check the declared package name ("git") against this answer ("git-core"),
+    never match, and so `_native_owner` correctly stands down and lets this
+    adapter run -- the exact split-package case this plan exists for."""
+
+    def probe(command: list[str]) -> str:
+        calls.append(command)
+        return f"{package}\n"
+
+    return probe
+
+
+@pytest.mark.parametrize("immutable", [True, False])
+def test_os_package_owner_resolves_git_shaped_tool_on_fedora(immutable: bool) -> None:
+    """THE CASE THAT MATTERS, parametrized over host mutability -- the
+    regression detector for a later `platform.immutable` gate (Round-2 review
+    MEDIUM). The evidence is identical on both: a split package's declared
+    name and the database's real answer differ on a mutable Fedora box too.
+    This is also the LOWER bracket on the branch's position: it fails with
+    `unknown` if the call in resolve_ownership is moved after the
+    active-path unknown branch, because a real git-shaped tool always has a
+    live, unattributable /usr/bin/git."""
+    tool = _git_shaped_tool()
+    calls: list[list[str]] = []
+    platform = Platform(os="fedora", arch="amd64", immutable=immutable, has_brew=False)
+    result = _resolve(
+        tool,
+        inventory=_empty_readable(),
+        which="/usr/bin/git",
+        platform=platform,
+        native_probe=_os_package_probe("git-core", calls),
+    )
+    assert result.owner == "os-package"
+    assert result.package == "git-core"
+    assert result.confidence == "direct"
+    assert result.confidence in MUTATION_GRADE
+    assert result.active_path == Path("/usr/bin/git")
+    assert result.candidates == (
+        OwnershipCandidate(
+            owner="os-package",
+            method=None,
+            package="git-core",
+            current_version=None,
+            evidence="OS package database reports git-core owns /usr/bin/git",
+        ),
+    )
+    assert result.shadowed is False
+    assert result.active_candidate is None
+    assert calls  # the probe really was consulted
+
+
+def _raising_probe(_command: list[str]) -> str:
+    raise FileNotFoundError()
+
+
+def test_os_package_owner_returns_unknown_when_probe_answers_nothing() -> None:
+    """CR-01, pinned for this branch too: a silent probe still forces
+    `unknown` with `active_path` set, never a guess."""
+    tool = _git_shaped_tool()
+    result = _resolve(
+        tool,
+        inventory=_empty_readable(),
+        which="/usr/bin/git",
+        platform=_FEDORA,
+        native_probe=_raising_probe,
+    )
+    assert result.owner == "unknown"
+    assert result.confidence == "none"
+    assert result.active_path == Path("/usr/bin/git")
+
+
+def test_readable_brew_inventory_listing_git_wins_over_os_package() -> None:
+    """UPPER bracket on the branch's position: this fails if the os-package
+    call is moved AHEAD of the tracked-candidate active-path branch -- a
+    readable inventory that lists the tool must win, and the probe below must
+    never even be consulted."""
+    tool = _git_shaped_tool()
+    calls: list[list[str]] = []
+    result = _resolve(
+        tool,
+        inventory=_readable(brew_formulae={"git": "2.44.0"}),
+        which=str(_BREW_PREFIX / "bin" / "git"),
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=True),
+        native_probe=_os_package_probe("git-core", calls),
+    )
+    assert result.owner == "brew"
+    assert calls == []
+
+
+def test_unreadable_brew_inventory_blocks_the_os_package_fallback() -> None:
+    """Complete negative evidence means EVERY tracked manager was queried
+    successfully and none claimed the tool -- an unreadable brew inventory is
+    incomplete, not a claim, and the os-package probe must not even run."""
+    tool = _git_shaped_tool()
+    calls: list[list[str]] = []
+    result = _resolve(
+        tool,
+        inventory=ManagerInventory(
+            brew_formulae=None,
+            brew_casks={},
+            pnpm_globals=frozenset(),
+            uv_tools={},
+            brew_prefix=_BREW_PREFIX,
+        ),
+        which="/usr/bin/git",
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=True),
+        native_probe=_os_package_probe("git-core", calls),
+    )
+    assert result.owner == "unknown"
+    assert result.unknown_reason
+    assert "brew" in result.unknown_reason.lower()
+    assert calls == []
+
+
+def test_os_package_owner_never_runs_on_macos() -> None:
+    """`path_owner_package` has no macOS entry -- there is no OS package
+    database to ask, and Homebrew ownership is answered elsewhere."""
+    tool = _git_shaped_tool()
+    calls: list[list[str]] = []
+    result = _resolve(
+        tool,
+        inventory=_empty_readable(),
+        which="/usr/local/bin/git",
+        platform=_MAC,
+        native_probe=_os_package_probe("git-core", calls),
+    )
+    assert result.owner == "unknown"
+
+
+def test_unmanageable_owners_is_native_owners_plus_os_package() -> None:
+    """The membership decision is written once: this is the wider set
+    installer/update.py's refusal branch actually reads."""
+    assert frozenset({*NATIVE_OWNERS, OS_PACKAGE_OWNER}) == UNMANAGEABLE_OWNERS
+    assert set(typing.get_args(Owner)) >= UNMANAGEABLE_OWNERS
+
+
+# -- 15.4-01/D-01/D-02: OWNER_LABELS and owner_label -- every Owner value
+# except unknown has a column label. --------------------------------------
+
+
+def test_owner_labels_covers_every_non_unknown_owner_value() -> None:
+    assert set(OWNER_LABELS) == set(typing.get_args(Owner)) - {"unknown"}
+    assert all(OWNER_LABELS[value] for value in OWNER_LABELS)
+
+
+def test_owner_labels_cask_and_brew_literals_are_pinned() -> None:
+    assert OWNER_LABELS["brew"] == "Homebrew"
+    assert OWNER_LABELS["cask"] == "Homebrew cask"
+
+
+def test_owner_label_names_the_os_package_case() -> None:
+    assert OWNER_LABELS["os-package"] == "OS package"
+
+
+def _record(
+    owner: Owner, *, method: Method | None = None, package: str | None = None
+) -> ManagerOwnership:
+    return ManagerOwnership(
+        tool_id="demo",
+        owner=owner,
+        method=method,
+        package=package,
+        current_version=None,
+        confidence="none" if owner == "unknown" else "direct",
+        shadowed=False,
+        candidates=(),
+        active_candidate=None,
+        active_path=None,
+        unknown_reason="no manager claimed the tool" if owner == "unknown" else None,
+    )
+
+
+def test_owner_label_is_none_only_for_unknown() -> None:
+    assert owner_label(_record("unknown")) is None
+
+
+@pytest.mark.parametrize(
+    "owner", [o for o in typing.get_args(Owner) if o not in ("unknown", "installer")]
+)
+def test_owner_label_reads_the_column_register(owner: Owner) -> None:
+    assert owner_label(_record(owner)) == OWNER_LABELS[owner]
+
+
+def test_owner_label_reads_the_resolved_method_kind_for_an_installer_owned_record() -> None:
+    method = Method(kind="github_release", params={"repo": "owner/demo"})
+    label = owner_label(_record("installer", method=method))
+    assert label == "GitHub release"
+    assert label != OWNER_LABELS["installer"]
+
+
+def test_owner_label_falls_back_to_the_installer_artifact_entry_with_no_method() -> None:
+    assert owner_label(_record("installer", method=None)) == OWNER_LABELS["installer"]
 
 
 def test_parse_brew_list_versions_takes_last_token() -> None:
