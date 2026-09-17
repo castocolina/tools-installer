@@ -133,6 +133,65 @@ def test_interactive_only_tools_are_audience_human() -> None:
         assert tools[tool_id].audience == "human", tool_id
 
 
+# D-02's other half: each of these prints and exits by default, so an agent
+# can invoke it for a one-shot snapshot the same way it invokes df, du, ps,
+# cat or ls -- which is why the Phase 15.3 re-tag pass deliberately stopped
+# short of them.
+_SCRIPTABLE_ONE_SHOT_TOOLS = ("duf", "dust", "procs", "bat", "eza", "glow", "hexyl")
+
+
+def test_scriptable_one_shot_tools_stay_audience_both() -> None:
+    tools = _tools_by_id()
+    for tool_id in _SCRIPTABLE_ONE_SHOT_TOOLS:
+        assert tools[tool_id].audience == "both", tool_id
+
+
+# The 17 ids that already carried `audience = "human"` before Phase 15.3 --
+# derived from the registry and reconciled against this list during
+# planning, not transcribed by hand.
+_PRE_15_3_HUMAN_TOOLS = {
+    "antigravity",
+    "claude",
+    "codex",
+    "cursor-agent",
+    "drawio-desktop",
+    "jetbrains-toolbox",
+    "kitty",
+    "matt-pocock-skills",
+    "opencode",
+    "opengsd",
+    "openspec",
+    "pi",
+    "ponytail",
+    "softaworks-agent-toolkit",
+    "spec-kit",
+    "superpowers",
+    "wezterm",
+}
+
+
+def test_audience_human_set_is_exactly_the_reviewed_tools() -> None:
+    # Set equality rather than a count: a count says "expected 33, got 34"
+    # and a set difference says which row moved. A phase adding a
+    # `human`-tagged catalog entry must add its id to one of these two sets
+    # in the same commit -- the same standing instruction
+    # test_registry_tier_distribution_is_pinned already carries for `tier`.
+    tools = _tools_by_id()
+    human_ids = {tool_id for tool_id, tool in tools.items() if tool.audience == "human"}
+    assert human_ids == _PRE_15_3_HUMAN_TOOLS | _INTERACTIVE_ONLY_TOOLS
+
+
+def test_registry_audience_distribution_is_pinned() -> None:
+    # Mirrors test_registry_tier_distribution_is_pinned. Catches a row
+    # moving between `both` and `ai`, which the set equality above cannot
+    # see -- neither set mentions `ai`.
+    assert dict(Counter(t.audience for t in load_tools(REGISTRY))) == {
+        "both": 47,
+        "ai": 9,
+        "human": 33,
+    }
+
+
 def test_high_use_agent_utilities_are_p0() -> None:
     assert {
         "rg",
