@@ -38,6 +38,7 @@ from installer.ownership import (
     Owner,
     OwnershipCandidate,
     owner_detail,
+    owner_label,
 )
 from installer.platform import Platform
 from installer.resolve import platform_could_support
@@ -1118,6 +1119,111 @@ def test_owner_column_and_detail_paint_the_os_package_case_end_to_end(tmp_path: 
     detail = screen._version_detail(tool)  # pyright: ignore[reportPrivateUsage]
     assert detail
     assert "OS package" in detail
+
+
+# -- 15.4-03/D-02: the Owner COLUMN renders every non-unknown owner value in
+# BOTH `_row_cells` branches, and blank means exactly "genuinely don't know"
+# -- never "didn't bother labeling this case". -------------------------------
+
+
+@pytest.mark.parametrize("owner", [o for o in typing.get_args(Owner) if o != "unknown"])
+def test_owner_column_renders_every_owner_value_in_both_branches(
+    owner: Owner, tmp_path: Path
+) -> None:
+    tool = _tool("demo")
+    ownership = _ownership(tool, owner=owner, package="demo-pkg" if owner == "os-package" else None)
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    expected = owner_label(ownership)
+    assert expected
+    for unavailable in (False, True):
+        screen._unavailable["demo"] = unavailable  # pyright: ignore[reportPrivateUsage]
+        cells = screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
+        assert cells[7].plain == expected
+
+
+def test_owner_column_is_blank_for_an_unknown_record(tmp_path: Path) -> None:
+    tool = _tool("demo")
+    ownership = _ownership(tool, owner="unknown", unknown_reason="no manager claimed the tool")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    for unavailable in (False, True):
+        screen._unavailable["demo"] = unavailable  # pyright: ignore[reportPrivateUsage]
+        assert screen._row_cells(tool)[7].plain == ""  # pyright: ignore[reportPrivateUsage]
+
+
+def test_owner_column_is_blank_with_no_ownership_record_produced_yet(tmp_path: Path) -> None:
+    """No ownership pass has produced a record for this tool (e.g. the
+    refresh worker has not landed) -- the SAME blank as an unknown record,
+    because both genuinely mean "don't know"."""
+    tool = _tool("demo")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    # No entry in service._ownership -- ownership_of("demo") returns None.
+    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    for unavailable in (False, True):
+        screen._unavailable["demo"] = unavailable  # pyright: ignore[reportPrivateUsage]
+        assert screen._row_cells(tool)[7].plain == ""  # pyright: ignore[reportPrivateUsage]
+
+
+def test_owner_column_is_blank_with_no_version_refresh_service_wired() -> None:
+    tool = _tool("demo")
+    screen = _screen([tool], {"demo": True}, version_refresh=None)
+    for unavailable in (False, True):
+        screen._unavailable["demo"] = unavailable  # pyright: ignore[reportPrivateUsage]
+        assert screen._row_cells(tool)[7].plain == ""  # pyright: ignore[reportPrivateUsage]
+
+
+def test_owner_column_dims_in_the_unavailable_branch_like_every_other_cell(
+    tmp_path: Path,
+) -> None:
+    tool = _tool("demo")
+    ownership = _ownership(tool, owner="brew")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    screen._unavailable["demo"] = True  # pyright: ignore[reportPrivateUsage]
+    cells = screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
+    assert "dim" in str(cells[7].style)
+
+
+def test_owner_column_does_not_gate_on_installed_state_unlike_ver_cell(
+    tmp_path: Path,
+) -> None:
+    """The column does not suppress on installed-state (contrast with
+    `_ver_cell`'s deliberate not-installed early return): ownership is
+    resolved from the live binary path, and a tool the presence predicate
+    happens to read as absent can still carry a real, useful record."""
+    tool = _tool("demo")
+    ownership = _ownership(tool, owner="brew")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"demo": ownership}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"demo": False}, version_refresh=service)
+    cells = screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
+    assert cells[7].plain == owner_label(ownership)
+    # The Ver cell, by contrast, DOES suppress for a not-installed tool.
+    assert cells[6].plain == ""
 
 
 def _gh_tool(tool_id: str, *, desc: str = "") -> Tool:

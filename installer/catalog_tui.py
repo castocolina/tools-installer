@@ -437,6 +437,17 @@ class CatalogScreen(AppScreen):
 
     # -- catalog data wiring for the browser adapter -----------------------
     def _owner_cell(self, tool: Tool) -> Text:
+        # D-02: blank means exactly "genuinely don't know" -- no service
+        # wired, no ownership record produced for this tool yet, or the
+        # record itself resolved to `unknown` (owner_label returns `None`
+        # for that case). Deliberately NOT gated on `self._installed`, unlike
+        # `_ver_cell`'s early return on a not-installed tool above: ownership
+        # is resolved from the live binary path (`ownership.py`'s
+        # `active_path` evidence), not from the presence predicate this
+        # screen's `_installed` map reads, so a tool the predicate happens to
+        # read as absent can still carry a real, useful ownership record. Do
+        # not "fix" this asymmetry by adding a not-installed early return
+        # here -- it would silently throw away real evidence.
         service = self._version_refresh
         ownership = service.ownership_of(tool.id) if service is not None else None
         if ownership is None:
@@ -448,7 +459,6 @@ class CatalogScreen(AppScreen):
         installed = self._installed[tool.id]
         desc = tool.desc or tool.name
         ver = self._ver_cell(tool)
-        owner = self._owner_cell(tool)
         if self._unavailable.get(tool.id, False):
             desc = f"{desc} (not available on this machine)"
             return [
@@ -459,7 +469,7 @@ class CatalogScreen(AppScreen):
                 Text(AUDIENCE_LABEL[tool.audience], style="dim"),
                 Text("✓" if installed else "○", style="dim"),
                 Text(ver.plain, style="dim"),
-                Text(owner.plain, style="dim"),
+                Text(self._owner_cell(tool).plain, style="dim"),
                 Text(desc, style="dim"),
             ]
         return [
@@ -470,7 +480,7 @@ class CatalogScreen(AppScreen):
             Text(AUDIENCE_LABEL[tool.audience], style=_AUDIENCE_STYLE[tool.audience]),
             Text("✓", style="green") if installed else Text("○", style="yellow"),
             ver,
-            owner,
+            self._owner_cell(tool),
             Text(desc, style="dim"),
         ]
 
