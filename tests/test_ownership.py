@@ -1,12 +1,15 @@
 import subprocess
 import typing
 from collections.abc import Callable
+from itertools import product
 from pathlib import Path
 
 import pytest
 
 import installer.install_ownership as install_ownership
-from installer.model import Method, Tool
+import installer.ownership as ownership
+import installer.resolve as resolve
+from installer.model import Method, Tool, load_tools
 from installer.ownership import (
     MUTATION_GRADE,
     NATIVE_OWNERS,
@@ -33,6 +36,22 @@ _MAC = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
 _BREW_PREFIX = Path("/opt/homebrew")
 _MANAGED = Path("/home/user/.local/bin")
 _PNPM_HOME = Path("/home/user/Library/pnpm")
+_LINUX = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+_LINUXBREW_PREFIX = Path("/home/linuxbrew/.linuxbrew")
+_REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+
+
+def _jetbrains_toolbox(*extra_methods: Method) -> Tool:
+    return Tool(
+        id="jetbrains-toolbox",
+        name="JetBrains Toolbox",
+        category="editor",
+        cmd="jetbrains-toolbox",
+        methods=(
+            Method(kind="cask", params={"cask": "jetbrains-toolbox"}, os=("macos",)),
+            *extra_methods,
+        ),
+    )
 
 
 def _rg() -> Tool:
@@ -1124,3 +1143,300 @@ def test_abandoned_drift_helpers_are_absent() -> None:
     for name in ("has_declared_manager_drift", "manager_drift_alert"):
         assert not hasattr(manager_versions, name)
         assert not hasattr(ownership, name)
+
+
+# --- 15.4-02: Linux-cask ownership evidence (D-01's second dated correction) ---
+
+
+def test_linux_cask_resolves_direct_owner_when_binary_under_brew_prefix() -> None:
+    """The primary proving case: a linuxbrew-cask-owned tool no longer
+    resolves to `unknown` just because `resolve.py`'s cask gate is macOS-only.
+    Mirrors the macOS cask path exactly -- direct confidence when the live
+    binary attributes to the brew prefix."""
+    tool = _jetbrains_toolbox(
+        Method(
+            kind="cask",
+            params={"cask": "jetbrains-toolbox-linux"},
+            os=("debian", "arch", "fedora"),
+        ),
+    )
+    result = _resolve(
+        tool,
+        inventory=_readable(
+            brew_casks={"jetbrains-toolbox-linux": "2.6.2"}, brew_prefix=_LINUXBREW_PREFIX
+        ),
+        which=str(_LINUXBREW_PREFIX / "bin" / "jetbrains-toolbox"),
+        platform=_LINUX,
+    )
+    assert result.owner == "cask"
+    assert result.package == "jetbrains-toolbox-linux"
+    assert result.confidence == "direct"
+    assert result.active_candidate == "cask"
+    # resolve.py is untouched: install behaviour on Linux stays no-cask.
+    assert [m.kind for m in resolve_methods(tool, _LINUX)] == []
+
+
+def test_linux_cask_unreadable_inventory_forces_unknown() -> None:
+    """`competing_owners` must see the Linux cask candidate too, so an
+    unreadable cask inventory forces `unknown` exactly like an unreadable
+    brew inventory already does (T-15.4-07)."""
+    tool = _jetbrains_toolbox(
+        Method(
+            kind="cask",
+            params={"cask": "jetbrains-toolbox-linux"},
+            os=("debian", "arch", "fedora"),
+        ),
+    )
+    result = _resolve(
+        tool,
+        inventory=ManagerInventory(
+            brew_formulae={},
+            brew_casks=None,
+            pnpm_globals=frozenset(),
+            uv_tools={},
+            brew_prefix=_LINUXBREW_PREFIX,
+        ),
+        which=str(_LINUXBREW_PREFIX / "bin" / "jetbrains-toolbox"),
+        platform=_LINUX,
+    )
+    assert result.owner == "unknown"
+    assert result.confidence == "none"
+    assert result.unknown_reason is not None
+    assert "cask" in result.unknown_reason.lower()
+
+
+def test_macos_cask_not_double_counted_by_ownership_only_path() -> None:
+    """On macOS the ownership-only helper contributes nothing: the method
+    sequence `_collect_candidates` sees contains each cask method exactly
+    once, so no tool can ever produce two `cask` candidates."""
+    tool = _jetbrains_toolbox(
+        Method(
+            kind="cask",
+            params={"cask": "jetbrains-toolbox-linux"},
+            os=("debian", "arch", "fedora"),
+        ),
+    )
+    assert ownership._ownership_only_methods(tool, _MAC) == ()  # pyright: ignore[reportPrivateUsage]
+    applicable = resolve_methods(tool, _MAC)
+    assert [m.kind for m in applicable].count("cask") == 1
+
+
+def test_linux_cask_no_brew_contributes_nothing() -> None:
+    """No brew present means no cask inventory could have been read, so the
+    ownership-only helper contributes nothing."""
+    tool = _jetbrains_toolbox(
+        Method(
+            kind="cask",
+            params={"cask": "jetbrains-toolbox-linux"},
+            os=("debian", "arch", "fedora"),
+        ),
+    )
+    linux_no_brew = Platform(os="fedora", arch="amd64", immutable=True, has_brew=False)
+    assert (
+        ownership._ownership_only_methods(tool, linux_no_brew) == ()  # pyright: ignore[reportPrivateUsage]
+    )
+
+
+def test_linux_cask_excluded_os_enters_neither_surface() -> None:
+    """A Linux cask method whose own `os` list excludes the running platform
+    enters NEITHER `candidates` NOR `competing_owners` (Round-2 review LOW)."""
+    tool = _jetbrains_toolbox(
+        Method(kind="cask", params={"cask": "jetbrains-toolbox-linux"}, os=("debian",)),
+    )
+    result = _resolve(
+        tool,
+        inventory=_readable(brew_casks={"jetbrains-toolbox-linux": "2.6.2"}),
+        platform=_LINUX,  # fedora, not debian
+    )
+    assert result.candidates == ()
+    assert ownership.competing_owners(tool, _LINUX) == frozenset()
+
+
+def test_linux_cask_excluded_arch_enters_neither_surface() -> None:
+    """A Linux cask method whose own `arch` list excludes the running
+    architecture contributes nothing, on the same two surfaces."""
+    tool = _jetbrains_toolbox(
+        Method(
+            kind="cask",
+            params={"cask": "jetbrains-toolbox-linux"},
+            os=("fedora",),
+            arch=("arm64",),
+        ),
+    )
+    result = _resolve(
+        tool,
+        inventory=_readable(brew_casks={"jetbrains-toolbox-linux": "2.6.2"}),
+        platform=_LINUX,  # amd64, not arm64
+    )
+    assert result.candidates == ()
+    assert ownership.competing_owners(tool, _LINUX) == frozenset()
+
+
+def test_linux_cask_unmet_min_os_version_enters_neither_surface() -> None:
+    """A Linux cask method declaring a `min_os_version` the platform does not
+    meet contributes nothing -- including a platform whose `os_version` is
+    `None`, which every Linux platform's is (populated only on Darwin)."""
+    tool = _jetbrains_toolbox(
+        Method(
+            kind="cask",
+            params={"cask": "jetbrains-toolbox-linux", "min_os_version": "26.0"},
+            os=("fedora",),
+        ),
+    )
+    assert _LINUX.os_version is None
+    result = _resolve(
+        tool,
+        inventory=_readable(brew_casks={"jetbrains-toolbox-linux": "2.6.2"}),
+        platform=_LINUX,
+    )
+    assert result.candidates == ()
+    assert ownership.competing_owners(tool, _LINUX) == frozenset()
+
+
+def test_ownership_only_methods_ignores_undeclared_kinds() -> None:
+    """A kind absent from `_OWNERSHIP_ONLY_KINDS` never reaches the
+    ownership-only path even when it targets the platform on every dimension
+    `_method_targets_platform` checks (Round-2 review MEDIUM)."""
+    tool = Tool(
+        id="hypothetical",
+        name="hypothetical",
+        category="dev",
+        cmd="hypothetical",
+        methods=(Method(kind="brew", params={"formula": "hypothetical"}, os=("fedora",)),),
+    )
+    assert (
+        ownership._method_targets_platform(tool.methods[0], _LINUX)  # pyright: ignore[reportPrivateUsage]
+        is True
+    )
+    assert ownership._ownership_only_methods(tool, _LINUX) == ()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_ownership_only_kinds_declaration_matches_helper_reach() -> None:
+    """The declaration table and the helper's actual reach are the same set:
+    a tool declaring one Linux-gated method of every kind in `resolve._RANK`
+    yields only the declared kinds through the ownership-only helper."""
+    assert set(ownership._OWNERSHIP_ONLY_KINDS) == {"cask"}  # pyright: ignore[reportPrivateUsage]
+    tool = Tool(
+        id="every-kind",
+        name="every-kind",
+        category="dev",
+        cmd="every-kind",
+        methods=tuple(
+            Method(kind=kind, os=("fedora",))
+            for kind in resolve._RANK  # pyright: ignore[reportPrivateUsage]
+        ),
+    )
+    reachable = {
+        method.kind
+        for method in ownership._ownership_only_methods(tool, _LINUX)  # pyright: ignore[reportPrivateUsage]
+    }
+    assert reachable == set(ownership._OWNERSHIP_ONLY_KINDS)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_cask_kind_absent_from_installer_kinds() -> None:
+    """`_collect_candidates`'s `installer_method` lookup must never pick up a
+    cask method: `APP_KINDS` and `DOWNLOAD_KINDS` do not contain `cask`."""
+    from installer.apps import APP_KINDS
+    from installer.download import DOWNLOAD_KINDS
+
+    assert "cask" not in APP_KINDS
+    assert "cask" not in DOWNLOAD_KINDS
+
+
+def test_ownership_only_methods_wired_into_both_candidate_and_competing_paths() -> None:
+    """The candidate path and the competing-owner guard must read the same
+    helper, or a claim and its guard could disagree."""
+    import inspect
+
+    resolve_ownership_source = inspect.getsource(ownership.resolve_ownership)
+    competing_owners_source = inspect.getsource(ownership.competing_owners)
+    assert "_ownership_only_methods" in resolve_ownership_source
+    assert "_ownership_only_methods" in competing_owners_source
+    assert "resolve_methods(tool, platform)" in resolve_ownership_source
+
+
+def test_resolve_py_cask_gate_unchanged_by_ownership_only_path() -> None:
+    """T-15.4-05: proves BEHAVIOURALLY, not by source-substring, that
+    `resolve.py::_applies`'s cask branch still refuses every Linux platform
+    and accepts only macOS with brew -- the exact verdict this plan's
+    ownership-only path exists to bypass for ATTRIBUTION, never for install
+    eligibility. A source-substring assertion was flagged over-rigid by
+    Round-1 review; this three-point truth table also catches an inverted
+    condition a substring match would happily pass."""
+    method = Method(kind="cask", params={"cask": "x"})
+    linux_with_brew = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+    macos_with_brew = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    macos_without_brew = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
+    assert resolve._applies(method, linux_with_brew) is False  # pyright: ignore[reportPrivateUsage]
+    assert resolve._applies(method, macos_with_brew) is True  # pyright: ignore[reportPrivateUsage]
+    assert resolve._applies(method, macos_without_brew) is False  # pyright: ignore[reportPrivateUsage]
+
+
+def test_method_targets_platform_agrees_with_applies_across_dimension_product() -> None:
+    """The applicability drift gate (Round-1 review MEDIUM; kept table-driven
+    per Round-2 review MEDIUM). Enumerates the product of declared os/arch/
+    min_os_version and platform os/arch/os_version over a `kind = "script"`
+    method -- the kind `_applies` accepts unconditionally once its three
+    dimension checks pass, making the two functions directly comparable --
+    and asserts `_method_targets_platform` and `resolve._applies` agree on
+    every cell. A future fourth dimension added to one function and
+    forgotten in the other fails here."""
+    platform_os_values = ("fedora", "debian", "arch", "macos")
+    platform_arch_values = ("amd64", "arm64")
+    platform_os_version_values = (None, "25.0", "26.1")
+    method_os_values = ((), ("fedora",), ("macos", "fedora"))
+    method_arch_values = ((), ("amd64",))
+    method_params_values: tuple[dict[str, object], ...] = ({}, {"min_os_version": "26.0"})
+    dimensions = (
+        platform_os_values,
+        platform_arch_values,
+        platform_os_version_values,
+        method_os_values,
+        method_arch_values,
+        method_params_values,
+    )
+    cases = [
+        (
+            Method(kind="script", params=dict(params), os=method_os, arch=method_arch),
+            Platform(
+                os=platform_os,
+                arch=platform_arch,
+                immutable=False,
+                has_brew=True,
+                os_version=platform_os_version,
+            ),
+        )
+        for platform_os, platform_arch, platform_os_version, method_os, method_arch, params in (
+            product(*dimensions)
+        )
+    ]
+    assert len(cases) == 288
+    mismatches: list[tuple[Method, Platform]] = []
+    for method, platform in cases:
+        targets = ownership._method_targets_platform(method, platform)  # pyright: ignore[reportPrivateUsage]
+        applies = resolve._applies(method, platform)  # pyright: ignore[reportPrivateUsage]
+        if targets != applies:
+            mismatches.append((method, platform))
+    assert not mismatches
+
+
+def test_real_registry_jetbrains_toolbox_resolves_linux_cask_ownership() -> None:
+    """15.4-02 task 2's end-to-end proof that the registry's Linux cask row
+    and task 1's ownership-only helper meet: loading the REAL registry and
+    resolving ownership for jetbrains-toolbox on a Linux platform, against a
+    fake cask inventory listing the Linux cask name and a live binary under
+    the fake brew prefix, resolves the cask owner -- exactly like the
+    fake-tool unit tests above, but over the actual committed registry data."""
+    tools = {tool.id: tool for tool in load_tools(_REGISTRY)}
+    toolbox = tools["jetbrains-toolbox"]
+    result = _resolve(
+        toolbox,
+        inventory=_readable(
+            brew_casks={"jetbrains-toolbox-linux": "2.6.2"}, brew_prefix=_LINUXBREW_PREFIX
+        ),
+        which=str(_LINUXBREW_PREFIX / "bin" / "jetbrains-toolbox"),
+        platform=_LINUX,
+    )
+    assert result.owner == "cask"
+    assert result.package == "jetbrains-toolbox-linux"
+    assert result.confidence == "direct"

@@ -377,6 +377,38 @@ def test_jetbrains_toolbox_installs_on_macos_and_linux() -> None:
     assert [m.kind for m in resolve_methods(toolbox, linux_amd64)] == ["tarball"]
 
 
+def test_jetbrains_toolbox_declares_two_distinct_linux_and_macos_cask_names() -> None:
+    """D-01's second dated correction: a second, Linux-gated cask row names
+    the cask Homebrew actually installs on Linux (jetbrains-toolbox-linux),
+    distinct from the macOS cask token (jetbrains-toolbox). The row is
+    ownership evidence only -- proven BEHAVIOURALLY here, not just by shape:
+    resolve_methods on Linux still returns no cask method, and on macOS
+    still returns exactly the one pre-existing cask method."""
+    toolbox = _tools_by_id()["jetbrains-toolbox"]
+    casks = [m for m in toolbox.methods if m.kind == "cask"]
+    assert len(casks) == 2, [m.params for m in casks]
+    names = {m.params.get("cask") for m in casks}
+    assert names == {"jetbrains-toolbox", "jetbrains-toolbox-linux"}
+    linux = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0")
+    assert [m for m in resolve_methods(toolbox, linux) if m.kind == "cask"] == []
+    macos_casks = [m for m in resolve_methods(toolbox, macos) if m.kind == "cask"]
+    assert len(macos_casks) == 1
+    assert macos_casks[0].params["cask"] == "jetbrains-toolbox"
+
+
+def test_jetbrains_toolbox_linux_cask_row_records_dated_verification() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    block = text.split('id = "jetbrains-toolbox"', 1)[1].split("[[tool]]", 1)[0]
+    # Not a bare "26" -- every dated comment starts with "# Verified {date}:".
+    verified = [
+        line for line in block.splitlines() if line.lstrip().startswith("#") and "Verified" in line
+    ]
+    assert verified, block
+    assert "jetbrains-toolbox-linux" in block
+    assert "OWNERSHIP EVIDENCE ONLY" in block
+
+
 def test_registry_includes_homebrew_with_os_targeted_install() -> None:
     brew = next(t for t in load_tools(REGISTRY) if t.id == "brew")
     assert {m.kind for m in brew.methods} == {"script"}

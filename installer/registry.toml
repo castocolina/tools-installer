@@ -2175,6 +2175,21 @@ arch = ["amd64"]
 url = "https://data.services.jetbrains.com/products/download?platform=linux&code=TBA"
 member = "jetbrains-toolbox"
 strip = 1
+# Verified 2026-09-16 (15.4-RESEARCH.md, independently re-confirmed live
+# against this host's own `brew list --cask` this session): on linuxbrew,
+# this tool's cask is named jetbrains-toolbox-linux, NOT jetbrains-toolbox
+# (the macOS cask token above) -- a distinct real name, not a typo, per
+# 15.4-CONTEXT.md's dated correction. This row is OWNERSHIP EVIDENCE ONLY
+# and can never install anything: installer/resolve.py's cask branch
+# hardcodes `platform.os == "macos" and platform.has_brew`, excluding every
+# cask method outside macOS regardless of its own os list -- which is
+# exactly why plan 15.4-02 task 1 reads cask methods for ownership through a
+# separate ownership-only path rather than loosening that gate here. The
+# Linux install path for this tool remains the tarball method above.
+[[tool.method]]
+kind = "cask"
+os = ["debian", "arch", "fedora"]
+cask = "jetbrains-toolbox-linux"
 
 [[tool]]
 id = "sublime"
