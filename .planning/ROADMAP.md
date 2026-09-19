@@ -552,12 +552,12 @@ Plans:
 **Goal:** [Urgent work - to be planned]
 **Requirements**: TBD
 **Depends on:** Phase 15
-**Plans:** 0 plans
+**Plans:** 2/6 plans executed
 
 Plans:
 
 - [x] 15.6-01-PLAN.md — Initial D-04 repair (superseded by review-driven plan 02 correction)
-- [ ] 15.6-02-PLAN.md — D-04 correction: precise, ordered source/template repair for inert and sourced-but-arrayless `.zshrc` files
+- [x] 15.6-02-PLAN.md — D-04 correction: precise, ordered source/template repair for inert and sourced-but-arrayless `.zshrc` files
 - [ ] 15.6-03-PLAN.md — D-02/D-03/D-04: safe, owned direct Linux terminal configuration and OMZ template synchronization
 - [ ] 15.6-04-PLAN.md — D-01/D-04: live OMZ Policy activation, truthful warning state, and composition-root wiring
 - [ ] 15.6-05-PLAN.md — D-01: direct catalog-update synchronization and nonfatal warning reporting
