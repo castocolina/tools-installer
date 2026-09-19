@@ -588,3 +588,73 @@ def test_atomic_write_replaces_a_symlinks_target_not_the_symlink_itself(
     assert zshrc.is_symlink()
     assert zshrc.resolve() == real_zshrc
     assert real_zshrc.read_text() == "plugins=(z git docker)\nsource x\n"
+
+
+def test_write_plugins_inserts_default_array_before_a_live_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sourced = 'export ZSH="$HOME/.oh-my-zsh"\nsource $ZSH/oh-my-zsh.sh\n'
+    zshrc, state = _sandbox(tmp_path, sourced)
+    assert write_plugins(zshrc, state) == ("docker",)
+    text = zshrc.read_text()
+    assert text.startswith('export ZSH="$HOME/.oh-my-zsh"\n')
+    plugins_at = text.index("plugins=(git docker)\n")
+    source_at = text.index("source $ZSH/oh-my-zsh.sh\n")
+    assert plugins_at < source_at
+    assert owned_plugins(state) == ("docker",)
+    assert "tools-installer" not in text
+
+
+def test_write_plugins_refuses_a_source_correct_multiline_array(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    src = 'export ZSH="$HOME/.oh-my-zsh"\nsource $ZSH/oh-my-zsh.sh\nplugins=(\n  git\n)\n'
+    zshrc, state = _sandbox(tmp_path, src)
+    with pytest.raises(OmzPluginsError, match="multi-line"):
+        write_plugins(zshrc, state)
+    assert zshrc.read_text() == src
+    assert plugins_owned(state) is False
+
+
+def test_write_plugins_preserves_comments_crlf_and_unrelated_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    src = (
+        "# keep this comment\r\n"
+        "source /etc/profile\r\n"
+        'export ZSH="$HOME/.oh-my-zsh"\r\n'
+        "source $ZSH/oh-my-zsh.sh\r\n"
+        "  plugins=(z git)  # mine\r\n"
+    )
+    zshrc, state = _sandbox(tmp_path, src)
+    zshrc.write_bytes(src.encode())
+    assert write_plugins(zshrc, state) == ("docker",)
+    text = zshrc.read_bytes().decode()
+    assert text.startswith("# keep this comment\r\n")
+    assert "source /etc/profile\r\n" in text
+    assert "  plugins=(z git docker)  # mine\r\n" in text
+    plugins_at = text.index("  plugins=(z git docker)  # mine\r\n")
+    source_at = text.index("source $ZSH/oh-my-zsh.sh\r\n")
+    assert plugins_at < source_at
+    assert owned_plugins(state) == ("docker",)
+
+
+def test_write_plugins_repairs_source_before_plugins_and_is_byte_stable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    src = 'export ZSH="$HOME/.oh-my-zsh"\nsource $ZSH/oh-my-zsh.sh\nplugins=(git)\n'
+    zshrc, state = _sandbox(tmp_path, src)
+    assert write_plugins(zshrc, state) == ("docker",)
+    first = zshrc.read_text()
+    assert first == (
+        'export ZSH="$HOME/.oh-my-zsh"\nplugins=(git docker)\nsource $ZSH/oh-my-zsh.sh\n'
+    )
+    assert owned_plugins(state) == ("docker",)
+    assert write_plugins(zshrc, state) == ()
+    assert zshrc.read_text() == first
+    assert ensure_zshrc_template(zshrc) is False
+    assert zshrc.read_text() == first
