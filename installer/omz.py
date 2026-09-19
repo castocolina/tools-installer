@@ -286,6 +286,28 @@ def _clear_owned(state_path: Path) -> None:
         _atomic_write(state_path, stripped)
 
 
+def ensure_zshrc_template(zshrc_path: Path) -> bool:
+    """Append the minimal oh-my-zsh source+plugins template if it is missing.
+
+    KEEP_ZSHRC=yes preserves an existing .zshrc, which can leave oh-my-zsh
+    installed but never sourced. Returns True when the file was written.
+    Does not add a second plugins= line when a single-line array already exists.
+    """
+    existing = zshrc_path.read_text() if zshrc_path.exists() else ""
+    if "oh-my-zsh.sh" in existing:
+        return False
+    updated = existing
+    if updated and not updated.endswith("\n"):
+        updated += "\n"
+    updated += 'export ZSH="$HOME/.oh-my-zsh"\n'
+    updated += "source $ZSH/oh-my-zsh.sh\n"
+    if _locate(updated.splitlines(keepends=True)) is None:
+        updated += "plugins=(git)\n"
+    zshrc_path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write(zshrc_path, updated)
+    return True
+
+
 def write_plugins(
     zshrc_path: Path, state_path: Path, plugins: tuple[str, ...] = MANAGED_PLUGINS
 ) -> tuple[str, ...]:
@@ -303,6 +325,14 @@ def write_plugins(
     out. An over-broad claim is recoverable (removing a name the array does not
     contain is a no-op); an absent one is not.
     """
+    if not zshrc_path.exists():
+        ensure_zshrc_template(zshrc_path)
+    else:
+        existing = zshrc_path.read_text()
+        if "oh-my-zsh.sh" not in existing and not any(
+            _ANY_PLUGINS_OPEN.match(line) for line in existing.split("\n")
+        ):
+            ensure_zshrc_template(zshrc_path)
     if not zshrc_path.exists():
         raise OmzPluginsError(_NO_ARRAY)
     original = zshrc_path.read_text()

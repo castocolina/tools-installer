@@ -8,6 +8,7 @@ from installer.omz import (
     OmzPluginsError,
     disable_plugins,
     enable_plugins,
+    ensure_zshrc_template,
     omz_present,
     owned_plugins,
     plugins_in,
@@ -87,19 +88,36 @@ def test_a_zshrc_with_no_plugins_line_raises_on_enable_and_no_ops_on_disable() -
     assert disable_plugins(src) == src
 
 
-def test_missing_file_raises_on_write_and_no_ops_on_remove(
+def test_missing_file_gets_the_oh_my_zsh_template_then_enables_plugins(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     missing = tmp_path / ".zshrc"
     state = tmp_path / ".myshellrc"
-    with pytest.raises(OmzPluginsError, match=r"plugins=\("):
-        write_plugins(missing, state)
-    assert not missing.exists()
-    # A refused enable must not leave a claim of ownership behind.
-    assert plugins_owned(state) is False
-    assert remove_plugins(missing, state) == ()
-    assert not missing.exists()
+    added = write_plugins(missing, state)
+    assert missing.exists()
+    text = missing.read_text()
+    assert "source $ZSH/oh-my-zsh.sh" in text
+    assert "plugins=(git docker)" in text
+    assert added == ("docker",)
+    assert remove_plugins(tmp_path / "nope", state) == ()
+
+
+def test_ensure_zshrc_template_is_idempotent_when_already_sourced(tmp_path: Path) -> None:
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text(_ZSHRC)
+    assert ensure_zshrc_template(zshrc) is False
+    assert zshrc.read_text() == _ZSHRC
+
+
+def test_ensure_zshrc_template_appends_when_zshrc_only_sources_myshellrc(tmp_path: Path) -> None:
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text('source "$HOME/.myshellrc"\n')
+    assert ensure_zshrc_template(zshrc) is True
+    text = zshrc.read_text()
+    assert 'source "$HOME/.myshellrc"' in text
+    assert "source $ZSH/oh-my-zsh.sh" in text
+    assert "plugins=(git)" in text
 
 
 def test_commented_out_plugins_line_is_never_matched() -> None:
