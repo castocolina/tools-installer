@@ -71,6 +71,7 @@ from installer.settings import (
 )
 from installer.shellrc import collect_bin_dirs, has_managed_block
 from installer.status import is_installed
+from installer.terminal_shell import sync_terminal_shells
 from installer.tweaks import BUNDLES, applicable_bundles
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import (
@@ -559,6 +560,18 @@ def _build_app(
             return ()
         return tuple(rc_paths_for_mode(mode, _SHELL))
 
+    def _sync_omz_terminals() -> str | None:
+        """Apply the shared terminal writer after a committed OMZ plugin edit."""
+        result = sync_terminal_shells(
+            home=Path.home(),
+            environ=os.environ,
+            platform=platform,
+            lookup=shutil.which,
+        )
+        if result.warnings:
+            return "Terminal shell synchronization warning: " + "; ".join(result.warnings)
+        return None
+
     policy_inputs = PolicyInputs(
         policies=[
             ban_policy(
@@ -581,7 +594,8 @@ def _build_app(
             omz_plugins_policy(
                 zshrc_path=_ZSHRC,
                 state_path=_MYSHELLRC,
-                present=omz_present(Path.home(), os.environ),
+                present=lambda: omz_present(Path.home(), os.environ),
+                terminal_sync=_sync_omz_terminals,
             ),
             *((daemon,) if daemon is not None else ()),
         ],

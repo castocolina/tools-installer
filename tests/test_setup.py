@@ -23,6 +23,7 @@ from installer.policy import Policy
 from installer.session import Summary
 from installer.settings import Settings, SettingsStore, load_settings, save_settings
 from installer.shellrc import write_myshellrc
+from installer.terminal_shell import TerminalShellResult
 from installer.tweaks import BUNDLES
 from installer.uninstall import SweepResult
 from installer.wizard_app import DoctorScreen, PolicyInputs, UninstallInputs, UninstallScreen
@@ -615,6 +616,44 @@ def test_the_policies_view_is_wired_ban_then_tweaks_then_omz(
     assert ids[-2] == "omz-plugins"
     assert all(policy_id.startswith("tweak:") for policy_id in ids[1:-2])
     assert len(ids) > 3
+
+
+def test_build_app_wires_live_omz_availability_and_one_terminal_sync_closure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    platform = Platform(os="fedora", arch="amd64", immutable=True, has_brew=False)
+    calls: list[dict[str, object]] = []
+
+    def sync(**kwargs: object) -> TerminalShellResult:
+        calls.append(kwargs)
+        return TerminalShellResult(warnings=("wezterm configuration is user-owned",))
+
+    monkeypatch.setattr(setup, "sync_terminal_shells", sync)
+
+    setup._build_app([], platform)  # pyright: ignore[reportPrivateUsage]
+
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    omz = next(policy for policy in policies.policies if policy.id == "omz-plugins")
+    assert omz.missing_requirements() == ("oh-my-zsh",)
+    (tmp_path / ".oh-my-zsh").mkdir()
+    assert omz.missing_requirements() == ()
+
+    result = omz.apply()
+
+    assert result.warning == (
+        "Terminal shell synchronization warning: wezterm configuration is user-owned"
+    )
+    assert len(calls) == 1
+    assert calls[0] == {
+        "home": tmp_path,
+        "environ": os.environ,
+        "platform": platform,
+        "lookup": setup.shutil.which,
+    }
+    assert (tmp_path / ".zshrc").exists()
 
 
 def test_daemon_policy_is_absent_on_linux(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
