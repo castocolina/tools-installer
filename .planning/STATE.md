@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: "15.5"
-current_phase_name: "Relax set_login_shell's immutable-host block from total silence to show-with-warning: _set_login_shell (installer/post_install.py:45) returns () unconditionally when Platform.immutable is True, giving zero user feedback when the action is blocked -- confirmed live on this Bazzite host (/run/ostree-booted present, Platform.immutable=True). Phase 14's D-04 decision locked a blanket block citing an unresolved-root-cause Bazzite/KDE-SDDM login bug (ublue-os/bazzite#4159, closed 'not planned', no maintainer diagnosis -- 14-RESEARCH.md's own Assumption A2 flagged the mechanism as unconfirmed). User re-decided (2026-09-15), explicitly overriding D-04's prior 'reversibility: one-way, requires re-verifying #4159 does not reproduce' caveat: on an immutable host, still show the reviewed chsh instructions (never auto-execute -- same non-interactive, handoff-only doctrine as the non-immutable path) but prepend an explicit warning naming the known Bazzite/KDE-SDDM issue and that the outcome is unconfirmed and host-dependent, so the user gets an informed choice instead of silence. Also applies the same 'never silent, always explain why' principle to any other post-install action that could hit a platform-gated no-op in the future"
+current_phase: "15.6"
+current_phase_name: "Terminal-emulator default-shell configuration (Konsole/kitty/WezTerm on immutable Linux hosts): make zsh (+ oh-my-zsh plugins, when installed) the working shell whenever the user opens a terminal, without ever touching chsh/system login shell -- chsh is confirmed absent on Bazzite (util-linux-user removed by design, ublue-os/bazzite#4159) and Bazzite maintainers explicitly recommend configuring the terminal emulator instead of the system login shell. Scoped to Linux/immutable hosts where this problem exists (macOS is unaffected -- chsh works normally there via the existing Phase 14 flow, confirmed by user). Research leads found this session: kitty supports a launcher-level override (kitty -o shell=<path>) and WezTerm supports (wezterm start --config default_prog={<path>}) without mutating kitty.conf/wezterm.lua directly; Konsole has no equivalent single flag but supports the more universal -e <command> launch pattern as a fallback. Investigate desktop-launcher (.desktop file) level integration vs per-app config mutation."
 current_plan: Not started
 status: planning
-stopped_at: Phase 15.4 complete, ready to plan Phase 15.5
-last_updated: "2026-09-19T03:06:20.506Z"
+stopped_at: Phase 15.5 complete, ready to plan Phase 15.6
+last_updated: "2026-09-19T03:22:27.059Z"
 last_activity: 2026-09-19
-last_activity_desc: Phase 15.4 complete, transitioned to Phase 15.5
-state_head: 48a0acc6c68bdd158758a341cc85d3e694fab505
+last_activity_desc: Phase 15.5 complete, transitioned to Phase 15.6
+state_head: 5508b45be9d3fef93aea8e768ceac93dc57cc205
 progress:
   total_phases: 27
-  completed_phases: 16
-  total_plans: 70
-  completed_plans: 70
+  completed_phases: 17
+  total_plans: 71
+  completed_plans: 71
 ---
 
 Total Phases: 21
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 15.5 of 89 (Relax set_login_shell's immutable-host block from total silence to show-with-warning: _set_login_shell (installer/post_install.py:45) returns () unconditionally when Platform.immutable is True, giving zero user feedback when the action is blocked -- confirmed live on this Bazzite host (/run/ostree-booted present, Platform.immutable=True). Phase 14's D-04 decision locked a blanket block citing an unresolved-root-cause Bazzite/KDE-SDDM login bug (ublue-os/bazzite#4159, closed 'not planned', no maintainer diagnosis -- 14-RESEARCH.md's own Assumption A2 flagged the mechanism as unconfirmed). User re-decided (2026-09-15), explicitly overriding D-04's prior 'reversibility: one-way, requires re-verifying #4159 does not reproduce' caveat: on an immutable host, still show the reviewed chsh instructions (never auto-execute -- same non-interactive, handoff-only doctrine as the non-immutable path) but prepend an explicit warning naming the known Bazzite/KDE-SDDM issue and that the outcome is unconfirmed and host-dependent, so the user gets an informed choice instead of silence. Also applies the same 'never silent, always explain why' principle to any other post-install action that could hit a platform-gated no-op in the future)
+Phase: 15.6 of 89 (Terminal-emulator default-shell configuration (Konsole/kitty/WezTerm on immutable Linux hosts): make zsh (+ oh-my-zsh plugins, when installed) the working shell whenever the user opens a terminal, without ever touching chsh/system login shell -- chsh is confirmed absent on Bazzite (util-linux-user removed by design, ublue-os/bazzite#4159) and Bazzite maintainers explicitly recommend configuring the terminal emulator instead of the system login shell. Scoped to Linux/immutable hosts where this problem exists (macOS is unaffected -- chsh works normally there via the existing Phase 14 flow, confirmed by user). Research leads found this session: kitty supports a launcher-level override (kitty -o shell=<path>) and WezTerm supports (wezterm start --config default_prog={<path>}) without mutating kitty.conf/wezterm.lua directly; Konsole has no equivalent single flag but supports the more universal -e <command> launch pattern as a fallback. Investigate desktop-launcher (.desktop file) level integration vs per-app config mutation.)
 Current Plan: Not started
 Total Plans in Phase: 5
 Status: Ready to plan
-Last activity: 2026-09-19 — Phase 15.4 complete, transitioned to Phase 15.5
+Last activity: 2026-09-19 — Phase 15.5 complete, transitioned to Phase 15.6
 
 Progress: [██████████] 100%
 
@@ -42,7 +42,7 @@ Progress: [██████████] 100%
 
 **Velocity:**
 
-- Total plans completed: 58
+- Total plans completed: 59
 - Average duration: - min
 - Total execution time: 0 hours
 
@@ -69,6 +69,7 @@ Progress: [██████████] 100%
 | 15.2 | 2 | - | - |
 | 15.3 | 1 | - | - |
 | 15.4 | 5 | - | - |
+| 15.5 | 1 | - | - |
 
 **Recent Trend:**
 
@@ -201,5 +202,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-17T07:18:10.000Z
-Stopped at: Phase 15.4 complete, ready to plan Phase 15.5
+Stopped at: Phase 15.5 complete, ready to plan Phase 15.6
 Resume file: None
