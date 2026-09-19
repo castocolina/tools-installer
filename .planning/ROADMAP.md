@@ -527,10 +527,10 @@ Plans:
 
 ### Phase 15.8: Fix real (not just cosmetic) PATH duplication from managed-block sourcing: installer/shellrc.py's managed_block() (line 101-111) emits a plain, unconditional 'export PATH="{dir}:$PATH"' per managed bin dir into .bashrc/.zshrc/.myshellrc. The rc-file block itself is idempotent (apply_block never writes it twice), but the block's RUNTIME EFFECT is not: every nested/child shell that sources it again (very common -- tmux/wezterm panes, IDE-integrated terminals, subshells) re-prepends the same directory onto an already-inherited PATH that has it, accumulating duplicates with every nesting level. Confirmed live this session: 5 copies of ~/.local/bin, 4 of fnm's dir, 3+ of several others, in a single real shell session -- this is why Doctor's PATH audit keeps reporting the same 'duplicated on PATH' findings even after applying the fix and opening a genuinely new terminal, not a UI staleness issue (that is Phase 15.1's separate finding). Fix by making managed_block() emit a self-deduping guarded form instead of a plain export -- this codebase already recognizes and special-cases exactly this shape from pnpm's own installer output (installer/rcclean.py:61-70's find_duplicate_path_lines explicitly skips pnpm's case-guarded '*) export PATH="$PNPM_HOME:$PATH" ;;' block as 'self-deduping ... nothing safe or necessary to strip' -- reuse that same case-guarded idiom for every managed dir instead of a plain export). User explicitly asked for a reusable function/mechanism that checks-before-adding, not a one-off patch to this single block -- audit installer/shellrc.py's other PATH-writing call site (pnpm_home block, line ~210) and any other PATH-modifying block in the codebase for the same non-idempotent-at-runtime defect. (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** On Linux, every available supported terminal emulator opens the discovered zsh login shell through its own user configuration, with Oh-My-Zsh sourced and plugins loadable when installed, while terminal configuration stays idempotent, safely owned, and independent of the system login shell.
+**Requirements**: D-01, D-02, D-03, D-04 (15.6-CONTEXT.md — inserted, roadmap-scoped phase, not a REQUIREMENTS.md id)
 **Depends on:** Phase 15
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
 
@@ -556,7 +556,9 @@ Plans:
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 15.6 to break down)
+- [x] 15.6-01-PLAN.md — D-04: ensure an inert KEEP_ZSHRC-preserved `.zshrc` sources Oh-My-Zsh and supplies an editable plugins array
+- [ ] 15.6-02-PLAN.md — D-02/D-03 tracer and expansion: direct, owned Linux kitty, WezTerm, and detected Konsole zsh configuration
+- [ ] 15.6-03-PLAN.md — D-01: reapply the shared terminal configuration after installs, updates, and Oh-My-Zsh policy activation
 
 ### Phase 15.5: Relax set_login_shell's immutable-host block from total silence to show-with-warning: _set_login_shell (installer/post_install.py:45) returns () unconditionally when Platform.immutable is True, giving zero user feedback when the action is blocked -- confirmed live on this Bazzite host (/run/ostree-booted present, Platform.immutable=True). Phase 14's D-04 decision locked a blanket block citing an unresolved-root-cause Bazzite/KDE-SDDM login bug (ublue-os/bazzite#4159, closed 'not planned', no maintainer diagnosis -- 14-RESEARCH.md's own Assumption A2 flagged the mechanism as unconfirmed). User re-decided (2026-09-15), explicitly overriding D-04's prior 'reversibility: one-way, requires re-verifying #4159 does not reproduce' caveat: on an immutable host, still show the reviewed chsh instructions (never auto-execute -- same non-interactive, handoff-only doctrine as the non-immutable path) but prepend an explicit warning naming the known Bazzite/KDE-SDDM issue and that the outcome is unconfirmed and host-dependent, so the user gets an informed choice instead of silence. Also applies the same 'never silent, always explain why' principle to any other post-install action that could hit a platform-gated no-op in the future (INSERTED)
 
