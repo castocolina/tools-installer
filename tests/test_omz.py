@@ -120,6 +120,50 @@ def test_ensure_zshrc_template_appends_when_zshrc_only_sources_myshellrc(tmp_pat
     assert "plugins=(git)" in text
 
 
+def test_ensure_zshrc_template_orders_export_plugins_then_source(tmp_path: Path) -> None:
+    zshrc = tmp_path / ".zshrc"
+    original = 'source "$HOME/.myshellrc"\n'
+    zshrc.write_text(original)
+    assert ensure_zshrc_template(zshrc) is True
+    text = zshrc.read_text()
+    assert text.startswith(original)
+    assert "tools-installer" not in text
+    export_at = text.index('export ZSH="$HOME/.oh-my-zsh"\n')
+    plugins_at = text.index("plugins=(git)\n")
+    source_at = text.index("source $ZSH/oh-my-zsh.sh\n")
+    assert export_at < plugins_at < source_at
+
+
+def test_ensure_zshrc_template_is_byte_stable_and_preserves_a_symlink(tmp_path: Path) -> None:
+    repo_dir = tmp_path / "dotfiles"
+    repo_dir.mkdir()
+    real_zshrc = repo_dir / "zshrc"
+    real_zshrc.write_text('source "$HOME/.myshellrc"\n')
+    zshrc = tmp_path / ".zshrc"
+    zshrc.symlink_to(real_zshrc)
+    assert ensure_zshrc_template(zshrc) is True
+    first = real_zshrc.read_text()
+    assert zshrc.is_symlink()
+    assert zshrc.resolve() == real_zshrc
+    assert ensure_zshrc_template(zshrc) is False
+    assert real_zshrc.read_text() == first
+    assert zshrc.is_symlink()
+    assert zshrc.resolve() == real_zshrc
+
+
+def test_ensure_zshrc_template_ignores_a_commented_framework_filename(tmp_path: Path) -> None:
+    zshrc = tmp_path / ".zshrc"
+    original = "# see oh-my-zsh.sh for the framework\nsource \"$HOME/.myshellrc\"\n"
+    zshrc.write_text(original)
+    assert ensure_zshrc_template(zshrc) is True
+    text = zshrc.read_text()
+    assert text.startswith(original)
+    export_at = text.index('export ZSH="$HOME/.oh-my-zsh"\n')
+    plugins_at = text.index("plugins=(git)\n")
+    source_at = text.index("source $ZSH/oh-my-zsh.sh\n")
+    assert export_at < plugins_at < source_at
+
+
 def test_commented_out_plugins_line_is_never_matched() -> None:
     src = "# plugins=(git)\nsource $ZSH/oh-my-zsh.sh\n"
     with pytest.raises(OmzPluginsError, match=r"plugins=\("):
