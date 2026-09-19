@@ -136,6 +136,11 @@ def _sourced_oh_my_zsh(lines: list[str]) -> int | None:
     return found
 
 
+def _read_rc(path: Path) -> str:
+    """Read an rc file without translating CRLF into Unix newlines."""
+    return path.read_bytes().decode("utf-8")
+
+
 def _bare(token: str) -> str:
     """A plugin name with zsh's optional surrounding quotes stripped.
 
@@ -299,26 +304,62 @@ def _clear_owned(state_path: Path) -> None:
         _atomic_write(state_path, stripped)
 
 
+def _crlf_line(line: str, *, like: str) -> str:
+    if like.endswith("\r") and not line.endswith("\r"):
+        return f"{line}\r"
+    return line
+
+
+def _repair_sourced_template(lines: list[str], source_idx: int) -> list[str] | None:
+    """Make the honored plugins assignment evaluate before the source command.
+
+    A supported single-line array after the source command is moved to that
+    location. An active source with no plugins assignment at all receives the
+    default `plugins=(git)` there. A governing multi-line array is left
+    untouched so `_locate`'s fail-safe still refuses it.
+    """
+    located = _locate(lines)
+    if located is not None:
+        plugins_idx, _ = located
+        if plugins_idx < source_idx:
+            return None
+        plugin_line = lines.pop(plugins_idx)
+        lines.insert(source_idx, plugin_line)
+        return lines
+    if any(_ANY_PLUGINS_OPEN.match(line) for line in lines):
+        return None
+    lines.insert(source_idx, _crlf_line("plugins=(git)", like=lines[source_idx]))
+    return lines
+
+
 def ensure_zshrc_template(zshrc_path: Path) -> bool:
-    """Append the minimal oh-my-zsh source+plugins template if it is missing.
+    """Make .zshrc source Oh-My-Zsh with an editable plugins assignment.
 
     KEEP_ZSHRC=yes preserves an existing .zshrc, which can leave oh-my-zsh
     installed but never sourced. Returns True when the file was written.
-    An uncommented source command is the only skip signal; a comment that
-    merely names the framework file does not suppress repair. The appended
-    template is evaluated in order: export ZSH, plugins=(git), then source.
-    Does not add a second plugins= line when a single-line array already exists.
+    An uncommented source command is the only source-detection signal; a
+    comment that merely names the framework file does not suppress repair.
+    When no source exists, the appended template is evaluated in order:
+    export ZSH, plugins=(git), then source. When a source exists, a missing
+    or post-source supported array is repaired at that source location.
+    Source-correct files and governing multi-line arrays are left unchanged.
     """
-    existing = zshrc_path.read_text() if zshrc_path.exists() else ""
-    if _sourced_oh_my_zsh(existing.split("\n")) is not None:
-        return False
-    updated = existing
-    if updated and not updated.endswith("\n"):
-        updated += "\n"
-    updated += 'export ZSH="$HOME/.oh-my-zsh"\n'
-    if _locate(updated.split("\n")) is None:
-        updated += "plugins=(git)\n"
-    updated += "source $ZSH/oh-my-zsh.sh\n"
+    existing = _read_rc(zshrc_path) if zshrc_path.exists() else ""
+    lines = existing.split("\n")
+    source_idx = _sourced_oh_my_zsh(lines)
+    if source_idx is not None:
+        repaired = _repair_sourced_template(lines, source_idx)
+        if repaired is None:
+            return False
+        updated = "\n".join(repaired)
+    else:
+        updated = existing
+        if updated and not updated.endswith("\n"):
+            updated += "\n"
+        updated += 'export ZSH="$HOME/.oh-my-zsh"\n'
+        if _locate(updated.split("\n")) is None:
+            updated += "plugins=(git)\n"
+        updated += "source $ZSH/oh-my-zsh.sh\n"
     zshrc_path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write(zshrc_path, updated)
     return True
@@ -344,14 +385,14 @@ def write_plugins(
     if not zshrc_path.exists():
         ensure_zshrc_template(zshrc_path)
     else:
-        existing = zshrc_path.read_text()
-        if _sourced_oh_my_zsh(existing.split("\n")) is None and not any(
-            _ANY_PLUGINS_OPEN.match(line) for line in existing.split("\n")
+        lines = _read_rc(zshrc_path).split("\n")
+        if _sourced_oh_my_zsh(lines) is not None or not any(
+            _ANY_PLUGINS_OPEN.match(line) for line in lines
         ):
             ensure_zshrc_template(zshrc_path)
     if not zshrc_path.exists():
         raise OmzPluginsError(_NO_ARRAY)
-    original = zshrc_path.read_text()
+    original = _read_rc(zshrc_path)
     current = plugins_in(original)
     added = tuple(name for name in plugins if name not in current)
     updated = enable_plugins(original, plugins)
