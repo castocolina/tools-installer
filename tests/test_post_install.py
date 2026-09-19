@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from installer.model import (
     POST_INSTALL_ACTIONS,
     POSTINSTALL_HOOK_NAMES,
@@ -50,6 +52,13 @@ def _login_shell_tool(
     )
 
 
+def _stub_chsh(monkeypatch: pytest.MonkeyPatch, *, present: bool) -> None:
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/chsh" if present and cmd == "chsh" else None
+
+    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
+
+
 def _record() -> tuple[list[tuple[str, str]], ConfirmSensitiveAction]:
     asked: list[tuple[str, str]] = []
 
@@ -65,7 +74,10 @@ def test_real_oh_my_zsh_entry_declares_set_login_shell() -> None:
     assert "set_login_shell" in tools["oh-my-zsh"].post_install
 
 
-def test_run_post_install_returns_chsh_instructions_when_confirmed() -> None:
+def test_run_post_install_returns_chsh_instructions_when_confirmed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_chsh(monkeypatch, present=True)
     asked: list[tuple[str, str]] = []
 
     def confirm(tool_id: str, action: str) -> bool:
@@ -89,23 +101,70 @@ def test_run_post_install_skips_when_no_actions_declared() -> None:
     assert asked == []
 
 
-def test_immutable_host_is_never_asked_and_produces_no_login_shell_instructions() -> None:
+def test_missing_chsh_explains_without_asking_or_offering_a_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_chsh(monkeypatch, present=False)
     asked, confirm = _record()
-    assert run_post_install(_login_shell_tool(), _immutable(), confirm) == ()
+    lines = run_post_install(_login_shell_tool(), _immutable(), confirm)
+    assert lines
+    assert not any("chsh -s" in line for line in lines)
+    assert any("removed chsh" in line for line in lines)
+    assert any("terminal emulator" in line for line in lines)
     assert asked == []
 
 
-def test_immutable_host_cannot_bypass_login_shell_guard_via_default_enabled() -> None:
+def test_missing_chsh_explains_on_mutable_hosts_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_chsh(monkeypatch, present=False)
     asked, confirm = _record()
-    assert run_post_install(_login_shell_tool(default_enabled=True), _immutable(), confirm) == ()
+    lines = run_post_install(_login_shell_tool(), _mutable(), confirm)
+    assert lines
+    assert asked == []
+    assert not any("chsh -s" in line for line in lines)
+
+
+def test_missing_chsh_explains_without_a_confirm_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_chsh(monkeypatch, present=False)
+    lines = run_post_install(_login_shell_tool(), _immutable(), None)
+    assert lines
+    assert not any("chsh -s" in line for line in lines)
+
+
+def test_immutable_host_with_chsh_still_uses_the_confirm_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_chsh(monkeypatch, present=True)
+    asked, confirm = _record()
+    lines = run_post_install(_login_shell_tool(), _immutable(), confirm)
+    assert any("chsh -s" in line for line in lines)
+    assert asked == [("oh-my-zsh", "set_login_shell")]
+
+
+def test_missing_chsh_cannot_be_silenced_via_default_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_chsh(monkeypatch, present=False)
+    asked, confirm = _record()
+    lines = run_post_install(_login_shell_tool(default_enabled=True), _immutable(), confirm)
+    assert lines
     assert asked == []
 
 
-def test_login_shell_skips_when_confirm_callback_is_none() -> None:
+def test_login_shell_skips_when_confirm_callback_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_chsh(monkeypatch, present=True)
     assert run_post_install(_login_shell_tool(), _mutable(), None) == ()
 
 
-def test_login_shell_skips_when_confirm_returns_false() -> None:
+def test_login_shell_skips_when_confirm_returns_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_chsh(monkeypatch, present=True)
     asked: list[tuple[str, str]] = []
 
     def refuse(tool_id: str, action: str) -> bool:

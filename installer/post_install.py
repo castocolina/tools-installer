@@ -21,6 +21,7 @@ single-direction trigger: a re-run cannot re-propose a system mutation the
 user already declined. It is not an oversight to be widened.
 """
 
+import shutil
 from collections.abc import Callable
 
 from installer.model import Tool
@@ -36,14 +37,23 @@ _SET_LOGIN_SHELL_INSTRUCTIONS: tuple[str, ...] = (
     "Then log out and back in for the change to take effect.",
 )
 
+_CHSH_ABSENT_EXPLANATION: tuple[str, ...] = (
+    "This system removed chsh (the command that would change your login shell) "
+    "to avoid breaking graphical login after an ostree rebase.",
+    "The supported path is to set zsh in your terminal emulator "
+    "(Konsole, kitty, or WezTerm), not as the system login shell.",
+    "A later installer step will apply that terminal-emulator configuration automatically.",
+)
+
 
 def _set_login_shell(
     tool: Tool,
     platform: Platform,
     confirm: ConfirmSensitiveAction | None,
 ) -> tuple[str, ...]:
-    if platform.immutable:
-        return ()
+    del platform
+    if shutil.which("chsh") is None:
+        return _CHSH_ABSENT_EXPLANATION
     if confirm is None or not confirm(tool.id, "set_login_shell"):
         return ()
     return _SET_LOGIN_SHELL_INSTRUCTIONS

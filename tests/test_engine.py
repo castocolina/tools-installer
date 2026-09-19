@@ -570,6 +570,10 @@ def test_failed_install_never_dispatches_postinstall(monkeypatch: pytest.MonkeyP
 def test_login_shell_action_dispatches_reviewed_instructions_after_oh_my_zsh_install(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/chsh" if cmd == "chsh" else None
+
+    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
     _not_installed(monkeypatch)
     omz = next(t for t in load_tools(Path("installer/registry.toml")) if t.id == "oh-my-zsh")
     asked: list[tuple[str, str]] = []
@@ -669,6 +673,10 @@ def test_manual_required_login_shell_never_invokes_confirm(
 def test_raising_confirm_degrades_to_named_warning_not_a_crash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/chsh" if cmd == "chsh" else None
+
+    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
     _not_installed(monkeypatch)
 
     def boom(tool_id: str, action: str) -> bool:

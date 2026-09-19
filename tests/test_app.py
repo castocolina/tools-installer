@@ -2024,6 +2024,10 @@ def _not_present(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_run_wizard_prints_login_shell_instructions_when_sensitive_confirmed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/chsh" if cmd == "chsh" else None
+
+    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
     _not_present(monkeypatch)
     prompter = FakePrompter(categories=[], tools=[], confirm=True)
     console, buf = _console()
@@ -2056,6 +2060,10 @@ def test_run_wizard_prints_login_shell_instructions_when_sensitive_confirmed(
 def test_run_wizard_skips_login_shell_instructions_when_sensitive_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/chsh" if cmd == "chsh" else None
+
+    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
     _not_present(monkeypatch)
     prompter = FakePrompter(categories=[], tools=[], confirm=True, sensitive_confirm=False)
     console, buf = _console()
@@ -2077,6 +2085,10 @@ def test_run_wizard_skips_login_shell_instructions_when_sensitive_refused(
 def test_run_wizard_sensitive_unattended_never_asks_and_prints_no_instructions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/chsh" if cmd == "chsh" else None
+
+    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
     _not_present(monkeypatch)
     prompter = FakePrompter(categories=[], tools=[], confirm=True)
     console, buf = _console()
