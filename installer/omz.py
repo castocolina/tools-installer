@@ -80,6 +80,10 @@ _PLUGINS_LINE = re.compile(
 # cannot edit but zsh still honors.
 _ANY_PLUGINS_OPEN = re.compile(r"^[ \t]*plugins=\(")
 
+# An uncommented `source` / `.` command whose target is oh-my-zsh.sh. A comment
+# or other mention of the filename is not an executable source statement.
+_OH_MY_ZSH_SOURCE = re.compile(r"^[ \t]*(?:source|\.)[ \t]+[^\n#]*oh-my-zsh\.sh")
+
 # The ownership record. It lives in ~/.myshellrc — a file this installer
 # created — because .zshrc must never carry a tools-installer marker. The body
 # is comments only, so the block is inert wherever the rc file is sourced.
@@ -121,6 +125,15 @@ def _refusal(content: str) -> str:
     if any(_ANY_PLUGINS_OPEN.match(line) for line in content.split("\n")):
         return _SHADOWED
     return _NO_ARRAY
+
+
+def _sourced_oh_my_zsh(lines: list[str]) -> int | None:
+    """Index of the last uncommented Oh-My-Zsh source command, if any."""
+    found: int | None = None
+    for i, line in enumerate(lines):
+        if _OH_MY_ZSH_SOURCE.match(line):
+            found = i
+    return found
 
 
 def _bare(token: str) -> str:
@@ -291,18 +304,21 @@ def ensure_zshrc_template(zshrc_path: Path) -> bool:
 
     KEEP_ZSHRC=yes preserves an existing .zshrc, which can leave oh-my-zsh
     installed but never sourced. Returns True when the file was written.
+    An uncommented source command is the only skip signal; a comment that
+    merely names the framework file does not suppress repair. The appended
+    template is evaluated in order: export ZSH, plugins=(git), then source.
     Does not add a second plugins= line when a single-line array already exists.
     """
     existing = zshrc_path.read_text() if zshrc_path.exists() else ""
-    if "oh-my-zsh.sh" in existing:
+    if _sourced_oh_my_zsh(existing.split("\n")) is not None:
         return False
     updated = existing
     if updated and not updated.endswith("\n"):
         updated += "\n"
     updated += 'export ZSH="$HOME/.oh-my-zsh"\n'
-    updated += "source $ZSH/oh-my-zsh.sh\n"
-    if _locate(updated.splitlines(keepends=True)) is None:
+    if _locate(updated.split("\n")) is None:
         updated += "plugins=(git)\n"
+    updated += "source $ZSH/oh-my-zsh.sh\n"
     zshrc_path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write(zshrc_path, updated)
     return True
@@ -329,7 +345,7 @@ def write_plugins(
         ensure_zshrc_template(zshrc_path)
     else:
         existing = zshrc_path.read_text()
-        if "oh-my-zsh.sh" not in existing and not any(
+        if _sourced_oh_my_zsh(existing.split("\n")) is None and not any(
             _ANY_PLUGINS_OPEN.match(line) for line in existing.split("\n")
         ):
             ensure_zshrc_template(zshrc_path)

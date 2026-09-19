@@ -153,7 +153,7 @@ def test_ensure_zshrc_template_is_byte_stable_and_preserves_a_symlink(tmp_path: 
 
 def test_ensure_zshrc_template_ignores_a_commented_framework_filename(tmp_path: Path) -> None:
     zshrc = tmp_path / ".zshrc"
-    original = "# see oh-my-zsh.sh for the framework\nsource \"$HOME/.myshellrc\"\n"
+    original = '# see oh-my-zsh.sh for the framework\nsource "$HOME/.myshellrc"\n'
     zshrc.write_text(original)
     assert ensure_zshrc_template(zshrc) is True
     text = zshrc.read_text()

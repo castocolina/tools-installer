@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pytest
 
-from installer.omz import OmzPluginsError
 from installer.policy import Policy, PolicyResult, omz_plugins_policy, omz_removal_detail
 
 _ZSHRC = (
@@ -69,20 +68,21 @@ def test_apply_and_remove_return_layered_results(
     assert "nothing to remove" in already_off.layers[0].detail
 
 
-def test_apply_on_a_zshrc_without_an_array_raises_os_error(
+def test_apply_on_an_inert_zshrc_repairs_the_template_then_enables_plugins(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     zshrc = tmp_path / ".zshrc"
     zshrc.write_text('ZSH_THEME="robbyrussell"\n')
     policy = omz_plugins_policy(zshrc_path=zshrc, state_path=tmp_path / ".myshellrc", present=True)
-    try:
-        policy.apply()
-    except OSError as exc:
-        assert isinstance(exc, OSError)
-        assert isinstance(exc, OmzPluginsError)
-    else:
-        raise AssertionError("apply() must raise OSError when there is no array")
+    result = policy.apply()
+    text = zshrc.read_text()
+    assert 'ZSH_THEME="robbyrussell"' in text
+    export_at = text.index('export ZSH="$HOME/.oh-my-zsh"\n')
+    plugins_at = text.index("plugins=(git docker)\n")
+    source_at = text.index("source $ZSH/oh-my-zsh.sh\n")
+    assert export_at < plugins_at < source_at
+    assert "docker" in result.layers[0].detail
 
 
 def test_removal_detail_names_the_plugins_and_the_file(
