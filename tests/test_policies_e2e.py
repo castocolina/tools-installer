@@ -4,6 +4,7 @@ enable and vanish on disable while the real $HOME is never touched. Saves SVG
 screenshots for agent inspection."""
 
 import plistlib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -255,12 +256,23 @@ async def test_policies_screen_toggles_omz_plugins_live(
         assert zshrc.read_text() == _ZSHRC_OMZ
 
 
-def _omz_app(home: Path, *, present: bool, zshrc_text: str) -> tuple[UnifiedApp, Path]:
+def _omz_app(
+    home: Path,
+    *,
+    present: bool | Callable[[], bool],
+    zshrc_text: str,
+    terminal_sync: Callable[[], str | None] | None = None,
+) -> tuple[UnifiedApp, Path]:
     zshrc = home / ".zshrc"
     zshrc.write_text(zshrc_text)
     bin_dir = home / ".local" / "bin"
     bin_dir.mkdir(parents=True)
-    policy = omz_plugins_policy(zshrc_path=zshrc, state_path=home / ".myshellrc", present=present)
+    policy = omz_plugins_policy(
+        zshrc_path=zshrc,
+        state_path=home / ".myshellrc",
+        present=present,
+        terminal_sync=terminal_sync,
+    )
     app = UnifiedApp(
         [_tool()],
         {"rg": True},
@@ -279,6 +291,96 @@ def _omz_app(home: Path, *, present: bool, zshrc_text: str) -> tuple[UnifiedApp,
         initial_view="policies",
     )
     return app, zshrc
+
+
+async def test_policies_screen_keeps_omz_on_when_terminal_sync_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    def sync() -> str | None:
+        raise OSError("kitty configuration is user-owned")
+
+    app, zshrc = _omz_app(
+        tmp_path,
+        present=True,
+        zshrc_text=_ZSHRC_OMZ,
+        terminal_sync=sync,
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, PoliciesScreen)
+        await pilot.press("space")
+        await pilot.pause()
+        assert app.screen.active_state["omz-plugins"] is True
+        assert "Terminal shell synchronization failed: kitty configuration is user-owned" in (
+            app.screen.status.text
+        )
+        assert "plugins=(z sudo git docker)" in zshrc.read_text()
+
+
+async def test_policies_screen_rechecks_omz_requirement_before_toggle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    present = False
+    app, zshrc = _omz_app(tmp_path, present=lambda: present, zshrc_text=_ZSHRC_OMZ)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, PoliciesScreen)
+        table = app.screen.query_one(DataTable[Any])
+        assert table.get_cell("omz-plugins", "requires").plain == "missing: oh-my-zsh"
+        present = True
+        await pilot.press("space")
+        await pilot.pause()
+        assert app.screen.active_state["omz-plugins"] is True
+        assert "plugins=(z sudo git docker)" in zshrc.read_text()
+
+
+async def test_policies_screen_never_syncs_terminals_for_ban_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sync_calls: list[str] = []
+    policy = ban_policy(
+        shim_dir=tmp_path / ".local" / "bin",
+        apply_rc_paths=[tmp_path / ".myshellrc"],
+        remove_rc_paths=[tmp_path / ".myshellrc"],
+        path_value="",
+        which=lambda _name: None,
+    )
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text(_ZSHRC_OMZ)
+    omz = omz_plugins_policy(
+        zshrc_path=zshrc,
+        state_path=tmp_path / ".myshellrc",
+        present=True,
+        terminal_sync=lambda: sync_calls.append("called") or None,
+    )
+    app = UnifiedApp(
+        [_tool()],
+        {"rg": True},
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: (guard_status(tmp_path / ".local" / "bin"), None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=UninstallInputs(
+            rows=list,
+            ban_names=list,
+            has_path_block=lambda: False,
+            remove=lambda _d: SweepResult(),
+        ),
+        policies=PolicyInputs(policies=[policy, omz]),
+        initial_view="policies",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        assert isinstance(app.screen, PoliciesScreen)
+        assert app.screen.active_state["ban"] is True
+        assert sync_calls == []
 
 
 async def test_policies_screen_refuses_omz_toggle_without_oh_my_zsh(

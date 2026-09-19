@@ -1358,10 +1358,11 @@ class PoliciesScreen(AppScreen):
         return Text(label, style="green" if active else "dim")
 
     def _requires_cell(self, policy: Policy) -> Text:
-        if policy.missing_requires and policy.hard_requires:
-            return Text("missing: " + ", ".join(policy.missing_requires), style="bold yellow")
-        if policy.missing_requires:
-            return Text("recommended: " + ", ".join(policy.missing_requires), style="yellow")
+        missing_requires = policy.missing_requirements()
+        if missing_requires and policy.hard_requires:
+            return Text("missing: " + ", ".join(missing_requires), style="bold yellow")
+        if missing_requires:
+            return Text("recommended: " + ", ".join(missing_requires), style="yellow")
         if policy.requires:
             return Text(", ".join(policy.requires), style="dim")
         return Text("none", style="dim")
@@ -1372,6 +1373,7 @@ class PoliciesScreen(AppScreen):
         return next((policy for policy in self._policies if policy.id == policy_id), None)
 
     def _policy_detail(self, policy: Policy) -> str:
+        missing_requires = policy.missing_requirements()
         details = {
             "ban": (
                 "Blocks bare pip and pip3, redirects npx to pnpm dlx, and routes"
@@ -1454,15 +1456,15 @@ class PoliciesScreen(AppScreen):
             ),
         }
         lines = [f"{policy.label} — {policy.description}"]
-        if policy.missing_requires and policy.hard_requires:
+        if missing_requires and policy.hard_requires:
             lines.append(
                 "Missing required tool(s): "
-                f"{', '.join(policy.missing_requires)}. Install from Catalog before enabling."
+                f"{', '.join(missing_requires)}. Install from Catalog before enabling."
             )
-        elif policy.missing_requires:
+        elif missing_requires:
             lines.append(
                 "Recommended tool(s): "
-                f"{', '.join(policy.missing_requires)}. Not required — apply still runs and "
+                f"{', '.join(missing_requires)}. Not required — apply still runs and "
                 "falls back automatically."
             )
         elif policy.requires:
@@ -1569,11 +1571,15 @@ class PoliciesScreen(AppScreen):
             self.status.set(_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE, "warn")
             return
         active = self.active_state[policy.id]
-        if not active and policy.missing_requires and policy.hard_requires:
+        missing_requires = policy.missing_requirements()
+        if not active and missing_requires and policy.hard_requires:
             self.status.set(
                 "Install required tool(s) first: "
-                f"{', '.join(policy.missing_requires)}. Open Catalog, install them, then retry.",
+                f"{', '.join(missing_requires)}. Open Catalog, install them, then retry.",
                 "warn",
+            )
+            self.query_one(DataTable[Any]).update_cell(
+                policy.id, "requires", self._requires_cell(policy)
             )
             self._set_detail(policy)
             return
@@ -1587,9 +1593,12 @@ class PoliciesScreen(AppScreen):
         new_active = not active
         self.active_state[policy.id] = new_active
         self.query_one(DataTable[Any]).update_cell(policy.id, "state", self._state_cell(new_active))
+        self.query_one(DataTable[Any]).update_cell(
+            policy.id, "requires", self._requires_cell(policy)
+        )
         self._set_detail(policy)
         verb = "enabled" if new_active else "disabled"
-        self.status.set(self._summary(policy, verb, result), "ok")
+        self.status.set(self._summary(policy, verb, result), "warn" if result.warning else "ok")
 
     def _summary(self, policy: Policy, verb: str, result: PolicyResult) -> str:
         # One line per outcome: a single joined line overflows the terminal width

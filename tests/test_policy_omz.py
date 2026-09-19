@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from installer.omz import plugins_owned
 from installer.policy import Policy, PolicyResult, omz_plugins_policy, omz_removal_detail
 
 _ZSHRC = (
@@ -66,6 +67,73 @@ def test_apply_and_remove_return_layered_results(
     assert "hash -r" not in removed.reload_hint
     already_off = policy.remove()
     assert "nothing to remove" in already_off.layers[0].detail
+
+
+def test_policy_runs_terminal_sync_after_committing_plugins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc = _zshrc(tmp_path)
+    calls: list[str] = []
+
+    def sync() -> str | None:
+        assert "plugins=(z sudo git docker)" in zshrc.read_text()
+        assert plugins_owned(tmp_path / ".myshellrc") is True
+        calls.append("synced")
+        return None
+
+    policy = omz_plugins_policy(
+        zshrc_path=zshrc,
+        state_path=tmp_path / ".myshellrc",
+        present=True,
+        terminal_sync=sync,
+    )
+
+    result = policy.apply()
+
+    assert calls == ["synced"]
+    assert result.warning is None
+
+
+def test_policy_keeps_committed_plugins_when_terminal_sync_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc = _zshrc(tmp_path)
+
+    def sync() -> str | None:
+        raise OSError("wezterm configuration is user-owned")
+
+    policy = omz_plugins_policy(
+        zshrc_path=zshrc,
+        state_path=tmp_path / ".myshellrc",
+        present=True,
+        terminal_sync=sync,
+    )
+
+    result = policy.apply()
+
+    assert "plugins=(z sudo git docker)" in zshrc.read_text()
+    assert plugins_owned(tmp_path / ".myshellrc") is True
+    assert result.warning == (
+        "Terminal shell synchronization failed: wezterm configuration is user-owned"
+    )
+
+
+def test_policy_rechecks_oh_my_zsh_presence_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    present = False
+    policy = omz_plugins_policy(
+        zshrc_path=_zshrc(tmp_path),
+        state_path=tmp_path / ".myshellrc",
+        present=lambda: present,
+    )
+
+    assert policy.missing_requirements() == ("oh-my-zsh",)
+    present = True
+    assert policy.missing_requirements() == ()
 
 
 def test_apply_on_an_inert_zshrc_repairs_the_template_then_enables_plugins(

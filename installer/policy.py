@@ -113,6 +113,13 @@ class Policy:
     set_schedule: Callable[[int, int], PolicyResult] | None = None
     read_schedule: Callable[[], tuple[int, int] | None] | None = None
     is_active: Callable[[], bool] | None = None
+    missing_requires_now: Callable[[], tuple[str, ...]] | None = None
+
+    def missing_requirements(self) -> tuple[str, ...]:
+        """Read prerequisites at the point a policy is rendered or applied."""
+        if self.missing_requires_now is not None:
+            return self.missing_requires_now()
+        return self.missing_requires
 
 
 @dataclass(frozen=True)
@@ -405,7 +412,13 @@ def tweak_policy(
     )
 
 
-def omz_plugins_policy(*, zshrc_path: Path, state_path: Path, present: bool) -> Policy:
+def omz_plugins_policy(
+    *,
+    zshrc_path: Path,
+    state_path: Path,
+    present: bool | Callable[[], bool],
+    terminal_sync: Callable[[], str | None] | None = None,
+) -> Policy:
     """Oh-My-Zsh bundled git/docker plugins as a Policy, parallel to tweak_policy.
 
     apply/remove edit the single-line plugins=(...) array in zshrc_path in place
@@ -421,6 +434,10 @@ def omz_plugins_policy(*, zshrc_path: Path, state_path: Path, present: bool) -> 
     because this is not a TweakBundle and must not read as one.
     """
 
+    def read_missing_requires() -> tuple[str, ...]:
+        available = present() if callable(present) else present
+        return () if available else ("oh-my-zsh",)
+
     def _apply() -> PolicyResult:
         added = write_plugins(zshrc_path, state_path)
         display = _display_path(zshrc_path)
@@ -428,10 +445,16 @@ def omz_plugins_policy(*, zshrc_path: Path, state_path: Path, present: bool) -> 
             detail = f"added {' '.join(added)} to {display}"
         else:
             detail = f"already in {display} — nothing added, nothing to undo later"
+        warning: str | None = None
+        if terminal_sync is not None:
+            try:
+                warning = terminal_sync()
+            except OSError as exc:
+                warning = f"Terminal shell synchronization failed: {exc}"
         return PolicyResult(
             layers=(PolicyLayer("Oh-My-Zsh plugins", detail),),
             reload_hint=_ZSH_RELOAD_HINT,
-            warning=None,
+            warning=warning,
         )
 
     def _remove() -> PolicyResult:
@@ -455,7 +478,8 @@ def omz_plugins_policy(*, zshrc_path: Path, state_path: Path, present: bool) -> 
         apply=_apply,
         remove=_remove,
         requires=("oh-my-zsh",),
-        missing_requires=() if present else ("oh-my-zsh",),
+        missing_requires=read_missing_requires(),
+        missing_requires_now=read_missing_requires,
     )
 
 
