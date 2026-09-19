@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: "15.2"
-current_phase_name: "Install output buffering and live-progress clarity: StreamingRunner (installer/run.py) already forwards child stdout line-by-line via Popen+readline, but many installers (pnpm, sdkman, curl|sh scripts) block-buffer their own stdout when not attached to a TTY, so output visibly arrives all at once at the end despite the installer streaming faithfully -- force line-buffered/unbuffered child output where feasible (stdbuf -oL, PYTHONUNBUFFERED, per-manager unbuffered flags) for known-buffering tools, and add a 'waiting for output...' indicator per in-flight tool so buffering-silence is not indistinguishable from a hang"
+current_phase: "15.5"
+current_phase_name: "Relax set_login_shell's immutable-host block from total silence to show-with-warning: _set_login_shell (installer/post_install.py:45) returns () unconditionally when Platform.immutable is True, giving zero user feedback when the action is blocked -- confirmed live on this Bazzite host (/run/ostree-booted present, Platform.immutable=True). Phase 14's D-04 decision locked a blanket block citing an unresolved-root-cause Bazzite/KDE-SDDM login bug (ublue-os/bazzite#4159, closed 'not planned', no maintainer diagnosis -- 14-RESEARCH.md's own Assumption A2 flagged the mechanism as unconfirmed). User re-decided (2026-09-15), explicitly overriding D-04's prior 'reversibility: one-way, requires re-verifying #4159 does not reproduce' caveat: on an immutable host, still show the reviewed chsh instructions (never auto-execute -- same non-interactive, handoff-only doctrine as the non-immutable path) but prepend an explicit warning naming the known Bazzite/KDE-SDDM issue and that the outcome is unconfirmed and host-dependent, so the user gets an informed choice instead of silence. Also applies the same 'never silent, always explain why' principle to any other post-install action that could hit a platform-gated no-op in the future"
 current_plan: Not started
 status: planning
-stopped_at: Phase 15.1 complete, ready to plan Phase 15.2
-last_updated: "2026-09-19T03:05:10.160Z"
+stopped_at: Phase 15.4 complete, ready to plan Phase 15.5
+last_updated: "2026-09-19T03:06:20.506Z"
 last_activity: 2026-09-19
-last_activity_desc: Phase 15.1 complete, transitioned to Phase 15.2
-state_head: 32a9328cd0810148b105d37235cd1040fc548a89
+last_activity_desc: Phase 15.4 complete, transitioned to Phase 15.5
+state_head: 48a0acc6c68bdd158758a341cc85d3e694fab505
 progress:
   total_phases: 27
-  completed_phases: 13
+  completed_phases: 16
   total_plans: 70
   completed_plans: 70
 ---
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 15.2 — Install output buffering and live-progress clarity: StreamingRunner (installer/run.py) already forwards child stdout line-by-line via Popen+readline, but many installers (pnpm, sdkman, curl|sh scripts) block-buffer their own stdout when not attached to a TTY, so output visibly arrives all at once at the end despite the installer streaming faithfully -- force line-buffered/unbuffered child output where feasible (stdbuf -oL, PYTHONUNBUFFERED, per-manager unbuffered flags) for known-buffering tools, and add a 'waiting for output...' indicator per in-flight tool so buffering-silence is not indistinguishable from a hang
+Phase: 15.5 of 89 (Relax set_login_shell's immutable-host block from total silence to show-with-warning: _set_login_shell (installer/post_install.py:45) returns () unconditionally when Platform.immutable is True, giving zero user feedback when the action is blocked -- confirmed live on this Bazzite host (/run/ostree-booted present, Platform.immutable=True). Phase 14's D-04 decision locked a blanket block citing an unresolved-root-cause Bazzite/KDE-SDDM login bug (ublue-os/bazzite#4159, closed 'not planned', no maintainer diagnosis -- 14-RESEARCH.md's own Assumption A2 flagged the mechanism as unconfirmed). User re-decided (2026-09-15), explicitly overriding D-04's prior 'reversibility: one-way, requires re-verifying #4159 does not reproduce' caveat: on an immutable host, still show the reviewed chsh instructions (never auto-execute -- same non-interactive, handoff-only doctrine as the non-immutable path) but prepend an explicit warning naming the known Bazzite/KDE-SDDM issue and that the outcome is unconfirmed and host-dependent, so the user gets an informed choice instead of silence. Also applies the same 'never silent, always explain why' principle to any other post-install action that could hit a platform-gated no-op in the future)
 Current Plan: Not started
 Total Plans in Phase: 5
 Status: Ready to plan
-Last activity: 2026-09-19 — Phase 15.1 complete, transitioned to Phase 15.2
+Last activity: 2026-09-19 — Phase 15.4 complete, transitioned to Phase 15.5
 
 Progress: [██████████] 100%
 
@@ -42,7 +42,7 @@ Progress: [██████████] 100%
 
 **Velocity:**
 
-- Total plans completed: 53
+- Total plans completed: 58
 - Average duration: - min
 - Total execution time: 0 hours
 
@@ -68,6 +68,7 @@ Progress: [██████████] 100%
 | 15.1 | 1 | - | - |
 | 15.2 | 2 | - | - |
 | 15.3 | 1 | - | - |
+| 15.4 | 5 | - | - |
 
 **Recent Trend:**
 
@@ -200,5 +201,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-17T07:18:10.000Z
-Stopped at: Phase 15.1 complete, ready to plan Phase 15.2
+Stopped at: Phase 15.4 complete, ready to plan Phase 15.5
 Resume file: None
