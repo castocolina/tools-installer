@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: "15.4"
-current_phase_name: "Catalog ownership visibility and Uninstall screen real manager attribution: add a visible Owner/package-manager column to the main catalog table (_COLUMNS/_row_cells in catalog_tui.py) reading the same ownership data _version_detail already computes, instead of ownership only appearing in the focused-row detail bar. Separately, UninstallScreen's 'Installed via'/'What gets removed' columns (wizard_app.py's _tool_entry) discard uninstall.py's own already-computed manager-name-plus-path hint (ToolRow.hint) in favor of a generic 4-value enum-keyed string ('userspace'/'managed elsewhere') -- surface the real hint in the table cell, and wire uninstall.py's manager detection (currently brew/cask-only) to the fuller install_ownership.py/ownership.py resolvers already used by update.py, so pnpm/volta/sdkman/uv/dnf/rpm-ostree-owned tools are named instead of falling through to a generic string"
-current_plan: 5
-status: executing
-stopped_at: Completed 15.4-05-PLAN.md
-last_updated: "2026-09-17T07:18:10.000Z"
-last_activity: 2026-09-17
-last_activity_desc: Phase 15.4 Plan 05 complete — Uninstall screen shows real manager attribution
-state_head: 9a9f58baf951f9e0fd2bf1280cf9e890d8838d1a
+current_phase: "15.2"
+current_phase_name: "Install output buffering and live-progress clarity: StreamingRunner (installer/run.py) already forwards child stdout line-by-line via Popen+readline, but many installers (pnpm, sdkman, curl|sh scripts) block-buffer their own stdout when not attached to a TTY, so output visibly arrives all at once at the end despite the installer streaming faithfully -- force line-buffered/unbuffered child output where feasible (stdbuf -oL, PYTHONUNBUFFERED, per-manager unbuffered flags) for known-buffering tools, and add a 'waiting for output...' indicator per in-flight tool so buffering-silence is not indistinguishable from a hang"
+current_plan: Not started
+status: planning
+stopped_at: Phase 15.1 complete, ready to plan Phase 15.2
+last_updated: "2026-09-19T03:05:10.160Z"
+last_activity: 2026-09-19
+last_activity_desc: Phase 15.1 complete, transitioned to Phase 15.2
+state_head: 32a9328cd0810148b105d37235cd1040fc548a89
 progress:
   total_phases: 27
-  completed_phases: 14
+  completed_phases: 13
   total_plans: 70
   completed_plans: 70
 ---
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 15.4 — Catalog ownership visibility and Uninstall screen real manager attribution: add a visible Owner/package-manager column to the main catalog table (_COLUMNS/_row_cells in catalog_tui.py) reading the same ownership data _version_detail already computes, instead of ownership only appearing in the focused-row detail bar. Separately, UninstallScreen's 'Installed via'/'What gets removed' columns (wizard_app.py's _tool_entry) discard uninstall.py's own already-computed manager-name-plus-path hint (ToolRow.hint) in favor of a generic 4-value enum-keyed string ('userspace'/'managed elsewhere') -- surface the real hint in the table cell, and wire uninstall.py's manager detection (currently brew/cask-only) to the fuller install_ownership.py/ownership.py resolvers already used by update.py, so pnpm/volta/sdkman/uv/dnf/rpm-ostree-owned tools are named instead of falling through to a generic string
-Current Plan: 5
+Phase: 15.2 — Install output buffering and live-progress clarity: StreamingRunner (installer/run.py) already forwards child stdout line-by-line via Popen+readline, but many installers (pnpm, sdkman, curl|sh scripts) block-buffer their own stdout when not attached to a TTY, so output visibly arrives all at once at the end despite the installer streaming faithfully -- force line-buffered/unbuffered child output where feasible (stdbuf -oL, PYTHONUNBUFFERED, per-manager unbuffered flags) for known-buffering tools, and add a 'waiting for output...' indicator per in-flight tool so buffering-silence is not indistinguishable from a hang
+Current Plan: Not started
 Total Plans in Phase: 5
-Status: Ready to execute
-Last activity: 2026-09-17 — Phase 15.4 Plan 05 complete (Uninstall screen real manager attribution)
+Status: Ready to plan
+Last activity: 2026-09-19 — Phase 15.1 complete, transitioned to Phase 15.2
 
 Progress: [██████████] 100%
 
@@ -200,5 +200,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-17T07:18:10.000Z
-Stopped at: Completed 15.4-05-PLAN.md
+Stopped at: Phase 15.1 complete, ready to plan Phase 15.2
 Resume file: None
