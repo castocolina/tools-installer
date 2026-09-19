@@ -538,10 +538,10 @@ Plans:
 
 ### Phase 15.7: Unify tmp-prune tooling into an installable Tweaks module (from pending todo 2026-09-10-unify-tmp-prune-tooling-into-an-installable-tweaks-module.md): opencode/Bun's runtime-transpiler-cache orphans native .so/.node artifacts on a killed/crashed process, either in OS temp (macOS $TMPDIR, can reach 100GB+/day) or /tmp on Linux (a small-quota tmpfs on Bazzite, ~12GB, causing EDQUOT failures across the whole system once full). Two independent non-reusable scripts already solve pieces of this today (this repo's scripts/prune-user-tmpdir.sh, manual dry-run/--apply only; ai-kit's Linux-only systemd-timer bundle, confirmed working, keeps /tmp under 1%) but neither is cross-platform, wired into this project, or installable/uninstallable. Build one dedicated cross-platform module: (1) env-var wiring to redirect Bun's cache off tmp entirely (environment.d on Linux, shell-rc based on macOS), (2) a real background daemon install/uninstall -- systemd user timer+oneshot on Linux, launchd LaunchAgent on macOS -- never manual scripts, (3) Tweaks view toggle (install/uninstall, daemon-active status, current tmp usage %), (4) make doctor integration: red warning when the cleanup daemon is inactive AND disk space is below 30% (or /tmp exceeds 50% on Linux specifically), extra visual weight when both conditions are true together. Reuse this project's existing OS-detection conventions (Phase 12.3 precedent) rather than duplicating per-OS logic; user explicitly rejected manual-script-only as an acceptable outcome. (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** Linux users open kitty, WezTerm, or a live-detected Konsole directly into the discovered zsh login shell, with Oh-My-Zsh and its selected plugins loading whenever the framework is present, while all changes remain reversible user configuration and never alter the system login shell.
+**Requirements**: D-01, D-02, D-03, D-04 (15.6-CONTEXT.md locked decisions — inserted roadmap phase, not a REQUIREMENTS.md id)
 **Depends on:** Phase 15
-**Plans:** 0 plans
+**Plans:** 6 plans
 
 Plans:
 
@@ -556,9 +556,12 @@ Plans:
 
 Plans:
 
-- [x] 15.6-01-PLAN.md — D-04: ensure an inert KEEP_ZSHRC-preserved `.zshrc` sources Oh-My-Zsh and supplies an editable plugins array
-- [ ] 15.6-02-PLAN.md — D-02/D-03 tracer and expansion: direct, owned Linux kitty, WezTerm, and detected Konsole zsh configuration
-- [ ] 15.6-03-PLAN.md — D-01: reapply the shared terminal configuration after installs, updates, and Oh-My-Zsh policy activation
+- [x] 15.6-01-PLAN.md — Initial D-04 repair (superseded by review-driven plan 02 correction)
+- [ ] 15.6-02-PLAN.md — D-04 correction: precise, ordered source/template repair for inert and sourced-but-arrayless `.zshrc` files
+- [ ] 15.6-03-PLAN.md — D-02/D-03/D-04: safe, owned direct Linux terminal configuration and OMZ template synchronization
+- [ ] 15.6-04-PLAN.md — D-01/D-04: live OMZ Policy activation, truthful warning state, and composition-root wiring
+- [ ] 15.6-05-PLAN.md — D-01: direct catalog-update synchronization and nonfatal warning reporting
+- [ ] 15.6-06-PLAN.md — D-01: interactive, unattended, and uninstall lifecycle synchronization with pending-warning delivery
 
 ### Phase 15.5: Relax set_login_shell's immutable-host block from total silence to show-with-warning: _set_login_shell (installer/post_install.py:45) returns () unconditionally when Platform.immutable is True, giving zero user feedback when the action is blocked -- confirmed live on this Bazzite host (/run/ostree-booted present, Platform.immutable=True). Phase 14's D-04 decision locked a blanket block citing an unresolved-root-cause Bazzite/KDE-SDDM login bug (ublue-os/bazzite#4159, closed 'not planned', no maintainer diagnosis -- 14-RESEARCH.md's own Assumption A2 flagged the mechanism as unconfirmed). User re-decided (2026-09-15), explicitly overriding D-04's prior 'reversibility: one-way, requires re-verifying #4159 does not reproduce' caveat: on an immutable host, still show the reviewed chsh instructions (never auto-execute -- same non-interactive, handoff-only doctrine as the non-immutable path) but prepend an explicit warning naming the known Bazzite/KDE-SDDM issue and that the outcome is unconfirmed and host-dependent, so the user gets an informed choice instead of silence. Also applies the same 'never silent, always explain why' principle to any other post-install action that could hit a platform-gated no-op in the future (INSERTED)
 
