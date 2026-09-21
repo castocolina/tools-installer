@@ -2833,6 +2833,92 @@ async def test_update_success_reports_replay_cleanup_and_postinstall_warnings(
         assert "postinstall shim needs manual review" in status
 
 
+# -- 15.6-05/D-01: the direct `u` route covers the same terminal synchronizer
+# Plan 04 wired for Policies -- a successful update, then a nonfatal terminal
+# follow-up warning rendered beside it without downgrading the status. -------
+
+
+async def test_update_success_reports_terminal_follow_up_warning_without_downgrading(
+    tmp_path: Path,
+) -> None:
+    tool = _tool("rg")
+    ownership = _ownership(tool, owner="brew", package="rg")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+
+    def failing_terminal_follow_up() -> str | None:
+        raise OSError("konsole profile is not writable")
+
+    updates = UpdateService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        runner=lambda _argv: None,
+        resolve_tag=lambda _repo: "v1",
+        tools={},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+        terminal_follow_up=failing_terminal_follow_up,
+    )
+    app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+            "rg": _outdated_status("rg")
+        }
+        await pilot.press("u")
+        await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
+        status = app.catalog.status_text
+        assert "updated rg" in status
+        assert "konsole profile is not writable" in status
+        assert "update failed" not in status
+
+
+async def test_update_via_u_calls_the_injected_terminal_follow_up_exactly_once(
+    tmp_path: Path,
+) -> None:
+    """D-01: the direct `u` route must reach `UpdateService`'s callback
+    through `action_update_tool`'s existing `UpdateService.run` call -- not a
+    second, `CatalogScreen`-owned mutation path that duplicates the sync."""
+    tool = _tool("rg")
+    ownership = _ownership(tool, owner="brew", package="rg")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    calls: list[int] = []
+
+    def terminal_follow_up() -> str | None:
+        calls.append(1)
+        return None
+
+    updates = UpdateService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        runner=lambda _argv: None,
+        resolve_tag=lambda _repo: "v1",
+        tools={},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+        terminal_follow_up=terminal_follow_up,
+    )
+    app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+            "rg": _outdated_status("rg")
+        }
+        await pilot.press("u")
+        await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
+        assert "updated rg" in app.catalog.status_text
+        assert calls == [1]
+
+
 async def test_update_failure_renders_status_line(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew", package="rg")

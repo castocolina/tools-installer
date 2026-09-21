@@ -585,6 +585,7 @@ def _service(
     replay: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
     invalidate: InvalidateFn | None = None,
     runner: Callable[[list[str]], None] | None = None,
+    terminal_follow_up: Callable[[], str | None] | None = None,
 ) -> UpdateService:
     from collections.abc import Sequence as Seq
 
@@ -600,6 +601,7 @@ def _service(
         replay_globals=replay or _replay,
         reresolve_ownership=reresolve,
         invalidate=invalidate,
+        terminal_follow_up=terminal_follow_up,
     )
 
 
@@ -821,3 +823,160 @@ def test_update_service_invalidate_failure_stays_updated(monkeypatch: pytest.Mon
     outcome = service.run(_target(tool, "brew", method=brew, package="ripgrep"))
     assert outcome.status == "updated"
     assert "cache invalidation failed" in outcome.detail
+
+
+# -- 15.6-05/D-01: the same terminal synchronizer Plan 04 wired for Policies,
+# reached from a successful direct `u` update through UpdateService.run. -----
+
+
+def test_update_service_calls_terminal_follow_up_after_a_successful_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    brew = Method(kind="brew", params={"formula": "ripgrep"})
+    tool = _tool("rg", brew, cmd="rg")
+    calls: list[int] = []
+
+    def follow_up() -> str | None:
+        calls.append(1)
+        return None
+
+    def fake_perform(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        return UpdateOutcome(tool_id=target.tool.id, status="updated", owner="brew")
+
+    monkeypatch.setattr(update, "perform_update", fake_perform)
+    service = _service(
+        reresolve=lambda _tool: _ownership(tool, "brew", method=brew, package="ripgrep"),
+        terminal_follow_up=follow_up,
+    )
+    outcome = service.run(_target(tool, "brew", method=brew, package="ripgrep"))
+    assert outcome.status == "updated"
+    assert calls == [1]
+
+
+def test_update_service_terminal_follow_up_oserror_appends_warning_without_downgrading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A terminal synchronization failure must stay visible beside the
+    successful update — never flip `status` away from `"updated"`."""
+    brew = Method(kind="brew", params={"formula": "ripgrep"})
+    tool = _tool("rg", brew, cmd="rg")
+
+    def failing_follow_up() -> str | None:
+        raise OSError("konsole profile is not writable")
+
+    def fake_perform(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        return UpdateOutcome(tool_id=target.tool.id, status="updated", owner="brew")
+
+    monkeypatch.setattr(update, "perform_update", fake_perform)
+    service = _service(
+        reresolve=lambda _tool: _ownership(tool, "brew", method=brew, package="ripgrep"),
+        terminal_follow_up=failing_follow_up,
+    )
+    outcome = service.run(_target(tool, "brew", method=brew, package="ripgrep"))
+    assert outcome.status == "updated"
+    assert "konsole profile is not writable" in outcome.detail
+
+
+@pytest.mark.parametrize("status", ["failed", "unsupported"])
+def test_update_service_terminal_follow_up_skipped_for_non_updated_outcomes(
+    monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    brew = Method(kind="brew", params={"formula": "ripgrep"})
+    tool = _tool("rg", brew, cmd="rg")
+    calls: list[int] = []
+
+    def follow_up() -> str | None:
+        calls.append(1)
+        return None
+
+    def fake_perform(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        return UpdateOutcome(tool_id=target.tool.id, status=status, owner="brew")  # type: ignore[arg-type]
+
+    monkeypatch.setattr(update, "perform_update", fake_perform)
+    service = _service(
+        reresolve=lambda _tool: _ownership(tool, "brew", method=brew, package="ripgrep"),
+        terminal_follow_up=follow_up,
+    )
+    outcome = service.run(_target(tool, "brew", method=brew, package="ripgrep"))
+    assert outcome.status == status
+    assert calls == []
+
+
+def test_update_service_terminal_follow_up_skipped_for_refused_unknown_owner() -> None:
+    tool = _tool("rg", Method(kind="brew", params={"formula": "ripgrep"}))
+    calls: list[int] = []
+
+    def follow_up() -> str | None:
+        calls.append(1)
+        return None
+
+    def reresolve(_tool: Tool) -> ManagerOwnership:
+        return _ownership(tool, "unknown", confidence="none", unknown_reason="no manager")
+
+    service = _service(reresolve=reresolve, terminal_follow_up=follow_up)
+    outcome = service.run(_target(tool, "brew", package="ripgrep"))
+    assert outcome.status == "unknown-owner"
+    assert calls == []
+
+
+def test_update_service_terminal_follow_up_runs_after_pnpm_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    method = Method(kind="script", params={"url": "https://get.pnpm.io/install.sh", "shell": "sh"})
+    tool = _tool("pnpm", method)
+    order: list[str] = []
+
+    def managed() -> tuple[str, ...] | None:
+        order.append("managed")
+        return ("x",)
+
+    def mutate(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        order.append("mutate")
+        return UpdateOutcome(tool_id=target.tool.id, status="updated", owner="installer")
+
+    def replay(packages: Sequence[str]) -> tuple[str, ...]:
+        order.append("replay")
+        return tuple(packages)
+
+    def follow_up() -> str | None:
+        order.append("terminal_follow_up")
+        return None
+
+    monkeypatch.setattr(update, "perform_update", mutate)
+    service = _service(
+        reresolve=lambda _tool: _ownership(tool, "installer", method=method),
+        managed=managed,
+        replay=replay,
+        terminal_follow_up=follow_up,
+    )
+    outcome = service.run(_target(tool, "installer", method=method))
+    assert outcome.status == "updated"
+    assert order == ["managed", "mutate", "replay", "terminal_follow_up"]
+
+
+def test_update_service_terminal_follow_up_runs_before_invalidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    brew = Method(kind="brew", params={"formula": "ripgrep"})
+    tool = _tool("rg", brew, cmd="rg")
+    order: list[str] = []
+
+    def fake_perform(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        return UpdateOutcome(tool_id=target.tool.id, status="updated", owner="brew")
+
+    def follow_up() -> str | None:
+        order.append("terminal_follow_up")
+        return None
+
+    def invalidate(*, reason: str) -> int:
+        order.append("invalidate")
+        return 1
+
+    monkeypatch.setattr(update, "perform_update", fake_perform)
+    service = _service(
+        reresolve=lambda _tool: _ownership(tool, "brew", method=brew, package="ripgrep"),
+        terminal_follow_up=follow_up,
+        invalidate=invalidate,
+    )
+    service.run(_target(tool, "brew", method=brew, package="ripgrep"))
+    assert order == ["terminal_follow_up", "invalidate"]

@@ -5,16 +5,16 @@ current_phase: "15.6"
 current_phase_name: terminal-emulator-default-shell-configuration-konsole-kitty
 current_plan: 4
 status: executing
-stopped_at: Completed 15.6-02-PLAN.md
-last_updated: "2026-09-19T17:57:49.603Z"
+stopped_at: Completed 15.6-05-PLAN.md
+last_updated: "2026-09-21T23:51:47.066Z"
 last_activity: 2026-09-19
 last_activity_desc: Phase 15.5 complete, transitioned to Phase 15.6
-state_head: d5eb935cfc5f1292d32b8779f503c59888b348a7
+state_head: e30bf0d09b5910ff1a4ddfbcffa318784d5de788
 progress:
   total_phases: 27
   completed_phases: 17
   total_plans: 77
-  completed_plans: 73
+  completed_plans: 76
 ---
 
 Total Phases: 21
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 15.6 (terminal-emulator-default-shell-configuration-konsole-kitty) — READY TO EXECUTE
-Current Plan: 3
+Current Plan: 4
 Total Plans in Phase: 6
 Status: Ready to execute
 Last activity: 2026-09-19 — Phase 15.5 complete, transitioned to Phase 15.6
@@ -99,6 +99,7 @@ Progress: [██████████] 100%
 | Phase 15.4 P04 | 52min | 3 tasks | 11 files |
 | Phase 15.4 P05 | 58min | 3 tasks | 10 files |
 | Phase 15.6 P02 | 12min | 2 tasks | 3 files |
+| Phase 15.6 P05 | 35min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -164,6 +165,7 @@ Recent decisions affecting current work:
 - [Phase 15.4]: 15.4-05: `classify_tools` gained an `owner_hint` seam (plain `Tool -> str | None` callable, never `ManagerOwnership`) consulted only on the managed branch; `setup.py` binds it to `removal_hint` over `VersionRefreshService.ownership_of`, reusing the catalog's already-computed map
 - [Phase 15.6]: write_plugins repairs active Oh-My-Zsh source shapes and inert no-array files, but leaves valid unsourced plugin arrays untouched.
 - [Phase 15.6]: A supported plugins assignment after the active Oh-My-Zsh source is moved before it; multi-line arrays remain fail-safe refusals.
+- [Phase 15.6]: [15.6-05, 2026-09-21]: Reused setup.py's existing _sync_omz_terminals closure for the u route instead of a second synchronizer; UpdateService's new terminal_follow_up seam runs after pnpm replay and before cache invalidation, catching only OSError
 
 ### Pending Todos
 
@@ -204,6 +206,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-19T17:57:18.574Z
-Stopped at: Completed 15.6-02-PLAN.md
+Last session: 2026-09-21T23:51:46.904Z
+Stopped at: Completed 15.6-05-PLAN.md
 Resume file: None
