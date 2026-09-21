@@ -1093,6 +1093,39 @@ def test_build_app_shares_one_update_service_and_invalidate(
     assert updates._replay_globals is doctor._reinstall_globals  # pyright: ignore[reportPrivateUsage]
 
 
+def test_build_app_wires_the_shared_terminal_closure_into_update_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D-01/15.6-05: the direct `u` update route reuses the SAME
+    composition-root terminal closure Plan 04 wired for Policies -- not a
+    second, independently constructed synchronizer."""
+    _sandbox(monkeypatch, tmp_path)
+    platform = _platform()
+    calls: list[dict[str, object]] = []
+
+    def sync(**kwargs: object) -> TerminalShellResult:
+        calls.append(kwargs)
+        return TerminalShellResult(warnings=("wezterm configuration is user-owned",))
+
+    monkeypatch.setattr(setup, "sync_terminal_shells", sync)
+    app = setup._build_app([], platform)  # pyright: ignore[reportPrivateUsage]
+    updates = app.catalog._updates  # pyright: ignore[reportPrivateUsage]
+    assert updates is not None
+    follow_up = updates._terminal_follow_up  # pyright: ignore[reportPrivateUsage]
+    assert follow_up is not None
+    warning = follow_up()
+    assert warning == (
+        "Terminal shell synchronization warning: wezterm configuration is user-owned"
+    )
+    assert len(calls) == 1
+    assert calls[0] == {
+        "home": tmp_path,
+        "environ": os.environ,
+        "platform": platform,
+        "lookup": setup.shutil.which,
+    }
+
+
 def test_build_app_rebinds_execute_onto_shared_services_when_execute_is_passed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

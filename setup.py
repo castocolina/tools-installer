@@ -561,7 +561,10 @@ def _build_app(
         return tuple(rc_paths_for_mode(mode, _SHELL))
 
     def _sync_omz_terminals() -> str | None:
-        """Apply the shared terminal writer after a committed OMZ plugin edit."""
+        """Apply the shared terminal writer after a committed OMZ plugin edit
+        or a successful direct catalog update (D-01/15.6-05) -- the one
+        composition-root closure both call sites reuse, so a stale terminal
+        shell configuration from either path is corrected the same way."""
         result = sync_terminal_shells(
             home=Path.home(),
             environ=os.environ,
@@ -699,6 +702,10 @@ def _build_app(
         replay_globals=_reinstall_globals,
         reresolve_ownership=_reresolve_ownership,
         invalidate=version_refresh.invalidate,
+        # D-01/15.6-05: the SAME terminal closure `omz_plugins_policy` above
+        # is wired with -- a direct `u` update and a committed OMZ plugin
+        # edit both end in one shared synchronizer, never two.
+        terminal_follow_up=_sync_omz_terminals,
     )
 
     if execute is not None:
