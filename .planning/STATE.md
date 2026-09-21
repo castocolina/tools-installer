@@ -2,19 +2,19 @@
 gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: "15.6"
-current_phase_name: "Terminal-emulator default-shell configuration (Konsole/kitty/WezTerm on immutable Linux hosts): make zsh (+ oh-my-zsh plugins, when installed) the working shell whenever the user opens a terminal, without ever touching chsh/system login shell -- chsh is confirmed absent on Bazzite (util-linux-user removed by design, ublue-os/bazzite#4159) and Bazzite maintainers explicitly recommend configuring the terminal emulator instead of the system login shell. Scoped to Linux/immutable hosts where this problem exists (macOS is unaffected -- chsh works normally there via the existing Phase 14 flow, confirmed by user). Research leads found this session: kitty supports a launcher-level override (kitty -o shell=<path>) and WezTerm supports (wezterm start --config default_prog={<path>}) without mutating kitty.conf/wezterm.lua directly; Konsole has no equivalent single flag but supports the more universal -e <command> launch pattern as a fallback. Investigate desktop-launcher (.desktop file) level integration vs per-app config mutation."
-current_plan: Not started
-status: planning
-stopped_at: Phase 15.5 complete, ready to plan Phase 15.6
-last_updated: "2026-09-19T03:22:27.059Z"
+current_phase_name: terminal-emulator-default-shell-configuration-konsole-kitty
+current_plan: 4
+status: executing
+stopped_at: Completed 15.6-02-PLAN.md
+last_updated: "2026-09-19T17:57:49.603Z"
 last_activity: 2026-09-19
 last_activity_desc: Phase 15.5 complete, transitioned to Phase 15.6
-state_head: 5508b45be9d3fef93aea8e768ceac93dc57cc205
+state_head: d5eb935cfc5f1292d32b8779f503c59888b348a7
 progress:
   total_phases: 27
   completed_phases: 17
-  total_plans: 71
-  completed_plans: 71
+  total_plans: 77
+  completed_plans: 73
 ---
 
 Total Phases: 21
@@ -30,10 +30,10 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 15.6 of 89 (Terminal-emulator default-shell configuration (Konsole/kitty/WezTerm on immutable Linux hosts): make zsh (+ oh-my-zsh plugins, when installed) the working shell whenever the user opens a terminal, without ever touching chsh/system login shell -- chsh is confirmed absent on Bazzite (util-linux-user removed by design, ublue-os/bazzite#4159) and Bazzite maintainers explicitly recommend configuring the terminal emulator instead of the system login shell. Scoped to Linux/immutable hosts where this problem exists (macOS is unaffected -- chsh works normally there via the existing Phase 14 flow, confirmed by user). Research leads found this session: kitty supports a launcher-level override (kitty -o shell=<path>) and WezTerm supports (wezterm start --config default_prog={<path>}) without mutating kitty.conf/wezterm.lua directly; Konsole has no equivalent single flag but supports the more universal -e <command> launch pattern as a fallback. Investigate desktop-launcher (.desktop file) level integration vs per-app config mutation.)
-Current Plan: Not started
-Total Plans in Phase: 5
-Status: Ready to plan
+Phase: 15.6 (terminal-emulator-default-shell-configuration-konsole-kitty) — READY TO EXECUTE
+Current Plan: 3
+Total Plans in Phase: 6
+Status: Ready to execute
 Last activity: 2026-09-19 — Phase 15.5 complete, transitioned to Phase 15.6
 
 Progress: [██████████] 100%
@@ -98,6 +98,7 @@ Progress: [██████████] 100%
 | Phase 15.4 P03 | 60m | 3 tasks | 4 files |
 | Phase 15.4 P04 | 52min | 3 tasks | 11 files |
 | Phase 15.4 P05 | 58min | 3 tasks | 10 files |
+| Phase 15.6 P02 | 12min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -161,6 +162,8 @@ Recent decisions affecting current work:
 - [Phase 15.4]: 15.4-05: `removal_hint` lives in `installer/ownership.py` (not `uninstall.py`) to avoid the import cycle `manager_name`'s existing ownership-to-uninstall dependency would create; structurally refuses to emit a backticked command without a resolved package name
 - [Phase 15.4]: 15.4-05: `_manager_hint` scans `resolve_methods(tool, platform)` instead of raw `tool.methods`, closing the Round-2 review HIGH where a macOS-only cask (codex) could name a Homebrew command on Linux
 - [Phase 15.4]: 15.4-05: `classify_tools` gained an `owner_hint` seam (plain `Tool -> str | None` callable, never `ManagerOwnership`) consulted only on the managed branch; `setup.py` binds it to `removal_hint` over `VersionRefreshService.ownership_of`, reusing the catalog's already-computed map
+- [Phase 15.6]: write_plugins repairs active Oh-My-Zsh source shapes and inert no-array files, but leaves valid unsourced plugin arrays untouched.
+- [Phase 15.6]: A supported plugins assignment after the active Oh-My-Zsh source is moved before it; multi-line arrays remain fail-safe refusals.
 
 ### Pending Todos
 
@@ -201,6 +204,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-17T07:18:10.000Z
-Stopped at: Phase 15.5 complete, ready to plan Phase 15.6
+Last session: 2026-09-19T17:57:18.574Z
+Stopped at: Completed 15.6-02-PLAN.md
 Resume file: None
