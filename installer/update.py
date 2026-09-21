@@ -348,6 +348,12 @@ class InvalidateFn(Protocol):
 ManagedPackagesFn = Callable[[], tuple[str, ...] | None]
 ReplayGlobalsFn = Callable[[Sequence[str]], tuple[str, ...]]
 ReresolveFn = Callable[[Tool], ManagerOwnership]
+# 15.6-05/D-01: the SAME shape `installer/policy.py::omz_plugins_policy`'s own
+# `terminal_sync` seam uses -- a zero-argument closure that performs the real
+# terminal-config IO and returns an optional warning string. This module
+# never imports `installer.terminal_shell` itself; the composition root
+# (`setup.py`) is the only place that knows what "terminal core" means.
+TerminalFollowUpFn = Callable[[], str | None]
 
 
 class UpdateService:
@@ -363,7 +369,11 @@ class UpdateService:
     1. Pre-capture the pnpm-managed package set when the tool is pnpm itself.
     2. Mutate via `perform_update`.
     3. Replay the captured snapshot only after `updated`.
-    4. Invalidate the version-refresh epoch and manager snapshot.
+    4. Run the injected terminal follow-up only after `updated` -- the same
+       synchronizer Plan 04 wired for Policies (D-01) -- appending any
+       `OSError` it raises to `detail` as a warning without downgrading the
+       outcome.
+    5. Invalidate the version-refresh epoch and manager snapshot.
 
     The capture cannot follow the update: if the pnpm self-update is the
     event that loses the globals, a post-update `managed_packages()` returns
@@ -383,6 +393,7 @@ class UpdateService:
         replay_globals: ReplayGlobalsFn,
         reresolve_ownership: ReresolveFn,
         invalidate: InvalidateFn | None = None,
+        terminal_follow_up: TerminalFollowUpFn | None = None,
     ) -> None:
         self.platform = platform
         self._runner = runner
@@ -392,6 +403,7 @@ class UpdateService:
         self._replay_globals = replay_globals
         self._reresolve_ownership = reresolve_ownership
         self._invalidate = invalidate
+        self._terminal_follow_up = terminal_follow_up
         self._lock = threading.Lock()
         self._in_flight: str | None = None
 
@@ -456,6 +468,16 @@ class UpdateService:
             except Exception as extra:  # noqa: BLE001 -- secondary mutation, never downgrades updated
                 warning = f"pnpm globals replay failed: {extra}"
                 detail = f"{detail}; {warning}" if detail else warning
+        if outcome.status == "updated" and self._terminal_follow_up is not None:
+            try:
+                follow_up_warning = self._terminal_follow_up()
+            except OSError as extra:
+                # T-15.6-11: the mutation already succeeded -- a terminal sync
+                # failure is a secondary, non-fatal warning appended beside
+                # the updated status, never a reason to report it as failed.
+                follow_up_warning = f"Terminal shell synchronization failed: {extra}"
+            if follow_up_warning:
+                detail = f"{detail}; {follow_up_warning}" if detail else follow_up_warning
         if outcome.status == "updated" and self._invalidate is not None:
             try:
                 self._invalidate(reason=f"updated {target.tool.id}")
