@@ -552,15 +552,15 @@ Plans:
 **Goal:** [Urgent work - to be planned]
 **Requirements**: TBD
 **Depends on:** Phase 15
-**Plans:** 2/6 plans executed
+**Plans:** 5/6 plans executed
 
 Plans:
 
 - [x] 15.6-01-PLAN.md — Initial D-04 repair (superseded by review-driven plan 02 correction)
 - [x] 15.6-02-PLAN.md — D-04 correction: precise, ordered source/template repair for inert and sourced-but-arrayless `.zshrc` files
-- [ ] 15.6-03-PLAN.md — D-02/D-03/D-04: safe, owned direct Linux terminal configuration and OMZ template synchronization
-- [ ] 15.6-04-PLAN.md — D-01/D-04: live OMZ Policy activation, truthful warning state, and composition-root wiring
-- [ ] 15.6-05-PLAN.md — D-01: direct catalog-update synchronization and nonfatal warning reporting
+- [x] 15.6-03-PLAN.md — D-02/D-03/D-04: safe, owned direct Linux terminal configuration and OMZ template synchronization
+- [x] 15.6-04-PLAN.md — D-01/D-04: live OMZ Policy activation, truthful warning state, and composition-root wiring
+- [x] 15.6-05-PLAN.md — D-01: direct catalog-update synchronization and nonfatal warning reporting
 - [ ] 15.6-06-PLAN.md — D-01: interactive, unattended, and uninstall lifecycle synchronization with pending-warning delivery
 
 ### Phase 15.5: Relax set_login_shell's immutable-host block from total silence to show-with-warning: _set_login_shell (installer/post_install.py:45) returns () unconditionally when Platform.immutable is True, giving zero user feedback when the action is blocked -- confirmed live on this Bazzite host (/run/ostree-booted present, Platform.immutable=True). Phase 14's D-04 decision locked a blanket block citing an unresolved-root-cause Bazzite/KDE-SDDM login bug (ublue-os/bazzite#4159, closed 'not planned', no maintainer diagnosis -- 14-RESEARCH.md's own Assumption A2 flagged the mechanism as unconfirmed). User re-decided (2026-09-15), explicitly overriding D-04's prior 'reversibility: one-way, requires re-verifying #4159 does not reproduce' caveat: on an immutable host, still show the reviewed chsh instructions (never auto-execute -- same non-interactive, handoff-only doctrine as the non-immutable path) but prepend an explicit warning naming the known Bazzite/KDE-SDDM issue and that the outcome is unconfirmed and host-dependent, so the user gets an informed choice instead of silence. Also applies the same 'never silent, always explain why' principle to any other post-install action that could hit a platform-gated no-op in the future (INSERTED)
