@@ -441,6 +441,17 @@ def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(setup, "_DAEMON_LOG_PATH", tmp_path / "Logs" / "prune-daemon.log")
     monkeypatch.setattr(setup, "_DAEMON_SCRIPT_PATH", tmp_path / "scripts" / "prune-user-tmpdir.sh")
     monkeypatch.setattr(setup, "_DAEMON_STATE_PATH", tmp_path / ".myshellrc")
+    # Linux mirror of the macOS daemon paths above: without this, the
+    # module-level _LINUX_DAEMON_UNIT_DIR constant (computed once, at import
+    # time, from the real machine's HOME) would have every Linux-platform
+    # test in this file reading/writing units_present() against the real
+    # dev host's ~/.config/systemd/user -- not merely the wrong isolation
+    # boundary, but also what keeps timer_state()'s own presence short-circuit
+    # (D-01c) from ever reaching the real systemctl in these tests.
+    monkeypatch.setattr(setup, "_LINUX_DAEMON_UNIT_DIR", tmp_path / "config" / "systemd" / "user")
+    monkeypatch.setattr(
+        setup, "_LINUX_DAEMON_LOG_PATH", tmp_path / "state" / "tools-installer" / "prune-daemon.log"
+    )
     monkeypatch.setattr(setup, "load_tools", _no_tools)
     monkeypatch.setattr(setup, "load_categories", _no_categories)
     monkeypatch.setattr(setup, "detect", _platform)
@@ -656,9 +667,23 @@ def test_build_app_wires_live_omz_availability_and_one_terminal_sync_closure(
     assert (tmp_path / ".zshrc").exists()
 
 
-def test_daemon_policy_is_absent_on_linux(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """ROADMAP SC#2: the daemon is invisible/inert on any non-macOS platform."""
+def _no_systemctl(_name: str) -> str | None:
+    return None
+
+
+def _systemctl_and_uv(name: str) -> str | None:
+    return f"/usr/bin/{name}" if name in ("systemctl", "uv") else None
+
+
+def test_daemon_policy_is_absent_on_linux_without_systemd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D-01b, not ROADMAP SC#2: a host without systemd gets no daemon row.
+    ROADMAP SC#2's "invisible/inert on Linux" is deliberately superseded by
+    this phase's D-01a -- see the sibling test below, where systemd IS
+    available and the row IS present."""
     _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup.shutil, "which", _no_systemctl)
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
     monkeypatch.setattr(setup, "detect", lambda: linux)
     seen = _capture_app(monkeypatch)
@@ -668,13 +693,88 @@ def test_daemon_policy_is_absent_on_linux(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert not any(policy.id.startswith("daemon:") for policy in policies.policies)
 
 
-def test_build_daemon_policy_returns_none_off_macos() -> None:
+def test_daemon_policy_is_present_on_linux_with_systemd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D-01a: on a debian platform whose lookup resolves systemctl, exactly
+    one daemon:-prefixed policy reaches PolicyInputs, and its id is the
+    Linux one -- not the macOS `daemon:prune-tmpdir` id."""
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup.shutil, "which", _systemctl_and_uv)
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    monkeypatch.setattr(setup, "detect", lambda: linux)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--uninstall"]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    daemon_ids = [policy.id for policy in policies.policies if policy.id.startswith("daemon:")]
+    assert daemon_ids == ["daemon:prune-tmp-linux"]
+
+
+def test_build_daemon_policy_returns_none_off_macos_only_when_systemctl_is_unresolvable() -> None:
+    """Renamed from test_build_daemon_policy_returns_none_off_macos: this
+    phase's D-01a means "off macOS" alone no longer implies None -- the
+    function returns None off macOS only when systemctl is unresolvable
+    (D-01b). See test_build_daemon_policy_returns_a_linux_policy_when_systemctl_is_resolvable
+    for the positive case."""
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
     # _build_daemon_policy is setup.py's own private composition-root helper;
     # the plan's own <behavior> requires testing it directly (construction
     # must never raise on a bad environment) -- there is no public seam that
     # exercises this without going through the full main()/_build_app flow.
-    assert setup._build_daemon_policy(linux, {}) is None  # pyright: ignore[reportPrivateUsage]
+    policy = setup._build_daemon_policy(  # pyright: ignore[reportPrivateUsage]
+        linux, {}, which=_no_systemctl
+    )
+    assert policy is None
+
+
+def test_build_daemon_policy_returns_a_linux_policy_when_systemctl_is_resolvable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Sandboxed so Policy construction's own active=_is_active() probe (which
+    # checks units_present() before ever calling read_output) reads a
+    # guaranteed-empty directory, not whatever the real dev host happens to
+    # have under ~/.config/systemd/user.
+    monkeypatch.setattr(setup, "_LINUX_DAEMON_UNIT_DIR", tmp_path / "config" / "systemd" / "user")
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    policy = setup._build_daemon_policy(  # pyright: ignore[reportPrivateUsage]
+        linux, {}, which=_systemctl_and_uv
+    )
+    assert policy is not None
+    assert policy.id == "daemon:prune-tmp-linux"
+
+
+def test_build_daemon_policy_on_linux_never_reaches_the_hosts_real_systemctl(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Construction alone (no apply()/is_active() call) must never spawn a
+    real subprocess -- proven with a recording run/read_output pair, sandboxed
+    against a fresh, always-empty unit dir so the D-01c presence short-circuit
+    itself can never mask a real escape (units_present() genuinely False here,
+    not merely False by luck of the real dev host's own state)."""
+    monkeypatch.setattr(setup, "_LINUX_DAEMON_UNIT_DIR", tmp_path / "config" / "systemd" / "user")
+    run_calls: list[list[str]] = []
+    read_calls: list[list[str]] = []
+
+    def recording_run(cmd: list[str]) -> None:
+        run_calls.append(cmd)
+
+    def recording_read_output(cmd: list[str]) -> str:
+        read_calls.append(cmd)
+        return "active"
+
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    policy = setup._build_daemon_policy(  # pyright: ignore[reportPrivateUsage]
+        linux,
+        {},
+        which=_systemctl_and_uv,
+        run=recording_run,
+        read_output=recording_read_output,
+    )
+    assert policy is not None
+    assert policy.id == "daemon:prune-tmp-linux"
+    assert run_calls == []
+    assert read_calls == []
 
 
 def _no_uv(_name: str) -> str | None:
@@ -724,6 +824,32 @@ def test_daemon_default_is_wired_only_for_the_genuine_setup_wizard_entry_point(
 
     assert callable(default_kwargs["daemon_default"])
     assert default_kwargs["daemon_default_policy_id"] == "daemon:prune-tmpdir"
+
+
+def test_daemon_default_is_wired_on_linux_when_systemd_is_available(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D-01a's Linux half, pinned at the composition root: the on-by-default
+    wiring fires from the genuine interactive wizard entry point on Linux
+    too, once systemd is available -- mirrors
+    test_daemon_default_is_wired_only_for_the_genuine_setup_wizard_entry_point's
+    macOS-default coverage, and its own daemon_default_policy_id is the
+    Linux id, not the macOS one."""
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup.shutil, "which", _systemctl_and_uv)
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    monkeypatch.setattr(setup, "detect", lambda: linux)
+    seen = _capture_app(monkeypatch)
+
+    assert setup.main(["--uninstall"]) == 0  # never wires the default
+    assert setup.main([]) == 0  # the genuine wizard entry point
+
+    assert len(seen) == 2
+    uninstall_kwargs, wizard_kwargs = seen
+    assert uninstall_kwargs.get("daemon_default") is None
+    assert uninstall_kwargs.get("daemon_default_policy_id") is None
+    assert callable(wizard_kwargs["daemon_default"])
+    assert wizard_kwargs["daemon_default_policy_id"] == "daemon:prune-tmp-linux"
 
 
 def test_the_policies_view_wires_split_mode_myshellrc_sourcing_for_every_tweak(
