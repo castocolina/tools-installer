@@ -2,7 +2,6 @@ import ast
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
@@ -831,10 +830,10 @@ def _reconstruct(node: ast.expr) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.JoinedStr):
-        parts = []
+        parts: list[str] = []
         for value in node.values:
             if isinstance(value, ast.Constant):
-                parts.append(value.value)
+                parts.append(str(value.value))
             elif isinstance(value, ast.FormattedValue):
                 parts.append("«»")
             else:
@@ -882,14 +881,22 @@ def _accumulating_hits(files: list[Path]) -> list[_Hit]:
 
         relative_path = file_path.relative_to(file_path.resolve().parent.parent)
 
+        parents: dict[ast.AST, ast.AST] = {}
         for node in ast.walk(tree):
             for child in ast.iter_child_nodes(node):
-                child._parent = node
+                parents[child] = node
 
         class Visitor(ast.NodeVisitor):
-            def __init__(self):
+            def __init__(self, file_path: Path, parent_map: dict[ast.AST, ast.AST]):
+                self.file_path = file_path
+                # Bound explicitly rather than closed over: `parents` is rebuilt
+                # per file inside the enclosing loop, and a closure would read
+                # whichever map the loop happened to leave behind (ruff B023).
+                self.parents = parent_map
                 self.current_func: str | None = None
-                self.current_func_node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Module | None = None
+                self.current_func_node: (
+                    ast.FunctionDef | ast.AsyncFunctionDef | ast.Module | None
+                ) = None
                 self.scoped_hits: list[_Hit] = []
 
             def visit_Module(self, node: ast.Module):
@@ -922,75 +929,80 @@ def _accumulating_hits(files: list[Path]) -> list[_Hit]:
                 self.current_func = old_func
                 self.current_func_node = old_func_node
 
-            def _check_scope_level_join(self, scope_node):
+            def _check_scope_level_join(self, scope_node: ast.AST) -> None:
                 """Check scope-level join (all string nodes except docstring)."""
-                parts = []
+                parts: list[str] = []
                 docstring_node = None
                 if isinstance(scope_node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
-                    if scope_node.body and isinstance(scope_node.body[0], ast.Expr):
-                        if isinstance(scope_node.body[0].value, ast.Constant) and isinstance(scope_node.body[0].value.value, str):
-                            docstring_node = scope_node.body[0]
-                            
+                    if (
+                        scope_node.body
+                        and isinstance(scope_node.body[0], ast.Expr)
+                        and isinstance(scope_node.body[0].value, ast.Constant)
+                        and isinstance(scope_node.body[0].value.value, str)
+                    ):
+                        docstring_node = scope_node.body[0]
+
                     for stmt in scope_node.body:
                         if stmt is docstring_node:
                             continue
-                        if isinstance(stmt, ast.Expr):
-                            rec = _reconstruct(stmt.value)
+                        value = None
+                        if isinstance(stmt, (ast.Expr, ast.Assign)) or (
+                            isinstance(stmt, ast.Return) and stmt.value
+                        ):
+                            value = stmt.value
+                        if value is not None:
+                            rec = _reconstruct(value)
                             if rec:
                                 parts.append(rec)
-                        elif isinstance(stmt, ast.Assign):
-                            rec = _reconstruct(stmt.value)
-                            if rec:
-                                parts.append(rec)
-                        elif isinstance(stmt, ast.Return) and stmt.value:
-                            rec = _reconstruct(stmt.value)
-                            if rec:
-                                parts.append(rec)
-                        
+
                     if parts:
                         joined = "".join(parts)
                         if pattern.search(joined):
-                            self.scoped_hits.append(_Hit(
-                                file_path=relative_path,
-                                line_number=scope_node.lineno if hasattr(scope_node, 'lineno') else 0,
-                                enclosing_function=self.current_func,
-                                is_docstring=False,
-                                reconstructed_text=joined,
-                            ))
+                            self.scoped_hits.append(
+                                _Hit(
+                                    file_path=self.file_path,
+                                    line_number=getattr(scope_node, "lineno", 0),
+                                    enclosing_function=self.current_func,
+                                    is_docstring=False,
+                                    reconstructed_text=joined,
+                                )
+                            )
 
             def visit_Expr(self, node: ast.Expr):
                 reconstructed = _reconstruct(node.value)
                 if reconstructed and pattern.search(reconstructed):
                     is_doc = False
-                    parent = getattr(node, '_parent', None)
-                    if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        is_doc = parent.body and parent.body[0] is node
-                    elif isinstance(parent, ast.Module):
-                        is_doc = parent.body and parent.body[0] is node
+                    parent = self.parents.get(node)
+                    if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+                        is_doc = bool(parent.body) and parent.body[0] is node
 
-                    self.scoped_hits.append(_Hit(
-                        file_path=relative_path,
-                        line_number=node.lineno if hasattr(node, 'lineno') else 0,
-                        enclosing_function=self.current_func,
-                        is_docstring=is_doc,
-                        reconstructed_text=reconstructed,
-                    ))
+                    self.scoped_hits.append(
+                        _Hit(
+                            file_path=self.file_path,
+                            line_number=(node.lineno if hasattr(node, "lineno") else 0),
+                            enclosing_function=self.current_func,
+                            is_docstring=is_doc,
+                            reconstructed_text=reconstructed,
+                        )
+                    )
                 self.generic_visit(node)
 
             def visit_Return(self, node: ast.Return):
                 if node.value:
                     reconstructed = _reconstruct(node.value)
                     if reconstructed and pattern.search(reconstructed):
-                        self.scoped_hits.append(_Hit(
-                            file_path=relative_path,
-                            line_number=node.lineno if hasattr(node, 'lineno') else 0,
-                            enclosing_function=self.current_func,
-                            is_docstring=False,
-                            reconstructed_text=reconstructed,
-                        ))
+                        self.scoped_hits.append(
+                            _Hit(
+                                file_path=self.file_path,
+                                line_number=(node.lineno if hasattr(node, "lineno") else 0),
+                                enclosing_function=self.current_func,
+                                is_docstring=False,
+                                reconstructed_text=reconstructed,
+                            )
+                        )
                 self.generic_visit(node)
 
-        visitor = Visitor()
+        visitor = Visitor(relative_path, parents)
         visitor.visit(tree)
         hits.extend(visitor.scoped_hits)
 
@@ -1030,10 +1042,11 @@ def test_no_accumulating_path_build_under_installer_or_setup() -> None:
     the old shape for migration testing, and scanning them would turn this
     invariant into an obstacle to testing the migration it depends on.
 
-    Liveness: both exemptions must actually match (asserted below with
-    is_docstring KIND check), so the invariant cannot be kept green by
-    matching nothing and cannot stay green from a docstring after the
-    emitter stops building the shape.
+    Liveness is carried by this module's seeded-violation tests
+    (`test_scan_reports_*`), which require the scanner to flag a known-bad
+    shape. A needle narrowed until it matches nothing fails those, so this
+    invariant cannot be kept green by gutting the scan. See the comment at the
+    end of this function for why no hit is asserted inside `path_export_guard`.
     """
     repo_root = Path(__file__).resolve().parent.parent
     installer_py = list((repo_root / "installer").glob("**/*.py"))
@@ -1047,36 +1060,50 @@ def test_no_accumulating_path_build_under_installer_or_setup() -> None:
         (Path("installer/rcclean.py"), "find_duplicate_path_lines", True),
     }
 
-    non_exempt = [h for h in hits if (h.file_path, h.enclosing_function, h.is_docstring) not in exempted_triples]
+    non_exempt = [
+        h
+        for h in hits
+        if (h.file_path, h.enclosing_function, h.is_docstring) not in exempted_triples
+    ]
 
     violation_lines = [
-        f"{h.file_path}:{h.line_number} in {h.enclosing_function or 'module'}: {h.reconstructed_text[:60]}"
+        f"{h.file_path}:{h.line_number} in {h.enclosing_function or 'module'}: "
+        f"{h.reconstructed_text[:60]}"
         for h in non_exempt
     ]
 
     assert not non_exempt, (
-        f"Found {len(non_exempt)} accumulating PATH assignment(s) outside exemptions:\n"
-        + "\n".join(violation_lines)
+        f"Found {len(non_exempt)} accumulating PATH assignment(s) outside "
+        f"exemptions:\n" + "\n".join(violation_lines)
     )
 
-    guarded_path_guard_hits = [h for h in hits if h.enclosing_function == "path_export_guard"]
-    guarded_non_doc = [h for h in guarded_path_guard_hits if not h.is_docstring]
-    guarded_doc = [h for h in guarded_path_guard_hits if h.is_docstring]
-    
-    has_guarded_implementation = bool(guarded_non_doc)
-    if not has_guarded_implementation:
-        src = Path(__file__).resolve().parent.parent / "installer" / "shellrc.py"
-        with open(src) as f:
-            content = f.read()
-            has_guarded_doc = "case-guarded" in content and "path_export_guard" in content
-    
-    assert has_guarded_implementation or has_guarded_doc, (
-        "Liveness check failed: path_export_guard either has no reconstructed hits "
-        "(due to f-string FormattedValues limiting AST analysis) or lacks documentation. "
-        "The function and docstring must explain the case-guarded emission pattern."
-    )
+    # Liveness is proven by the seeded-violation tests in this module
+    # (test_scan_reports_*), which feed the scanner a known-bad shape and
+    # require a hit. They are the positive control: a needle narrowed until it
+    # matches nothing fails THEM, so this assertion cannot be kept green by
+    # gutting the scanner.
+    #
+    # It deliberately does NOT assert a hit inside path_export_guard. The
+    # emitter assembles its assignment through an intermediate local
+    # (`value = f"{declared}${{PATH:+:$PATH}}"`, then `export PATH="{value}"`),
+    # so no single reconstructed expression carries both the assignment head
+    # and a `$PATH` reference, and the scan reports zero hits for that function
+    # today. That is the documented reconstruction limit accepted in 15.8-03's
+    # Review Dispositions Ledger (cycle-3 MEDIUM-03), not an emitter defect:
+    # the runtime guarantee lives in the real-shell repeated-source tests in
+    # this module and in tests/test_shell_scripts_path.py, which observe actual
+    # PATH contents rather than source shape.
+    #
+    # An earlier revision asserted `has_guarded_implementation or
+    # has_guarded_doc`, where the fallback was a substring check for
+    # "case-guarded" in shellrc.py. That made the liveness half of this test
+    # satisfiable by a comment, which is exactly the vacuity the assertion
+    # existed to prevent. It is removed rather than weakened further: the
+    # assertion that carries this test is `assert not non_exempt` above.
 
-    rcclean_doc_hits = [h for h in hits if h.file_path == Path("installer/rcclean.py") and h.is_docstring]
+    rcclean_doc_hits = [
+        h for h in hits if h.file_path == Path("installer/rcclean.py") and h.is_docstring
+    ]
     assert rcclean_doc_hits, (
         "Liveness check failed: rcclean docstring exemption did not match "
         "(documentation of the old shape must be present)"
@@ -1126,7 +1153,9 @@ def test_needle_matches_all_path_expansion_spellings() -> None:
 
     for text, should_match in test_cases:
         matches = bool(pattern.search(text))
-        assert matches == should_match, f"Pattern mismatch for: {text} (expected match={should_match})"
+        assert matches == should_match, (
+            f"Pattern mismatch for: {text} (expected match={should_match})"
+        )
 
 
 def test_scan_reports_a_bare_prepend_near_an_unrelated_guard_opening(tmp_path: Path) -> None:
@@ -1136,13 +1165,13 @@ def test_scan_reports_a_bare_prepend_near_an_unrelated_guard_opening(tmp_path: P
     prepend should still report the prepend as a violation, because the
     two-line proximity check is no longer part of the invariant.
     """
-    module_code = '''
+    module_code = """
 def unrelated():
     return "case"
 
 def bad():
     return 'export PATH="/x:$PATH"'
-'''
+"""
     file_path = tmp_path / "bad_module.py"
     file_path.write_text(module_code)
 
@@ -1159,13 +1188,13 @@ def test_scan_reports_a_shape_assembled_from_split_fragments(tmp_path: Path) -> 
     concatenates them should still be reported, because the scan joins
     all string-producing nodes in a scope in source order.
     """
-    module_code = '''
+    module_code = """
 def build_path():
     head = 'export PATH="/x'
     tail = ':$PATH"'
     result = head + tail
     return result
-'''
+"""
     file_path = tmp_path / "split_module.py"
     file_path.write_text(module_code)
 
@@ -1203,11 +1232,15 @@ def test_scan_reports_every_path_expansion_spelling(tmp_path: Path, expansion: s
     Each spelling represents a different shell parameter-expansion form.
     The needle must recognize all of them, not just $PATH and ${PATH}.
     """
-    module_code = f'''
+    module_code = f"""
 def bad():
     return 'export PATH="/x:{expansion}"'
-'''
-    file_path = tmp_path / f"expansion_{expansion.replace('/', '_').replace('$', '_').replace('{', '_').replace('}', '_')}.py"
+"""
+    file_path = tmp_path / (
+        f"expansion_"
+        f"{expansion.replace('/', '_').replace('$', '_').replace('{', '_').replace('}', '_')}"
+        f".py"
+    )
     file_path.write_text(module_code)
 
     hits = _accumulating_hits([file_path])
@@ -1218,25 +1251,36 @@ def bad():
     "var_name",
     ["$PATHOLOGICAL", "${PATHOLOGICAL}"],
 )
-def test_scan_does_not_false_positive_on_longer_variable_names(tmp_path: Path, var_name: str) -> None:
+def test_scan_does_not_false_positive_on_longer_variable_names(
+    tmp_path: Path, var_name: str
+) -> None:
     """Prove longer variable names are not false positives.
 
     $PATHOLOGICAL and ${PATHOLOGICAL} are different variables from $PATH
     and must not trigger the needle.
     """
-    module_code = f'''
+    module_code = f"""
 def not_bad():
     return 'export PATHOLOGICAL="/x:{var_name}"'
-'''
-    file_path = tmp_path / f"longer_{var_name.replace('/', '_').replace('$', '_').replace('{', '_').replace('}', '_')}.py"
+"""
+    file_path = tmp_path / (
+        f"longer_{var_name.replace('/', '_').replace('$', '_').replace('{', '_').replace('}', '_')}"
+        f".py"
+    )
     file_path.write_text(module_code)
 
     hits = _accumulating_hits([file_path])
-    path_like_hits = [h for h in hits if "PATHOLOGICAL" in h.reconstructed_text and "PATH=" in h.reconstructed_text]
+    path_like_hits = [
+        h
+        for h in hits
+        if "PATHOLOGICAL" in h.reconstructed_text and "PATH=" in h.reconstructed_text
+    ]
     assert not path_like_hits, f"False positive for {var_name}"
 
 
-def test_scan_reports_a_production_expression_inside_rcclean(tmp_path: Path) -> None:
+def test_scan_reports_a_production_expression_inside_rcclean(
+    tmp_path: Path,
+) -> None:
     """Prove the rcclean exemption is narrowed to the docstring node.
 
     A module NAMED rcclean.py with find_duplicate_path_lines() whose
@@ -1254,8 +1298,14 @@ def find_duplicate_path_lines():
 
     hits = _accumulating_hits([file_path])
     assert len(hits) >= 1, "Expected to find at least the production expression"
-    production_hits = [h for h in hits if not h.is_docstring and h.enclosing_function == "find_duplicate_path_lines"]
-    assert production_hits, "Expected the production expression (non-docstring) inside the function to be reported"
+    production_hits = [
+        h
+        for h in hits
+        if not h.is_docstring and h.enclosing_function == "find_duplicate_path_lines"
+    ]
+    assert production_hits, (
+        "Expected the production expression (non-docstring) inside the function to be reported"
+    )
 
 
 def test_managed_block_output_contains_no_bare_assignment_line() -> None:
@@ -1269,3 +1319,146 @@ def test_managed_block_output_contains_no_bare_assignment_line() -> None:
         stripped = line.lstrip()
         assert not stripped.startswith("PATH="), f"Found plain PATH= in line: {line}"
         assert not stripped.startswith("export PATH="), f"Found plain export PATH= in line: {line}"
+
+
+def test_a_failed_write_myshellrc_leaves_the_original_byte_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Write failure leaves original file untouched, no temp file left behind."""
+    rc = tmp_path / ".myshellrc"
+    original_bytes = b"# original content\n"
+    rc.write_bytes(original_bytes)
+
+    def raise_oserror(_self: Path, _data: bytes) -> int:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr("pathlib.Path.write_bytes", raise_oserror)
+
+    with pytest.raises(OSError):
+        write_myshellrc([tmp_path / "bin"], rc)
+
+    assert rc.read_bytes() == original_bytes
+    temp_files = list(tmp_path.glob("*.tools-installer.tmp"))
+    assert len(temp_files) == 0, f"Temp files left behind: {temp_files}"
+
+
+def test_a_failed_write_managed_path_leaves_the_original_byte_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Write failure in write_managed_path leaves original file untouched."""
+    from installer.shellrc import write_managed_path
+
+    rc = tmp_path / ".zshrc"
+    original_bytes = b"# original .zshrc\n"
+    rc.write_bytes(original_bytes)
+
+    def raise_oserror(_self: Path, _data: bytes) -> int:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr("pathlib.Path.write_bytes", raise_oserror)
+
+    with pytest.raises(OSError):
+        write_managed_path(rc, [tmp_path / "bin"])
+
+    assert rc.read_bytes() == original_bytes
+    temp_files = list(tmp_path.glob("*.tools-installer.tmp"))
+    assert len(temp_files) == 0
+
+
+def test_a_failed_ensure_source_leaves_the_original_byte_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Write failure in ensure_source leaves original file untouched."""
+    rc = tmp_path / ".bashrc"
+    original_bytes = b"# original .bashrc\n"
+    rc.write_bytes(original_bytes)
+
+    myshellrc = tmp_path / ".myshellrc"
+
+    def raise_oserror(_self: Path, _data: bytes) -> int:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr("pathlib.Path.write_bytes", raise_oserror)
+
+    with pytest.raises(OSError):
+        ensure_source(rc, myshellrc)
+
+    assert rc.read_bytes() == original_bytes
+    temp_files = list(tmp_path.glob("*.tools-installer.tmp"))
+    assert len(temp_files) == 0
+
+
+def test_a_failed_remove_managed_block_leaves_the_original_byte_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Write failure in remove_managed_block leaves original file untouched."""
+    rc = tmp_path / ".myshellrc"
+    original_content = (
+        "# user content\n# >>> tools-installer path >>>\nX\n# <<< tools-installer path <<<"
+    )
+    original_bytes = original_content.encode("utf-8")
+    rc.write_bytes(original_bytes)
+
+    def raise_oserror(_self: Path, _data: bytes) -> int:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr("pathlib.Path.write_bytes", raise_oserror)
+
+    with pytest.raises(OSError):
+        remove_managed_block(rc)
+
+    assert rc.read_bytes() == original_bytes
+    temp_files = list(tmp_path.glob("*.tools-installer.tmp"))
+    assert len(temp_files) == 0
+
+
+def test_the_converted_writers_preserve_a_symlinked_rc_file(tmp_path: Path) -> None:
+    """Symlinked rc file survives as a symlink with its target updated."""
+    real_file = tmp_path / "real_zshrc"
+    real_file.write_text("# original\n")
+
+    link = tmp_path / ".zshrc"
+    link.symlink_to(real_file)
+
+    ensure_source(link, tmp_path / ".myshellrc")
+
+    assert link.is_symlink(), ".zshrc should still be a symlink"
+    assert link.resolve() == real_file, "symlink target should be preserved"
+    content = real_file.read_text()
+    assert "tools-installer source" in content
+
+
+def test_write_myshellrc_creates_missing_file(tmp_path: Path) -> None:
+    """write_myshellrc creates file when it does not exist."""
+    rc = tmp_path / ".myshellrc"
+    assert not rc.exists()
+
+    write_myshellrc([tmp_path / "bin"], rc)
+
+    assert rc.exists()
+    assert "tools-installer path" in rc.read_text()
+
+
+def test_write_managed_path_creates_missing_file(tmp_path: Path) -> None:
+    """write_managed_path creates file when it does not exist."""
+    from installer.shellrc import write_managed_path
+
+    rc = tmp_path / ".zshrc"
+    assert not rc.exists()
+
+    write_managed_path(rc, [tmp_path / "bin"])
+
+    assert rc.exists()
+    assert "tools-installer path" in rc.read_text()
+
+
+def test_ensure_source_creates_missing_file(tmp_path: Path) -> None:
+    """ensure_source creates file when it does not exist."""
+    rc = tmp_path / ".bashrc"
+    assert not rc.exists()
+
+    myshellrc = tmp_path / ".myshellrc"
+    ensure_source(rc, myshellrc)
+
+    assert rc.exists()
+    assert "tools-installer source" in rc.read_text()

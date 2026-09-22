@@ -9,6 +9,7 @@ these files are edited read-modify-write.
 from collections.abc import Callable
 from pathlib import Path
 
+from installer.atomic import atomic_write_text
 from installer.model import Tool
 from installer.platform import Platform
 from installer.resolve import resolve_methods
@@ -179,7 +180,7 @@ def remove_managed_block(path: Path) -> None:
     original = path.read_text()
     stripped = strip_block(original, _PATH_BEGIN, _PATH_END)
     if stripped != original:
-        path.write_text(stripped)
+        atomic_write_text(path, stripped)
 
 
 def has_managed_block(path: Path) -> bool:
@@ -193,7 +194,7 @@ def has_managed_block(path: Path) -> bool:
 def write_myshellrc(bin_dirs: list[Path], path: Path) -> None:
     """Idempotently write the managed PATH block into ~/.myshellrc, preserving the rest."""
     existing = path.read_text() if path.exists() else ""
-    path.write_text(apply_block(existing, managed_block(bin_dirs)))
+    atomic_write_text(path, apply_block(existing, managed_block(bin_dirs)))
 
 
 def write_managed_path(rc_path: Path, bin_dirs: list[Path]) -> None:
@@ -203,7 +204,7 @@ def write_managed_path(rc_path: Path, bin_dirs: list[Path]) -> None:
     preserved. Used when the user opts out of the ~/.myshellrc indirection.
     """
     existing = rc_path.read_text() if rc_path.exists() else ""
-    rc_path.write_text(apply_block(existing, managed_block(bin_dirs)))
+    atomic_write_text(rc_path, apply_block(existing, managed_block(bin_dirs)))
 
 
 def ensure_source(rc_path: Path, myshellrc_path: Path) -> None:
@@ -216,5 +217,4 @@ def ensure_source(rc_path: Path, myshellrc_path: Path) -> None:
         ]
     )
     existing = rc_path.read_text() if rc_path.exists() else ""
-    rc_path.write_text(apply_block(existing, block, begin=_SOURCE_BEGIN, end=_SOURCE_END))
-
+    atomic_write_text(rc_path, apply_block(existing, block, begin=_SOURCE_BEGIN, end=_SOURCE_END))
