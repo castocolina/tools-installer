@@ -873,6 +873,44 @@ def test_the_policies_view_wires_split_mode_myshellrc_sourcing_for_every_tweak(
     assert str(tmp_path / ".myshellrc") in (tmp_path / ".bashrc").read_text()
 
 
+def test_the_policies_view_wires_split_mode_myshellrc_sourcing_for_the_cache_redirect(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """WR-07: in split mode nothing sources ~/.myshellrc, so a macOS redirect
+    written only there was a silent no-op while its row read ON."""
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--guard", "--link-mode", "split"]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    redirect = next(p for p in policies.policies if p.id.startswith("cache-redirect:"))
+    result = redirect.apply()
+    assert str(tmp_path / ".myshellrc") in (tmp_path / ".zshrc").read_text()
+    assert str(tmp_path / ".myshellrc") in (tmp_path / ".bashrc").read_text()
+    assert any(layer.name == "Split-mode sourcing" for layer in result.layers)
+
+
+def test_the_environment_d_dir_honours_xdg_config_home(tmp_path: Path) -> None:
+    """WR-04: systemd's user environment generator reads
+    $XDG_CONFIG_HOME/environment.d; a redirect written under ~/.config there
+    is never read. Import-time constant, so it is read in a fresh process."""
+    import os
+    import subprocess
+    import sys
+
+    xdg = tmp_path / "xdg"
+    env = {**os.environ, "HOME": str(tmp_path), "XDG_CONFIG_HOME": str(xdg)}
+    completed = subprocess.run(
+        [sys.executable, "-c", "import setup; print(setup._ENVIRONMENT_D_DIR)"],
+        cwd=Path(setup.__file__).parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert completed.stdout.strip() == str(xdg / "environment.d")
+
+
 def test_the_policies_view_does_not_wire_split_sourcing_under_centralized_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

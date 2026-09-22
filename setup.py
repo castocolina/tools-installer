@@ -121,7 +121,9 @@ _DAEMON_STATE_PATH = _MYSHELLRC
 _LINUX_DAEMON_UNIT_DIR = systemd_daemon.user_unit_dir(Path.home(), os.environ)
 _LINUX_DAEMON_LOG_PATH = Path.home() / ".local" / "state" / "tools-installer" / "prune-daemon.log"
 _LINUX_DAEMON_SCRIPT_PATH = Path(__file__).parent / "scripts" / "prune-tmp-linux.sh"
-_ENVIRONMENT_D_DIR = Path.home() / ".config" / "environment.d"
+# systemd's user environment generator reads $XDG_CONFIG_HOME/environment.d,
+# so this honours XDG_CONFIG_HOME exactly like _LINUX_DAEMON_UNIT_DIR (WR-04).
+_ENVIRONMENT_D_DIR = env_redirect.environment_d_dir(Path.home(), os.environ)
 
 _STYLE = questionary.Style(
     [
@@ -556,12 +558,21 @@ def _build_daemon_policy(
     )
 
 
-def _cache_redirect_policies(platform: Platform) -> tuple[Policy, ...]:
+def _cache_redirect_policies(
+    platform: Platform,
+    *,
+    ensure_sourced_from: tuple[Path, ...] | Callable[[], tuple[Path, ...]] = (),
+) -> tuple[Policy, ...]:
     """One cache-redirect Policy per declared redirect, for this platform.
 
     Built once and shared: the Policies list, the uninstall preview and the
     uninstall sweep must act on the same objects. The per-platform branch
     lives inside ``cache_redirect_policy``.
+
+    ``ensure_sourced_from`` is ``_build_app``'s link-mode-aware closure
+    (WR-07): in split mode no rc file sources ``~/.myshellrc``, so a macOS
+    redirect written only there would never reach Bun. The CLI uninstall
+    route keeps the ``()`` default, because removal needs no sourcing.
     """
     return tuple(
         cache_redirect_policy(
@@ -570,7 +581,7 @@ def _cache_redirect_policies(platform: Platform) -> tuple[Policy, ...]:
             conf_dir=_ENVIRONMENT_D_DIR,
             rc_path=_MYSHELLRC,
             home=Path.home(),
-            ensure_sourced_from=(),
+            ensure_sourced_from=ensure_sourced_from,
         )
         for redirect in env_redirect.REDIRECTS
     )
@@ -772,7 +783,6 @@ def _build_app(
     # daemon_policy instance -- all three need to read and act on the exact
     # same object.
     daemon = _build_daemon_policy(platform, installed, timer_cache=timer_cache)
-    redirects = _cache_redirect_policies(platform)
 
     # Hoisted above `uninstall_inputs` (Round-1 review HIGH's post-removal
     # invalidation): the Uninstall screen's seam binds to this instance, so
@@ -811,6 +821,8 @@ def _build_app(
         if mode != "split":
             return ()
         return tuple(rc_paths_for_mode(mode, _SHELL))
+
+    redirects = _cache_redirect_policies(platform, ensure_sourced_from=_tweak_ensure_sourced_from)
 
     def _sync_omz_terminals() -> str | None:
         """Apply the shared terminal writer after a committed OMZ plugin edit,
