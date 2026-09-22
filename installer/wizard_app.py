@@ -167,11 +167,11 @@ _GLOBALS_UNREADABLE_PREVIEW = _GLOBALS_UNKNOWN_COUNT
 # the UNAVAILABLE wording (D-03c) names no row, because on that host there is
 # no row to enable, so it is deliberately never rewritten into one.
 _DISK_PRESSURE_ENABLE_PREFIX = "Enable the background cleanup policy"
-_DISK_PRESSURE_TUI_STEP = (
-    "Open the Policies view and turn on the Background tmpdir cleanup row; a one-off "
-    "`./scripts/prune-user-tmpdir.sh --apply` from a terminal clears space immediately "
-    "in the meantime."
-)
+# The console sentence's own tail names the platform's real one-off command
+# (WR-08), so only its leading clause is rewritten for the TUI -- rebuilding
+# the whole sentence here would re-introduce a second, platform-blind copy of
+# that command.
+_DISK_PRESSURE_TUI_PREFIX = "Open the Policies view and turn on the Background tmpdir cleanup row;"
 
 
 class GlobalsReinstalled(Message):
@@ -538,7 +538,9 @@ class DoctorScreen(AppScreen):
                 # generic `Run `make setup`` branch below, or a later edit to
                 # the console wording could let that prefix capture this item
                 # and answer a full disk with pnpm-reinstall advice.
-                rewritten.append(replace(item, next_step=_DISK_PRESSURE_TUI_STEP))
+                tail = item.next_step[len(_DISK_PRESSURE_ENABLE_PREFIX) :]
+                tail = tail.split(";", 1)[1].strip() if ";" in tail else tail.strip()
+                rewritten.append(replace(item, next_step=f"{_DISK_PRESSURE_TUI_PREFIX} {tail}"))
             elif item.next_step.startswith("Run `make setup`"):
                 rewritten.append(
                     replace(

@@ -20,6 +20,12 @@ from installer.pnpm_globals import IncompleteGroup, NodeGlobal, NodeGlobalsRepor
 _RUNNABLE_PRUNE_SENTENCE = (
     "Run `./scripts/prune-user-tmpdir.sh --apply` for an immediate one-off cleanup."
 )
+# WR-08: the Linux rule (tmp_threshold) names the Linux script -- the macOS
+# one defaults to $TMPDIR with no /tmp fallback and prunes another platform's
+# file families entirely.
+_RUNNABLE_PRUNE_SENTENCE_LINUX = (
+    "Run `./scripts/prune-tmp-linux.sh --apply` for an immediate one-off cleanup."
+)
 
 
 def test_healthy_report_yields_a_single_ok_item() -> None:
@@ -382,11 +388,44 @@ def test_disk_pressure_guidance_unavailable_is_an_ordinary_non_emphasised_warnin
 
 
 def test_disk_pressure_guidance_unavailable_next_step_is_the_runnable_prune_sentence() -> None:
+    macos = _pressure(
+        root_free_percent=9.5,
+        tmp_used_percent=None,
+        daemon=DaemonState.UNAVAILABLE,
+        tmp_threshold=False,
+    )
+    assert _RUNNABLE_PRUNE_SENTENCE in disk_pressure_guidance(macos)[0].next_step
+    linux = _pressure(root_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.UNAVAILABLE)
+    assert _RUNNABLE_PRUNE_SENTENCE_LINUX in disk_pressure_guidance(linux)[0].next_step
+
+
+def test_disk_pressure_guidance_unavailable_never_denies_the_row_exists_here() -> None:
+    """IN-06: a timed-out or bus-error query is UNAVAILABLE on a host that
+    does have the Policies row, so "no such policy on this host" was wrong."""
     pressure = _pressure(
         root_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.UNAVAILABLE
     )
     item = disk_pressure_guidance(pressure)[0]
-    assert _RUNNABLE_PRUNE_SENTENCE in item.next_step
+    assert "no such policy" not in item.next_step.lower()
+    assert "could not be read" in item.next_step
+
+
+def test_disk_pressure_guidance_next_step_names_the_platforms_own_prune_script() -> None:
+    """WR-08: the emphasised INACTIVE finding's one immediate-relief command
+    must run on the platform the /tmp rule applies to."""
+    linux = _pressure(root_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.INACTIVE)
+    linux_step = disk_pressure_guidance(linux)[0].next_step
+    assert "prune-tmp-linux.sh --apply" in linux_step
+    assert "prune-user-tmpdir.sh" not in linux_step
+    macos = _pressure(
+        root_free_percent=9.5,
+        tmp_used_percent=None,
+        daemon=DaemonState.INACTIVE,
+        tmp_threshold=False,
+    )
+    macos_step = disk_pressure_guidance(macos)[0].next_step
+    assert "prune-user-tmpdir.sh --apply" in macos_step
+    assert "prune-tmp-linux.sh" not in macos_step
 
 
 def test_disk_pressure_guidance_unavailable_next_step_never_offers_to_enable_a_row() -> None:
@@ -403,7 +442,7 @@ def test_disk_pressure_guidance_inactive_next_step_points_at_enabling_the_policy
     pressure = _pressure(root_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.INACTIVE)
     item = disk_pressure_guidance(pressure)[0]
     assert "enable" in item.next_step.lower()
-    assert "prune-user-tmpdir.sh" in item.next_step
+    assert "prune-tmp-linux.sh" in item.next_step
 
 
 def test_disk_pressure_guidance_inactive_and_active_never_use_the_unavailable_sentence() -> None:
@@ -415,6 +454,8 @@ def test_disk_pressure_guidance_inactive_and_active_never_use_the_unavailable_se
     )[0]
     assert _RUNNABLE_PRUNE_SENTENCE not in inactive.next_step
     assert _RUNNABLE_PRUNE_SENTENCE not in active.next_step
+    assert _RUNNABLE_PRUNE_SENTENCE_LINUX not in inactive.next_step
+    assert _RUNNABLE_PRUNE_SENTENCE_LINUX not in active.next_step
 
 
 def test_disk_pressure_guidance_empty_when_daemon_inactive_and_no_pressure() -> None:

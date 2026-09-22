@@ -279,9 +279,24 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
 # never appears in the INACTIVE (or ACTIVE) next_step, and a reader can tell
 # the two "no action beyond a one-off" and "there is a policy to flip" cases
 # apart by next_step content alone.
-_RUNNABLE_PRUNE_SENTENCE = (
-    "Run `./scripts/prune-user-tmpdir.sh --apply` for an immediate one-off cleanup."
-)
+_MACOS_PRUNE_SCRIPT = "./scripts/prune-user-tmpdir.sh --apply"
+_LINUX_PRUNE_SCRIPT = "./scripts/prune-tmp-linux.sh --apply"
+
+
+def prune_command(pressure: DiskPressure) -> str:
+    """The one-off cleanup command that actually works on this platform.
+
+    WR-08: every next step named the macOS script. On Linux it defaults to
+    $TMPDIR with no /tmp fallback (so it exits 1 on a stock host) and prunes
+    a macOS family of files three days old, not the fresh Bun .so/.node
+    orphans filling the tmpfs. `tmp_threshold` is the Linux-only flag the
+    probe already carries, so no new platform argument is needed.
+    """
+    return _LINUX_PRUNE_SCRIPT if pressure.tmp_threshold else _MACOS_PRUNE_SCRIPT
+
+
+def runnable_prune_sentence(pressure: DiskPressure) -> str:
+    return f"Run `{prune_command(pressure)}` for an immediate one-off cleanup."
 
 
 def _pressure_clauses(pressure: DiskPressure) -> tuple[str, ...]:
@@ -342,25 +357,29 @@ def _disk_pressure_meaning(pressure: DiskPressure) -> str:
 
 
 def _disk_pressure_next_step(pressure: DiskPressure) -> str:
+    command = prune_command(pressure)
     if pressure.daemon is DaemonState.INACTIVE:
         # Enable through this project's own setup flow, and name the manual
         # prune script as the immediate one-off (D-03's action text). This
-        # sentence is deliberately NOT _RUNNABLE_PRUNE_SENTENCE verbatim, and
+        # sentence is deliberately NOT runnable_prune_sentence verbatim, and
         # plan 15.7-06 rewrites it (by its own new prefix match, distinct
         # from the existing "Run `make fix`"/"Run `make setup`" prefixes
         # DoctorScreen._tui_guidance already recognises) into a "go to the
         # Policies view" TUI instruction.
         return (
             "Enable the background cleanup policy in `make setup`'s Policies view; a "
-            "one-off `./scripts/prune-user-tmpdir.sh --apply` run clears space "
-            "immediately in the meantime."
+            f"one-off `{command}` run clears space immediately in the meantime."
         )
     if pressure.daemon is DaemonState.UNAVAILABLE:
         # D-03c: no policy row exists on this host to enable, so only the
         # one-off is named -- never "enable"/"Policies"/"setup" wording.
+        # IN-06: UNAVAILABLE also covers a query that timed out or hit a
+        # wedged bus on a host that DOES have the row, so the wording says
+        # the state could not be read rather than claiming the capability
+        # does not exist here.
         return (
-            f"{_RUNNABLE_PRUNE_SENTENCE} No managed background cleanup could be "
-            "confirmed on this machine, and there is no such policy on this host to turn on."
+            f"{runnable_prune_sentence(pressure)} No managed background cleanup could be "
+            "confirmed on this machine: its state could not be read."
         )
     return (
         "Nothing to do right now -- the background cleanup job is already active and "

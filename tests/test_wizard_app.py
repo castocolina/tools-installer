@@ -3822,6 +3822,25 @@ async def test_doctor_tui_rewrites_the_disk_pressure_next_step_to_the_policies_r
         assert "make setup`'s Policies view" not in body
 
 
+async def test_doctor_tui_step_keeps_the_platforms_own_prune_command() -> None:
+    """WR-08: the TUI rewrite used to hardcode the macOS script, so the Linux
+    finding recommended a command that exits 1 on a stock Linux host."""
+    linux = _pressure(root_free=5.0, tmp_used=95.0, tmp_threshold=True)
+    app = _app(policies=_policy_inputs(disk_pressure=_probe(linux)), initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        [console_item] = disk_pressure_guidance(linux)
+        [tui_item] = [
+            item
+            for item in app.screen._tui_guidance()  # pyright: ignore[reportPrivateUsage]
+            if item.title == console_item.title
+        ]
+        assert "Policies view" in tui_item.next_step
+        assert "prune-tmp-linux.sh --apply" in tui_item.next_step
+        assert "prune-user-tmpdir.sh" not in tui_item.next_step
+
+
 async def test_doctor_disk_pressure_step_is_never_rewritten_into_pnpm_advice() -> None:
     # The generic `Run `make setup`` branch must not capture this item: a
     # full disk answered with "press r to reinstall pnpm globals" is exactly
