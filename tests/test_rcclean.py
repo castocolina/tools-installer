@@ -1,6 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from installer.rcclean import find_duplicate_path_lines, strip_lines
+from installer.shellrc import managed_block, path_export_guard
 
 
 def test_flags_literal_home_path_duplicate():
@@ -152,4 +155,157 @@ def test_assignment_with_unresolvable_var_is_skipped():
     env = {"HOME": "/home/u"}
     # BUN_INSTALL never gets stored because $UNKNOWN_BASE can't be resolved,
     # so the PATH line also can't be resolved → not flagged.
+    assert find_duplicate_path_lines(rc, managed, env) == []
+
+
+# Task 1: Pin that this project's own guarded output is never flagged
+
+
+def test_managed_block_own_output_is_not_flagged() -> None:
+    """The real managed_block() output should never be flagged by find_duplicate_path_lines.
+
+    This pins that the new case-guarded form emitted by managed_block() is self-deduping
+    and will never be stripped by the cleanup path.
+    """
+    dir_a = Path("/home/u/.local/bin")
+    dir_b = Path("/home/u/.bun/bin")
+    rc = managed_block([dir_a, dir_b])
+    managed: set[Path] = {dir_a, dir_b}
+    env = {"HOME": "/home/u"}
+    assert find_duplicate_path_lines(rc, managed, env) == []
+
+
+def test_guard_lines_are_not_flagged_outside_our_markers() -> None:
+    """The guard lines alone (stripped of markers) should not match _PATH_EXPORT regex.
+
+    This proves the regex itself recognizes the guard form as safe, not merely its
+    location inside marker blocks. Tests that _managed_line_indices contributes nothing.
+    """
+    dir_a = Path("/home/u/.local/bin")
+    dir_b = Path("/home/u/.bun/bin")
+    # Get the full managed block, then strip the marker lines
+    full_block = managed_block([dir_a, dir_b])
+    lines = full_block.split("\n")
+    # First line is the begin marker, last line is the end marker; remove both
+    guard_lines = "\n".join(lines[1:-1])
+    managed: set[Path] = {dir_a, dir_b}
+    env = {"HOME": "/home/u"}
+    assert find_duplicate_path_lines(guard_lines, managed, env) == []
+
+
+def test_indented_guard_line_is_not_flagged() -> None:
+    """An indented guard line should not be flagged (neither regex nor heuristic match).
+
+    This ensures that if a user's own if/case block indents a copied guard line,
+    it stays safe from the cleanup path.
+    """
+    directory = Path("/home/u/.local/bin")
+    guard = path_export_guard(directory)
+    indented = "    " + guard
+    rc = indented + "\n"
+    managed: set[Path] = {directory}
+    env = {"HOME": "/home/u"}
+    assert find_duplicate_path_lines(rc, managed, env) == []
+
+
+def test_guard_line_for_an_unmanaged_dir_is_not_flagged() -> None:
+    """A guard line for a directory not in managed_dirs should not be flagged.
+
+    This confirms that self-deduping lines are never strip candidates, even if the
+    directory name does not appear in our managed set (e.g., a user's own tool).
+    """
+    directory = Path("/opt/some/tool/bin")
+    guard = path_export_guard(directory)
+    rc = guard + "\n"
+    # managed_dirs is empty — the directory is not ours
+    managed: set[Path] = set()
+    env = {"HOME": "/home/u"}
+    assert find_duplicate_path_lines(rc, managed, env) == []
+
+
+def test_the_two_pattern_guard_form_is_not_flagged(tmp_path: Path) -> None:
+    """A guard line with two patterns (for aliased directories) should not be flagged.
+
+    When a directory has a second spelling (e.g., /home -> /var/home on this host),
+    path_export_guard emits a case pattern with two alternatives joined by |.
+    This test exercises that alternation branch.
+    """
+    import sys
+
+    # Create a real aliased directory under tmp_path to test the symlink branch
+    real_dir = tmp_path / "real" / "bin"
+    real_dir.mkdir(parents=True)
+    link_dir = tmp_path / "link"
+    try:
+        link_dir.symlink_to(tmp_path / "real")
+    except OSError:
+        # Platform without symlink support; skip this test
+        if sys.platform == "win32":
+            pytest.skip(reason="Windows symlink not available without admin")
+        raise
+
+    # Guard the symlinked path; path_export_guard will detect the alias
+    guard = path_export_guard(link_dir / "bin")
+    rc = guard + "\n"
+
+    # Both spellings are in managed_dirs
+    managed: set[Path] = {link_dir / "bin", real_dir}
+    env = {"HOME": str(tmp_path)}
+    assert find_duplicate_path_lines(rc, managed, env) == []
+
+
+# Task 2: Pin the opposite direction — other tools' plain exports are still flagged
+
+
+def test_plain_export_for_a_managed_dir_is_still_flagged_alongside_our_guard() -> None:
+    """After the shape change, plain exports are still flagged when mixed with guarded lines.
+
+    This is the critical test: it proves the two shapes are distinguished, not that
+    everything stopped being flagged. A file with both this project's guarded block
+    and another tool's plain export should flag only the plain export.
+    """
+    directory = Path("/home/u/.bun/bin")
+
+    # Build rc text as a list so we can track line indices
+    lines: list[str] = []
+    lines.extend(managed_block([directory]).split("\n"))
+    plain_export_line_index = len(lines)
+    lines.append('export PATH="/home/u/.bun/bin:$PATH"')
+    rc = "\n".join(lines)
+
+    managed: set[Path] = {directory}
+    env = {"HOME": "/home/u"}
+    result = find_duplicate_path_lines(rc, managed, env)
+
+    # Should find exactly one line: the plain export
+    assert result == [plain_export_line_index]
+
+
+def test_pnpm_case_guard_and_our_guard_are_both_skipped_in_one_file() -> None:
+    """Two independent self-deduping guard forms in one file should both be skipped.
+
+    This confirms that pnpm's own multi-line case guard and our single-line guard
+    are both recognized as self-deduping and neither is a strip candidate.
+    """
+    our_directory = Path("/home/u/.local/bin")
+
+    # pnpm's multi-line guard form (from existing test)
+    pnpm_guard = (
+        'export PNPM_HOME="$HOME/.local/share/pnpm"\n'
+        'case ":$PATH:" in\n'
+        '  *":$PNPM_HOME:"*) ;;\n'
+        '  *) export PATH="$PNPM_HOME:$PATH" ;;\n'
+        "esac"
+    )
+
+    # Our single-line guard form
+    our_guard = path_export_guard(our_directory)
+
+    rc = pnpm_guard + "\n" + our_guard + "\n"
+
+    managed: set[Path] = {
+        Path("/home/u/.local/share/pnpm"),
+        our_directory,
+    }
+    env = {"HOME": "/home/u"}
     assert find_duplicate_path_lines(rc, managed, env) == []
