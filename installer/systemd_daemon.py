@@ -15,6 +15,7 @@ from installer/run.py -- this module never imports subprocess.
 from __future__ import annotations
 
 import shutil
+import threading
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
@@ -485,28 +486,50 @@ class TimerStateCache:
         self._clock = clock
         self._value: DaemonState | None = None
         self._at: float | None = None
+        # WR-03: the cache is shared by the event loop and thread workers
+        # (the daemon-default apply, the Doctor probe, the execute screen's
+        # verify). The lock guards the three fields; the generation, bumped
+        # by every invalidate(), lets a read() whose probe started BEFORE an
+        # invalidate discard its now-stale answer instead of storing it as
+        # fresh. The probe itself runs outside the lock so a slow systemctl
+        # never blocks peek().
+        self._lock = threading.Lock()
+        self._generation = 0
 
     def read(self) -> DaemonState:
         """Return the memo when fresh; otherwise issue one bounded probe and
-        store the answer. MAY block for up to the probe's own timeout."""
-        now = self._clock()
-        if self._value is not None and self._at is not None and (now - self._at) < self._ttl:
-            return self._value
+        store the answer. MAY block for up to the probe's own timeout.
+
+        The answer is stored only when no invalidate() ran while the probe
+        was in flight; otherwise it is returned but left unstored, so the
+        next read() probes again.
+        """
+        with self._lock:
+            now = self._clock()
+            fresh = self._at is not None and (now - self._at) < self._ttl
+            if self._value is not None and fresh:
+                return self._value
+            generation = self._generation
         value = self._probe()
-        self._value = value
-        self._at = now
+        with self._lock:
+            if generation == self._generation:
+                self._value = value
+                self._at = now
         return value
 
     def peek(self) -> DaemonState | None:
         """The last stored answer whatever its age, or None if never read.
         NEVER probes, never blocks, never spawns."""
-        return self._value
+        with self._lock:
+            return self._value
 
     def invalidate(self) -> None:
         """Mark the stored answer STALE without discarding it: the next
         read() re-probes, while peek() can still report the last known
         answer instead of falling back to None (D-01e)."""
-        self._at = None
+        with self._lock:
+            self._at = None
+            self._generation += 1
 
 
 def bootout(

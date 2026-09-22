@@ -12,6 +12,7 @@ be switched out. Navigation is therefore a stack with the base view at the
 bottom: the stack is always `[base]` or `[base, <one other view>]`.
 """
 
+import contextlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -211,6 +212,32 @@ class GlobalsAudited(Message):
         super().__init__()
 
 
+class DiskPressureProbed(Message):
+    """The Doctor's threaded blocking disk-pressure read finished (WR-02).
+
+    Carries nothing: the worker's only job is to warm the shared
+    TimerStateCache off the event loop, and the render path then reads the
+    fresh answer through the non-blocking peek.
+    """
+
+
+class PolicyToggled(Message):
+    """A scheduled-job toggle finished on its thread worker (WR-02).
+
+    `was_active` is the row state the toggle started from; `result` is None
+    exactly when run_live reported `error`.
+    """
+
+    def __init__(
+        self, policy_id: str, was_active: bool, result: PolicyResult | None, error: str | None
+    ) -> None:
+        self.policy_id = policy_id
+        self.was_active = was_active
+        self.result = result
+        self.error = error
+        super().__init__()
+
+
 class _BodyStatic(Static):
     """Static with a small public render seam for headless tests."""
 
@@ -257,11 +284,13 @@ class DoctorScreen(AppScreen):
         self._report = report
         # A predicate, not its result, for the guard_state reason: the
         # Policies view can enable the background cleanup one navigation step
-        # away, so every entry re-reads it. Consulted only in
-        # _refresh_guidance, never at render time and never on a worker: the
-        # mount half is one statvfs, and the daemon half is a memoized,
-        # bounded read -- unlike the pnpm audit, nothing here needs a thread.
+        # away, so every entry re-reads it. WR-02: the daemon half of the
+        # blocking read may spawn `systemctl --user is-active` (bounded, but
+        # a frozen UI for its duration), so the event loop only ever calls it
+        # with blocking=False (TimerStateCache.peek). The blocking read runs in
+        # _probe_disk_pressure_worker, which then asks for a re-render.
         self.disk_pressure = disk_pressure
+        self.disk_probing = False
         # A predicate, not its result: the Policies view installs and removes the
         # pip/npm ban live, one nav step away, and guard_guidance renders exactly
         # that state. The PATH audit beside it stays a snapshot on purpose — the
@@ -326,6 +355,7 @@ class DoctorScreen(AppScreen):
         self._refresh_guidance()
         self._refresh_body()
         self._start_globals_audit()
+        self._start_disk_probe()
 
     def enter_view(self) -> None:
         """Re-read the ban state on every entry, and re-ask pnpm off the loop.
@@ -343,6 +373,36 @@ class DoctorScreen(AppScreen):
         if self.is_mounted:
             self._refresh_body()
             self._start_globals_audit()
+            self._start_disk_probe()
+
+    def _start_disk_probe(self) -> None:
+        if self.disk_pressure is None:
+            return
+        self.disk_probing = True
+        self._probe_disk_pressure_worker()
+
+    @work(thread=True, exclusive=True, group="disk-pressure", exit_on_error=False)
+    def _probe_disk_pressure_worker(self) -> None:
+        """Take the blocking disk-pressure read off the event loop (WR-02).
+
+        The answer is not carried back: the read's purpose is to refresh the
+        shared TimerStateCache, which the render path then peeks. The same
+        (OSError, ValueError) second layer _disk_pressure_items uses applies,
+        and the message is posted in a finally so disk_probing always clears.
+        """
+        try:
+            probe = self.disk_pressure
+            if probe is not None:
+                with contextlib.suppress(OSError, ValueError):
+                    probe()
+        finally:
+            self.post_message(DiskPressureProbed())
+
+    def on_disk_pressure_probed(self, _message: DiskPressureProbed) -> None:
+        self.disk_probing = False
+        self._refresh_guidance()
+        if self.is_mounted:
+            self._refresh_body()
 
     def _start_globals_audit(self) -> None:
         if self.globals_running:
@@ -385,7 +445,7 @@ class DoctorScreen(AppScreen):
         # documented second layer over the INJECTED closure a caller composes
         # -- the same named set run_doctor uses, never a blanket except.
         try:
-            pressure = self.disk_pressure()
+            pressure = self.disk_pressure(blocking=False)
         except (OSError, ValueError):
             return []
         return disk_pressure_guidance(pressure)
@@ -1419,6 +1479,9 @@ class PoliciesScreen(AppScreen):
         }
         self.error: str | None = None
         self.detail_text = ""
+        # True while a scheduled-job toggle runs on its thread worker (WR-02);
+        # a second toggle or a reschedule waits for it.
+        self.toggle_in_flight = False
         # Explicit, not left to on_data_table_row_highlighted's own reset as the
         # sole assignment point: an AttributeError would otherwise be reachable
         # if action_toggle_log ever ran before any row-highlight event has fired
@@ -1645,7 +1708,7 @@ class PoliciesScreen(AppScreen):
           never probes. Memoization alone is not the answer, although "it's
           cached" reads like one: a memo still has a cold first read and a TTL
           expiry, and on those a read() blocks the Textual event loop for up to
-          run.QUERY_TIMEOUT (20s) -- bounded, but a frozen UI. Nor is "move it
+          systemd_daemon.SYSTEMCTL_QUERY_TIMEOUT (5 s) -- bounded, but a frozen UI. Nor is "move it
           to a worker": the daemon state is not even shown on this line, so a
           worker would add async plumbing to fetch a value nothing renders.
 
@@ -1702,24 +1765,40 @@ class PoliciesScreen(AppScreen):
         self._log_view = not self._log_view
         self._set_detail(policy)
 
-    def refresh_daemon_state(self, policy_id: str, applied: bool) -> None:
+    def live_state(self, policy_id: str) -> bool | None:
+        """The matching Policy's own is_active() answer, or None when there is
+        no such policy or it binds no is_active closure.
+
+        Touches no widget, so a thread worker may call it -- and only a worker
+        should: for the Linux daemon it may spawn a bounded
+        `systemctl --user is-active` (WR-02).
+        """
+        policy = next((p for p in self._policies if p.id == policy_id), None)
+        if policy is None or policy.is_active is None:
+            return None
+        return policy.is_active()
+
+    def refresh_daemon_state(self, policy_id: str, applied: bool, live: bool | None) -> None:
         """Explicit UI refresh after an on-by-default worker run completes.
 
-        Resolves the value to display via the matching Policy's own
-        is_active() live-check when present, COMPLETELY IGNORING `applied`
-        -- `applied=False` means only "no apply() call was made this run",
-        which is equally true whether the policy is already ACTIVE-and-
-        decided or already DISABLED-and-decided; conflating the two would
-        incorrectly flip an already-on daemon's row to OFF on every ordinary
-        second run (11-REVIEWS.md cycle 3 finding #11). Falls back to
-        `applied` only when no matching policy is found or it has no
-        is_active closure (true for every other policy kind today).
+        `live` is the policy's own is_active() answer, resolved by the worker
+        through live_state() BEFORE it posted (WR-02: this runs on the event
+        loop, which must never probe systemd). It wins over `applied` --
+        `applied=False` means only "no apply() call was made this run", which
+        is equally true whether the policy is already ACTIVE-and-decided or
+        already DISABLED-and-decided; conflating the two would incorrectly
+        flip an already-on daemon's row to OFF on every ordinary second run
+        (11-REVIEWS.md cycle 3 finding #11). `applied` is used only for a
+        policy with no is_active closure; a policy that has one but whose
+        answer the worker could not resolve keeps its row as it is.
         Idempotent: a no-op when the resolved value does not actually
         change anything, so calling this unconditionally is harmless.
         """
         policy = next((p for p in self._policies if p.id == policy_id), None)
-        if policy is not None and policy.is_active is not None:
-            resolved = policy.is_active()
+        if live is not None:
+            resolved = live
+        elif policy is not None and policy.is_active is not None:
+            return
         else:
             resolved = applied
         if policy_id not in self.active_state or self.active_state[policy_id] == resolved:
@@ -1742,6 +1821,9 @@ class PoliciesScreen(AppScreen):
         ):
             self.status.set(_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE, "warn")
             return
+        if self.toggle_in_flight:
+            self.status.set(_TOGGLE_IN_FLIGHT_MESSAGE, "warn")
+            return
         active = self.active_state[policy.id]
         missing_requires = policy.missing_requirements()
         if not active and missing_requires and policy.hard_requires:
@@ -1755,7 +1837,40 @@ class PoliciesScreen(AppScreen):
             )
             self._set_detail(policy)
             return
-        result, self.error = run_live(policy.remove if active else policy.apply)
+        action = policy.remove if active else policy.apply
+        if policy.log_path is not None:
+            # WR-02: a scheduled job's apply/remove issues unbounded
+            # launchctl/systemctl mutations, plus (Linux) the bounded
+            # competing-mechanism probes -- seconds of frozen UI on a wedged
+            # user manager. It runs on a thread worker through the same
+            # run_live, and the outcome comes back as PolicyToggled.
+            self.toggle_in_flight = True
+            self.status.set(f"Applying {policy.label}...", "warn")
+            self._toggle_policy_worker(policy, active, action)
+            return
+        result, self.error = run_live(action)
+        self._finish_toggle(policy, active, result)
+
+    @work(thread=True, exclusive=True, group="policy-toggle", exit_on_error=False)
+    def _toggle_policy_worker(
+        self, policy: Policy, active: bool, action: Callable[[], PolicyResult]
+    ) -> None:
+        result: PolicyResult | None = None
+        error: str | None = "the policy change did not complete"
+        try:
+            result, error = run_live(action)
+        finally:
+            self.post_message(PolicyToggled(policy.id, active, result, error))
+
+    def on_policy_toggled(self, message: PolicyToggled) -> None:
+        self.toggle_in_flight = False
+        policy = next((item for item in self._policies if item.id == message.policy_id), None)
+        if policy is None:
+            return
+        self.error = message.error
+        self._finish_toggle(policy, message.was_active, message.result)
+
+    def _finish_toggle(self, policy: Policy, active: bool, result: PolicyResult | None) -> None:
         if result is None:
             self.status.set(
                 f"Policy change failed: {self.error}. Check permissions, then press space.",
@@ -1826,6 +1941,9 @@ class PoliciesScreen(AppScreen):
                 self.app, "daemon_default_in_flight", False
             ):
                 self.status.set(_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE, "warn")
+                return
+            if self.toggle_in_flight:
+                self.status.set(_TOGGLE_IN_FLIGHT_MESSAGE, "warn")
                 return
             hour_text, minute_text = value.split(":")
             hour, minute = int(hour_text), int(minute_text)
@@ -2009,6 +2127,7 @@ class LinkModeScreen(ModalScreen[str | None]):
 _DAEMON_DEFAULT_IN_FLIGHT_MESSAGE = (
     "Applying the on-by-default daemon setting; wait a moment, then try again."
 )
+_TOGGLE_IN_FLIGHT_MESSAGE = "A background job change is still applying; wait a moment, then retry."
 
 
 class DaemonDefaultApplied(Message):
@@ -2021,9 +2140,12 @@ class DaemonDefaultApplied(Message):
     may only be touched from the app's own thread.
     """
 
-    def __init__(self, policy_id: str, applied: bool) -> None:
+    def __init__(self, policy_id: str, applied: bool, live: bool | None = None) -> None:
         self.policy_id = policy_id
         self.applied = applied
+        # The policy's own is_active() answer, resolved on the worker thread
+        # (WR-02), or None when there was none to resolve.
+        self.live = live
         super().__init__()
 
 
@@ -2254,12 +2376,23 @@ class UnifiedApp(App[list[str] | None]):
         never swallows or hides a genuine bug.
         """
         applied = False
+        live: bool | None = None
         try:
             if self._daemon_default is not None:
                 applied = self._daemon_default()
+            # Resolved HERE, on the worker thread, never in the handler: the
+            # apply's own finally just invalidated the timer cache, so this
+            # read is guaranteed to spawn `systemctl --user is-active` (WR-02).
+            policies_screen = self._views.get("policies")
+            if self._daemon_default_policy_id is not None and isinstance(
+                policies_screen, PoliciesScreen
+            ):
+                live = policies_screen.live_state(self._daemon_default_policy_id)
         finally:
             if self._daemon_default_policy_id is not None:
-                self.post_message(DaemonDefaultApplied(self._daemon_default_policy_id, applied))
+                self.post_message(
+                    DaemonDefaultApplied(self._daemon_default_policy_id, applied, live)
+                )
 
     def on_daemon_default_applied(self, message: DaemonDefaultApplied) -> None:
         # Cleared FIRST, unconditionally: this is the ONE place the flag is
@@ -2268,7 +2401,7 @@ class UnifiedApp(App[list[str] | None]):
         self.daemon_default_in_flight = False
         policies_screen = self._views.get("policies")
         if isinstance(policies_screen, PoliciesScreen):
-            policies_screen.refresh_daemon_state(message.policy_id, message.applied)
+            policies_screen.refresh_daemon_state(message.policy_id, message.applied, message.live)
 
     @property
     def catalog(self) -> CatalogScreen:

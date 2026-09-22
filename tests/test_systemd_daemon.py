@@ -513,6 +513,24 @@ def test_cache_peek_after_invalidate_returns_the_last_known_answer_not_none() ->
     assert calls == 2  # invalidate forced a re-probe at that later read()
 
 
+def test_cache_an_invalidate_during_an_in_flight_probe_is_never_lost() -> None:
+    """WR-03: another thread's apply invalidates while this read() is still
+    probing. Storing the pre-invalidate answer as fresh hid the toggle for a
+    whole TTL."""
+    answers = iter([DaemonState.INACTIVE, DaemonState.ACTIVE])
+    cache: systemd_daemon.TimerStateCache
+
+    def probe() -> DaemonState:
+        answer = next(answers)
+        if answer is DaemonState.INACTIVE:
+            cache.invalidate()  # the worker's apply finishes mid-probe
+        return answer
+
+    cache = systemd_daemon.TimerStateCache(probe, ttl=60.0, clock=lambda: 0.0)
+    assert cache.read() is DaemonState.INACTIVE  # the racing caller still gets its answer
+    assert cache.read() is DaemonState.ACTIVE  # ...but it was not memoized as fresh
+
+
 def test_linux_daemon_policy_uses_the_injected_cache_by_identity(tmp_path: Path) -> None:
     paths = _make_paths(tmp_path)
     injected = systemd_daemon.TimerStateCache(lambda: DaemonState.INACTIVE)
