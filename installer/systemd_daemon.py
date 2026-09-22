@@ -34,6 +34,7 @@ from installer.daemon import (
     wrapper_present,
 )
 from installer.enums import DaemonState
+from installer.locations import xdg_config_base
 from installer.run import CommandError, OutputRunner, Runner, run_captured, run_query
 from installer.shellrc import apply_block, strip_block
 
@@ -140,15 +141,14 @@ def user_unit_dir(home: Path, environ: Mapping[str, str]) -> Path:
     home/.config/systemd/user when XDG_CONFIG_HOME is unset or relative.
 
     systemd documents $XDG_CONFIG_HOME/systemd/user as the per-user unit
-    search path, so this read belongs to this module rather than a shared
-    helper. A RELATIVE XDG_CONFIG_HOME is ignored rather than honoured: the
-    XDG base-directory spec says a non-absolute value must be ignored, and
-    honouring one here would resolve every unit path against whatever cwd
-    the process happens to have (review LOW 15.7-01 / 15.7-04).
+    search path, so the "systemd/user" SUB-PATH belongs to this module. The
+    base-directory rule underneath it does not: it is shared verbatim with
+    env_redirect.environment_d_dir, so it lives once in
+    locations.xdg_config_base (lane-2 MEDIUM-01). A RELATIVE
+    XDG_CONFIG_HOME is ignored rather than honoured -- see that helper for
+    why (review LOW 15.7-01 / 15.7-04).
     """
-    raw = environ.get("XDG_CONFIG_HOME", "")
-    base = Path(raw) if raw and Path(raw).is_absolute() else home / ".config"
-    return base / "systemd" / "user"
+    return xdg_config_base(home, environ) / "systemd" / "user"
 
 
 def systemd_available(*, which: Callable[[str], str | None] = shutil.which) -> bool:
