@@ -1,7 +1,9 @@
 """Manage ~/.myshellrc as one marker-delimited PATH block, and wire `source` into rc files.
 
 Every write is idempotent: only the marked block is ever rewritten, user content is
-preserved, and entries are never duplicated across runs.
+preserved, and entries are never duplicated across runs. Every write in this module
+goes through installer/atomic.py, because a truncated rc file is unrecoverable and
+these files are edited read-modify-write.
 """
 
 from collections.abc import Callable
@@ -15,8 +17,6 @@ _PATH_BEGIN = "# >>> tools-installer path >>>"
 _PATH_END = "# <<< tools-installer path <<<"
 _SOURCE_BEGIN = "# >>> tools-installer source >>>"
 _SOURCE_END = "# <<< tools-installer source <<<"
-_PNPM_BEGIN = "# >>> tools-installer pnpm >>>"
-_PNPM_END = "# <<< tools-installer pnpm <<<"
 
 
 def _resolve_home(path: Path, home: Path) -> Path:
@@ -116,35 +116,6 @@ def path_export_guard(directory: Path) -> str:
 
     value = f"{declared}${{PATH:+:$PATH}}"
     return f'case ":${{PATH-}}:" in {guard_pattern}) ;; *) export PATH="{value}";;esac'
-
-
-def existing_managed_bin_dirs(
-    path: Path,
-    exists: Callable[[Path], bool] = Path.is_dir,
-) -> list[Path]:
-    """Read valid PATH entries from the last installer-owned managed block."""
-    if not path.exists():
-        return []
-    lines = path.read_text().splitlines()
-    starts = [index for index, line in enumerate(lines) if line == _PATH_BEGIN]
-    if not starts:
-        return []
-    start = starts[-1]
-    try:
-        stop = lines.index(_PATH_END, start + 1)
-    except ValueError:
-        return []
-
-    prefix = 'export PATH="'
-    suffix = ':$PATH"'
-    paths: list[Path] = []
-    for line in lines[start + 1 : stop]:
-        if not (line.startswith(prefix) and line.endswith(suffix)):
-            continue
-        candidate = Path(line[len(prefix) : -len(suffix)])
-        if candidate.is_absolute() and exists(candidate) and candidate not in paths:
-            paths.append(candidate)
-    return paths
 
 
 def managed_block(bin_dirs: list[Path]) -> str:
@@ -247,24 +218,3 @@ def ensure_source(rc_path: Path, myshellrc_path: Path) -> None:
     existing = rc_path.read_text() if rc_path.exists() else ""
     rc_path.write_text(apply_block(existing, block, begin=_SOURCE_BEGIN, end=_SOURCE_END))
 
-
-def write_pnpm_home(rc_path: Path, pnpm_home: Path) -> bool:
-    """Write PNPM_HOME and its PATH entry as one installer-owned block.
-
-    Returns whether the file changed so the action layer can distinguish a
-    first application from an idempotent repeat.
-    """
-    block = "\n".join(
-        (
-            _PNPM_BEGIN,
-            f'export PNPM_HOME="{pnpm_home}"',
-            f'export PATH="{pnpm_home}:$PATH"',
-            _PNPM_END,
-        )
-    )
-    existing = rc_path.read_text() if rc_path.exists() else ""
-    updated = apply_block(existing, block, begin=_PNPM_BEGIN, end=_PNPM_END)
-    if updated == existing:
-        return False
-    rc_path.write_text(updated)
-    return True
