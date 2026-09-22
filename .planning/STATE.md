@@ -3,13 +3,13 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: "15.7"
 current_phase_name: unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr
-current_plan: 07 (Plans 01-03 complete)
+current_plan: 04 (Plans 01-03,07 complete)
 status: executing
-stopped_at: Completed 15.7-02-PLAN.md and 15.7-03-PLAN.md (wave 2, parallel with 07 still running)
+stopped_at: Completed 15.7-02-PLAN.md, 15.7-03-PLAN.md, 15.7-07-PLAN.md (wave 2, all merged)
 last_updated: "2026-09-22T12:33:14.788Z"
 last_activity: 2026-09-22
-last_activity_desc: "Phase 15.7 Wave 2: disk-pressure probe + Doctor guidance (D-03, Plan 02) and competing-mechanism detection/takeover (D-02a, Plan 03) both complete"
-state_head: 7414d6143e9e37b3b8b662164aa8b650e897fac8
+last_activity_desc: "Phase 15.7 Wave 2 complete: disk-pressure probe + Doctor guidance (D-03, Plan 02), competing-mechanism detection/takeover (D-02a, Plan 03), shared prune-tmp core + age-semantics convergence (D-01d/D-01f, Plan 07)"
+state_head: 9c92ee101f10b4d99b56b6ae21a3f5c3eb4be2b6
 progress:
   total_phases: 27
   completed_phases: 17
@@ -106,6 +106,7 @@ Progress: [██████████] 100%
 | Phase 15.7 P01 | ~90min (spans a compaction boundary) | 3 tasks | 10 files |
 | Phase 15.7 P02 | 15min | 2 tasks | 6 files |
 | Phase 15.7-unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr P03 | ~ | 2 tasks | 4 files |
+| Phase 15.7 P07 | ~1h | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -184,6 +185,8 @@ Recent decisions affecting current work:
 - [Phase 15.7]: 15.7-02: Guidance gained an emphasis boolean field instead of a fourth Severity member, since Severity is a dict key in ui_common.SEVERITY_STYLE and render.py
 - [Phase 15.7]: D-02a scope split enforced structurally: disable_competing raises ValueError before any argv for a system-scope entry
 - [Phase 15.7]: D-02c: a failed user-scope disable keeps this project's own registration and discloses the survivor -- proceed and disclose, never rollback
+- [15.7-07, 2026-09-22]: D-01f — both prune scripts converge on `-mmin`/`--changed-before Nmin` (minute-precision, `fd`-matching semantics), never `-mtime`'s day-boundary semantics; "byte-for-byte" equivalence between the two scripts is narrowed to the flag/refusal/validation/family/depth/`deleted: N` contract, excluding exact age-cutoff arithmetic. Fixed a real production bug found while characterizing: macOS's `--apply` deletion pipeline ran its counting function in a bash pipeline subshell, so `deleted: N` (the line `installer.daemon.last_run_summary` parses) always reported 0 regardless of real work done; fixed by redirecting into the function's stdin instead of piping into it.
+- [15.7-07, 2026-09-22]: Extracted `scripts/lib/prune-tmp-common.sh` as the single shared implementation (broad-path refusal guard, root/age validation, fd-preferred/find-fallback depth-1 traversal, byte formatting, `deleted: N` summary) used by both `scripts/prune-tmp-linux.sh` and `scripts/prune-user-tmpdir.sh`. A pre-existing quirk (`--tmpdir /` bypassing the refusal guard via the trailing-slash strip turning `/` into an empty string) was pinned as-is, not fixed — out of this plan's must_haves scope.
 
 ### Pending Todos
 
@@ -225,5 +228,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-22T12:33:14.633Z
-Stopped at: Completed 15.7-02-PLAN.md and 15.7-03-PLAN.md (wave 2)
+Stopped at: Completed 15.7-02-PLAN.md, 15.7-03-PLAN.md, 15.7-07-PLAN.md (wave 2, all merged)
 Resume file: None
