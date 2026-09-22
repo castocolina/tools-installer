@@ -1126,6 +1126,146 @@ def test_build_app_wires_the_shared_terminal_closure_into_update_service(
     }
 
 
+# -- D-01/15.6-06 Task 2: unattended installation and the command-line
+# uninstall route both reuse the exact same terminal synchronizer Plans
+# 04/05/06(Task 1) already wired for Policies, the direct `u` update, and
+# interactive close -- never a second, independently constructed one -- and
+# a raised OSError is reported to the console without ever flipping an
+# already-determined primary exit code.
+
+
+def _noninteractive_all_fixture(
+    monkeypatch: pytest.MonkeyPatch, buffer: io.StringIO, summary: Summary
+) -> None:
+    def fake_load_tools(_registry: object) -> list[Tool]:
+        return []
+
+    def fake_load_categories(_registry: object) -> dict[str, str]:
+        return {}
+
+    def fake_run_wizard(*_args: object, **_kwargs: object) -> Summary:
+        return summary
+
+    def noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(setup, "load_tools", fake_load_tools)
+    monkeypatch.setattr(setup, "detect", _platform)
+    monkeypatch.setattr(setup, "load_categories", fake_load_categories)
+    monkeypatch.setattr(setup, "run_wizard", fake_run_wizard)
+    monkeypatch.setattr(
+        "installer.settings.default_settings_path", lambda: Path("/no/such/settings.json")
+    )
+    monkeypatch.setattr(
+        setup, "default_settings_path", lambda: Path("/no/such/settings.json"), raising=False
+    )
+    monkeypatch.setattr(setup, "configure_path", noop)
+    monkeypatch.setattr(setup, "_verify_and_clean", noop)
+    monkeypatch.setattr(setup.sys, "stdin", _FakeStdin())
+    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
+
+
+def test_the_noninteractive_all_route_calls_the_terminal_synchronizer_after_run_wizard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test 1: the --all/category route invokes the shared synchronizer
+    after run_wizard returns a summary and reports a nonfatal warning to the
+    console."""
+    buffer = io.StringIO()
+    summary = Summary(installed=("fd",), already=(), failed=(), no_method=())
+    _noninteractive_all_fixture(monkeypatch, buffer, summary)
+    calls: list[dict[str, object]] = []
+
+    def sync(**kwargs: object) -> TerminalShellResult:
+        calls.append(kwargs)
+        return TerminalShellResult(warnings=("wezterm configuration is user-owned",))
+
+    monkeypatch.setattr(setup, "sync_terminal_shells", sync)
+
+    assert setup.main(["--all", "--yes"]) == 0
+    assert len(calls) == 1
+    assert (
+        "Terminal shell synchronization warning: wezterm configuration is user-owned"
+        in buffer.getvalue()
+    )
+
+
+def test_the_cli_uninstall_route_calls_the_terminal_synchronizer_after_run_uninstall(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Test 2: the command-line uninstall route invokes the same
+    synchronizer after its removal flow so absent zsh removes only owned
+    terminal configuration (sync_terminal_shells' own no-zsh reversion
+    branch)."""
+    _sandbox(monkeypatch, tmp_path)
+
+    def fake_run_uninstall(_tools: object, _console: object, **_kwargs: object) -> list[Path]:
+        return []
+
+    monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
+    buffer = io.StringIO()
+    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
+    calls: list[dict[str, object]] = []
+
+    def sync(**kwargs: object) -> TerminalShellResult:
+        calls.append(kwargs)
+        return TerminalShellResult(warnings=("wezterm configuration is user-owned",))
+
+    monkeypatch.setattr(setup, "sync_terminal_shells", sync)
+
+    assert setup.main(["--uninstall", "--yes"]) == 0
+    assert len(calls) == 1
+    assert (
+        "Terminal shell synchronization warning: wezterm configuration is user-owned"
+        in buffer.getvalue()
+    )
+
+
+def test_the_noninteractive_all_route_survives_a_raising_terminal_synchronizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test 3 (install half): a synchronizer OSError never flips an
+    already-determined exit code, and produces an explicit console warning."""
+    buffer = io.StringIO()
+    summary = Summary(installed=("fd",), already=(), failed=(), no_method=())
+    _noninteractive_all_fixture(monkeypatch, buffer, summary)
+
+    def boom(**_kwargs: object) -> TerminalShellResult:
+        raise OSError("EACCES: ~/.config/kitty/kitty.conf")
+
+    monkeypatch.setattr(setup, "sync_terminal_shells", boom)
+
+    assert setup.main(["--all", "--yes"]) == 0
+    text = buffer.getvalue()
+    assert "Terminal shell synchronization failed" in text
+    assert "EACCES" in text
+
+
+def test_the_cli_uninstall_route_survives_a_raising_terminal_synchronizer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Test 3 (uninstall half): the same non-fatal contract on the
+    command-line teardown route."""
+    _sandbox(monkeypatch, tmp_path)
+
+    def fake_run_uninstall(_tools: object, _console: object, **_kwargs: object) -> list[Path]:
+        return []
+
+    monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
+    buffer = io.StringIO()
+    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
+
+    def boom(**_kwargs: object) -> TerminalShellResult:
+        raise OSError("EACCES: ~/.config/kitty/kitty.conf")
+
+    monkeypatch.setattr(setup, "sync_terminal_shells", boom)
+
+    assert setup.main(["--uninstall", "--yes"]) == 0
+    text = buffer.getvalue()
+    assert "Terminal shell synchronization failed" in text
+    assert "EACCES" in text
+
+
 def test_build_app_rebinds_execute_onto_shared_services_when_execute_is_passed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
