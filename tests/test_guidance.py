@@ -515,3 +515,17 @@ def test_competing_mechanism_guidance_names_the_unit_and_the_manual_root_command
     assert item.severity == "warn"
     assert item.emphasis is False
     assert "sudo" in item.next_step  # named as the user's own action, never run here
+
+
+def test_duplicate_path_guidance_wording_is_unchanged() -> None:
+    """15.8-01: The duplicate-PATH guidance wording is intentionally unchanged.
+
+    Migration via apply_block makes this a runtime issue (in-memory PATH in an
+    already-running shell) that resolves on shell restart. The existing wording
+    already says so. No new wording is needed.
+    """
+    items = doctor_guidance(DoctorReport(missing=(), broken=(), duplicated=(Path("/b/bin"),)))
+    item = next(i for i in items if "/b/bin" in i.title)
+    assert item.severity == "warn"
+    assert item.next_step
+    assert "new shell" in item.next_step.lower() or "reload" in item.next_step.lower()

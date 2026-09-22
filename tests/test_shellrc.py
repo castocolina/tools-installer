@@ -670,3 +670,138 @@ def test_managed_block_is_runtime_idempotent_under_bin_sh(tmp_path: Path) -> Non
     path_entries = result.stdout.strip().split(":")
     matching = [e for e in path_entries if e == str(bin_dir)]
     assert len(matching) == 1
+
+
+def test_write_myshellrc_migrates_an_old_plain_export_block_in_one_write(
+    tmp_path: Path,
+) -> None:
+    rc = tmp_path / ".myshellrc"
+    bin_dir = tmp_path / "managed_bin"
+    bin_dir.mkdir()
+
+    old_block = "\n".join(
+        [
+            "# >>> tools-installer path >>>",
+            f'export PATH="{bin_dir}:$PATH"',
+            "# <<< tools-installer path <<<",
+        ]
+    )
+    user_content_before = "export EDITOR=vim\n"
+    user_content_after = "\nalias ll='ls -l'\n"
+
+    rc.write_text(user_content_before + old_block + user_content_after)
+
+    write_myshellrc([bin_dir], rc)
+    text = rc.read_text()
+
+    assert "export EDITOR=vim" in text
+    assert "alias ll='ls -l'" in text
+    assert text.count("# >>> tools-installer path >>>") == 1
+    assert text.count("# <<< tools-installer path <<<") == 1
+    block_content = text.split("# >>> tools-installer path >>>")[1].split(
+        "# <<< tools-installer path <<<"
+    )[0]
+    assert path_export_guard(bin_dir) in block_content
+    assert "case" in block_content
+
+
+def test_write_myshellrc_is_idempotent_after_migration(tmp_path: Path) -> None:
+    rc = tmp_path / ".myshellrc"
+    bin_dir = tmp_path / "managed_bin"
+    bin_dir.mkdir()
+
+    old_block = "\n".join(
+        [
+            "# >>> tools-installer path >>>",
+            f'export PATH="{bin_dir}:$PATH"',
+            "# <<< tools-installer path <<<",
+        ]
+    )
+    rc.write_text("export EDITOR=vim\n" + old_block)
+
+    write_myshellrc([bin_dir], rc)
+    first = rc.read_text()
+
+    write_myshellrc([bin_dir], rc)
+    second = rc.read_text()
+
+    assert first == second
+
+
+def test_migrated_block_is_runtime_idempotent(tmp_path: Path) -> None:
+    bash_path = shutil.which("bash")
+    if bash_path is None:
+        pytest.skip("bash not available")
+
+    rc = tmp_path / ".myshellrc"
+    bin_dir = tmp_path / "managed_bin"
+    bin_dir.mkdir()
+
+    old_block = "\n".join(
+        [
+            "# >>> tools-installer path >>>",
+            f'export PATH="{bin_dir}:$PATH"',
+            "# <<< tools-installer path <<<",
+        ]
+    )
+    rc.write_text("export EDITOR=vim\n" + old_block)
+
+    write_myshellrc([bin_dir], rc)
+
+    script = "\n".join([f". {rc}" for _ in range(5)]) + "\necho $PATH"
+    result = subprocess.run(
+        [bash_path, "-c", script],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    path_entries = result.stdout.strip().split(":")
+    matching = [e for e in path_entries if e == str(bin_dir)]
+    assert len(matching) == 1
+
+
+def test_write_managed_path_emits_the_guarded_form(tmp_path: Path) -> None:
+    from installer.shellrc import write_managed_path
+
+    rc = tmp_path / ".zshrc"
+    bin_dir = tmp_path / "managed_bin"
+    bin_dir.mkdir()
+
+    write_managed_path(rc, [bin_dir])
+    text = rc.read_text()
+
+    assert "# >>> tools-installer path >>>" in text
+    assert path_export_guard(bin_dir) in text
+
+
+def test_write_managed_path_is_runtime_idempotent(tmp_path: Path) -> None:
+    from installer.shellrc import write_managed_path
+
+    bash_path = shutil.which("bash")
+    if bash_path is None:
+        pytest.skip("bash not available")
+
+    rc = tmp_path / ".bashrc"
+    bin_dir = tmp_path / "managed_bin"
+    bin_dir.mkdir()
+
+    write_managed_path(rc, [bin_dir])
+
+    script = "\n".join([f". {rc}" for _ in range(5)]) + "\necho $PATH"
+    result = subprocess.run(
+        [bash_path, "-c", script],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    path_entries = result.stdout.strip().split(":")
+    matching = [e for e in path_entries if e == str(bin_dir)]
+    assert len(matching) == 1
