@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, cast
 
 from installer import daemon, env_redirect, systemd_daemon
 from installer.agent_env import AgentAdapter
+from installer.atomic import atomic_write_bytes
 from installer.enums import DaemonState
 from installer.guards import (
     guard_path_warning,
@@ -666,7 +667,7 @@ def daemon_policy(
     apply/remove/set_schedule are fully transactional: each snapshots the
     plist's prior bytes (or absence) before any launchctl call and, on a real
     launchctl failure, rolls back to that snapshot -- restoring the file via
-    installer.daemon's own crash-safe _atomic_write helper and, whenever a
+    installer.atomic's crash-safe atomic_write_bytes and, whenever a
     prior working registration existed, making a best-effort daemon.bootstrap
     call with the restored content -- so a failed apply/remove/reschedule
     never leaves the plist file and the real registration disagreeing with
@@ -746,9 +747,7 @@ def daemon_policy(
                 # A reapply: bootstrap's own internal pre-clear already tore
                 # the old registration out before this attempt, so restoring
                 # only the plist FILE would make `active` a false positive.
-                daemon._atomic_write(  # pyright: ignore[reportPrivateUsage]
-                    plist_path, previous, mode=0o644
-                )
+                atomic_write_bytes(plist_path, previous, mode=0o644)
                 with contextlib.suppress(CommandError):
                     daemon.bootstrap(uid, plist_path, run=run)
             else:
@@ -808,7 +807,7 @@ def daemon_policy(
         try:
             daemon.bootstrap(uid, plist_path, run=run)
         except CommandError:
-            daemon._atomic_write(plist_path, previous, mode=0o644)  # pyright: ignore[reportPrivateUsage]
+            atomic_write_bytes(plist_path, previous, mode=0o644)
             with contextlib.suppress(CommandError):
                 daemon.bootstrap(uid, plist_path, run=run)
             raise
@@ -955,9 +954,15 @@ def linux_daemon_policy(
         }
 
     def _restore_units(snapshot: dict[Path, bytes | None]) -> None:
+        # Back to exactly the snapshot: a file that existed is rewritten with
+        # its prior bytes, and one that did not is deleted. IN-05: a first
+        # apply over a half-removed install must not delete the one unit file
+        # that predates it.
         for path, previous in snapshot.items():
-            if previous is not None:
-                daemon._atomic_write(path, previous, mode=0o644)  # pyright: ignore[reportPrivateUsage]
+            if previous is None:
+                path.unlink(missing_ok=True)
+            else:
+                atomic_write_bytes(path, previous, mode=0o644)
 
     def _detect_and_take_over_competitors() -> tuple[PolicyLayer | None, str | None]:
         """D-02: detect a pre-existing competing cleanup mechanism in BOTH
@@ -1023,6 +1028,7 @@ def linux_daemon_policy(
         # stale memoized answer.
         had_prior_registration = systemd_daemon.units_present(unit_dir)
         snapshot = _snapshot_units()
+        link_existed_before = systemd_daemon.wants_link_path(unit_dir).is_symlink()
         wrapper_existed_before = systemd_daemon.wrapper_present(wrapper_bin_dir)
         log_existed_before = log_path.exists()
         try:
@@ -1056,8 +1062,17 @@ def linux_daemon_policy(
                     # OSError while cleaning up must never mask the
                     # ORIGINAL failure being unwound, nor abort the rest of
                     # this rollback (wrapper/log cleanup still below).
+                    # WR-01: `enable` may already have created the
+                    # timers.target.wants symlink before a later verb
+                    # failed; undo it before the unit it points at is gone,
+                    # or it dangles and nothing ever removes it.
+                    with contextlib.suppress(CommandError):
+                        systemd_daemon.disable_timer(run=run)
                     with contextlib.suppress(OSError):
-                        systemd_daemon.remove_units(unit_dir)
+                        _restore_units(snapshot)
+                        link = systemd_daemon.wants_link_path(unit_dir)
+                        if not link_existed_before and link.is_symlink():
+                            link.unlink()
                     with contextlib.suppress(CommandError):
                         systemd_daemon.daemon_reload(run=run)
                     if not wrapper_existed_before:
@@ -1096,13 +1111,24 @@ def linux_daemon_policy(
     def _remove() -> PolicyResult:
         # Same invalidate()-in-`finally` discipline as _apply above.
         try:
+            snapshot = _snapshot_units()
             reached = systemd_daemon.bootout(unit_dir, run=run, read_output=read_output)
             try:
                 systemd_daemon.remove_units(unit_dir)
             except OSError:
-                if reached:
-                    with contextlib.suppress(CommandError):
-                        systemd_daemon.bootstrap(unit_dir, run=run)
+                # WR-01: remove_units may have deleted the service before the
+                # timer unlink failed. Re-registering a half-deleted pair
+                # would enable a timer whose service no longer exists, so the
+                # files come back first, and only a complete restore is
+                # re-bootstrapped.
+                try:
+                    _restore_units(snapshot)
+                except OSError:
+                    pass
+                else:
+                    if reached:
+                        with contextlib.suppress(CommandError):
+                            systemd_daemon.bootstrap(unit_dir, run=run)
                 raise
             warnings: list[str] = []
             if reached:

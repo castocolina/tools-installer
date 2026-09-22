@@ -292,10 +292,85 @@ def test_first_ever_apply_rollback_reload_happens_after_the_unit_file_deletion(
     with pytest.raises(CommandError):
         policy.apply()
     verbs = [c[2] for c in fake_run.calls]
-    # daemon-reload (pre-enable), enable (fails), daemon-reload (compensating,
-    # AFTER remove_units already ran) -- the pre-enable reload cannot
-    # satisfy this: it is a THIRD call.
-    assert verbs == ["daemon-reload", "enable", "daemon-reload"]
+    # daemon-reload (pre-enable), enable (fails), disable (WR-01: undo any
+    # wants symlink enable created), daemon-reload (compensating, AFTER the
+    # unit files are gone) -- the pre-enable reload cannot satisfy this.
+    assert verbs == ["daemon-reload", "enable", "disable", "daemon-reload"]
+
+
+class _EnablingRun(_FakeRun):
+    """A _FakeRun whose `enable` creates the wants symlink and `disable`
+    removes it, like the real user manager."""
+
+    def __init__(self, unit_dir: Path, **kwargs: frozenset[tuple[str, int]]) -> None:
+        super().__init__(**kwargs)
+        self._link = systemd_daemon.wants_link_path(unit_dir)
+
+    def __call__(self, cmd: list[str]) -> None:
+        if cmd[2] == "enable":
+            self._link.parent.mkdir(parents=True, exist_ok=True)
+            if not self._link.is_symlink():
+                self._link.symlink_to(self._link.parent.parent / systemd_daemon.TIMER_NAME)
+        super().__call__(cmd)
+        if cmd[2] == "disable" and self._link.is_symlink():
+            self._link.unlink()
+
+
+def test_first_ever_apply_restart_failure_disables_before_deleting_the_units(
+    tmp_path: Path,
+) -> None:
+    """WR-01: a restart failure after a successful enable used to leave the
+    timers.target.wants symlink dangling at a deleted unit forever."""
+    paths = _make_paths(tmp_path)
+    fake_run = _EnablingRun(paths.unit_dir, fail_on=frozenset({("restart", 1)}))
+    policy = _build(paths, run=fake_run)
+    with pytest.raises(CommandError):
+        policy.apply()
+    assert ["systemctl", "--user", "disable", systemd_daemon.TIMER_NAME] in fake_run.calls
+    assert not systemd_daemon.wants_link_path(paths.unit_dir).is_symlink()
+    assert systemd_daemon.footprint_present(paths.unit_dir) is False
+
+
+def test_first_ever_apply_over_a_half_removed_install_keeps_the_pre_existing_unit_file(
+    tmp_path: Path,
+) -> None:
+    """IN-05: only one unit file predates the apply, so it is not a prior
+    registration, and the rollback used to delete that file too."""
+    paths = _make_paths(tmp_path)
+    paths.unit_dir.mkdir(parents=True)
+    service_path, timer_path = systemd_daemon.unit_paths(paths.unit_dir)
+    service_path.write_bytes(b"hand-edited service\n")
+    policy = _build(paths, run=_FakeRun(fail_on=frozenset({("enable", 1)})))
+    with pytest.raises(CommandError):
+        policy.apply()
+    assert service_path.read_bytes() == b"hand-edited service\n"
+    assert not timer_path.exists()
+
+
+def test_remove_timer_unlink_failure_restores_the_deleted_service_before_rebootstrapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WR-01: remove_units deletes the service first; re-bootstrapping after
+    the timer unlink fails used to re-enable a timer with no service."""
+    paths = _make_paths(tmp_path)
+    _build(paths, run=_FakeRun()).apply()
+    service_path, timer_path = systemd_daemon.unit_paths(paths.unit_dir)
+    original_service_bytes = service_path.read_bytes()
+    original_unlink = Path.unlink
+
+    def failing_unlink(self: Path, missing_ok: bool = False) -> None:
+        if self == timer_path:
+            raise OSError("simulated unlink failure")
+        original_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+    fake_run = _FakeRun()
+    policy = _build(paths, run=fake_run, read_output=lambda _cmd: "active")
+    with pytest.raises(OSError):
+        policy.remove()
+    assert service_path.read_bytes() == original_service_bytes
+    assert timer_path.exists()
+    assert [c[2] for c in fake_run.calls].count("restart") == 1
 
 
 def test_reapply_rollback_reload_precedes_the_best_effort_rebootstrap(tmp_path: Path) -> None:

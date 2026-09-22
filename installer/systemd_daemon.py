@@ -64,6 +64,7 @@ __all__ = [
     "decided",
     "detect_competing",
     "disable_competing",
+    "disable_timer",
     "ensure_log_path",
     "footprint_present",
     "install_wrapper",
@@ -374,6 +375,15 @@ def remove_units(unit_dir: Path) -> None:
 def daemon_reload(*, run: Runner = run_captured) -> None:
     """`systemctl --user daemon-reload` -- reread every unit file on disk."""
     run(["systemctl", "--user", "daemon-reload"])
+
+
+def disable_timer(*, run: Runner = run_captured) -> None:
+    """`systemctl --user disable <timer>` -- undo `enable`'s wants symlink.
+
+    No `--now`: this is the first-apply rollback, which undoes only what
+    `bootstrap` did before it failed (WR-01).
+    """
+    run(["systemctl", "--user", "disable", TIMER_NAME])
 
 
 def bootstrap(unit_dir: Path, *, run: Runner = run_captured) -> None:
