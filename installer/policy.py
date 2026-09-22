@@ -447,6 +447,34 @@ def tweak_policy(
     )
 
 
+def _competing_conf_warning(
+    redirect: env_redirect.CacheRedirect, written: Path, competing: tuple[Path, ...]
+) -> str | None:
+    """Say which way precedence actually goes, never assert it (WR-05).
+
+    environment.d applies files in basename order and the last assignment
+    wins, so a competing file that sorts BEFORE ours is overridden by this
+    redirect, while one that sorts AFTER it overrides this redirect.
+    """
+    earlier = [path for path in competing if path.name < written.name]
+    later = [path for path in competing if path.name > written.name]
+    sentences: list[str] = []
+    if earlier:
+        names = ", ".join(_display_path(path) for path in earlier)
+        sentences.append(
+            f"{names} also sets {redirect.variable}; left in place. "
+            f"{written.name} takes precedence because it sorts later."
+        )
+    if later:
+        names = ", ".join(_display_path(path) for path in later)
+        sentences.append(
+            f"{names} also sets {redirect.variable} and sorts after {written.name}, so it "
+            "overrides this redirect; left in place. Remove or rename it for the redirect "
+            "to take effect."
+        )
+    return " ".join(sentences) if sentences else None
+
+
 def cache_redirect_policy(
     redirect: env_redirect.CacheRedirect,
     *,
@@ -455,6 +483,7 @@ def cache_redirect_policy(
     rc_path: Path,
     home: Path,
     ensure_sourced_from: tuple[Path, ...] | Callable[[], tuple[Path, ...]] = (),
+    system_conf_dirs: tuple[Path, ...] = (),
 ) -> Policy:
     """One tool's cache redirect as a Policy.
 
@@ -467,6 +496,10 @@ def cache_redirect_policy(
     zero-argument callable returning one) because the link mode is adjustable
     while the app runs. A redirect sourced only into a file split mode never
     reads is a silent no-op.
+
+    ``system_conf_dirs`` are the read-only system environment.d directories
+    scanned for a competing assignment (WR-05); the composition root passes
+    ``env_redirect.SYSTEM_ENVIRONMENT_D_DIRS``.
     """
     if isinstance(ensure_sourced_from, tuple):
         captured_sourced = cast("tuple[Path, ...]", ensure_sourced_from)
@@ -501,18 +534,11 @@ def cache_redirect_policy(
                 warning=None,
             )
         written = env_redirect.write_linux_redirect(redirect, home, conf_dir)
-        competing = env_redirect.competing_conf_paths(redirect, home, conf_dir)
-        warning = None
-        if competing:
-            names = ", ".join(_display_path(path) for path in competing)
-            warning = (
-                f"{names} also sets {redirect.variable}; left in place. "
-                f"{written.name} takes precedence because it sorts later."
-            )
+        competing = env_redirect.competing_conf_paths(redirect, home, conf_dir, system_conf_dirs)
         return PolicyResult(
             layers=(PolicyLayer(redirect.label, f"written to {_display_path(written)}"),),
             reload_hint=_CACHE_REDIRECT_LINUX_HINT,
-            warning=warning,
+            warning=_competing_conf_warning(redirect, written, competing),
         )
 
     def _remove() -> PolicyResult:

@@ -146,9 +146,13 @@ def write_linux_redirect(redirect: CacheRedirect, home: Path, conf_dir: Path) ->
     text = render_conf(redirect, home)
     conf_dir.mkdir(parents=True, exist_ok=True)
     path = conf_dir / redirect.conf_basename
-    existing = _read(path) if path.exists() else None
-    if existing is not None and not _owned(existing):
-        raise OSError(f"{path} exists and is not managed by tools-installer")
+    # WR-06: "exists but unreadable" (mode 000, non-UTF-8 bytes, a dangling
+    # symlink) is not "absent". Ownership that cannot be proven is refused,
+    # never assumed; the rename below would need only directory write access.
+    if path.exists() or path.is_symlink():
+        existing = _read(path)
+        if existing is None or not _owned(existing):
+            raise OSError(f"{path} exists and is not managed by tools-installer")
     atomic_write_bytes(path, text.encode("utf-8"), mode=0o644)
     target_path(redirect, home).mkdir(parents=True, exist_ok=True)
     return path
@@ -240,16 +244,47 @@ def rc_applied(redirect: CacheRedirect, home: Path, rc_path: Path) -> bool:
     return False
 
 
-def competing_conf_paths(redirect: CacheRedirect, home: Path, conf_dir: Path) -> tuple[Path, ...]:
-    """Other ``.conf`` files in ``conf_dir`` that assign the same variable."""
-    if not conf_dir.is_dir():
-        return ()
-    prefix = f"{redirect.variable}="
+# The system-wide environment.d directories systemd's user environment
+# generator merges after the user's own, highest priority first (see
+# environment.d(5)). Read, never written: this project has no privilege to
+# touch them.
+SYSTEM_ENVIRONMENT_D_DIRS: tuple[Path, ...] = (
+    Path("/etc/environment.d"),
+    Path("/run/environment.d"),
+    Path("/usr/local/lib/environment.d"),
+    Path("/usr/lib/environment.d"),
+)
+
+
+def _assigns_variable(text: str, variable: str) -> bool:
+    pattern = re.compile(rf"^\s*{re.escape(variable)}\s*=")
+    return any(pattern.match(line) for line in text.splitlines())
+
+
+def competing_conf_paths(
+    redirect: CacheRedirect,
+    home: Path,
+    conf_dir: Path,
+    system_dirs: tuple[Path, ...] = (),
+) -> tuple[Path, ...]:
+    """Other ``.conf`` files that assign the same variable, sorted by basename.
+
+    Scans ``conf_dir`` then each of ``system_dirs`` (read-only) in systemd's
+    priority order. A basename seen in an earlier directory masks the same
+    basename later on, exactly as systemd merges them, so a masked file is
+    not reported -- including a system file sharing this redirect's own name.
+    An indented assignment counts: systemd strips the leading whitespace.
+    """
+    seen = {redirect.conf_basename}
     found: list[Path] = []
-    for path in sorted(conf_dir.glob("*.conf")):
-        if path.name == redirect.conf_basename:
+    for directory in (conf_dir, *system_dirs):
+        if not directory.is_dir():
             continue
-        text = _read(path)
-        if text is not None and any(line.startswith(prefix) for line in text.splitlines()):
-            found.append(path)
-    return tuple(found)
+        for path in sorted(directory.glob("*.conf")):
+            if path.name in seen:
+                continue
+            seen.add(path.name)
+            text = _read(path)
+            if text is not None and _assigns_variable(text, redirect.variable):
+                found.append(path)
+    return tuple(sorted(found, key=lambda path: path.name))

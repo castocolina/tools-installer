@@ -582,6 +582,7 @@ def _cache_redirect_policies(
             rc_path=_MYSHELLRC,
             home=Path.home(),
             ensure_sourced_from=ensure_sourced_from,
+            system_conf_dirs=env_redirect.SYSTEM_ENVIRONMENT_D_DIRS,
         )
         for redirect in env_redirect.REDIRECTS
     )
