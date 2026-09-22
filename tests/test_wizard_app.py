@@ -148,6 +148,7 @@ def _uninstall_inputs(
     tweak_ids: tuple[str, ...] | Callable[[], tuple[str, ...]] = (),
     invalidate: Callable[[], object] | None = None,
     refresh: Callable[[], object] | None = None,
+    terminal_sync: Callable[[], str | None] | None = None,
 ) -> UninstallInputs:
     """`rows` is strictly a callable, matching `UninstallInputs`' own field
     (WR-05): a snapshot goes through `_frozen` above, which names itself.
@@ -164,6 +165,7 @@ def _uninstall_inputs(
         tweak_ids=_predicate(tweak_ids),
         invalidate=invalidate,
         refresh=refresh,
+        terminal_sync=terminal_sync,
     )
 
 
@@ -228,6 +230,7 @@ def _app(
     daemon_default_policy_id: str | None = None,
     execute: ExecuteInputs | None = None,
     prompt_link_mode: bool = False,
+    terminal_sync: Callable[[], str | None] | None = None,
 ) -> UnifiedApp:
     tools = [_tool("rg"), _tool("fd")]
     installed: Mapping[str, bool] = {"rg": True, "fd": False}
@@ -250,6 +253,7 @@ def _app(
         daemon_default_policy_id=daemon_default_policy_id,
         execute=execute,
         prompt_link_mode=prompt_link_mode,
+        terminal_sync=terminal_sync,
     )
 
 
@@ -749,6 +753,96 @@ async def test_uninstall_apply_survives_a_raising_invalidate_seam() -> None:
         assert len(captured) == 1
         assert "version cache invalidation failed" in screen.status.text
         assert "cache write refused" in screen.status.text
+
+
+# -- D-01/15.6-06 Task 3: a successful interactive Uninstall removal
+# re-synchronizes terminal configuration through the SAME shared closure
+# Policies, the direct `u` update, unattended installation, the CLI
+# uninstall route, and interactive close already reuse.
+
+
+async def test_uninstall_apply_calls_the_terminal_synchronizer_once_on_success() -> None:
+    """Test 1: a successful removal invokes the injected terminal
+    synchronizer after perform_uninstall (here: `_remove`) completes, and
+    the normal completed-removal summary is retained."""
+    captured: list[UninstallDecision] = []
+    calls: list[None] = []
+
+    def _terminal_sync() -> str | None:
+        calls.append(None)
+        return None
+
+    rows = _rg_rows()
+    app = _app(
+        uninstall=_uninstall_inputs(
+            rows=rows, remove=_recorder(captured), terminal_sync=_terminal_sync
+        )
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert screen.applied is True
+        assert len(captured) == 1
+        assert len(calls) == 1
+        assert "Removed 1 tool(s)." in screen.status.text
+
+
+async def test_uninstall_apply_appends_a_terminal_sync_oserror_without_losing_applied() -> None:
+    """Test 2: a terminal synchronizer OSError appends a visible warning to
+    the successful removal result and never changes `applied` from the
+    primary removal outcome."""
+    captured: list[UninstallDecision] = []
+
+    def _boom() -> str | None:
+        raise OSError("EACCES: ~/.config/kitty/kitty.conf")
+
+    rows = _rg_rows()
+    app = _app(
+        uninstall=_uninstall_inputs(rows=rows, remove=_recorder(captured), terminal_sync=_boom)
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert screen.applied is True
+        assert len(captured) == 1
+        assert "terminal shell synchronization failed" in screen.status.text.lower()
+        assert "EACCES" in screen.status.text
+
+
+async def test_uninstall_apply_never_calls_the_terminal_synchronizer_after_a_failed_sweep() -> None:
+    """Test 2 (continued): a failed sweep must never call the synchronizer
+    at all -- nothing was mutated, so there is nothing to reapply."""
+    calls: list[None] = []
+
+    def _terminal_sync() -> str | None:
+        calls.append(None)
+        return None
+
+    def boom(_decision: UninstallDecision) -> SweepResult:
+        raise OSError("permission denied")
+
+    app = _app(
+        uninstall=_uninstall_inputs(rows=_rg_rows(), remove=boom, terminal_sync=_terminal_sync)
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.applied is False
+        assert calls == []
 
 
 # -- 15.4-04/Task 1: `rows` becomes the fourth live predicate -----------------
@@ -3902,6 +3996,7 @@ def _version_app(
     execute: ExecuteInputs | None = None,
     uninstall: UninstallInputs | None = None,
     initial_view: str = BASE_VIEW,
+    terminal_sync: Callable[[], str | None] | None = None,
 ) -> UnifiedApp:
     return UnifiedApp(
         tools,
@@ -3916,6 +4011,7 @@ def _version_app(
         version_refresh=service,
         execute=execute,
         initial_view=initial_view,
+        terminal_sync=terminal_sync,
     )
 
 
@@ -4680,6 +4776,178 @@ async def test_install_closed_keeps_cross_tier_ids_in_every_installed_map(
         # "pnpm" is still a KEY on the user screen rather than being dropped.
         for screen in (app.catalog_for("system"), user):
             assert screen._installed == presence  # pyright: ignore[reportPrivateUsage]
+
+
+# -- D-01/15.6-06 Task 1: every interactive close re-synchronizes terminal
+# configuration through the same shared closure Plans 04/05 wired for
+# Policies and the direct `u` update, and never silently drops a follow-up
+# warning regardless of which AppScreen is visible when the run closes. -----
+
+
+async def test_install_closed_calls_the_terminal_synchronizer_once_per_tier(
+    tmp_path: Path,
+) -> None:
+    """Test 1: closing an interactive run from EACH catalog tier calls the
+    injected synchronizer exactly once, after the installed-state sweep, and
+    the existing version-refresh behaviour (Pitfall 1: index self._catalogs
+    uniformly across tiers) is unaffected."""
+    calls: list[str] = []
+
+    def _terminal_sync() -> str | None:
+        calls.append("terminal-sync")
+        return None
+
+    tools = [
+        _gh_tool("sys-tool", tier="system"),
+        _gh_tool("user-tool", tier="user"),
+        _gh_tool("ai-tool", tier="ai"),
+    ]
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+
+    def _installed(_t: Tool) -> bool:
+        calls.append("installed-sweep")
+        return True
+
+    execute = ExecuteInputs(
+        catalog=tools,
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=_installed,
+        install=_tracking_install(lambda _t: None),
+    )
+    app = _version_app(
+        tools,
+        {tool.id: True for tool in tools},
+        service,
+        execute=execute,
+        terminal_sync=_terminal_sync,
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        for index, view in enumerate(("system", "user", "ai")):
+            if view != "system":
+                await pilot.press(str(VIEW_ORDER.index(view) + 1))
+            assert app.current_view == view
+            screen = app.catalog_for(view)
+            await _settle_versions(app, pilot, screen)
+            before_generation = screen._version_refresh_generation  # pyright: ignore[reportPrivateUsage]
+            calls.clear()
+            screen.selected.add(tools[index].id)
+            await pilot.press("enter")
+            assert isinstance(app.screen, ExecuteScreen)
+            await pilot.press("enter")
+            await _settle_execute_screen(app, pilot)
+            await pilot.press("escape")
+            await _settle_versions(app, pilot, screen)
+            assert calls.count("terminal-sync") == 1
+            # The synchronizer runs AFTER the installed-state sweep, never before.
+            assert calls.index("terminal-sync") == len(calls) - 1
+            assert (
+                screen._version_refresh_generation == before_generation + 1  # pyright: ignore[reportPrivateUsage]
+            )
+
+
+async def test_install_closed_reports_a_terminal_sync_oserror_without_losing_the_summary(
+    tmp_path: Path,
+) -> None:
+    """Test 2: a synchronization OSError leaves the completed install summary
+    intact and appears on the active catalog's status line -- mirrors
+    UpdateService.run's own non-fatal terminal-follow-up contract
+    (installer/update.py:471-480)."""
+    tool = _gh_tool("codegraph", tier="system")
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+
+    def _boom() -> str | None:
+        raise OSError("EACCES: ~/.config/kitty/kitty.conf")
+
+    execute = ExecuteInputs(
+        catalog=[tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda _t: True,
+        install=_tracking_install(lambda _t: None),
+    )
+    app = _version_app([tool], {"codegraph": True}, service, execute=execute, terminal_sync=_boom)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        app.catalog.selected.add("codegraph")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        await pilot.press("escape")
+        await _settle_versions(app, pilot)
+        assert app.is_running is True
+        assert app.install_summary is not None
+        assert "terminal shell synchronization" in app.catalog.status_text.lower()
+        assert "EACCES" in app.catalog.status_text
+
+
+async def test_install_closed_delivers_a_terminal_sync_warning_to_the_visible_doctor_screen(
+    tmp_path: Path,
+) -> None:
+    """Test 3: a close callback reached with Doctor (or Uninstall/Policies)
+    current retains the warning until it can be rendered on THAT visible
+    AppScreen -- it is never silently discarded merely because current_view
+    is not a tier key (T-15.6-13)."""
+    tool = _gh_tool("codegraph", tier="system")
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+
+    def _warns() -> str | None:
+        return "Terminal shell synchronization warning: wezterm configuration is user-owned"
+
+    execute = ExecuteInputs(
+        catalog=[tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda _t: True,
+        install=_tracking_install(lambda _t: None),
+    )
+    app = _version_app([tool], {"codegraph": False}, service, execute=execute, terminal_sync=_warns)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        await pilot.press("4")
+        await pilot.pause()
+        assert app.current_view == "doctor"
+        doctor_screen = app.screen
+        assert isinstance(doctor_screen, DoctorScreen)
+        app._install_closed(None)  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        assert app.is_running is True
+        assert "wezterm configuration is user-owned" in doctor_screen.status.text
+
+
+async def test_install_closed_with_no_terminal_sync_wired_is_unaffected(
+    tmp_path: Path,
+) -> None:
+    """Test 4: existing UnifiedApp construction sites without the new closure
+    (the default None) remain behaviourally compatible -- no exception, no
+    status warning, and the run still closes normally."""
+    tool = _gh_tool("codegraph", tier="system")
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    execute = ExecuteInputs(
+        catalog=[tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda _t: True,
+        install=_tracking_install(lambda _t: None),
+    )
+    app = _version_app([tool], {"codegraph": True}, service, execute=execute)
+    assert app._terminal_sync is None  # pyright: ignore[reportPrivateUsage]
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        app.catalog.selected.add("codegraph")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        await pilot.press("escape")
+        await _settle_versions(app, pilot)
+        assert app.is_running is True
+        assert app.catalog.status_text == ""
 
 
 def _owned(

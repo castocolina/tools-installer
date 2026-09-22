@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: "15.6"
 current_phase_name: terminal-emulator-default-shell-configuration-konsole-kitty
-current_plan: 4
+current_plan: 6
 status: executing
-stopped_at: Completed 15.6-05-PLAN.md
-last_updated: "2026-09-21T23:51:47.066Z"
+stopped_at: Completed 15.6-06-PLAN.md
+last_updated: "2026-09-22T00:36:42.347Z"
 last_activity: 2026-09-19
 last_activity_desc: Phase 15.5 complete, transitioned to Phase 15.6
-state_head: e30bf0d09b5910ff1a4ddfbcffa318784d5de788
+state_head: 844fd141b091d113fbc1795c128a761ceab57384
 progress:
   total_phases: 27
   completed_phases: 17
   total_plans: 77
-  completed_plans: 76
+  completed_plans: 77
 ---
 
 Total Phases: 21
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 15.6 (terminal-emulator-default-shell-configuration-konsole-kitty) — READY TO EXECUTE
-Current Plan: 4
+Current Plan: 6
 Total Plans in Phase: 6
 Status: Ready to execute
 Last activity: 2026-09-19 — Phase 15.5 complete, transitioned to Phase 15.6
@@ -100,6 +100,7 @@ Progress: [██████████] 100%
 | Phase 15.4 P05 | 58min | 3 tasks | 10 files |
 | Phase 15.6 P02 | 12min | 2 tasks | 3 files |
 | Phase 15.6 P05 | 35min | 2 tasks | 5 files |
+| Phase 15.6 P06 | 75min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -166,6 +167,8 @@ Recent decisions affecting current work:
 - [Phase 15.6]: write_plugins repairs active Oh-My-Zsh source shapes and inert no-array files, but leaves valid unsourced plugin arrays untouched.
 - [Phase 15.6]: A supported plugins assignment after the active Oh-My-Zsh source is moved before it; multi-line arrays remain fail-safe refusals.
 - [Phase 15.6]: [15.6-05, 2026-09-21]: Reused setup.py's existing _sync_omz_terminals closure for the u route instead of a second synchronizer; UpdateService's new terminal_follow_up seam runs after pnpm replay and before cache invalidation, catching only OSError
+- [Phase 15.6]: Generalized _install_closed's visible-screen lookup to cover Doctor/Uninstall/Policies (not only catalog tiers), with a named pending-warning queue flushed on next navigation as defense-in-depth.
+- [Phase 15.6]: Extracted setup.py's module-level _sync_terminals(platform)/_sync_terminals_and_report so unattended install and CLI uninstall reuse the exact same terminal synchronizer as every interactive route.
 
 ### Pending Todos
 
@@ -206,6 +209,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-21T23:51:46.904Z
-Stopped at: Completed 15.6-05-PLAN.md
+Last session: 2026-09-22T00:36:42.178Z
+Stopped at: Completed 15.6-06-PLAN.md
 Resume file: None

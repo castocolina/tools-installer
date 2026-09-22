@@ -100,6 +100,13 @@ class UninstallInputs:
     # rest of the session. BLOCKING when called -- `_apply_removal` runs it
     # on a thread worker, never on the message loop.
     refresh: Callable[[], Any] | None = None
+    # D-01/15.6-06 Task 3: the SAME composition-root closure Policies, the
+    # direct `u` update, unattended installation, the CLI uninstall route,
+    # and interactive ExecuteScreen close already reuse. Called from
+    # `_apply_removal` only after `remove` reports a successful sweep, so a
+    # completed removal always leaves terminal shell configuration in sync
+    # (or safely reverted when zsh itself was just removed).
+    terminal_sync: Callable[[], str | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -680,6 +687,7 @@ class UninstallScreen(AppScreen):
             "; ".join(part for part in (rows_error, env_error) if part is not None) or None
         )
         self._remove = inputs.remove
+        self._terminal_sync = inputs.terminal_sync
         self.applied = False
         self.error: str | None = None
         self._entries = self._build_entries()
@@ -1206,6 +1214,22 @@ class UninstallScreen(AppScreen):
                 # -- an invalidate that raised did not drop anything, so there
                 # is nothing to replace.
                 self._refresh_ownership_worker()
+        # D-01/15.6-06 Task 3: called unconditionally on every successful
+        # sweep (never gated on tool_count -- unlike invalidate above, a
+        # terminal reapply/reversion is warranted even when only an env
+        # lever came off, since sync_terminal_shells' own no-zsh branch is
+        # exactly what a zsh-removing sweep needs). A raised OSError is a
+        # secondary, non-fatal warning appended to the same completed-removal
+        # summary, mirroring the invalidate seam's own both-directions
+        # contract: never swallowed, never flips `applied` or the primary
+        # outcome.
+        if self._terminal_sync is not None:
+            try:
+                terminal_warning = self._terminal_sync()
+            except OSError as exc:
+                terminal_warning = f"Terminal shell synchronization failed: {exc}"
+            if terminal_warning:
+                summary_parts.append(terminal_warning)
         self.status.set(multiline_summary(summary_parts), "ok")
 
     @work(thread=True, exclusive=True, group="uninstall-ownership-refresh", exit_on_error=False)
@@ -1900,6 +1924,7 @@ class UnifiedApp(App[list[str] | None]):
         updates: UpdateService | None = None,
         execute: ExecuteInputs | None = None,
         prompt_link_mode: bool = False,
+        terminal_sync: Callable[[], str | None] | None = None,
     ) -> None:
         super().__init__()
         self._staged: set[str] = set()
@@ -1913,6 +1938,18 @@ class UnifiedApp(App[list[str] | None]):
         self.install_summary: Summary | None = None
         self._version_refresh = version_refresh
         self._updates = updates
+        # D-01/15.6-06: the SAME composition-root closure Plans 04/05 wired for
+        # Policies' OMZ-plugin apply and the direct `u` update -- called from
+        # _install_closed on EVERY close event, never only a selected tool id
+        # or a successful outcome. None at every one of the fifteen other
+        # UnifiedApp(...) construction sites outside setup.py, matching the
+        # default-no-op contract every other optional closure here already has.
+        self._terminal_sync = terminal_sync
+        # T-15.6-13: a follow-up warning that arrived while no AppScreen was
+        # resolvable (current_view names neither a tier nor a registered view)
+        # is queued here rather than dropped, and flushed to the next screen
+        # that becomes visible (show_view) or the next _install_closed render.
+        self._pending_warnings: list[str] = []
         # Set by on_install_run_finished when the post-run cache invalidation
         # fails, consumed (and cleared) by the _install_closed that follows:
         # the execute screen is still on top when the failure happens, so
@@ -2105,6 +2142,17 @@ class UnifiedApp(App[list[str] | None]):
             entering.enter_view()
             await self.push_screen(entering)
         self.current_view = name
+        # T-15.6-13: this is also the one place a warning queued because no
+        # AppScreen was resolvable when it arrived can finally be delivered.
+        visible = self._catalogs.get(name) or self._views.get(name)
+        if visible is not None:
+            self._flush_pending_warnings(visible)
+
+    def _flush_pending_warnings(self, screen: AppScreen) -> None:
+        if not self._pending_warnings:
+            return
+        pending, self._pending_warnings = self._pending_warnings, []
+        screen.status.set(" · ".join(pending), "warn")
 
     def _navigable(self) -> bool:
         # ctrl+p and the number keys are priority App bindings, so they fire even
@@ -2235,6 +2283,19 @@ class UnifiedApp(App[list[str] | None]):
                     screen.set_installed(fresh)
             elif error is not None:
                 warnings.append(f"installed-state re-check failed: {error}")
+        # D-01/15.6-06 Task 1: the shared terminal synchronizer runs after
+        # EVERY close event -- never only a selected tool id, never only a
+        # successful outcome -- the same closure Plans 04/05 already wired
+        # for Policies' OMZ-plugin apply and the direct `u` update. Through
+        # run_live like every other live core read this callback triggers
+        # (rule 3): an OSError is a secondary, non-fatal warning and must
+        # never flip an already-recorded run into a reported failure.
+        if self._terminal_sync is not None:
+            sync_warning, sync_error = run_live(self._terminal_sync)
+            if sync_error is not None:
+                warnings.append(f"terminal shell synchronization failed: {sync_error}")
+            elif sync_warning:
+                warnings.append(sync_warning)
         # A .get(), not an index: _catalogs is keyed by tier only
         # (system/user/ai) while current_view ranges over all six VIEWS
         # (doctor, uninstall and policies included). Only a catalog tier
@@ -2243,20 +2304,35 @@ class UnifiedApp(App[list[str] | None]):
         # future caller pushing it with this callback from the uninstall or
         # doctor view -- and a KeyError raised inside a Textual screen-result
         # callback takes the message pump down instead of degrading. No
-        # catalog on top means nothing to re-enter; the installed maps above
-        # were still replaced, and a pending warning is left pending for the
-        # next close that has a status line to write it to.
+        # catalog on top means nothing to re-enter (enter_view is a catalog
+        # tier's own version-refresh trigger, not a generic "screen visible"
+        # signal), and the installed maps above were still replaced either way.
         active = self._catalogs.get(self.current_view)
-        if active is None:
-            return
-        active.enter_view()
+        if active is not None:
+            active.enter_view()
         # Both post-run failures land on one line, and both are written after
         # enter_view so the refresh it starts cannot repaint over them.
         if self._invalidate_warning is not None:
             warnings.append(self._invalidate_warning)
             self._invalidate_warning = None
-        if warnings:
-            active.status.set(" · ".join(warnings), "warn")
+        if not warnings:
+            return
+        # T-15.6-13: render on WHICHEVER AppScreen is actually visible right
+        # now -- a catalog tier (active, above) or the Doctor/Uninstall/
+        # Policies screen the run was launched over -- never dropped merely
+        # because current_view names a non-tier key. Only when no AppScreen
+        # is resolvable at all (not reachable in the current call graph) does
+        # the warning queue for the next screen that becomes visible.
+        visible = active if active is not None else self._visible_app_screen()
+        if visible is None:
+            self._pending_warnings.extend(warnings)
+            return
+        pending, self._pending_warnings = self._pending_warnings, []
+        visible.status.set(" · ".join(pending + warnings), "warn")
+
+    def _visible_app_screen(self) -> AppScreen | None:
+        screen = self.screen
+        return screen if isinstance(screen, AppScreen) else None
 
     def on_install_run_finished(self, message: InstallRunFinished) -> None:
         # Every mutation this app performs calls invalidate

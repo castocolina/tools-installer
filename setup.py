@@ -382,6 +382,43 @@ def _build_daemon_policy(platform: Platform, installed: Mapping[str, bool]) -> P
     )
 
 
+def _sync_terminals(platform: Platform) -> str | None:
+    """The single Phase 15.6 terminal-shell synchronizer every lifecycle route
+    reuses (D-01): Policies' OMZ-plugin apply, the direct `u` update,
+    interactive ExecuteScreen close, unattended installation, the
+    command-line uninstall route, and interactive Uninstall removal all call
+    this exact closure, so a stale terminal shell configuration from any one
+    path is corrected the same way. `_build_app` binds a zero-argument
+    wrapper closing over its own resolved `platform` (`_sync_omz_terminals`);
+    the two CLI-only lifecycle routes in `main`/`_run_uninstall` call this
+    directly since neither builds a `UnifiedApp`.
+    """
+    result = sync_terminal_shells(
+        home=Path.home(),
+        environ=os.environ,
+        platform=platform,
+        lookup=shutil.which,
+    )
+    if result.warnings:
+        return "Terminal shell synchronization warning: " + "; ".join(result.warnings)
+    return None
+
+
+def _sync_terminals_and_report(console: Console, platform: Platform) -> None:
+    """Run the shared terminal synchronizer and print any nonfatal warning to
+    the console (D-01/15.6-06 Task 2) -- both non-interactive CLI lifecycle
+    routes (`main`'s unattended install, `_run_uninstall`'s command-line
+    teardown) call this after their own primary completion, so a raised
+    OSError is reported truthfully without ever flipping an already-determined
+    exit code."""
+    try:
+        warning = _sync_terminals(platform)
+    except OSError as exc:
+        warning = f"Terminal shell synchronization failed: {exc}"
+    if warning:
+        console.print(warning)
+
+
 def _build_app(
     tools: list[Tool],
     platform: Platform,
@@ -523,6 +560,25 @@ def _build_app(
             daemon_policy=daemon,
         )
 
+    def _ban_apply_rc_paths() -> list[Path]:
+        return ban_rc_paths(_current_link_mode(), _SHELL)
+
+    def _tweak_ensure_sourced_from() -> tuple[Path, ...]:
+        mode = _current_link_mode()
+        if mode != "split":
+            return ()
+        return tuple(rc_paths_for_mode(mode, _SHELL))
+
+    def _sync_omz_terminals() -> str | None:
+        """Apply the shared terminal writer after a committed OMZ plugin edit,
+        a successful direct catalog update, an interactive close, or a
+        successful interactive Uninstall removal (D-01/15.6-05/15.6-06) -- a
+        zero-arg wrapper closing over this call's own resolved `platform`
+        around the one composition-root closure every call site reuses
+        (`_sync_terminals` above), so a stale terminal shell configuration
+        from any of them is corrected the same way."""
+        return _sync_terminals(platform)
+
     # Every field is a predicate, not its result: the Policies and Doctor
     # views mutate the three environment fields live in this same session,
     # and this screen's own removal action changes what `rows` returns next
@@ -530,7 +586,11 @@ def _build_app(
     # UninstallInputs). `invalidate` mirrors `UpdateService`'s own seam
     # (below): a successful removal falsifies the shared version/ownership
     # data exactly like an install or an update does, and this closure is
-    # what closes that hole (D-05).
+    # what closes that hole (D-05). `terminal_sync` is the SAME closure
+    # `omz_plugins_policy` below and `UnifiedApp`'s own `terminal_sync` kwarg
+    # are bound with (D-01/15.6-06 Task 3) -- defined just above this
+    # construction so the reference resolves at statement-execution time,
+    # not only at call time.
     uninstall_inputs = UninstallInputs(
         rows=_uninstall_rows,
         ban_names=lambda: [name for name, active in _guard_state()[0].items() if active],
@@ -549,31 +609,8 @@ def _build_app(
         # vocabulary of ownership feeds both screens. Called on a thread
         # worker by `_apply_removal` -- it re-probes every manager.
         refresh=lambda: version_refresh.refresh(tools),
+        terminal_sync=_sync_omz_terminals,
     )
-
-    def _ban_apply_rc_paths() -> list[Path]:
-        return ban_rc_paths(_current_link_mode(), _SHELL)
-
-    def _tweak_ensure_sourced_from() -> tuple[Path, ...]:
-        mode = _current_link_mode()
-        if mode != "split":
-            return ()
-        return tuple(rc_paths_for_mode(mode, _SHELL))
-
-    def _sync_omz_terminals() -> str | None:
-        """Apply the shared terminal writer after a committed OMZ plugin edit
-        or a successful direct catalog update (D-01/15.6-05) -- the one
-        composition-root closure both call sites reuse, so a stale terminal
-        shell configuration from either path is corrected the same way."""
-        result = sync_terminal_shells(
-            home=Path.home(),
-            environ=os.environ,
-            platform=platform,
-            lookup=shutil.which,
-        )
-        if result.warnings:
-            return "Terminal shell synchronization warning: " + "; ".join(result.warnings)
-        return None
 
     policy_inputs = PolicyInputs(
         policies=[
@@ -732,6 +769,11 @@ def _build_app(
         updates=updates,
         execute=execute,
         prompt_link_mode=prompt_link_mode,
+        # D-01/15.6-06 Task 1: the SAME closure `omz_plugins_policy` and
+        # `updates` above are wired with -- every interactive close
+        # re-synchronizes terminal configuration exactly like Policies' own
+        # apply and the direct `u` update already do.
+        terminal_sync=_sync_omz_terminals,
     )
 
 
@@ -910,6 +952,11 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
         zshrc_path=_ZSHRC,
         daemon_policy=_build_daemon_policy(platform, installed),
     )
+    # D-01/15.6-06 Task 2: absent zsh reverts only owned terminal
+    # configuration (sync_terminal_shells' own no-zsh branch), so a teardown
+    # that just removed zsh corrects the terminals the same way any other
+    # completion route does.
+    _sync_terminals_and_report(console, platform)
     return 0
 
 
@@ -1021,6 +1068,9 @@ def main(argv: list[str]) -> int:
         link_mode=store.link_mode,
     )
     _verify_and_clean(console, tools, platform, assume_yes=options.yes)
+    # D-01/15.6-06 Task 2: the same shared synchronizer every other lifecycle
+    # route calls, after the unattended run's own summary is final.
+    _sync_terminals_and_report(console, platform)
     # dependency_failed counts as a failed run: the tool was wanted, was
     # installable on this platform, and was skipped only because something it
     # requires failed. (no_method is deliberately excluded — a tool that has no
