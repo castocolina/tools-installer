@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from installer.atomic import atomic_write_text
+from installer.locations import zshrc_path
 from installer.omz import ensure_zshrc_template, omz_root
 from installer.platform import Platform
 
@@ -405,7 +406,10 @@ def sync_terminal_shells(
         # None, so the repair never hardcodes $HOME/.oh-my-zsh for an install
         # that actually lives elsewhere (a dotfiles-managed or XDG-relocated
         # oh-my-zsh checkout).
-        ensure_zshrc_template(home / ".zshrc", root)
+        # G-01: resolve the repair target through the same $ZDOTDIR-aware
+        # resolver the Policies route already uses (setup.py::_ZSHRC), so the
+        # repair never edits a file zsh does not source.
+        ensure_zshrc_template(zshrc_path(home, environ), root)
 
     configured: list[str] = []
     skipped: list[str] = []
