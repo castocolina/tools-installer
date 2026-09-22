@@ -1,5 +1,6 @@
 """Safety-first terminal emulator shell synchronization tests."""
 
+import shlex
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypedDict
@@ -27,6 +28,25 @@ def _platform(os_name: str = "fedora") -> Platform:
 
 def _lookup(**executables: str) -> Callable[[str], str | None]:
     return lambda name: executables.get(name)
+
+
+def _kconfig_decode(value: str) -> str:
+    """Undo KConfig's own value-decoding layer for the escapes this module
+    writes, so a test can assert what Konsole would actually read back on
+    disk -- not merely the bytes this module happened to write. Mirrors the
+    same mapping as installer.terminal_shell._KCONFIG_ESCAPES, decoded."""
+    decoded: list[str] = []
+    mapping = {"\\": "\\", "n": "\n", "t": "\t", "r": "\r"}
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if character == "\\" and index + 1 < len(value) and value[index + 1] in mapping:
+            decoded.append(mapping[value[index + 1]])
+            index += 2
+        else:
+            decoded.append(character)
+            index += 1
+    return "".join(decoded)
 
 
 @pytest.mark.parametrize("os_name", ("fedora", "debian", "arch"))
@@ -286,14 +306,28 @@ def test_konsole_creates_an_owned_profile_and_records_the_prior_default(tmp_path
     profile = data_home / "konsole" / "tools-installer-zsh.profile"
     state = data_home / "tools-installer" / "terminal-shell-konsole-default"
     assert result.configured == ("kitty", "wezterm", "konsole")
-    assert "Command=/usr/bin/zsh -l" in profile.read_text()
+    profile_text = profile.read_text()
+    assert "Command=/usr/bin/zsh -l" in profile_text
+    # CR-05: every real Konsole profile carries a Name= (confirmed against
+    # this host's own /usr/share/konsole/Vapor.profile); a profile missing
+    # one is expected to be rejected outright by Konsole's profile manager.
+    assert "Name=tools-installer zsh" in profile_text
+    assert "Parent=FALLBACK/" in profile_text
     assert "DefaultProfile=tools-installer-zsh.profile" in konsolerc.read_text()
     assert state.read_text() == "Old.profile\n"
 
 
-def test_konsole_serializer_preserves_special_login_argv_and_rejects_unsafe_paths(
+def test_konsole_serializer_kconfig_escapes_special_argv_and_rejects_unsafe_paths(
     tmp_path: Path,
 ) -> None:
+    """WR-01: shlex's own shell-argv quoting is a separate escaping layer
+    from KConfig's own value-decoding, applied when Konsole reads the file
+    back. The shipped test this replaces asserted the raw, un-escaped
+    shlex.join(...) bytes as correct -- certifying the bug rather than
+    catching it. This decodes the written value through KConfig's own
+    escaping rules and confirms it round-trips to the exact argv this
+    module intended, for a path containing a space, a double quote, and a
+    backslash."""
     data_home = tmp_path / "xdg" / "data"
     config_home = tmp_path / "xdg" / "config"
     zsh_path = '/opt/Zsh Tools/z"sh\\bin'
@@ -308,7 +342,12 @@ def test_konsole_serializer_preserves_special_login_argv_and_rejects_unsafe_path
     original_profile = profile.read_bytes()
     original_konsolerc = konsolerc.read_bytes()
 
-    assert "Command='/opt/Zsh Tools/z\"sh\\bin' -l" in profile.read_text()
+    command_line = next(
+        line for line in profile.read_text().splitlines() if line.startswith("Command=")
+    )
+    written_value = command_line.removeprefix("Command=")
+    assert _kconfig_decode(written_value) == shlex.join((zsh_path, "-l"))
+
     with pytest.raises(TerminalShellError, match="control"):
         sync_terminal_shells(
             home=tmp_path,
@@ -320,6 +359,33 @@ def test_konsole_serializer_preserves_special_login_argv_and_rejects_unsafe_path
         )
     assert profile.read_bytes() == original_profile
     assert konsolerc.read_bytes() == original_konsolerc
+
+
+def test_konsole_command_survives_a_backslash_t_sequence_without_becoming_a_tab(
+    tmp_path: Path,
+) -> None:
+    """WR-01's own reproduction: shlex.quote('/opt/a\\test/zsh') writes the
+    literal text '/opt/a\\test/zsh', and KConfig's decoder treats \\t as its
+    own escape for a tab character on read -- so an un-escaped write
+    silently corrupts the launch command into '/opt/a<TAB>est/zsh'."""
+    data_home = tmp_path / "xdg" / "data"
+    config_home = tmp_path / "xdg" / "config"
+    zsh_path = "/opt/a\\test/zsh"
+
+    sync_terminal_shells(
+        home=tmp_path,
+        environ={"XDG_DATA_HOME": str(data_home), "XDG_CONFIG_HOME": str(config_home)},
+        platform=_platform(),
+        lookup=_lookup(zsh=zsh_path, kitty="/usr/bin/kitty", konsole="/usr/bin/konsole"),
+    )
+
+    profile = data_home / "konsole" / "tools-installer-zsh.profile"
+    command_line = next(
+        line for line in profile.read_text().splitlines() if line.startswith("Command=")
+    )
+    decoded = _kconfig_decode(command_line.removeprefix("Command="))
+    assert decoded == shlex.join((zsh_path, "-l"))
+    assert "\t" not in decoded
 
 
 def test_zsh_removal_reverts_only_complete_owned_terminal_configuration(tmp_path: Path) -> None:
@@ -360,6 +426,88 @@ def test_zsh_removal_reverts_only_complete_owned_terminal_configuration(tmp_path
     )
     assert not (data_home / "konsole" / "tools-installer-zsh.profile").exists()
     assert konsolerc.read_text() == original_konsolerc
+
+
+def test_revert_restores_the_prior_konsole_default_after_a_real_konsole_rewrite(
+    tmp_path: Path,
+) -> None:
+    """CR-06: konsolerc is a KConfig file Konsole itself rewrites on
+    ordinary use, and KConfig's own backend does not preserve comment
+    lines -- so the marker comments this module relies on elsewhere can
+    silently vanish while DefaultProfile=tools-installer-zsh.profile
+    survives as a plain, now-unmarked entry. This simulates exactly that:
+    strip the marker lines from konsolerc the way a real Konsole rewrite
+    would, leaving only the plain DefaultProfile= entry pointing at our
+    profile, and confirm the prior default is restored rather than
+    permanently lost."""
+    data_home = tmp_path / "xdg" / "data"
+    config_home = tmp_path / "xdg" / "config"
+    konsolerc = config_home / "konsolerc"
+    konsolerc.parent.mkdir(parents=True)
+    konsolerc.write_text("[Desktop Entry]\nDefaultProfile=Old.profile\n")
+    args: _SyncArgs = {
+        "home": tmp_path,
+        "environ": {"XDG_DATA_HOME": str(data_home), "XDG_CONFIG_HOME": str(config_home)},
+        "platform": _platform(),
+        "lookup": _lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty", konsole="/usr/bin/konsole"),
+    }
+    sync_terminal_shells(**args)
+
+    # Simulate a real Konsole rewrite: the marker comments are gone, but the
+    # value they wrapped is still there as a plain, unmarked entry.
+    konsolerc.write_text("[Desktop Entry]\nDefaultProfile=tools-installer-zsh.profile\n")
+
+    result = sync_terminal_shells(
+        home=tmp_path,
+        environ=args["environ"],
+        platform=_platform(),
+        lookup=_lookup(kitty="/usr/bin/kitty", konsole="/usr/bin/konsole"),
+    )
+
+    assert "konsole" in result.reverted
+    assert konsolerc.read_text() == "[Desktop Entry]\nDefaultProfile=Old.profile\n"
+    assert not (data_home / "konsole" / "tools-installer-zsh.profile").exists()
+    assert not (data_home / "tools-installer" / "terminal-shell-konsole-default").exists()
+
+
+def test_revert_strips_a_stale_owned_konsolerc_region_even_when_no_longer_effective(
+    tmp_path: Path,
+) -> None:
+    """WR-02: the profile file's own deletion and the konsolerc region-strip
+    are both unconditionally ours whenever their own markers are present --
+    never gated on whether our profile is still the *effective* default.
+    Before this fix, the konsolerc cleanup was guarded by an effective-
+    default check that could never become true again once a later
+    [Desktop Entry] group (simulated here) took over, permanently stranding
+    the installer-owned marker region."""
+    data_home = tmp_path / "xdg" / "data"
+    config_home = tmp_path / "xdg" / "config"
+    konsolerc = config_home / "konsolerc"
+    args: _SyncArgs = {
+        "home": tmp_path,
+        "environ": {"XDG_DATA_HOME": str(data_home), "XDG_CONFIG_HOME": str(config_home)},
+        "platform": _platform(),
+        "lookup": _lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty", konsole="/usr/bin/konsole"),
+    }
+    sync_terminal_shells(**args)
+
+    # A later [Desktop Entry] group takes over as the effective default --
+    # our owned region (still present, still marked) is no longer effective.
+    konsolerc.write_text(
+        konsolerc.read_text() + "[Desktop Entry]\nDefaultProfile=SomeoneElse.profile\n"
+    )
+
+    result = sync_terminal_shells(
+        home=tmp_path,
+        environ=args["environ"],
+        platform=_platform(),
+        lookup=_lookup(kitty="/usr/bin/kitty", konsole="/usr/bin/konsole"),
+    )
+
+    assert "konsole" in result.reverted
+    assert "tools-installer terminal-shell konsole" not in konsolerc.read_text()
+    assert "DefaultProfile=SomeoneElse.profile" in konsolerc.read_text()
+    assert not (data_home / "konsole" / "tools-installer-zsh.profile").exists()
 
 
 def test_absent_konsole_does_not_create_profile_or_kconfig(tmp_path: Path) -> None:

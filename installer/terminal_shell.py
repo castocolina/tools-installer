@@ -174,6 +174,21 @@ def _kconfig_command(zsh_path: str) -> str:
     return shlex.join((zsh_path, "-l"))
 
 
+# WR-01: KConfig's own value-decoding layer unescapes these sequences when it
+# READS a value -- a separate layer from shlex's own shell-argv quoting.
+# Without re-escaping after shlex.join, a zsh path containing a backslash
+# round-trips wrong: shlex.quote('/opt/a\test/zsh') writes the literal text
+# '/opt/a\test/zsh', and KConfig reads that back as '/opt/a<TAB>est/zsh'
+# because \t is ITS OWN escape for a tab, silently corrupting the launch
+# command.
+_KCONFIG_ESCAPES: dict[str, str] = {"\\": "\\\\", "\n": "\\n", "\t": "\\t", "\r": "\\r"}
+
+
+def _kconfig_value(value: str) -> str:
+    """Encode a value for a KConfig entry, applied AFTER shell-argv quoting."""
+    return "".join(_KCONFIG_ESCAPES.get(character, character) for character in value)
+
+
 def _desktop_default(content: str) -> str | None:
     """Return the effective Desktop Entry default-profile value, if any."""
     in_desktop_entry = False
@@ -184,6 +199,32 @@ def _desktop_default(content: str) -> str | None:
         elif in_desktop_entry and line.startswith("DefaultProfile="):
             found = line.removeprefix("DefaultProfile=")
     return found
+
+
+def _set_desktop_default(content: str, value: str | None) -> str:
+    """Rewrite (or remove, when value is None) the effective DefaultProfile line.
+
+    Mirrors _desktop_default's own last-[Desktop Entry]-group-wins traversal,
+    so the exact line that function would report as effective is the one
+    edited here -- never a guess at which of several [Desktop Entry] groups
+    is authoritative. A no-op (returns content unchanged) when there is no
+    such line to edit.
+    """
+    lines = content.split("\n")
+    in_desktop_entry = False
+    target: int | None = None
+    for index, line in enumerate(lines):
+        if line.startswith("[") and line.endswith("]"):
+            in_desktop_entry = line == "[Desktop Entry]"
+        elif in_desktop_entry and line.startswith("DefaultProfile="):
+            target = index
+    if target is None:
+        return content
+    if value:
+        lines[target] = f"DefaultProfile={value}"
+    else:
+        del lines[target]
+    return "\n".join(lines)
 
 
 def _remove_if_owned(path: Path, terminal: str, *, comment: str = "#") -> bool:
@@ -243,7 +284,19 @@ def _sync_konsole(
     updated_profile = _replace_owned_region(
         profile_content,
         "konsole-profile",
-        f"[General]\nCommand={_kconfig_command(zsh_path)}",
+        # CR-05: every real Konsole profile carries a Name= (confirmed
+        # against this host's own /usr/share/konsole/Vapor.profile) --
+        # Konsole's profile manager is documented to reject a profile with
+        # no valid Name property, so a profile missing one is expected to be
+        # silently rejected, making DefaultProfile= resolve to nothing and
+        # Konsole fall back to its own built-in default shell regardless of
+        # this module having run at all. WR-01: the Command value is
+        # KConfig-escaped AFTER shlex's own shell-argv quoting -- a separate
+        # decoding layer Konsole applies on read.
+        "[General]\n"
+        "Name=tools-installer zsh\n"
+        "Parent=FALLBACK/\n"
+        f"Command={_kconfig_value(_kconfig_command(zsh_path))}",
     )
     updated_konsolerc = _replace_owned_region(
         original_konsolerc,
@@ -259,20 +312,56 @@ def _sync_konsole(
 
 
 def _revert_konsole(*, home: Path, environ: Mapping[str, str]) -> bool:
-    """Undo only the profile and selection whose ownership this module can prove."""
+    """Undo only the profile and selection whose ownership this module can prove.
+
+    CR-06: konsolerc is a KConfig file Konsole itself rewrites on ordinary
+    use, and KConfig's own backend does not preserve comment lines (confirmed
+    against a real ~/.config/konsolerc on this host: zero `#` lines across 11
+    entries) -- so the marker-comment ownership proof _remove_if_owned relies
+    on can silently vanish while `DefaultProfile=tools-installer-zsh.profile`
+    survives as a plain, now-unmarked entry. The state file is therefore made
+    load-bearing rather than decorative: it is the one thing that can still
+    prove ownership and supply the prior value to restore, independent of
+    whether the marker comments survived.
+
+    WR-02: stripping the marker-owned region (this function's first action)
+    and deleting the owned profile file (its last) are both unconditionally
+    ours whenever their own markers are present, regardless of whether our
+    profile is still the *effective* default -- so a `DefaultProfile=` entry
+    left behind in a non-effective `[Desktop Entry]` group (a later group, or
+    the user having since picked a different profile by hand) is still
+    cleaned up. Restoring the PRIOR default via the state file, in contrast,
+    is deliberately conditioned on our profile still being effective:
+    overwriting DefaultProfile with the recorded prior value would be wrong
+    if the user had already chosen a different profile themselves.
+    """
     data_home = _xdg_data_home(home, environ)
     profile = data_home / "konsole" / "tools-installer-zsh.profile"
     state = data_home / "tools-installer" / "terminal-shell-konsole-default"
     konsolerc = _xdg_config_home(home, environ) / "konsolerc"
     reverted = False
-    current_konsolerc = _read_text(konsolerc)
-    if _desktop_default(current_konsolerc) == "tools-installer-zsh.profile":
-        reverted = _remove_if_owned(konsolerc, "konsole") or reverted
+
+    # WR-02: unconditional -- ours by construction wherever the marker region
+    # still exists, independent of whether it is currently effective.
+    if _remove_if_owned(konsolerc, "konsole"):
+        reverted = True
+
+    # CR-06: the marker region may already be gone (a real Konsole rewrite)
+    # while DefaultProfile still points at our profile as a plain, unmarked
+    # entry. The state file is the one thing that can still prove ownership
+    # in that case.
+    if state.exists():
+        prior = state.read_text().rstrip("\n")
+        current_konsolerc = _read_text(konsolerc)
+        if _desktop_default(current_konsolerc) == "tools-installer-zsh.profile":
+            updated = _set_desktop_default(current_konsolerc, prior or None)
+            if _write_if_changed(konsolerc, updated):
+                reverted = True
+        state.unlink()
+
     if profile.exists() and "tools-installer terminal-shell konsole-profile" in _read_text(profile):
         profile.unlink()
         reverted = True
-    if state.exists():
-        state.unlink()
     return reverted
 
 
