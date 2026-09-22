@@ -22,7 +22,7 @@ from prompt_toolkit.input import Input, create_input
 from prompt_toolkit.output import Output, create_output
 from rich.console import Console
 
-from installer import daemon, pnpm_globals, systemd_daemon
+from installer import daemon, env_redirect, pnpm_globals, systemd_daemon
 from installer.app import (
     UninstallDecision,
     clean_rc_duplicates,
@@ -54,6 +54,7 @@ from installer.policy import (
     DaemonDefaultWarnings,
     Policy,
     ban_policy,
+    cache_redirect_policy,
     daemon_policy,
     ensure_daemon_default,
     linux_daemon_policy,
@@ -118,6 +119,7 @@ _DAEMON_STATE_PATH = _MYSHELLRC
 _LINUX_DAEMON_UNIT_DIR = systemd_daemon.user_unit_dir(Path.home(), os.environ)
 _LINUX_DAEMON_LOG_PATH = Path.home() / ".local" / "state" / "tools-installer" / "prune-daemon.log"
 _LINUX_DAEMON_SCRIPT_PATH = Path(__file__).parent / "scripts" / "prune-tmp-linux.sh"
+_ENVIRONMENT_D_DIR = Path.home() / ".config" / "environment.d"
 
 _STYLE = questionary.Style(
     [
@@ -485,6 +487,26 @@ def _build_daemon_policy(
     )
 
 
+def _cache_redirect_policies(platform: Platform) -> tuple[Policy, ...]:
+    """One cache-redirect Policy per declared redirect, for this platform.
+
+    Built once and shared: the Policies list, the uninstall preview and the
+    uninstall sweep must act on the same objects. The per-platform branch
+    lives inside ``cache_redirect_policy``.
+    """
+    return tuple(
+        cache_redirect_policy(
+            redirect,
+            platform_os=platform.os,
+            conf_dir=_ENVIRONMENT_D_DIR,
+            rc_path=_MYSHELLRC,
+            home=Path.home(),
+            ensure_sourced_from=(),
+        )
+        for redirect in env_redirect.REDIRECTS
+    )
+
+
 def _which_with_brew(name: str) -> str | None:
     """Resolve an executable like `shutil.which`, falling back to well-known
     Homebrew prefixes checked by disk presence.
@@ -678,6 +700,7 @@ def _build_app(
     # daemon_policy instance -- all three need to read and act on the exact
     # same object.
     daemon = _build_daemon_policy(platform, installed, timer_cache=timer_cache)
+    redirects = _cache_redirect_policies(platform)
 
     # Hoisted above `uninstall_inputs` (Round-1 review HIGH's post-removal
     # invalidation): the Uninstall screen's seam binds to this instance, so
@@ -705,6 +728,7 @@ def _build_app(
             bundles=BUNDLES,
             zshrc_path=_ZSHRC,
             daemon_policy=daemon,
+            extra_policies=redirects,
         )
 
     def _ban_apply_rc_paths() -> list[Path]:
@@ -749,6 +773,7 @@ def _build_app(
             bin_dir=_DEFAULT_BIN_DIR,
             zshrc_path=_ZSHRC,
             daemon_policy=daemon,
+            extra_policies=redirects,
         ),
         invalidate=lambda: version_refresh.invalidate(reason="uninstall run finished"),
         # WR-01: the pass that REPLACES what the invalidate above drops, off
@@ -785,6 +810,7 @@ def _build_app(
                 terminal_sync=_sync_omz_terminals,
             ),
             *((daemon,) if daemon is not None else ()),
+            *redirects,
         ],
         link_mode=_current_link_mode if settings is not None else None,
         set_link_mode=settings.set_link_mode if settings is not None else None,
@@ -1127,6 +1153,7 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
         bundles=BUNDLES,
         zshrc_path=_ZSHRC,
         daemon_policy=_build_daemon_policy(platform, installed),
+        extra_policies=_cache_redirect_policies(platform),
     )
     # D-01/15.6-06 Task 2: absent zsh reverts only owned terminal
     # configuration (sync_terminal_shells' own no-zsh branch), so a teardown

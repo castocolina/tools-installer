@@ -1088,3 +1088,90 @@ def test_a_failing_bundle_does_not_abort_the_rest_of_the_sweep(
     # and it is the only arm that touches a file the user owns.
     assert result.swept == ("omz-plugins",)
     assert zshrc.read_text() == "plugins=(z)\nsource omz\n"
+
+
+def _extra(policy_id: str, *, active: bool) -> Policy:
+    from installer.policy import PolicyResult
+
+    state = {"active": active}
+
+    def is_active() -> bool:
+        return state["active"]
+
+    def remove() -> PolicyResult:
+        state["active"] = False
+        return PolicyResult(layers=(), reload_hint=None, warning=None)
+
+    return Policy(
+        id=policy_id,
+        label=policy_id,
+        description="",
+        active=active,
+        apply=remove,
+        remove=remove,
+        is_active=is_active,
+    )
+
+
+def test_active_policies_appends_a_live_extra_and_skips_an_inactive_one(tmp_path: Path) -> None:
+    from installer.uninstall import active_policies
+
+    live = _extra("cache-redirect:bun", active=True)
+    quiet = _extra("cache-redirect:other", active=False)
+    policies = active_policies(
+        (),
+        rc_path=tmp_path / ".myshellrc",
+        bin_dir=tmp_path / "bin",
+        extra_policies=(live, quiet),
+    )
+    assert policies == [live]
+
+
+def test_active_tweak_ids_names_the_extra_policy(tmp_path: Path) -> None:
+    ids = active_tweak_ids(
+        (),
+        rc_path=tmp_path / ".myshellrc",
+        bin_dir=tmp_path / "bin",
+        extra_policies=(_extra("cache-redirect:bun", active=True),),
+    )
+    assert ids == ("cache-redirect:bun",)
+
+
+def test_sweep_tweaks_disables_an_extra_policy_and_isolates_its_failure(tmp_path: Path) -> None:
+    from installer.policy import PolicyResult
+    from installer.run import CommandError
+
+    live = _extra("cache-redirect:bun", active=True)
+
+    def boom() -> PolicyResult:
+        raise CommandError(["rm"], 1)
+
+    failed = Policy(
+        id="cache-redirect:broken",
+        label="broken",
+        description="",
+        active=True,
+        apply=boom,
+        remove=boom,
+        is_active=lambda: True,
+    )
+    result = sweep_tweaks(
+        (),
+        rc_path=tmp_path / ".myshellrc",
+        bin_dir=tmp_path / "bin",
+        extra_policies=(failed, live),
+    )
+    assert result.failed == ("cache-redirect:broken",)
+    assert result.swept == ("cache-redirect:bun",)
+    assert live.is_active is not None
+    assert live.is_active() is False
+
+
+def test_empty_extra_policies_leaves_the_sweep_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc_path, bin_dir = _enabled_countdown(tmp_path)
+    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, extra_policies=()) == SweepResult(
+        swept=("tweak:countdown",)
+    )

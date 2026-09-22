@@ -13,6 +13,7 @@ from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.policy import Policy, daemon_policy
+from installer.uninstall import SweepResult
 from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError, Runner
 from installer.selection import Choice
@@ -383,6 +384,7 @@ def test_run_uninstall_removes_when_confirmed(tmp_path: Path, monkeypatch: pytes
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
     assert set(removed) == {opt, bin_dir / "fd"}
     assert not opt.exists()
@@ -419,6 +421,7 @@ def test_run_uninstall_aborts_when_declined(tmp_path: Path, monkeypatch: pytest.
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
     assert removed == []
     assert opt.exists()  # nothing removed
@@ -589,6 +592,7 @@ def test_run_uninstall_nothing_to_remove_skips_confirm(
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
     assert removed == []
 
@@ -1200,6 +1204,7 @@ def test_run_uninstall_also_removes_guard_artifacts(tmp_path: Path):
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
     assert not (shim_dir / "pip").exists()
     assert "tools-installer ban" not in myshellrc.read_text()
@@ -1232,6 +1237,7 @@ def test_perform_uninstall_removes_only_chosen_levers(tmp_path: Path) -> None:
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
 
     assert not artifact.exists()
@@ -1256,6 +1262,7 @@ def test_perform_uninstall_removes_path_block_when_chosen(tmp_path: Path) -> Non
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
 
     assert "tools-installer path" not in myshellrc.read_text()  # block stripped
@@ -1332,6 +1339,7 @@ def test_perform_uninstall_ban_lever_removes_shims_and_aliases(tmp_path: Path) -
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
 
     assert all(active is False for active in guard_status(bin_dir).values())  # shims gone
@@ -1370,6 +1378,7 @@ def test_run_uninstall_previews_and_sweeps_active_tweaks(
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
     out = buf.getvalue()
     assert "countdown" in out
@@ -1417,6 +1426,7 @@ def test_run_uninstall_sweeps_the_very_tweaks_it_previewed(
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
     out = buf.getvalue()
     assert "These shell tweaks will also be disabled" in out
@@ -1445,6 +1455,7 @@ def test_run_uninstall_reports_nothing_to_uninstall_only_when_truly_empty(
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
     assert "Nothing to uninstall" in buf.getvalue()
 
@@ -1460,6 +1471,7 @@ def test_run_uninstall_reports_nothing_to_uninstall_only_when_truly_empty(
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
     assert "Nothing to uninstall" not in buf.getvalue()
     assert "countdown" in buf.getvalue()
@@ -1484,6 +1496,7 @@ def test_run_uninstall_declined_removes_nothing(
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
     assert helper.exists()
     assert "wait_time()" in rc_path.read_text()
@@ -1507,6 +1520,7 @@ def test_run_uninstall_without_bundles_sweeps_nothing(
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
     assert helper.exists()
     assert "wait_time()" in rc_path.read_text()
@@ -1540,6 +1554,7 @@ def test_run_uninstall_preview_names_the_plugins_and_the_zshrc(
         bundles=BUNDLES,
         zshrc_path=zshrc,
         daemon_policy=None,
+        extra_policies=(),
     )
     out = buf.getvalue()
     assert "omz-plugins" in out
@@ -1570,6 +1585,7 @@ def test_run_uninstall_preview_stays_silent_about_a_zshrc_it_does_not_own(
         bundles=BUNDLES,
         zshrc_path=zshrc,
         daemon_policy=None,
+        extra_policies=(),
     )
     out = buf.getvalue()
     assert "countdown" in out
@@ -1595,6 +1611,7 @@ def test_run_uninstall_reports_what_the_sweep_did_not_what_it_previewed(
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
     assert "Shell tweaks disabled: tweak:countdown." in buf.getvalue()
 
@@ -1623,6 +1640,7 @@ def test_run_uninstall_names_the_tweaks_it_could_not_disable(
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
     out = buf.getvalue()
     assert "Could not disable: tweak:countdown." in out
@@ -1692,6 +1710,7 @@ def test_run_uninstall_forwards_daemon_policy_into_the_sweep_and_clears_the_mark
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=daemon_policy_obj,
+        extra_policies=(),
     )
     assert not plist_path.exists()
     assert daemon.decided(state_path) is False
@@ -1741,6 +1760,7 @@ def test_run_uninstall_clears_the_decided_marker_for_an_already_disabled_daemon(
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=daemon_policy_obj,
+        extra_policies=(),
     )
     assert daemon.decided(state_path) is False
 
@@ -1768,6 +1788,7 @@ def test_run_uninstall_preserves_the_decided_marker_when_daemon_removal_fails(
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=daemon_policy_obj,
+        extra_policies=(),
     )
     assert daemon.decided(state_path) is True  # preserved: the removal genuinely failed
     assert "Could not disable" in buf.getvalue()
@@ -1793,6 +1814,7 @@ def test_perform_uninstall_forwards_daemon_policy_and_clears_the_marker(tmp_path
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=daemon_policy_obj,
+        extra_policies=(),
     )
     assert "daemon:prune-tmpdir" in result.swept
     assert not plist_path.exists()
@@ -1825,6 +1847,7 @@ def test_perform_uninstall_clears_marker_for_disabled_daemon_with_no_tweaks_row(
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=daemon_policy_obj,
+        extra_policies=(),
     )
     assert result.swept == ()
     assert daemon.decided(state_path) is False
@@ -1858,6 +1881,7 @@ def test_perform_uninstall_preserves_the_decided_marker_for_an_active_daemon_lef
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=daemon_policy_obj,
+        extra_policies=(),
     )
     assert result.swept == ()
     assert plist_path.exists()  # untouched: the user did not select removal
@@ -1898,6 +1922,7 @@ def test_run_uninstall_preview_names_the_background_job_when_the_daemon_is_activ
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=daemon_policy_obj,
+        extra_policies=(),
     )
     out = buf.getvalue()
     assert "background maintenance job" in out
@@ -1922,6 +1947,7 @@ def test_run_uninstall_preview_stays_byte_identical_when_the_daemon_is_absent(
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
+        extra_policies=(),
     )
     out = buf.getvalue()
     assert "These shell tweaks will also be disabled (tweak:countdown)." in out
@@ -1972,6 +1998,7 @@ def test_run_uninstall_clears_the_linux_marker_and_leaves_the_macos_one(
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=policy,
+        extra_policies=(),
     )
     assert systemd_daemon.decided(state_path) is False
     assert daemon.decided(state_path) is True
@@ -2009,6 +2036,7 @@ def test_run_uninstall_clears_the_linux_marker_after_a_successful_sweep(
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=active_policy,
+        extra_policies=(),
     )
     assert systemd_daemon.decided(state_path) is False
     assert daemon.decided(state_path) is True
@@ -2035,6 +2063,7 @@ def test_perform_uninstall_clears_the_linux_marker_for_an_already_inactive_daemo
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=policy,
+        extra_policies=(),
     )
     assert systemd_daemon.decided(state_path) is False
     assert daemon.decided(state_path) is True
@@ -2069,6 +2098,7 @@ def test_run_uninstall_preserves_the_linux_marker_when_removal_fails(tmp_path: P
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=failed,
+        extra_policies=(),
     )
     assert systemd_daemon.decided(state_path) is True
     assert "Could not disable" in buf.getvalue()
@@ -2093,6 +2123,7 @@ def test_clear_decided_none_is_a_noop_at_every_uninstall_branch(tmp_path: Path) 
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=bare,
+        extra_policies=(),
     )
     perform_uninstall(
         UninstallDecision(paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=False),
@@ -2102,6 +2133,7 @@ def test_clear_decided_none_is_a_noop_at_every_uninstall_branch(tmp_path: Path) 
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=bare,
+        extra_policies=(),
     )
 
     def active() -> bool:
@@ -2121,6 +2153,7 @@ def test_clear_decided_none_is_a_noop_at_every_uninstall_branch(tmp_path: Path) 
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=swept,
+        extra_policies=(),
     )
     perform_uninstall(
         UninstallDecision(paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True),
@@ -2130,7 +2163,106 @@ def test_clear_decided_none_is_a_noop_at_every_uninstall_branch(tmp_path: Path) 
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=swept,
+        extra_policies=(),
     )
+
+
+def test_run_uninstall_and_perform_uninstall_sweep_and_name_an_extra_policy(
+    tmp_path: Path,
+) -> None:
+    from installer.app import UninstallDecision, perform_uninstall, run_uninstall
+    from installer.policy import PolicyResult
+
+    removed: list[str] = []
+
+    def remove() -> PolicyResult:
+        removed.append("cache-redirect:bun")
+        return PolicyResult(layers=(), reload_hint=None, warning=None)
+
+    extra = Policy(
+        id="cache-redirect:bun",
+        label="Bun cache",
+        description="",
+        active=True,
+        apply=remove,
+        remove=remove,
+        is_active=lambda: "cache-redirect:bun" not in removed,
+    )
+    console, buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(extra,),
+    )
+    assert "cache-redirect:bun" in buf.getvalue()
+    assert removed == ["cache-redirect:bun"]
+
+    removed.clear()
+    again = Policy(
+        id="cache-redirect:bun",
+        label="Bun cache",
+        description="",
+        active=True,
+        apply=remove,
+        remove=remove,
+        is_active=lambda: True,
+    )
+    result = perform_uninstall(
+        UninstallDecision(paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True),
+        bin_dir=tmp_path / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(again,),
+    )
+    assert "cache-redirect:bun" in result.swept
+
+
+def test_uninstall_entry_points_require_extra_policies(tmp_path: Path) -> None:
+    from installer.app import UninstallDecision, perform_uninstall, run_uninstall
+
+    console, _buf = _console()
+    with pytest.raises(TypeError):
+        run_uninstall(  # type: ignore[call-arg]
+            [],
+            console,
+            default_bin_dir=tmp_path / "bin",
+            myshellrc_path=tmp_path / ".myshellrc",
+            rc_paths=[],
+            confirm=lambda _m: True,
+            bundles=(),
+            zshrc_path=tmp_path / ".zshrc",
+            daemon_policy=None,
+        )
+    with pytest.raises(TypeError):
+        perform_uninstall(  # type: ignore[call-arg]
+            UninstallDecision(paths=(), remove_ban=False, remove_path_block=False),
+            bin_dir=tmp_path / "bin",
+            myshellrc_path=tmp_path / ".myshellrc",
+            rc_paths=[],
+            bundles=(),
+            zshrc_path=tmp_path / ".zshrc",
+            daemon_policy=None,
+        )
+
+
+def test_sweep_helpers_keep_an_empty_extra_policies_default(tmp_path: Path) -> None:
+    from installer.uninstall import active_policies, active_tweak_ids, sweep_tweaks
+
+    rc = tmp_path / ".myshellrc"
+    bin_dir = tmp_path / "bin"
+    assert active_policies((), rc_path=rc, bin_dir=bin_dir) == []
+    assert active_tweak_ids((), rc_path=rc, bin_dir=bin_dir) == ()
+    assert sweep_tweaks((), rc_path=rc, bin_dir=bin_dir) == SweepResult()
 
 
 def test_run_wizard_surfaces_a_postinstall_warning_on_the_real_path() -> None:

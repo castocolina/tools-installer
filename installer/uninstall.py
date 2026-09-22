@@ -385,6 +385,16 @@ class SweepResult:
     failed: tuple[str, ...] = ()
 
 
+def _reads_active(policy: Policy) -> bool:
+    """The daemon arm's live-probe rule, shared with every extra policy.
+
+    ``is_active()`` when the policy binds one, otherwise the frozen ``.active``
+    snapshot. A construction-time snapshot goes stale once another thread
+    enables the same object.
+    """
+    return policy.is_active() if policy.is_active is not None else policy.active
+
+
 def active_policies(
     bundles: tuple[TweakBundle, ...],
     *,
@@ -392,6 +402,7 @@ def active_policies(
     bin_dir: Path,
     zshrc_path: Path | None = None,
     daemon_policy: Policy | None = None,
+    extra_policies: tuple[Policy, ...] = (),
 ) -> list[Policy]:
     """Every policy whose footprint is still on this machine, built exactly once.
 
@@ -422,14 +433,11 @@ def active_policies(
         policy = _omz_policy(zshrc_path, rc_path)
         if policy.active:
             policies.append(policy)
-    if daemon_policy is not None:
-        is_active = (
-            daemon_policy.is_active()
-            if daemon_policy.is_active is not None
-            else daemon_policy.active
-        )
-        if is_active:
-            policies.append(daemon_policy)
+    if daemon_policy is not None and _reads_active(daemon_policy):
+        policies.append(daemon_policy)
+    for extra in extra_policies:
+        if _reads_active(extra):
+            policies.append(extra)
     return policies
 
 
@@ -440,6 +448,7 @@ def active_tweak_ids(
     bin_dir: Path,
     zshrc_path: Path | None = None,
     daemon_policy: Policy | None = None,
+    extra_policies: tuple[Policy, ...] = (),
 ) -> tuple[str, ...]:
     """Ids of tweaks still present on this machine.
 
@@ -476,6 +485,7 @@ def active_tweak_ids(
             bin_dir=bin_dir,
             zshrc_path=zshrc_path,
             daemon_policy=daemon_policy,
+            extra_policies=extra_policies,
         )
     )
 
@@ -521,6 +531,7 @@ def sweep_tweaks(
     bin_dir: Path,
     zshrc_path: Path | None = None,
     daemon_policy: Policy | None = None,
+    extra_policies: tuple[Policy, ...] = (),
 ) -> SweepResult:
     """Read what is active right now and disable it: `active_policies` + `sweep_policies`.
 
@@ -544,5 +555,6 @@ def sweep_tweaks(
             bin_dir=bin_dir,
             zshrc_path=zshrc_path,
             daemon_policy=daemon_policy,
+            extra_policies=extra_policies,
         )
     )

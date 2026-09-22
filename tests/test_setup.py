@@ -441,6 +441,7 @@ def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(setup, "_DAEMON_LOG_PATH", tmp_path / "Logs" / "prune-daemon.log")
     monkeypatch.setattr(setup, "_DAEMON_SCRIPT_PATH", tmp_path / "scripts" / "prune-user-tmpdir.sh")
     monkeypatch.setattr(setup, "_DAEMON_STATE_PATH", tmp_path / ".myshellrc")
+    monkeypatch.setattr(setup, "_ENVIRONMENT_D_DIR", tmp_path / ".config" / "environment.d")
     # Linux mirror of the macOS daemon paths above: without this, the
     # module-level _LINUX_DAEMON_UNIT_DIR constant (computed once, at import
     # time, from the real machine's HOME) would have every Linux-platform
@@ -623,9 +624,11 @@ def test_the_policies_view_is_wired_ban_then_tweaks_then_omz(
 
     ids = [policy.id for policy in policies.policies]
     assert ids[0] == "ban"
-    assert ids[-1] == "daemon:prune-tmpdir"
-    assert ids[-2] == "omz-plugins"
-    assert all(policy_id.startswith("tweak:") for policy_id in ids[1:-2])
+    daemon_at = ids.index("daemon:prune-tmpdir")
+    assert ids[daemon_at - 1] == "omz-plugins"
+    assert all(policy_id.startswith("tweak:") for policy_id in ids[1 : daemon_at - 1])
+    assert all(policy_id.startswith("cache-redirect:") for policy_id in ids[daemon_at + 1 :])
+    assert ids[daemon_at + 1 :]
     assert len(ids) > 3
 
 
@@ -2186,6 +2189,48 @@ def test_interactive_wizard_labels_a_timed_out_background_apply(
     assert "partial" in text
     assert "had not finished" in text
     assert DAEMON_DEFAULT_WAIT_SECONDS > 0
+
+
+def test_both_uninstall_routes_pass_the_same_cache_redirect_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    cli: list[dict[str, object]] = []
+    interactive: list[dict[str, object]] = []
+
+    def fake_run_uninstall(_tools: object, _console: object, **kwargs: object) -> list[Path]:
+        cli.append(kwargs)
+        return []
+
+    def fake_perform_uninstall(_decision: object, **kwargs: object) -> SweepResult:
+        interactive.append(kwargs)
+        return SweepResult()
+
+    monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
+    monkeypatch.setattr(setup, "perform_uninstall", fake_perform_uninstall)
+    assert setup.main(["--uninstall", "--yes"]) == 0
+    assert setup.main(["--uninstall"]) == 0
+    inputs = seen[-1]["uninstall"]
+    assert isinstance(inputs, UninstallInputs)
+    inputs.remove(
+        UninstallDecision(paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True)
+    )
+    policies = seen[-1]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    listed = tuple(policy.id for policy in policies.policies if policy.id.startswith("cache-redirect:"))
+
+    def redirect_ids(forwarded: dict[str, object]) -> tuple[str, ...]:
+        extras = forwarded["extra_policies"]
+        assert isinstance(extras, tuple)
+        return tuple(policy.id for policy in extras if isinstance(policy, Policy))
+
+    assert listed
+    assert redirect_ids(cli[0]) == listed
+    assert redirect_ids(interactive[0]) == listed
+    assert interactive[0]["extra_policies"] == tuple(
+        policy for policy in policies.policies if policy.id.startswith("cache-redirect:")
+    )
 
 
 def test_native_probe_is_wired_at_both_the_display_and_mutation_sites() -> None:

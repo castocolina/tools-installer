@@ -390,6 +390,7 @@ def run_uninstall(
     bundles: tuple[TweakBundle, ...],
     zshrc_path: Path,
     daemon_policy: Policy | None,
+    extra_policies: tuple[Policy, ...],
 ) -> list[Path]:
     """Preview userspace artifacts, confirm, then remove them, the PATH block,
     any pip/npm-ban artifacts (shims + alias blocks), and still-enabled shell
@@ -397,13 +398,15 @@ def run_uninstall(
 
     Returns the removed download/app paths ([] if nothing to remove or declined).
 
-    `bundles`, `zshrc_path`, and `daemon_policy` are required, unlike on the
-    uninstall primitives they forward to. There the defaults are a test
-    affordance; here a dropped kwarg would type-check, pass the suite, and
-    silently sweep nothing while reporting success — a user-visible
+    `bundles`, `zshrc_path`, `daemon_policy`, and `extra_policies` are required,
+    unlike on the uninstall primitives they forward to. There the defaults are
+    a test affordance; here a dropped kwarg would type-check, pass the suite,
+    and silently sweep nothing while reporting success — a user-visible
     data-integrity regression that nothing else can catch. `daemon_policy` is
-    `None` on any non-macOS platform (the daemon is never constructed there)
-    or when the caller genuinely has none to offer.
+    `None` on any platform where the daemon is never constructed, or when the
+    caller genuinely has none to offer. `extra_policies` has the identical
+    property: drop it and a cache-redirect file survives an uninstall that
+    printed success.
 
     The tweak preview and the tweak sweep are one `active_policies` list, not
     two reads of it: `remove_paths`, `remove_managed_block`, `remove_shims` and
@@ -427,6 +430,7 @@ def run_uninstall(
         bin_dir=default_bin_dir,
         zshrc_path=zshrc_path,
         daemon_policy=daemon_policy,
+        extra_policies=extra_policies,
     )
     tweaks = tuple(policy.id for policy in policies)
     # A machine whose only tools-installer footprint is an enabled tweak must
@@ -520,6 +524,7 @@ def perform_uninstall(
     bundles: tuple[TweakBundle, ...],
     zshrc_path: Path,
     daemon_policy: Policy | None,
+    extra_policies: tuple[Policy, ...],
 ) -> SweepResult:
     """Apply exactly the levers the view chose, composing the existing core
     removers. Unlike `run_uninstall`, nothing is removed all-or-nothing: a
@@ -529,11 +534,13 @@ def perform_uninstall(
     rather than the snapshot it rendered its rows from. Empty when the sweep
     lever was not selected.
 
-    `bundles`, `zshrc_path`, and `daemon_policy` are required for the same
-    reason they are on `run_uninstall`: this is a composition-root entry
-    point, and a dropped kwarg here silently narrows a teardown instead of
-    narrowing a test. `daemon_policy` is `None` on any non-macOS platform or
-    when the caller genuinely has none to offer."""
+    `bundles`, `zshrc_path`, `daemon_policy`, and `extra_policies` are required
+    for the same reason they are on `run_uninstall`: this is a composition-root
+    entry point, and a dropped kwarg here silently narrows a teardown instead
+    of narrowing a test. `daemon_policy` is `None` on any platform where the
+    daemon is never constructed, or when the caller genuinely has none to
+    offer. Dropping `extra_policies` leaves a cache-redirect file on disk
+    while the uninstall reports success."""
     remove_paths(list(decision.paths))
     if decision.remove_ban:
         remove_shims(bin_dir)
@@ -549,6 +556,7 @@ def perform_uninstall(
             bin_dir=bin_dir,
             zshrc_path=zshrc_path,
             daemon_policy=daemon_policy,
+            extra_policies=extra_policies,
         )
         # Same post-sweep, composition-root-only marker clear as run_uninstall
         # (see that function's own comment for the full ordering rationale).
