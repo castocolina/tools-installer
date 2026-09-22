@@ -527,14 +527,29 @@ Plans:
 
 ### Phase 15.8: Fix real (not just cosmetic) PATH duplication from managed-block sourcing: installer/shellrc.py's managed_block() (line 101-111) emits a plain, unconditional 'export PATH="{dir}:$PATH"' per managed bin dir into .bashrc/.zshrc/.myshellrc. The rc-file block itself is idempotent (apply_block never writes it twice), but the block's RUNTIME EFFECT is not: every nested/child shell that sources it again (very common -- tmux/wezterm panes, IDE-integrated terminals, subshells) re-prepends the same directory onto an already-inherited PATH that has it, accumulating duplicates with every nesting level. Confirmed live this session: 5 copies of ~/.local/bin, 4 of fnm's dir, 3+ of several others, in a single real shell session -- this is why Doctor's PATH audit keeps reporting the same 'duplicated on PATH' findings even after applying the fix and opening a genuinely new terminal, not a UI staleness issue (that is Phase 15.1's separate finding). Fix by making managed_block() emit a self-deduping guarded form instead of a plain export -- this codebase already recognizes and special-cases exactly this shape from pnpm's own installer output (installer/rcclean.py:61-70's find_duplicate_path_lines explicitly skips pnpm's case-guarded '*) export PATH="$PNPM_HOME:$PATH" ;;' block as 'self-deduping ... nothing safe or necessary to strip' -- reuse that same case-guarded idiom for every managed dir instead of a plain export). User explicitly asked for a reusable function/mechanism that checks-before-adding, not a one-off patch to this single block -- audit installer/shellrc.py's other PATH-writing call site (pnpm_home block, line ~210) and any other PATH-modifying block in the codebase for the same non-idempotent-at-runtime defect. (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** Every PATH entry this installer writes into a shell rc file is self-deduping at runtime — a nested or child shell that re-sources the file N times ends up with exactly one copy of each managed directory, proven by running real shells rather than by asserting on the emitted string — existing installations migrate automatically the next time apply/fix runs through the block-replacement mechanism that already exists, no PATH-writing code in the repo emits a plain unconditional export any more, and a machine carrying a generic ~/.shellrc ends up with one canonical file (~/.myshellrc) plus a marked stub, with the foreign content copied forward before anything is replaced.
+**Requirements**: D-01 (automatic migration through the existing apply_block), D-02 (+D-02a, the dated 2026-09-22 CONTEXT correction, authoritative over D-02's original text: the named second site is dead code and is DELETED rather than ported, with a port fallback if a live caller is found), D-03 (the case-guarded self-deduping idiom, still unrecognized-as-duplicate by installer/rcclean.py), D-04 (generic ~/.shellrc consolidated into ~/.myshellrc) — 15.8-CONTEXT.md locked decisions; an inserted roadmap phase with no REQUIREMENTS.md ids, following Phase 15.7's precedent.
 **Depends on:** Phase 15
-**Plans:** TBD
+**Plans:** 5 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 15.8 to break down)
+**Wave 1**
+
+- [ ] 15.8-01-PLAN.md — The reusable self-deduping PATH-guard emitter, managed_block rewired, and the real-shell runtime-idempotency + D-01 migration proofs (D-01, D-02, D-03)
+
+**Wave 2** *(blocked on Wave 1; the two plans touch disjoint files and run in parallel)*
+
+- [ ] 15.8-02-PLAN.md — Executable pins that installer/rcclean.py needs no change, in both directions (D-02, D-03)
+- [ ] 15.8-03-PLAN.md — D-02a: delete write_pnpm_home and existing_managed_bin_dirs after re-verifying zero callers, plus a repo-level no-plain-export invariant test (D-02, D-02a)
+
+**Wave 3** *(blocked on Wave 2: shares installer/shellrc.py with 15.8-03)*
+
+- [ ] 15.8-04-PLAN.md — D-04 consolidation mechanism: copy-forward, marked stub, refusal cases, and the sourcing-loop proof (D-04)
+
+**Wave 4** *(blocked on Wave 3: consumes consolidate_shellrc)*
+
+- [ ] 15.8-05-PLAN.md — Wiring into configure_path and all four setup.py call sites, test isolation for the new home constant, and the architecture.md invariants record (D-01, D-04)
 
 ### Phase 15.7: Unify tmp-prune tooling into an installable Tweaks module (from pending todo 2026-09-10-unify-tmp-prune-tooling-into-an-installable-tweaks-module.md): opencode/Bun's runtime-transpiler-cache orphans native .so/.node artifacts on a killed/crashed process, either in OS temp (macOS $TMPDIR, can reach 100GB+/day) or /tmp on Linux (a small-quota tmpfs on Bazzite, ~12GB, causing EDQUOT failures across the whole system once full). Two independent non-reusable scripts already solve pieces of this today (this repo's scripts/prune-user-tmpdir.sh, manual dry-run/--apply only; ai-kit's Linux-only systemd-timer bundle, confirmed working, keeps /tmp under 1%) but neither is cross-platform, wired into this project, or installable/uninstallable. Build one dedicated cross-platform module: (1) env-var wiring to redirect Bun's cache off tmp entirely (environment.d on Linux, shell-rc based on macOS), (2) a real background daemon install/uninstall -- systemd user timer+oneshot on Linux, launchd LaunchAgent on macOS -- never manual scripts, (3) Tweaks view toggle (install/uninstall, daemon-active status, current tmp usage %), (4) make doctor integration: red warning when the cleanup daemon is inactive AND disk space is below 30% (or /tmp exceeds 50% on Linux specifically), extra visual weight when both conditions are true together. Reuse this project's existing OS-detection conventions (Phase 12.3 precedent) rather than duplicating per-OS logic; user explicitly rejected manual-script-only as an acceptable outcome. (INSERTED)
 
