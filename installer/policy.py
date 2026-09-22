@@ -856,8 +856,14 @@ def linux_daemon_policy(
                     # enabling, so the user manager is already holding the
                     # definition about to be deleted -- the compensating
                     # reload keeps `systemctl --user list-units` honest
-                    # (review MEDIUM 15.7-01).
-                    systemd_daemon.remove_units(unit_dir)
+                    # (review MEDIUM 15.7-01). Best-effort: a write_units
+                    # failure this early can leave unit_dir in an unusual
+                    # state (e.g. never created at all), and a secondary
+                    # OSError while cleaning up must never mask the
+                    # ORIGINAL failure being unwound, nor abort the rest of
+                    # this rollback (wrapper/log cleanup still below).
+                    with contextlib.suppress(OSError):
+                        systemd_daemon.remove_units(unit_dir)
                     with contextlib.suppress(CommandError):
                         systemd_daemon.daemon_reload(run=run)
                     if not wrapper_existed_before:
