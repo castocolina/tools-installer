@@ -12,6 +12,7 @@ from installer.doctor import DoctorReport, has_problems
 from installer.enums import DaemonState, Severity
 from installer.guards import GLOBAL_REDIRECTED, REDIRECTED, guard_label, guarded_names
 from installer.pnpm_globals import NodeGlobalsReport
+from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit, system_scope_warning
 
 
 @dataclass(frozen=True, init=False)
@@ -279,9 +280,24 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
 # never appears in the INACTIVE (or ACTIVE) next_step, and a reader can tell
 # the two "no action beyond a one-off" and "there is a policy to flip" cases
 # apart by next_step content alone.
-_RUNNABLE_PRUNE_SENTENCE = (
-    "Run `./scripts/prune-user-tmpdir.sh --apply` for an immediate one-off cleanup."
-)
+_MACOS_PRUNE_SCRIPT = "./scripts/prune-user-tmpdir.sh --apply"
+_LINUX_PRUNE_SCRIPT = "./scripts/prune-tmp-linux.sh --apply"
+
+
+def prune_command(pressure: DiskPressure) -> str:
+    """The one-off cleanup command that actually works on this platform.
+
+    WR-08: every next step named the macOS script. On Linux it defaults to
+    $TMPDIR with no /tmp fallback (so it exits 1 on a stock host) and prunes
+    a macOS family of files three days old, not the fresh Bun .so/.node
+    orphans filling the tmpfs. `tmp_threshold` is the Linux-only flag the
+    probe already carries, so no new platform argument is needed.
+    """
+    return _LINUX_PRUNE_SCRIPT if pressure.tmp_threshold else _MACOS_PRUNE_SCRIPT
+
+
+def runnable_prune_sentence(pressure: DiskPressure) -> str:
+    return f"Run `{prune_command(pressure)}` for an immediate one-off cleanup."
 
 
 def _pressure_clauses(pressure: DiskPressure) -> tuple[str, ...]:
@@ -296,7 +312,9 @@ def _pressure_clauses(pressure: DiskPressure) -> tuple[str, ...]:
         # Deliberately not "/tmp usage is high": a string literal beginning
         # with "/tmp" reads to bandit's B108 as a hardcoded temp-directory
         # path, even though this is prose, never a filesystem argument.
-        clauses.append("the /tmp mount is nearly full")
+        # IN-03: the probe measures $TMPDIR when set, else /tmp, so the
+        # wording names the measured mount rather than always saying /tmp.
+        clauses.append("the temp mount is nearly full")
     return tuple(clauses)
 
 
@@ -325,9 +343,10 @@ def _disk_pressure_meaning(pressure: DiskPressure) -> str:
         # Leads with "The" rather than a literal starting "/tmp" for the same
         # bandit B108 reason as _pressure_clauses above.
         parts.append(
-            f"The /tmp mount is at {pressure.tmp_used_percent:.1f}% used, above the "
-            f"{TMP_USED_WARN_PERCENT}% threshold -- a full /tmp breaks unrelated system "
-            "writes, not only this tool."
+            f"The temp mount ($TMPDIR when set, else /tmp) is at "
+            f"{pressure.tmp_used_percent:.1f}% used, above the "
+            f"{TMP_USED_WARN_PERCENT}% threshold -- a full temp mount breaks unrelated "
+            "system writes, not only this tool."
         )
     if pressure.daemon is DaemonState.INACTIVE:
         parts.append("The background cleanup job is not running to relieve it.")
@@ -342,25 +361,29 @@ def _disk_pressure_meaning(pressure: DiskPressure) -> str:
 
 
 def _disk_pressure_next_step(pressure: DiskPressure) -> str:
+    command = prune_command(pressure)
     if pressure.daemon is DaemonState.INACTIVE:
         # Enable through this project's own setup flow, and name the manual
         # prune script as the immediate one-off (D-03's action text). This
-        # sentence is deliberately NOT _RUNNABLE_PRUNE_SENTENCE verbatim, and
+        # sentence is deliberately NOT runnable_prune_sentence verbatim, and
         # plan 15.7-06 rewrites it (by its own new prefix match, distinct
         # from the existing "Run `make fix`"/"Run `make setup`" prefixes
         # DoctorScreen._tui_guidance already recognises) into a "go to the
         # Policies view" TUI instruction.
         return (
             "Enable the background cleanup policy in `make setup`'s Policies view; a "
-            "one-off `./scripts/prune-user-tmpdir.sh --apply` run clears space "
-            "immediately in the meantime."
+            f"one-off `{command}` run clears space immediately in the meantime."
         )
     if pressure.daemon is DaemonState.UNAVAILABLE:
         # D-03c: no policy row exists on this host to enable, so only the
         # one-off is named -- never "enable"/"Policies"/"setup" wording.
+        # IN-06: UNAVAILABLE also covers a query that timed out or hit a
+        # wedged bus on a host that DOES have the row, so the wording says
+        # the state could not be read rather than claiming the capability
+        # does not exist here.
         return (
-            f"{_RUNNABLE_PRUNE_SENTENCE} No managed background cleanup could be "
-            "confirmed on this machine, and there is no such policy on this host to turn on."
+            f"{runnable_prune_sentence(pressure)} No managed background cleanup could be "
+            "confirmed on this machine: its state could not be read."
         )
     return (
         "Nothing to do right now -- the background cleanup job is already active and "
@@ -391,5 +414,36 @@ def disk_pressure_guidance(pressure: DiskPressure) -> list[Guidance]:
             next_step=_disk_pressure_next_step(pressure),
             severity=severity,
             emphasis=pressure.at_risk,
+        )
+    ]
+
+
+def competing_mechanism_guidance(units: tuple[CompetingUnit, ...]) -> list[Guidance]:
+    """WR-10: a durable, read-only disclosure of a SYSTEM-scope competitor.
+
+    D-02a requires naming the root-owned competing cleanup unit and the
+    manual command that stops it. Until now that sentence existed only inside
+    the first apply's result, so it was printed once (after the TUI exits)
+    and never again, because `decided()` is True on every later run. This
+    item is rendered from a memoized detection on every Doctor run instead.
+
+    User-scope competitors are deliberately absent: those are taken over by
+    the apply (D-02/D-02b) and disclosed by it, so repeating them here would
+    describe a mechanism that is no longer running. Nothing on this path
+    mutates anything, in either scope.
+    """
+    sentence = system_scope_warning(units)
+    if sentence is None:
+        return []
+    names = sorted({unit.name for unit in units if unit.scope == SCOPE_SYSTEM})
+    return [
+        Guidance(
+            title=f"Another system-level cleanup service is installed ({', '.join(names)})",
+            meaning=sentence,
+            next_step=(
+                "Nothing here can stop it: this installer never uses sudo. Run the command "
+                "named above yourself if you want only one cleanup job on this machine."
+            ),
+            severity=Severity.WARN,
         )
     ]

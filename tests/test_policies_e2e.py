@@ -31,6 +31,15 @@ _ARTIFACTS = Path(__file__).resolve().parent.parent / ".e2e-artifacts"
 _UX = _ARTIFACTS / "policies"
 
 
+async def _settle_toggle(screen: PoliciesScreen, pilot: Any) -> None:
+    """Wait for a scheduled-job toggle's thread worker (WR-02) to report back."""
+    for _ in range(400):
+        if not screen.toggle_in_flight:
+            break
+        await pilot.pause()
+    await pilot.pause()
+
+
 def _tool() -> Tool:
     return Tool(
         id="rg",
@@ -613,18 +622,18 @@ async def test_linux_daemon_and_cache_redirect_toggle_against_a_sandboxed_home(
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         await pilot.press("space")
-        await pilot.pause()
+        await _settle_toggle(screen, pilot)
         assert service.exists() and timer.exists()
         await pilot.press("space")
-        await pilot.pause()
+        await _settle_toggle(screen, pilot)
         assert not service.exists() and not timer.exists()
         await pilot.press("down")
         await pilot.press("space")
-        await pilot.pause()
+        await _settle_toggle(screen, pilot)
         assert conf.exists()
         assert "tools-installer: cache-redirect" in conf.read_text()
         await pilot.press("space")
-        await pilot.pause()
+        await _settle_toggle(screen, pilot)
         assert not conf.exists()
         assert home == tmp_path
         assert os.environ["HOME"] == str(tmp_path)
@@ -653,13 +662,13 @@ async def test_daemon_policy_toggles_on_despite_missing_fd_and_rg_with_recommend
         assert "before enabling" not in screen.detail_text
 
         await pilot.press("space")
-        await pilot.pause()
+        await _settle_toggle(screen, pilot)
         assert isinstance(screen, PoliciesScreen)
         assert screen.active_state["daemon:prune-tmpdir"] is True
         assert plist_path.exists()  # concrete proof apply() actually ran
 
         await pilot.press("space")
-        await pilot.pause()
+        await _settle_toggle(screen, pilot)
         assert isinstance(screen, PoliciesScreen)
         assert screen.active_state["daemon:prune-tmpdir"] is False
         assert not plist_path.exists()
@@ -680,7 +689,7 @@ async def test_daemon_policy_time_picker_rewrites_the_real_plist_and_updates_det
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         await pilot.press("space")  # enable the daemon so t becomes reachable
-        await pilot.pause()
+        await _settle_toggle(screen, pilot)
         assert screen.active_state["daemon:prune-tmpdir"] is True
 
         await pilot.press("t")

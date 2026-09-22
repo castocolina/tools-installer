@@ -15,10 +15,12 @@ from installer/run.py -- this module never imports subprocess.
 from __future__ import annotations
 
 import shutil
+import threading
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Generic, TypeVar
 
 from installer.atomic import atomic_write_bytes
 from installer.daemon import (
@@ -53,7 +55,9 @@ __all__ = [
     "STATE_CACHE_TTL",
     "SYSTEMCTL_QUERY_TIMEOUT",
     "TIMER_NAME",
+    "COMPETITOR_CACHE_TTL",
     "CompetingUnit",
+    "CompetitorCache",
     "TimerStateCache",
     "UNIT_BASENAME",
     "WRAPPER_COMMAND",
@@ -64,7 +68,9 @@ __all__ = [
     "decided",
     "detect_competing",
     "disable_competing",
+    "disable_timer",
     "ensure_log_path",
+    "footprint_present",
     "install_wrapper",
     "last_run_summary",
     "parse_unit_files",
@@ -77,11 +83,13 @@ __all__ = [
     "render_timer",
     "system_scope_warning",
     "systemd_available",
+    "takeover_disclosure",
     "timer_state",
     "unit_paths",
     "units_present",
     "user_scope_failure_warning",
     "user_unit_dir",
+    "wants_link_path",
     "wrapper_present",
     "write_units",
 ]
@@ -152,16 +160,18 @@ def systemd_available(*, which: Callable[[str], str | None] = shutil.which) -> b
     return which("systemctl") is not None
 
 
-_REJECTED_CHARS = ('"', "\\", "%", "\n", "\r")
+_REJECTED_CHARS = ('"', "\\", "%", "$", "\n", "\r")
 
 
 def _quote(value: str) -> str:
     """Validate one rendered value and return it wrapped in double quotes.
 
     Raises DaemonScheduleError for a value containing a double quote, a
-    backslash, a percent sign, a newline, or a carriage return -- percent is
-    rejected because systemd expands %-specifiers inside unit values, the
-    rest because they break or inject into the unit grammar. Mirrors
+    backslash, a percent sign, a dollar sign, a newline, or a carriage
+    return -- percent is rejected because systemd expands %-specifiers
+    inside unit values, dollar because systemd substitutes $VAR/${VAR}
+    inside ExecStart= arguments even quoted ones (IN-01), the rest because
+    they break or inject into the unit grammar. Mirrors
     installer/daemon.py::render_plist's fail-closed validation ordering:
     every value is validated before anything is returned.
     """
@@ -290,6 +300,28 @@ def units_present(unit_dir: Path) -> bool:
     return service_path.exists() and timer_path.exists()
 
 
+def wants_link_path(unit_dir: Path) -> Path:
+    """The enablement symlink `systemctl --user enable` creates for the timer.
+
+    The name is this project's own timer name inside the user unit dir, so the
+    path identifies it as ours without reading the link target.
+    """
+    return unit_dir / "timers.target.wants" / TIMER_NAME
+
+
+def footprint_present(unit_dir: Path) -> bool:
+    """True when ANY file this project installs into unit_dir is on disk.
+
+    The uninstall question is "is this ours", not "is it running" (CR-01): a
+    stopped-but-enabled timer, or one whose user manager cannot be reached,
+    still has files that restart it at the next login. Either unit file or a
+    leftover enablement symlink (even a dangling one) counts.
+    """
+    service_path, timer_path = unit_paths(unit_dir)
+    link = wants_link_path(unit_dir)
+    return service_path.exists() or timer_path.exists() or link.is_symlink()
+
+
 def write_units(
     unit_dir: Path,
     *,
@@ -331,14 +363,33 @@ def write_units(
 
 
 def remove_units(unit_dir: Path) -> None:
-    """Delete both unit files (missing_ok) -- never raises when already gone."""
+    """Delete both unit files and the timer's enablement symlink.
+
+    missing_ok throughout, so it never raises when already gone. The symlink
+    is removed by hand because `systemctl --user disable` cannot run when the
+    user manager is unreachable, and a link left behind points at a deleted
+    unit that the manager reports as missing at every login. Only a symlink is
+    unlinked: a regular file at that path is not something enable creates.
+    """
     for path in unit_paths(unit_dir):
         path.unlink(missing_ok=True)
+    link = wants_link_path(unit_dir)
+    if link.is_symlink():
+        link.unlink(missing_ok=True)
 
 
 def daemon_reload(*, run: Runner = run_captured) -> None:
     """`systemctl --user daemon-reload` -- reread every unit file on disk."""
     run(["systemctl", "--user", "daemon-reload"])
+
+
+def disable_timer(*, run: Runner = run_captured) -> None:
+    """`systemctl --user disable <timer>` -- undo `enable`'s wants symlink.
+
+    No `--now`: this is the first-apply rollback, which undoes only what
+    `bootstrap` did before it failed (WR-01).
+    """
+    run(["systemctl", "--user", "disable", TIMER_NAME])
 
 
 def bootstrap(unit_dir: Path, *, run: Runner = run_captured) -> None:
@@ -414,7 +465,76 @@ def timer_state(unit_dir: Path, *, read_output: OutputRunner = query_systemctl) 
     return probe_timer_state(read_output=read_output)
 
 
-class TimerStateCache:
+_Probed = TypeVar("_Probed")
+
+
+class _ProbeCache(Generic[_Probed]):
+    """Memoized value over one probe, with an injected monotonic clock.
+
+    The read/peek/invalidate split and the locking are identical for every
+    bounded systemd query this phase memoizes, so they live here once;
+    TimerStateCache and CompetitorCache differ only in what they answer.
+    """
+
+    def __init__(
+        self,
+        probe: Callable[[], _Probed],
+        *,
+        ttl: float = STATE_CACHE_TTL,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._probe = probe
+        self._ttl = ttl
+        self._clock = clock
+        self._value: _Probed | None = None
+        self._at: float | None = None
+        # WR-03: the cache is shared by the event loop and thread workers
+        # (the daemon-default apply, the Doctor probe, the execute screen's
+        # verify). The lock guards the three fields; the generation, bumped
+        # by every invalidate(), lets a read() whose probe started BEFORE an
+        # invalidate discard its now-stale answer instead of storing it as
+        # fresh. The probe itself runs outside the lock so a slow systemctl
+        # never blocks peek().
+        self._lock = threading.Lock()
+        self._generation = 0
+
+    def read(self) -> _Probed:
+        """Return the memo when fresh; otherwise issue one bounded probe and
+        store the answer. MAY block for up to the probe's own timeout.
+
+        The answer is stored only when no invalidate() ran while the probe
+        was in flight; otherwise it is returned but left unstored, so the
+        next read() probes again.
+        """
+        with self._lock:
+            now = self._clock()
+            fresh = self._at is not None and (now - self._at) < self._ttl
+            if self._value is not None and fresh:
+                return self._value
+            generation = self._generation
+        value = self._probe()
+        with self._lock:
+            if generation == self._generation:
+                self._value = value
+                self._at = now
+        return value
+
+    def peek(self) -> _Probed | None:
+        """The last stored answer whatever its age, or None if never read.
+        NEVER probes, never blocks, never spawns."""
+        with self._lock:
+            return self._value
+
+    def invalidate(self) -> None:
+        """Mark the stored answer STALE without discarding it: the next
+        read() re-probes, while peek() can still report the last known
+        answer instead of falling back to None (D-01e)."""
+        with self._lock:
+            self._at = None
+            self._generation += 1
+
+
+class TimerStateCache(_ProbeCache[DaemonState]):
     """Memoized runtime-state source over one DaemonState-returning probe,
     with an injected monotonic clock for deterministic TTL tests.
 
@@ -428,48 +548,13 @@ class TimerStateCache:
     and is the ONLY verb a Textual render path may call.
     """
 
-    def __init__(
-        self,
-        probe: Callable[[], DaemonState],
-        *,
-        ttl: float = STATE_CACHE_TTL,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        self._probe = probe
-        self._ttl = ttl
-        self._clock = clock
-        self._value: DaemonState | None = None
-        self._at: float | None = None
-
-    def read(self) -> DaemonState:
-        """Return the memo when fresh; otherwise issue one bounded probe and
-        store the answer. MAY block for up to the probe's own timeout."""
-        now = self._clock()
-        if self._value is not None and self._at is not None and (now - self._at) < self._ttl:
-            return self._value
-        value = self._probe()
-        self._value = value
-        self._at = now
-        return value
-
-    def peek(self) -> DaemonState | None:
-        """The last stored answer whatever its age, or None if never read.
-        NEVER probes, never blocks, never spawns."""
-        return self._value
-
-    def invalidate(self) -> None:
-        """Mark the stored answer STALE without discarding it: the next
-        read() re-probes, while peek() can still report the last known
-        answer instead of falling back to None (D-01e)."""
-        self._at = None
-
 
 def bootout(
     unit_dir: Path,
     *,
     run: Runner = run_captured,
     read_output: OutputRunner = query_systemctl,
-) -> None:
+) -> bool:
     """Unregister the timer, distinguishing "already gone" from a real
     failure -- the systemd equivalent of installer/daemon.py::bootout.
 
@@ -479,25 +564,32 @@ def bootout(
     hand-corrupted unit file can coexist with a still-loaded unit, and a
     presence gate would skip the one call that fixes it.
 
-    On CommandError it classifies: unit files present -> re-raise (this
-    project wrote those units; a failure to unregister them is real); unit
-    files absent -> re-probe systemd through probe_timer_state and re-raise
-    only when the timer is still ACTIVE, returning normally when it is
-    INACTIVE or UNAVAILABLE. Systemd has no single ESRCH-equivalent exit
-    code for `disable` (a missing unit exits 1, the same code a permission
-    or manager failure uses), so the classification is made on systemd's own
-    post-failure answer rather than on a code table or on stderr text, which
-    would be locale-dependent. Invariant: a caller can never proceed past a
-    real bootout failure and treat the daemon as removed while it may still
-    be loaded (review HIGH 15.7-01; T-15.7-39).
+    On CommandError it re-probes systemd through probe_timer_state and
+    classifies on that answer: ACTIVE -> re-raise (the timer is provably
+    still running, so the failure is real); INACTIVE -> return True (the
+    manager answered and nothing is running, so the caller may delete the
+    files); UNAVAILABLE -> return False (the user manager could not be
+    reached at all, e.g. `make uninstall` over ssh with no user bus). Systemd
+    has no single ESRCH-equivalent exit code for `disable` (a missing unit
+    exits 1, the same code a permission or manager failure uses), so the
+    classification is made on systemd's own post-failure answer rather than
+    on a code table or on stderr text, which would be locale-dependent.
+
+    Returns whether the user manager was reached. False tells the caller to
+    remove its owned files anyway and to DISCLOSE that no daemon-reload could
+    run (CR-01): refusing would leave the files that restart the timer at the
+    next login, which is worse. Invariant: a caller can never proceed past a
+    failure while the timer is provably ACTIVE (review HIGH 15.7-01;
+    T-15.7-39).
     """
     try:
         run(["systemctl", "--user", "disable", "--now", TIMER_NAME])
     except CommandError:
-        if units_present(unit_dir):
+        state = probe_timer_state(read_output=read_output)
+        if state is DaemonState.ACTIVE:
             raise
-        if probe_timer_state(read_output=read_output) is DaemonState.ACTIVE:
-            raise
+        return state is DaemonState.INACTIVE
+    return True
 
 
 # --- Competing-mechanism detection & takeover (D-02) -------------------------
@@ -645,6 +737,25 @@ def detect_competing(*, read_output: OutputRunner = query_systemctl) -> tuple[Co
     return tuple(found)
 
 
+# How long a memoized competing-mechanism answer is trusted. Longer than
+# STATE_CACHE_TTL: this answers "is another cleanup tool installed here",
+# which only a deliberate install or a root command changes, and each read
+# costs one list-unit-files per scope.
+COMPETITOR_CACHE_TTL = 30.0
+
+
+class CompetitorCache(_ProbeCache[tuple[CompetingUnit, ...]]):
+    """Memoized read-only competing-mechanism detection (WR-10).
+
+    The same read()/peek() contract TimerStateCache carries, for the same
+    reason: read() may spawn bounded `systemctl list-unit-files`/`is-active`
+    queries and so runs only on a worker or a CLI route, while a Textual
+    render path may only peek(). Detection is read-only in BOTH scopes and
+    this cache never reaches a mutation verb -- disclosure of a system-scope
+    competitor is the whole point (D-02a).
+    """
+
+
 def disable_competing(
     units: Iterable[CompetingUnit], *, run: Runner = run_captured
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -657,8 +768,10 @@ def disable_competing(
     every argv this function can emit is a user-scope `systemctl` call.
 
     Issues one `systemctl --user disable --now <name>` call per entry,
-    collecting a per-entry CommandError into the failed list instead of
-    aborting the rest (D-02c) -- never a file-removing verb, never an unlink
+    collecting a per-entry CommandError OR OSError into the failed list
+    instead of aborting the rest (D-02c, IN-07: an OSError partway through
+    the loop used to escape and take the names already disabled, plus the
+    system-scope disclosure, down with it) -- never a file-removing verb, never an unlink
     (D-02b): the competitor's unit files belong to whoever installed them,
     matching this project's own ownership discipline
     (daemon.install_wrapper/remove_wrapper/wrapper_present's sentinel-checked
@@ -675,7 +788,7 @@ def disable_competing(
     for unit in units:
         try:
             run(["systemctl", "--user", "disable", "--now", unit.name])
-        except CommandError:
+        except (CommandError, OSError):
             failed.append(unit.name)
         else:
             disabled.append(unit.name)
@@ -715,6 +828,27 @@ def system_scope_warning(units: Iterable[CompetingUnit]) -> str | None:
         f"A system-level cleanup service was found ({', '.join(names)}) and will keep running "
         "alongside this app's own daemon; this project cannot stop it without root, so it was "
         f"left untouched. Run `{'; '.join(commands)}` yourself to stop and disable it."
+    )
+
+
+def takeover_disclosure(disabled: Iterable[str]) -> str | None:
+    """A sentence disclosing every user-scope competitor this run DID stop
+    and disable (D-02, CR-02), or None when none was.
+
+    A successful takeover changes another tool's behavior, so it is a
+    disclosure, not a silent success: the on-by-default apply runs with no
+    human watching, and without this line the user cannot tell why that
+    tool's cleanup stopped. Says "stopped and disabled", never "removed"
+    (D-02b), and quotes the user-scope command that undoes it.
+    """
+    names = tuple(disabled)
+    if not names:
+        return None
+    commands = "; ".join(f"systemctl --user enable --now {name}" for name in names)
+    return (
+        f"Stopped and disabled {', '.join(names)}, another user-scope cleanup job, so it "
+        "does not run alongside this app's own daemon; its unit files were left in place. "
+        f"Run `{commands}` to re-enable it."
     )
 
 

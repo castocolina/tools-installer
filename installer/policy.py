@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, cast
 
 from installer import daemon, env_redirect, systemd_daemon
 from installer.agent_env import AgentAdapter
+from installer.atomic import atomic_write_bytes
 from installer.enums import DaemonState
 from installer.guards import (
     guard_path_warning,
@@ -79,8 +80,15 @@ _TWEAK_DISABLE_HINT = (
 # show-environment does not see a freshly written file, so a hint that says
 # "open a new shell" would overstate how soon the redirect becomes live.
 _CACHE_REDIRECT_LINUX_HINT = (
-    "Takes effect at the next login: the systemd user manager reads "
-    "~/.config/environment.d only when it starts."
+    "Takes effect at the next login: the systemd user manager reads its "
+    "environment.d directory only when it starts."
+)
+# IN-02: removal needs the same login cycle, and saying "open a new shell"
+# here (the wording every other tweak uses) is wrong for environment.d --
+# the variable stays in every process the user manager already started.
+_CACHE_REDIRECT_LINUX_REMOVE_HINT = (
+    "Log out and back in to drop the variable: the systemd user manager exported it "
+    "to every process it has already started, and no new shell can undo that."
 )
 _CACHE_REDIRECT_MACOS_HINT = _TWEAK_ENABLE_HINT
 
@@ -141,6 +149,13 @@ class Policy:
     # field placed mid-list silently renumbers every positional construction.
     decided: Callable[[], bool] | None = None
     clear_decided: Callable[[], None] | None = None
+    # CR-01: "is anything of ours still on disk", for the uninstall sweep.
+    # Distinct from is_active, which may answer a RUNTIME question (the Linux
+    # timer's is-active state): a stopped-but-enabled timer, or one whose user
+    # manager is unreachable, is not running yet still has files that restart
+    # it at the next login. None means is_active/active already answers the
+    # footprint question for this policy.
+    owned: Callable[[], bool] | None = None
 
     def missing_requirements(self) -> tuple[str, ...]:
         """Read prerequisites at the point a policy is rendered or applied."""
@@ -439,6 +454,34 @@ def tweak_policy(
     )
 
 
+def _competing_conf_warning(
+    redirect: env_redirect.CacheRedirect, written: Path, competing: tuple[Path, ...]
+) -> str | None:
+    """Say which way precedence actually goes, never assert it (WR-05).
+
+    environment.d applies files in basename order and the last assignment
+    wins, so a competing file that sorts BEFORE ours is overridden by this
+    redirect, while one that sorts AFTER it overrides this redirect.
+    """
+    earlier = [path for path in competing if path.name < written.name]
+    later = [path for path in competing if path.name > written.name]
+    sentences: list[str] = []
+    if earlier:
+        names = ", ".join(_display_path(path) for path in earlier)
+        sentences.append(
+            f"{names} also sets {redirect.variable}; left in place. "
+            f"{written.name} takes precedence because it sorts later."
+        )
+    if later:
+        names = ", ".join(_display_path(path) for path in later)
+        sentences.append(
+            f"{names} also sets {redirect.variable} and sorts after {written.name}, so it "
+            "overrides this redirect; left in place. Remove or rename it for the redirect "
+            "to take effect."
+        )
+    return " ".join(sentences) if sentences else None
+
+
 def cache_redirect_policy(
     redirect: env_redirect.CacheRedirect,
     *,
@@ -447,6 +490,7 @@ def cache_redirect_policy(
     rc_path: Path,
     home: Path,
     ensure_sourced_from: tuple[Path, ...] | Callable[[], tuple[Path, ...]] = (),
+    system_conf_dirs: tuple[Path, ...] = (),
 ) -> Policy:
     """One tool's cache redirect as a Policy.
 
@@ -459,6 +503,10 @@ def cache_redirect_policy(
     zero-argument callable returning one) because the link mode is adjustable
     while the app runs. A redirect sourced only into a file split mode never
     reads is a silent no-op.
+
+    ``system_conf_dirs`` are the read-only system environment.d directories
+    scanned for a competing assignment (WR-05); the composition root passes
+    ``env_redirect.SYSTEM_ENVIRONMENT_D_DIRS``.
     """
     if isinstance(ensure_sourced_from, tuple):
         captured_sourced = cast("tuple[Path, ...]", ensure_sourced_from)
@@ -493,18 +541,11 @@ def cache_redirect_policy(
                 warning=None,
             )
         written = env_redirect.write_linux_redirect(redirect, home, conf_dir)
-        competing = env_redirect.competing_conf_paths(redirect, home, conf_dir)
-        warning = None
-        if competing:
-            names = ", ".join(_display_path(path) for path in competing)
-            warning = (
-                f"{names} also sets {redirect.variable}; left in place. "
-                f"{written.name} takes precedence because it sorts later."
-            )
+        competing = env_redirect.competing_conf_paths(redirect, home, conf_dir, system_conf_dirs)
         return PolicyResult(
             layers=(PolicyLayer(redirect.label, f"written to {_display_path(written)}"),),
             reload_hint=_CACHE_REDIRECT_LINUX_HINT,
-            warning=warning,
+            warning=_competing_conf_warning(redirect, written, competing),
         )
 
     def _remove() -> PolicyResult:
@@ -516,7 +557,7 @@ def cache_redirect_policy(
             detail = f"cleared from {_display_path(conf_dir / redirect.conf_basename)}"
         return PolicyResult(
             layers=(PolicyLayer(redirect.label, detail),),
-            reload_hint=None,
+            reload_hint=None if macos else _CACHE_REDIRECT_LINUX_REMOVE_HINT,
             warning=None,
         )
 
@@ -659,7 +700,7 @@ def daemon_policy(
     apply/remove/set_schedule are fully transactional: each snapshots the
     plist's prior bytes (or absence) before any launchctl call and, on a real
     launchctl failure, rolls back to that snapshot -- restoring the file via
-    installer.daemon's own crash-safe _atomic_write helper and, whenever a
+    installer.atomic's crash-safe atomic_write_bytes and, whenever a
     prior working registration existed, making a best-effort daemon.bootstrap
     call with the restored content -- so a failed apply/remove/reschedule
     never leaves the plist file and the real registration disagreeing with
@@ -739,9 +780,7 @@ def daemon_policy(
                 # A reapply: bootstrap's own internal pre-clear already tore
                 # the old registration out before this attempt, so restoring
                 # only the plist FILE would make `active` a false positive.
-                daemon._atomic_write(  # pyright: ignore[reportPrivateUsage]
-                    plist_path, previous, mode=0o644
-                )
+                atomic_write_bytes(plist_path, previous, mode=0o644)
                 with contextlib.suppress(CommandError):
                     daemon.bootstrap(uid, plist_path, run=run)
             else:
@@ -801,7 +840,7 @@ def daemon_policy(
         try:
             daemon.bootstrap(uid, plist_path, run=run)
         except CommandError:
-            daemon._atomic_write(plist_path, previous, mode=0o644)  # pyright: ignore[reportPrivateUsage]
+            atomic_write_bytes(plist_path, previous, mode=0o644)
             with contextlib.suppress(CommandError):
                 daemon.bootstrap(uid, plist_path, run=run)
             raise
@@ -834,6 +873,13 @@ def daemon_policy(
         decided=lambda: daemon.decided(state_path),
         clear_decided=lambda: daemon.clear_decided(state_path),
     )
+
+
+_UNREACHABLE_MANAGER_WARNING = (
+    "the systemd user manager could not be reached, so `systemctl --user daemon-reload` "
+    "did not run; the unit files are removed, but a timer it already loaded may keep "
+    "running until you log out, or until you run `systemctl --user daemon-reload` yourself"
+)
 
 
 def linux_daemon_policy(
@@ -882,6 +928,12 @@ def linux_daemon_policy(
     also WARMS the cache before the first TUI frame) and the `is_active`
     closure, and exposed on `Policy.state_cache` so a test can assert
     identity with plan 15.7-06's disk-pressure probe.
+
+    CR-01: `owned()` is the separate FOOTPRINT answer the uninstall sweep
+    reads -- either unit file, the enablement symlink or the owned wrapper on
+    disk -- so a stopped-but-enabled timer, or one whose user manager is
+    unreachable, is still torn down. `remove` then deletes the files even when
+    the manager cannot be reached, and discloses that no daemon-reload ran.
 
     `installed_tools` is accepted for signature symmetry with daemon_policy
     and because setup.py's composition root already computes it uniformly
@@ -935,9 +987,15 @@ def linux_daemon_policy(
         }
 
     def _restore_units(snapshot: dict[Path, bytes | None]) -> None:
+        # Back to exactly the snapshot: a file that existed is rewritten with
+        # its prior bytes, and one that did not is deleted. IN-05: a first
+        # apply over a half-removed install must not delete the one unit file
+        # that predates it.
         for path, previous in snapshot.items():
-            if previous is not None:
-                daemon._atomic_write(path, previous, mode=0o644)  # pyright: ignore[reportPrivateUsage]
+            if previous is None:
+                path.unlink(missing_ok=True)
+            else:
+                atomic_write_bytes(path, previous, mode=0o644)
 
     def _detect_and_take_over_competitors() -> tuple[PolicyLayer | None, str | None]:
         """D-02: detect a pre-existing competing cleanup mechanism in BOTH
@@ -953,43 +1011,63 @@ def linux_daemon_policy(
         Returns (layer, warning), both None when nothing was detected -- the
         no-competitor case must keep producing exactly the layers/warning it
         produced before this feature existed. Every branch inside is guarded
-        against CommandError, OSError and ValueError (the structural refusal
-        disable_competing raises for a system-scope entry, which this
-        function never hands it, but is caught anyway since it can only fire
-        on a programming error and must be reported rather than crash a live
-        policy apply) -- a bookkeeping-tier detection/takeover failure must
-        never undo an already-working registration (T-15.7-13).
+        -- the detection half against CommandError, OSError and ValueError,
+        the mutation half per unit inside disable_competing plus the
+        structural ValueError refusal here -- so a bookkeeping-tier
+        detection/takeover failure never undoes an already-working
+        registration (T-15.7-13). The guards are deliberately NOT one outer
+        try: everything already learned (which units were disabled, and the
+        system-scope disclosure that needed no mutation at all) must survive
+        a failure in the step after it (IN-07).
         """
         try:
             competitors = systemd_daemon.detect_competing(read_output=read_output)
-            if not competitors:
-                return None, None
-            user_scope = [c for c in competitors if c.scope == systemd_daemon.SCOPE_USER]
-            disabled, failed = (
-                systemd_daemon.disable_competing(user_scope, run=run) if user_scope else ((), ())
-            )
-            detail_parts: list[str] = []
-            if disabled:
-                detail_parts.append(f"disabled: {', '.join(disabled)}")
-            if failed:
-                detail_parts.append(f"disable failed, still running: {', '.join(failed)}")
-            system_names = sorted(
-                {c.name for c in competitors if c.scope == systemd_daemon.SCOPE_SYSTEM}
-            )
-            if system_names:
-                detail_parts.append(f"system-scope, left running: {', '.join(system_names)}")
-            layer = PolicyLayer("Competing mechanism", "; ".join(detail_parts))
-            warning_parts = [
-                sentence
-                for sentence in (
-                    systemd_daemon.system_scope_warning(competitors),
-                    systemd_daemon.user_scope_failure_warning(failed),
-                )
-                if sentence
-            ]
-            return layer, (" ".join(warning_parts) if warning_parts else None)
         except (CommandError, OSError, ValueError):
             return None, None
+        if not competitors:
+            return None, None
+        # IN-07: resolved BEFORE the mutation half, and never inside its
+        # guard: a takeover failure must not take the system-scope
+        # disclosure (which needed no mutation at all) down with it.
+        system_warning = systemd_daemon.system_scope_warning(competitors)
+        system_names = sorted(
+            {c.name for c in competitors if c.scope == systemd_daemon.SCOPE_SYSTEM}
+        )
+        user_scope = [c for c in competitors if c.scope == systemd_daemon.SCOPE_USER]
+        disabled: tuple[str, ...] = ()
+        failed: tuple[str, ...] = ()
+        if user_scope:
+            try:
+                disabled, failed = systemd_daemon.disable_competing(user_scope, run=run)
+            except ValueError:
+                # The structural refusal disable_competing raises for a
+                # system-scope entry, which this function never hands it. It
+                # can only fire on a programming error, and it fires BEFORE
+                # any argv, so nothing was disabled: report every unit as
+                # still running rather than crashing a live policy apply.
+                failed = tuple(unit.name for unit in user_scope)
+        detail_parts: list[str] = []
+        if disabled:
+            detail_parts.append(f"disabled: {', '.join(disabled)}")
+        if failed:
+            detail_parts.append(f"disable failed, still running: {', '.join(failed)}")
+        if system_names:
+            detail_parts.append(f"system-scope, left running: {', '.join(system_names)}")
+        layer = PolicyLayer("Competing mechanism", "; ".join(detail_parts))
+        # CR-02: a SUCCESSFUL takeover is a disclosure too. The layers
+        # never reach ensure_daemon_default's on_warning sink (the one
+        # apply path with no human watching), so the warning must say
+        # which unit was disabled and how to re-enable it.
+        warning_parts = [
+            sentence
+            for sentence in (
+                systemd_daemon.takeover_disclosure(disabled),
+                system_warning,
+                systemd_daemon.user_scope_failure_warning(failed),
+            )
+            if sentence
+        ]
+        return layer, (" ".join(warning_parts) if warning_parts else None)
 
     def _apply() -> PolicyResult:
         # invalidate() is called from a `finally` at the bottom of this
@@ -998,6 +1076,7 @@ def linux_daemon_policy(
         # stale memoized answer.
         had_prior_registration = systemd_daemon.units_present(unit_dir)
         snapshot = _snapshot_units()
+        link_existed_before = systemd_daemon.wants_link_path(unit_dir).is_symlink()
         wrapper_existed_before = systemd_daemon.wrapper_present(wrapper_bin_dir)
         log_existed_before = log_path.exists()
         try:
@@ -1031,8 +1110,17 @@ def linux_daemon_policy(
                     # OSError while cleaning up must never mask the
                     # ORIGINAL failure being unwound, nor abort the rest of
                     # this rollback (wrapper/log cleanup still below).
+                    # WR-01: `enable` may already have created the
+                    # timers.target.wants symlink before a later verb
+                    # failed; undo it before the unit it points at is gone,
+                    # or it dangles and nothing ever removes it.
+                    with contextlib.suppress(CommandError):
+                        systemd_daemon.disable_timer(run=run)
                     with contextlib.suppress(OSError):
-                        systemd_daemon.remove_units(unit_dir)
+                        _restore_units(snapshot)
+                        link = systemd_daemon.wants_link_path(unit_dir)
+                        if not link_existed_before and link.is_symlink():
+                            link.unlink()
                     with contextlib.suppress(CommandError):
                         systemd_daemon.daemon_reload(run=run)
                     if not wrapper_existed_before:
@@ -1071,20 +1159,38 @@ def linux_daemon_policy(
     def _remove() -> PolicyResult:
         # Same invalidate()-in-`finally` discipline as _apply above.
         try:
-            systemd_daemon.bootout(unit_dir, run=run, read_output=read_output)
+            snapshot = _snapshot_units()
+            reached = systemd_daemon.bootout(unit_dir, run=run, read_output=read_output)
             try:
                 systemd_daemon.remove_units(unit_dir)
             except OSError:
-                with contextlib.suppress(CommandError):
-                    systemd_daemon.bootstrap(unit_dir, run=run)
+                # WR-01: remove_units may have deleted the service before the
+                # timer unlink failed. Re-registering a half-deleted pair
+                # would enable a timer whose service no longer exists, so the
+                # files come back first, and only a complete restore is
+                # re-bootstrapped.
+                try:
+                    _restore_units(snapshot)
+                except OSError:
+                    pass
+                else:
+                    if reached:
+                        with contextlib.suppress(CommandError):
+                            systemd_daemon.bootstrap(unit_dir, run=run)
                 raise
-            # _remove's own unit-file deletion just changed what the user
-            # manager's already-loaded definition was read from -- the same
-            # compensating-reload reasoning the rollback branches above
-            # apply (review MEDIUM 15.7-01).
-            with contextlib.suppress(CommandError):
-                systemd_daemon.daemon_reload(run=run)
             warnings: list[str] = []
+            if reached:
+                # _remove's own unit-file deletion just changed what the user
+                # manager's already-loaded definition was read from -- the
+                # same compensating-reload reasoning the rollback branches
+                # above apply (review MEDIUM 15.7-01).
+                with contextlib.suppress(CommandError):
+                    systemd_daemon.daemon_reload(run=run)
+            else:
+                # CR-01: the files are gone, so nothing restarts the timer at
+                # the next login, but a manager this process could not reach
+                # may still hold the loaded unit until it reloads.
+                warnings.append(_UNREACHABLE_MANAGER_WARNING)
             try:
                 systemd_daemon.remove_wrapper(wrapper_bin_dir)
             except OSError as exc:
@@ -1107,7 +1213,15 @@ def linux_daemon_policy(
             cache.invalidate()
 
     def _is_active() -> bool:
+        # The Policies row: is the timer RUNNING right now.
         return cache.read() is DaemonState.ACTIVE
+
+    def _owned() -> bool:
+        # The uninstall sweep: is anything this policy installed still on
+        # disk (CR-01). File reads only, so it never spawns systemctl.
+        return systemd_daemon.footprint_present(unit_dir) or systemd_daemon.wrapper_present(
+            wrapper_bin_dir
+        )
 
     return Policy(
         id="daemon:prune-tmp-linux",
@@ -1124,6 +1238,7 @@ def linux_daemon_policy(
         state_cache=cache,
         decided=lambda: systemd_daemon.decided(state_path),
         clear_decided=lambda: systemd_daemon.clear_decided(state_path),
+        owned=_owned,
     )
 
 

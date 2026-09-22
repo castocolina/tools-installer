@@ -383,15 +383,23 @@ class SweepResult:
 
     swept: tuple[str, ...] = ()
     failed: tuple[str, ...] = ()
+    # "<policy id>: <warning>" for every swept policy whose remove() succeeded
+    # but still had something to disclose (CR-01: the unreachable-manager
+    # case). Dropping these would report a clean teardown that was not one.
+    warnings: tuple[str, ...] = ()
 
 
-def _reads_active(policy: Policy) -> bool:
-    """The daemon arm's live-probe rule, shared with every extra policy.
+def policy_owned(policy: Policy) -> bool:
+    """The daemon arm's "is this ours" rule, shared with every extra policy.
 
-    ``is_active()`` when the policy binds one, otherwise the frozen ``.active``
-    snapshot. A construction-time snapshot goes stale once another thread
-    enables the same object.
+    ``owned()`` when the policy binds a footprint predicate (CR-01: the Linux
+    timer, whose ``is_active`` answers "is it running", which is the wrong
+    question for a teardown), else ``is_active()`` when it binds one, else the
+    frozen ``.active`` snapshot. A construction-time snapshot goes stale once
+    another thread enables the same object.
     """
+    if policy.owned is not None:
+        return policy.owned()
     return policy.is_active() if policy.is_active is not None else policy.active
 
 
@@ -414,9 +422,9 @@ def active_policies(
     between its preview and its sweep, all from the same rc file and bin dir the
     predicate below reads.
 
-    `daemon_policy`, when given, is appended last when it is currently active
-    -- evaluated as `daemon_policy.is_active() if daemon_policy.is_active is
-    not None else daemon_policy.active` (11-REVIEWS.md cycle 2 finding #13),
+    `daemon_policy`, when given, is appended last when `policy_owned` says
+    its footprint is still here -- its `owned()` footprint predicate when it
+    binds one (CR-01), else `is_active()` (11-REVIEWS.md cycle 2 finding #13),
     NEVER the frozen `.active` field alone: `daemon_policy` is a frozen
     dataclass instance shared with the Policies list and the on-by-default
     worker, which may enable it on a separate thread AFTER construction --
@@ -433,10 +441,10 @@ def active_policies(
         policy = _omz_policy(zshrc_path, rc_path)
         if policy.active:
             policies.append(policy)
-    if daemon_policy is not None and _reads_active(daemon_policy):
+    if daemon_policy is not None and policy_owned(daemon_policy):
         policies.append(daemon_policy)
     for extra in extra_policies:
-        if _reads_active(extra):
+        if policy_owned(extra):
             policies.append(extra)
     return policies
 
@@ -514,14 +522,17 @@ def sweep_policies(policies: list[Policy]) -> SweepResult:
     """
     swept: list[str] = []
     failed: list[str] = []
+    warnings: list[str] = []
     for policy in policies:
         try:
-            policy.remove()
+            result = policy.remove()
         except (OSError, CommandError):
             failed.append(policy.id)
         else:
             swept.append(policy.id)
-    return SweepResult(swept=tuple(swept), failed=tuple(failed))
+            if result.warning:
+                warnings.append(f"{policy.id}: {result.warning}")
+    return SweepResult(swept=tuple(swept), failed=tuple(failed), warnings=tuple(warnings))
 
 
 def sweep_tweaks(

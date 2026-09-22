@@ -19,6 +19,7 @@ from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import DaemonState, Severity
 from installer.execute_screen import ExecuteInputs, ExecuteScreen
 from installer.guidance import (
+    competing_mechanism_guidance,
     disk_pressure_guidance,
     doctor_guidance,
     guard_guidance,
@@ -48,7 +49,7 @@ from installer.policy import (
 from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError, Runner
 from installer.session import SensitiveInstall, Summary
-from installer.systemd_daemon import TimerStateCache
+from installer.systemd_daemon import CompetingUnit, TimerStateCache
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, ToolRow, classify_tools
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
@@ -56,6 +57,7 @@ from installer.version_status import VersionRefreshService, VersionStatus
 from installer.versions import TagResolver, VersionError
 from installer.wizard_app import (
     VIEW_ORDER,
+    CompetingProbe,
     ConfirmUninstall,
     DiskPressureProbe,
     DoctorScreen,
@@ -221,12 +223,14 @@ def _policy_inputs(
     link_mode: Callable[[], str] | None = None,
     set_link_mode: Callable[[str], None] | None = None,
     disk_pressure: DiskPressureProbe | None = None,
+    competing: CompetingProbe | None = None,
 ) -> PolicyInputs:
     return PolicyInputs(
         policies=policies if policies is not None else [_fake_policy()],
         link_mode=link_mode,
         set_link_mode=set_link_mode,
         disk_pressure=disk_pressure,
+        competing=competing,
     )
 
 
@@ -319,7 +323,7 @@ async def _settle(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> None:
         screen = app.screen
         if not isinstance(screen, DoctorScreen):
             break
-        if not screen.globals_running and not screen.globals_auditing:
+        if not screen.globals_running and not screen.globals_auditing and not screen.disk_probing:
             break
         await pilot.pause()
     await pilot.pause()
@@ -1926,6 +1930,7 @@ async def test_policy_with_hard_requires_false_still_enables_when_requires_missi
         assert "Recommended tool(s): fd, rg. Not required" in screen.detail_text
         assert "Missing required tool(s)" not in screen.detail_text
         await pilot.press("space")
+        await _settle_toggle(screen, pilot)
         assert calls == ["apply"]
         assert screen.active_state["daemon:test"] is True
         assert "enabled" in screen.status.text
@@ -3821,6 +3826,93 @@ async def test_doctor_tui_rewrites_the_disk_pressure_next_step_to_the_policies_r
         assert "make setup`'s Policies view" not in body
 
 
+async def test_doctor_tui_step_keeps_the_platforms_own_prune_command() -> None:
+    """WR-08: the TUI rewrite used to hardcode the macOS script, so the Linux
+    finding recommended a command that exits 1 on a stock Linux host."""
+    linux = _pressure(root_free=5.0, tmp_used=95.0, tmp_threshold=True)
+    app = _app(policies=_policy_inputs(disk_pressure=_probe(linux)), initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        [console_item] = disk_pressure_guidance(linux)
+        [tui_item] = [
+            item
+            for item in app.screen._tui_guidance()  # pyright: ignore[reportPrivateUsage]
+            if item.title == console_item.title
+        ]
+        assert "Policies view" in tui_item.next_step
+        assert "prune-tmp-linux.sh --apply" in tui_item.next_step
+        assert "prune-user-tmpdir.sh" not in tui_item.next_step
+
+
+def _competing_probe(
+    units: tuple[CompetingUnit, ...], *, blocking_calls: list[bool] | None = None
+) -> CompetingProbe:
+    """A competing-mechanism probe with the production closure's call shape:
+    a blocking read answers, a peek answers only after one has run."""
+    warmed = [False]
+
+    def probe(*, blocking: bool = True) -> tuple[CompetingUnit, ...]:
+        if blocking_calls is not None:
+            blocking_calls.append(blocking)
+        if blocking:
+            warmed[0] = True
+            return units
+        return units if warmed[0] else ()
+
+    return probe
+
+
+_SYSTEM_COMPETITOR = (
+    CompetingUnit(name="cleanup-bun-tmp-cache.timer", scope="system", state="enabled"),
+)
+
+
+async def test_doctor_discloses_a_system_scope_competitor_from_a_worker_read() -> None:
+    """WR-10: the disclosure existed only inside the first apply's result, so
+    every later run said nothing about the root-owned cleanup job."""
+    calls: list[bool] = []
+    app = _app(
+        policies=_policy_inputs(
+            disk_pressure=_probe(_pressure()),
+            competing=_competing_probe(_SYSTEM_COMPETITOR, blocking_calls=calls),
+        ),
+        initial_view="doctor",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        [item] = competing_mechanism_guidance(_SYSTEM_COMPETITOR)
+        assert item in app.screen.guidance
+        assert "cleanup-bun-tmp-cache.timer" in _doctor_body(app)
+        # The blocking detection never runs on the event loop (WR-02).
+        assert True in calls
+        assert app.screen.disk_probing is False
+
+
+async def test_policies_row_names_a_system_scope_competitor_after_its_warm_up() -> None:
+    policy = _fake_policy(active=True, log_path=Path("/tmp/x.log"))
+    policy = replace(policy, id="daemon:prune-tmp-linux")
+    app = _app(
+        policies=_policy_inputs(
+            [policy],
+            disk_pressure=_probe(_pressure()),
+            competing=_competing_probe(_SYSTEM_COMPETITOR),
+        ),
+        initial_view="policies",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        for _ in range(400):
+            if not screen.competing_probing:
+                break
+            await pilot.pause()
+        await pilot.pause()
+        assert "cleanup-bun-tmp-cache.timer" in screen.detail_text
+        assert "root-owned" in screen.detail_text
+
+
 async def test_doctor_disk_pressure_step_is_never_rewritten_into_pnpm_advice() -> None:
     # The generic `Run `make setup`` branch must not capture this item: a
     # full disk answered with "press r to reinstall pnpm globals" is exactly
@@ -3854,10 +3946,13 @@ async def test_doctor_unavailable_daemon_step_is_not_rewritten_to_a_missing_row(
 
 async def test_doctor_rereads_disk_pressure_on_enter_view() -> None:
     current = [_pressure()]
-    calls: list[bool] = []
-    app = _app(
-        policies=_policy_inputs(disk_pressure=_probe(lambda: current[0], blocking_calls=calls))
-    )
+    calls: list[tuple[bool, bool]] = []
+
+    def probe(*, blocking: bool = True) -> DiskPressure:
+        calls.append((blocking, threading.current_thread() is threading.main_thread()))
+        return current[0]
+
+    app = _app(policies=_policy_inputs(disk_pressure=probe))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("4")
         await _settle(app, pilot)
@@ -3870,11 +3965,12 @@ async def test_doctor_rereads_disk_pressure_on_enter_view() -> None:
         await pilot.press("4")
         await _settle(app, pilot)
         assert isinstance(app.screen, DoctorScreen)
-        assert len(calls) > seen
+        assert (True, False) in calls[seen:]  # a fresh blocking read, on a worker
         assert item in app.screen.guidance
-        # Doctor entry is not the Textual row-highlight path: the blocking read
-        # is the correct one here (a stale daemon state would mislead).
-        assert all(calls)
+        # WR-02: the blocking read may spawn systemctl, so it never runs on the
+        # event loop; the render path there only peeks.
+        assert all(not on_loop for blocking, on_loop in calls if blocking)
+        assert all(not blocking for blocking, on_loop in calls if on_loop)
 
 
 @pytest.mark.parametrize("error", [OSError("statvfs failed"), ValueError("bad reading")])
@@ -4187,7 +4283,8 @@ def test_policy_appends_decided_closures_after_every_existing_field() -> None:
     import dataclasses
 
     names = [field.name for field in dataclasses.fields(Policy)]
-    assert names[-2:] == ["decided", "clear_decided"]
+    # Later optional fields are appended after them, never inserted before.
+    assert names[-3:] == ["decided", "clear_decided", "owned"]
 
 
 def test_unarmed_collector_wait_returns_immediately() -> None:
@@ -4422,6 +4519,85 @@ async def test_manual_toggle_of_the_daemon_is_refused_while_the_worker_is_in_fli
         assert screen.active_state["daemon:prune-tmpdir"] is True
         bootstrap_calls = [c for c in fake_run.calls if c[:2] == ["launchctl", "bootstrap"]]
         assert len(bootstrap_calls) == 1
+
+
+async def _settle_toggle(screen: PoliciesScreen, pilot: Pilot[list[str] | None]) -> None:
+    """Wait for a scheduled-job toggle's thread worker (WR-02) to report back."""
+    for _ in range(400):
+        if not screen.toggle_in_flight:
+            break
+        await pilot.pause()
+    await pilot.pause()
+
+
+async def test_manual_daemon_toggle_runs_off_the_event_loop(tmp_path: Path) -> None:
+    """WR-02: a scheduled job's apply issues launchctl/systemctl mutations
+    (and, on Linux, the competing-mechanism probes); on the event loop a
+    wedged user manager froze the UI for the whole sequence."""
+    threads: list[bool] = []
+    fake_run = _FakeDaemonRun()
+
+    def run(cmd: list[str]) -> None:
+        threads.append(threading.current_thread() is threading.main_thread())
+        fake_run(cmd)
+
+    policy = _daemon_policy(tmp_path, run=run)
+    app = _daemon_app(tmp_path, policy=policy, daemon_default=None)
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        await pilot.press("space")
+        await _settle_toggle(screen, pilot)
+        assert screen.active_state["daemon:prune-tmpdir"] is True
+        assert "enabled" in screen.status.text
+        assert threads and not any(threads)
+
+
+async def test_a_second_toggle_is_refused_while_a_daemon_toggle_is_in_flight(
+    tmp_path: Path,
+) -> None:
+    release = threading.Event()
+    applies: list[str] = []
+
+    def slow_apply() -> PolicyResult:
+        release.wait(timeout=5)
+        applies.append("apply")
+        return _ok_result()
+
+    policy = replace(_daemon_policy(tmp_path), active=False, apply=slow_apply)
+    app = _daemon_app(tmp_path, policy=policy, daemon_default=None)
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        await pilot.press("space")
+        assert screen.toggle_in_flight is True
+        await pilot.press("space")
+        assert "still applying" in screen.status.text
+        release.set()
+        await _settle_toggle(screen, pilot)
+        assert applies == ["apply"]
+        assert screen.active_state["daemon:prune-tmpdir"] is True
+
+
+async def test_daemon_default_resolves_the_row_state_off_the_event_loop(tmp_path: Path) -> None:
+    """WR-02: the apply's own finally just invalidated the timer cache, so
+    resolving is_active() in the completion handler always spawned systemctl
+    on the event loop."""
+    seen: list[bool] = []
+    base = _daemon_policy(tmp_path)
+
+    def is_active() -> bool:
+        seen.append(threading.current_thread() is threading.main_thread())
+        return True
+
+    policy = replace(base, active=False, is_active=is_active)
+    app = _daemon_app(tmp_path, policy=policy, daemon_default=lambda: True)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle_daemon(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert screen.active_state["daemon:prune-tmpdir"] is True
+        assert seen and not any(seen)
 
 
 async def test_reschedule_is_refused_while_the_worker_is_in_flight(tmp_path: Path) -> None:

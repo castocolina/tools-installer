@@ -192,6 +192,52 @@ def test_competing_conf_paths_lists_other_files_assigning_the_same_variable(tmp_
     assert env_redirect.competing_conf_paths(_bun(), home, tmp_path / "missing") == ()
 
 
+def test_competing_conf_paths_scans_system_dirs_masks_by_name_and_sees_indentation(
+    tmp_path: Path,
+) -> None:
+    """WR-05: systemd merges the system environment.d dirs too, a same-named
+    file in a higher-priority dir masks a lower one, and systemd strips
+    leading whitespace before an assignment."""
+    home = tmp_path / "home"
+    conf_dir = tmp_path / "environment.d"
+    env_redirect.write_linux_redirect(_bun(), home, conf_dir)
+    etc = tmp_path / "etc-environment.d"
+    usr = tmp_path / "usr-environment.d"
+    etc.mkdir()
+    usr.mkdir()
+    indented = etc / "99-system.conf"
+    indented.write_text("  BUN_RUNTIME_TRANSPILER_CACHE_PATH=/var/cache/bun\n")
+    (etc / "10-masker.conf").write_text("OTHER=1\n")
+    (usr / "10-masker.conf").write_text("BUN_RUNTIME_TRANSPILER_CACHE_PATH=/masked\n")
+    (usr / _bun().conf_basename).write_text("BUN_RUNTIME_TRANSPILER_CACHE_PATH=/masked\n")
+    found = env_redirect.competing_conf_paths(_bun(), home, conf_dir, (etc, usr))
+    assert found == (indented,)
+
+
+def test_write_linux_redirect_refuses_an_unreadable_same_named_file(tmp_path: Path) -> None:
+    """WR-06: an undecodable (or unreadable) foreign file used to be treated
+    as absent and replaced by the atomic rename."""
+    home = tmp_path / "home"
+    conf_dir = tmp_path / "environment.d"
+    conf_dir.mkdir()
+    foreign = conf_dir / _bun().conf_basename
+    foreign.write_bytes(b"\xff\xfe not utf-8 BUN_RUNTIME_TRANSPILER_CACHE_PATH=/theirs\n")
+    with pytest.raises(OSError, match="not managed by tools-installer"):
+        env_redirect.write_linux_redirect(_bun(), home, conf_dir)
+    assert foreign.read_bytes().startswith(b"\xff\xfe")
+
+
+def test_write_linux_redirect_refuses_a_dangling_same_named_symlink(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    conf_dir = tmp_path / "environment.d"
+    conf_dir.mkdir()
+    link = conf_dir / _bun().conf_basename
+    link.symlink_to(tmp_path / "nowhere.conf")
+    with pytest.raises(OSError, match="not managed by tools-installer"):
+        env_redirect.write_linux_redirect(_bun(), home, conf_dir)
+    assert link.is_symlink()
+
+
 def test_rc_applied_requires_a_closed_block(tmp_path: Path) -> None:
     home = tmp_path / "home"
     rc = tmp_path / ".myshellrc"

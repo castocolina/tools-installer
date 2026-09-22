@@ -152,6 +152,46 @@ def test_refuses_the_home_directory_itself(tmp_path: Path) -> None:
     assert "deleted" not in result.stdout
 
 
+@pytest.mark.parametrize("shape", ["dot", "trailing-slash", "dotdot", "symlink"])
+def test_refuses_non_canonical_spellings_of_home(tmp_path: Path, shape: str) -> None:
+    """WR-09: the shared guard compared raw strings, so every non-canonical
+    spelling of a refused directory passed straight through."""
+    home = tmp_path / "home"
+    home.mkdir()
+    victim = home / _MATCH_SO
+    _touch(victim, age_minutes=60)
+
+    if shape == "dot":
+        target = f"{home}/."
+    elif shape == "trailing-slash":
+        target = f"{home}/"
+    elif shape == "dotdot":
+        target = f"{home}/../{home.name}"
+    else:
+        link = tmp_path / "home-link"
+        link.symlink_to(home)
+        target = str(link)
+
+    result = _run("--tmpdir", target, "--apply", home=home)
+
+    assert result.returncode != 0
+    # The wrapper strips one trailing slash before the guard runs, so the
+    # message quotes that spelling rather than the raw argument.
+    assert "refusing broad path" in result.stderr
+    assert "deleted" not in result.stdout
+    assert victim.exists()
+
+
+def test_refuses_a_dotdot_spelling_of_the_root_directory(tmp_path: Path) -> None:
+    """`/tmp/..` canonicalizes to `/`, which the refusal list names."""
+    home = tmp_path / "home"
+    home.mkdir()
+    result = _run("--tmpdir", "/tmp/..", "--apply", home=home)
+    assert result.returncode != 0
+    assert "refusing broad path /tmp/.." in result.stderr
+    assert "deleted" not in result.stdout
+
+
 @pytest.mark.parametrize("minutes", ["0", "-5", "abc"])
 def test_minutes_rejects_non_positive_or_non_numeric_values(tmp_path: Path, minutes: str) -> None:
     tmpdir = tmp_path / "tmp"

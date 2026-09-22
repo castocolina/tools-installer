@@ -1282,6 +1282,42 @@ def test_run_doctor_healthy_disk_prints_nothing_extra(tmp_path: Path) -> None:
     assert extra_buf.getvalue() == baseline_buf.getvalue()
 
 
+def test_run_doctor_discloses_a_system_scope_competitor(tmp_path: Path) -> None:
+    """WR-10: `make doctor` never mentioned the root-owned cleanup unit
+    running alongside this project's own daemon."""
+    from installer.app import run_doctor
+    from installer.systemd_daemon import CompetingUnit
+
+    bin_dir = tmp_path / "bin"
+    kwargs = _healthy_doctor_kwargs(bin_dir)
+    console, buf = _console()
+    units = (CompetingUnit(name="cleanup-bun-tmp-cache.timer", scope="system", state="enabled"),)
+    run_doctor([], console, competing=lambda: units, **kwargs)  # type: ignore[arg-type]
+    out = buf.getvalue()
+    assert "cleanup-bun-tmp-cache.timer" in out
+    assert "sudo systemctl disable --now cleanup-bun-tmp-cache.timer" in out
+
+
+def test_run_doctor_without_a_competing_probe_is_byte_identical(tmp_path: Path) -> None:
+    from installer.app import run_doctor
+    from installer.run import CommandError
+
+    bin_dir = tmp_path / "bin"
+    kwargs = _healthy_doctor_kwargs(bin_dir)
+    baseline, baseline_buf = _console()
+    empty, empty_buf = _console()
+    failed, failed_buf = _console()
+
+    def boom() -> tuple[object, ...]:
+        raise CommandError(["systemctl", "list-unit-files"], 1)
+
+    run_doctor([], baseline, **kwargs)  # type: ignore[arg-type]
+    run_doctor([], empty, competing=tuple, **kwargs)  # type: ignore[arg-type]
+    run_doctor([], failed, competing=boom, **kwargs)  # type: ignore[arg-type]
+    assert empty_buf.getvalue() == baseline_buf.getvalue()
+    assert failed_buf.getvalue() == baseline_buf.getvalue()
+
+
 def test_run_doctor_swallows_a_probe_oserror(tmp_path: Path) -> None:
     from installer.app import run_doctor
 
@@ -2152,6 +2188,159 @@ def _linux_daemon_for_uninstall(tmp_path: Path) -> tuple[Policy, Path]:
     return policy, state_path
 
 
+class _SystemctlFake:
+    """A user manager on disk: `enable` creates the wants symlink, `disable`
+    removes it. `reachable=False` makes every mutation fail, like a
+    `make uninstall` over ssh with no user bus."""
+
+    def __init__(self, unit_dir: Path, *, reachable: bool = True) -> None:
+        self.unit_dir = unit_dir
+        self.reachable = reachable
+        self.calls: list[list[str]] = []
+
+    def __call__(self, cmd: list[str]) -> None:
+        from installer import systemd_daemon
+        from installer.run import CommandError
+
+        self.calls.append(cmd)
+        if not self.reachable:
+            raise CommandError(cmd, 1)
+        link = systemd_daemon.wants_link_path(self.unit_dir)
+        if cmd[2] == "enable":
+            link.parent.mkdir(parents=True, exist_ok=True)
+            if not link.is_symlink():
+                link.symlink_to(self.unit_dir / systemd_daemon.TIMER_NAME)
+        elif cmd[2] == "disable" and link.is_symlink():
+            link.unlink()
+
+
+@pytest.mark.parametrize("state", ["inactive", "unreachable"])
+def test_run_uninstall_removes_an_installed_but_not_running_linux_timer(
+    tmp_path: Path, state: str
+) -> None:
+    """CR-01: the sweep reads footprint, never runtime state. A stopped or
+    unreachable timer used to be skipped while the marker was cleared and
+    success was printed, so the timer restarted at the next login."""
+    from installer import systemd_daemon
+    from installer.app import run_uninstall
+    from installer.policy import linux_daemon_policy
+    from installer.run import CommandError
+
+    script_path = tmp_path / "scripts" / "prune-tmp-linux.sh"
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text("#!/bin/sh\n")
+    unit_dir = tmp_path / "systemd" / "user"
+    bin_dir = tmp_path / ".local" / "bin"
+    state_path = tmp_path / ".myshellrc"
+    fake = _SystemctlFake(unit_dir)
+
+    def read_output(cmd: list[str]) -> str:
+        if not fake.reachable:
+            raise CommandError(cmd, 1)
+        return "inactive" if cmd[2] == "is-active" else ""
+
+    def build() -> Policy:
+        return linux_daemon_policy(
+            unit_dir=unit_dir,
+            log_path=tmp_path / "Logs" / "prune-daemon.log",
+            wrapper_bin_dir=bin_dir,
+            script_path=script_path,
+            state_path=state_path,
+            installed_tools={},
+            path_value="/usr/bin:/bin",
+            tmpdir_value=str(tmp_path / "tmp"),
+            home_value=str(tmp_path),
+            uv_path=tmp_path / "uv",
+            run=fake,
+            read_output=read_output,
+        )
+
+    build().apply()
+    assert systemd_daemon.wants_link_path(unit_dir).is_symlink()
+    assert systemd_daemon.decided(state_path) is True
+    fake.reachable = state != "unreachable"
+    policy = build()
+    assert policy.active is False  # not running: the old sweep predicate
+    console, buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=state_path,
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=policy,
+        extra_policies=(),
+    )
+    out = buf.getvalue()
+    assert systemd_daemon.footprint_present(unit_dir) is False
+    assert not systemd_daemon.wants_link_path(unit_dir).is_symlink()
+    assert systemd_daemon.wrapper_present(bin_dir) is False
+    assert "daemon:prune-tmp-linux" in out
+    assert systemd_daemon.decided(state_path) is False
+    if state == "unreachable":
+        assert "systemctl --user daemon-reload" in out
+    else:
+        assert "daemon-reload" not in out
+
+
+def test_run_uninstall_keeps_the_linux_marker_when_a_running_timer_cannot_be_disabled(
+    tmp_path: Path,
+) -> None:
+    from installer import systemd_daemon
+    from installer.app import run_uninstall
+    from installer.policy import linux_daemon_policy
+    from installer.run import CommandError
+
+    script_path = tmp_path / "scripts" / "prune-tmp-linux.sh"
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text("#!/bin/sh\n")
+    unit_dir = tmp_path / "systemd" / "user"
+    state_path = tmp_path / ".myshellrc"
+    fail_disable = False
+
+    def run(cmd: list[str]) -> None:
+        if fail_disable and cmd[2] == "disable":
+            raise CommandError(cmd, 1)
+
+    def build() -> Policy:
+        return linux_daemon_policy(
+            unit_dir=unit_dir,
+            log_path=tmp_path / "Logs" / "prune-daemon.log",
+            wrapper_bin_dir=tmp_path / ".local" / "bin",
+            script_path=script_path,
+            state_path=state_path,
+            installed_tools={},
+            path_value="/usr/bin:/bin",
+            tmpdir_value=str(tmp_path / "tmp"),
+            home_value=str(tmp_path),
+            uv_path=tmp_path / "uv",
+            run=run,
+            read_output=lambda _cmd: "active",
+        )
+
+    build().apply()
+    fail_disable = True
+    console, buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=state_path,
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=build(),
+        extra_policies=(),
+    )
+    assert systemd_daemon.units_present(unit_dir) is True
+    assert systemd_daemon.decided(state_path) is True
+    assert "Could not disable: daemon:prune-tmp-linux" in buf.getvalue()
+
+
 def test_run_uninstall_clears_the_linux_marker_and_leaves_the_macos_one(
     tmp_path: Path,
 ) -> None:
@@ -2198,7 +2387,7 @@ def test_run_uninstall_clears_the_linux_marker_after_a_successful_sweep(
     def remove() -> PolicyResult:
         return PolicyResult(layers=(), reload_hint=None, warning=None)
 
-    active_policy = replace(policy, active=True, is_active=active, remove=remove)
+    active_policy = replace(policy, active=True, is_active=active, owned=active, remove=remove)
     console, buf = _console()
     run_uninstall(
         [],
@@ -2260,7 +2449,7 @@ def test_run_uninstall_preserves_the_linux_marker_when_removal_fails(tmp_path: P
     def remove() -> PolicyResult:
         raise CommandError(["systemctl", "--user", "disable"], 1)
 
-    failed = replace(policy, active=True, is_active=active, remove=remove)
+    failed = replace(policy, active=True, is_active=active, owned=active, remove=remove)
     console, buf = _console()
     run_uninstall(
         [],

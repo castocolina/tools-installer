@@ -15,6 +15,7 @@ import setup
 from installer import pnpm_globals
 from installer.app import UninstallDecision
 from installer.diskusage import DiskPressure
+from installer.enums import DaemonState
 from installer.execute_screen import ExecuteInputs
 from installer.guards import install_shims
 from installer.model import Method, Tool
@@ -871,6 +872,111 @@ def test_the_policies_view_wires_split_mode_myshellrc_sourcing_for_every_tweak(
     codex_skip.apply()
     assert str(tmp_path / ".myshellrc") in (tmp_path / ".zshrc").read_text()
     assert str(tmp_path / ".myshellrc") in (tmp_path / ".bashrc").read_text()
+
+
+def test_the_policies_view_wires_split_mode_myshellrc_sourcing_for_the_cache_redirect(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """WR-07: in split mode nothing sources ~/.myshellrc, so a macOS redirect
+    written only there was a silent no-op while its row read ON."""
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--guard", "--link-mode", "split"]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    redirect = next(p for p in policies.policies if p.id.startswith("cache-redirect:"))
+    result = redirect.apply()
+    assert str(tmp_path / ".myshellrc") in (tmp_path / ".zshrc").read_text()
+    assert str(tmp_path / ".myshellrc") in (tmp_path / ".bashrc").read_text()
+    assert any(layer.name == "Split-mode sourcing" for layer in result.layers)
+
+
+def test_the_policies_and_doctor_share_one_competing_probe_that_never_mutates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """WR-10: the system-scope disclosure needs a durable, read-only source.
+    The probe is built once per route and must issue only read verbs."""
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "detect", lambda: Platform("fedora", "amd64", False, False))
+
+    def which(name: str) -> str:
+        return f"/usr/bin/{name}"
+
+    monkeypatch.setattr(setup.shutil, "which", which)
+    issued: list[list[str]] = []
+
+    def read_output(cmd: list[str]) -> str:
+        issued.append(cmd)
+        if "list-unit-files" in cmd and "--user" not in cmd:
+            return "cleanup-bun-tmp-cache.timer enabled -\n"
+        return ""
+
+    monkeypatch.setattr(setup.systemd_daemon, "query_systemctl", read_output)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--guard"]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    probe = policies.competing
+    assert probe is not None
+    assert probe(blocking=False) == ()  # cold peek says nothing rather than guessing
+    units = probe()
+    assert [unit.name for unit in units] == ["cleanup-bun-tmp-cache.timer"]
+    assert [unit.scope for unit in units] == ["system"]
+    assert probe(blocking=False) == units  # memoized for the render path
+    assert issued  # and every query it issued was read-only
+    read_verbs = {"list-unit-files", "is-active", "is-enabled", "show"}
+    for cmd in issued:
+        assert read_verbs & set(cmd), cmd
+        assert not {"disable", "enable", "stop", "start", "daemon-reload"} & set(cmd), cmd
+
+
+def test_the_disk_probe_ignores_a_relative_tmpdir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """IN-03: a relative TMPDIR was measured against whatever cwd the process
+    happened to have."""
+    measured: list[Path] = []
+
+    def fake_probe(daemon: object, tmp_threshold: bool, root: Path, tmp: Path) -> DiskPressure:
+        del daemon, tmp_threshold, root
+        measured.append(tmp)
+        return DiskPressure(
+            root_free_percent=None,
+            tmp_used_percent=None,
+            daemon=DaemonState.UNAVAILABLE,
+            tmp_threshold=False,
+        )
+
+    monkeypatch.setattr(setup.diskusage, "probe_disk_pressure", fake_probe)
+    probe = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
+        Platform("fedora", "amd64", False, False), timer_cache=None
+    )
+    monkeypatch.setenv("TMPDIR", "relative/tmp")
+    probe()
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "abs-tmp"))
+    probe()
+    assert measured == [Path("/tmp"), tmp_path / "abs-tmp"]
+
+
+def test_the_environment_d_dir_honours_xdg_config_home(tmp_path: Path) -> None:
+    """WR-04: systemd's user environment generator reads
+    $XDG_CONFIG_HOME/environment.d; a redirect written under ~/.config there
+    is never read. Import-time constant, so it is read in a fresh process."""
+    import os
+    import subprocess
+    import sys
+
+    xdg = tmp_path / "xdg"
+    env = {**os.environ, "HOME": str(tmp_path), "XDG_CONFIG_HOME": str(xdg)}
+    completed = subprocess.run(
+        [sys.executable, "-c", "import setup; print(setup._ENVIRONMENT_D_DIR)"],
+        cwd=Path(setup.__file__).parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert completed.stdout.strip() == str(xdg / "environment.d")
 
 
 def test_the_policies_view_does_not_wire_split_sourcing_under_centralized_mode(

@@ -513,6 +513,24 @@ def test_cache_peek_after_invalidate_returns_the_last_known_answer_not_none() ->
     assert calls == 2  # invalidate forced a re-probe at that later read()
 
 
+def test_cache_an_invalidate_during_an_in_flight_probe_is_never_lost() -> None:
+    """WR-03: another thread's apply invalidates while this read() is still
+    probing. Storing the pre-invalidate answer as fresh hid the toggle for a
+    whole TTL."""
+    answers = iter([DaemonState.INACTIVE, DaemonState.ACTIVE])
+    cache: systemd_daemon.TimerStateCache
+
+    def probe() -> DaemonState:
+        answer = next(answers)
+        if answer is DaemonState.INACTIVE:
+            cache.invalidate()  # the worker's apply finishes mid-probe
+        return answer
+
+    cache = systemd_daemon.TimerStateCache(probe, ttl=60.0, clock=lambda: 0.0)
+    assert cache.read() is DaemonState.INACTIVE  # the racing caller still gets its answer
+    assert cache.read() is DaemonState.ACTIVE  # ...but it was not memoized as fresh
+
+
 def test_linux_daemon_policy_uses_the_injected_cache_by_identity(tmp_path: Path) -> None:
     paths = _make_paths(tmp_path)
     injected = systemd_daemon.TimerStateCache(lambda: DaemonState.INACTIVE)
@@ -667,6 +685,80 @@ def test_bootout_with_units_absent_disable_failing_and_probe_active_reraises(
 
     with pytest.raises(CommandError):
         systemd_daemon.bootout(unit_dir, run=failing_run, read_output=_ScriptedReadOutput("active"))
+
+
+def test_bootout_with_units_present_and_manager_unreachable_reports_not_reached(
+    tmp_path: Path,
+) -> None:
+    # CR-01: `make uninstall` over ssh has no user bus. Raising here left the
+    # owned files on disk, so the timer restarted at the next login.
+    unit_dir = tmp_path / "unit"
+    _write_units_present(unit_dir)
+
+    def failing_run(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1)
+
+    assert (
+        systemd_daemon.bootout(unit_dir, run=failing_run, read_output=_RaisingReadOutput()) is False
+    )
+
+
+def test_bootout_with_units_present_disable_failing_and_timer_inactive_reports_reached(
+    tmp_path: Path,
+) -> None:
+    unit_dir = tmp_path / "unit"
+    _write_units_present(unit_dir)
+
+    def failing_run(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1)
+
+    assert (
+        systemd_daemon.bootout(
+            unit_dir, run=failing_run, read_output=_ScriptedReadOutput("inactive")
+        )
+        is True
+    )
+
+
+def test_bootout_successful_disable_reports_reached(tmp_path: Path) -> None:
+    unit_dir = tmp_path / "unit"
+    assert (
+        systemd_daemon.bootout(
+            unit_dir, run=_RecordingRun(), read_output=_ScriptedReadOutput("active")
+        )
+        is True
+    )
+
+
+def test_footprint_present_counts_either_unit_file_or_a_dangling_enable_link(
+    tmp_path: Path,
+) -> None:
+    unit_dir = tmp_path / "unit"
+    assert systemd_daemon.footprint_present(unit_dir) is False
+    unit_dir.mkdir(parents=True)
+    (unit_dir / systemd_daemon.TIMER_NAME).write_text("x")
+    assert systemd_daemon.footprint_present(unit_dir) is True
+    (unit_dir / systemd_daemon.TIMER_NAME).unlink()
+    link = systemd_daemon.wants_link_path(unit_dir)
+    link.parent.mkdir(parents=True)
+    link.symlink_to(unit_dir / systemd_daemon.TIMER_NAME)  # dangling
+    assert systemd_daemon.footprint_present(unit_dir) is True
+
+
+def test_remove_units_also_removes_the_enable_symlink_but_never_a_regular_file(
+    tmp_path: Path,
+) -> None:
+    unit_dir = tmp_path / "unit"
+    _write_units_present(unit_dir)
+    link = systemd_daemon.wants_link_path(unit_dir)
+    link.parent.mkdir(parents=True)
+    link.symlink_to(unit_dir / systemd_daemon.TIMER_NAME)
+    systemd_daemon.remove_units(unit_dir)
+    assert not link.is_symlink()
+    assert systemd_daemon.footprint_present(unit_dir) is False
+    link.write_text("not ours")
+    systemd_daemon.remove_units(unit_dir)
+    assert link.exists()
 
 
 def test_bootout_successful_disable_issues_no_reprobe(tmp_path: Path) -> None:
@@ -1110,3 +1202,56 @@ def test_systemd_daemon_module_imports_no_subprocess() -> None:
 
 def test_competing_units_are_the_two_exact_confirmed_unit_names() -> None:
     assert systemd_daemon.COMPETING_UNITS == (_TIMER_NAME, _SERVICE_NAME)
+
+
+def test_takeover_disclosure_names_each_unit_and_its_re_enable_command() -> None:
+    assert systemd_daemon.takeover_disclosure(()) is None
+    text = systemd_daemon.takeover_disclosure(["a.timer", "b.service"])
+    assert text is not None
+    assert "Stopped and disabled a.timer, b.service" in text
+    assert "systemctl --user enable --now a.timer; systemctl --user enable --now b.service" in text
+    assert "sudo" not in text
+    assert "removed" not in text and "deleted" not in text  # D-02b: disabled, never deleted
+
+
+def test_disable_competing_counts_an_oserror_as_failed_and_keeps_going() -> None:
+    """IN-07: an OSError partway through the loop escaped, discarding the
+    names already disabled and the system-scope disclosure with them."""
+    units = (
+        systemd_daemon.CompetingUnit(
+            name="a.timer", scope=systemd_daemon.SCOPE_USER, state="enabled"
+        ),
+        systemd_daemon.CompetingUnit(
+            name="b.timer", scope=systemd_daemon.SCOPE_USER, state="enabled"
+        ),
+    )
+
+    def run(cmd: list[str]) -> None:
+        if cmd[-1] == "a.timer":
+            raise OSError("dbus socket vanished")
+
+    disabled, failed = systemd_daemon.disable_competing(units, run=run)
+    assert disabled == ("b.timer",)
+    assert failed == ("a.timer",)
+
+
+def test_render_service_rejects_a_dollar_sign_in_any_rendered_value(tmp_path: Path) -> None:
+    """IN-01: systemd substitutes $VAR/${VAR} inside ExecStart= arguments,
+    even quoted ones, so a path carrying one would be silently rewritten."""
+
+    def render(*, script_path: Path | None = None, path_value: str = "/usr/bin:/bin") -> str:
+        return systemd_daemon.render_service(
+            uv_path=tmp_path / "uv",
+            wrapper_path=tmp_path / "wrapper",
+            script_path=script_path if script_path is not None else tmp_path / "prune.sh",
+            log_path=tmp_path / "prune.log",
+            tmpdir=str(tmp_path / "tmp"),
+            home=str(tmp_path / "home"),
+            path_value=path_value,
+        )
+
+    assert render()  # the same values without a $ render fine
+    with pytest.raises(DaemonScheduleError):
+        render(script_path=tmp_path / "pru$ne.sh")
+    with pytest.raises(DaemonScheduleError):
+        render(path_value="/usr/bin:${HOME}/bin")

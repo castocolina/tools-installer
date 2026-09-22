@@ -64,17 +64,36 @@ _prune_common_require_directory() {
   fi
 }
 
+# _prune_common_canonicalize PATH
+# Prints PATH with ".", "..", repeated/trailing slashes and symlinks
+# resolved; prints nothing and returns 1 when PATH is not a directory this
+# process can reach. CDPATH is cleared so a relative argument can never be
+# resolved against a configured search path, and `cd -P`/`pwd -P` resolve
+# symlinks rather than keeping the logical path.
+_prune_common_canonicalize() {
+  (CDPATH='' cd -P -- "$1" 2>/dev/null && pwd -P)
+}
+
 # _prune_common_refuse_broad_path ROOT ENTRY...
-# Exits 1 with "error: refusing broad path ROOT" if ROOT literally equals
-# any of the following ENTRY arguments (the caller's own base + extra
-# refusal list; trailing slashes must already be stripped by the caller
-# before this runs, per each wrapper's own original check ordering).
+# Exits 1 with "error: refusing broad path ROOT" if ROOT equals any of the
+# following ENTRY arguments (the caller's own base + extra refusal list),
+# compared BOTH literally and after canonicalizing each side.
+#
+# The canonical compare is the load-bearing half: a literal compare alone
+# let "$HOME/.", "$HOME//", "/tmp/.." and a symlink pointing at $HOME walk
+# straight through the guard and delete matching files inside the refused
+# directory (WR-09). The literal compare is kept for an entry that is not a
+# directory on this host (the macOS-only /private/var family on Linux),
+# which cannot be canonicalized at all.
 _prune_common_refuse_broad_path() {
   local root="$1"
   shift
-  local entry
+  local entry root_canon entry_canon
+  root_canon="$(_prune_common_canonicalize "$root")" || root_canon=""
   for entry in "$@"; do
-    if [[ "$root" == "$entry" ]]; then
+    entry_canon="$(_prune_common_canonicalize "$entry")" || entry_canon=""
+    if [[ "$root" == "$entry" ]] ||
+      { [[ -n "$root_canon" ]] && [[ "$root_canon" == "$entry_canon" ]]; }; then
       printf 'error: refusing broad path %s\n' "$root" >&2
       exit 1
     fi

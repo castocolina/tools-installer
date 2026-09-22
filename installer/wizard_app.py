@@ -12,6 +12,7 @@ be switched out. Navigation is therefore a stack with the base view at the
 bottom: the stack is always `[base]` or `[base, <one other view>]`.
 """
 
+import contextlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -34,6 +35,7 @@ from installer.enums import Tier, UninstallState
 from installer.execute_screen import ExecuteInputs, ExecuteScreen, InstallRunFinished
 from installer.guidance import (
     Guidance,
+    competing_mechanism_guidance,
     disk_pressure_guidance,
     doctor_guidance,
     guard_guidance,
@@ -43,7 +45,9 @@ from installer.model import Tool
 from installer.pnpm_globals import NodeGlobalsReport, reinstall_preview
 from installer.policy import Policy, PolicyResult
 from installer.render import guidance_text
+from installer.run import CommandError
 from installer.session import Summary
+from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit
 from installer.terminal_shell import terminal_sync_warning
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import (
@@ -124,6 +128,11 @@ class UninstallInputs:
 # the Textual event loop needs. `...` rather than a Protocol spelling out that
 # keyword: a Protocol method's parameter reads as dead code to vulture.
 DiskPressureProbe = Callable[..., DiskPressure]
+# The composition root's competing-mechanism probe (WR-10), same
+# call shape and same blocking rule as DiskPressureProbe: blocking=True
+# may issue bounded read-only systemctl queries, blocking=False peeks
+# a memo and never spawns. Read-only in both systemd scopes.
+CompetingProbe = Callable[..., tuple[CompetingUnit, ...]]
 
 
 @dataclass(frozen=True)
@@ -139,6 +148,9 @@ class PolicyInputs:
     link_mode: Callable[[], str] | None = None
     set_link_mode: Callable[[str], None] | None = None
     disk_pressure: DiskPressureProbe | None = None
+    # WR-10: the same seam reasoning as disk_pressure -- one closure, both
+    # the Doctor's durable disclosure and the Policies row's detail line.
+    competing: CompetingProbe | None = None
 
 
 # The l log-view toggle's tail length — a plain, bounded slice of the raw log,
@@ -166,11 +178,11 @@ _GLOBALS_UNREADABLE_PREVIEW = _GLOBALS_UNKNOWN_COUNT
 # the UNAVAILABLE wording (D-03c) names no row, because on that host there is
 # no row to enable, so it is deliberately never rewritten into one.
 _DISK_PRESSURE_ENABLE_PREFIX = "Enable the background cleanup policy"
-_DISK_PRESSURE_TUI_STEP = (
-    "Open the Policies view and turn on the Background tmpdir cleanup row; a one-off "
-    "`./scripts/prune-user-tmpdir.sh --apply` from a terminal clears space immediately "
-    "in the meantime."
-)
+# The console sentence's own tail names the platform's real one-off command
+# (WR-08), so only its leading clause is rewritten for the TUI -- rebuilding
+# the whole sentence here would re-introduce a second, platform-blind copy of
+# that command.
+_DISK_PRESSURE_TUI_PREFIX = "Open the Policies view and turn on the Background tmpdir cleanup row;"
 
 
 class GlobalsReinstalled(Message):
@@ -208,6 +220,40 @@ class GlobalsAudited(Message):
         # asked for and discard the other, rather than whichever lands last
         # silently overwriting fresher state with stale state.
         self.generation = generation
+        super().__init__()
+
+
+class DiskPressureProbed(Message):
+    """The Doctor's threaded blocking disk-pressure read finished (WR-02).
+
+    Carries nothing: the worker's only job is to warm the shared
+    TimerStateCache off the event loop, and the render path then reads the
+    fresh answer through the non-blocking peek.
+    """
+
+
+class CompetingProbed(Message):
+    """The Policies screen's competing-mechanism warm-up worker finished.
+
+    Carries nothing: the worker only fills the shared memo, and the detail
+    line then reads it through the non-blocking peek (WR-10).
+    """
+
+
+class PolicyToggled(Message):
+    """A scheduled-job toggle finished on its thread worker (WR-02).
+
+    `was_active` is the row state the toggle started from; `result` is None
+    exactly when run_live reported `error`.
+    """
+
+    def __init__(
+        self, policy_id: str, was_active: bool, result: PolicyResult | None, error: str | None
+    ) -> None:
+        self.policy_id = policy_id
+        self.was_active = was_active
+        self.result = result
+        self.error = error
         super().__init__()
 
 
@@ -252,16 +298,23 @@ class DoctorScreen(AppScreen):
         globals_preview: Callable[[NodeGlobalsReport], str],
         reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]],
         disk_pressure: DiskPressureProbe | None = None,
+        competing: CompetingProbe | None = None,
     ) -> None:
         super().__init__(view="doctor")
         self._report = report
         # A predicate, not its result, for the guard_state reason: the
         # Policies view can enable the background cleanup one navigation step
-        # away, so every entry re-reads it. Consulted only in
-        # _refresh_guidance, never at render time and never on a worker: the
-        # mount half is one statvfs, and the daemon half is a memoized,
-        # bounded read -- unlike the pnpm audit, nothing here needs a thread.
+        # away, so every entry re-reads it. WR-02: the daemon half of the
+        # blocking read may spawn `systemctl --user is-active` (bounded, but
+        # a frozen UI for its duration), so the event loop only ever calls it
+        # with blocking=False (TimerStateCache.peek). The blocking read runs in
+        # _probe_disk_pressure_worker, which then asks for a re-render.
         self.disk_pressure = disk_pressure
+        self.disk_probing = False
+        # WR-10: read-only competing-mechanism detection. Same split as
+        # disk_pressure: the render path peeks, the worker below does the
+        # blocking read that may issue `systemctl list-unit-files`.
+        self.competing = competing
         # A predicate, not its result: the Policies view installs and removes the
         # pip/npm ban live, one nav step away, and guard_guidance renders exactly
         # that state. The PATH audit beside it stays a snapshot on purpose — the
@@ -326,6 +379,7 @@ class DoctorScreen(AppScreen):
         self._refresh_guidance()
         self._refresh_body()
         self._start_globals_audit()
+        self._start_disk_probe()
 
     def enter_view(self) -> None:
         """Re-read the ban state on every entry, and re-ask pnpm off the loop.
@@ -343,6 +397,42 @@ class DoctorScreen(AppScreen):
         if self.is_mounted:
             self._refresh_body()
             self._start_globals_audit()
+            self._start_disk_probe()
+
+    def _start_disk_probe(self) -> None:
+        if self.disk_pressure is None:
+            return
+        self.disk_probing = True
+        self._probe_disk_pressure_worker()
+
+    @work(thread=True, exclusive=True, group="disk-pressure", exit_on_error=False)
+    def _probe_disk_pressure_worker(self) -> None:
+        """Take the blocking background-state reads off the event loop (WR-02).
+
+        The answer is not carried back: the read's purpose is to refresh the
+        shared TimerStateCache, which the render path then peeks. The same
+        (OSError, ValueError) second layer _disk_pressure_items uses applies,
+        and the message is posted in a finally so disk_probing always clears.
+        """
+        try:
+            probe = self.disk_pressure
+            if probe is not None:
+                with contextlib.suppress(OSError, ValueError):
+                    probe()
+            competing = self.competing
+            if competing is not None:
+                # WR-10: warmed here for the same reason -- the detection
+                # spawns bounded read-only systemctl queries.
+                with contextlib.suppress(OSError, ValueError, CommandError):
+                    competing()
+        finally:
+            self.post_message(DiskPressureProbed())
+
+    def on_disk_pressure_probed(self, _message: DiskPressureProbed) -> None:
+        self.disk_probing = False
+        self._refresh_guidance()
+        if self.is_mounted:
+            self._refresh_body()
 
     def _start_globals_audit(self) -> None:
         if self.globals_running:
@@ -373,6 +463,7 @@ class DoctorScreen(AppScreen):
             doctor_guidance(self._report)
             + guard_guidance(status, warning)
             + self._disk_pressure_items()
+            + self._competing_items()
             + (node_globals_guidance(globals_report) if globals_report is not None else [])
         )
 
@@ -385,10 +476,21 @@ class DoctorScreen(AppScreen):
         # documented second layer over the INJECTED closure a caller composes
         # -- the same named set run_doctor uses, never a blanket except.
         try:
-            pressure = self.disk_pressure()
+            pressure = self.disk_pressure(blocking=False)
         except (OSError, ValueError):
             return []
         return disk_pressure_guidance(pressure)
+
+    def _competing_items(self) -> list[Guidance]:
+        if self.competing is None:
+            return []
+        # peek only: this runs on the event loop, and a blocking read here
+        # would spawn the very systemctl queries WR-02 moved off it.
+        try:
+            units = self.competing(blocking=False)
+        except (OSError, ValueError, CommandError):
+            return []
+        return competing_mechanism_guidance(units)
 
     def _refresh_body(self) -> None:
         body = self.query_one("#doctor-body", _BodyStatic)
@@ -478,7 +580,9 @@ class DoctorScreen(AppScreen):
                 # generic `Run `make setup`` branch below, or a later edit to
                 # the console wording could let that prefix capture this item
                 # and answer a full disk with pnpm-reinstall advice.
-                rewritten.append(replace(item, next_step=_DISK_PRESSURE_TUI_STEP))
+                tail = item.next_step[len(_DISK_PRESSURE_ENABLE_PREFIX) :]
+                tail = tail.split(";", 1)[1].strip() if ";" in tail else tail.strip()
+                rewritten.append(replace(item, next_step=f"{_DISK_PRESSURE_TUI_PREFIX} {tail}"))
             elif item.next_step.startswith("Run `make setup`"):
                 rewritten.append(
                     replace(
@@ -1369,6 +1473,7 @@ class UninstallScreen(AppScreen):
                 parts.append(
                     f"could not disable {', '.join(swept.failed)} — check permissions and re-run."
                 )
+            parts.extend(f"warning: {warning}." for warning in swept.warnings)
             if not swept.swept and not swept.failed:
                 parts.append("no shell tweaks were still enabled — nothing to disable.")
         # One line per outcome: a single joined line overflows the terminal width and
@@ -1413,11 +1518,17 @@ class PoliciesScreen(AppScreen):
         self._set_link_mode = inputs.set_link_mode
         # The SAME closure UnifiedApp hands the Doctor: one field, two screens.
         self._disk_pressure = inputs.disk_pressure
+        self._competing = inputs.competing
         self.active_state: dict[str, bool] = {
             policy.id: policy.active for policy in inputs.policies
         }
         self.error: str | None = None
         self.detail_text = ""
+        # True while a scheduled-job toggle runs on its thread worker (WR-02);
+        # a second toggle or a reschedule waits for it.
+        self.toggle_in_flight = False
+        # True while the one-shot competing-mechanism warm-up worker runs.
+        self.competing_probing = False
         # Explicit, not left to on_data_table_row_highlighted's own reset as the
         # sole assignment point: an AttributeError would otherwise be reachable
         # if action_toggle_log ever ran before any row-highlight event has fired
@@ -1448,6 +1559,26 @@ class PoliciesScreen(AppScreen):
         table.focus()
         self._set_detail(self._policies[0] if self._policies else None)
         self._refresh_link_mode_line()
+        if self._competing is not None:
+            self.competing_probing = True
+            self._probe_competing_worker()
+
+    @work(thread=True, exclusive=True, group="policies-competing", exit_on_error=False)
+    def _probe_competing_worker(self) -> None:
+        """Warm the competing-mechanism memo off the event loop (WR-02/WR-10),
+        then ask for a repaint so the detail line appears."""
+        try:
+            probe = self._competing
+            if probe is not None:
+                with contextlib.suppress(OSError, ValueError, CommandError):
+                    probe()
+        finally:
+            self.post_message(CompetingProbed())
+
+    def on_competing_probed(self, _message: CompetingProbed) -> None:
+        self.competing_probing = False
+        if self.is_mounted:
+            self._set_detail(self._highlighted_policy())
 
     def _refresh_link_mode_line(self) -> None:
         line = self.query_one("#link-mode-line", Static)
@@ -1624,7 +1755,32 @@ class PoliciesScreen(AppScreen):
             usage = self._temp_usage_line()
             if usage is not None:
                 lines.append(usage)
+            competing = self._competing_line()
+            if competing is not None:
+                lines.append(competing)
         return "\n".join(lines)
+
+    def _competing_line(self) -> str | None:
+        """WR-10: name a system-scope competitor on the background-cleanup row.
+
+        Peek only -- this runs on every row highlight -- so it says nothing
+        until the screen's own warm-up worker has landed an answer. Only
+        system-scope units appear: a user-scope one is taken over by the
+        apply, so repeating it here would describe a stopped mechanism.
+        """
+        if self._competing is None:
+            return None
+        try:
+            units = self._competing(blocking=False)
+        except (OSError, ValueError, CommandError):
+            return None
+        names = sorted({unit.name for unit in units if unit.scope == SCOPE_SYSTEM})
+        if not names:
+            return None
+        return (
+            f"Also installed system-wide: {', '.join(names)} (root-owned; this installer "
+            "cannot stop it without sudo)"
+        )
 
     def _temp_usage_line(self) -> str | None:
         """The live temp-usage line for a background-cleanup row, or None.
@@ -1644,7 +1800,7 @@ class PoliciesScreen(AppScreen):
           never probes. Memoization alone is not the answer, although "it's
           cached" reads like one: a memo still has a cold first read and a TTL
           expiry, and on those a read() blocks the Textual event loop for up to
-          run.QUERY_TIMEOUT (20s) -- bounded, but a frozen UI. Nor is "move it
+          systemd_daemon.SYSTEMCTL_QUERY_TIMEOUT (5 s) -- bounded, but a frozen UI. Nor is "move it
           to a worker": the daemon state is not even shown on this line, so a
           worker would add async plumbing to fetch a value nothing renders.
 
@@ -1701,24 +1857,40 @@ class PoliciesScreen(AppScreen):
         self._log_view = not self._log_view
         self._set_detail(policy)
 
-    def refresh_daemon_state(self, policy_id: str, applied: bool) -> None:
+    def live_state(self, policy_id: str) -> bool | None:
+        """The matching Policy's own is_active() answer, or None when there is
+        no such policy or it binds no is_active closure.
+
+        Touches no widget, so a thread worker may call it -- and only a worker
+        should: for the Linux daemon it may spawn a bounded
+        `systemctl --user is-active` (WR-02).
+        """
+        policy = next((p for p in self._policies if p.id == policy_id), None)
+        if policy is None or policy.is_active is None:
+            return None
+        return policy.is_active()
+
+    def refresh_daemon_state(self, policy_id: str, applied: bool, live: bool | None) -> None:
         """Explicit UI refresh after an on-by-default worker run completes.
 
-        Resolves the value to display via the matching Policy's own
-        is_active() live-check when present, COMPLETELY IGNORING `applied`
-        -- `applied=False` means only "no apply() call was made this run",
-        which is equally true whether the policy is already ACTIVE-and-
-        decided or already DISABLED-and-decided; conflating the two would
-        incorrectly flip an already-on daemon's row to OFF on every ordinary
-        second run (11-REVIEWS.md cycle 3 finding #11). Falls back to
-        `applied` only when no matching policy is found or it has no
-        is_active closure (true for every other policy kind today).
+        `live` is the policy's own is_active() answer, resolved by the worker
+        through live_state() BEFORE it posted (WR-02: this runs on the event
+        loop, which must never probe systemd). It wins over `applied` --
+        `applied=False` means only "no apply() call was made this run", which
+        is equally true whether the policy is already ACTIVE-and-decided or
+        already DISABLED-and-decided; conflating the two would incorrectly
+        flip an already-on daemon's row to OFF on every ordinary second run
+        (11-REVIEWS.md cycle 3 finding #11). `applied` is used only for a
+        policy with no is_active closure; a policy that has one but whose
+        answer the worker could not resolve keeps its row as it is.
         Idempotent: a no-op when the resolved value does not actually
         change anything, so calling this unconditionally is harmless.
         """
         policy = next((p for p in self._policies if p.id == policy_id), None)
-        if policy is not None and policy.is_active is not None:
-            resolved = policy.is_active()
+        if live is not None:
+            resolved = live
+        elif policy is not None and policy.is_active is not None:
+            return
         else:
             resolved = applied
         if policy_id not in self.active_state or self.active_state[policy_id] == resolved:
@@ -1741,6 +1913,9 @@ class PoliciesScreen(AppScreen):
         ):
             self.status.set(_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE, "warn")
             return
+        if self.toggle_in_flight:
+            self.status.set(_TOGGLE_IN_FLIGHT_MESSAGE, "warn")
+            return
         active = self.active_state[policy.id]
         missing_requires = policy.missing_requirements()
         if not active and missing_requires and policy.hard_requires:
@@ -1754,7 +1929,40 @@ class PoliciesScreen(AppScreen):
             )
             self._set_detail(policy)
             return
-        result, self.error = run_live(policy.remove if active else policy.apply)
+        action = policy.remove if active else policy.apply
+        if policy.log_path is not None:
+            # WR-02: a scheduled job's apply/remove issues unbounded
+            # launchctl/systemctl mutations, plus (Linux) the bounded
+            # competing-mechanism probes -- seconds of frozen UI on a wedged
+            # user manager. It runs on a thread worker through the same
+            # run_live, and the outcome comes back as PolicyToggled.
+            self.toggle_in_flight = True
+            self.status.set(f"Applying {policy.label}...", "warn")
+            self._toggle_policy_worker(policy, active, action)
+            return
+        result, self.error = run_live(action)
+        self._finish_toggle(policy, active, result)
+
+    @work(thread=True, exclusive=True, group="policy-toggle", exit_on_error=False)
+    def _toggle_policy_worker(
+        self, policy: Policy, active: bool, action: Callable[[], PolicyResult]
+    ) -> None:
+        result: PolicyResult | None = None
+        error: str | None = "the policy change did not complete"
+        try:
+            result, error = run_live(action)
+        finally:
+            self.post_message(PolicyToggled(policy.id, active, result, error))
+
+    def on_policy_toggled(self, message: PolicyToggled) -> None:
+        self.toggle_in_flight = False
+        policy = next((item for item in self._policies if item.id == message.policy_id), None)
+        if policy is None:
+            return
+        self.error = message.error
+        self._finish_toggle(policy, message.was_active, message.result)
+
+    def _finish_toggle(self, policy: Policy, active: bool, result: PolicyResult | None) -> None:
         if result is None:
             self.status.set(
                 f"Policy change failed: {self.error}. Check permissions, then press space.",
@@ -1825,6 +2033,9 @@ class PoliciesScreen(AppScreen):
                 self.app, "daemon_default_in_flight", False
             ):
                 self.status.set(_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE, "warn")
+                return
+            if self.toggle_in_flight:
+                self.status.set(_TOGGLE_IN_FLIGHT_MESSAGE, "warn")
                 return
             hour_text, minute_text = value.split(":")
             hour, minute = int(hour_text), int(minute_text)
@@ -2008,6 +2219,7 @@ class LinkModeScreen(ModalScreen[str | None]):
 _DAEMON_DEFAULT_IN_FLIGHT_MESSAGE = (
     "Applying the on-by-default daemon setting; wait a moment, then try again."
 )
+_TOGGLE_IN_FLIGHT_MESSAGE = "A background job change is still applying; wait a moment, then retry."
 
 
 class DaemonDefaultApplied(Message):
@@ -2020,9 +2232,12 @@ class DaemonDefaultApplied(Message):
     may only be touched from the app's own thread.
     """
 
-    def __init__(self, policy_id: str, applied: bool) -> None:
+    def __init__(self, policy_id: str, applied: bool, live: bool | None = None) -> None:
         self.policy_id = policy_id
         self.applied = applied
+        # The policy's own is_active() answer, resolved on the worker thread
+        # (WR-02), or None when there was none to resolve.
+        self.live = live
         super().__init__()
 
 
@@ -2174,6 +2389,7 @@ class UnifiedApp(App[list[str] | None]):
                     # PoliciesScreen reads the same field, so one closure
                     # reaches both screens.
                     disk_pressure=policies.disk_pressure,
+                    competing=policies.competing,
                 ),
                 "uninstall": UninstallScreen(uninstall),
                 "policies": PoliciesScreen(policies),
@@ -2253,12 +2469,23 @@ class UnifiedApp(App[list[str] | None]):
         never swallows or hides a genuine bug.
         """
         applied = False
+        live: bool | None = None
         try:
             if self._daemon_default is not None:
                 applied = self._daemon_default()
+            # Resolved HERE, on the worker thread, never in the handler: the
+            # apply's own finally just invalidated the timer cache, so this
+            # read is guaranteed to spawn `systemctl --user is-active` (WR-02).
+            policies_screen = self._views.get("policies")
+            if self._daemon_default_policy_id is not None and isinstance(
+                policies_screen, PoliciesScreen
+            ):
+                live = policies_screen.live_state(self._daemon_default_policy_id)
         finally:
             if self._daemon_default_policy_id is not None:
-                self.post_message(DaemonDefaultApplied(self._daemon_default_policy_id, applied))
+                self.post_message(
+                    DaemonDefaultApplied(self._daemon_default_policy_id, applied, live)
+                )
 
     def on_daemon_default_applied(self, message: DaemonDefaultApplied) -> None:
         # Cleared FIRST, unconditionally: this is the ONE place the flag is
@@ -2267,7 +2494,7 @@ class UnifiedApp(App[list[str] | None]):
         self.daemon_default_in_flight = False
         policies_screen = self._views.get("policies")
         if isinstance(policies_screen, PoliciesScreen):
-            policies_screen.refresh_daemon_state(message.policy_id, message.applied)
+            policies_screen.refresh_daemon_state(message.policy_id, message.applied, message.live)
 
     @property
     def catalog(self) -> CatalogScreen:

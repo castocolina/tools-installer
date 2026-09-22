@@ -122,6 +122,57 @@ def test_competing_conf_is_warned_about_and_left_on_disk(tmp_path: Path) -> None
     assert foreign.read_text() == "BUN_RUNTIME_TRANSPILER_CACHE_PATH=/tmp/theirs\n"
 
 
+def test_a_competing_conf_that_sorts_later_is_reported_as_overriding_the_redirect(
+    tmp_path: Path,
+) -> None:
+    """WR-05: 60-bun.conf sorts after 51-tools-installer-... and wins; the
+    warning used to claim the opposite."""
+    conf_dir = tmp_path / "environment.d"
+    conf_dir.mkdir()
+    later = conf_dir / "60-bun.conf"
+    later.write_text("BUN_RUNTIME_TRANSPILER_CACHE_PATH=/tmp/theirs\n")
+    result = _policy(tmp_path, platform_os="linux").apply()
+    assert result.warning is not None
+    assert "60-bun.conf" in result.warning
+    assert "overrides this redirect" in result.warning
+    assert "takes precedence" not in result.warning
+    assert later.exists()
+
+
+def test_a_later_sorting_system_conf_is_reported_read_only(tmp_path: Path) -> None:
+    system = tmp_path / "etc-environment.d"
+    system.mkdir()
+    theirs = system / "99-bun.conf"
+    theirs.write_text("BUN_RUNTIME_TRANSPILER_CACHE_PATH=/var/cache/bun\n")
+    policy = cache_redirect_policy(
+        BUN_CACHE_REDIRECT,
+        platform_os="linux",
+        conf_dir=tmp_path / "environment.d",
+        rc_path=tmp_path / ".myshellrc",
+        home=tmp_path / "home",
+        system_conf_dirs=(system,),
+    )
+    result = policy.apply()
+    assert result.warning is not None
+    assert "99-bun.conf" in result.warning
+    assert "overrides this redirect" in result.warning
+    assert theirs.read_text() == "BUN_RUNTIME_TRANSPILER_CACHE_PATH=/var/cache/bun\n"
+
+
+def test_linux_removal_tells_the_user_to_log_out(tmp_path: Path) -> None:
+    """IN-02: the Policies toggle-off returned no hint at all on Linux, so the
+    UI fell back to "open a new shell", which cannot undo an environment.d
+    variable the user manager already exported."""
+    policy = _policy(tmp_path, platform_os="linux")
+    policy.apply()
+    result = policy.remove()
+    assert result.reload_hint is not None
+    assert "Log out" in result.reload_hint
+    macos = _policy(tmp_path, platform_os="macos")
+    macos.apply()
+    assert macos.remove().reload_hint is None  # unchanged on macOS
+
+
 def test_second_apply_is_idempotent_and_warns_nothing(tmp_path: Path) -> None:
     policy = _policy(tmp_path, platform_os="linux")
     policy.apply()

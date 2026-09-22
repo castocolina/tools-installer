@@ -33,6 +33,7 @@ from installer.prompt import Prompter
 from installer.rcclean import find_duplicate_path_lines, strip_lines
 from installer.render import (
     render_audit,
+    render_competing_mechanisms,
     render_dependency_notice,
     render_disk_pressure,
     render_doctor,
@@ -50,7 +51,7 @@ from installer.render import (
     render_verification,
 )
 from installer.resolve import resolve_methods
-from installer.run import Runner, run_command
+from installer.run import CommandError, Runner, run_command
 from installer.selection import category_choices, select_tools, tool_choices
 from installer.session import (
     OnMismatch,
@@ -69,11 +70,13 @@ from installer.shellrc import (
     write_myshellrc,
 )
 from installer.status import is_installed
+from installer.systemd_daemon import CompetingUnit
 from installer.tweaks import TweakBundle
 from installer.uninstall import (
     SweepResult,
     active_policies,
     plan_uninstall,
+    policy_owned,
     remove_paths,
     sweep_policies,
     sweep_tweaks,
@@ -269,6 +272,7 @@ def run_doctor(
     which: Callable[[str], str | None] = shutil.which,
     managed_globals: Callable[[], tuple[str, ...] | None] = pnpm_global_packages,
     disk_pressure: Callable[[], DiskPressure] | None = None,
+    competing: Callable[[], tuple[CompetingUnit, ...]] | None = None,
 ) -> DoctorReport:
     """Audit the PATH (read-only) and render the report. Fixing the PATH
     remains a separate explicit action.
@@ -299,6 +303,13 @@ def run_doctor(
     if disk_pressure is not None:
         with contextlib.suppress(OSError, ValueError):
             render_disk_pressure(disk_pressure(), console)
+    # WR-10: the system-scope competitor disclosure used to exist only inside
+    # the first apply's result, so `make doctor` never mentioned the root-owned
+    # cleanup job running beside this one. Read-only, and guarded like the
+    # probe above: a detection failure must not fail the audit.
+    if competing is not None:
+        with contextlib.suppress(OSError, ValueError, CommandError):
+            render_competing_mechanisms(competing(), console)
     return report
 
 
@@ -452,8 +463,9 @@ def run_uninstall(
     # not be told there is nothing to uninstall.
     if not paths and not shimmed and not tweaks:
         render_uninstall([], console)  # prints the "nothing to uninstall" line
-        # An already-disabled daemon never appears in `tweaks` (active_policies
-        # only includes it when is_active() is True) and needs no confirm --
+        # A daemon with no footprint left never appears in `tweaks`
+        # (active_policies includes it only when policy_owned() is True) and
+        # needs no confirm --
         # nothing destructive happens, only an internal marker resetting so a
         # later reinstall is genuinely fresh (11-REVIEWS.md cycle 3 finding
         # #13's "already disabled, nothing to sweep" case).
@@ -500,6 +512,8 @@ def run_uninstall(
         console.print(
             f"Could not disable: {', '.join(swept.failed)}. Check permissions and re-run."
         )
+    for warning in swept.warnings:
+        console.print(f"Warning: {warning}.")
     # Composition-root-only, and only AFTER the sweep: daemon_policy.remove()
     # itself still calls daemon.record_decided as part of that same sweep
     # call, so clearing the marker BEFORE the sweep would be immediately
@@ -594,11 +608,7 @@ def perform_uninstall(
     if (
         daemon_policy is not None
         and daemon_policy.clear_decided is not None
-        and not (
-            daemon_policy.is_active()
-            if daemon_policy.is_active is not None
-            else daemon_policy.active
-        )
+        and not policy_owned(daemon_policy)
     ):
         daemon_policy.clear_decided()
     return SweepResult()

@@ -121,7 +121,9 @@ _DAEMON_STATE_PATH = _MYSHELLRC
 _LINUX_DAEMON_UNIT_DIR = systemd_daemon.user_unit_dir(Path.home(), os.environ)
 _LINUX_DAEMON_LOG_PATH = Path.home() / ".local" / "state" / "tools-installer" / "prune-daemon.log"
 _LINUX_DAEMON_SCRIPT_PATH = Path(__file__).parent / "scripts" / "prune-tmp-linux.sh"
-_ENVIRONMENT_D_DIR = Path.home() / ".config" / "environment.d"
+# systemd's user environment generator reads $XDG_CONFIG_HOME/environment.d,
+# so this honours XDG_CONFIG_HOME exactly like _LINUX_DAEMON_UNIT_DIR (WR-04).
+_ENVIRONMENT_D_DIR = env_redirect.environment_d_dir(Path.home(), os.environ)
 
 _STYLE = questionary.Style(
     [
@@ -382,6 +384,53 @@ def _timer_state_cache(
     )
 
 
+class _CompetitorProbe:
+    """Zero-argument competing-mechanism probe with the same blocking switch
+    as _DiskProbe (WR-10).
+
+    blocking=True issues the bounded, READ-ONLY `systemctl list-unit-files`
+    queries through the shared memo; blocking=False peeks and never spawns,
+    which is the only verb a Textual render path may use. A cold peek answers
+    "nothing detected", so a screen says nothing rather than guessing. This
+    probe reaches no mutation verb in either scope: a system-scope competitor
+    is disclosed and never touched (D-02a).
+    """
+
+    def __init__(self, cache: systemd_daemon.CompetitorCache | None) -> None:
+        self._cache = cache
+
+    def __call__(self, *, blocking: bool = True) -> tuple[systemd_daemon.CompetingUnit, ...]:
+        cache = self._cache
+        if cache is None:
+            return ()
+        if not blocking:
+            peeked = cache.peek()
+            return () if peeked is None else peeked
+        return cache.read()
+
+
+def _competitor_probe(
+    platform: Platform,
+    *,
+    which: Callable[[str], str | None],
+    read_output: OutputRunner,
+) -> _CompetitorProbe:
+    """THE construction point for a competing-mechanism probe (WR-10).
+
+    Gated on exactly the D-01b condition `_timer_state_cache` uses, so one
+    place in this file decides "this host has no systemd"; on macOS or a
+    Linux host without systemctl the probe is inert and answers ().
+    """
+    if platform.os == "macos" or not systemd_daemon.systemd_available(which=which):
+        return _CompetitorProbe(None)
+    return _CompetitorProbe(
+        systemd_daemon.CompetitorCache(
+            lambda: systemd_daemon.detect_competing(read_output=read_output),
+            ttl=systemd_daemon.COMPETITOR_CACHE_TTL,
+        )
+    )
+
+
 class _DiskProbe:
     """Zero-argument disk probe with a blocking switch for the render path.
 
@@ -418,7 +467,11 @@ class _DiskProbe:
         return cache.read()
 
     def __call__(self, *, blocking: bool = True) -> DiskPressure:
-        tmp = os.environ.get("TMPDIR", "") or str(Path(os.sep) / "tmp")
+        # IN-03: a RELATIVE TMPDIR is ignored rather than measured against
+        # whatever cwd this process happens to have, matching
+        # systemd_daemon.user_unit_dir's own XDG rule.
+        raw_tmp = os.environ.get("TMPDIR", "")
+        tmp = raw_tmp if raw_tmp and Path(raw_tmp).is_absolute() else str(Path(os.sep) / "tmp")
         return diskusage.probe_disk_pressure(
             self._daemon(blocking=blocking),
             self._platform.os != "macos",
@@ -556,12 +609,21 @@ def _build_daemon_policy(
     )
 
 
-def _cache_redirect_policies(platform: Platform) -> tuple[Policy, ...]:
+def _cache_redirect_policies(
+    platform: Platform,
+    *,
+    ensure_sourced_from: tuple[Path, ...] | Callable[[], tuple[Path, ...]] = (),
+) -> tuple[Policy, ...]:
     """One cache-redirect Policy per declared redirect, for this platform.
 
     Built once and shared: the Policies list, the uninstall preview and the
     uninstall sweep must act on the same objects. The per-platform branch
     lives inside ``cache_redirect_policy``.
+
+    ``ensure_sourced_from`` is ``_build_app``'s link-mode-aware closure
+    (WR-07): in split mode no rc file sources ``~/.myshellrc``, so a macOS
+    redirect written only there would never reach Bun. The CLI uninstall
+    route keeps the ``()`` default, because removal needs no sourcing.
     """
     return tuple(
         cache_redirect_policy(
@@ -570,7 +632,8 @@ def _cache_redirect_policies(platform: Platform) -> tuple[Policy, ...]:
             conf_dir=_ENVIRONMENT_D_DIR,
             rc_path=_MYSHELLRC,
             home=Path.home(),
-            ensure_sourced_from=(),
+            ensure_sourced_from=ensure_sourced_from,
+            system_conf_dirs=env_redirect.SYSTEM_ENVIRONMENT_D_DIRS,
         )
         for redirect in env_redirect.REDIRECTS
     )
@@ -661,6 +724,7 @@ def _build_app(
     daemon_default_warnings: DaemonDefaultWarnings | None = None,
     disk_pressure: Callable[..., DiskPressure] | None = None,
     timer_cache: systemd_daemon.TimerStateCache | None = None,
+    competing: Callable[..., tuple[systemd_daemon.CompetingUnit, ...]] | None = None,
 ) -> UnifiedApp:
     # One resolution, not two independent fallbacks: the routes that supply
     # neither argument (_run_doctor's TTY branch, _run_fix, _run_uninstall)
@@ -671,6 +735,10 @@ def _build_app(
         )
     if disk_pressure is None:
         disk_pressure = _disk_pressure_probe(platform, timer_cache=timer_cache)
+    if competing is None:
+        competing = _competitor_probe(
+            platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
+        )
     installed = {tool.id: is_installed(tool) for tool in tools}
     unavailable = {tool.id: not platform_could_support(tool, platform) for tool in tools}
     report, _status, _warning = doctor_data(
@@ -772,7 +840,6 @@ def _build_app(
     # daemon_policy instance -- all three need to read and act on the exact
     # same object.
     daemon = _build_daemon_policy(platform, installed, timer_cache=timer_cache)
-    redirects = _cache_redirect_policies(platform)
 
     # Hoisted above `uninstall_inputs` (Round-1 review HIGH's post-removal
     # invalidation): the Uninstall screen's seam binds to this instance, so
@@ -811,6 +878,8 @@ def _build_app(
         if mode != "split":
             return ()
         return tuple(rc_paths_for_mode(mode, _SHELL))
+
+    redirects = _cache_redirect_policies(platform, ensure_sourced_from=_tweak_ensure_sourced_from)
 
     def _sync_omz_terminals() -> str | None:
         """Apply the shared terminal writer after a committed OMZ plugin edit,
@@ -887,6 +956,7 @@ def _build_app(
         link_mode=_current_link_mode if settings is not None else None,
         set_link_mode=settings.set_link_mode if settings is not None else None,
         disk_pressure=disk_pressure,
+        competing=competing,
     )
 
     def _apply_fix() -> None:
@@ -1181,6 +1251,9 @@ def _run_doctor(console: Console) -> int:
         path_value=os.environ.get("PATH", ""),
         exists=Path.is_dir,
         disk_pressure=_disk_pressure_probe(platform, timer_cache=cache),
+        competing=_competitor_probe(
+            platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
+        ),
     )
     return 0
 
@@ -1286,6 +1359,9 @@ def _verify_and_clean(
         path_value=os.environ.get("PATH", ""),
         exists=Path.is_dir,
         disk_pressure=_disk_pressure_probe(platform, timer_cache=cache),
+        competing=_competitor_probe(
+            platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
+        ),
     )
     managed = set(collect_bin_dirs(tools, platform, _DEFAULT_BIN_DIR))
     confirm = (lambda _message: True) if assume_yes else _ask_confirm
