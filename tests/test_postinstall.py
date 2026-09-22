@@ -312,7 +312,7 @@ def test_resolve_rtk_binary_brew_falls_back_to_userspace_bin_dir_when_no_brew_pr
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(pi.shutil, "which", _fake_which_missing)
-    monkeypatch.setattr(pi, "_BREW_BIN_DIRS", (tmp_path / "nonexistent",))
+    monkeypatch.setattr(pi, "BREW_BIN_DIRS", (tmp_path / "nonexistent",))
     method = Method(kind="brew", params={})
     expected = str(Path.home() / ".local" / "bin" / "rtk")
     result = pi._resolve_rtk_binary(method)  # pyright: ignore[reportPrivateUsage]
@@ -330,7 +330,7 @@ def test_resolve_rtk_binary_brew_finds_a_well_known_prefix_by_disk_presence(
     brew_dir = tmp_path / "brew-prefix"
     brew_dir.mkdir()
     (brew_dir / "rtk").touch()
-    monkeypatch.setattr(pi, "_BREW_BIN_DIRS", (tmp_path / "nonexistent", brew_dir))
+    monkeypatch.setattr(pi, "BREW_BIN_DIRS", (tmp_path / "nonexistent", brew_dir))
     method = Method(kind="brew", params={})
     result = pi._resolve_rtk_binary(method)  # pyright: ignore[reportPrivateUsage]
     assert result == str(brew_dir / "rtk")

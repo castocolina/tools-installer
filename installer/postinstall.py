@@ -175,7 +175,12 @@ _RTK_HOST_CONFIG_DIR: dict[str, str] = {
 # github_release-installed tools -- a brew install never writes there, so
 # falling back to it when shutil.which misses would resolve to a path
 # guaranteed not to contain the binary.
-_BREW_BIN_DIRS: tuple[Path, ...] = (
+#
+# Public (not `_`-prefixed): CR-04 (15.6-REVIEW.md) reuses this exact fix
+# pattern for `installer/terminal_shell.py`'s own brew-installed zsh
+# discovery, which hits the identical chicken-and-egg gap this constant
+# already exists to close for rtk.
+BREW_BIN_DIRS: tuple[Path, ...] = (
     Path("/opt/homebrew/bin"),  # Apple Silicon
     Path("/usr/local/bin"),  # Intel macOS
     Path("/home/linuxbrew/.linuxbrew/bin"),  # Linuxbrew
@@ -192,7 +197,7 @@ def _resolve_rtk_binary(method: Method) -> str:
         found = shutil.which("rtk")
         if found:
             return found
-        for brew_dir in _BREW_BIN_DIRS:
+        for brew_dir in BREW_BIN_DIRS:
             candidate = brew_dir / "rtk"
             if candidate.exists():
                 return str(candidate)
