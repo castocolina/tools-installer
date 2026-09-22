@@ -178,12 +178,22 @@ def render_rc_duplicates(found: dict[Path, list[str]], console: Console) -> None
 
 
 def guidance_text(items: list[Guidance]) -> Text:
-    """Render guidance items as one colored block: title (by severity), meaning, next step."""
+    """Render guidance items as one colored block: title (by severity), meaning, next step.
+
+    D-03's extra visual weight is a render concern, not a fourth Severity
+    member (Severity is consumed structurally as a dict key elsewhere): a
+    bold modifier is prepended to the resolved severity style whenever the
+    item's `emphasis` flag is set. An item that does not set the flag renders
+    with exactly today's plain severity style.
+    """
     text = Text()
     for index, item in enumerate(items):
         if index:
             text.append("\n")
-        text.append(item.title, style=SEVERITY_STYLE[item.severity])
+        style = SEVERITY_STYLE[item.severity]
+        if item.emphasis:
+            style = f"bold {style}"
+        text.append(item.title, style=style)
         text.append(f"\n  {item.meaning}")
         if item.next_step:
             text.append(f"\n  → {item.next_step}")

@@ -3,13 +3,13 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: "15.7"
 current_phase_name: unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr
-current_plan: 03 (Plan 01 complete)
+current_plan: 07 (Plans 01-03 complete)
 status: executing
-stopped_at: Completed 15.7-03-PLAN.md
-last_updated: "2026-09-22T12:26:57.850Z"
+stopped_at: Completed 15.7-02-PLAN.md and 15.7-03-PLAN.md (wave 2, parallel with 07 still running)
+last_updated: "2026-09-22T12:33:14.788Z"
 last_activity: 2026-09-22
-last_activity_desc: "Phase 15.7 Plan 01 complete: Linux systemd background-cleanup daemon, tracer + transactional apply/remove + composition-root reconciliation (D-01)"
-state_head: bc636607b8fab9f784cd71bdd20103976077b5c3
+last_activity_desc: "Phase 15.7 Wave 2: disk-pressure probe + Doctor guidance (D-03, Plan 02) and competing-mechanism detection/takeover (D-02a, Plan 03) both complete"
+state_head: 7414d6143e9e37b3b8b662164aa8b650e897fac8
 progress:
   total_phases: 27
   completed_phases: 17
@@ -104,6 +104,7 @@ Progress: [██████████] 100%
 | Phase 15.6 P05 | 35min | 2 tasks | 5 files |
 | Phase 15.6 P06 | 75min | 3 tasks | 4 files |
 | Phase 15.7 P01 | ~90min (spans a compaction boundary) | 3 tasks | 10 files |
+| Phase 15.7 P02 | 15min | 2 tasks | 6 files |
 | Phase 15.7-unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr P03 | ~ | 2 tasks | 4 files |
 
 ## Accumulated Context
@@ -179,6 +180,8 @@ Recent decisions affecting current work:
 - [15.7-01, 2026-09-22]: _build_daemon_policy's `which` parameter defaults to None and is resolved dynamically inside the function body (not bound at def time), keeping an existing macOS test's monkeypatch technique working unchanged while new Linux call sites can still inject an explicit lookup.
 - [15.7-01, 2026-09-22]: D-01a required no new gating logic — _build_app's existing `daemon is not None and apply_daemon_default` check already fires correctly once _build_daemon_policy returns a non-None Linux Policy; this plan's job was proving that wiring explicitly at the composition root rather than inventing a second allowlist.
 - [15.7-01, 2026-09-22]: ROADMAP SC#2's "invisible/inert on Linux" claim is deliberately superseded by D-01a; the two tests that asserted it were split into a pair (D-01b-gated absent case, D-01a-proving present case) rather than simply widened, so the suite states the new behavior positively.
+- [Phase 15.7]: 15.7-02: disk_pressure_guidance reuses DiskPressure.at_risk directly for severity/emphasis so the D-03c source of truth stays in installer/diskusage.py
+- [Phase 15.7]: 15.7-02: Guidance gained an emphasis boolean field instead of a fourth Severity member, since Severity is a dict key in ui_common.SEVERITY_STYLE and render.py
 - [Phase 15.7]: D-02a scope split enforced structurally: disable_competing raises ValueError before any argv for a system-scope entry
 - [Phase 15.7]: D-02c: a failed user-scope disable keeps this project's own registration and discloses the survivor -- proceed and disclose, never rollback
 
@@ -221,6 +224,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-22T12:26:57.693Z
-Stopped at: Completed 15.7-03-PLAN.md
+Last session: 2026-09-22T12:33:14.633Z
+Stopped at: Completed 15.7-02-PLAN.md and 15.7-03-PLAN.md (wave 2)
 Resume file: None

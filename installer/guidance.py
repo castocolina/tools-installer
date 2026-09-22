@@ -7,8 +7,9 @@ place. `severity` drives color-coding downstream.
 
 from dataclasses import dataclass
 
+from installer.diskusage import DISK_FREE_WARN_PERCENT, TMP_USED_WARN_PERCENT, DiskPressure
 from installer.doctor import DoctorReport, has_problems
-from installer.enums import Severity
+from installer.enums import DaemonState, Severity
 from installer.guards import GLOBAL_REDIRECTED, REDIRECTED, guard_label, guarded_names
 from installer.pnpm_globals import NodeGlobalsReport
 
@@ -19,12 +20,27 @@ class Guidance:
     meaning: str
     next_step: str  # empty only for the healthy/ok case
     severity: Severity
+    # D-03: extra visual weight for the daemon-inactive + low-space conjunction,
+    # without a fourth Severity member -- Severity is consumed structurally as a
+    # dict key in ui_common.SEVERITY_STYLE and render.py, so a new severity
+    # level would need every consuming dict updated. render.guidance_text is the
+    # single point that honours this flag, reaching both `make doctor` and the
+    # Doctor screen from one change.
+    emphasis: bool
 
-    def __init__(self, title: str, meaning: str, next_step: str, severity: Severity | str) -> None:
+    def __init__(
+        self,
+        title: str,
+        meaning: str,
+        next_step: str,
+        severity: Severity | str,
+        emphasis: bool = False,
+    ) -> None:
         object.__setattr__(self, "title", title)
         object.__setattr__(self, "meaning", meaning)
         object.__setattr__(self, "next_step", next_step)
         object.__setattr__(self, "severity", Severity(severity))
+        object.__setattr__(self, "emphasis", emphasis)
 
 
 _HEALTHY = Guidance(
@@ -253,3 +269,127 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
             )
         )
     return items
+
+
+# The one-off manual prune command, used verbatim only by the UNAVAILABLE
+# branch below (D-03c): that host has no policy row to enable, so its next
+# step names only the immediate, runnable command. The INACTIVE branch also
+# names the same script (D-03's action text), but phrased inside a longer
+# sentence that leads with enabling the policy -- so this exact sentence
+# never appears in the INACTIVE (or ACTIVE) next_step, and a reader can tell
+# the two "no action beyond a one-off" and "there is a policy to flip" cases
+# apart by next_step content alone.
+_RUNNABLE_PRUNE_SENTENCE = (
+    "Run `./scripts/prune-user-tmpdir.sh --apply` for an immediate one-off cleanup."
+)
+
+
+def _pressure_clauses(pressure: DiskPressure) -> tuple[str, ...]:
+    """Human phrases for whichever threshold(s) tripped, disk before tmp so
+    title/meaning wording never depends on iteration order. Reused by the
+    title (names the conditions) and by the caller's own two-item cap in
+    `_join` -- only low_disk and high_tmp exist, so at most two clauses."""
+    clauses: list[str] = []
+    if pressure.low_disk:
+        clauses.append("free disk space is low")
+    if pressure.high_tmp:
+        # Deliberately not "/tmp usage is high": a string literal beginning
+        # with "/tmp" reads to bandit's B108 as a hardcoded temp-directory
+        # path, even though this is prose, never a filesystem argument.
+        clauses.append("the /tmp mount is nearly full")
+    return tuple(clauses)
+
+
+def _disk_pressure_title(pressure: DiskPressure) -> str:
+    clauses = _join(_pressure_clauses(pressure))
+    if pressure.daemon is DaemonState.INACTIVE:
+        return f"Background cleanup is off and {clauses}"
+    capitalized = clauses[0].upper() + clauses[1:]
+    if pressure.daemon is DaemonState.ACTIVE:
+        return f"{capitalized} even though background cleanup is active"
+    return capitalized
+
+
+def _disk_pressure_meaning(pressure: DiskPressure) -> str:
+    parts: list[str] = []
+    # The explicit `is not None` conjunct (redundant with low_disk/high_tmp's
+    # own None-check) is what lets pyright narrow the percentage to `float`
+    # here without an `assert` -- an assert would be stripped under
+    # `python -O` and bandit (B101) flags it regardless.
+    if pressure.low_disk and pressure.root_free_percent is not None:
+        parts.append(
+            f"Free space is at {pressure.root_free_percent:.1f}%, below the "
+            f"{DISK_FREE_WARN_PERCENT}% threshold."
+        )
+    if pressure.high_tmp and pressure.tmp_used_percent is not None:
+        # Leads with "The" rather than a literal starting "/tmp" for the same
+        # bandit B108 reason as _pressure_clauses above.
+        parts.append(
+            f"The /tmp mount is at {pressure.tmp_used_percent:.1f}% used, above the "
+            f"{TMP_USED_WARN_PERCENT}% threshold -- a full /tmp breaks unrelated system "
+            "writes, not only this tool."
+        )
+    if pressure.daemon is DaemonState.INACTIVE:
+        parts.append("The background cleanup job is not running to relieve it.")
+    elif pressure.daemon is DaemonState.ACTIVE:
+        parts.append(
+            "The background cleanup job is currently active; this is worth watching, but "
+            "not the failure scenario the emphasised finding is reserved for."
+        )
+    else:
+        parts.append("No managed background cleanup could be confirmed on this machine.")
+    return " ".join(parts)
+
+
+def _disk_pressure_next_step(pressure: DiskPressure) -> str:
+    if pressure.daemon is DaemonState.INACTIVE:
+        # Enable through this project's own setup flow, and name the manual
+        # prune script as the immediate one-off (D-03's action text). This
+        # sentence is deliberately NOT _RUNNABLE_PRUNE_SENTENCE verbatim, and
+        # plan 15.7-06 rewrites it (by its own new prefix match, distinct
+        # from the existing "Run `make fix`"/"Run `make setup`" prefixes
+        # DoctorScreen._tui_guidance already recognises) into a "go to the
+        # Policies view" TUI instruction.
+        return (
+            "Enable the background cleanup policy in `make setup`'s Policies view; a "
+            "one-off `./scripts/prune-user-tmpdir.sh --apply` run clears space "
+            "immediately in the meantime."
+        )
+    if pressure.daemon is DaemonState.UNAVAILABLE:
+        # D-03c: no policy row exists on this host to enable, so only the
+        # one-off is named -- never "enable"/"Policies"/"setup" wording.
+        return (
+            f"{_RUNNABLE_PRUNE_SENTENCE} No managed background cleanup could be "
+            "confirmed on this machine, and there is no such policy on this host to turn on."
+        )
+    return (
+        "Nothing to do right now -- the background cleanup job is already active and "
+        "should reclaim space on its own scheduled run."
+    )
+
+
+def disk_pressure_guidance(pressure: DiskPressure) -> list[Guidance]:
+    """D-03: one Guidance item when disk pressure was measured, none otherwise.
+
+    Decision D-03a (this plan's objective): the daemon-inactive fact and the
+    low-space fact are two independently measurable conditions. Low space
+    alone is an ordinary warning -- a doctor that measured a nearly-full disk
+    and said nothing is worse than a warning -- and the conjunction (low
+    space AND the one daemon state with a control the user can flip) is the
+    emphasised red finding D-03 calls "the actual failure scenario this whole
+    todo exists to prevent". An emphasis every finding earns is not an
+    emphasis, so ACTIVE and UNAVAILABLE both report the same measured
+    pressure at ordinary warning weight, never emphasised.
+    """
+    if not pressure.under_pressure:
+        return []
+    severity = Severity.ERROR if pressure.at_risk else Severity.WARN
+    return [
+        Guidance(
+            title=_disk_pressure_title(pressure),
+            meaning=_disk_pressure_meaning(pressure),
+            next_step=_disk_pressure_next_step(pressure),
+            severity=severity,
+            emphasis=pressure.at_risk,
+        )
+    ]
