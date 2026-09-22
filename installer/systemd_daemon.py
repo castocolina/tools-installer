@@ -732,8 +732,10 @@ def disable_competing(
     every argv this function can emit is a user-scope `systemctl` call.
 
     Issues one `systemctl --user disable --now <name>` call per entry,
-    collecting a per-entry CommandError into the failed list instead of
-    aborting the rest (D-02c) -- never a file-removing verb, never an unlink
+    collecting a per-entry CommandError OR OSError into the failed list
+    instead of aborting the rest (D-02c, IN-07: an OSError partway through
+    the loop used to escape and take the names already disabled, plus the
+    system-scope disclosure, down with it) -- never a file-removing verb, never an unlink
     (D-02b): the competitor's unit files belong to whoever installed them,
     matching this project's own ownership discipline
     (daemon.install_wrapper/remove_wrapper/wrapper_present's sentinel-checked
@@ -750,7 +752,7 @@ def disable_competing(
     for unit in units:
         try:
             run(["systemctl", "--user", "disable", "--now", unit.name])
-        except CommandError:
+        except (CommandError, OSError):
             failed.append(unit.name)
         else:
             disabled.append(unit.name)

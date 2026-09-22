@@ -1212,3 +1212,24 @@ def test_takeover_disclosure_names_each_unit_and_its_re_enable_command() -> None
     assert "systemctl --user enable --now a.timer; systemctl --user enable --now b.service" in text
     assert "sudo" not in text
     assert "removed" not in text and "deleted" not in text  # D-02b: disabled, never deleted
+
+
+def test_disable_competing_counts_an_oserror_as_failed_and_keeps_going() -> None:
+    """IN-07: an OSError partway through the loop escaped, discarding the
+    names already disabled and the system-scope disclosure with them."""
+    units = (
+        systemd_daemon.CompetingUnit(
+            name="a.timer", scope=systemd_daemon.SCOPE_USER, state="enabled"
+        ),
+        systemd_daemon.CompetingUnit(
+            name="b.timer", scope=systemd_daemon.SCOPE_USER, state="enabled"
+        ),
+    )
+
+    def run(cmd: list[str]) -> None:
+        if cmd[-1] == "a.timer":
+            raise OSError("dbus socket vanished")
+
+    disabled, failed = systemd_daemon.disable_competing(units, run=run)
+    assert disabled == ("b.timer",)
+    assert failed == ("a.timer",)

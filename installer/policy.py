@@ -1004,48 +1004,63 @@ def linux_daemon_policy(
         Returns (layer, warning), both None when nothing was detected -- the
         no-competitor case must keep producing exactly the layers/warning it
         produced before this feature existed. Every branch inside is guarded
-        against CommandError, OSError and ValueError (the structural refusal
-        disable_competing raises for a system-scope entry, which this
-        function never hands it, but is caught anyway since it can only fire
-        on a programming error and must be reported rather than crash a live
-        policy apply) -- a bookkeeping-tier detection/takeover failure must
-        never undo an already-working registration (T-15.7-13).
+        -- the detection half against CommandError, OSError and ValueError,
+        the mutation half per unit inside disable_competing plus the
+        structural ValueError refusal here -- so a bookkeeping-tier
+        detection/takeover failure never undoes an already-working
+        registration (T-15.7-13). The guards are deliberately NOT one outer
+        try: everything already learned (which units were disabled, and the
+        system-scope disclosure that needed no mutation at all) must survive
+        a failure in the step after it (IN-07).
         """
         try:
             competitors = systemd_daemon.detect_competing(read_output=read_output)
-            if not competitors:
-                return None, None
-            user_scope = [c for c in competitors if c.scope == systemd_daemon.SCOPE_USER]
-            disabled, failed = (
-                systemd_daemon.disable_competing(user_scope, run=run) if user_scope else ((), ())
-            )
-            detail_parts: list[str] = []
-            if disabled:
-                detail_parts.append(f"disabled: {', '.join(disabled)}")
-            if failed:
-                detail_parts.append(f"disable failed, still running: {', '.join(failed)}")
-            system_names = sorted(
-                {c.name for c in competitors if c.scope == systemd_daemon.SCOPE_SYSTEM}
-            )
-            if system_names:
-                detail_parts.append(f"system-scope, left running: {', '.join(system_names)}")
-            layer = PolicyLayer("Competing mechanism", "; ".join(detail_parts))
-            # CR-02: a SUCCESSFUL takeover is a disclosure too. The layers
-            # never reach ensure_daemon_default's on_warning sink (the one
-            # apply path with no human watching), so the warning must say
-            # which unit was disabled and how to re-enable it.
-            warning_parts = [
-                sentence
-                for sentence in (
-                    systemd_daemon.takeover_disclosure(disabled),
-                    systemd_daemon.system_scope_warning(competitors),
-                    systemd_daemon.user_scope_failure_warning(failed),
-                )
-                if sentence
-            ]
-            return layer, (" ".join(warning_parts) if warning_parts else None)
         except (CommandError, OSError, ValueError):
             return None, None
+        if not competitors:
+            return None, None
+        # IN-07: resolved BEFORE the mutation half, and never inside its
+        # guard: a takeover failure must not take the system-scope
+        # disclosure (which needed no mutation at all) down with it.
+        system_warning = systemd_daemon.system_scope_warning(competitors)
+        system_names = sorted(
+            {c.name for c in competitors if c.scope == systemd_daemon.SCOPE_SYSTEM}
+        )
+        user_scope = [c for c in competitors if c.scope == systemd_daemon.SCOPE_USER]
+        disabled: tuple[str, ...] = ()
+        failed: tuple[str, ...] = ()
+        if user_scope:
+            try:
+                disabled, failed = systemd_daemon.disable_competing(user_scope, run=run)
+            except ValueError:
+                # The structural refusal disable_competing raises for a
+                # system-scope entry, which this function never hands it. It
+                # can only fire on a programming error, and it fires BEFORE
+                # any argv, so nothing was disabled: report every unit as
+                # still running rather than crashing a live policy apply.
+                failed = tuple(unit.name for unit in user_scope)
+        detail_parts: list[str] = []
+        if disabled:
+            detail_parts.append(f"disabled: {', '.join(disabled)}")
+        if failed:
+            detail_parts.append(f"disable failed, still running: {', '.join(failed)}")
+        if system_names:
+            detail_parts.append(f"system-scope, left running: {', '.join(system_names)}")
+        layer = PolicyLayer("Competing mechanism", "; ".join(detail_parts))
+        # CR-02: a SUCCESSFUL takeover is a disclosure too. The layers
+        # never reach ensure_daemon_default's on_warning sink (the one
+        # apply path with no human watching), so the warning must say
+        # which unit was disabled and how to re-enable it.
+        warning_parts = [
+            sentence
+            for sentence in (
+                systemd_daemon.takeover_disclosure(disabled),
+                system_warning,
+                systemd_daemon.user_scope_failure_warning(failed),
+            )
+            if sentence
+        ]
+        return layer, (" ".join(warning_parts) if warning_parts else None)
 
     def _apply() -> PolicyResult:
         # invalidate() is called from a `finally` at the bottom of this

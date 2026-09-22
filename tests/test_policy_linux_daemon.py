@@ -706,6 +706,36 @@ def test_apply_two_user_scope_competitors_partial_failure_is_never_reported_as_c
     )
 
 
+def test_apply_keeps_the_system_scope_disclosure_when_the_user_scope_disable_raises(
+    tmp_path: Path,
+) -> None:
+    """IN-07: an OSError from the takeover used to reach the outer guard,
+    which returned (None, None) and dropped the system-scope disclosure the
+    user still needs."""
+    paths = _make_paths(tmp_path)
+
+    class _OSErrorOnDisable(_FakeRun):
+        def __call__(self, cmd: list[str]) -> None:
+            if cmd[2] == "disable":
+                raise OSError("dbus socket vanished")
+            super().__call__(cmd)
+
+    read_output = _DetectionReadOutput(
+        user_listing=_competing_listing((_COMPETING_TIMER, "enabled")),
+        system_listing=_competing_listing((_COMPETING_SERVICE, "enabled")),
+    )
+    policy = _build(paths, run=_OSErrorOnDisable(), read_output=read_output)
+    result = policy.apply()
+    assert result.warning is not None
+    assert f"sudo systemctl stop {_COMPETING_SERVICE}" in result.warning  # system scope, disclosed
+    assert f"systemctl --user disable --now {_COMPETING_TIMER}" in result.warning  # still running
+    assert result.layers[-1] == PolicyLayer(
+        "Competing mechanism",
+        f"disable failed, still running: {_COMPETING_TIMER}; "
+        f"system-scope, left running: {_COMPETING_SERVICE}",
+    )
+
+
 def test_apply_detection_probe_raising_behaves_identically_to_no_competitor(
     tmp_path: Path,
 ) -> None:
