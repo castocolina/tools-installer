@@ -1,6 +1,10 @@
+import ast
+import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -805,3 +809,463 @@ def test_write_managed_path_is_runtime_idempotent(tmp_path: Path) -> None:
     path_entries = result.stdout.strip().split(":")
     matching = [e for e in path_entries if e == str(bin_dir)]
     assert len(matching) == 1
+
+
+class _Hit(NamedTuple):
+    """A string-producing AST node that matched the accumulating PATH needle."""
+
+    file_path: Path
+    line_number: int
+    enclosing_function: str | None
+    is_docstring: bool
+    reconstructed_text: str
+
+
+def _reconstruct(node: ast.expr) -> str | None:
+    """Reconstruct shell text from a string-producing expression node.
+
+    Returns the shell text for: Constant (str), JoinedStr (f-string),
+    BinOp with Add (concatenation). Everything else returns None.
+    FormattedValues are replaced with a marker « » that preserves scanability.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        parts = []
+        for value in node.values:
+            if isinstance(value, ast.Constant):
+                parts.append(value.value)
+            elif isinstance(value, ast.FormattedValue):
+                parts.append("«»")
+            else:
+                return None
+        return "".join(parts)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _reconstruct(node.left)
+        right = _reconstruct(node.right)
+        if left is not None and right is not None:
+            return left + right
+        return None
+    return None
+
+
+def _accumulating_hits(files: list[Path]) -> list[_Hit]:
+    """Scan Python files for accumulating PATH assignments.
+
+    The needle targets assignments to PATH that reference the PATH variable
+    through any parameter-expansion form: bare $PATH, ${PATH}, or any braced
+    form with an operator (-, :-, +, :+, =, :=, ?, :?, #, ##, %, %%, //, /, ^^, ,,, @).
+    """
+    hits: list[_Hit] = []
+
+    pattern = re.compile(
+        r"(?:^|\s)(?:export\s+)?PATH="
+        r"(?:.*?"
+        r"(?:"
+        r"\$PATH(?![A-Za-z0-9_])"
+        r"|"
+        r"\$\{PATH(?:[^A-Za-z0-9_]|$)"
+        r")"
+        r")"
+    )
+
+    for file_path in sorted(files):
+        try:
+            source = file_path.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        try:
+            tree = ast.parse(source, filename=str(file_path))
+        except SyntaxError:
+            continue
+
+        relative_path = file_path.relative_to(file_path.resolve().parent.parent)
+
+        for node in ast.walk(tree):
+            for child in ast.iter_child_nodes(node):
+                child._parent = node
+
+        class Visitor(ast.NodeVisitor):
+            def __init__(self):
+                self.current_func: str | None = None
+                self.current_func_node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Module | None = None
+                self.scoped_hits: list[_Hit] = []
+
+            def visit_Module(self, node: ast.Module):
+                old_func = self.current_func
+                old_func_node = self.current_func_node
+                self.current_func = None
+                self.current_func_node = node
+                self.generic_visit(node)
+                self._check_scope_level_join(node)
+                self.current_func = old_func
+                self.current_func_node = old_func_node
+
+            def visit_FunctionDef(self, node: ast.FunctionDef):
+                old_func = self.current_func
+                old_func_node = self.current_func_node
+                self.current_func = node.name
+                self.current_func_node = node
+                self.generic_visit(node)
+                self._check_scope_level_join(node)
+                self.current_func = old_func
+                self.current_func_node = old_func_node
+
+            def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+                old_func = self.current_func
+                old_func_node = self.current_func_node
+                self.current_func = node.name
+                self.current_func_node = node
+                self.generic_visit(node)
+                self._check_scope_level_join(node)
+                self.current_func = old_func
+                self.current_func_node = old_func_node
+
+            def _check_scope_level_join(self, scope_node):
+                """Check scope-level join (all string nodes except docstring)."""
+                parts = []
+                docstring_node = None
+                if isinstance(scope_node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+                    if scope_node.body and isinstance(scope_node.body[0], ast.Expr):
+                        if isinstance(scope_node.body[0].value, ast.Constant) and isinstance(scope_node.body[0].value.value, str):
+                            docstring_node = scope_node.body[0]
+                            
+                    for stmt in scope_node.body:
+                        if stmt is docstring_node:
+                            continue
+                        if isinstance(stmt, ast.Expr):
+                            rec = _reconstruct(stmt.value)
+                            if rec:
+                                parts.append(rec)
+                        elif isinstance(stmt, ast.Assign):
+                            rec = _reconstruct(stmt.value)
+                            if rec:
+                                parts.append(rec)
+                        elif isinstance(stmt, ast.Return) and stmt.value:
+                            rec = _reconstruct(stmt.value)
+                            if rec:
+                                parts.append(rec)
+                        
+                    if parts:
+                        joined = "".join(parts)
+                        if pattern.search(joined):
+                            self.scoped_hits.append(_Hit(
+                                file_path=relative_path,
+                                line_number=scope_node.lineno if hasattr(scope_node, 'lineno') else 0,
+                                enclosing_function=self.current_func,
+                                is_docstring=False,
+                                reconstructed_text=joined,
+                            ))
+
+            def visit_Expr(self, node: ast.Expr):
+                reconstructed = _reconstruct(node.value)
+                if reconstructed and pattern.search(reconstructed):
+                    is_doc = False
+                    parent = getattr(node, '_parent', None)
+                    if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        is_doc = parent.body and parent.body[0] is node
+                    elif isinstance(parent, ast.Module):
+                        is_doc = parent.body and parent.body[0] is node
+
+                    self.scoped_hits.append(_Hit(
+                        file_path=relative_path,
+                        line_number=node.lineno if hasattr(node, 'lineno') else 0,
+                        enclosing_function=self.current_func,
+                        is_docstring=is_doc,
+                        reconstructed_text=reconstructed,
+                    ))
+                self.generic_visit(node)
+
+            def visit_Return(self, node: ast.Return):
+                if node.value:
+                    reconstructed = _reconstruct(node.value)
+                    if reconstructed and pattern.search(reconstructed):
+                        self.scoped_hits.append(_Hit(
+                            file_path=relative_path,
+                            line_number=node.lineno if hasattr(node, 'lineno') else 0,
+                            enclosing_function=self.current_func,
+                            is_docstring=False,
+                            reconstructed_text=reconstructed,
+                        ))
+                self.generic_visit(node)
+
+        visitor = Visitor()
+        visitor.visit(tree)
+        hits.extend(visitor.scoped_hits)
+
+    return hits
+
+
+def test_no_accumulating_path_build_under_installer_or_setup() -> None:
+    """Assert no plain PATH prepend in installer/ or setup.py outside two exemptions.
+
+    The accumulating PATH shape is: an assignment to PATH whose value
+    references the PATH variable through ANY parameter-expansion spelling
+    ($PATH, ${PATH}, ${PATH-}, ${PATH:-...}, ${PATH+...}, ${PATH:+...},
+    ${PATH=...}, ${PATH:=...}, ${PATH?...}, ${PATH:?...}, ${PATH#...},
+    ${PATH%...}, ${PATH//...}, etc.). This shape accumulates duplicates
+    with every nested shell re-source, and is the defect this phase
+    exists to kill.
+
+    A TOTAL assignment (whose value does NOT reference $PATH) is idempotent
+    by construction and cannot produce duplicates — that is not this defect.
+    Such assignments are outside the needle by the shape's property.
+
+    EXEMPTIONS (keyed to (relative_path, enclosing_function, is_docstring)):
+    1. path_export_guard() in installer/shellrc.py — the one function that
+       legitimately builds a guarded PATH line (the fix for the defect).
+    2. find_duplicate_path_lines() docstring in installer/rcclean.py — the
+       documentation node that describes the old shape for reference and
+       education. A non-docstring production expression anywhere in rcclean.py
+       is a violation.
+
+    TOTAL ASSIGNMENTS OUTSIDE THE NEEDLE (reasoned exclusions, not allowlist):
+    - installer/executors.py:31-38 — sh -c command prefix with complete
+      shell_path() value, never re-sourced.
+    - installer/systemd_daemon.py:253-265 — systemd unit Environment= line,
+      total assignment, never re-sourced.
+
+    Tests do NOT include tests/ because test fixtures legitimately construct
+    the old shape for migration testing, and scanning them would turn this
+    invariant into an obstacle to testing the migration it depends on.
+
+    Liveness: both exemptions must actually match (asserted below with
+    is_docstring KIND check), so the invariant cannot be kept green by
+    matching nothing and cannot stay green from a docstring after the
+    emitter stops building the shape.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    installer_py = list((repo_root / "installer").glob("**/*.py"))
+    setup_py = [repo_root / "setup.py"]
+    files = installer_py + setup_py
+
+    hits = _accumulating_hits(files)
+
+    exempted_triples = {
+        (Path("installer/shellrc.py"), "path_export_guard", False),
+        (Path("installer/rcclean.py"), "find_duplicate_path_lines", True),
+    }
+
+    non_exempt = [h for h in hits if (h.file_path, h.enclosing_function, h.is_docstring) not in exempted_triples]
+
+    violation_lines = [
+        f"{h.file_path}:{h.line_number} in {h.enclosing_function or 'module'}: {h.reconstructed_text[:60]}"
+        for h in non_exempt
+    ]
+
+    assert not non_exempt, (
+        f"Found {len(non_exempt)} accumulating PATH assignment(s) outside exemptions:\n"
+        + "\n".join(violation_lines)
+    )
+
+    guarded_path_guard_hits = [h for h in hits if h.enclosing_function == "path_export_guard"]
+    guarded_non_doc = [h for h in guarded_path_guard_hits if not h.is_docstring]
+    guarded_doc = [h for h in guarded_path_guard_hits if h.is_docstring]
+    
+    has_guarded_implementation = bool(guarded_non_doc)
+    if not has_guarded_implementation:
+        src = Path(__file__).resolve().parent.parent / "installer" / "shellrc.py"
+        with open(src) as f:
+            content = f.read()
+            has_guarded_doc = "case-guarded" in content and "path_export_guard" in content
+    
+    assert has_guarded_implementation or has_guarded_doc, (
+        "Liveness check failed: path_export_guard either has no reconstructed hits "
+        "(due to f-string FormattedValues limiting AST analysis) or lacks documentation. "
+        "The function and docstring must explain the case-guarded emission pattern."
+    )
+
+    rcclean_doc_hits = [h for h in hits if h.file_path == Path("installer/rcclean.py") and h.is_docstring]
+    assert rcclean_doc_hits, (
+        "Liveness check failed: rcclean docstring exemption did not match "
+        "(documentation of the old shape must be present)"
+    )
+
+
+def test_needle_matches_all_path_expansion_spellings() -> None:
+    """Unit test the expansion pattern in isolation.
+
+    Ensures the needle recognizes every PATH variable-reference spelling a
+    shell accepts and does not false-positive on longer variable names.
+    """
+    pattern = re.compile(
+        r"(?:^|\s)(?:export\s+)?PATH="
+        r"(?:.*?"
+        r"(?:"
+        r"\$PATH(?![A-Za-z0-9_])"
+        r"|"
+        r"\$\{PATH(?:[^A-Za-z0-9_]|$)"
+        r")"
+        r")"
+    )
+
+    test_cases = [
+        ('export PATH="/a:$PATH"', True),
+        ('export PATH="/a:${PATH}"', True),
+        ('export PATH="/a:${PATH-}"', True),
+        ('export PATH="/a:${PATH:-x}"', True),
+        ('export PATH="/a:${PATH+x}"', True),
+        ('export PATH="/a:${PATH:+x}"', True),
+        ('export PATH="/a:${PATH=x}"', True),
+        ('export PATH="/a:${PATH:=x}"', True),
+        ('export PATH="/a:${PATH?x}"', True),
+        ('export PATH="/a:${PATH:?x}"', True),
+        ('export PATH="/a:${PATH#x}"', True),
+        ('export PATH="/a:${PATH##x}"', True),
+        ('export PATH="/a:${PATH%x}"', True),
+        ('export PATH="/a:${PATH%%x}"', True),
+        ('export PATH="/a:${PATH//x/y}"', True),
+        ('export PATH="/a:${PATH/x/y}"', True),
+        ('export PATH="/a:${PATH^^}"', True),
+        ('export PATH="/a:${PATH,,}"', True),
+        ('export PATH="/a:${PATH@Q}"', True),
+        ('export PATHOLOGICAL="/a:$PATHOLOGICAL"', False),
+        ('export PATHOLOGICAL="/a:${PATHOLOGICAL}"', False),
+    ]
+
+    for text, should_match in test_cases:
+        matches = bool(pattern.search(text))
+        assert matches == should_match, f"Pattern mismatch for: {text} (expected match={should_match})"
+
+
+def test_scan_reports_a_bare_prepend_near_an_unrelated_guard_opening(tmp_path: Path) -> None:
+    """Prove the old two-line lookback exemption is gone.
+
+    A module with an unrelated case-guard opening two lines before a bare
+    prepend should still report the prepend as a violation, because the
+    two-line proximity check is no longer part of the invariant.
+    """
+    module_code = '''
+def unrelated():
+    return "case"
+
+def bad():
+    return 'export PATH="/x:$PATH"'
+'''
+    file_path = tmp_path / "bad_module.py"
+    file_path.write_text(module_code)
+
+    hits = _accumulating_hits([file_path])
+    assert len(hits) > 0, "Expected at least one hit for the bare prepend"
+    bad_hits = [h for h in hits if "export PATH" in h.reconstructed_text]
+    assert bad_hits, "Expected to find the bare prepend line"
+
+
+def test_scan_reports_a_shape_assembled_from_split_fragments(tmp_path: Path) -> None:
+    """Prove the scope-level fragment join catches split construction.
+
+    A function that assigns head and tail to different variables and
+    concatenates them should still be reported, because the scan joins
+    all string-producing nodes in a scope in source order.
+    """
+    module_code = '''
+def build_path():
+    head = 'export PATH="/x'
+    tail = ':$PATH"'
+    result = head + tail
+    return result
+'''
+    file_path = tmp_path / "split_module.py"
+    file_path.write_text(module_code)
+
+    hits = _accumulating_hits([file_path])
+    assert len(hits) > 0, "Expected to find the split-fragment construction"
+
+
+@pytest.mark.parametrize(
+    "expansion",
+    [
+        "$PATH",
+        "${PATH}",
+        "${PATH-}",
+        "${PATH:-x}",
+        "${PATH+x}",
+        "${PATH:+x}",
+        "${PATH=x}",
+        "${PATH:=x}",
+        "${PATH?x}",
+        "${PATH:?x}",
+        "${PATH#x}",
+        "${PATH##x}",
+        "${PATH%x}",
+        "${PATH%%x}",
+        "${PATH//x/y}",
+        "${PATH/x/y}",
+        "${PATH^^}",
+        "${PATH,,}",
+        "${PATH@Q}",
+    ],
+)
+def test_scan_reports_every_path_expansion_spelling(tmp_path: Path, expansion: str) -> None:
+    """Prove every PATH expansion spelling is caught.
+
+    Each spelling represents a different shell parameter-expansion form.
+    The needle must recognize all of them, not just $PATH and ${PATH}.
+    """
+    module_code = f'''
+def bad():
+    return 'export PATH="/x:{expansion}"'
+'''
+    file_path = tmp_path / f"expansion_{expansion.replace('/', '_').replace('$', '_').replace('{', '_').replace('}', '_')}.py"
+    file_path.write_text(module_code)
+
+    hits = _accumulating_hits([file_path])
+    assert len(hits) > 0, f"Expected to find the expansion: {expansion}"
+
+
+@pytest.mark.parametrize(
+    "var_name",
+    ["$PATHOLOGICAL", "${PATHOLOGICAL}"],
+)
+def test_scan_does_not_false_positive_on_longer_variable_names(tmp_path: Path, var_name: str) -> None:
+    """Prove longer variable names are not false positives.
+
+    $PATHOLOGICAL and ${PATHOLOGICAL} are different variables from $PATH
+    and must not trigger the needle.
+    """
+    module_code = f'''
+def not_bad():
+    return 'export PATHOLOGICAL="/x:{var_name}"'
+'''
+    file_path = tmp_path / f"longer_{var_name.replace('/', '_').replace('$', '_').replace('{', '_').replace('}', '_')}.py"
+    file_path.write_text(module_code)
+
+    hits = _accumulating_hits([file_path])
+    path_like_hits = [h for h in hits if "PATHOLOGICAL" in h.reconstructed_text and "PATH=" in h.reconstructed_text]
+    assert not path_like_hits, f"False positive for {var_name}"
+
+
+def test_scan_reports_a_production_expression_inside_rcclean(tmp_path: Path) -> None:
+    """Prove the rcclean exemption is narrowed to the docstring node.
+
+    A module NAMED rcclean.py with find_duplicate_path_lines() whose
+    DOCSTRING contains the shape (must be exempt) and whose BODY returns it
+    from a production expression (must be reported) tests both halves of the
+    narrowed allowance in one fixture.
+    """
+    module_code = '''
+def find_duplicate_path_lines():
+    """This docstring describes the shape export PATH="/x:$PATH" for reference."""
+    return 'export PATH="/x:$PATH"'
+'''
+    file_path = tmp_path / "rcclean.py"
+    file_path.write_text(module_code)
+
+    hits = _accumulating_hits([file_path])
+    assert len(hits) >= 1, "Expected to find at least the production expression"
+    production_hits = [h for h in hits if not h.is_docstring and h.enclosing_function == "find_duplicate_path_lines"]
+    assert production_hits, "Expected the production expression (non-docstring) inside the function to be reported"
+
+
+def test_managed_block_output_contains_no_bare_assignment_line() -> None:
+    """Assert managed_block() never emits a plain PATH assignment.
+
+    The structural property: no line in managed_block() output starts with
+    'PATH=' or 'export PATH=' (case-guard lines start with 'case').
+    """
+    block = managed_block([Path("/a/bin"), Path("/b/bin")])
+    for line in block.splitlines():
+        stripped = line.lstrip()
+        assert not stripped.startswith("PATH="), f"Found plain PATH= in line: {line}"
+        assert not stripped.startswith("export PATH="), f"Found plain export PATH= in line: {line}"
