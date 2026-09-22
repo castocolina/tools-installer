@@ -242,6 +242,41 @@ def test_refuses_root_via_not_a_directory_quirk(tmp_path: Path) -> None:
     assert "deleted" not in result.stdout
 
 
+@pytest.mark.parametrize("shape", ["dot", "trailing-slash", "dotdot", "symlink"])
+def test_refuses_non_canonical_spellings_of_home(tmp_path: Path, shape: str) -> None:
+    """WR-09: the guard was a literal string compare, so `$HOME/.` walked
+    through it and `rm -rf`'d matching entries inside HOME."""
+    home = tmp_path / "home"
+    home.mkdir()
+    victim_dir = home / "gitid-stage-important"
+    _touch_dir(victim_dir, age_hours=24 * 10)
+    _touch_file(victim_dir / "payload.txt", age_hours=24 * 10)
+    victim_file = home / "orphan.node"
+    _touch_file(victim_file, age_hours=24 * 10)
+
+    if shape == "dot":
+        target = f"{home}/."
+    elif shape == "trailing-slash":
+        target = f"{home}/"
+    elif shape == "dotdot":
+        target = f"{home}/../{home.name}"
+    else:
+        link = tmp_path / "home-link"
+        link.symlink_to(home)
+        target = str(link)
+
+    result = _run("--tmpdir", target, "--apply", home=home)
+
+    assert result.returncode != 0
+    # The wrapper strips one trailing slash before the guard runs, so the
+    # message quotes that spelling rather than the raw argument.
+    assert "refusing broad path" in result.stderr
+    assert "deleted" not in result.stdout
+    assert victim_dir.is_dir()
+    assert (victim_dir / "payload.txt").exists()
+    assert victim_file.exists()
+
+
 def test_tmpdir_not_a_directory(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
