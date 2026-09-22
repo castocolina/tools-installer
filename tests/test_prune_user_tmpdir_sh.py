@@ -1,8 +1,13 @@
-"""Black-box tests for scripts/prune-user-tmpdir.sh -- written BEFORE any
-refactor touches the script (15.7-07 Task 1), so this suite documents the
-CONTRACT the Task 2 extraction must not break: flag grammar, broad-path
-refusal, age validation, target-family matching, depth-1 traversal, and the
-`deleted: N` summary line `installer.daemon.last_run_summary` parses.
+"""Black-box tests for scripts/prune-user-tmpdir.sh.
+
+15.7-07 Task 1 wrote this suite BEFORE any refactor touched the script, so it
+pins the CONTRACT the Task 2 extraction (scripts/lib/prune-tmp-common.sh) was
+not allowed to break: flag grammar, broad-path refusal, age validation,
+target-family matching, depth-1 traversal, and the `deleted: N` summary line
+`installer.daemon.last_run_summary` parses. Task 2 then extracted the shared
+core and updated exactly the two assertions licensed below -- every other
+assertion in this file is byte-identical to what Task 1 first pinned against
+the unmodified script.
 
 Mirrors tests/test_install_sh.py's and tests/test_prune_tmp_linux_sh.py's
 subprocess-against-the-real-script convention. find/fd/rm are real (never
@@ -11,30 +16,38 @@ stubbed): every path exercised here is created fresh under tmp_path, and
 ONLY to prove the refusal guard rejects it -- no fixture ever touches the
 real $TMPDIR or $HOME.
 
-Three frozen, host-dependent or pre-existing characteristics of the
-UNMODIFIED script are pinned here, not "fixed" -- Task 2 is licensed to
-change exactly TWO assertions in this file, and none other:
+Two licensed, deliberate behavior changes are reflected in this file's
+current assertions (both discovered and resolved during 15.7-07):
 
-- D-01f's find-fallback age cutoff (test_find_fallback_spares_25h_and_deletes_49h)
-- the pipeline-subshell `deleted: N` counter bug (test_deleted_line_is_stuck_at_zero_due_to_a_pipeline_subshell_bug),
-  discovered live while writing this suite -- see that test's own docstring.
+1. D-01f (review HIGH cycle 3): the shared core converges the fd and
+   find-fallback branches onto one `-mmin`/`--changed-before Nmin` duration
+   semantics, replacing the find-fallback's old `-mtime +N` day-boundary
+   truncation. test_days_to_minutes_conversion_deletes_25h_and_spares_23h
+   and test_47h_49h_boundary_pair_both_deleted assert the CONVERGED behavior
+   in both PATH configurations.
+2. A pipeline-subshell scoping bug (Rule 1, discovered live while writing
+   Task 1's suite): the unmodified script's `deleted: N` line always read 0
+   regardless of real work done, because it piped into a function whose
+   counters ran in a subshell. test_deleted_line_reports_the_actual_count
+   asserts the FIXED, accurate count.
 
-1. `--tmpdir /`: the script's own trailing-slash strip
-   (`TMP_ROOT="${TMP_ROOT%/}"`, line 66) turns "/" into an EMPTY string
-   before the refusal case list is ever consulted, so it is caught by the
-   "not a directory" check (line 67), not the broad-path refusal -- even
-   though "/" is literally one of the case patterns (line 72). Measured live
-   against the unmodified script (see the 15.7-07 execution SUMMARY). See
-   test_refuses_root_via_not_a_directory_quirk.
-2. The is-a-directory check runs BEFORE the refusal check (line 67 vs line
-   71), so a refusal-list entry that is not a real directory on the host
-   running this suite (e.g. /private/var/folders on Linux, which has no such
-   path) is rejected via "not a directory", not "refusing broad path". The
+Two further characteristics of the script are frozen (unaffected by the
+extraction, still true today):
+
+1. `--tmpdir /`: the trailing-slash strip (`TMP_ROOT="${TMP_ROOT%/}"`)
+   turns "/" into an EMPTY string before the refusal case list is ever
+   consulted, so it is caught by the "not a directory" check, not the
+   broad-path refusal -- even though "/" is literally one of the refusal
+   patterns. See test_refuses_root_via_not_a_directory_quirk.
+2. The is-a-directory check runs BEFORE the refusal check, so a
+   refusal-list entry that is not a real directory on the host running this
+   suite (e.g. /private/var/folders on Linux, which has no such path) is
+   rejected via "not a directory", not "refusing broad path". The
    parametrized refusal test below skips any entry that is not a real
-   directory on the CURRENT host rather than asserting a message the
-   unmodified script cannot produce here -- the same "don't fail a suite for
-   a tool/path the host legitimately lacks" principle this task already
-   applies to fd-presence.
+   directory on the CURRENT host rather than asserting a message the script
+   cannot produce here -- the same "don't fail a suite for a tool/path the
+   host legitimately lacks" principle this task already applies to
+   fd-presence.
 """
 
 import os
@@ -67,7 +80,14 @@ _PATH_WITHOUT_FD = "/usr/bin:/bin"
 # guard on every host; the /var family are real absolute system paths this
 # suite cannot fabricate, so entries that do not exist on the CURRENT host
 # are skipped rather than asserted against.
-_REFUSAL_ENTRIES = ("$HOME", "/var", "/private/var", "/var/folders", "/private/var/folders", "$HOME/Library")
+_REFUSAL_ENTRIES = (
+    "$HOME",
+    "/var",
+    "/private/var",
+    "/var/folders",
+    "/private/var/folders",
+    "$HOME/Library",
+)
 
 _FAMILY_FIXTURES: dict[str, tuple[str, str]] = {
     "dylib": ("file", "orphan.dylib"),
@@ -78,9 +98,7 @@ _FAMILY_FIXTURES: dict[str, tuple[str, str]] = {
 }
 
 
-def _run(
-    *args: str, home: Path, path: str = _PATH_WITH_FD
-) -> "subprocess.CompletedProcess[str]":
+def _run(*args: str, home: Path, path: str = _PATH_WITH_FD) -> "subprocess.CompletedProcess[str]":
     env = {"PATH": path, "HOME": str(home)}
     return subprocess.run(
         ["bash", str(SCRIPT), *args],
@@ -352,30 +370,21 @@ def test_matching_file_in_sibling_directory_untouched(tmp_path: Path) -> None:
     assert target.exists()
 
 
-def test_deleted_line_is_stuck_at_zero_due_to_a_pipeline_subshell_bug(tmp_path: Path) -> None:
-    """The unmodified script's `--apply` path streams matches into
-    `delete_stream` through a pipe (`{ list_fd0 ...; } | delete_stream`,
-    lines 244-255). Bash runs EVERY stage of a pipeline -- including the
-    last -- in its own subshell unless `shopt -s lastpipe` is set, which
-    this script never does. `delete_stream`'s `deleted=$((deleted + 1))`
-    (line 224) therefore mutates a copy of `deleted` that is thrown away
-    the instant the pipeline exits: the deletions themselves are real
-    (`rm`/`rm -rf` run for real, verified live against this fixture), but
-    the final `deleted: %s` line the caller reads back is always the
-    parent shell's never-incremented `deleted=0` from line 208, no matter
-    how many paths were actually removed.
-
-    This is a genuine, independent bug -- not the D-01f age-semantics
-    finding -- discovered live while writing this characterization suite
-    (15.7-07 Task 1). It matters here because `installer.daemon.
-    last_run_summary` parses exactly this line for the Policies "last run"
-    detail, which today silently always reports 0 regardless of real
-    work done. Task 2 is licensed to fix it (Rule 1: auto-fix bugs) as a
-    SECOND exception alongside D-01f, because the shared core's own
-    traversal helpers do not stream through a lossy subshell pipe, and
-    reproducing this counting bug on purpose inside code Linux also uses
-    would be actively worse than the status quo. See the 15.7-07 execution
-    SUMMARY's Deviations section for the fix and its rationale.
+def test_deleted_line_reports_the_actual_count(tmp_path: Path) -> None:
+    """15.7-07 Task 2 (Rule 1 bug fix, licensed exception #2 alongside D-01f):
+    the unmodified script fed matches into `delete_stream` through a PIPE
+    (`{ list_fd0 ...; } | delete_stream`, lines 244-255). Bash runs every
+    pipeline stage, including the last, in its own subshell unless
+    `shopt -s lastpipe` is set, which the script never did, so
+    `delete_stream`'s own `deleted=$((deleted + 1))` mutated a copy that was
+    discarded the instant the pipeline exited -- the deletions were real
+    but the shipped `deleted: N` line always read 0 regardless of real work
+    done. Task 1's frozen characterization of that bug is
+    test_deleted_line_is_stuck_at_zero_due_to_a_pipeline_subshell_bug in the
+    15.7-07 Task 1 commit; the extraction fixes it by redirecting the NUL
+    stream into delete_stream's stdin (input redirection, not a pipe) so
+    delete_stream now runs in the wrapper's own shell and its counters are
+    real. This is that same scenario, now asserting the FIXED count.
     """
     tmpdir = tmp_path / "tmp"
     tmpdir.mkdir()
@@ -390,19 +399,36 @@ def test_deleted_line_is_stuck_at_zero_due_to_a_pipeline_subshell_bug(tmp_path: 
     assert result.returncode == 0
     match = re.search(r"^deleted: (\d+)$", result.stdout, re.MULTILINE)
     assert match is not None
-    # The real deletions happened (proves the bug is in the COUNTER, not the
-    # deletion logic itself) even though the reported count is stuck at 0.
     for p in fixtures.values():
         assert not p.exists()
-    assert int(match.group(1)) == 0
+    assert int(match.group(1)) == len(_FAMILY_FIXTURES)
     assert survivor.exists()
 
 
-# --- Age semantics: record the divergence, do not paper over it (D-01f) ------
+# --- Age semantics: D-01f convergence, pinned in BOTH PATH configurations ---
 
 
-def test_fd_branch_deletes_25h_and_spares_23h(tmp_path: Path) -> None:
-    if not _HAVE_FD:
+@pytest.mark.parametrize(
+    "path_config",
+    [
+        pytest.param(_PATH_WITH_FD, id="with-fd"),
+        pytest.param(_PATH_WITHOUT_FD, id="without-fd"),
+    ],
+)
+def test_days_to_minutes_conversion_deletes_25h_and_spares_23h(
+    tmp_path: Path, path_config: str
+) -> None:
+    """D-01f (review HIGH cycle 3, resolved by convergence): the shared core
+    filters with `-mmin`/`--changed-before Nmin` on BOTH the fd and the
+    find-fallback branch, never `-mtime`, so `--days 1` (converted to 1440
+    minutes at the wrapper boundary) now means "older than 24h" identically
+    whether or not `fd` is on PATH. Before the extraction this held only on
+    the fd branch (test_fd_branch_deletes_25h_and_spares_23h,
+    15.7-07 Task 1); the find-fallback branch used to SPARE this same 25h
+    file until Task 2's `-mtime` -> `-mmin` conversion collapsed the two
+    semantics into one.
+    """
+    if path_config is _PATH_WITH_FD and not _HAVE_FD:
         pytest.skip("fd not present on this host's real PATH")
     tmpdir = tmp_path / "tmp"
     tmpdir.mkdir()
@@ -413,34 +439,41 @@ def test_fd_branch_deletes_25h_and_spares_23h(tmp_path: Path) -> None:
     _touch_file(old, age_hours=25)
     _touch_file(young, age_hours=23)
 
-    result = _run("--tmpdir", str(tmpdir), "--days", "1", "--apply", home=home, path=_PATH_WITH_FD)
+    result = _run("--tmpdir", str(tmpdir), "--days", "1", "--apply", home=home, path=path_config)
 
     assert result.returncode == 0
     assert not old.exists()
     assert young.exists()
 
 
-def test_find_fallback_spares_25h_and_deletes_49h(tmp_path: Path) -> None:
-    """D-01f (review HIGH cycle 3): the CURRENT find-fallback branch
-    (`find -mtime +"$DAYS"`) truncates age to whole 24h periods before
-    comparing, so `--days 1` actually means "older than 2 days" on this
-    branch -- it SPARES a 25h-old file that the fd branch (above) deletes,
-    and only catches a 49h-old file. Task 2 is licensed to change this ONE
-    assertion (and only this one) in this entire suite, once the shared core
-    converges both branches on `-mmin` duration semantics; every other
-    assertion in this file is frozen.
+@pytest.mark.parametrize(
+    "path_config",
+    [
+        pytest.param(_PATH_WITH_FD, id="with-fd"),
+        pytest.param(_PATH_WITHOUT_FD, id="without-fd"),
+    ],
+)
+def test_47h_49h_boundary_pair_both_deleted(tmp_path: Path, path_config: str) -> None:
+    """Under the OLD `-mtime +1` find-fallback, a 47h-old file survived
+    (only a 49h-old one was caught, due to the day-boundary truncation
+    D-01f removes). Pinning this pair in BOTH configurations means a
+    well-meaning "restore compatibility" edit that reintroduces `-mtime`
+    into the shared core fails this test loudly rather than silently
+    reopening the fd/find divergence.
     """
+    if path_config is _PATH_WITH_FD and not _HAVE_FD:
+        pytest.skip("fd not present on this host's real PATH")
     tmpdir = tmp_path / "tmp"
     tmpdir.mkdir()
     home = tmp_path / "home"
     home.mkdir()
-    spared = tmpdir / "spared.dylib"
-    deleted = tmpdir / "deleted.dylib"
-    _touch_file(spared, age_hours=25)
-    _touch_file(deleted, age_hours=49)
+    at_47h = tmpdir / "at-47h.dylib"
+    at_49h = tmpdir / "at-49h.dylib"
+    _touch_file(at_47h, age_hours=47)
+    _touch_file(at_49h, age_hours=49)
 
-    result = _run("--tmpdir", str(tmpdir), "--days", "1", "--apply", home=home, path=_PATH_WITHOUT_FD)
+    result = _run("--tmpdir", str(tmpdir), "--days", "1", "--apply", home=home, path=path_config)
 
     assert result.returncode == 0
-    assert spared.exists()
-    assert not deleted.exists()
+    assert not at_47h.exists()
+    assert not at_49h.exists()

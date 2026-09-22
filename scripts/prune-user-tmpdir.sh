@@ -12,6 +12,16 @@
 # IMPORTANT — "disk free before" is FREE SPACE LEFT on the volume (often tiny
 # when the disk is full). "estimated reclaim" is how much this prune can free.
 #
+# 15.7-07 (D-01d): the broad-path refusal guard, root/age validation, the
+# fd-preferred/find-fallback traversal, the byte formatter, and the trailing
+# `deleted: N` line now live in scripts/lib/prune-tmp-common.sh, shared with
+# scripts/prune-tmp-linux.sh. This script owns only its own flags, its own
+# 3-day default, its own five target families, its own extra refusal
+# entries, and the lsof-based open-file skip that has no Linux counterpart.
+# Its --days flag, default and argv contract are UNCHANGED: the shipped
+# macOS LaunchAgent already invokes this exact grammar through
+# installer/helper_assets/prune_daemon_runner.py.
+#
 # Usage:
 #   ./scripts/prune-user-tmpdir.sh              # dry-run (safe)
 #   ./scripts/prune-user-tmpdir.sh --apply      # delete orphans older than 3d
@@ -59,62 +69,28 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$TMP_ROOT" ]]; then
-  printf 'error: TMPDIR empty; pass --tmpdir PATH\n' >&2
-  exit 1
-fi
-TMP_ROOT="${TMP_ROOT%/}"
-if [[ ! -d "$TMP_ROOT" ]]; then
-  printf 'error: not a directory: %s\n' "$TMP_ROOT" >&2
-  exit 1
-fi
-case "$TMP_ROOT" in
-  /var|/private/var|/var/folders|/private/var/folders|"$HOME"|"$HOME"/Library|"/")
-    printf 'error: refusing broad path %s\n' "$TMP_ROOT" >&2
-    exit 1
-    ;;
-esac
-if ! [[ "$DAYS" =~ ^[0-9]+$ ]] || [[ "$DAYS" -lt 1 ]]; then
-  printf 'error: --days must be a positive integer\n' >&2
-  exit 1
-fi
+_PRUNE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/prune-tmp-common.sh
+source "${_PRUNE_LIB_DIR}/lib/prune-tmp-common.sh"
+
+_prune_common_require_nonempty "$TMP_ROOT" TMPDIR
+# NOTE: unlike scripts/prune-tmp-linux.sh, this strip is unconditional --
+# `--tmpdir /` therefore becomes an EMPTY string here, which the directory
+# check below rejects as "not a directory" rather than reaching the refusal
+# guard. That is the script's own pre-existing behavior (pinned by
+# tests/test_prune_user_tmpdir_sh.py::test_refuses_root_via_not_a_directory_quirk)
+# and this extraction preserves it exactly rather than "fixing" it.
+TMP_ROOT="$(_prune_common_strip_trailing_slash "$TMP_ROOT")"
+_prune_common_require_directory "$TMP_ROOT"
+_prune_common_refuse_broad_path "$TMP_ROOT" "/" "$HOME" /var /private/var /var/folders /private/var/folders "$HOME/Library"
+_prune_common_validate_positive_int "$DAYS" days
+# 10#$DAYS forces base-10 arithmetic: a leading-zero DAYS value (e.g. "010")
+# would otherwise be parsed as octal by bash's `$(( ))`.
+MINUTES=$((10#$DAYS * 1440))
 
 HAVE_FD=0; HAVE_RG=0
 command -v fd >/dev/null 2>&1 && HAVE_FD=1
 command -v rg >/dev/null 2>&1 && HAVE_RG=1
-
-human() {
-  awk -v b="${1:-0}" 'BEGIN {
-    split("B KB MB GB TB", u, " ")
-    i = 1
-    while (b >= 1024 && i < 5) { b /= 1024; i++ }
-    printf "%.1f %s", b, u[i]
-  }'
-}
-
-bytes_free() {
-  df -P -k "$TMP_ROOT" 2>/dev/null | awk 'NR==2 {print $4 * 1024}'
-}
-
-count_fd() {
-  # $1 = f|d, $2 = fd regex (only used when HAVE_FD=1)
-  local ftype="$1" pat="$2"
-  if [[ "$HAVE_FD" -eq 1 ]]; then
-    fd -u -d 1 --changed-before "${DAYS}d" -t "$ftype" "$pat" "$TMP_ROOT" 2>/dev/null | wc -l | tr -d ' '
-  else
-    find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -mtime +"$DAYS" -type "$ftype" -name "$pat" 2>/dev/null | wc -l | tr -d ' '
-  fi
-}
-
-list_fd0() {
-  # NUL-delimited paths. $1 = f|d, $2 = fd regex
-  local ftype="$1" pat="$2"
-  if [[ "$HAVE_FD" -eq 1 ]]; then
-    fd -u -0 -d 1 --changed-before "${DAYS}d" -t "$ftype" "$pat" "$TMP_ROOT" 2>/dev/null || true
-  else
-    find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -mtime +"$DAYS" -type "$ftype" -name "$pat" -print0 2>/dev/null || true
-  fi
-}
 
 sample_bytes() {
   local p="$1" out
@@ -133,26 +109,18 @@ printf '  tooling:  fd=%s rg=%s\n' \
   "$([[ $HAVE_FD -eq 1 ]] && echo yes || echo no)" \
   "$([[ $HAVE_RG -eq 1 ]] && echo yes || echo no)"
 
-free_before="$(bytes_free || echo 0)"
+free_before="$(_prune_common_bytes_free "$TMP_ROOT" || echo 0)"
 printf '\n'
-printf '  disk FREE now:        %s   ← space left on the volume (often tiny)\n' "$(human "$free_before")"
+printf '  disk FREE now:        %s   ← space left on the volume (often tiny)\n' "$(_prune_common_human "$free_before")"
 
 # --- Fast counts first (no big lists in memory) ---
-# fd patterns: regex. find fallback uses shell globs via -name in count_fd —
-# for find fallback we pass glob-ish names; for fd we pass regex.
-if [[ "$HAVE_FD" -eq 1 ]]; then
-  n_dylib="$(count_fd f '\.dylib$')"
-  n_node="$(count_fd f '\.node$')"
-  n_gitid="$(count_fd d '^gitid-(stage|e2e)-')"
-  n_codex="$(count_fd d '^\.com\.openai\.codex\.')"
-  sample="$(fd -u -d 1 --changed-before "${DAYS}d" -t f '\.dylib$' "$TMP_ROOT" 2>/dev/null | head -1 || true)"
-else
-  n_dylib="$(find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -mtime +"$DAYS" -type f -name '*.dylib' 2>/dev/null | wc -l | tr -d ' ')"
-  n_node="$(find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -mtime +"$DAYS" -type f -name '*.node' 2>/dev/null | wc -l | tr -d ' ')"
-  n_gitid="$(find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -mtime +"$DAYS" -type d \( -name 'gitid-stage-*' -o -name 'gitid-e2e-*' \) 2>/dev/null | wc -l | tr -d ' ')"
-  n_codex="$(find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -mtime +"$DAYS" -type d -name '.com.openai.codex.*' 2>/dev/null | wc -l | tr -d ' ')"
-  sample="$(find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -mtime +"$DAYS" -type f -name '*.dylib' 2>/dev/null | head -1 || true)"
-fi
+n_dylib="$(_prune_common_find_matches "$TMP_ROOT" "$MINUTES" f name '*.dylib' '\.dylib$' | wc -l | tr -d ' ')"
+n_node="$(_prune_common_find_matches "$TMP_ROOT" "$MINUTES" f name '*.node' '\.node$' | wc -l | tr -d ' ')"
+n_gitid_stage="$(_prune_common_find_matches "$TMP_ROOT" "$MINUTES" d name 'gitid-stage-*' '^gitid-stage-' | wc -l | tr -d ' ')"
+n_gitid_e2e="$(_prune_common_find_matches "$TMP_ROOT" "$MINUTES" d name 'gitid-e2e-*' '^gitid-e2e-' | wc -l | tr -d ' ')"
+n_gitid=$((n_gitid_stage + n_gitid_e2e))
+n_codex="$(_prune_common_find_matches "$TMP_ROOT" "$MINUTES" d name '.com.openai.codex.*' '^\.com\.openai\.codex\.' | wc -l | tr -d ' ')"
+sample="$(_prune_common_find_matches "$TMP_ROOT" "$MINUTES" f name '*.dylib' '\.dylib$' | head -1 || true)"
 
 dylib_sz=3762984
 [[ -n "$sample" ]] && dylib_sz="$(sample_bytes "$sample")"
@@ -161,12 +129,12 @@ node_sz=346272
 est=$(( n_dylib * dylib_sz + n_node * node_sz + (n_gitid + n_codex) * 4096 ))
 total_items=$(( n_dylib + n_node + n_gitid + n_codex ))
 
-printf '  estimated RECLAIM:    %s   ← what this prune can free (age > %sd)\n' "$(human "$est")" "$DAYS"
+printf '  estimated RECLAIM:    %s   ← what this prune can free (age > %sd)\n' "$(_prune_common_human "$est")" "$DAYS"
 printf '\n'
 printf '  breakdown:\n'
-printf '    OpenTUI/OpenCode dylibs: %s  (~%s)\n' "$n_dylib" "$(human $((n_dylib * dylib_sz)))"
+printf '    OpenTUI/OpenCode dylibs: %s  (~%s)\n' "$n_dylib" "$(_prune_common_human $((n_dylib * dylib_sz)))"
 printf '    Bun .node files:         %s\n' "$n_node"
-printf '    gitid-stage/e2e dirs:    %s  (tiny each, ~%s total)\n' "$n_gitid" "$(human $((n_gitid * 4096)))"
+printf '    gitid-stage/e2e dirs:    %s  (tiny each, ~%s total)\n' "$n_gitid" "$(_prune_common_human $((n_gitid * 4096)))"
 printf '    Codex temp dirs:         %s\n' "$n_codex"
 printf '    total items:             %s\n' "$total_items"
 
@@ -178,12 +146,12 @@ else
 fi
 printf '\n'
 printf '  context: ALL dylibs in TMPDIR (any age): %s (~%s)\n' \
-  "$n_dylib_all" "$(human $((n_dylib_all * dylib_sz)))"
+  "$n_dylib_all" "$(_prune_common_human $((n_dylib_all * dylib_sz)))"
 printf '           (only those older than %s days are in scope for this run)\n' "$DAYS"
 
 if [[ "$APPLY" -eq 0 ]]; then
   printf '\n--- dry-run complete ---\n'
-  printf 'Nothing deleted. Re-run with --apply to reclaim ~%s.\n' "$(human "$est")"
+  printf 'Nothing deleted. Re-run with --apply to reclaim ~%s.\n' "$(_prune_common_human "$est")"
   printf 'Tip: with the disk this full, close OpenCode first, then:\n'
   printf '  bash scripts/prune-user-tmpdir.sh --apply\n'
   exit 0
@@ -211,7 +179,7 @@ failed=0
 
 delete_stream() {
   # Reads NUL paths on stdin.
-  local path sz
+  local path
   while IFS= read -r -d '' path; do
     [[ -z "$path" ]] && continue
     if [[ -s "$OPEN_LIST" ]] && grep -Fxq -- "$path" "$OPEN_LIST"; then
@@ -236,31 +204,39 @@ delete_stream() {
     fi
     # Progress every 2000 items so a kill mid-way still shows work done.
     if (( deleted % 2000 == 0 && deleted > 0 )); then
-      printf '  ... deleted %s so far (free now: %s)\n' "$deleted" "$(human "$(bytes_free || echo 0)")"
+      printf '  ... deleted %s so far (free now: %s)\n' "$deleted" "$(_prune_common_human "$(_prune_common_bytes_free "$TMP_ROOT" || echo 0)")"
     fi
   done
 }
 
-if [[ "$HAVE_FD" -eq 1 ]]; then
-  { list_fd0 f '\.dylib$'
-    list_fd0 f '\.node$'
-    list_fd0 d '^gitid-(stage|e2e)-'
-    list_fd0 d '^\.com\.openai\.codex\.'
-  } | delete_stream
-else
-  {
-    find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -mtime +"$DAYS" -type f \( -name '*.dylib' -o -name '*.node' \) -print0 2>/dev/null || true
-    find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -mtime +"$DAYS" -type d \( -name 'gitid-stage-*' -o -name 'gitid-e2e-*' -o -name '.com.openai.codex.*' \) -print0 2>/dev/null || true
-  } | delete_stream
-fi
+# 15.7-07 (Rule 1 bug fix): the shipped script fed this same NUL stream into
+# delete_stream through a PIPE (`{ ...; } | delete_stream`). Bash runs every
+# pipeline stage, including the last, in its own subshell unless
+# `shopt -s lastpipe` is set (it never was), so delete_stream's own
+# deleted/skipped/failed increments were silently discarded once the
+# pipeline exited -- the shipped `deleted: N` line always read 0 regardless
+# of real work done (see tests/test_prune_user_tmpdir_sh.py::
+# test_deleted_line_is_stuck_at_zero_due_to_a_pipeline_subshell_bug for the
+# live characterization of that bug against the unmodified script).
+# Redirecting the process substitution into delete_stream's STDIN instead of
+# piping into it keeps delete_stream running in THIS shell -- input
+# redirection does not fork a subshell the way a pipe does -- so its
+# counters are real.
+delete_stream < <(
+  _prune_common_find_matches0 "$TMP_ROOT" "$MINUTES" f name '*.dylib' '\.dylib$'
+  _prune_common_find_matches0 "$TMP_ROOT" "$MINUTES" f name '*.node' '\.node$'
+  _prune_common_find_matches0 "$TMP_ROOT" "$MINUTES" d name 'gitid-stage-*' '^gitid-stage-'
+  _prune_common_find_matches0 "$TMP_ROOT" "$MINUTES" d name 'gitid-e2e-*' '^gitid-e2e-'
+  _prune_common_find_matches0 "$TMP_ROOT" "$MINUTES" d name '.com.openai.codex.*' '^\.com\.openai\.codex\.'
+)
 
-free_after="$(bytes_free || echo 0)"
+free_after="$(_prune_common_bytes_free "$TMP_ROOT" || echo 0)"
 printf '\n--- summary ---\n'
-printf 'deleted: %s\n' "$deleted"
+_prune_common_emit_deleted "$deleted"
 printf 'skipped (open): %s\n' "$skipped"
 printf 'failed: %s\n' "$failed"
-printf 'disk free before: %s\n' "$(human "$free_before")"
-printf 'disk free after:  %s\n' "$(human "$free_after")"
+printf 'disk free before: %s\n' "$(_prune_common_human "$free_before")"
+printf 'disk free after:  %s\n' "$(_prune_common_human "$free_after")"
 if [[ "$free_after" =~ ^[0-9]+$ && "$free_before" =~ ^[0-9]+$ ]]; then
-  printf 'disk free delta:  %s\n' "$(human $((free_after - free_before)))"
+  printf 'disk free delta:  %s\n' "$(_prune_common_human $((free_after - free_before)))"
 fi
