@@ -2294,6 +2294,43 @@ def test_disk_pressure_probe_is_a_zero_arg_callable_returning_disk_pressure(
     assert isinstance(pressure, DiskPressure)
 
 
+def test_non_blocking_probe_never_queries_systemd_in_any_cache_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.enums import DaemonState
+    from installer.systemd_daemon import TimerStateCache
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    queries: list[str] = []
+    now = [0.0]
+
+    def is_active() -> DaemonState:
+        queries.append("is-active")
+        return DaemonState.INACTIVE
+
+    cache = TimerStateCache(is_active, ttl=10.0, clock=lambda: now[0])
+    probe = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
+        _linux_platform(), timer_cache=cache
+    )
+    # Truly cold: nothing to peek at, the daemon half is omitted (UNAVAILABLE)
+    # while the temp usage -- a statvfs, not systemd -- is still measured.
+    cold = probe(blocking=False)
+    assert cold.daemon is DaemonState.UNAVAILABLE
+    assert cold.tmp_used_percent is not None
+    assert queries == []
+    cache.read()
+    queries.clear()
+    assert probe(blocking=False).daemon is DaemonState.INACTIVE  # warm
+    now[0] = 10_000.0
+    assert probe(blocking=False).daemon is DaemonState.INACTIVE  # far past the TTL
+    cache.invalidate()
+    assert probe(blocking=False).daemon is DaemonState.INACTIVE  # just invalidated
+    assert queries == []
+    # The default stays the blocking read: a stale memo is re-probed once.
+    assert probe().daemon is DaemonState.INACTIVE
+    assert queries == ["is-active"]
+
+
 def test_disk_pressure_probe_requires_timer_cache() -> None:
     signature = inspect.signature(setup._disk_pressure_probe)  # pyright: ignore[reportPrivateUsage]
     parameter = signature.parameters["timer_cache"]
@@ -2489,6 +2526,27 @@ def test_build_app_without_disk_pressure_still_binds_the_probe(
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
     assert policies.disk_pressure is marker
+
+
+def test_build_app_binds_the_callers_probe_without_building_another(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    built: list[object] = []
+
+    def fake_probe(*_args: object, **_kwargs: object) -> object:
+        built.append(object())
+        return built[-1]
+
+    monkeypatch.setattr(setup, "_disk_pressure_probe", fake_probe)
+    seen = _capture_app(monkeypatch)
+    setup._build_app(  # pyright: ignore[reportPrivateUsage]
+        [], _platform(), disk_pressure=_unused_probe
+    )
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    assert policies.disk_pressure is _unused_probe
+    assert built == []
 
 
 def test_build_app_omitted_arguments_still_share_one_cache(

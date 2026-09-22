@@ -28,10 +28,17 @@ from textual.widgets import DataTable, Label, ListItem, ListView, Static
 from installer import daemon, env_redirect
 from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen, OwnershipRefreshed
+from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.enums import Tier, UninstallState
 from installer.execute_screen import ExecuteInputs, ExecuteScreen, InstallRunFinished
-from installer.guidance import Guidance, doctor_guidance, guard_guidance, node_globals_guidance
+from installer.guidance import (
+    Guidance,
+    disk_pressure_guidance,
+    doctor_guidance,
+    guard_guidance,
+    node_globals_guidance,
+)
 from installer.model import Tool
 from installer.pnpm_globals import NodeGlobalsReport, reinstall_preview
 from installer.policy import Policy, PolicyResult
@@ -110,15 +117,28 @@ class UninstallInputs:
     terminal_sync: Callable[[], str | None] | None = None
 
 
+# The composition root's disk probe (D-03): callable with no arguments, plus
+# one optional keyword, `blocking`, that picks the daemon-state cache verb.
+# blocking=True (the default) may run one bounded systemd query, right for a
+# Doctor entry; blocking=False never queries at all, which is what a render on
+# the Textual event loop needs. `...` rather than a Protocol spelling out that
+# keyword: a Protocol method's parameter reads as dead code to vulture.
+DiskPressureProbe = Callable[..., DiskPressure]
+
+
 @dataclass(frozen=True)
 class PolicyInputs:
     """The policies the PoliciesScreen renders, each carrying its own bound
-    apply/remove closures. The composition root builds these from the pure core."""
+    apply/remove closures. The composition root builds these from the pure core.
+
+    `disk_pressure` is the ONE seam the route's single probe travels through:
+    UnifiedApp hands it to both DoctorScreen and PoliciesScreen, so no second
+    field or UnifiedApp parameter carries the same closure."""
 
     policies: list[Policy]
     link_mode: Callable[[], str] | None = None
     set_link_mode: Callable[[str], None] | None = None
-    disk_pressure: Callable[..., Any] | None = None
+    disk_pressure: DiskPressureProbe | None = None
 
 
 # The l log-view toggle's tail length — a plain, bounded slice of the raw log,
@@ -140,6 +160,17 @@ _GLOBALS_UNREADABLE = NodeGlobalsReport(entries=(), missing=(), managed=(), know
 # closure is exactly what may have just raised inside the guarded audit call,
 # so calling it again for the fallback path would reopen the same hazard.
 _GLOBALS_UNREADABLE_PREVIEW = _GLOBALS_UNKNOWN_COUNT
+
+# The console next step installer/guidance.py writes for a low disk with an
+# INACTIVE daemon, and its TUI form. Only INACTIVE starts with this prefix:
+# the UNAVAILABLE wording (D-03c) names no row, because on that host there is
+# no row to enable, so it is deliberately never rewritten into one.
+_DISK_PRESSURE_ENABLE_PREFIX = "Enable the background cleanup policy"
+_DISK_PRESSURE_TUI_STEP = (
+    "Open the Policies view and turn on the Background tmpdir cleanup row; a one-off "
+    "`./scripts/prune-user-tmpdir.sh --apply` from a terminal clears space immediately "
+    "in the meantime."
+)
 
 
 class GlobalsReinstalled(Message):
@@ -220,9 +251,17 @@ class DoctorScreen(AppScreen):
         node_globals: Callable[[], NodeGlobalsReport],
         globals_preview: Callable[[NodeGlobalsReport], str],
         reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]],
+        disk_pressure: DiskPressureProbe | None = None,
     ) -> None:
         super().__init__(view="doctor")
         self._report = report
+        # A predicate, not its result, for the guard_state reason: the
+        # Policies view can enable the background cleanup one navigation step
+        # away, so every entry re-reads it. Consulted only in
+        # _refresh_guidance, never at render time and never on a worker: the
+        # mount half is one statvfs, and the daemon half is a memoized,
+        # bounded read -- unlike the pnpm audit, nothing here needs a thread.
+        self.disk_pressure = disk_pressure
         # A predicate, not its result: the Policies view installs and removes the
         # pip/npm ban live, one nav step away, and guard_guidance renders exactly
         # that state. The PATH audit beside it stays a snapshot on purpose — the
@@ -328,11 +367,28 @@ class DoctorScreen(AppScreen):
         # about a set it has seen.
         status, warning = self._guard_state()
         globals_report = self._globals_report
+        # Position is a decision, pinned by a test: disk pressure follows the
+        # guard items and precedes the pnpm-globals items.
         self.guidance = (
             doctor_guidance(self._report)
             + guard_guidance(status, warning)
+            + self._disk_pressure_items()
             + (node_globals_guidance(globals_report) if globals_report is not None else [])
         )
+
+    def _disk_pressure_items(self) -> list[Guidance]:
+        if self.disk_pressure is None:
+            return []
+        # Plan 15.7-02's D-03b already makes probe_disk_pressure TOTAL over
+        # filesystem and probe-conversion failure, and any other exception
+        # (a programming error) propagates uncaught. This guard is the
+        # documented second layer over the INJECTED closure a caller composes
+        # -- the same named set run_doctor uses, never a blanket except.
+        try:
+            pressure = self.disk_pressure()
+        except (OSError, ValueError):
+            return []
+        return disk_pressure_guidance(pressure)
 
     def _refresh_body(self) -> None:
         body = self.query_one("#doctor-body", _BodyStatic)
@@ -417,6 +473,12 @@ class DoctorScreen(AppScreen):
                         ),
                     )
                 )
+            elif item.next_step.startswith(_DISK_PRESSURE_ENABLE_PREFIX):
+                # Ordering is load-bearing: this branch must stay BEFORE the
+                # generic `Run `make setup`` branch below, or a later edit to
+                # the console wording could let that prefix capture this item
+                # and answer a full disk with pnpm-reinstall advice.
+                rewritten.append(replace(item, next_step=_DISK_PRESSURE_TUI_STEP))
             elif item.next_step.startswith("Run `make setup`"):
                 rewritten.append(
                     replace(
@@ -1349,6 +1411,8 @@ class PoliciesScreen(AppScreen):
         self._policies = inputs.policies
         self._link_mode = inputs.link_mode
         self._set_link_mode = inputs.set_link_mode
+        # The SAME closure UnifiedApp hands the Doctor: one field, two screens.
+        self._disk_pressure = inputs.disk_pressure
         self.active_state: dict[str, bool] = {
             policy.id: policy.active for policy in inputs.policies
         }
@@ -1556,7 +1620,55 @@ class PoliciesScreen(AppScreen):
             if schedule is not None:
                 hour, minute = schedule
                 lines.append(f"scheduled daily at {hour:02d}:{minute:02d}")
+        if _has_daemon_id((policy.id,)):
+            usage = self._temp_usage_line()
+            if usage is not None:
+                lines.append(usage)
         return "\n".join(lines)
+
+    def _temp_usage_line(self) -> str | None:
+        """The live temp-usage line for a background-cleanup row, or None.
+
+        This runs on EVERY row-highlight, i.e. on every arrow key, so the two
+        halves of the probe are handled differently on purpose:
+
+        - The mount reads stay synchronous and un-cached. `shutil.disk_usage`
+          is one statvfs on an already-mounted filesystem -- the same order of
+          cost as the read_schedule/last_run_summary reads above, and it spawns
+          no process, unlike the pnpm audit the Doctor runs on a worker. A
+          worker here would buy nothing and cost a cross-thread hand-off plus a
+          stale-value window on a number whose whole point is being current.
+        - The daemon-state half is a `systemctl --user is-active` SUBPROCESS
+          (plan 15.7-01's D-01c), so this path does not run it AT ALL:
+          blocking=False makes the closure read TimerStateCache.peek(), which
+          never probes. Memoization alone is not the answer, although "it's
+          cached" reads like one: a memo still has a cold first read and a TTL
+          expiry, and on those a read() blocks the Textual event loop for up to
+          run.QUERY_TIMEOUT (20s) -- bounded, but a frozen UI. Nor is "move it
+          to a worker": the daemon state is not even shown on this line, so a
+          worker would add async plumbing to fetch a value nothing renders.
+
+        Failures follow plan 15.7-02's D-03b: probe_disk_pressure is TOTAL over
+        filesystem and probe-conversion failure, and any other exception
+        propagates uncaught. This guard is the documented second layer over the
+        injected closure, the same pairing the adjacent reads use.
+
+        Only a number the probe actually measured is stated: the temp-directory
+        usage (measured on macOS too, per D-03d), else -- only when the temp
+        mount was unreadable -- the root filesystem's free space, labelled as
+        such, else no line at all.
+        """
+        if self._disk_pressure is None:
+            return None
+        try:
+            pressure = self._disk_pressure(blocking=False)
+        except (OSError, ValueError):
+            return None
+        if pressure.tmp_used_percent is not None:
+            return f"Current temp-directory usage: {pressure.tmp_used_percent:.1f}%"
+        if pressure.root_free_percent is not None:
+            return f"Current root filesystem free space: {pressure.root_free_percent:.1f}%"
+        return None
 
     def _set_detail(self, policy: Policy | None) -> None:
         if policy is not None and self._log_view and policy.log_path is not None:
@@ -2054,6 +2166,14 @@ class UnifiedApp(App[list[str] | None]):
                     node_globals=read_node_globals,
                     globals_preview=read_preview,
                     reinstall_globals=run_reinstall,
+                    # Read off PolicyInputs rather than a new UnifiedApp
+                    # parameter, on purpose: PolicyInputs already exists to
+                    # carry composition-root closures to the screens, and a
+                    # parallel kwarg would make every UnifiedApp(...) site in
+                    # the tests grow an argument for a value with a home.
+                    # PoliciesScreen reads the same field, so one closure
+                    # reaches both screens.
+                    disk_pressure=policies.disk_pressure,
                 ),
                 "uninstall": UninstallScreen(uninstall),
                 "policies": PoliciesScreen(policies),
