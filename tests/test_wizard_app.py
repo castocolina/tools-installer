@@ -14,6 +14,7 @@ from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
+from installer.enums import Severity
 from installer.execute_screen import ExecuteInputs, ExecuteScreen
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool, load_tools
@@ -790,12 +791,16 @@ async def test_uninstall_apply_calls_the_terminal_synchronizer_once_on_success()
         assert len(captured) == 1
         assert len(calls) == 1
         assert "Removed 1 tool(s)." in screen.status.text
+        assert screen.status.severity is Severity.OK
 
 
 async def test_uninstall_apply_appends_a_terminal_sync_oserror_without_losing_applied() -> None:
     """Test 2: a terminal synchronizer OSError appends a visible warning to
     the successful removal result and never changes `applied` from the
-    primary removal outcome."""
+    primary removal outcome. WR-04: the failure must also render with
+    "warn" styling -- not "ok" -- so it is distinguishable from a clean
+    success at a glance, mirroring the Policies screen and
+    _install_closed's own use of "warn" for this exact class of failure."""
     captured: list[UninstallDecision] = []
 
     def _boom() -> str | None:
@@ -817,6 +822,7 @@ async def test_uninstall_apply_appends_a_terminal_sync_oserror_without_losing_ap
         assert len(captured) == 1
         assert "terminal shell synchronization failed" in screen.status.text.lower()
         assert "EACCES" in screen.status.text
+        assert screen.status.severity is Severity.WARN
 
 
 async def test_uninstall_apply_never_calls_the_terminal_synchronizer_after_a_failed_sweep() -> None:

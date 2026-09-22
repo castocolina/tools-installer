@@ -1226,10 +1226,16 @@ class UninstallScreen(AppScreen):
         # outcome.
         # WR-03: the one shared failure contract (terminal_sync_warning), not a
         # local try/except -- it is total and None-tolerant by construction.
+        # WR-04: a terminal-sync failure must render with "warn" styling, not
+        # the "ok" success color -- the text alone (appended above) is not
+        # enough to distinguish it from a clean run at a glance. Mirrors the
+        # Policies screen and _install_closed, both of which already use
+        # "warn" for this exact class of failure.
         terminal_warning = terminal_sync_warning(self._terminal_sync)
+        terminal_failed = terminal_warning is not None
         if terminal_warning:
             summary_parts.append(terminal_warning)
-        self.status.set(multiline_summary(summary_parts), "ok")
+        self.status.set(multiline_summary(summary_parts), "warn" if terminal_failed else "ok")
 
     @work(thread=True, exclusive=True, group="uninstall-ownership-refresh", exit_on_error=False)
     def _refresh_ownership_worker(self) -> None:
