@@ -3,6 +3,7 @@ ban_policy closures against a sandboxed HOME, asserting shims + aliases appear o
 enable and vanish on disable while the real $HOME is never touched. Saves SVG
 screenshots for agent inspection."""
 
+import os
 import plistlib
 from collections.abc import Callable
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any
 import pytest
 from textual.widgets import DataTable
 
+from installer import systemd_daemon
 from installer.doctor import DoctorReport
 from installer.guards import REDIRECT_SENTINEL, SHIM_SENTINEL, guard_status
 from installer.model import Method, Tool
@@ -554,6 +556,79 @@ def _daemon_app(home: Path, *, installed_tools: dict[str, bool]) -> tuple[Unifie
         initial_view="policies",
     )
     return app, plist_path, policy.log_path
+
+
+async def test_linux_daemon_and_cache_redirect_toggle_against_a_sandboxed_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.env_redirect import BUN_CACHE_REDIRECT
+    from installer.policy import cache_redirect_policy, linux_daemon_policy
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home = Path.home()
+    script = home / "scripts" / "prune-tmp-linux.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text("#!/bin/sh\n")
+    unit_dir = home / "config" / "systemd" / "user"
+    conf_dir = home / ".config" / "environment.d"
+    daemon = linux_daemon_policy(
+        unit_dir=unit_dir,
+        log_path=home / "state" / "prune-daemon.log",
+        wrapper_bin_dir=home / ".local" / "bin",
+        script_path=script,
+        state_path=home / ".myshellrc",
+        installed_tools={},
+        path_value="/usr/bin:/bin",
+        tmpdir_value=str(home / "tmp"),
+        home_value=str(home),
+        uv_path=home / "uv",
+        run=lambda _cmd: None,
+        read_output=lambda _cmd: "inactive",
+    )
+    redirect = cache_redirect_policy(
+        BUN_CACHE_REDIRECT,
+        platform_os="linux",
+        conf_dir=conf_dir,
+        rc_path=home / ".myshellrc",
+        home=home,
+    )
+    app = UnifiedApp(
+        [_tool()],
+        {"rg": True},
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: ({}, None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=UninstallInputs(
+            rows=list, ban_names=list, has_path_block=lambda: False, remove=lambda _d: SweepResult()
+        ),
+        policies=PolicyInputs(policies=[daemon, redirect]),
+        initial_view="policies",
+    )
+    service, timer = systemd_daemon.unit_paths(unit_dir)
+    conf = conf_dir / BUN_CACHE_REDIRECT.conf_basename
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        await pilot.press("space")
+        await pilot.pause()
+        assert service.exists() and timer.exists()
+        await pilot.press("space")
+        await pilot.pause()
+        assert not service.exists() and not timer.exists()
+        await pilot.press("down")
+        await pilot.press("space")
+        await pilot.pause()
+        assert conf.exists()
+        assert "tools-installer: cache-redirect" in conf.read_text()
+        await pilot.press("space")
+        await pilot.pause()
+        assert not conf.exists()
+        assert home == tmp_path
+        assert os.environ["HOME"] == str(tmp_path)
+        _snapshot(app, "linux-daemon-and-redirect.svg")
 
 
 async def test_daemon_policy_toggles_on_despite_missing_fd_and_rg_with_recommended_copy(

@@ -1925,6 +1925,53 @@ async def test_existing_policies_render_byte_identical_effect_and_detail() -> No
         assert "watch-powered" in screen.detail_text
 
 
+async def test_linux_daemon_detail_discloses_the_login_session_limit() -> None:
+    policy = Policy(
+        id="daemon:prune-tmp-linux",
+        label="Background tmpdir cleanup",
+        description="runs scripts/prune-tmp-linux.sh every 10 minutes via a systemd user timer",
+        active=False,
+        apply=_ok_result,
+        remove=_ok_result,
+    )
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)):
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        detail = screen.detail_text
+        assert "every ten minutes" in detail
+        assert "while you are logged in" in detail
+        assert "loginctl enable-linger $USER" in detail
+        assert "does not run that command" in detail
+        assert "unregisters the timer" in detail
+        assert "never deletes temp files" in detail
+        assert "daily time picker does not apply" in detail
+        assert "scheduled daily at" not in detail
+
+
+async def test_cache_redirect_detail_carries_the_declaration_caveat() -> None:
+    from installer.env_redirect import BUN_CACHE_REDIRECT
+    from installer.policy import cache_redirect_policy
+
+    policy = cache_redirect_policy(
+        BUN_CACHE_REDIRECT,
+        platform_os="linux",
+        conf_dir=Path("/tmp/environment.d"),
+        rc_path=Path("/tmp/.myshellrc"),
+        home=Path("/tmp/home"),
+    )
+    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
+    async with app.run_test(size=(100, 30)):
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        detail = screen.detail_text
+        assert BUN_CACHE_REDIRECT.variable in detail
+        assert ".cache/bun" in detail
+        assert "next login" in detail
+        assert BUN_CACHE_REDIRECT.coverage_caveat in detail
+        assert "never deletes the cache directory" in detail
+
+
 async def test_daemon_policy_detail_uses_accurate_daemon_copy() -> None:
     policy = Policy(
         id="daemon:prune-tmpdir",
@@ -2749,6 +2796,57 @@ async def test_uninstall_tweak_row_names_background_jobs_when_a_daemon_id_is_off
         assert "shell tweaks + background jobs" in rendered
         await pilot.pause()
         assert "background maintenance" in screen.detail_text.lower()
+
+
+async def test_uninstall_tweak_row_names_the_linux_timer_and_the_cache_redirect() -> None:
+    inputs = _uninstall_inputs(
+        tweak_ids=("tweak:countdown", "daemon:prune-tmp-linux", "cache-redirect:bun")
+    )
+    app = _app(uninstall=inputs, initial_view="uninstall")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.pause()
+        detail = screen.detail_text
+        assert "systemd user timer" in detail
+        assert "unit files" in detail
+        assert "LaunchAgent" not in detail
+        assert "environment cache redirect" in detail
+
+
+async def test_uninstall_tweak_row_keeps_the_macos_launchagent_sentence() -> None:
+    inputs = _uninstall_inputs(tweak_ids=("tweak:countdown", "daemon:prune-tmpdir"))
+    app = _app(uninstall=inputs, initial_view="uninstall")
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.pause()
+        assert (
+            "unregisters the background maintenance LaunchAgent (its plist and wrapper executable)"
+            in screen.detail_text
+        )
+        assert "environment cache redirect" not in screen.detail_text
+
+
+async def test_uninstall_applied_summary_names_a_linux_sweep_without_a_launchagent() -> None:
+    inputs = _uninstall_inputs(
+        tweak_ids=("daemon:prune-tmp-linux", "cache-redirect:bun"),
+        remove=_recorder(
+            [],
+            SweepResult(swept=("daemon:prune-tmp-linux", "cache-redirect:bun")),
+        ),
+    )
+    app = _app(uninstall=inputs, initial_view="uninstall")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("a")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, UninstallScreen)
+        status = app.screen.status.text
+        assert "LaunchAgent" not in status
+        assert "log out and back in" in status
+        assert "cache-redirect:bun" in status
 
 
 async def test_uninstall_tweak_row_stays_byte_identical_without_a_daemon_id() -> None:
@@ -3842,7 +3940,6 @@ async def _settle_daemon(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> Non
 
 
 async def test_on_by_default_auto_applies_on_a_fresh_undecided_machine(tmp_path: Path) -> None:
-    state_path = tmp_path / ".myshellrc"
     plist_path = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
     policy = _daemon_policy(tmp_path)
     app = _daemon_app(
@@ -3899,7 +3996,6 @@ async def test_on_by_default_never_records_a_decision_on_a_failed_apply(tmp_path
 async def test_manual_toggle_of_the_daemon_is_refused_while_the_worker_is_in_flight(
     tmp_path: Path,
 ) -> None:
-    state_path = tmp_path / ".myshellrc"
     fake_run = _FakeDaemonRun()
     policy = _daemon_policy(tmp_path, run=fake_run)
     app = _daemon_app(

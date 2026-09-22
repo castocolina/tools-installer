@@ -25,7 +25,7 @@ from textual.message import Message
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
-from installer import daemon
+from installer import daemon, env_redirect
 from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen, OwnershipRefreshed
 from installer.doctor import DoctorReport
@@ -803,17 +803,25 @@ class UninstallScreen(AppScreen):
         # (Linux, or the daemon never enabled) -- the label/detail only name
         # the background job when one is actually present.
         has_daemon = _has_daemon_id(self._tweak_ids)
+        linux_daemon = any(policy_id == "daemon:prune-tmp-linux" for policy_id in self._tweak_ids)
+        has_redirect = any(policy_id.startswith("cache-redirect:") for policy_id in self._tweak_ids)
         label = "shell tweaks + background jobs" if has_daemon else "shell tweaks"
         detail = (
             "Disables every enabled shell tweak — the ~/.myshellrc blocks, "
             "the managed helper executables, and the Oh-My-Zsh plugin names "
             "this installer added to .zshrc (never ones you added yourself)"
         )
-        if has_daemon:
+        if linux_daemon:
+            detail += (
+                " — and unregisters the systemd user timer (its unit files and wrapper executable)"
+            )
+        elif has_daemon:
             detail += (
                 " — and unregisters the background maintenance LaunchAgent"
                 " (its plist and wrapper executable)"
             )
+        if has_redirect:
+            detail += "; the environment cache redirect is removed too"
         return _UninstallEntry(
             key=_TWEAK_KEY,
             cells=[
@@ -1279,17 +1287,20 @@ class UninstallScreen(AppScreen):
                 # tweak was ALSO swept -- a LaunchAgent needs no shell reload
                 # at all (11-REVIEWS.md cycle 2 finding #19).
                 has_daemon = _has_daemon_id(swept.swept)
+                linux_daemon = "daemon:prune-tmp-linux" in swept.swept
+                has_redirect = any(sid.startswith("cache-redirect:") for sid in swept.swept)
                 has_other = any(not sid.startswith("daemon:") for sid in swept.swept)
                 prefix = (
                     "shell tweaks and the background maintenance job"
                     if has_daemon
                     else "shell tweaks"
                 )
-                reload_hint = (
-                    " — open a new shell so functions and aliases refresh."
-                    if not has_daemon or has_other
-                    else "."
-                )
+                if linux_daemon and has_redirect:
+                    reload_hint = " — log out and back in so the environment redirect is dropped."
+                elif not has_daemon or has_other:
+                    reload_hint = " — open a new shell so functions and aliases refresh."
+                else:
+                    reload_hint = "."
                 parts.append(f"{prefix} disabled ({', '.join(swept.swept)}){reload_hint}")
             if swept.failed:
                 parts.append(
@@ -1482,6 +1493,24 @@ class PoliciesScreen(AppScreen):
                 " files directly, only through the unchanged script's own dry-run/apply"
                 " modes while the LaunchAgent is registered.",
                 "Press t to set the daily run time; press l to view the run log.",
+            ),
+            "daemon:prune-tmp-linux": (
+                "Deletes orphaned Bun runtime-cache files from the OS temp dir, every ten minutes.",
+                "The timer runs while you are logged in. For always-on operation, run"
+                " `loginctl enable-linger $USER` yourself; this installer does not run that"
+                " command for you, because it is a system-wide setting for the whole account.",
+                "Disabling only unregisters the timer and its unit files: it never deletes"
+                " temp files directly.",
+                "The daily time picker does not apply to this row.",
+            ),
+            "cache-redirect:bun": (
+                f"Sets {env_redirect.BUN_CACHE_REDIRECT.variable} so Bun's transpiler cache"
+                " lands in ~/.cache/bun instead of the OS temp dir.",
+                "On Linux this is an environment.d file the systemd user manager reads only"
+                " when it starts, so the change takes effect at the next login, not in a"
+                " new terminal tab.",
+                "Disabling removes the redirect but never deletes the cache directory itself.",
+                env_redirect.BUN_CACHE_REDIRECT.coverage_caveat,
             ),
         }
         lines = [f"{policy.label} — {policy.description}"]

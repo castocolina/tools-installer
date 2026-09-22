@@ -2102,6 +2102,7 @@ def test_interactive_wizard_prints_warnings_before_the_abort_return(
 
     def fake_build(*_args: object, **kwargs: object) -> _Aborting:
         handed = kwargs["daemon_default_warnings"]
+        assert isinstance(handed, DaemonDefaultWarnings)
         assert handed is collector
         handed.arm()
         return _Aborting()
@@ -2124,8 +2125,15 @@ def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_w
     buffer = io.StringIO()
     _sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=120, no_color=True))
-    monkeypatch.setattr(setup, "clean_rc_duplicates", lambda *_a, **_k: {})
-    monkeypatch.setattr(setup, "collect_bin_dirs", lambda *_a, **_k: [])
+
+    def no_duplicates(*_args: object, **_kwargs: object) -> dict[Path, list[str]]:
+        return {}
+
+    def no_bins(*_args: object, **_kwargs: object) -> list[Path]:
+        return []
+
+    monkeypatch.setattr(setup, "clean_rc_duplicates", no_duplicates)
+    monkeypatch.setattr(setup, "collect_bin_dirs", no_bins)
     collector = DaemonDefaultWarnings()
 
     class _Done:
@@ -2155,7 +2163,10 @@ def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_w
         def run(self) -> None:
             return None
 
-    monkeypatch.setattr(setup, "_build_app", lambda *_a, **_k: _Quiet())
+    def quiet_build(*_args: object, **_kwargs: object) -> _Quiet:
+        return _Quiet()
+
+    monkeypatch.setattr(setup, "_build_app", quiet_build)
     monkeypatch.setattr(setup, "DaemonDefaultWarnings", lambda: empty)
     assert setup.main([]) == 0
     assert quiet.getvalue() == ""
@@ -2218,12 +2229,18 @@ def test_both_uninstall_routes_pass_the_same_cache_redirect_set(
     )
     policies = seen[-1]["policies"]
     assert isinstance(policies, PolicyInputs)
-    listed = tuple(policy.id for policy in policies.policies if policy.id.startswith("cache-redirect:"))
+    listed = tuple(
+        policy.id for policy in policies.policies if policy.id.startswith("cache-redirect:")
+    )
 
     def redirect_ids(forwarded: dict[str, object]) -> tuple[str, ...]:
         extras = forwarded["extra_policies"]
         assert isinstance(extras, tuple)
-        return tuple(policy.id for policy in extras if isinstance(policy, Policy))
+        found: list[str] = []
+        for item in cast("tuple[object, ...]", extras):
+            if isinstance(item, Policy):
+                found.append(item.id)
+        return tuple(found)
 
     assert listed
     assert redirect_ids(cli[0]) == listed

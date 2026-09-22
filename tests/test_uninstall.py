@@ -1172,6 +1172,5 @@ def test_empty_extra_policies_leaves_the_sweep_unchanged(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     rc_path, bin_dir = _enabled_countdown(tmp_path)
-    assert sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, extra_policies=()) == SweepResult(
-        swept=("tweak:countdown",)
-    )
+    result = sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, extra_policies=())
+    assert result == SweepResult(swept=("tweak:countdown",))

@@ -13,11 +13,11 @@ from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.policy import Policy, daemon_policy
-from installer.uninstall import SweepResult
 from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError, Runner
 from installer.selection import Choice
 from installer.session import Install, MismatchChoice, SensitiveInstall, Summary
+from installer.uninstall import SweepResult
 from installer.versions import TagResolver
 
 
