@@ -144,18 +144,26 @@ resync_workspace() {
 write_tester_path() {
   # su - is a login shell: Fedora's .bashrc returns immediately when not
   # interactive, so PATH must live in .bash_profile (sourced after .bashrc).
+  # These rc files are sourced again by every nested shell, so the export
+  # must be self-deduping. The two export PATH= lines in sync_workspace and
+  # run_setup_as_tester are one-shot command prefixes in processes nothing
+  # re-sources and are deliberately left alone.
   exec_tester 'touch ~/.bash_profile
 if ! grep -q linuxbrew ~/.bash_profile 2>/dev/null; then
   printf "%s\n" "eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"" >> ~/.bash_profile
 fi
 if ! grep -q ".local/bin" ~/.bash_profile 2>/dev/null; then
-  printf "%s\n" "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> ~/.bash_profile
+  cat >> ~/.bash_profile <<"TI_PATH_GUARD"
+case ":${PATH-}:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin${PATH:+:$PATH}";;esac
+TI_PATH_GUARD
 fi
 if ! grep -q linuxbrew ~/.bashrc 2>/dev/null; then
   printf "%s\n" "eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"" >> ~/.bashrc
 fi
 if ! grep -q ".local/bin" ~/.bashrc 2>/dev/null; then
-  printf "%s\n" "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> ~/.bashrc
+  cat >> ~/.bashrc <<"TI_PATH_GUARD"
+case ":${PATH-}:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin${PATH:+:$PATH}";;esac
+TI_PATH_GUARD
 fi
 '
 }
