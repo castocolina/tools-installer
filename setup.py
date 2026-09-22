@@ -561,10 +561,11 @@ def _build_app(
         return tuple(rc_paths_for_mode(mode, _SHELL))
 
     def _sync_omz_terminals() -> str | None:
-        """Apply the shared terminal writer after a committed OMZ plugin edit
-        or a successful direct catalog update (D-01/15.6-05) -- the one
-        composition-root closure both call sites reuse, so a stale terminal
-        shell configuration from either path is corrected the same way."""
+        """Apply the shared terminal writer after a committed OMZ plugin edit,
+        a successful direct catalog update, or an interactive close
+        (D-01/15.6-05/15.6-06 Task 1) -- the one composition-root closure
+        every call site reuses, so a stale terminal shell configuration from
+        any of them is corrected the same way."""
         result = sync_terminal_shells(
             home=Path.home(),
             environ=os.environ,
@@ -732,6 +733,11 @@ def _build_app(
         updates=updates,
         execute=execute,
         prompt_link_mode=prompt_link_mode,
+        # D-01/15.6-06 Task 1: the SAME closure `omz_plugins_policy` and
+        # `updates` above are wired with -- every interactive close
+        # re-synchronizes terminal configuration exactly like Policies' own
+        # apply and the direct `u` update already do.
+        terminal_sync=_sync_omz_terminals,
     )
 
 
