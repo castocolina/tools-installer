@@ -538,14 +538,19 @@ Plans:
 
 ### Phase 15.7: Unify tmp-prune tooling into an installable Tweaks module (from pending todo 2026-09-10-unify-tmp-prune-tooling-into-an-installable-tweaks-module.md): opencode/Bun's runtime-transpiler-cache orphans native .so/.node artifacts on a killed/crashed process, either in OS temp (macOS $TMPDIR, can reach 100GB+/day) or /tmp on Linux (a small-quota tmpfs on Bazzite, ~12GB, causing EDQUOT failures across the whole system once full). Two independent non-reusable scripts already solve pieces of this today (this repo's scripts/prune-user-tmpdir.sh, manual dry-run/--apply only; ai-kit's Linux-only systemd-timer bundle, confirmed working, keeps /tmp under 1%) but neither is cross-platform, wired into this project, or installable/uninstallable. Build one dedicated cross-platform module: (1) env-var wiring to redirect Bun's cache off tmp entirely (environment.d on Linux, shell-rc based on macOS), (2) a real background daemon install/uninstall -- systemd user timer+oneshot on Linux, launchd LaunchAgent on macOS -- never manual scripts, (3) Tweaks view toggle (install/uninstall, daemon-active status, current tmp usage %), (4) make doctor integration: red warning when the cleanup daemon is inactive AND disk space is below 30% (or /tmp exceeds 50% on Linux specifically), extra visual weight when both conditions are true together. Reuse this project's existing OS-detection conventions (Phase 12.3 precedent) rather than duplicating per-OS logic; user explicitly rejected manual-script-only as an acceptable outcome. (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** A developer on Linux gets the same installable, uninstallable background cleanup for orphaned agent-runtime temp files that macOS already has — a systemd user timer + oneshot service toggled from the Policies view, never a manual script — plus a reusable cache-redirect that keeps Bun's runtime-transpiler cache out of the temp dir in the first place, a scope-aware takeover of any pre-existing competing cleanup mechanism, and a red Doctor warning when the cleanup job is inactive while disk or /tmp space is running out.
+**Requirements**: D-01, D-02 (scoped as D-02a: take over a user-scope competitor, detect-and-warn for a system-scope one, never escalate privileges), D-03, D-04 (15.7-CONTEXT.md locked decisions — inserted roadmap phase, not a REQUIREMENTS.md id)
 **Depends on:** Phase 15
-**Plans:** TBD
+**Plans:** 6 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 15.7 to break down)
+- [ ] 15.7-01-PLAN.md — Tracer: end-to-end Linux systemd prune daemon (mechanism, cleanup script, Policy factory, composition root) + transactional apply/remove and its own ownership marker (D-01)
+- [ ] 15.7-02-PLAN.md — D-03 pure layer: disk-pressure probe with the 15%/70% thresholds, guidance wording for every combination, and render-layer emphasis instead of a fourth Severity value
+- [ ] 15.7-03-PLAN.md — D-02a: read-only detection of a competing cleanup mechanism in both systemd scopes, user-scope takeover, system-scope warn-only, zero privilege escalation
+- [ ] 15.7-04-PLAN.md — D-04: generalized cache-redirect mechanism (environment.d on Linux, rc block on macOS) and its Policy factory, with Bun as the first wired-up target
+- [ ] 15.7-05-PLAN.md — Composition and teardown: per-policy ownership closures, extra-policy uninstall sweep, Policies-view disclosures (login-session limit, next-login redirect)
+- [ ] 15.7-06-PLAN.md — D-03 composition: the finding in `make doctor` and the Doctor screen, live temp usage on the cleanup row, source todo folded
 
 ### Phase 15.6: Terminal-emulator default-shell configuration (Konsole/kitty/WezTerm on immutable Linux hosts): make zsh (+ oh-my-zsh plugins, when installed) the working shell whenever the user opens a terminal, without ever touching chsh/system login shell -- chsh is confirmed absent on Bazzite (util-linux-user removed by design, ublue-os/bazzite#4159) and Bazzite maintainers explicitly recommend configuring the terminal emulator instead of the system login shell. Scoped to Linux/immutable hosts where this problem exists (macOS is unaffected -- chsh works normally there via the existing Phase 14 flow, confirmed by user). Research leads found this session: kitty supports a launcher-level override (kitty -o shell=<path>) and WezTerm supports (wezterm start --config default_prog={<path>}) without mutating kitty.conf/wezterm.lua directly; Konsole has no equivalent single flag but supports the more universal -e <command> launch pattern as a fallback. Investigate desktop-launcher (.desktop file) level integration vs per-app config mutation. (INSERTED)
 
