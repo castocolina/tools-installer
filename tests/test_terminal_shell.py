@@ -37,7 +37,7 @@ def test_sync_writes_kitty_login_shell_for_each_supported_linux_distro(
         home=tmp_path,
         environ={},
         platform=_platform(os_name),
-        lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+        lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty", wezterm="/usr/bin/wezterm"),
     )
 
     kitty_conf = tmp_path / ".config" / "kitty" / "kitty.conf"
@@ -154,9 +154,9 @@ def test_omz_repair_completes_before_kitty_region_is_written(
         writes.append(path)
         real_atomic_write(path, text)
 
-    def record_template(path: Path) -> bool:
+    def record_template(path: Path, root: Path | None = None) -> bool:
         writes.append(path)
-        return real_ensure_template(path)
+        return real_ensure_template(path, root)
 
     monkeypatch.setattr(terminal_shell, "atomic_write_text", record_write)
     monkeypatch.setattr(terminal_shell, "ensure_zshrc_template", record_template)
@@ -173,13 +173,53 @@ def test_omz_repair_completes_before_kitty_region_is_written(
     assert writes.index(zshrc) < writes.index(kitty_conf)
 
 
+def test_omz_repair_uses_the_real_root_when_zsh_names_a_relocated_install(
+    tmp_path: Path,
+) -> None:
+    """CR-01: `omz_present` treats a configured $ZSH as present too, so the
+    repair must write that real root -- not assume the conventional
+    ~/.oh-my-zsh -- or it overwrites a working $ZSH with a path that does not
+    exist."""
+    custom_root = tmp_path / "dotfiles" / "custom-omz"
+    custom_root.mkdir(parents=True)
+
+    sync_terminal_shells(
+        home=tmp_path,
+        environ={"ZSH": str(custom_root)},
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+    )
+
+    text = (tmp_path / ".zshrc").read_text()
+    assert f"export ZSH={custom_root}" in text
+    assert "$HOME/.oh-my-zsh" not in text
+
+
+def test_omz_repair_falls_back_to_the_default_root_when_no_zsh_env_is_set(
+    tmp_path: Path,
+) -> None:
+    """The conventional ~/.oh-my-zsh remains the default when omz_present is
+    satisfied through that location rather than a configured $ZSH."""
+    (tmp_path / ".oh-my-zsh").mkdir()
+
+    sync_terminal_shells(
+        home=tmp_path,
+        environ={},
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+    )
+
+    text = (tmp_path / ".zshrc").read_text()
+    assert 'export ZSH="$HOME/.oh-my-zsh"' in text
+
+
 def test_wezterm_generates_an_owned_login_program_before_return_config(tmp_path: Path) -> None:
     config_home = tmp_path / "xdg" / "config"
     result = sync_terminal_shells(
         home=tmp_path,
         environ={"XDG_CONFIG_HOME": str(config_home)},
         platform=_platform(),
-        lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+        lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty", wezterm="/usr/bin/wezterm"),
     )
 
     wezterm = config_home / "wezterm" / "wezterm.lua"
@@ -197,7 +237,7 @@ def test_wezterm_uses_the_existing_home_fallback_before_creating_a_new_file(tmp_
         home=tmp_path,
         environ={},
         platform=_platform(),
-        lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+        lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty", wezterm="/usr/bin/wezterm"),
     )
 
     assert 'config.default_prog = { "/usr/bin/zsh", "-l" }' in wezterm.read_text()
@@ -217,7 +257,7 @@ def test_wezterm_escapes_special_paths_and_leaves_unsupported_returns_unchanged(
         home=tmp_path,
         environ={},
         platform=_platform(),
-        lookup=_lookup(zsh=zsh_path, kitty="/usr/bin/kitty"),
+        lookup=_lookup(zsh=zsh_path, kitty="/usr/bin/kitty", wezterm="/usr/bin/wezterm"),
     )
 
     assert wezterm.read_text() == original
@@ -235,7 +275,12 @@ def test_konsole_creates_an_owned_profile_and_records_the_prior_default(tmp_path
         home=tmp_path,
         environ={"XDG_DATA_HOME": str(data_home), "XDG_CONFIG_HOME": str(config_home)},
         platform=_platform(),
-        lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty", konsole="/usr/bin/konsole"),
+        lookup=_lookup(
+            zsh="/usr/bin/zsh",
+            kitty="/usr/bin/kitty",
+            konsole="/usr/bin/konsole",
+            wezterm="/usr/bin/wezterm",
+        ),
     )
 
     profile = data_home / "konsole" / "tools-installer-zsh.profile"
@@ -288,7 +333,12 @@ def test_zsh_removal_reverts_only_complete_owned_terminal_configuration(tmp_path
         "home": tmp_path,
         "environ": {"XDG_DATA_HOME": str(data_home), "XDG_CONFIG_HOME": str(config_home)},
         "platform": _platform(),
-        "lookup": _lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty", konsole="/usr/bin/konsole"),
+        "lookup": _lookup(
+            zsh="/usr/bin/zsh",
+            kitty="/usr/bin/kitty",
+            konsole="/usr/bin/konsole",
+            wezterm="/usr/bin/wezterm",
+        ),
     }
     sync_terminal_shells(**args)
 
@@ -322,6 +372,25 @@ def test_absent_konsole_does_not_create_profile_or_kconfig(tmp_path: Path) -> No
 
     assert not (tmp_path / ".local" / "share" / "konsole" / "tools-installer-zsh.profile").exists()
     assert not (tmp_path / ".config" / "konsolerc").exists()
+
+
+def test_absent_wezterm_does_not_create_a_config_file_or_its_parent_directory(
+    tmp_path: Path,
+) -> None:
+    """CR-03: kitty and Konsole both gate on a live presence check; WezTerm had
+    none at all, so a synchronizer run with no wezterm in the lookup table
+    still created ~/.config/wezterm/wezterm.lua and its parent directory."""
+    result = sync_terminal_shells(
+        home=tmp_path,
+        environ={},
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+    )
+
+    assert "wezterm" not in result.configured
+    assert "wezterm unavailable" in result.skipped
+    assert not (tmp_path / ".config" / "wezterm").exists()
+    assert not (tmp_path / ".wezterm.lua").exists()
 
 
 def test_non_utf8_kitty_config_is_refused_as_an_oserror_without_changing_bytes(

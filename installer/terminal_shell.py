@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from installer.atomic import atomic_write_text
-from installer.omz import ensure_zshrc_template, omz_present
+from installer.omz import ensure_zshrc_template, omz_root
 from installer.platform import Platform
 
 Lookup = Callable[[str], str | None]
@@ -309,8 +309,14 @@ def sync_terminal_shells(
     if zsh_path is None:
         return _revert_terminal_shells(home=home, environ=environ)
 
-    if omz_present(home, environ):
-        ensure_zshrc_template(home / ".zshrc")
+    root = omz_root(home, environ)
+    if root is not None:
+        # CR-01: pass the real install directory, mirroring omz_present's own
+        # $ZSH-aware check -- omz_present being true guarantees root is not
+        # None, so the repair never hardcodes $HOME/.oh-my-zsh for an install
+        # that actually lives elsewhere (a dotfiles-managed or XDG-relocated
+        # oh-my-zsh checkout).
+        ensure_zshrc_template(home / ".zshrc", root)
 
     configured: list[str] = []
     skipped: list[str] = []
@@ -325,16 +331,25 @@ def sync_terminal_shells(
         _write_if_changed(config_path, updated)
         configured.append("kitty")
 
-    wezterm_path = _wezterm_config_path(home, environ)
-    wezterm_existing = _read_text(wezterm_path)
-    if not wezterm_existing:
-        wezterm_existing = 'local wezterm = require "wezterm"\nlocal config = {}\nreturn config\n'
-    wezterm_content = _wezterm_content(wezterm_existing, zsh_path)
-    if wezterm_content is None:
-        warnings.append("wezterm: unsupported return shape")
+    if _safe_executable(lookup("wezterm")) is None:
+        # CR-03: kitty (above) and Konsole (_sync_konsole) both gate on a
+        # live presence check; WezTerm previously had none at all, so every
+        # synchronizer run created ~/.config/wezterm/wezterm.lua -- and its
+        # parent directory -- for an app that may not even be installed.
+        skipped.append("wezterm unavailable")
     else:
-        _write_if_changed(wezterm_path, wezterm_content)
-        configured.append("wezterm")
+        wezterm_path = _wezterm_config_path(home, environ)
+        wezterm_existing = _read_text(wezterm_path)
+        if not wezterm_existing:
+            wezterm_existing = (
+                'local wezterm = require "wezterm"\nlocal config = {}\nreturn config\n'
+            )
+        wezterm_content = _wezterm_content(wezterm_existing, zsh_path)
+        if wezterm_content is None:
+            warnings.append("wezterm: unsupported return shape")
+        else:
+            _write_if_changed(wezterm_path, wezterm_content)
+            configured.append("wezterm")
 
     konsole_configured, konsole_warning = _sync_konsole(
         home=home, environ=environ, zsh_path=zsh_path, lookup=lookup

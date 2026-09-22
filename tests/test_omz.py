@@ -10,6 +10,7 @@ from installer.omz import (
     enable_plugins,
     ensure_zshrc_template,
     omz_present,
+    omz_root,
     owned_plugins,
     plugins_in,
     plugins_owned,
@@ -244,6 +245,39 @@ def test_omz_present_accepts_a_valid_zsh_env_var(
     assert omz_present(tmp_path, {"ZSH": str(custom)}) is True
     assert omz_present(tmp_path, {"ZSH": str(tmp_path / "missing")}) is False
     assert omz_present(tmp_path, {"ZSH": ""}) is False
+
+
+def test_omz_root_agrees_with_omz_present_on_every_case(tmp_path: Path) -> None:
+    """CR-01: omz_present is now defined directly in terms of omz_root, so the
+    two answers can never disagree -- this pins that relationship rather than
+    re-testing each branch independently."""
+    custom = tmp_path / "custom-omz"
+    missing = tmp_path / "missing"
+    for environ in ({}, {"ZSH": str(custom)}, {"ZSH": str(missing)}, {"ZSH": ""}):
+        assert (omz_root(tmp_path, environ) is not None) == omz_present(tmp_path, environ)
+
+    assert omz_root(tmp_path, {}) is None
+    (tmp_path / ".oh-my-zsh").mkdir()
+    assert omz_root(tmp_path, {}) == tmp_path / ".oh-my-zsh"
+
+    custom.mkdir()
+    # The conventional default takes priority when both exist, matching
+    # omz_present's own preference order.
+    assert omz_root(tmp_path, {"ZSH": str(custom)}) == tmp_path / ".oh-my-zsh"
+
+
+def test_ensure_zshrc_template_writes_the_real_root_when_one_is_supplied(
+    tmp_path: Path,
+) -> None:
+    """CR-01: a caller that already resolved the real oh-my-zsh directory
+    (terminal_shell's synchronizer, via omz_root) must have that root land in
+    the emitted export -- not the conventional ~/.oh-my-zsh default."""
+    zshrc = tmp_path / ".zshrc"
+    real_root = tmp_path / "dotfiles" / "custom-omz"
+    assert ensure_zshrc_template(zshrc, real_root) is True
+    text = zshrc.read_text()
+    assert f"export ZSH={real_root}" in text
+    assert "$HOME/.oh-my-zsh" not in text
 
 
 def test_a_multi_line_array_after_a_single_line_one_is_refused_not_silently_edited() -> None:

@@ -39,6 +39,7 @@ nothing left to act on.
 
 import os  # noqa: F401  # pyright: ignore[reportUnusedImport]
 import re
+import shlex
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -346,7 +347,7 @@ def _repair_sourced_template(lines: list[str], source_idx: int) -> list[str] | N
     return lines
 
 
-def ensure_zshrc_template(zshrc_path: Path) -> bool:
+def ensure_zshrc_template(zshrc_path: Path, root: Path | None = None) -> bool:
     """Make .zshrc source Oh-My-Zsh with an editable plugins assignment.
 
     KEEP_ZSHRC=yes preserves an existing .zshrc, which can leave oh-my-zsh
@@ -357,7 +358,23 @@ def ensure_zshrc_template(zshrc_path: Path) -> bool:
     export ZSH, plugins=(git), then source. When a source exists, a missing
     or post-source supported array is repaired at that source location.
     Source-correct files and governing multi-line arrays are left unchanged.
+
+    CR-01: `root` is the real oh-my-zsh install directory -- `omz_root`'s
+    answer, not an assumption. `omz_present`, the predicate every caller
+    gates this repair on, deliberately treats oh-my-zsh as present either at
+    the conventional `~/.oh-my-zsh` or at whatever directory a configured
+    `$ZSH` names (a dotfiles-managed or XDG-relocated install). Before this
+    fix, this function ignored that and always emitted a literal
+    `export ZSH="$HOME/.oh-my-zsh"` regardless of where the install actually
+    was, silently overwriting a working `$ZSH` and sourcing a path that does
+    not exist. Callers that cannot supply a real root (write_plugins, when
+    .zshrc itself does not exist yet and there is nothing to detect a root
+    from) keep the conventional default via the `None` fallback. The
+    conventional default itself is still emitted as the portable, symbolic
+    `$HOME/.oh-my-zsh` -- exactly as before -- and only a root that actually
+    differs from it is written out as its own quoted, resolved path.
     """
+    default_root = zshrc_path.parent / ".oh-my-zsh"
     existing = _read_rc(zshrc_path) if zshrc_path.exists() else ""
     lines = existing.split("\n")
     source_idx = _sourced_oh_my_zsh(lines)
@@ -370,7 +387,10 @@ def ensure_zshrc_template(zshrc_path: Path) -> bool:
         updated = existing
         if updated and not updated.endswith("\n"):
             updated += "\n"
-        updated += 'export ZSH="$HOME/.oh-my-zsh"\n'
+        if root is None or root == default_root:
+            updated += 'export ZSH="$HOME/.oh-my-zsh"\n'
+        else:
+            updated += f"export ZSH={shlex.quote(str(root))}\n"
         if _locate(updated.split("\n")) is None:
             updated += "plugins=(git)\n"
         updated += "source $ZSH/oh-my-zsh.sh\n"
@@ -477,9 +497,22 @@ def remove_plugins(zshrc_path: Path, state_path: Path) -> tuple[str, ...]:
     return removed
 
 
+def omz_root(home: Path, environ: Mapping[str, str]) -> Path | None:
+    """The real oh-my-zsh install directory, or None when neither location exists.
+
+    CR-01: this is the one place that decides "where is oh-my-zsh actually
+    installed", so `omz_present` and `ensure_zshrc_template`'s root can never
+    disagree again -- `omz_present` is now defined directly in terms of this
+    function's answer, and callers that need to write a root (terminal_shell's
+    synchronizer) resolve it here rather than assuming the default.
+    """
+    default = home / ".oh-my-zsh"
+    if default.is_dir():
+        return default
+    configured = environ.get("ZSH")
+    return Path(configured) if configured and Path(configured).is_dir() else None
+
+
 def omz_present(home: Path, environ: Mapping[str, str]) -> bool:
     """True when ~/.oh-my-zsh or a $ZSH that names an existing directory is present."""
-    if (home / ".oh-my-zsh").is_dir():
-        return True
-    zsh = environ.get("ZSH")
-    return bool(zsh) and Path(zsh).is_dir()
+    return omz_root(home, environ) is not None
