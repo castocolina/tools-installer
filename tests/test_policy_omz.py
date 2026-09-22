@@ -168,3 +168,30 @@ def test_removal_detail_names_the_plugins_and_the_file(
     assert "git, docker" in detail
     assert "~/.zshrc" in detail
     assert "plugins=(...)" in detail
+
+
+def test_policy_keeps_committed_plugins_when_terminal_sync_raises_a_non_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CR-02/WR-03: a UnicodeDecodeError (a ValueError) is a real failure mode
+    of the synchronizer's own readers, and it used to escape this site's narrow
+    `except OSError` straight out of the Policies toggle."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zshrc = _zshrc(tmp_path)
+
+    def sync() -> str | None:
+        return "\xe9".encode("latin-1").decode("utf-8")
+
+    policy = omz_plugins_policy(
+        zshrc_path=zshrc,
+        state_path=tmp_path / ".myshellrc",
+        present=True,
+        terminal_sync=sync,
+    )
+
+    result = policy.apply()
+
+    assert "plugins=(z sudo git docker)" in zshrc.read_text()
+    assert plugins_owned(tmp_path / ".myshellrc") is True
+    assert result.warning is not None
+    assert result.warning.startswith("Terminal shell synchronization failed: ")

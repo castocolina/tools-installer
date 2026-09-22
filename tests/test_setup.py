@@ -651,7 +651,7 @@ def test_build_app_wires_live_omz_availability_and_one_terminal_sync_closure(
         "home": tmp_path,
         "environ": os.environ,
         "platform": platform,
-        "lookup": setup.shutil.which,
+        "lookup": setup._which_with_brew,  # pyright: ignore[reportPrivateUsage]
     }
     assert (tmp_path / ".zshrc").exists()
 
@@ -1141,7 +1141,7 @@ def test_build_app_wires_the_shared_terminal_closure_into_update_service(
         "home": tmp_path,
         "environ": os.environ,
         "platform": platform,
-        "lookup": setup.shutil.which,
+        "lookup": setup._which_with_brew,  # pyright: ignore[reportPrivateUsage]
     }
 
 
@@ -1283,6 +1283,59 @@ def test_the_cli_uninstall_route_survives_a_raising_terminal_synchronizer(
     text = buffer.getvalue()
     assert "Terminal shell synchronization failed" in text
     assert "EACCES" in text
+
+
+def test_which_with_brew_finds_a_linuxbrew_binary_shutil_which_cannot_see(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CR-04: on an immutable host, registry.toml's zsh entry installs via
+    brew and engine.py never adds the brew bin dir to THIS process's own
+    PATH, so a bare shutil.which("zsh") still returns None immediately after
+    the install this phase exists to react to. _which_with_brew must find it
+    anyway, by disk presence, the same way _resolve_rtk_binary already does
+    for rtk."""
+
+    def which_misses(_name: str) -> str | None:
+        return None
+
+    monkeypatch.setattr(setup.shutil, "which", which_misses)
+    linuxbrew = tmp_path / "linuxbrew"
+    linuxbrew.mkdir()
+    (linuxbrew / "zsh").write_text("#!/bin/sh\n")
+    monkeypatch.setattr(setup, "BREW_BIN_DIRS", (linuxbrew,))
+
+    assert setup._which_with_brew("zsh") == str(linuxbrew / "zsh")  # pyright: ignore[reportPrivateUsage]
+    assert setup._which_with_brew("does-not-exist") is None  # pyright: ignore[reportPrivateUsage]
+
+
+def test_which_with_brew_prefers_a_real_shutil_which_hit(monkeypatch: pytest.MonkeyPatch) -> None:
+    def which_hits(_name: str) -> str | None:
+        return "/usr/bin/zsh"
+
+    monkeypatch.setattr(setup.shutil, "which", which_hits)
+
+    assert setup._which_with_brew("zsh") == "/usr/bin/zsh"  # pyright: ignore[reportPrivateUsage]
+
+
+def test_sync_terminals_surfaces_a_silent_revert_as_a_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CR-04/IN-01: a full revert (zsh no longer discoverable) used to be
+    reported identically to a fully successful run -- only `.warnings` was
+    ever read. A revert must now produce its own message."""
+    platform = _platform()
+
+    def sync(**_kwargs: object) -> TerminalShellResult:
+        return TerminalShellResult(reverted=("kitty", "konsole"))
+
+    monkeypatch.setattr(setup, "sync_terminal_shells", sync)
+
+    warning = setup._sync_terminals(platform)  # pyright: ignore[reportPrivateUsage]
+
+    assert warning is not None
+    assert "reverted" in warning
+    assert "kitty" in warning
+    assert "konsole" in warning
 
 
 def test_build_app_rebinds_execute_onto_shared_services_when_execute_is_passed(

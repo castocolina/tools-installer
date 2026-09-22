@@ -37,6 +37,7 @@ from installer.pnpm_globals import NodeGlobalsReport, reinstall_preview
 from installer.policy import Policy, PolicyResult
 from installer.render import guidance_text
 from installer.session import Summary
+from installer.terminal_shell import terminal_sync_warning
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import (
     BASE_VIEW,
@@ -1223,14 +1224,18 @@ class UninstallScreen(AppScreen):
         # summary, mirroring the invalidate seam's own both-directions
         # contract: never swallowed, never flips `applied` or the primary
         # outcome.
-        if self._terminal_sync is not None:
-            try:
-                terminal_warning = self._terminal_sync()
-            except OSError as exc:
-                terminal_warning = f"Terminal shell synchronization failed: {exc}"
-            if terminal_warning:
-                summary_parts.append(terminal_warning)
-        self.status.set(multiline_summary(summary_parts), "ok")
+        # WR-03: the one shared failure contract (terminal_sync_warning), not a
+        # local try/except -- it is total and None-tolerant by construction.
+        # WR-04: a terminal-sync failure must render with "warn" styling, not
+        # the "ok" success color -- the text alone (appended above) is not
+        # enough to distinguish it from a clean run at a glance. Mirrors the
+        # Policies screen and _install_closed, both of which already use
+        # "warn" for this exact class of failure.
+        terminal_warning = terminal_sync_warning(self._terminal_sync)
+        terminal_failed = terminal_warning is not None
+        if terminal_warning:
+            summary_parts.append(terminal_warning)
+        self.status.set(multiline_summary(summary_parts), "warn" if terminal_failed else "ok")
 
     @work(thread=True, exclusive=True, group="uninstall-ownership-refresh", exit_on_error=False)
     def _refresh_ownership_worker(self) -> None:
@@ -1955,6 +1960,17 @@ class UnifiedApp(App[list[str] | None]):
         # the execute screen is still on top when the failure happens, so
         # there is no catalog status line to write to yet.
         self._invalidate_warning: str | None = None
+        # WR-07 (15.6-REVIEW.md): set by on_install_run_finished whenever a
+        # run in this ExecuteScreen session actually installed something
+        # (Summary.installed non-empty -- real disk/config mutation, unlike
+        # `already`/`failed`/`no_method`/etc., which are no-ops or failures),
+        # consumed and reset by _install_closed. Gates the terminal
+        # re-synchronization on a real state change: merely opening and
+        # dismissing the Execute screen with nothing selected/changed
+        # otherwise rewrote kitty.conf, created a brand-new wezterm.lua
+        # (CR-03), and wrote konsolerc for a session where the user selected
+        # and changed nothing.
+        self._install_state_changed: bool = False
         # The WHOLE catalog, not a tier slice. `_install_closed` re-derives the
         # installed map from this list because the map is resolved against the
         # full catalog by deps.missing_requires / selection.unstaged_recommends,
@@ -2283,18 +2299,25 @@ class UnifiedApp(App[list[str] | None]):
                     screen.set_installed(fresh)
             elif error is not None:
                 warnings.append(f"installed-state re-check failed: {error}")
-        # D-01/15.6-06 Task 1: the shared terminal synchronizer runs after
-        # EVERY close event -- never only a selected tool id, never only a
-        # successful outcome -- the same closure Plans 04/05 already wired
-        # for Policies' OMZ-plugin apply and the direct `u` update. Through
-        # run_live like every other live core read this callback triggers
-        # (rule 3): an OSError is a secondary, non-fatal warning and must
-        # never flip an already-recorded run into a reported failure.
-        if self._terminal_sync is not None:
-            sync_warning, sync_error = run_live(self._terminal_sync)
-            if sync_error is not None:
-                warnings.append(f"terminal shell synchronization failed: {sync_error}")
-            elif sync_warning:
+        # D-01/15.6-06 Task 1: the shared terminal synchronizer runs after a
+        # close event that actually changed installed-tool state -- never
+        # only a selected tool id (WR-07: merely opening and dismissing the
+        # Execute screen with nothing selected/changed otherwise rewrote
+        # kitty.conf, created a brand-new wezterm.lua (CR-03), and wrote
+        # konsolerc for a session that installed nothing). The zsh-removal
+        # revert case is independently covered by
+        # UninstallScreen._apply_removal and _run_uninstall, so this gate
+        # does not lose coverage for that scenario. Through run_live like
+        # every other live core read this callback triggers (rule 3): an
+        # OSError is a secondary, non-fatal warning and must never flip an
+        # already-recorded run into a reported failure.
+        # WR-03: not run_live -- terminal_sync_warning IS this seam's live
+        # guard, and routing through both produced the one message whose
+        # casing had already drifted from the other four call sites.
+        if self._install_state_changed:
+            self._install_state_changed = False
+            sync_warning = terminal_sync_warning(self._terminal_sync)
+            if sync_warning:
                 warnings.append(sync_warning)
         # A .get(), not an index: _catalogs is keyed by tier only
         # (system/user/ai) while current_view ranges over all six VIEWS
@@ -2315,7 +2338,14 @@ class UnifiedApp(App[list[str] | None]):
         if self._invalidate_warning is not None:
             warnings.append(self._invalidate_warning)
             self._invalidate_warning = None
-        if not warnings:
+        # WR-08: also checks _pending_warnings, not just this close's own
+        # `warnings` -- __init__'s own documented contract is that a queued
+        # warning flushes on "the next _install_closed render", but a close
+        # that produces no NEW warning of its own used to return here before
+        # ever reaching the drain below, so a previously-queued warning was
+        # never actually delivered by this path -- only a subsequent
+        # show_view navigation flushed it.
+        if not warnings and not self._pending_warnings:
             return
         # T-15.6-13: render on WHICHEVER AppScreen is actually visible right
         # now -- a catalog tier (active, above) or the Doctor/Uninstall/
@@ -2363,6 +2393,14 @@ class UnifiedApp(App[list[str] | None]):
             except Exception as exc:  # noqa: BLE001 -- post-mutation side effect, reported below
                 self._invalidate_warning = f"version cache invalidation failed: {exc}"
         incoming = message.summary
+        # WR-07: `installed` is the one Summary bucket that means a real
+        # mutation happened (a tool actually installed) -- `already` is a
+        # confirmed-no-op, and `failed`/`no_method`/`mismatched`/
+        # `dependency_failed`/`manual_required` are all failures, never a
+        # state change. `|=` because a session can run ExecuteScreen more
+        # than once before closing it; any one of those runs installing
+        # something is enough.
+        self._install_state_changed = self._install_state_changed or bool(incoming.installed)
         existing = self.install_summary
         if existing is None:
             self.install_summary = incoming

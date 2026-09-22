@@ -68,13 +68,20 @@ class StatusLine(Static):
     def __init__(self) -> None:
         super().__init__("")
         self.text = ""  # public test seam
+        # WR-04 (15.6-REVIEW.md): a caller-visible severity seam, mirroring
+        # `text` above -- before this, a test could confirm the WARNING text
+        # landed but had no way to confirm it was not rendered with the same
+        # "ok" (success) styling as a clean run.
+        self.severity: Severity | None = None  # public test seam
 
     def set(self, text: str, severity: Severity | str) -> None:
         self.text = text
-        self.update(Text(text, style=SEVERITY_STYLE[Severity(severity)]))
+        self.severity = Severity(severity)
+        self.update(Text(text, style=SEVERITY_STYLE[self.severity]))
 
     def clear(self) -> None:
         self.text = ""
+        self.severity = None
         self.update("")
 
 

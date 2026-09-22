@@ -30,6 +30,7 @@ from installer.guards import (
 from installer.omz import owned_plugins, plugins_owned, remove_plugins, write_plugins
 from installer.run import CommandError, Runner, run_captured
 from installer.shellrc import ensure_source
+from installer.terminal_shell import terminal_sync_warning
 from installer.tweaks import (
     TweakBundle,
     install_tweak_executables,
@@ -445,12 +446,10 @@ def omz_plugins_policy(
             detail = f"added {' '.join(added)} to {display}"
         else:
             detail = f"already in {display} — nothing added, nothing to undo later"
-        warning: str | None = None
-        if terminal_sync is not None:
-            try:
-                warning = terminal_sync()
-            except OSError as exc:
-                warning = f"Terminal shell synchronization failed: {exc}"
+        # WR-03: the one shared failure contract, never a local try/except --
+        # it is total by construction, so a synchronization failure can never
+        # downgrade the plugin edit that already committed above.
+        warning = terminal_sync_warning(terminal_sync)
         return PolicyResult(
             layers=(PolicyLayer("Oh-My-Zsh plugins", detail),),
             reload_hint=_ZSH_RELOAD_HINT,

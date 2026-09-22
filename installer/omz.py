@@ -39,6 +39,7 @@ nothing left to act on.
 
 import os  # noqa: F401  # pyright: ignore[reportUnusedImport]
 import re
+import shlex
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -82,7 +83,23 @@ _ANY_PLUGINS_OPEN = re.compile(r"^[ \t]*plugins=\(")
 
 # An uncommented `source` / `.` command whose target is oh-my-zsh.sh. A comment
 # or other mention of the filename is not an executable source statement.
-_OH_MY_ZSH_SOURCE = re.compile(r"^[ \t]*(?:source|\.)[ \t]+[^\n#]*oh-my-zsh\.sh")
+#
+# WR-06 (15.6-REVIEW.md): anchored to the start of the (trimmed) line only,
+# the previous pattern classified the common guarded idiom
+# `[ -f "$ZSH/oh-my-zsh.sh" ] && source "$ZSH/oh-my-zsh.sh"` as "not sourced"
+# -- ensure_zshrc_template is called unconditionally whenever omz_present()
+# is true, bypassing write_plugins's own smarter already-has-an-array gate
+# entirely, so a fully correct .zshrc using this idiom got a second,
+# unconditional export ZSH=/source pair appended on every install-close,
+# update, and uninstall event. `(?:^|[;&|]\s*|\s)` requires the token to be
+# preceded by the string's own start, a shell operator (;, &&/&, ||/|), or
+# plain whitespace -- i.e. a position the shell would actually execute a
+# command from -- not merely anywhere the substring appears (inside a
+# string literal, as part of a longer identifier). `[^#\n]*` (rather than
+# `.*`) is what keeps "a comment never counts": it cannot cross a `#`, so
+# a `#` anywhere earlier on the line makes every position after it
+# unreachable for this match.
+_OH_MY_ZSH_SOURCE = re.compile(r"^[^#\n]*(?:^|[;&|]\s*|\s)(?:source|\.)\s+[^\n#]*oh-my-zsh\.sh")
 
 # The ownership record. It lives in ~/.myshellrc — a file this installer
 # created — because .zshrc must never carry a tools-installer marker. The body
@@ -137,8 +154,22 @@ def _sourced_oh_my_zsh(lines: list[str]) -> int | None:
 
 
 def _read_rc(path: Path) -> str:
-    """Read an rc file without translating CRLF into Unix newlines."""
-    return path.read_bytes().decode("utf-8")
+    """Read an rc file without translating CRLF into Unix newlines.
+
+    A non-UTF-8 byte (a Latin-1 accented character in a comment is entirely
+    realistic in a hand-written .zshrc) is reported as OmzPluginsError rather
+    than the bare UnicodeDecodeError `bytes.decode` raises. UnicodeDecodeError
+    is a ValueError, NOT an OSError, so it escapes every caller's OSError
+    handler -- including the six lifecycle call sites of the terminal
+    synchronizer, where it would turn a successful install into an uncaught
+    traceback. Refusing here also keeps the file byte-identical: a rewrite of
+    content this module could not read is exactly the corruption it exists to
+    avoid.
+    """
+    try:
+        return path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise OmzPluginsError(f"{path} is not valid UTF-8; refusing to rewrite it") from exc
 
 
 def _bare(token: str) -> str:
@@ -317,10 +348,22 @@ def _repair_sourced_template(lines: list[str], source_idx: int) -> list[str] | N
     location. An active source with no plugins assignment at all receives the
     default `plugins=(git)` there. A governing multi-line array is left
     untouched so `_locate`'s fail-safe still refuses it.
+
+    WR-05 (15.6-REVIEW.md): an INDENTED single-line array is nested inside an
+    `if`/`case`/function body -- `_locate`'s own regex deliberately allows
+    leading indentation so ownership/enable/disable can still recognize it,
+    but relocating a nested assignment here has no awareness of the
+    surrounding block structure: popping it out and re-inserting it before
+    the source line turns a conditional plugin set into an unconditional
+    one and leaves the original conditional an empty no-op. Refused the
+    same way this function already refuses a governing multi-line array --
+    not ours to relocate.
     """
     located = _locate(lines)
     if located is not None:
-        plugins_idx, _ = located
+        plugins_idx, match = located
+        if match.group("indent"):
+            return None
         if plugins_idx < source_idx:
             return None
         plugin_line = lines.pop(plugins_idx)
@@ -332,7 +375,7 @@ def _repair_sourced_template(lines: list[str], source_idx: int) -> list[str] | N
     return lines
 
 
-def ensure_zshrc_template(zshrc_path: Path) -> bool:
+def ensure_zshrc_template(zshrc_path: Path, root: Path | None = None) -> bool:
     """Make .zshrc source Oh-My-Zsh with an editable plugins assignment.
 
     KEEP_ZSHRC=yes preserves an existing .zshrc, which can leave oh-my-zsh
@@ -342,8 +385,26 @@ def ensure_zshrc_template(zshrc_path: Path) -> bool:
     When no source exists, the appended template is evaluated in order:
     export ZSH, plugins=(git), then source. When a source exists, a missing
     or post-source supported array is repaired at that source location.
-    Source-correct files and governing multi-line arrays are left unchanged.
+    Source-correct files, governing multi-line arrays, and an INDENTED
+    single-line array nested inside an if/case/function body (WR-05) are
+    all left unchanged.
+
+    CR-01: `root` is the real oh-my-zsh install directory -- `omz_root`'s
+    answer, not an assumption. `omz_present`, the predicate every caller
+    gates this repair on, deliberately treats oh-my-zsh as present either at
+    the conventional `~/.oh-my-zsh` or at whatever directory a configured
+    `$ZSH` names (a dotfiles-managed or XDG-relocated install). Before this
+    fix, this function ignored that and always emitted a literal
+    `export ZSH="$HOME/.oh-my-zsh"` regardless of where the install actually
+    was, silently overwriting a working `$ZSH` and sourcing a path that does
+    not exist. Callers that cannot supply a real root (write_plugins, when
+    .zshrc itself does not exist yet and there is nothing to detect a root
+    from) keep the conventional default via the `None` fallback. The
+    conventional default itself is still emitted as the portable, symbolic
+    `$HOME/.oh-my-zsh` -- exactly as before -- and only a root that actually
+    differs from it is written out as its own quoted, resolved path.
     """
+    default_root = zshrc_path.parent / ".oh-my-zsh"
     existing = _read_rc(zshrc_path) if zshrc_path.exists() else ""
     lines = existing.split("\n")
     source_idx = _sourced_oh_my_zsh(lines)
@@ -356,7 +417,10 @@ def ensure_zshrc_template(zshrc_path: Path) -> bool:
         updated = existing
         if updated and not updated.endswith("\n"):
             updated += "\n"
-        updated += 'export ZSH="$HOME/.oh-my-zsh"\n'
+        if root is None or root == default_root:
+            updated += 'export ZSH="$HOME/.oh-my-zsh"\n'
+        else:
+            updated += f"export ZSH={shlex.quote(str(root))}\n"
         if _locate(updated.split("\n")) is None:
             updated += "plugins=(git)\n"
         updated += "source $ZSH/oh-my-zsh.sh\n"
@@ -463,9 +527,22 @@ def remove_plugins(zshrc_path: Path, state_path: Path) -> tuple[str, ...]:
     return removed
 
 
+def omz_root(home: Path, environ: Mapping[str, str]) -> Path | None:
+    """The real oh-my-zsh install directory, or None when neither location exists.
+
+    CR-01: this is the one place that decides "where is oh-my-zsh actually
+    installed", so `omz_present` and `ensure_zshrc_template`'s root can never
+    disagree again -- `omz_present` is now defined directly in terms of this
+    function's answer, and callers that need to write a root (terminal_shell's
+    synchronizer) resolve it here rather than assuming the default.
+    """
+    default = home / ".oh-my-zsh"
+    if default.is_dir():
+        return default
+    configured = environ.get("ZSH")
+    return Path(configured) if configured and Path(configured).is_dir() else None
+
+
 def omz_present(home: Path, environ: Mapping[str, str]) -> bool:
     """True when ~/.oh-my-zsh or a $ZSH that names an existing directory is present."""
-    if (home / ".oh-my-zsh").is_dir():
-        return True
-    zsh = environ.get("ZSH")
-    return bool(zsh) and Path(zsh).is_dir()
+    return omz_root(home, environ) is not None

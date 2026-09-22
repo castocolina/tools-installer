@@ -95,6 +95,7 @@ from installer.platform import Platform
 from installer.pnpm_globals import PnpmUnavailable
 from installer.postinstall import run_postinstall
 from installer.run import CommandError, Runner, run_captured
+from installer.terminal_shell import terminal_sync_warning
 from installer.versions import TagResolver, VersionError, resolve_github_tag
 
 PostinstallFn = Callable[[str, Method, Runner, Mapping[str, Tool]], str | None]
@@ -468,14 +469,13 @@ class UpdateService:
             except Exception as extra:  # noqa: BLE001 -- secondary mutation, never downgrades updated
                 warning = f"pnpm globals replay failed: {extra}"
                 detail = f"{detail}; {warning}" if detail else warning
-        if outcome.status == "updated" and self._terminal_follow_up is not None:
-            try:
-                follow_up_warning = self._terminal_follow_up()
-            except OSError as extra:
-                # T-15.6-11: the mutation already succeeded -- a terminal sync
-                # failure is a secondary, non-fatal warning appended beside
-                # the updated status, never a reason to report it as failed.
-                follow_up_warning = f"Terminal shell synchronization failed: {extra}"
+        if outcome.status == "updated":
+            # T-15.6-11: the mutation already succeeded -- a terminal sync
+            # failure is a secondary, non-fatal warning appended beside the
+            # updated status, never a reason to report it as failed. WR-03:
+            # that guarantee lives in terminal_sync_warning, which is total
+            # (and None-tolerant), not in a try/except copied to this site.
+            follow_up_warning = terminal_sync_warning(self._terminal_follow_up)
             if follow_up_warning:
                 detail = f"{detail}; {follow_up_warning}" if detail else follow_up_warning
         if outcome.status == "updated" and self._invalidate is not None:

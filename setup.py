@@ -57,6 +57,7 @@ from installer.policy import (
     omz_plugins_policy,
     tweak_policy,
 )
+from installer.postinstall import BREW_BIN_DIRS
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.resolve import platform_could_support
@@ -71,7 +72,7 @@ from installer.settings import (
 )
 from installer.shellrc import collect_bin_dirs, has_managed_block
 from installer.status import is_installed
-from installer.terminal_shell import sync_terminal_shells
+from installer.terminal_shell import sync_terminal_shells, terminal_sync_warning
 from installer.tweaks import BUNDLES, applicable_bundles
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import (
@@ -382,6 +383,33 @@ def _build_daemon_policy(platform: Platform, installed: Mapping[str, bool]) -> P
     )
 
 
+def _which_with_brew(name: str) -> str | None:
+    """Resolve an executable like `shutil.which`, falling back to well-known
+    Homebrew prefixes checked by disk presence.
+
+    CR-04: on an immutable host -- Bazzite, the only host class this phase
+    targets -- registry.toml's zsh entry has no rpm-ostree method and
+    installs via the brew method (`formula = "zsh"`). `engine.py` only calls
+    `prepend_path` for a method whose params include `bin_dir`, and the brew
+    method declares none, so `/home/linuxbrew/.linuxbrew/bin` is never added
+    to THIS process's own PATH. Immediately after the install this phase
+    exists to react to, a bare `shutil.which("zsh")` still returned `None` in
+    that same process, and the synchronizer took its revert branch instead of
+    configuring anything -- silently, on the exact host this phase was built
+    for. Reuses the fix pattern this project already has for the identical
+    chicken-and-egg problem (`installer/postinstall.py::_resolve_rtk_binary`,
+    `BREW_BIN_DIRS`).
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+    for brew_dir in BREW_BIN_DIRS:
+        candidate = brew_dir / name
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 def _sync_terminals(platform: Platform) -> str | None:
     """The single Phase 15.6 terminal-shell synchronizer every lifecycle route
     reuses (D-01): Policies' OMZ-plugin apply, the direct `u` update,
@@ -392,15 +420,24 @@ def _sync_terminals(platform: Platform) -> str | None:
     wrapper closing over its own resolved `platform` (`_sync_omz_terminals`);
     the two CLI-only lifecycle routes in `main`/`_run_uninstall` call this
     directly since neither builds a `UnifiedApp`.
+
+    CR-04: `lookup` is `_which_with_brew`, not a bare `shutil.which`, so a
+    zsh that a brew install just placed on disk in this same process is
+    still found. IN-01/CR-04: a revert is also surfaced now -- previously
+    only `result.warnings` was ever read, so a full revert (zsh no longer
+    discoverable) produced no message at all.
     """
     result = sync_terminal_shells(
         home=Path.home(),
         environ=os.environ,
         platform=platform,
-        lookup=shutil.which,
+        lookup=_which_with_brew,
     )
-    if result.warnings:
-        return "Terminal shell synchronization warning: " + "; ".join(result.warnings)
+    messages = list(result.warnings)
+    if result.reverted:
+        messages.append("zsh is no longer present; reverted " + ", ".join(result.reverted))
+    if messages:
+        return "Terminal shell synchronization warning: " + "; ".join(messages)
     return None
 
 
@@ -409,12 +446,11 @@ def _sync_terminals_and_report(console: Console, platform: Platform) -> None:
     the console (D-01/15.6-06 Task 2) -- both non-interactive CLI lifecycle
     routes (`main`'s unattended install, `_run_uninstall`'s command-line
     teardown) call this after their own primary completion, so a raised
-    OSError is reported truthfully without ever flipping an already-determined
-    exit code."""
-    try:
-        warning = _sync_terminals(platform)
-    except OSError as exc:
-        warning = f"Terminal shell synchronization failed: {exc}"
+    exception is reported truthfully without ever flipping an already-determined
+    exit code. WR-03: the catch and the message live in the one shared
+    `terminal_sync_warning` contract, never in a try/except copied to this
+    site."""
+    warning = terminal_sync_warning(lambda: _sync_terminals(platform))
     if warning:
         console.print(warning)
 

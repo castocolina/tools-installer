@@ -14,6 +14,7 @@ from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
+from installer.enums import Severity
 from installer.execute_screen import ExecuteInputs, ExecuteScreen
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool, load_tools
@@ -790,12 +791,16 @@ async def test_uninstall_apply_calls_the_terminal_synchronizer_once_on_success()
         assert len(captured) == 1
         assert len(calls) == 1
         assert "Removed 1 tool(s)." in screen.status.text
+        assert screen.status.severity is Severity.OK
 
 
 async def test_uninstall_apply_appends_a_terminal_sync_oserror_without_losing_applied() -> None:
     """Test 2: a terminal synchronizer OSError appends a visible warning to
     the successful removal result and never changes `applied` from the
-    primary removal outcome."""
+    primary removal outcome. WR-04: the failure must also render with
+    "warn" styling -- not "ok" -- so it is distinguishable from a clean
+    success at a glance, mirroring the Policies screen and
+    _install_closed's own use of "warn" for this exact class of failure."""
     captured: list[UninstallDecision] = []
 
     def _boom() -> str | None:
@@ -817,6 +822,7 @@ async def test_uninstall_apply_appends_a_terminal_sync_oserror_without_losing_ap
         assert len(captured) == 1
         assert "terminal shell synchronization failed" in screen.status.text.lower()
         assert "EACCES" in screen.status.text
+        assert screen.status.severity is Severity.WARN
 
 
 async def test_uninstall_apply_never_calls_the_terminal_synchronizer_after_a_failed_sweep() -> None:
@@ -4804,9 +4810,15 @@ async def test_install_closed_calls_the_terminal_synchronizer_once_per_tier(
     ]
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
 
+    # WR-07: `installed` gates BOTH resolve_dependencies' own selection-time
+    # is_installed check (ExecuteScreen.on_mount) AND _install_closed's
+    # post-run resync sweep -- the same ExecuteInputs field serves both. It
+    # must answer False, or the tool is treated as already present and
+    # excluded from the run entirely; Summary.installed then stays empty and
+    # the WR-07 gate this test exercises would never fire.
     def _installed(_t: Tool) -> bool:
         calls.append("installed-sweep")
-        return True
+        return False
 
     execute = ExecuteInputs(
         catalog=tools,
@@ -4865,7 +4877,11 @@ async def test_install_closed_reports_a_terminal_sync_oserror_without_losing_the
         platform=_install_closed_platform(),
         wire_path=lambda: "",
         verify=lambda: "",
-        installed=lambda _t: True,
+        # WR-07: False, not True -- resolve_dependencies' own is_installed
+        # gate excludes an already-True tool from the run entirely, leaving
+        # Summary.installed empty and never satisfying the state-change gate
+        # this test's terminal-sync assertion depends on.
+        installed=lambda _t: False,
         install=_tracking_install(lambda _t: None),
     )
     app = _version_app([tool], {"codegraph": True}, service, execute=execute, terminal_sync=_boom)
@@ -4913,6 +4929,12 @@ async def test_install_closed_delivers_a_terminal_sync_warning_to_the_visible_do
         assert app.current_view == "doctor"
         doctor_screen = app.screen
         assert isinstance(doctor_screen, DoctorScreen)
+        # WR-07: this test calls _install_closed directly, bypassing the real
+        # ExecuteScreen run entirely -- simulate the state-change signal
+        # on_install_run_finished would otherwise have set, so the gate this
+        # fix added does not mask what this test is actually about (T-15.6-13's
+        # delivery-to-visible-screen contract).
+        app._install_state_changed = True  # pyright: ignore[reportPrivateUsage]
         app._install_closed(None)  # pyright: ignore[reportPrivateUsage]
         await pilot.pause()
         assert app.is_running is True
@@ -4948,6 +4970,93 @@ async def test_install_closed_with_no_terminal_sync_wired_is_unaffected(
         await _settle_versions(app, pilot)
         assert app.is_running is True
         assert app.catalog.status_text == ""
+
+
+async def test_install_closed_skips_the_terminal_synchronizer_when_nothing_was_installed(
+    tmp_path: Path,
+) -> None:
+    """WR-07 (15.6-REVIEW.md): closing the Execute screen after a run that
+    installed nothing (every selected tool already present, so
+    resolve_dependencies excludes it and Summary.installed stays empty) must
+    not re-sync terminals -- merely opening and dismissing the Execute
+    screen otherwise rewrote kitty.conf, created a brand-new wezterm.lua
+    (CR-03), and wrote konsolerc for a session where the user selected and
+    changed nothing."""
+    calls: list[str] = []
+
+    def _terminal_sync() -> str | None:
+        calls.append("terminal-sync")
+        return None
+
+    tool = _gh_tool("codegraph", tier="system")
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    execute = ExecuteInputs(
+        catalog=[tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        # Already installed -- resolve_dependencies excludes it from the run
+        # entirely, so _tracking_install is never even called.
+        installed=lambda _t: True,
+        install=_tracking_install(lambda _t: None),
+    )
+    app = _version_app(
+        [tool], {"codegraph": True}, service, execute=execute, terminal_sync=_terminal_sync
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        app.catalog.selected.add("codegraph")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        await pilot.press("escape")
+        await _settle_versions(app, pilot)
+        assert app.is_running is True
+        assert app.install_summary is not None
+        assert app.install_summary.installed == ()
+        assert calls == []
+
+
+async def test_install_closed_flushes_a_previously_queued_warning_even_with_no_new_one(
+    tmp_path: Path,
+) -> None:
+    """WR-08 (15.6-REVIEW.md): __init__'s own documented contract is that a
+    queued warning flushes on "the next _install_closed render", but the
+    early `if not warnings: return` used to skip that flush entirely when
+    THIS close produced no new warning of its own -- only a subsequent
+    show_view navigation actually delivered a previously-queued one. Confirm
+    a close with a real state change but no new warning (terminal_sync
+    returns None) still drains and renders a warning queued earlier."""
+    tool = _gh_tool("codegraph", tier="system")
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    execute = ExecuteInputs(
+        catalog=[tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda _t: False,
+        install=_tracking_install(lambda _t: None),
+    )
+    app = _version_app(
+        [tool], {"codegraph": False}, service, execute=execute, terminal_sync=lambda: None
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        # Simulate a warning that arrived while queued (T-15.6-13) -- the
+        # exact starting state a subsequent no-new-warning close must not
+        # silently keep stranded.
+        app._pending_warnings.append("queued: an earlier warning")  # pyright: ignore[reportPrivateUsage]
+        app.catalog.selected.add("codegraph")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        await pilot.press("escape")
+        await _settle_versions(app, pilot)
+        assert app.is_running is True
+        assert "queued: an earlier warning" in app.catalog.status_text
+        assert app._pending_warnings == []  # pyright: ignore[reportPrivateUsage]
 
 
 def _owned(
