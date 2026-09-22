@@ -822,6 +822,58 @@ def linux_daemon_policy(
             if previous is not None:
                 daemon._atomic_write(path, previous, mode=0o644)  # pyright: ignore[reportPrivateUsage]
 
+    def _detect_and_take_over_competitors() -> tuple[PolicyLayer | None, str | None]:
+        """D-02: detect a pre-existing competing cleanup mechanism in BOTH
+        systemd scopes, disable the user-scope one(s) (D-02a), and disclose
+        -- never mutate -- the system-scope one(s).
+
+        Called from `_apply` only AFTER this project's own registration has
+        already succeeded: D-02's requirement is that two mechanisms never
+        run side by side, and a takeover-first ordering that then failed to
+        register would leave the machine with NO cleanup at all, which is
+        strictly worse than a few milliseconds of overlap (T-15.7-13).
+
+        Returns (layer, warning), both None when nothing was detected -- the
+        no-competitor case must keep producing exactly the layers/warning it
+        produced before this feature existed. Every branch inside is guarded
+        against CommandError, OSError and ValueError (the structural refusal
+        disable_competing raises for a system-scope entry, which this
+        function never hands it, but is caught anyway since it can only fire
+        on a programming error and must be reported rather than crash a live
+        policy apply) -- a bookkeeping-tier detection/takeover failure must
+        never undo an already-working registration (T-15.7-13).
+        """
+        try:
+            competitors = systemd_daemon.detect_competing(read_output=read_output)
+            if not competitors:
+                return None, None
+            user_scope = [c for c in competitors if c.scope == systemd_daemon.SCOPE_USER]
+            disabled, failed = (
+                systemd_daemon.disable_competing(user_scope, run=run) if user_scope else ((), ())
+            )
+            detail_parts: list[str] = []
+            if disabled:
+                detail_parts.append(f"disabled: {', '.join(disabled)}")
+            if failed:
+                detail_parts.append(f"disable failed, still running: {', '.join(failed)}")
+            system_names = sorted(
+                {c.name for c in competitors if c.scope == systemd_daemon.SCOPE_SYSTEM}
+            )
+            if system_names:
+                detail_parts.append(f"system-scope, left running: {', '.join(system_names)}")
+            layer = PolicyLayer("Competing mechanism", "; ".join(detail_parts))
+            warning_parts = [
+                sentence
+                for sentence in (
+                    systemd_daemon.system_scope_warning(competitors),
+                    systemd_daemon.user_scope_failure_warning(failed),
+                )
+                if sentence
+            ]
+            return layer, (" ".join(warning_parts) if warning_parts else None)
+        except (CommandError, OSError, ValueError):
+            return None, None
+
     def _apply() -> PolicyResult:
         # invalidate() is called from a `finally` at the bottom of this
         # closure (D-01e/D-01c) -- on the success AND the failure path
@@ -876,13 +928,23 @@ def linux_daemon_policy(
                 _record_decided_durably(lambda: systemd_daemon.record_decided(state_path))
             except OSError as exc:
                 warning = f"decision not recorded: {exc}"
-            return PolicyResult(
-                layers=(
-                    PolicyLayer(
-                        "Schedule",
-                        f"runs every {systemd_daemon.DEFAULT_INTERVAL} via a systemd user timer",
-                    ),
+            layers = [
+                PolicyLayer(
+                    "Schedule",
+                    f"runs every {systemd_daemon.DEFAULT_INTERVAL} via a systemd user timer",
                 ),
+            ]
+            # D-02: detection and takeover run only AFTER the two lines
+            # above -- this project's own registration is already real and
+            # the marker already (best-effort) recorded -- see
+            # _detect_and_take_over_competitors's own docstring for why.
+            competing_layer, competing_warning = _detect_and_take_over_competitors()
+            if competing_layer is not None:
+                layers.append(competing_layer)
+            if competing_warning:
+                warning = f"{warning}; {competing_warning}" if warning else competing_warning
+            return PolicyResult(
+                layers=tuple(layers),
                 reload_hint=None,
                 warning=warning,
             )
