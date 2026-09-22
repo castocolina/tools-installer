@@ -98,11 +98,14 @@ _FAMILY_FIXTURES: dict[str, tuple[str, str]] = {
 }
 
 
-def _run(*args: str, home: Path, path: str = _PATH_WITH_FD) -> "subprocess.CompletedProcess[str]":
+def _run(
+    *args: str, home: Path, path: str = _PATH_WITH_FD, cwd: Path | None = None
+) -> "subprocess.CompletedProcess[str]":
     env = {"PATH": path, "HOME": str(home)}
     return subprocess.run(
         ["bash", str(SCRIPT), *args],
         env=env,
+        cwd=None if cwd is None else str(cwd),
         capture_output=True,
         text=True,
         check=False,
@@ -240,6 +243,33 @@ def test_refuses_root_via_not_a_directory_quirk(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "not a directory:" in result.stderr
     assert "deleted" not in result.stdout
+
+
+@pytest.mark.parametrize("relative", [".", "./tmp", "tmp"])
+def test_refuses_a_relative_tmpdir(tmp_path: Path, relative: str) -> None:
+    """Lane-2 LOW-02: WR-09 made the broad-path guard canonicalize, but a
+    relative root canonicalizes against whatever cwd the process happens to
+    have. "." was therefore refused only because the cwd was $HOME, which is
+    on the refusal list -- "./tmp" and a bare "tmp" resolve somewhere the
+    list does not name, so the wrapper pruned the current directory's
+    depth-1 matches. Reject a non-absolute root outright, BEFORE the
+    trailing-slash strip and the canonicalizing guard.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "tmp").mkdir()
+    victim_here = home / "orphan.node"
+    _touch_file(victim_here, age_hours=24 * 10)
+    victim_below = home / "tmp" / "orphan.node"
+    _touch_file(victim_below, age_hours=24 * 10)
+
+    result = _run("--tmpdir", relative, "--apply", home=home, cwd=home)
+
+    assert result.returncode != 0
+    assert f"tmpdir must be absolute: {relative}" in result.stderr
+    assert "deleted" not in result.stdout
+    assert victim_here.exists()
+    assert victim_below.exists()
 
 
 @pytest.mark.parametrize("shape", ["dot", "trailing-slash", "dotdot", "symlink"])

@@ -74,6 +74,11 @@ _PRUNE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_PRUNE_LIB_DIR}/lib/prune-tmp-common.sh"
 
 _prune_common_require_nonempty "$TMP_ROOT" TMPDIR
+# Before the strip and before the canonicalizing refusal guard: a relative
+# root would otherwise be resolved against this process's cwd (lane-2 LOW-02).
+# "/" is absolute, so it passes here and still reaches the strip-to-empty
+# quirk documented immediately below, unchanged.
+_prune_common_require_absolute "$TMP_ROOT"
 # NOTE: unlike scripts/prune-tmp-linux.sh, this strip is unconditional --
 # `--tmpdir /` therefore becomes an EMPTY string here, which the directory
 # check below rejects as "not a directory" rather than reaching the refusal

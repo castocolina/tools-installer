@@ -40,6 +40,31 @@ _prune_common_require_nonempty() {
   fi
 }
 
+# _prune_common_require_absolute ROOT
+# Exits 1 with "error: tmpdir must be absolute: ROOT" unless ROOT starts
+# with "/".
+#
+# Must run BEFORE the trailing-slash strip and before the canonicalizing
+# broad-path guard, and that ordering is the whole point (lane-2 LOW-02).
+# WR-09 made _prune_common_refuse_broad_path canonicalize both sides, but a
+# RELATIVE root canonicalizes against whatever cwd the process happens to
+# have: "." was refused only when that cwd was itself on the refusal list
+# (typically $HOME), while "./tmp" or a bare "tmp" resolved somewhere the
+# list does not name and got pruned. Refusing a non-absolute root outright
+# removes the whole class, independently of the refusal list.
+#
+# Running before the strip also leaves each wrapper's own pinned handling of
+# "/" untouched: "/" is absolute, so it passes here and still reaches the
+# Linux wrapper's broad-path refusal and the macOS wrapper's
+# strip-to-empty/"not a directory" quirk exactly as before.
+_prune_common_require_absolute() {
+  local root="$1"
+  if [[ "$root" != /* ]]; then
+    printf 'error: tmpdir must be absolute: %s\n' "$root" >&2
+    exit 1
+  fi
+}
+
 # _prune_common_strip_trailing_slash VALUE
 # Prints VALUE with exactly one trailing "/" removed (mirrors bash's plain
 # "${value%/}"). Deliberately does NOT special-case "/" itself (which this

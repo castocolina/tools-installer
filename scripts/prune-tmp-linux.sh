@@ -73,6 +73,9 @@ _PRUNE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_PRUNE_LIB_DIR}/lib/prune-tmp-common.sh"
 
 _prune_common_require_nonempty "$TMP_ROOT" tmpdir
+# Before the strip and before the canonicalizing refusal guard: a relative
+# root would otherwise be resolved against this process's cwd (lane-2 LOW-02).
+_prune_common_require_absolute "$TMP_ROOT"
 # Strip a trailing slash, but "/" itself must stay "/" (not become empty) so
 # the broad-path refusal below still recognizes it.
 if [[ "$TMP_ROOT" != "/" ]]; then
