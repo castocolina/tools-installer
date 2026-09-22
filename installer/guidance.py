@@ -312,7 +312,9 @@ def _pressure_clauses(pressure: DiskPressure) -> tuple[str, ...]:
         # Deliberately not "/tmp usage is high": a string literal beginning
         # with "/tmp" reads to bandit's B108 as a hardcoded temp-directory
         # path, even though this is prose, never a filesystem argument.
-        clauses.append("the /tmp mount is nearly full")
+        # IN-03: the probe measures $TMPDIR when set, else /tmp, so the
+        # wording names the measured mount rather than always saying /tmp.
+        clauses.append("the temp mount is nearly full")
     return tuple(clauses)
 
 
@@ -341,9 +343,10 @@ def _disk_pressure_meaning(pressure: DiskPressure) -> str:
         # Leads with "The" rather than a literal starting "/tmp" for the same
         # bandit B108 reason as _pressure_clauses above.
         parts.append(
-            f"The /tmp mount is at {pressure.tmp_used_percent:.1f}% used, above the "
-            f"{TMP_USED_WARN_PERCENT}% threshold -- a full /tmp breaks unrelated system "
-            "writes, not only this tool."
+            f"The temp mount ($TMPDIR when set, else /tmp) is at "
+            f"{pressure.tmp_used_percent:.1f}% used, above the "
+            f"{TMP_USED_WARN_PERCENT}% threshold -- a full temp mount breaks unrelated "
+            "system writes, not only this tool."
         )
     if pressure.daemon is DaemonState.INACTIVE:
         parts.append("The background cleanup job is not running to relieve it.")

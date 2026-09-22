@@ -160,16 +160,18 @@ def systemd_available(*, which: Callable[[str], str | None] = shutil.which) -> b
     return which("systemctl") is not None
 
 
-_REJECTED_CHARS = ('"', "\\", "%", "\n", "\r")
+_REJECTED_CHARS = ('"', "\\", "%", "$", "\n", "\r")
 
 
 def _quote(value: str) -> str:
     """Validate one rendered value and return it wrapped in double quotes.
 
     Raises DaemonScheduleError for a value containing a double quote, a
-    backslash, a percent sign, a newline, or a carriage return -- percent is
-    rejected because systemd expands %-specifiers inside unit values, the
-    rest because they break or inject into the unit grammar. Mirrors
+    backslash, a percent sign, a dollar sign, a newline, or a carriage
+    return -- percent is rejected because systemd expands %-specifiers
+    inside unit values, dollar because systemd substitutes $VAR/${VAR}
+    inside ExecStart= arguments even quoted ones (IN-01), the rest because
+    they break or inject into the unit grammar. Mirrors
     installer/daemon.py::render_plist's fail-closed validation ordering:
     every value is validated before anything is returned.
     """

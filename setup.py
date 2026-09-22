@@ -467,7 +467,11 @@ class _DiskProbe:
         return cache.read()
 
     def __call__(self, *, blocking: bool = True) -> DiskPressure:
-        tmp = os.environ.get("TMPDIR", "") or str(Path(os.sep) / "tmp")
+        # IN-03: a RELATIVE TMPDIR is ignored rather than measured against
+        # whatever cwd this process happens to have, matching
+        # systemd_daemon.user_unit_dir's own XDG rule.
+        raw_tmp = os.environ.get("TMPDIR", "")
+        tmp = raw_tmp if raw_tmp and Path(raw_tmp).is_absolute() else str(Path(os.sep) / "tmp")
         return diskusage.probe_disk_pressure(
             self._daemon(blocking=blocking),
             self._platform.os != "macos",

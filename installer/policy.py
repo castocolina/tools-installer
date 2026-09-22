@@ -80,8 +80,15 @@ _TWEAK_DISABLE_HINT = (
 # show-environment does not see a freshly written file, so a hint that says
 # "open a new shell" would overstate how soon the redirect becomes live.
 _CACHE_REDIRECT_LINUX_HINT = (
-    "Takes effect at the next login: the systemd user manager reads "
-    "~/.config/environment.d only when it starts."
+    "Takes effect at the next login: the systemd user manager reads its "
+    "environment.d directory only when it starts."
+)
+# IN-02: removal needs the same login cycle, and saying "open a new shell"
+# here (the wording every other tweak uses) is wrong for environment.d --
+# the variable stays in every process the user manager already started.
+_CACHE_REDIRECT_LINUX_REMOVE_HINT = (
+    "Log out and back in to drop the variable: the systemd user manager exported it "
+    "to every process it has already started, and no new shell can undo that."
 )
 _CACHE_REDIRECT_MACOS_HINT = _TWEAK_ENABLE_HINT
 
@@ -550,7 +557,7 @@ def cache_redirect_policy(
             detail = f"cleared from {_display_path(conf_dir / redirect.conf_basename)}"
         return PolicyResult(
             layers=(PolicyLayer(redirect.label, detail),),
-            reload_hint=None,
+            reload_hint=None if macos else _CACHE_REDIRECT_LINUX_REMOVE_HINT,
             warning=None,
         )
 

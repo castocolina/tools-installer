@@ -1233,3 +1233,25 @@ def test_disable_competing_counts_an_oserror_as_failed_and_keeps_going() -> None
     disabled, failed = systemd_daemon.disable_competing(units, run=run)
     assert disabled == ("b.timer",)
     assert failed == ("a.timer",)
+
+
+def test_render_service_rejects_a_dollar_sign_in_any_rendered_value(tmp_path: Path) -> None:
+    """IN-01: systemd substitutes $VAR/${VAR} inside ExecStart= arguments,
+    even quoted ones, so a path carrying one would be silently rewritten."""
+
+    def render(*, script_path: Path | None = None, path_value: str = "/usr/bin:/bin") -> str:
+        return systemd_daemon.render_service(
+            uv_path=tmp_path / "uv",
+            wrapper_path=tmp_path / "wrapper",
+            script_path=script_path if script_path is not None else tmp_path / "prune.sh",
+            log_path=tmp_path / "prune.log",
+            tmpdir=str(tmp_path / "tmp"),
+            home=str(tmp_path / "home"),
+            path_value=path_value,
+        )
+
+    assert render()  # the same values without a $ render fine
+    with pytest.raises(DaemonScheduleError):
+        render(script_path=tmp_path / "pru$ne.sh")
+    with pytest.raises(DaemonScheduleError):
+        render(path_value="/usr/bin:${HOME}/bin")

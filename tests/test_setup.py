@@ -15,6 +15,7 @@ import setup
 from installer import pnpm_globals
 from installer.app import UninstallDecision
 from installer.diskusage import DiskPressure
+from installer.enums import DaemonState
 from installer.execute_screen import ExecuteInputs
 from installer.guards import install_shims
 from installer.model import Method, Tool
@@ -927,6 +928,34 @@ def test_the_policies_and_doctor_share_one_competing_probe_that_never_mutates(
     for cmd in issued:
         assert read_verbs & set(cmd), cmd
         assert not {"disable", "enable", "stop", "start", "daemon-reload"} & set(cmd), cmd
+
+
+def test_the_disk_probe_ignores_a_relative_tmpdir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """IN-03: a relative TMPDIR was measured against whatever cwd the process
+    happened to have."""
+    measured: list[Path] = []
+
+    def fake_probe(daemon: object, tmp_threshold: bool, root: Path, tmp: Path) -> DiskPressure:
+        del daemon, tmp_threshold, root
+        measured.append(tmp)
+        return DiskPressure(
+            root_free_percent=None,
+            tmp_used_percent=None,
+            daemon=DaemonState.UNAVAILABLE,
+            tmp_threshold=False,
+        )
+
+    monkeypatch.setattr(setup.diskusage, "probe_disk_pressure", fake_probe)
+    probe = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
+        Platform("fedora", "amd64", False, False), timer_cache=None
+    )
+    monkeypatch.setenv("TMPDIR", "relative/tmp")
+    probe()
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "abs-tmp"))
+    probe()
+    assert measured == [Path("/tmp"), tmp_path / "abs-tmp"]
 
 
 def test_the_environment_d_dir_honours_xdg_config_home(tmp_path: Path) -> None:

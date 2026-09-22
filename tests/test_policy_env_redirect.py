@@ -159,6 +159,20 @@ def test_a_later_sorting_system_conf_is_reported_read_only(tmp_path: Path) -> No
     assert theirs.read_text() == "BUN_RUNTIME_TRANSPILER_CACHE_PATH=/var/cache/bun\n"
 
 
+def test_linux_removal_tells_the_user_to_log_out(tmp_path: Path) -> None:
+    """IN-02: the Policies toggle-off returned no hint at all on Linux, so the
+    UI fell back to "open a new shell", which cannot undo an environment.d
+    variable the user manager already exported."""
+    policy = _policy(tmp_path, platform_os="linux")
+    policy.apply()
+    result = policy.remove()
+    assert result.reload_hint is not None
+    assert "Log out" in result.reload_hint
+    macos = _policy(tmp_path, platform_os="macos")
+    macos.apply()
+    assert macos.remove().reload_hint is None  # unchanged on macOS
+
+
 def test_second_apply_is_idempotent_and_warns_nothing(tmp_path: Path) -> None:
     policy = _policy(tmp_path, platform_os="linux")
     policy.apply()
