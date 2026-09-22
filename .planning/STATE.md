@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: "15.7"
 current_phase_name: unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr
-current_plan: "02"
+current_plan: 03 (Plan 01 complete)
 status: executing
-stopped_at: Completed 15.7-01-PLAN.md
-last_updated: "2026-09-22T12:00:30.000Z"
+stopped_at: Completed 15.7-02-PLAN.md
+last_updated: "2026-09-22T12:33:14.788Z"
 last_activity: 2026-09-22
 last_activity_desc: "Phase 15.7 Plan 01 complete: Linux systemd background-cleanup daemon, tracer + transactional apply/remove + composition-root reconciliation (D-01)"
-state_head: a7b967baa206ee151a872c53f793395394659e34
+state_head: 7414d6143e9e37b3b8b662164aa8b650e897fac8
 progress:
   total_phases: 27
   completed_phases: 17
   total_plans: 84
-  completed_plans: 78
+  completed_plans: 79
 ---
 
 Total Phases: 21
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 15.7 (unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr) — EXECUTING
-Current Plan: 02 (Plan 01 complete)
+Current Plan: 03 (Plan 01 complete)
 Total Plans in Phase: 7
 Status: 1/7 plans complete
 Last activity: 2026-09-22 — 15.7-01-PLAN.md complete (D-01 Linux systemd daemon tracer + transactional apply/remove + composition-root reconciliation)
@@ -104,6 +104,7 @@ Progress: [██████████] 100%
 | Phase 15.6 P05 | 35min | 2 tasks | 5 files |
 | Phase 15.6 P06 | 75min | 3 tasks | 4 files |
 | Phase 15.7 P01 | ~90min (spans a compaction boundary) | 3 tasks | 10 files |
+| Phase 15.7 P02 | 15min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -178,6 +179,8 @@ Recent decisions affecting current work:
 - [15.7-01, 2026-09-22]: _build_daemon_policy's `which` parameter defaults to None and is resolved dynamically inside the function body (not bound at def time), keeping an existing macOS test's monkeypatch technique working unchanged while new Linux call sites can still inject an explicit lookup.
 - [15.7-01, 2026-09-22]: D-01a required no new gating logic — _build_app's existing `daemon is not None and apply_daemon_default` check already fires correctly once _build_daemon_policy returns a non-None Linux Policy; this plan's job was proving that wiring explicitly at the composition root rather than inventing a second allowlist.
 - [15.7-01, 2026-09-22]: ROADMAP SC#2's "invisible/inert on Linux" claim is deliberately superseded by D-01a; the two tests that asserted it were split into a pair (D-01b-gated absent case, D-01a-proving present case) rather than simply widened, so the suite states the new behavior positively.
+- [Phase 15.7]: 15.7-02: disk_pressure_guidance reuses DiskPressure.at_risk directly for severity/emphasis so the D-03c source of truth stays in installer/diskusage.py
+- [Phase 15.7]: 15.7-02: Guidance gained an emphasis boolean field instead of a fourth Severity member, since Severity is a dict key in ui_common.SEVERITY_STYLE and render.py
 
 ### Pending Todos
 
@@ -218,6 +221,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-22T12:00:30.000Z
-Stopped at: Completed 15.7-01-PLAN.md (D-01 Linux systemd daemon tracer + transactional apply/remove + composition-root reconciliation); next up 15.7-02-PLAN.md
+Last session: 2026-09-22T12:33:14.633Z
+Stopped at: Completed 15.7-02-PLAN.md
 Resume file: None
