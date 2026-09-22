@@ -3,7 +3,68 @@ from pathlib import Path
 
 import pytest
 
-from installer.locations import applications_dir, bin_dir, ensure_dir, opt_dir, prepend_path
+from installer import env_redirect, systemd_daemon
+from installer.locations import (
+    applications_dir,
+    bin_dir,
+    ensure_dir,
+    opt_dir,
+    prepend_path,
+    xdg_config_base,
+)
+
+# --- xdg_config_base (lane-2 MEDIUM-01) --------------------------------------
+
+
+def test_xdg_config_base_honours_an_absolute_xdg_config_home(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    xdg = tmp_path / "xdgconf"
+    assert xdg_config_base(home, {"XDG_CONFIG_HOME": str(xdg)}) == xdg
+
+
+def test_xdg_config_base_falls_back_to_home_config_when_unset_or_empty(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    assert xdg_config_base(home, {}) == home / ".config"
+    assert xdg_config_base(home, {"XDG_CONFIG_HOME": ""}) == home / ".config"
+
+
+@pytest.mark.parametrize("raw", ["relative/config", ".config", ".", "~/config"])
+def test_xdg_config_base_ignores_a_non_absolute_xdg_config_home(tmp_path: Path, raw: str) -> None:
+    """The XDG base-directory spec says a non-absolute value must be ignored.
+    Honouring one would resolve every derived path against whatever cwd the
+    process happens to have. A leading "~" is NOT expanded here either: the
+    spec has no tilde rule, and Path("~/config") is not absolute.
+    """
+    home = tmp_path / "home"
+    assert xdg_config_base(home, {"XDG_CONFIG_HOME": raw}) == home / ".config"
+
+
+def test_both_xdg_config_consumers_resolve_through_the_one_shared_base(tmp_path: Path) -> None:
+    """Lane-2 MEDIUM-01: systemd_daemon.user_unit_dir and
+    env_redirect.environment_d_dir each carried their own copy of the
+    "absolute or fall back to ~/.config" rule. Both now derive from
+    locations.xdg_config_base, so a change to the rule can never land in one
+    and miss the other -- exercised for BOTH functions in one session, which
+    is exactly what no test did before.
+    """
+    home = tmp_path / "home"
+    absolute = tmp_path / "xdgconf"
+
+    for environ in (
+        {},
+        {"XDG_CONFIG_HOME": ""},
+        {"XDG_CONFIG_HOME": str(absolute)},
+        {"XDG_CONFIG_HOME": "relative/config"},
+        {"XDG_CONFIG_HOME": "."},
+    ):
+        base = xdg_config_base(home, environ)
+        assert systemd_daemon.user_unit_dir(home, environ) == base / "systemd" / "user"
+        assert env_redirect.environment_d_dir(home, environ) == base / "environment.d"
+
+    # And the relative case really is ignored by both, not merely consistent.
+    relative = {"XDG_CONFIG_HOME": "relative/config"}
+    assert systemd_daemon.user_unit_dir(home, relative) == home / ".config" / "systemd" / "user"
+    assert env_redirect.environment_d_dir(home, relative) == home / ".config" / "environment.d"
 
 
 def test_bin_dir_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

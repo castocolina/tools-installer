@@ -1058,6 +1058,15 @@ def linux_daemon_policy(
         # never reach ensure_daemon_default's on_warning sink (the one
         # apply path with no human watching), so the warning must say
         # which unit was disabled and how to re-enable it.
+        #
+        # Lane-2 HIGH-02: all three sentences are emitted together, so a
+        # PARTIAL takeover names BOTH halves -- what was disabled (with the
+        # `enable --now` that puts it back) and what survived (with the
+        # `disable --now` that stops it) -- and the user can tell which is
+        # which. D-02c is what makes that the right shape: a partial
+        # takeover proceeds and is disclosed, never rolled back. Both name
+        # lists arrive name-sorted from disable_competing, so the sentence
+        # a user reads is the same on every run.
         warning_parts = [
             sentence
             for sentence in (

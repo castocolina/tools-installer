@@ -25,6 +25,26 @@ def _zshrc() -> Path:
     return zshrc_path(Path.home(), os.environ)
 
 
+def xdg_config_base(home: Path, environ: Mapping[str, str]) -> Path:
+    """The XDG user config base: $XDG_CONFIG_HOME when it is ABSOLUTE, else
+    ``home/.config``.
+
+    The ONE place this rule lives (lane-2 MEDIUM-01). Both
+    ``systemd_daemon.user_unit_dir`` ($XDG_CONFIG_HOME/systemd/user) and
+    ``env_redirect.environment_d_dir`` ($XDG_CONFIG_HOME/environment.d) used
+    to carry their own copy of it, so a change to the rule could land in one
+    and miss the other. Each still owns its own sub-path -- only the base is
+    shared -- and this module is where path resolution already lives.
+
+    A RELATIVE (or empty) value is IGNORED rather than honoured: the XDG
+    base-directory spec says a non-absolute value must be ignored, and
+    honouring one would resolve every derived path against whatever cwd the
+    process happens to have (review LOW 15.7-01 / 15.7-04).
+    """
+    raw = environ.get("XDG_CONFIG_HOME", "")
+    return Path(raw) if raw and Path(raw).is_absolute() else home / ".config"
+
+
 def bin_dir(declared: str | None) -> Path:
     """Resolve a method's bin dir. Defaults to ~/.local/bin; expands a leading ~."""
     if declared:

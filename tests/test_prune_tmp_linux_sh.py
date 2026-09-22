@@ -36,11 +36,12 @@ _MATCH_SO = ".0123456789abcdef-12345678.so"
 _MATCH_NODE = ".fedcba9876543210-87654321.node"
 
 
-def _run(*args: str, home: Path) -> "subprocess.CompletedProcess[str]":
+def _run(*args: str, home: Path, cwd: Path | None = None) -> "subprocess.CompletedProcess[str]":
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home)}
     return subprocess.run(
         ["bash", str(SCRIPT), *args],
         env=env,
+        cwd=None if cwd is None else str(cwd),
         capture_output=True,
         text=True,
         check=False,
@@ -180,6 +181,33 @@ def test_refuses_non_canonical_spellings_of_home(tmp_path: Path, shape: str) -> 
     assert "refusing broad path" in result.stderr
     assert "deleted" not in result.stdout
     assert victim.exists()
+
+
+@pytest.mark.parametrize("relative", [".", "./tmp", "tmp"])
+def test_refuses_a_relative_tmpdir(tmp_path: Path, relative: str) -> None:
+    """Lane-2 LOW-02: WR-09 made the broad-path guard canonicalize, but a
+    relative root canonicalizes against whatever cwd the process happens to
+    have. "." was therefore refused only because the cwd was $HOME, which is
+    on the refusal list -- "./tmp" and a bare "tmp" resolve somewhere the
+    list does not name, so the wrapper pruned the current directory's
+    depth-1 matches. Reject a non-absolute root outright, BEFORE any
+    canonicalization.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "tmp").mkdir()
+    victim_here = home / _MATCH_SO
+    _touch(victim_here, age_minutes=60)
+    victim_below = home / "tmp" / _MATCH_SO
+    _touch(victim_below, age_minutes=60)
+
+    result = _run("--tmpdir", relative, "--apply", home=home, cwd=home)
+
+    assert result.returncode != 0
+    assert f"tmpdir must be absolute: {relative}" in result.stderr
+    assert "deleted" not in result.stdout
+    assert victim_here.exists()
+    assert victim_below.exists()
 
 
 def test_refuses_a_dotdot_spelling_of_the_root_directory(tmp_path: Path) -> None:

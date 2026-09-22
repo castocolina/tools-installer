@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from installer.atomic import atomic_write_bytes
+from installer.locations import xdg_config_base
 from installer.shellrc import apply_block, strip_block
 
 # Carried by every file and block this module writes. linux_applied and
@@ -78,12 +79,12 @@ REDIRECTS: tuple[CacheRedirect, ...] = (BUN_CACHE_REDIRECT,)
 def environment_d_dir(home: Path, environ: Mapping[str, str]) -> Path:
     """``$XDG_CONFIG_HOME/environment.d``, or ``home/.config/environment.d``.
 
-    A relative ``XDG_CONFIG_HOME`` is ignored, matching
-    ``systemd_daemon.user_unit_dir`` and the XDG spec.
+    A relative ``XDG_CONFIG_HOME`` is ignored. That rule is no longer merely
+    "matching" ``systemd_daemon.user_unit_dir`` -- both now derive from the
+    one ``locations.xdg_config_base`` (lane-2 MEDIUM-01), so the two can no
+    longer drift; only the ``environment.d`` sub-path is this module's own.
     """
-    raw = environ.get("XDG_CONFIG_HOME", "")
-    base = Path(raw) if raw and Path(raw).is_absolute() else home / ".config"
-    return base / "environment.d"
+    return xdg_config_base(home, environ) / "environment.d"
 
 
 def _valid_name(name: str) -> None:
