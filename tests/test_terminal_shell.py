@@ -233,6 +233,33 @@ def test_omz_repair_falls_back_to_the_default_root_when_no_zsh_env_is_set(
     assert 'export ZSH="$HOME/.oh-my-zsh"' in text
 
 
+def test_omz_repair_targets_zdotdir_zshrc_when_zdotdir_is_set(tmp_path: Path) -> None:
+    """G-01: the repair target must resolve through locations.zshrc_path --
+    the same $ZDOTDIR-aware resolver the Policies route already uses
+    (setup.py::_ZSHRC) -- rather than a hardcoded home / ".zshrc". Otherwise
+    the D-04 repair silently no-ops on a ZDOTDIR host and creates a spurious
+    $HOME/.zshrc that zsh never sources."""
+    zdotdir = tmp_path / "zdotdir"
+    zdotdir.mkdir()
+    (tmp_path / ".oh-my-zsh").mkdir()
+
+    sync_terminal_shells(
+        home=tmp_path,
+        environ={"ZDOTDIR": str(zdotdir)},
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+    )
+
+    assert not (tmp_path / ".zshrc").exists()
+    text = (zdotdir / ".zshrc").read_text()
+    # The real root (home / ".oh-my-zsh") differs from the .zshrc's own parent
+    # dir (zdotdir), so ensure_zshrc_template quotes the real, resolved path
+    # rather than the portable $HOME/.oh-my-zsh symbol -- proof the repair
+    # actually reached and inspected the ZDOTDIR file, not a same-shaped stand-in.
+    assert f"export ZSH={shlex.quote(str(tmp_path / '.oh-my-zsh'))}" in text
+    assert "plugins=(git)" in text
+
+
 def test_wezterm_generates_an_owned_login_program_before_return_config(tmp_path: Path) -> None:
     config_home = tmp_path / "xdg" / "config"
     result = sync_terminal_shells(
