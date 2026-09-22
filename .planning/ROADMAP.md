@@ -552,7 +552,7 @@ Plans:
 **Goal:** Linux users open kitty, WezTerm, or a live-detected Konsole directly into the discovered zsh login shell, with Oh-My-Zsh and its selected plugins loading whenever the framework is present, while all changes remain reversible user configuration and never alter the system login shell.
 **Requirements**: D-01, D-02, D-03, D-04 (15.6-CONTEXT.md locked decisions — inserted roadmap phase, not a REQUIREMENTS.md id)
 **Depends on:** Phase 15
-**Plans:** 6/6 plans executed
+**Plans:** 6/6 plans complete
 
 Plans:
 

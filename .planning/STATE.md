@@ -1,20 +1,21 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: "15.6"
-current_phase_name: terminal-emulator-default-shell-configuration-konsole-kitty
-current_plan: 6
-status: executing
-stopped_at: Completed 15.6-06-PLAN.md
-last_updated: "2026-09-22T00:36:42.347Z"
-last_activity: 2026-09-19
-last_activity_desc: Phase 15.5 complete, transitioned to Phase 15.6
-state_head: 844fd141b091d113fbc1795c128a761ceab57384
+current_phase: "15.7"
+current_phase_name: "Unify tmp-prune tooling into an installable Tweaks module (from pending todo 2026-09-10-unify-tmp-prune-tooling-into-an-installable-tweaks-module.md): opencode/Bun's runtime-transpiler-cache orphans native .so/.node artifacts on a killed/crashed process, either in OS temp (macOS $TMPDIR, can reach 100GB+/day) or /tmp on Linux (a small-quota tmpfs on Bazzite, ~12GB, causing EDQUOT failures across the whole system once full). Two independent non-reusable scripts already solve pieces of this today (this repo's scripts/prune-user-tmpdir.sh, manual dry-run/--apply only; ai-kit's Linux-only systemd-timer bundle, confirmed working, keeps /tmp under 1%) but neither is cross-platform, wired into this project, or installable/uninstallable. Build one dedicated cross-platform module: (1) env-var wiring to redirect Bun's cache off tmp entirely (environment.d on Linux, shell-rc based on macOS), (2) a real background daemon install/uninstall -- systemd user timer+oneshot on Linux, launchd LaunchAgent on macOS -- never manual scripts, (3) Tweaks view toggle (install/uninstall, daemon-active status, current tmp usage %), (4) make doctor integration: red warning when the cleanup daemon is inactive AND disk space is below 30% (or /tmp exceeds 50% on Linux specifically), extra visual weight when both conditions are true together. Reuse this project's existing OS-detection conventions (Phase 12.3 precedent) rather than duplicating per-OS logic; user explicitly rejected manual-script-only as an acceptable outcome."
+current_plan: Not started
+status: planning
+stopped_at: Phase 15.6 complete, ready to plan Phase 15.7
+last_updated: "2026-09-22T03:21:05.508Z"
+last_activity: 2026-09-22
+last_activity_desc: Phase 15.6 complete, transitioned to Phase 15.7
+state_head: 91f1429e3d9eba6adef19d2a48c917eb01097221
 progress:
   total_phases: 27
   completed_phases: 17
   total_plans: 77
   completed_plans: 77
+  percent: 100
 ---
 
 Total Phases: 21
@@ -30,11 +31,11 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 15.6 (terminal-emulator-default-shell-configuration-konsole-kitty) — READY TO EXECUTE
-Current Plan: 6
+Phase: 15.7 — Unify tmp-prune tooling into an installable Tweaks module (from pending todo 2026-09-10-unify-tmp-prune-tooling-into-an-installable-tweaks-module.md): opencode/Bun's runtime-transpiler-cache orphans native .so/.node artifacts on a killed/crashed process, either in OS temp (macOS $TMPDIR, can reach 100GB+/day) or /tmp on Linux (a small-quota tmpfs on Bazzite, ~12GB, causing EDQUOT failures across the whole system once full). Two independent non-reusable scripts already solve pieces of this today (this repo's scripts/prune-user-tmpdir.sh, manual dry-run/--apply only; ai-kit's Linux-only systemd-timer bundle, confirmed working, keeps /tmp under 1%) but neither is cross-platform, wired into this project, or installable/uninstallable. Build one dedicated cross-platform module: (1) env-var wiring to redirect Bun's cache off tmp entirely (environment.d on Linux, shell-rc based on macOS), (2) a real background daemon install/uninstall -- systemd user timer+oneshot on Linux, launchd LaunchAgent on macOS -- never manual scripts, (3) Tweaks view toggle (install/uninstall, daemon-active status, current tmp usage %), (4) make doctor integration: red warning when the cleanup daemon is inactive AND disk space is below 30% (or /tmp exceeds 50% on Linux specifically), extra visual weight when both conditions are true together. Reuse this project's existing OS-detection conventions (Phase 12.3 precedent) rather than duplicating per-OS logic; user explicitly rejected manual-script-only as an acceptable outcome.
+Current Plan: Not started
 Total Plans in Phase: 6
-Status: Ready to execute
-Last activity: 2026-09-19 — Phase 15.5 complete, transitioned to Phase 15.6
+Status: Ready to plan
+Last activity: 2026-09-22 — Phase 15.6 complete, transitioned to Phase 15.7
 
 Progress: [██████████] 100%
 
@@ -42,7 +43,7 @@ Progress: [██████████] 100%
 
 **Velocity:**
 
-- Total plans completed: 59
+- Total plans completed: 65
 - Average duration: - min
 - Total execution time: 0 hours
 
@@ -70,6 +71,7 @@ Progress: [██████████] 100%
 | 15.3 | 1 | - | - |
 | 15.4 | 5 | - | - |
 | 15.5 | 1 | - | - |
+| 15.6 | 6 | - | - |
 
 **Recent Trend:**
 
@@ -210,5 +212,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-22T00:36:42.178Z
-Stopped at: Completed 15.6-06-PLAN.md
+Stopped at: Phase 15.6 complete, ready to plan Phase 15.7
 Resume file: None
