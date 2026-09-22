@@ -334,9 +334,13 @@ def _disk_pressure_meaning(pressure: DiskPressure) -> str:
     # own None-check) is what lets pyright narrow the percentage to `float`
     # here without an `assert` -- an assert would be stripped under
     # `python -O` and bandit (B101) flags it regardless.
-    if pressure.low_disk and pressure.root_free_percent is not None:
+    if pressure.low_disk and pressure.home_free_percent is not None:
+        # Names the filesystem that was actually measured -- the one holding
+        # the user's home directory, which is `/` on a stock host but the
+        # separate data mount on an ostree/composefs one.
         parts.append(
-            f"Free space is at {pressure.root_free_percent:.1f}%, below the "
+            f"Free space on the filesystem holding your home directory is at "
+            f"{pressure.home_free_percent:.1f}%, below the "
             f"{DISK_FREE_WARN_PERCENT}% threshold."
         )
     if pressure.high_tmp and pressure.tmp_used_percent is not None:

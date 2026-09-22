@@ -4,7 +4,7 @@ import io
 import os
 import pty
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -12,10 +12,10 @@ import pytest
 from rich.console import Console
 
 import setup
-from installer import pnpm_globals
+from installer import pnpm_globals, systemd_daemon
 from installer.app import UninstallDecision
 from installer.diskusage import DiskPressure
-from installer.enums import DaemonState
+from installer.enums import DaemonState, Severity
 from installer.execute_screen import ExecuteInputs
 from installer.guards import install_shims
 from installer.model import Method, Tool
@@ -937,11 +937,13 @@ def test_the_disk_probe_ignores_a_relative_tmpdir(
     happened to have."""
     measured: list[Path] = []
 
-    def fake_probe(daemon: object, tmp_threshold: bool, root: Path, tmp: Path) -> DiskPressure:
-        del daemon, tmp_threshold, root
+    def fake_probe(
+        daemon: object, tmp_threshold: bool, home: Path, tmp: Path, usage: object
+    ) -> DiskPressure:
+        del daemon, tmp_threshold, home, usage
         measured.append(tmp)
         return DiskPressure(
-            root_free_percent=None,
+            home_free_percent=None,
             tmp_used_percent=None,
             daemon=DaemonState.UNAVAILABLE,
             tmp_threshold=False,
@@ -2465,6 +2467,159 @@ def test_disk_pressure_probe_none_cache_is_unavailable_on_linux_and_plist_on_mac
     assert macos.daemon is DaemonState.ACTIVE
     assert macos.tmp_threshold is False
     assert linux.tmp_threshold is True
+
+
+# -- WHICH mount the composition root measures (15.7 gap closure) ------------
+#
+# The pure layer measures whatever path it is handed and is exercised with
+# synthetic percentages; nothing there can catch the composition root handing
+# it the WRONG filesystem. These drive setup.py's own probe against a fake
+# mount table, so they pin the choice on host layouts this machine does not
+# have to be partitioned like.
+
+_MEGABYTE = 1024 * 1024
+_GIGABYTE = 1024 * _MEGABYTE
+
+# An ostree/composefs workstation (Bazzite, Silverblue -- the host class this
+# phase names as its target): `/` is a tiny read-only composefs overlay,
+# 100% used and 0 bytes free BY CONSTRUCTION, and the user's real disk is
+# `/var`, which `/var/home/<user>` lives on.
+_COMPOSEFS_HOST = {
+    "/": (45 * _MEGABYTE, 45 * _MEGABYTE, 0),
+    "/var": (800 * _GIGABYTE, 400 * _GIGABYTE, 400 * _GIGABYTE),
+    "/tmp": (16 * _GIGABYTE, 1 * _GIGABYTE, 15 * _GIGABYTE),
+}
+
+# The same layout with the two mounts' health swapped: a roomy `/` and a
+# nearly-full data mount. Measuring `/` here would MISS a real emergency, the
+# mirror image of the false alarm above.
+_COMPOSEFS_HOST_FULL_DATA = {
+    "/": (45 * _MEGABYTE, 20 * _MEGABYTE, 25 * _MEGABYTE),
+    "/var": (800 * _GIGABYTE, 776 * _GIGABYTE, 24 * _GIGABYTE),
+    "/tmp": (16 * _GIGABYTE, 1 * _GIGABYTE, 15 * _GIGABYTE),
+}
+
+# A stock single-root host (ordinary Linux, and macOS): home is under `/`, so
+# "the filesystem holding home" and "/" are the same filesystem and this
+# change is a no-op there.
+_SINGLE_ROOT_HOST = {
+    "/": (500 * _GIGABYTE, 250 * _GIGABYTE, 250 * _GIGABYTE),
+    "/tmp": (16 * _GIGABYTE, 1 * _GIGABYTE, 15 * _GIGABYTE),
+}
+
+
+def _mount_table(
+    mounts: Mapping[str, tuple[int, int, int]], measured: list[Path] | None = None
+) -> Callable[[Path], tuple[int, int, int]]:
+    """A `shutil.disk_usage`-shaped reader over a fake mount table.
+
+    Resolves a path the way a kernel does: the LONGEST mount point that is a
+    prefix of the path owns it. A path under no mount raises
+    FileNotFoundError, like the real call on a missing path.
+    """
+
+    def usage(path: Path) -> tuple[int, int, int]:
+        if measured is not None:
+            measured.append(path)
+        owners = [m for m in mounts if path == Path(m) or Path(m) in path.parents]
+        if not owners:
+            raise FileNotFoundError(path)
+        return mounts[max(owners, key=len)]
+
+    return usage
+
+
+def _inactive_cache() -> systemd_daemon.TimerStateCache:
+    """A warm cache answering INACTIVE without touching systemd -- the state
+    that makes low space an emphasised red finding, so silence here is silence
+    in the worst case, not silence because the daemon looked fine."""
+    cache = systemd_daemon.TimerStateCache(lambda: DaemonState.INACTIVE, ttl=10_000.0)
+    cache.read()
+    return cache
+
+
+def _immutable_platform() -> Platform:
+    return Platform(os="fedora", arch="amd64", immutable=True, has_brew=False)
+
+
+def test_the_disk_probe_measures_the_users_filesystem_not_a_read_only_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gap Phase 15.7 verification found: `/` on an ostree host is a 45 MB
+    read-only overlay reporting 0 bytes free, so measuring it made `make doctor`
+    print a permanent red "free disk space is low" on a machine with 400 GB
+    free -- inverting D-03's own false-positive-reduction rationale."""
+    from installer.guidance import disk_pressure_guidance
+
+    measured: list[Path] = []
+    monkeypatch.setenv("HOME", "/var/home/u")
+    monkeypatch.setenv("TMPDIR", "/tmp")
+    probe = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
+        _immutable_platform(),
+        timer_cache=_inactive_cache(),
+        usage=_mount_table(_COMPOSEFS_HOST, measured),
+    )
+
+    pressure = probe()
+
+    assert measured[0] == Path("/var/home/u")  # never Path("/")
+    assert pressure.daemon is DaemonState.INACTIVE
+    assert pressure.home_free_percent == 50.0
+    assert pressure.low_disk is False
+    assert pressure.under_pressure is False
+    # The must-have both plans state: a healthy machine produces NOTHING.
+    assert disk_pressure_guidance(pressure) == []
+
+
+def test_the_disk_probe_still_reports_a_full_user_filesystem(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other direction of the same choice: on that host a roomy `/` must
+    not mask an almost-full `/var`, or the fix would be "never warn"."""
+    from installer.guidance import disk_pressure_guidance
+
+    monkeypatch.setenv("HOME", "/var/home/u")
+    monkeypatch.setenv("TMPDIR", "/tmp")
+    probe = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
+        _immutable_platform(),
+        timer_cache=_inactive_cache(),
+        usage=_mount_table(_COMPOSEFS_HOST_FULL_DATA),
+    )
+
+    pressure = probe()
+
+    assert pressure.home_free_percent == 3.0
+    assert pressure.low_disk is True
+    guidance = disk_pressure_guidance(pressure)
+    assert [(item.severity, item.emphasis) for item in guidance] == [(Severity.ERROR, True)]
+
+
+@pytest.mark.parametrize(
+    ("platform", "home"),
+    [
+        pytest.param(_linux_platform(), "/home/u", id="stock-linux"),
+        pytest.param(_platform(), "/Users/u", id="macos"),
+    ],
+)
+def test_the_disk_probe_measures_the_root_mount_on_a_single_root_host(
+    monkeypatch: pytest.MonkeyPatch, platform: Platform, home: str
+) -> None:
+    """Where home IS on `/`, resolving the mount from home is the same
+    measurement as before -- this change moves no number on a stock host."""
+    measured: list[Path] = []
+    monkeypatch.setenv("HOME", home)
+    monkeypatch.setenv("TMPDIR", "/tmp")
+    probe = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
+        platform,
+        timer_cache=_inactive_cache() if platform.os != "macos" else None,
+        usage=_mount_table(_SINGLE_ROOT_HOST, measured),
+    )
+
+    pressure = probe()
+
+    assert measured[0] == Path(home)
+    assert pressure.home_free_percent == 50.0
+    assert pressure.low_disk is False
 
 
 def test_probe_and_policy_share_one_cache_and_issue_one_query(

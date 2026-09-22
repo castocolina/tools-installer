@@ -440,6 +440,31 @@ class _DiskProbe:
     row-highlight path passes blocking=False and reads TimerStateCache.peek,
     which never probes. A None peek omits the daemon-dependent half by
     answering UNAVAILABLE — ordinary warning wording, never a red finding.
+
+    WHICH filesystem the free-space half measures is this class's other
+    decision, and it is `Path.home()`'s — the filesystem holding the user's
+    home directory — never `/`. `/` is not a portable stand-in for "the
+    user's disk": on an ostree/composefs host (Bazzite, Silverblue) it is a
+    ~45 MB read-only overlay that is 100% used and 0 bytes free by
+    construction, so measuring it made `make doctor` print a permanent red
+    "free disk space is low" on a machine with 400 GB free — the exact
+    false positive D-03's conservative 15%/70% thresholds exist to avoid.
+    macOS has the same shape in milder form (a read-only signed system
+    volume with the user's data on `/System/Volumes/Data`).
+
+    Resolving from home rather than branching on `Platform.immutable` is the
+    more robust of the two: it needs no hardcoded `/var` that may not be a
+    separate mount, it needs no marker-file detection to be right, it is the
+    SAME measurement as before on a stock single-root host (home is under
+    `/`), and it is additionally correct on a host with a separate `/home`
+    partition, where `/` can be roomy while the user's disk is full. It also
+    measures the filesystem this installer actually fills: every artifact it
+    writes — `~/.local/opt`, `~/.local/bin`, `~/.cache` — lives under home.
+
+    `Path.home()` is the same notion of home every other path constant in
+    this file is built from (`_MYSHELLRC`, `_DAEMON_PLIST_PATH`, …), all of
+    which resolve it at import time, so by the time this runs it is already
+    known to resolve; no local fallback rule is invented here.
     """
 
     def __init__(
@@ -449,11 +474,13 @@ class _DiskProbe:
         timer_cache: systemd_daemon.TimerStateCache | None,
         plist_path: Path,
         unit_dir: Path,
+        usage: diskusage.UsageProbe = shutil.disk_usage,
     ) -> None:
         self._platform = platform
         self._timer_cache = timer_cache
         self._plist_path = plist_path
         self._unit_dir = unit_dir
+        self._usage = usage
 
     def _daemon(self, *, blocking: bool) -> DaemonState:
         if self._platform.os == "macos":
@@ -475,8 +502,9 @@ class _DiskProbe:
         return diskusage.probe_disk_pressure(
             self._daemon(blocking=blocking),
             self._platform.os != "macos",
-            Path("/"),
+            Path.home(),
             Path(tmp),
+            self._usage,
         )
 
 
@@ -484,6 +512,7 @@ def _disk_pressure_probe(
     platform: Platform,
     *,
     timer_cache: systemd_daemon.TimerStateCache | None,
+    usage: diskusage.UsageProbe = shutil.disk_usage,
 ) -> _DiskProbe:
     """THE construction point for a disk-pressure probe.
 
@@ -493,12 +522,19 @@ def _disk_pressure_probe(
     because a default would silently build a second cache; None is a
     meaningful value (macOS, or Linux without systemctl) meaning
     DaemonState.UNAVAILABLE on Linux.
+
+    `usage` is a real-defaulted injected seam (`shutil.disk_usage`), the same
+    convention `_build_daemon_policy`'s `which`/`run`/`read_output` follow, so
+    this file's own tests can pin WHICH mount the probe measures against a
+    fake mount table instead of against whatever the developer's machine
+    happens to be partitioned like.
     """
     return _DiskProbe(
         platform=platform,
         timer_cache=timer_cache,
         plist_path=_DAEMON_PLIST_PATH,
         unit_dir=_LINUX_DAEMON_UNIT_DIR,
+        usage=usage,
     )
 
 

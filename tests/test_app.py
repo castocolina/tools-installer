@@ -1210,12 +1210,12 @@ def _healthy_doctor_kwargs(bin_dir: Path) -> dict[str, object]:
 def _pressure(
     *,
     daemon: str,
-    root_free: float | None,
+    home_free: float | None,
     tmp_used: float | None,
     tmp_threshold: bool,
 ) -> DiskPressure:
     return DiskPressure(
-        root_free_percent=root_free,
+        home_free_percent=home_free,
         tmp_used_percent=tmp_used,
         daemon=DaemonState(daemon),
         tmp_threshold=tmp_threshold,
@@ -1254,7 +1254,7 @@ def test_run_doctor_emphasised_finding_carries_bold_style(tmp_path: Path) -> Non
         [],
         console,
         disk_pressure=lambda: _pressure(
-            daemon="inactive", root_free=10.0, tmp_used=10.0, tmp_threshold=True
+            daemon="inactive", home_free=10.0, tmp_used=10.0, tmp_threshold=True
         ),
         **_healthy_doctor_kwargs(bin_dir),  # type: ignore[arg-type]
     )
@@ -1275,7 +1275,7 @@ def test_run_doctor_healthy_disk_prints_nothing_extra(tmp_path: Path) -> None:
         [],
         extra,
         disk_pressure=lambda: _pressure(
-            daemon="inactive", root_free=80.0, tmp_used=10.0, tmp_threshold=True
+            daemon="inactive", home_free=80.0, tmp_used=10.0, tmp_threshold=True
         ),
         **kwargs,  # type: ignore[arg-type]
     )
@@ -1343,7 +1343,7 @@ def test_run_doctor_macos_skips_tmp_threshold_but_keeps_the_measured_percentage(
     seen: list[DiskPressure] = []
 
     def probe() -> DiskPressure:
-        pressure = _pressure(daemon="inactive", root_free=80.0, tmp_used=95.0, tmp_threshold=False)
+        pressure = _pressure(daemon="inactive", home_free=80.0, tmp_used=95.0, tmp_threshold=False)
         assert isinstance(pressure, DiskPressure)
         seen.append(pressure)
         return pressure
@@ -1362,7 +1362,7 @@ def test_run_doctor_macos_skips_tmp_threshold_but_keeps_the_measured_percentage(
     # percentage is still on the report the caller handed over — task 3's
     # Policies row reads that number rather than a substituted root figure.
     assert seen == [
-        _pressure(daemon="inactive", root_free=80.0, tmp_used=95.0, tmp_threshold=False)
+        _pressure(daemon="inactive", home_free=80.0, tmp_used=95.0, tmp_threshold=False)
     ]
 
 
@@ -1380,7 +1380,7 @@ def test_run_doctor_unavailable_daemon_is_an_ordinary_warning(tmp_path: Path) ->
         [],
         console,
         disk_pressure=lambda: _pressure(
-            daemon="unavailable", root_free=10.0, tmp_used=10.0, tmp_threshold=True
+            daemon="unavailable", home_free=10.0, tmp_used=10.0, tmp_threshold=True
         ),
         **_healthy_doctor_kwargs(bin_dir),  # type: ignore[arg-type]
     )

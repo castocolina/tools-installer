@@ -1,6 +1,6 @@
-"""Pure disk-pressure probe (D-03): free root space and used /tmp space, both
-IO-injected so nothing here touches a real filesystem except through the
-injected callable this module's tests drive.
+"""Pure disk-pressure probe (D-03): free space on the user's own filesystem
+and used /tmp space, both IO-injected so nothing here touches a real
+filesystem except through the injected callable this module's tests drive.
 
 No IO of its own: the only external call is `usage`, defaulted to
 `shutil.disk_usage` (stdlib -- (total, used, free) in bytes for any mounted
@@ -54,24 +54,24 @@ def _percent(path: Path, usage: UsageProbe, *, of_free: bool) -> float | None:
 
 @dataclass(frozen=True)
 class DiskPressure:
-    """One measurement pass: the root mount's free percentage, the temp
-    mount's used percentage (both None when that mount could not be read),
-    the daemon's own runtime state, and whether the /tmp usage rule applies
-    on this platform (D-03d: Linux only -- the temp mount itself is always
-    measured, this flag gates only the threshold)."""
+    """One measurement pass: the free percentage of the filesystem holding the
+    user's home directory, the temp mount's used percentage (both None when
+    that mount could not be read), the daemon's own runtime state, and whether
+    the /tmp usage rule applies on this platform (D-03d: Linux only -- the temp
+    mount itself is always measured, this flag gates only the threshold)."""
 
-    root_free_percent: float | None
+    home_free_percent: float | None
     tmp_used_percent: float | None
     daemon: DaemonState
     tmp_threshold: bool
 
     @property
     def low_disk(self) -> bool:
-        """True when free root space is measured and strictly below the
-        threshold -- "below 15%", not "at or below"."""
-        if self.root_free_percent is None:
+        """True when the home filesystem's free space is measured and strictly
+        below the threshold -- "below 15%", not "at or below"."""
+        if self.home_free_percent is None:
             return False
-        return self.root_free_percent < DISK_FREE_WARN_PERCENT
+        return self.home_free_percent < DISK_FREE_WARN_PERCENT
 
     @property
     def high_tmp(self) -> bool:
@@ -96,11 +96,19 @@ class DiskPressure:
 def probe_disk_pressure(
     daemon: DaemonState,
     tmp_threshold: bool,
-    root_path: Path,
+    home_path: Path,
     tmp_path: Path,
     usage: UsageProbe = shutil.disk_usage,
 ) -> DiskPressure:
-    """Measure `root_path`'s free percentage and `tmp_path`'s used percentage.
+    """Measure `home_path`'s free percentage and `tmp_path`'s used percentage.
+
+    `home_path` is the path whose CONTAINING FILESYSTEM is measured -- the
+    caller passes the user's home directory, not a mount point, and the
+    kernel resolves it to the filesystem that actually holds the user's data.
+    Which path that is stays the caller's decision (this module has no
+    platform knowledge); the name records that no caller may pass `/`, which
+    on an ostree/composefs host is a read-only overlay permanently at 0 bytes
+    free and on macOS is a read-only signed system volume.
 
     `probe_disk_pressure` is TOTAL over filesystem and probe-conversion
     failure. It catches `OSError` (including `PermissionError`), `ValueError`
@@ -114,10 +122,10 @@ def probe_disk_pressure(
     macOS caller (`tmp_threshold=False`) still gets a real measured
     `tmp_used_percent` to display, never a substituted root-filesystem number.
     """
-    root_free_percent = _percent(root_path, usage, of_free=True)
+    home_free_percent = _percent(home_path, usage, of_free=True)
     tmp_used_percent = _percent(tmp_path, usage, of_free=False)
     return DiskPressure(
-        root_free_percent=root_free_percent,
+        home_free_percent=home_free_percent,
         tmp_used_percent=tmp_used_percent,
         daemon=daemon,
         tmp_threshold=tmp_threshold,

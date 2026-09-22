@@ -1811,8 +1811,8 @@ class PoliciesScreen(AppScreen):
 
         Only a number the probe actually measured is stated: the temp-directory
         usage (measured on macOS too, per D-03d), else -- only when the temp
-        mount was unreadable -- the root filesystem's free space, labelled as
-        such, else no line at all.
+        mount was unreadable -- the free space on the filesystem holding the
+        user's home directory, labelled as such, else no line at all.
         """
         if self._disk_pressure is None:
             return None
@@ -1822,8 +1822,8 @@ class PoliciesScreen(AppScreen):
             return None
         if pressure.tmp_used_percent is not None:
             return f"Current temp-directory usage: {pressure.tmp_used_percent:.1f}%"
-        if pressure.root_free_percent is not None:
-            return f"Current root filesystem free space: {pressure.root_free_percent:.1f}%"
+        if pressure.home_free_percent is not None:
+            return f"Current home filesystem free space: {pressure.home_free_percent:.1f}%"
         return None
 
     def _set_detail(self, policy: Policy | None) -> None:
