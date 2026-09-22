@@ -137,8 +137,22 @@ def _sourced_oh_my_zsh(lines: list[str]) -> int | None:
 
 
 def _read_rc(path: Path) -> str:
-    """Read an rc file without translating CRLF into Unix newlines."""
-    return path.read_bytes().decode("utf-8")
+    """Read an rc file without translating CRLF into Unix newlines.
+
+    A non-UTF-8 byte (a Latin-1 accented character in a comment is entirely
+    realistic in a hand-written .zshrc) is reported as OmzPluginsError rather
+    than the bare UnicodeDecodeError `bytes.decode` raises. UnicodeDecodeError
+    is a ValueError, NOT an OSError, so it escapes every caller's OSError
+    handler -- including the six lifecycle call sites of the terminal
+    synchronizer, where it would turn a successful install into an uncaught
+    traceback. Refusing here also keeps the file byte-identical: a rewrite of
+    content this module could not read is exactly the corruption it exists to
+    avoid.
+    """
+    try:
+        return path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise OmzPluginsError(f"{path} is not valid UTF-8; refusing to rewrite it") from exc
 
 
 def _bare(token: str) -> str:

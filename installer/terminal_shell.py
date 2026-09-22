@@ -166,7 +166,21 @@ def _remove_if_owned(path: Path, terminal: str, *, comment: str = "#") -> bool:
 
 
 def _read_text(path: Path) -> str:
-    return path.read_bytes().decode("utf-8") if path.exists() else ""
+    """Read a terminal configuration file, refusing one this module cannot decode.
+
+    A non-UTF-8 byte is reported as TerminalShellError -- an OSError subclass,
+    like every other refusal here -- rather than the bare UnicodeDecodeError
+    `bytes.decode` raises. UnicodeDecodeError is a ValueError, not an OSError,
+    so it would escape the OSError handler each lifecycle call site wraps the
+    synchronizer in. Refusing also leaves the file byte-identical rather than
+    rewriting content this module could not read.
+    """
+    if not path.exists():
+        return ""
+    try:
+        return path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise TerminalShellError(f"{path} is not valid UTF-8; refusing to rewrite it") from exc
 
 
 def _write_if_changed(path: Path, content: str) -> bool:

@@ -658,3 +658,20 @@ def test_write_plugins_repairs_source_before_plugins_and_is_byte_stable(
     assert zshrc.read_text() == first
     assert ensure_zshrc_template(zshrc) is False
     assert zshrc.read_text() == first
+
+
+def test_non_utf8_zshrc_is_refused_as_an_oserror_without_changing_bytes(tmp_path: Path) -> None:
+    """CR-02: a Latin-1 byte must not escape as a bare UnicodeDecodeError.
+
+    UnicodeDecodeError is a ValueError, so it would slip past every caller's
+    `except OSError` -- including the six terminal-sync lifecycle call sites.
+    """
+    zshrc = tmp_path / ".zshrc"
+    original = "# caf\xe9 comment\nsource $ZSH/oh-my-zsh.sh\n".encode("latin-1")
+    zshrc.write_bytes(original)
+
+    with pytest.raises(OmzPluginsError, match="UTF-8") as caught:
+        ensure_zshrc_template(zshrc)
+
+    assert isinstance(caught.value, OSError)
+    assert zshrc.read_bytes() == original

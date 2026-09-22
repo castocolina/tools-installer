@@ -318,3 +318,28 @@ def test_absent_konsole_does_not_create_profile_or_kconfig(tmp_path: Path) -> No
 
     assert not (tmp_path / ".local" / "share" / "konsole" / "tools-installer-zsh.profile").exists()
     assert not (tmp_path / ".config" / "konsolerc").exists()
+
+
+def test_non_utf8_kitty_config_is_refused_as_an_oserror_without_changing_bytes(
+    tmp_path: Path,
+) -> None:
+    """CR-02: a Latin-1 byte must not escape as a bare UnicodeDecodeError.
+
+    UnicodeDecodeError is a ValueError, so it would slip past every caller's
+    `except OSError` -- including the six terminal-sync lifecycle call sites.
+    """
+    config = tmp_path / ".config" / "kitty" / "kitty.conf"
+    config.parent.mkdir(parents=True)
+    original = "# caf\xe9 comment\nfont_size 14\n".encode("latin-1")
+    config.write_bytes(original)
+
+    with pytest.raises(TerminalShellError, match="UTF-8") as caught:
+        sync_terminal_shells(
+            home=tmp_path,
+            environ={},
+            platform=_platform(),
+            lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+        )
+
+    assert isinstance(caught.value, OSError)
+    assert config.read_bytes() == original
