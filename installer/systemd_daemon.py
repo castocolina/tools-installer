@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import shutil
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from installer.atomic import atomic_write_bytes
@@ -39,14 +40,20 @@ from installer.shellrc import apply_block, strip_block
 # installer.daemon's WRAPPER_COMMAND/install_wrapper/etc. rather than
 # re-declaring a parallel copy).
 __all__ = [
+    "COMPETING_UNITS",
     "DEFAULT_AGE_MINUTES",
     "DEFAULT_BOOT_DELAY",
     "DEFAULT_CAP_BYTES",
     "DEFAULT_INTERVAL",
+    "ENABLED_STATES",
+    "INERT_STATES",
+    "SCOPE_SYSTEM",
+    "SCOPE_USER",
     "SERVICE_NAME",
     "STATE_CACHE_TTL",
     "SYSTEMCTL_QUERY_TIMEOUT",
     "TIMER_NAME",
+    "CompetingUnit",
     "TimerStateCache",
     "UNIT_BASENAME",
     "WRAPPER_COMMAND",
@@ -55,9 +62,12 @@ __all__ = [
     "clear_decided",
     "daemon_reload",
     "decided",
+    "detect_competing",
+    "disable_competing",
     "ensure_log_path",
     "install_wrapper",
     "last_run_summary",
+    "parse_unit_files",
     "probe_timer_state",
     "query_systemctl",
     "record_decided",
@@ -65,10 +75,12 @@ __all__ = [
     "remove_wrapper",
     "render_service",
     "render_timer",
+    "system_scope_warning",
     "systemd_available",
     "timer_state",
     "unit_paths",
     "units_present",
+    "user_scope_failure_warning",
     "user_unit_dir",
     "wrapper_present",
     "write_units",
@@ -486,6 +498,245 @@ def bootout(
             raise
         if probe_timer_state(read_output=read_output) is DaemonState.ACTIVE:
             raise
+
+
+# --- Competing-mechanism detection & takeover (D-02) -------------------------
+#
+# D-02a (ratified in 15.7-CONTEXT.md, 2026-09-22): "detect and disable/remove"
+# applies as originally written ONLY to a USER-scope competitor -- genuinely
+# detect, disable, and replace it. A SYSTEM-scope competitor is detected and
+# DISCLOSED, never mutated: this project has no sudo/pkexec/doas call anywhere
+# and its entire install model is userspace-only, so silently escalating
+# privileges to touch a root-owned unit would be a first-ever architectural
+# change nobody signed off. See the plan's <objective> for the full rationale.
+
+# The one real, live-confirmed competing implementation (15.7-RESEARCH.md
+# Pitfall 1, live-verified on the target host as SYSTEM-scope,
+# /etc/systemd/system/cleanup-bun-tmp-cache.{service,timer}). Exact-name
+# matching is a deliberate choice over a broader pattern-based heuristic --
+# there is exactly one real, confirmed case today (15.7-RESEARCH.md Open
+# Question 3).
+COMPETING_UNITS: tuple[str, str] = (
+    "cleanup-bun-tmp-cache.timer",
+    "cleanup-bun-tmp-cache.service",
+)
+_COMPETING_TIMER_NAME, _COMPETING_SERVICE_NAME = COMPETING_UNITS
+
+# The two systemd scopes a competing unit can live in. Named constants so no
+# call site spells "user"/"system" by hand.
+SCOPE_USER = "user"
+SCOPE_SYSTEM = "system"
+
+# D-02d: `systemctl list-unit-files` reports whether a unit FILE exists and
+# how it is wired, not whether the mechanism is actually RUNNING. A unit
+# whose enablement state is one of these is treated as live without a further
+# probe -- the common case, one query per scope. Any other state (disabled,
+# static, ...) gets ONE bounded `is-active` probe in its own scope before a
+# verdict is reached; see detect_competing.
+ENABLED_STATES: frozenset[str] = frozenset({"enabled", "enabled-runtime"})
+# A masked unit can never be started by systemd short of unmasking it first --
+# acting on it (or warning about it) would describe a mechanism that is
+# structurally incapable of running, so it is dropped outright, unprobed.
+INERT_STATES: frozenset[str] = frozenset({"masked", "masked-runtime"})
+
+_LIST_UNIT_FILES_FLAGS: tuple[str, ...] = ("--no-legend", "--no-pager")
+
+
+@dataclass(frozen=True)
+class CompetingUnit:
+    """One live (D-02d) pre-existing cleanup unit detected in either systemd
+    scope -- the read-only detection result `detect_competing` returns."""
+
+    name: str
+    scope: str  # SCOPE_USER or SCOPE_SYSTEM
+    state: str  # the enablement state list-unit-files reported
+
+
+def parse_unit_files(output: str, names: Collection[str]) -> tuple[tuple[str, str], ...]:
+    """Pure parse of a `systemctl list-unit-files` listing into (name, state)
+    pairs for only the wanted unit names.
+
+    Takes the first TWO whitespace-delimited columns of each non-empty line
+    (name, enablement state); any further column -- the vendor-preset column
+    this module never reads -- is ignored. A line whose first column is not
+    exactly one of `names` (a summary line such as "2 unit files listed.", a
+    legend line, an unrelated unit) is skipped -- the comparison is on the
+    WHOLE first column, so a name that merely contains a wanted name as a
+    substring never matches. A line carrying only a name and no second column
+    yields that name with an empty state rather than raising -- ragged output
+    degrades, never breaks a caller. Total over any input: never raises.
+    """
+    wanted = set(names)
+    results: list[tuple[str, str]] = []
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        columns = line.split()
+        name = columns[0]
+        if name not in wanted:
+            continue
+        state = columns[1] if len(columns) > 1 else ""
+        results.append((name, state))
+    return tuple(results)
+
+
+def _list_unit_files_cmd(*, user: bool) -> list[str]:
+    prefix = ["systemctl", "--user"] if user else ["systemctl"]
+    return [*prefix, "list-unit-files", *_LIST_UNIT_FILES_FLAGS, *COMPETING_UNITS]
+
+
+def _is_active_cmd(name: str, *, user: bool) -> list[str]:
+    prefix = ["systemctl", "--user"] if user else ["systemctl"]
+    return [*prefix, "is-active", name]
+
+
+def _detect_in_scope(*, user: bool, scope: str, read_output: OutputRunner) -> list[CompetingUnit]:
+    try:
+        listing = read_output(_list_unit_files_cmd(user=user))
+    except (CommandError, OSError):
+        # A machine without systemd, or one scope this process cannot read
+        # (a wedged manager, a query timeout) degrades to "found nothing
+        # there" -- the OTHER scope's own guard is independent, so one
+        # unreadable scope never suppresses the other (T-15.7-12).
+        return []
+    found: list[CompetingUnit] = []
+    for name, state in parse_unit_files(listing, COMPETING_UNITS):
+        if state in INERT_STATES:
+            continue
+        if state in ENABLED_STATES:
+            found.append(CompetingUnit(name=name, scope=scope, state=state))
+            continue
+        # D-02d: neither enabled-ish nor masked -- the listing alone cannot
+        # say whether this is genuinely running (a unit started by hand while
+        # `disabled`) or a dormant leftover. ONE bounded is-active probe
+        # answers that, in the SAME scope the unit was found in.
+        try:
+            answer = read_output(_is_active_cmd(name, user=user))
+        except (CommandError, OSError):
+            # An unanswerable question must not manufacture a takeover of a
+            # foreign unit -- degrade to "not a competitor", same as the
+            # listing-probe guard above.
+            continue
+        if answer.strip() in _ACTIVE_ANSWERS:
+            found.append(CompetingUnit(name=name, scope=scope, state=state))
+    return found
+
+
+def detect_competing(*, read_output: OutputRunner = query_systemctl) -> tuple[CompetingUnit, ...]:
+    """Read-only, both-scope probe for a live (D-02d) pre-existing competing
+    cleanup mechanism (D-02/D-02a).
+
+    Probes the user scope and the system scope independently, each behind its
+    own guard (see _detect_in_scope) -- a machine without systemd, or one
+    where only one scope is unreadable, degrades to "found nothing there"
+    rather than breaking a policy apply (T-15.7-12/T-15.7-42). Reading a
+    system-scope unit listing needs no privilege, which is exactly why
+    detection can span both scopes while mutation (disable_competing) never
+    can. Every query goes through the injected `read_output`, whose real
+    default is the bounded `query_systemctl` adapter -- never the unbounded
+    `run_output` -- so a wedged systemd manager can never hang a policy apply
+    (T-15.7-42).
+    """
+    found = [
+        *_detect_in_scope(user=True, scope=SCOPE_USER, read_output=read_output),
+        *_detect_in_scope(user=False, scope=SCOPE_SYSTEM, read_output=read_output),
+    ]
+    return tuple(found)
+
+
+def disable_competing(
+    units: Iterable[CompetingUnit], *, run: Runner = run_captured
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Disable (never delete -- D-02b) every USER-scope entry in `units`.
+
+    Raises ValueError immediately -- before issuing a single argv -- when ANY
+    entry is system-scope: a structural refusal, not a comment, so a future
+    caller can never accidentally route a system-scope unit into a mutation
+    path (T-15.7-10). This project has no sudo/pkexec/doas call anywhere;
+    every argv this function can emit is a user-scope `systemctl` call.
+
+    Issues one `systemctl --user disable --now <name>` call per entry,
+    collecting a per-entry CommandError into the failed list instead of
+    aborting the rest (D-02c) -- never a file-removing verb, never an unlink
+    (D-02b): the competitor's unit files belong to whoever installed them,
+    matching this project's own ownership discipline
+    (daemon.install_wrapper/remove_wrapper/wrapper_present's sentinel-checked
+    refusal to touch a same-named artifact it did not create), and a disabled
+    unit is a state the user can undo while a deleted one is not.
+
+    Returns (disabled_names, failed_names).
+    """
+    units = tuple(units)
+    if any(unit.scope == SCOPE_SYSTEM for unit in units):
+        raise ValueError("disable_competing refuses a system-scope competing unit")
+    disabled: list[str] = []
+    failed: list[str] = []
+    for unit in units:
+        try:
+            run(["systemctl", "--user", "disable", "--now", unit.name])
+        except CommandError:
+            failed.append(unit.name)
+        else:
+            disabled.append(unit.name)
+    return tuple(disabled), tuple(failed)
+
+
+def system_scope_warning(units: Iterable[CompetingUnit]) -> str | None:
+    """A sentence disclosing every detected SYSTEM-scope competitor (D-02a),
+    or None when there is none.
+
+    Names the unit(s), states that a system-level cleanup service was found
+    and will keep running alongside this app's own daemon, and quotes
+    verbatim the root command(s) that stop and disable it -- this project
+    never runs these commands itself (T-15.7-10); they are user-facing prose
+    only. Says "stops and disables", never "removes" or "deletes" (D-02b):
+    these commands leave the unit files in place.
+
+    Lifecycle coverage (review LOW 15.7-03): quotes the timer's
+    `disable --now` and, only when a system-scope SERVICE unit was ALSO
+    detected, its explicit `stop` -- disabling the timer only prevents the
+    NEXT trigger, a service already running from the last trigger keeps
+    going, and a `.service` with no `[Install]` section cannot be disabled at
+    all. A service command is never named when no service unit was found.
+    """
+    system_units = [unit for unit in units if unit.scope == SCOPE_SYSTEM]
+    if not system_units:
+        return None
+    names = sorted({unit.name for unit in system_units})
+    has_timer = any(unit.name == _COMPETING_TIMER_NAME for unit in system_units)
+    has_service = any(unit.name == _COMPETING_SERVICE_NAME for unit in system_units)
+    commands: list[str] = []
+    if has_timer:
+        commands.append(f"sudo systemctl disable --now {_COMPETING_TIMER_NAME}")
+    if has_service:
+        commands.append(f"sudo systemctl stop {_COMPETING_SERVICE_NAME}")
+    return (
+        f"A system-level cleanup service was found ({', '.join(names)}) and will keep running "
+        "alongside this app's own daemon; this project cannot stop it without root, so it was "
+        f"left untouched. Run `{'; '.join(commands)}` yourself to stop and disable it."
+    )
+
+
+def user_scope_failure_warning(failed: Iterable[str]) -> str | None:
+    """A sentence disclosing every user-scope competitor this run could NOT
+    disable (D-02c), or None when nothing failed.
+
+    Names each unit, states that it is still running alongside this app's own
+    daemon, and quotes the user-scope command the user can run themselves.
+    This is what makes D-02c's "proceed and disclose" real: without it, a
+    failed takeover is indistinguishable from a machine that never had a
+    competitor (T-15.7-14).
+    """
+    names = tuple(failed)
+    if not names:
+        return None
+    sentences = [
+        f"{name} could not be stopped and disabled and is still running alongside this app's "
+        f"own daemon; run `systemctl --user disable --now {name}` yourself to stop it."
+        for name in names
+    ]
+    return " ".join(sentences)
 
 
 def _decided_block() -> str:

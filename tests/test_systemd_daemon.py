@@ -7,6 +7,8 @@ Every test uses an injected fake `run`/`read_output` -- never real
 tests and tests/test_policy_daemon.py's fixture structure.
 """
 
+import inspect
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -742,3 +744,369 @@ def test_linux_decided_marker_is_independent_of_macos_daemons_own(tmp_path: Path
     systemd_daemon.record_decided(state_path)
     assert systemd_daemon.decided(state_path) is True
     assert daemon.decided(state_path) is False
+
+
+# --- Competing-mechanism detection & takeover (D-02/D-02a/D-02b/D-02c/D-02d) --
+
+_TIMER_NAME = "cleanup-bun-tmp-cache.timer"
+_SERVICE_NAME = "cleanup-bun-tmp-cache.service"
+
+
+def _unit_files_output(*entries: tuple[str, str]) -> str:
+    """Build a `systemctl list-unit-files`-shaped listing: name, whitespace,
+    state, whitespace, a third (preset) column this module never reads --
+    matching the live-captured shape in 15.7-RESEARCH.md Pitfall 1."""
+    lines = [f"{name}{' ' * 8}{state}{' ' * 8}-" for name, state in entries]
+    lines.append(f"{len(entries)} unit files listed.")
+    return "\n".join(lines) + "\n"
+
+
+class _ScopedReadOutput:
+    """Routes list-unit-files/is-active answers by scope (--user present or
+    not) and by verb, recording every argv issued."""
+
+    def __init__(
+        self,
+        *,
+        user_listing: str = "",
+        system_listing: str = "",
+        user_active: Mapping[str, str] | None = None,
+        system_active: Mapping[str, str] | None = None,
+    ) -> None:
+        self.calls: list[list[str]] = []
+        self._user_listing = user_listing
+        self._system_listing = system_listing
+        self._user_active = dict(user_active or {})
+        self._system_active = dict(system_active or {})
+
+    def __call__(self, cmd: list[str]) -> str:
+        self.calls.append(cmd)
+        is_user = "--user" in cmd
+        if "list-unit-files" in cmd:
+            return self._user_listing if is_user else self._system_listing
+        if "is-active" in cmd:
+            unit = cmd[-1]
+            table = self._user_active if is_user else self._system_active
+            return table.get(unit, "inactive")
+        raise AssertionError(f"unexpected argv in _ScopedReadOutput: {cmd}")
+
+
+class _RaisingScopedReadOutput:
+    """Raises CommandError for one named scope ('user' or 'system'), answers
+    normally for the other."""
+
+    def __init__(self, *, raise_for: str, other_listing: str = "") -> None:
+        self.calls: list[list[str]] = []
+        self._raise_for = raise_for
+        self._other_listing = other_listing
+
+    def __call__(self, cmd: list[str]) -> str:
+        self.calls.append(cmd)
+        is_user = "--user" in cmd
+        scope = systemd_daemon.SCOPE_USER if is_user else systemd_daemon.SCOPE_SYSTEM
+        if scope == self._raise_for:
+            raise CommandError(cmd, 1)
+        return self._other_listing
+
+
+# --- parse_unit_files (pure) --------------------------------------------------
+
+
+def test_parse_unit_files_returns_name_state_pairs_ignoring_the_third_column() -> None:
+    output = _unit_files_output((_TIMER_NAME, "enabled"), (_SERVICE_NAME, "static"))
+    result = systemd_daemon.parse_unit_files(output, (_TIMER_NAME, _SERVICE_NAME))
+    assert result == ((_TIMER_NAME, "enabled"), (_SERVICE_NAME, "static"))
+
+
+def test_parse_unit_files_ignores_the_trailing_summary_line() -> None:
+    output = _unit_files_output((_TIMER_NAME, "enabled"))
+    assert "unit files listed." in output  # sanity: the fixture builds one
+    result = systemd_daemon.parse_unit_files(output, (_TIMER_NAME,))
+    assert result == ((_TIMER_NAME, "enabled"),)
+
+
+def test_parse_unit_files_ignores_a_legend_line() -> None:
+    output = f"UNIT FILE STATE PRESET\n{_unit_files_output((_TIMER_NAME, 'enabled'))}"
+    result = systemd_daemon.parse_unit_files(output, (_TIMER_NAME,))
+    assert result == ((_TIMER_NAME, "enabled"),)
+
+
+def test_parse_unit_files_ignores_lines_whose_name_is_not_wanted() -> None:
+    output = _unit_files_output(("some-other.timer", "enabled"), (_TIMER_NAME, "static"))
+    result = systemd_daemon.parse_unit_files(output, (_TIMER_NAME,))
+    assert result == ((_TIMER_NAME, "static"),)
+
+
+def test_parse_unit_files_yields_empty_state_for_a_name_only_line() -> None:
+    result = systemd_daemon.parse_unit_files(f"{_TIMER_NAME}\n", (_TIMER_NAME,))
+    assert result == ((_TIMER_NAME, ""),)
+
+
+def test_parse_unit_files_on_empty_output_returns_empty_tuple() -> None:
+    assert systemd_daemon.parse_unit_files("", (_TIMER_NAME,)) == ()
+
+
+def test_parse_unit_files_skips_a_blank_line_between_entries() -> None:
+    output = f"{_TIMER_NAME}    enabled    -\n\n{_SERVICE_NAME}    static    -\n"
+    result = systemd_daemon.parse_unit_files(output, (_TIMER_NAME, _SERVICE_NAME))
+    assert result == ((_TIMER_NAME, "enabled"), (_SERVICE_NAME, "static"))
+
+
+def test_parse_unit_files_does_not_match_a_substring_of_a_wanted_name() -> None:
+    output = _unit_files_output(
+        (f"prefix-{_TIMER_NAME}", "enabled"), (f"{_TIMER_NAME}-suffix", "enabled")
+    )
+    result = systemd_daemon.parse_unit_files(output, (_TIMER_NAME,))
+    assert result == ()
+
+
+# --- Liveness classification (D-02d) -----------------------------------------
+
+
+def test_detect_competing_enabled_state_is_a_competitor_without_an_is_active_probe() -> None:
+    read_output = _ScopedReadOutput(user_listing=_unit_files_output((_TIMER_NAME, "enabled")))
+    result = systemd_daemon.detect_competing(read_output=read_output)
+    assert [u.name for u in result] == [_TIMER_NAME]
+    assert not any("is-active" in c for c in read_output.calls)
+
+
+def test_detect_competing_enabled_runtime_state_is_a_competitor() -> None:
+    read_output = _ScopedReadOutput(
+        user_listing=_unit_files_output((_TIMER_NAME, "enabled-runtime"))
+    )
+    result = systemd_daemon.detect_competing(read_output=read_output)
+    assert [u.name for u in result] == [_TIMER_NAME]
+
+
+def test_detect_competing_disabled_and_inactive_is_not_a_competitor() -> None:
+    read_output = _ScopedReadOutput(
+        user_listing=_unit_files_output((_TIMER_NAME, "disabled")),
+        user_active={_TIMER_NAME: "inactive"},
+    )
+    result = systemd_daemon.detect_competing(read_output=read_output)
+    assert result == ()
+
+
+def test_detect_competing_disabled_but_active_is_a_competitor() -> None:
+    read_output = _ScopedReadOutput(
+        user_listing=_unit_files_output((_TIMER_NAME, "disabled")),
+        user_active={_TIMER_NAME: "active"},
+    )
+    result = systemd_daemon.detect_competing(read_output=read_output)
+    assert [u.name for u in result] == [_TIMER_NAME]
+
+
+def test_detect_competing_masked_state_is_not_a_competitor_and_is_not_probed_further() -> None:
+    read_output = _ScopedReadOutput(user_listing=_unit_files_output((_TIMER_NAME, "masked")))
+    result = systemd_daemon.detect_competing(read_output=read_output)
+    assert result == ()
+    assert not any("is-active" in c for c in read_output.calls)
+
+
+def test_detect_competing_is_active_probe_raising_is_treated_as_not_a_competitor() -> None:
+    def read_output(cmd: list[str]) -> str:
+        if "list-unit-files" in cmd and "--user" in cmd:
+            return _unit_files_output((_TIMER_NAME, "disabled"))
+        if "is-active" in cmd:
+            raise CommandError(cmd, 1)
+        return ""
+
+    result = systemd_daemon.detect_competing(read_output=read_output)
+    assert result == ()
+
+
+# --- Detection spans both scopes ---------------------------------------------
+
+
+def test_detect_competing_reports_user_scope_only() -> None:
+    read_output = _ScopedReadOutput(user_listing=_unit_files_output((_TIMER_NAME, "enabled")))
+    result = systemd_daemon.detect_competing(read_output=read_output)
+    assert len(result) == 1
+    assert result[0].name == _TIMER_NAME
+    assert result[0].scope == systemd_daemon.SCOPE_USER
+
+
+def test_detect_competing_reports_system_scope_only() -> None:
+    read_output = _ScopedReadOutput(
+        system_listing=_unit_files_output((_TIMER_NAME, "enabled"), (_SERVICE_NAME, "static")),
+        system_active={_SERVICE_NAME: "active"},
+    )
+    result = systemd_daemon.detect_competing(read_output=read_output)
+    names_scopes = {(u.name, u.scope) for u in result}
+    assert names_scopes == {
+        (_TIMER_NAME, systemd_daemon.SCOPE_SYSTEM),
+        (_SERVICE_NAME, systemd_daemon.SCOPE_SYSTEM),
+    }
+
+
+def test_detect_competing_reports_entries_from_both_scopes() -> None:
+    read_output = _ScopedReadOutput(
+        user_listing=_unit_files_output((_TIMER_NAME, "enabled")),
+        system_listing=_unit_files_output((_SERVICE_NAME, "enabled")),
+    )
+    result = systemd_daemon.detect_competing(read_output=read_output)
+    names_scopes = {(u.name, u.scope) for u in result}
+    assert names_scopes == {
+        (_TIMER_NAME, systemd_daemon.SCOPE_USER),
+        (_SERVICE_NAME, systemd_daemon.SCOPE_SYSTEM),
+    }
+
+
+def test_detect_competing_one_scope_raising_never_suppresses_the_other() -> None:
+    read_output = _RaisingScopedReadOutput(
+        raise_for=systemd_daemon.SCOPE_SYSTEM,
+        other_listing=_unit_files_output((_TIMER_NAME, "enabled")),
+    )
+    result = systemd_daemon.detect_competing(read_output=read_output)
+    assert [u.name for u in result] == [_TIMER_NAME]
+    assert [u.scope for u in result] == [systemd_daemon.SCOPE_USER]
+
+
+def test_detect_competing_os_error_on_every_scope_returns_empty_tuple() -> None:
+    def read_output(cmd: list[str]) -> str:
+        raise OSError(f"no systemctl: {cmd}")
+
+    assert systemd_daemon.detect_competing(read_output=read_output) == ()
+
+
+def test_detect_competing_argv_shape_is_read_only_and_scope_correct() -> None:
+    read_output = _ScopedReadOutput(
+        user_listing=_unit_files_output((_TIMER_NAME, "disabled")),
+        user_active={_TIMER_NAME: "active"},
+    )
+    systemd_daemon.detect_competing(read_output=read_output)
+    for cmd in read_output.calls:
+        assert cmd[0] == "systemctl"
+        assert cmd[1] in ("--user", "list-unit-files", "is-active")
+    user_calls = [c for c in read_output.calls if "--user" in c]
+    system_calls = [c for c in read_output.calls if "--user" not in c]
+    assert user_calls  # the user-scope probes carry the flag
+    assert all("--user" not in c for c in system_calls)
+
+
+def test_detect_competing_default_read_output_is_query_systemctl() -> None:
+    sig = inspect.signature(systemd_daemon.detect_competing)
+    assert sig.parameters["read_output"].default is systemd_daemon.query_systemctl
+
+
+# --- Refusal and wording -------------------------------------------------------
+
+
+def _user_unit(name: str, state: str = "enabled") -> systemd_daemon.CompetingUnit:
+    return systemd_daemon.CompetingUnit(name=name, scope=systemd_daemon.SCOPE_USER, state=state)
+
+
+def _system_unit(name: str, state: str = "enabled") -> systemd_daemon.CompetingUnit:
+    return systemd_daemon.CompetingUnit(name=name, scope=systemd_daemon.SCOPE_SYSTEM, state=state)
+
+
+def test_disable_competing_raises_valueerror_before_any_argv_for_a_system_scope_entry() -> None:
+    fake_run = _RecordingRun()
+    with pytest.raises(ValueError):
+        systemd_daemon.disable_competing([_system_unit(_TIMER_NAME)], run=fake_run)
+    assert fake_run.calls == []
+
+
+def test_disable_competing_refuses_mixed_scopes_before_any_argv() -> None:
+    fake_run = _RecordingRun()
+    with pytest.raises(ValueError):
+        systemd_daemon.disable_competing(
+            [_user_unit(_TIMER_NAME), _system_unit(_SERVICE_NAME)], run=fake_run
+        )
+    assert fake_run.calls == []
+
+
+def test_disable_competing_issues_one_disable_now_call_per_user_scope_entry() -> None:
+    fake_run = _RecordingRun()
+    disabled, failed = systemd_daemon.disable_competing(
+        [_user_unit(_TIMER_NAME), _user_unit(_SERVICE_NAME)], run=fake_run
+    )
+    assert fake_run.calls == [
+        ["systemctl", "--user", "disable", "--now", _TIMER_NAME],
+        ["systemctl", "--user", "disable", "--now", _SERVICE_NAME],
+    ]
+    assert disabled == (_TIMER_NAME, _SERVICE_NAME)
+    assert failed == ()
+
+
+def test_disable_competing_collects_a_per_entry_failure_instead_of_aborting() -> None:
+    def run(cmd: list[str]) -> None:
+        if cmd[-1] == _TIMER_NAME:
+            raise CommandError(cmd, 1)
+
+    disabled, failed = systemd_daemon.disable_competing(
+        [_user_unit(_TIMER_NAME), _user_unit(_SERVICE_NAME)], run=run
+    )
+    assert disabled == (_SERVICE_NAME,)
+    assert failed == (_TIMER_NAME,)
+
+
+def test_disable_competing_never_issues_a_unit_removing_verb_and_files_survive(
+    tmp_path: Path,
+) -> None:
+    unit_dir = tmp_path / "unit"
+    _write_units_present(unit_dir)
+    service_path, timer_path = systemd_daemon.unit_paths(unit_dir)
+    fake_run = _RecordingRun()
+    systemd_daemon.disable_competing([_user_unit(_TIMER_NAME)], run=fake_run)
+    for cmd in fake_run.calls:
+        assert not any(verb in cmd for verb in ("mask", "unlink", "rm"))
+    assert service_path.exists()
+    assert timer_path.exists()
+
+
+def test_system_scope_warning_none_when_no_system_scope_entries() -> None:
+    assert systemd_daemon.system_scope_warning([_user_unit(_TIMER_NAME)]) is None
+    assert systemd_daemon.system_scope_warning([]) is None
+
+
+def test_system_scope_warning_names_the_timer_command_for_a_timer_only_detection() -> None:
+    warning = systemd_daemon.system_scope_warning([_system_unit(_TIMER_NAME)])
+    assert warning == (
+        f"A system-level cleanup service was found ({_TIMER_NAME}) and will keep running "
+        "alongside this app's own daemon; this project cannot stop it without root, so it was "
+        f"left untouched. Run `sudo systemctl disable --now {_TIMER_NAME}` yourself to stop "
+        "and disable it."
+    )
+
+
+def test_system_scope_warning_adds_the_service_stop_command_when_a_service_was_also_found() -> None:
+    warning = systemd_daemon.system_scope_warning(
+        [_system_unit(_TIMER_NAME), _system_unit(_SERVICE_NAME)]
+    )
+    assert warning == (
+        f"A system-level cleanup service was found ({_SERVICE_NAME}, {_TIMER_NAME}) and will "
+        "keep running alongside this app's own daemon; this project cannot stop it without "
+        f"root, so it was left untouched. Run `sudo systemctl disable --now {_TIMER_NAME}; "
+        f"sudo systemctl stop {_SERVICE_NAME}` yourself to stop and disable it."
+    )
+
+
+def test_system_scope_warning_never_names_a_service_command_with_no_service_detected() -> None:
+    warning = systemd_daemon.system_scope_warning([_system_unit(_TIMER_NAME)])
+    assert warning is not None
+    assert _SERVICE_NAME not in warning
+
+
+def test_user_scope_failure_warning_none_when_nothing_failed() -> None:
+    assert systemd_daemon.user_scope_failure_warning([]) is None
+
+
+def test_user_scope_failure_warning_names_each_failed_unit_and_its_user_scope_command() -> None:
+    warning = systemd_daemon.user_scope_failure_warning([_TIMER_NAME, _SERVICE_NAME])
+    assert warning == (
+        f"{_TIMER_NAME} could not be stopped and disabled and is still running alongside this "
+        f"app's own daemon; run `systemctl --user disable --now {_TIMER_NAME}` yourself to "
+        f"stop it. {_SERVICE_NAME} could not be stopped and disabled and is still running "
+        f"alongside this app's own daemon; run `systemctl --user disable --now {_SERVICE_NAME}` "
+        "yourself to stop it."
+    )
+
+
+def test_systemd_daemon_module_imports_no_subprocess() -> None:
+    source = inspect.getsource(systemd_daemon)
+    assert "import subprocess" not in source
+
+
+def test_competing_units_are_the_two_exact_confirmed_unit_names() -> None:
+    assert systemd_daemon.COMPETING_UNITS == (_TIMER_NAME, _SERVICE_NAME)
