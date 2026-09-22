@@ -1,4 +1,8 @@
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from installer.model import Method, Tool
 from installer.platform import Platform
@@ -8,14 +12,47 @@ from installer.shellrc import (
     ensure_source,
     has_managed_block,
     managed_block,
+    path_export_guard,
     remove_managed_block,
     strip_block,
     write_myshellrc,
 )
 
-# has_brew=True so the brew-method tools in these tests still resolve (and thus
-# still contribute their bin dirs) under platform-aware collect_bin_dirs.
+pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="bash not on PATH")
+
 _PLATFORM = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+
+
+def _source_n_times(  # pyright: ignore[reportUnusedFunction]
+    shell: str,
+    rc: Path,
+    *,
+    times: int = 1,
+    seed: str | None = "",
+    home: Path | None = None,
+) -> str:
+    """Source an rc file N times in a subprocess and return the resulting $PATH.
+
+    shell: absolute path to shell binary
+    rc: path to rc file to source
+    times: number of times to source it
+    seed: initial PATH value (empty string means empty PATH, None means no PATH key)
+    home: HOME directory for the subprocess
+    """
+    if home is None:
+        home = Path("/tmp")
+    script = f". {rc}\n" * times + "echo $PATH"
+    env = {"HOME": str(home)}
+    if seed is not None:
+        env["PATH"] = seed
+    return subprocess.run(
+        [shell, "-c", script],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    ).stdout.strip()
 
 
 def _tool(tool_id: str, bin_dir: str | None) -> Tool:
@@ -69,14 +106,14 @@ def test_collect_bin_dirs_always_keeps_default_even_when_missing():
     assert result == [default]
 
 
-def test_managed_block_exports_each_dir_between_markers():
+def test_managed_block_emits_one_guard_per_dir_between_markers():
     block = managed_block([Path("/a/bin"), Path("/b/bin")])
-    assert block.splitlines() == [
-        "# >>> tools-installer path >>>",
-        'export PATH="/a/bin:$PATH"',
-        'export PATH="/b/bin:$PATH"',
-        "# <<< tools-installer path <<<",
-    ]
+    lines = block.splitlines()
+    assert lines[0] == "# >>> tools-installer path >>>"
+    assert lines[-1] == "# <<< tools-installer path <<<"
+    assert len(lines) == 4
+    assert lines[1] == path_export_guard(Path("/a/bin"))
+    assert lines[2] == path_export_guard(Path("/b/bin"))
 
 
 def test_apply_block_appends_when_absent_and_preserves_user_content():
@@ -119,7 +156,7 @@ def test_write_myshellrc_is_idempotent(tmp_path: Path):
     write_myshellrc(bin_dirs, rc)
     assert rc.read_text() == first
     assert first.count("# >>> tools-installer path >>>") == 1
-    assert 'export PATH="/a/bin:$PATH"' in first
+    assert path_export_guard(Path("/a/bin")) in first
 
 
 def test_write_myshellrc_preserves_existing_user_lines(tmp_path: Path):
@@ -128,7 +165,7 @@ def test_write_myshellrc_preserves_existing_user_lines(tmp_path: Path):
     write_myshellrc([Path("/a/bin")], rc)
     text = rc.read_text()
     assert "export EDITOR=vim" in text
-    assert 'export PATH="/a/bin:$PATH"' in text
+    assert path_export_guard(Path("/a/bin")) in text
 
 
 def test_ensure_source_adds_once_and_is_idempotent(tmp_path: Path):
@@ -189,7 +226,7 @@ def test_write_managed_path_inlines_block_into_rc(tmp_path: Path) -> None:
     write_managed_path(rc, [tmp_path / "bin"])
     text = rc.read_text()
     assert "# >>> tools-installer path >>>" in text
-    assert f'export PATH="{tmp_path / "bin"}:$PATH"' in text
+    assert path_export_guard(tmp_path / "bin") in text
     assert "# user line" in text  # user content preserved
 
 
@@ -248,3 +285,76 @@ def test_has_managed_block_false_for_plain_or_missing_file(tmp_path: Path) -> No
     plain = tmp_path / ".myshellrc"
     plain.write_text("export EDITOR=vim\n")
     assert has_managed_block(plain) is False
+
+
+def test_path_export_guard_emits_the_case_guard_line() -> None:
+    guard = path_export_guard(Path("/a/bin"))
+    assert guard.startswith("case")
+    assert '":${PATH-}:"' in guard
+    assert ":/a/bin:" in guard
+    assert 'export PATH="/a/bin${PATH:+:$PATH}"' in guard
+
+
+def test_path_export_guard_line_does_not_start_with_an_assignment() -> None:
+    guard = path_export_guard(Path("/a/bin"))
+    assert not guard.startswith("export")
+    assert guard.split()[0] == "case"
+
+
+def test_path_export_guard_never_emits_a_bare_colon_join() -> None:
+    directory = Path("/a/bin")
+    guard = path_export_guard(directory)
+    bare_bad = f'"{directory}:$PATH"'
+    assert bare_bad not in guard
+
+
+def test_path_export_guard_matches_an_aliased_spelling_of_the_same_directory(
+    tmp_path: Path,
+) -> None:
+    real = tmp_path / "real" / "bin"
+    real.mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(tmp_path / "real")
+
+    guard = path_export_guard(link / "bin")
+    assert str(link / "bin") in guard
+    assert str(real) in guard
+    assert f'export PATH="{str(link / "bin")}' in guard
+
+
+def test_path_export_guard_falls_back_to_one_pattern_when_resolution_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def raise_oserror(self: object) -> object:
+        raise OSError()
+
+    monkeypatch.setattr("pathlib.Path.resolve", raise_oserror)
+    guard = path_export_guard(Path("/a/bin"))
+    assert guard.startswith("case")
+    assert 'export PATH="/a/bin' in guard
+
+
+def test_managed_block_is_runtime_idempotent_under_bash(tmp_path: Path) -> None:
+    bash_path = shutil.which("bash")
+    if bash_path is None:
+        pytest.skip("bash not available")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    rc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], rc)
+
+    script = "\n".join([f". {rc}" for _ in range(5)]) + "\necho $PATH"
+    result = subprocess.run(
+        [bash_path, "-c", script],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    path_entries = result.stdout.strip().split(":")
+    matching = [e for e in path_entries if e == str(bin_dir)]
+    assert len(matching) == 1

@@ -69,6 +69,55 @@ def collect_bin_dirs(
     return dirs
 
 
+def path_export_guard(directory: Path) -> str:
+    """Emit a self-deduping PATH line that adds directory at most once per shell.
+
+    Re-sourcing this line in a nested or child shell (or in the same shell
+    multiple times) adds the directory to PATH at most once. This is achieved
+    through a case-guarded self-deduping idiom that pnpm uses and that
+    `installer/rcclean.py::find_duplicate_path_lines` already documents as
+    safe to leave alone (the scanner does not flag lines starting with `case`).
+
+    Paths are double-quoted but not otherwise escaped: they come only from the
+    trusted registry and Path.home(), never from user input. Do not feed
+    user-supplied paths here without shell-quoting first.
+
+    When the directory has a second spelling (e.g. /home -> /var/home on
+    Fedora, or /var -> /private/var on macOS), the guard matches both spellings
+    to detect if the directory is already on PATH under either name. However,
+    the VALUE prepended onto PATH is always the DECLARED spelling (never
+    canonicalized), so that `installer/doctor.py::audit_path` and
+    `installer/rcclean.py` -- which both compare raw PATH entries against
+    declared directory strings -- continue to recognize what this project writes.
+
+    The conditional expansion `${PATH:+:$PATH}` is security-critical: an empty
+    PATH component (the trailing empty string after a colon-join) resolves to
+    the current working directory in every POSIX shell. An empty starting PATH
+    becomes exactly the managed directory with no empty component, so the
+    managed shell cannot execute a same-named script out of the user's cwd.
+
+    The guard reads PATH through `${PATH-}` (default-applying expansion), not
+    bare `$PATH`, so the line does not abort a shell running under `set -u`
+    with PATH unset.
+    """
+    declared = str(directory)
+    try:
+        resolved = str(directory.resolve())
+    except OSError:
+        resolved = declared
+
+    if resolved == declared:
+        pattern = f":{declared}:"
+        patterns = pattern
+    else:
+        pattern1 = f":{declared}:"
+        pattern2 = f":{resolved}:"
+        patterns = f"{pattern1}|{pattern2}"
+
+    value = f"{declared}${{PATH:+:$PATH}}"
+    return f'case ":${{PATH-}}:" in *"{patterns}"*) ;; *) export PATH="{value}";;esac'
+
+
 def existing_managed_bin_dirs(
     path: Path,
     exists: Callable[[Path], bool] = Path.is_dir,
@@ -101,12 +150,14 @@ def existing_managed_bin_dirs(
 def managed_block(bin_dirs: list[Path]) -> str:
     """Marker-delimited block exporting each bin dir onto PATH.
 
-    Paths are double-quoted but not otherwise escaped: they come only from the
-    trusted registry and Path.home(), never from user input. Do not feed
-    user-supplied paths here without shell-quoting first.
+    Each directory is emitted as a self-deduping case-guarded line through
+    `path_export_guard`, so re-sourcing the block N times adds each directory
+    at most once. Paths are double-quoted but not otherwise escaped: they come
+    only from the trusted registry and Path.home(), never from user input. Do
+    not feed user-supplied paths here without shell-quoting first.
     """
     lines = [_PATH_BEGIN]
-    lines.extend(f'export PATH="{directory}:$PATH"' for directory in bin_dirs)
+    lines.extend(path_export_guard(directory) for directory in bin_dirs)
     lines.append(_PATH_END)
     return "\n".join(lines)
 
