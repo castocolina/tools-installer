@@ -78,6 +78,7 @@ __all__ = [
     "render_timer",
     "system_scope_warning",
     "systemd_available",
+    "takeover_disclosure",
     "timer_state",
     "unit_paths",
     "units_present",
@@ -756,6 +757,27 @@ def system_scope_warning(units: Iterable[CompetingUnit]) -> str | None:
         f"A system-level cleanup service was found ({', '.join(names)}) and will keep running "
         "alongside this app's own daemon; this project cannot stop it without root, so it was "
         f"left untouched. Run `{'; '.join(commands)}` yourself to stop and disable it."
+    )
+
+
+def takeover_disclosure(disabled: Iterable[str]) -> str | None:
+    """A sentence disclosing every user-scope competitor this run DID stop
+    and disable (D-02, CR-02), or None when none was.
+
+    A successful takeover changes another tool's behavior, so it is a
+    disclosure, not a silent success: the on-by-default apply runs with no
+    human watching, and without this line the user cannot tell why that
+    tool's cleanup stopped. Says "stopped and disabled", never "removed"
+    (D-02b), and quotes the user-scope command that undoes it.
+    """
+    names = tuple(disabled)
+    if not names:
+        return None
+    commands = "; ".join(f"systemctl --user enable --now {name}" for name in names)
+    return (
+        f"Stopped and disabled {', '.join(names)}, another user-scope cleanup job, so it "
+        "does not run alongside this app's own daemon; its unit files were left in place. "
+        f"Run `{commands}` to re-enable it."
     )
 
 

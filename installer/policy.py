@@ -999,9 +999,14 @@ def linux_daemon_policy(
             if system_names:
                 detail_parts.append(f"system-scope, left running: {', '.join(system_names)}")
             layer = PolicyLayer("Competing mechanism", "; ".join(detail_parts))
+            # CR-02: a SUCCESSFUL takeover is a disclosure too. The layers
+            # never reach ensure_daemon_default's on_warning sink (the one
+            # apply path with no human watching), so the warning must say
+            # which unit was disabled and how to re-enable it.
             warning_parts = [
                 sentence
                 for sentence in (
+                    systemd_daemon.takeover_disclosure(disabled),
                     systemd_daemon.system_scope_warning(competitors),
                     systemd_daemon.user_scope_failure_warning(failed),
                 )

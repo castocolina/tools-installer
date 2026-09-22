@@ -1184,3 +1184,13 @@ def test_systemd_daemon_module_imports_no_subprocess() -> None:
 
 def test_competing_units_are_the_two_exact_confirmed_unit_names() -> None:
     assert systemd_daemon.COMPETING_UNITS == (_TIMER_NAME, _SERVICE_NAME)
+
+
+def test_takeover_disclosure_names_each_unit_and_its_re_enable_command() -> None:
+    assert systemd_daemon.takeover_disclosure(()) is None
+    text = systemd_daemon.takeover_disclosure(["a.timer", "b.service"])
+    assert text is not None
+    assert "Stopped and disabled a.timer, b.service" in text
+    assert "systemctl --user enable --now a.timer; systemctl --user enable --now b.service" in text
+    assert "sudo" not in text
+    assert "removed" not in text and "deleted" not in text  # D-02b: disabled, never deleted

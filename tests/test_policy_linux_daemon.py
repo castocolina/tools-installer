@@ -509,13 +509,38 @@ def test_apply_with_user_scope_competitor_registers_first_then_disables_it(
     verbs = [c[2] for c in fake_run.calls]
     assert verbs == ["daemon-reload", "enable", "restart", "disable"]
     assert fake_run.calls[-1] == ["systemctl", "--user", "disable", "--now", _COMPETING_TIMER]
-    assert result.warning is None
+    # CR-02: a successful takeover is disclosed, never a silent success.
+    assert result.warning is not None
+    assert f"Stopped and disabled {_COMPETING_TIMER}" in result.warning
+    assert f"systemctl --user enable --now {_COMPETING_TIMER}" in result.warning
+    assert "sudo" not in result.warning
     assert result.layers == (
         PolicyLayer(
             "Schedule", f"runs every {systemd_daemon.DEFAULT_INTERVAL} via a systemd user timer"
         ),
         PolicyLayer("Competing mechanism", f"disabled: {_COMPETING_TIMER}"),
     )
+
+
+def test_on_by_default_takeover_reaches_the_warning_sink_with_the_re_enable_command(
+    tmp_path: Path,
+) -> None:
+    """CR-02: ensure_daemon_default forwards only result.warning, so a takeover
+    reported only as a layer was disabled with nothing said to anyone."""
+    from installer.policy import ensure_daemon_default
+
+    paths = _make_paths(tmp_path)
+    fake_run = _FakeRun()
+    read_output = _DetectionReadOutput(
+        user_listing=_competing_listing((_COMPETING_TIMER, "enabled")),
+    )
+    policy = _build(paths, run=fake_run, read_output=read_output)
+    sink: list[str] = []
+    assert ensure_daemon_default(policy, on_warning=sink.append) is True
+    assert ["systemctl", "--user", "disable", "--now", _COMPETING_TIMER] in fake_run.calls
+    assert len(sink) == 1
+    assert _COMPETING_TIMER in sink[0]
+    assert f"systemctl --user enable --now {_COMPETING_TIMER}" in sink[0]
 
 
 def test_apply_with_system_scope_competitor_issues_no_disable_call_and_warns(
