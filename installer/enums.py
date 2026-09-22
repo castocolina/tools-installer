@@ -83,3 +83,25 @@ class Severity(StrEnum):
     OK = "ok"
     WARN = "warn"
     ERROR = "error"
+
+
+class DaemonState(StrEnum):
+    """Runtime-truthful answer to "is the managed background cleanup running".
+
+    Closed three-member vocabulary shared by installer/systemd_daemon.py (this
+    phase) and installer/diskusage.py (plan 15.7-02) so both consume the same
+    fact rather than each declaring their own -- it lives here, not in the
+    Linux-only backend module, because a Doctor-facing disk-pressure probe
+    must never import a Linux-only backend module just to get this vocabulary.
+
+    UNAVAILABLE means "this machine has no managed background cleanup we can
+    confirm" -- a host with no systemd, or one whose state query could not be
+    answered -- and is deliberately NOT the same fact as INACTIVE, because the
+    two want different user advice (plan 15.7-02 D-03c): INACTIVE says "you
+    have this capability and it is off", UNAVAILABLE says "this machine has
+    nothing to turn on".
+    """
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    UNAVAILABLE = "unavailable"

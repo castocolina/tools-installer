@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: "15.7"
 current_phase_name: unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr
-current_plan: Not started
+current_plan: "02"
 status: executing
-stopped_at: Phase 15.6 complete, ready to plan Phase 15.7
-last_updated: "2026-09-22T11:09:07.641Z"
+stopped_at: Completed 15.7-01-PLAN.md
+last_updated: "2026-09-22T12:00:30.000Z"
 last_activity: 2026-09-22
-last_activity_desc: Phase 15.6 complete, transitioned to Phase 15.7
-state_head: e3962c026008012d2ed3ae2b90432d5e0a0bed4a
+last_activity_desc: "Phase 15.7 Plan 01 complete: Linux systemd background-cleanup daemon, tracer + transactional apply/remove + composition-root reconciliation (D-01)"
+state_head: a7b967baa206ee151a872c53f793395394659e34
 progress:
   total_phases: 27
   completed_phases: 17
   total_plans: 84
-  completed_plans: 77
+  completed_plans: 78
 ---
 
 Total Phases: 21
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 15.7 (unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr) — READY TO EXECUTE
-Current Plan: Not started
+Phase: 15.7 (unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr) — EXECUTING
+Current Plan: 02 (Plan 01 complete)
 Total Plans in Phase: 7
-Status: Ready to execute
-Last activity: 2026-09-22 — Phase 15.6 complete, transitioned to Phase 15.7
+Status: 1/7 plans complete
+Last activity: 2026-09-22 — 15.7-01-PLAN.md complete (D-01 Linux systemd daemon tracer + transactional apply/remove + composition-root reconciliation)
 
 Progress: [██████████] 100%
 
@@ -71,10 +71,11 @@ Progress: [██████████] 100%
 | 15.4 | 5 | - | - |
 | 15.5 | 1 | - | - |
 | 15.6 | 6 | - | - |
+| 15.7 | 7 | - | - |
 
 **Recent Trend:**
 
-- Last 5 plans: none yet
+- Last 5 plans: 15.6 P02, 15.6 P05, 15.6 P06, 15.7 P01
 - Trend: -
 
 *Updated after each plan completion*
@@ -102,6 +103,7 @@ Progress: [██████████] 100%
 | Phase 15.6 P02 | 12min | 2 tasks | 3 files |
 | Phase 15.6 P05 | 35min | 2 tasks | 5 files |
 | Phase 15.6 P06 | 75min | 3 tasks | 4 files |
+| Phase 15.7 P01 | ~90min (spans a compaction boundary) | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -170,6 +172,12 @@ Recent decisions affecting current work:
 - [Phase 15.6]: [15.6-05, 2026-09-21]: Reused setup.py's existing _sync_omz_terminals closure for the u route instead of a second synchronizer; UpdateService's new terminal_follow_up seam runs after pnpm replay and before cache invalidation, catching only OSError
 - [Phase 15.6]: Generalized _install_closed's visible-screen lookup to cover Doctor/Uninstall/Policies (not only catalog tiers), with a named pending-warning queue flushed on next navigation as defense-in-depth.
 - [Phase 15.6]: Extracted setup.py's module-level _sync_terminals(platform)/_sync_terminals_and_report so unattended install and CLI uninstall reuse the exact same terminal synchronizer as every interactive route.
+- [15.7-01, 2026-09-22]: Linux systemd mechanism (installer/systemd_daemon.py) mirrors installer/daemon.py's macOS launchd shape exactly — same Policy pattern, its own daemon-linux:decided marker (independent of macOS's), the wrapper-executable pattern reused (not re-declared) from installer.daemon.
+- [15.7-01, 2026-09-22]: D-01e — TimerStateCache is constructed exactly once per route at setup.py::_timer_state_cache (the composition root) and injected into linux_daemon_policy; Policy gained a real state_cache field so the "same instance" invariant is an identity assertion, not prose. read() may spawn one bounded, memoized query; peek() never spawns and is the only verb the Textual render path may call.
+- [15.7-01, 2026-09-22]: D-01c — activity is never inferred from unit-file presence alone; timer_state() checks units_present() as a cheap precondition, then falls through to the real `systemctl --user is-active` answer only when files exist.
+- [15.7-01, 2026-09-22]: _build_daemon_policy's `which` parameter defaults to None and is resolved dynamically inside the function body (not bound at def time), keeping an existing macOS test's monkeypatch technique working unchanged while new Linux call sites can still inject an explicit lookup.
+- [15.7-01, 2026-09-22]: D-01a required no new gating logic — _build_app's existing `daemon is not None and apply_daemon_default` check already fires correctly once _build_daemon_policy returns a non-None Linux Policy; this plan's job was proving that wiring explicitly at the composition root rather than inventing a second allowlist.
+- [15.7-01, 2026-09-22]: ROADMAP SC#2's "invisible/inert on Linux" claim is deliberately superseded by D-01a; the two tests that asserted it were split into a pair (D-01b-gated absent case, D-01a-proving present case) rather than simply widened, so the suite states the new behavior positively.
 
 ### Pending Todos
 
@@ -210,6 +218,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-22T00:36:42.178Z
-Stopped at: Phase 15.6 complete, ready to plan Phase 15.7
+Last session: 2026-09-22T12:00:30.000Z
+Stopped at: Completed 15.7-01-PLAN.md (D-01 Linux systemd daemon tracer + transactional apply/remove + composition-root reconciliation); next up 15.7-02-PLAN.md
 Resume file: None

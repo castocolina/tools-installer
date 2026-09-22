@@ -22,7 +22,7 @@ from prompt_toolkit.input import Input, create_input
 from prompt_toolkit.output import Output, create_output
 from rich.console import Console
 
-from installer import daemon, pnpm_globals
+from installer import daemon, pnpm_globals, systemd_daemon
 from installer.app import (
     UninstallDecision,
     clean_rc_duplicates,
@@ -54,6 +54,7 @@ from installer.policy import (
     ban_policy,
     daemon_policy,
     ensure_daemon_default,
+    linux_daemon_policy,
     omz_plugins_policy,
     tweak_policy,
 )
@@ -61,7 +62,7 @@ from installer.postinstall import BREW_BIN_DIRS
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.resolve import platform_could_support
-from installer.run import run_captured
+from installer.run import OutputRunner, Runner, run_captured
 from installer.selection import Choice
 from installer.settings import (
     SettingsStore,
@@ -107,6 +108,14 @@ _DAEMON_PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{daemon.LABEL}
 _DAEMON_LOG_PATH = Path.home() / "Library" / "Logs" / "tools-installer" / "prune-daemon.log"
 _DAEMON_SCRIPT_PATH = Path(__file__).parent / "scripts" / "prune-user-tmpdir.sh"
 _DAEMON_STATE_PATH = _MYSHELLRC
+# The Linux (systemd) daemon's own artifacts, mirroring the macOS constants
+# immediately above: the systemd user unit search dir, its log file, and the
+# cleanup script it invokes. _DAEMON_STATE_PATH is reused unchanged -- the
+# Linux "decided" marker lives in the SAME ~/.myshellrc, under its OWN
+# sentinel pair (installer.systemd_daemon's, independent of installer.daemon's).
+_LINUX_DAEMON_UNIT_DIR = systemd_daemon.user_unit_dir(Path.home(), os.environ)
+_LINUX_DAEMON_LOG_PATH = Path.home() / ".local" / "state" / "tools-installer" / "prune-daemon.log"
+_LINUX_DAEMON_SCRIPT_PATH = Path(__file__).parent / "scripts" / "prune-tmp-linux.sh"
 
 _STYLE = questionary.Style(
     [
@@ -337,49 +346,140 @@ def _ask_mismatch(tool_id: str) -> str:
     )
 
 
-def _build_daemon_policy(platform: Platform, installed: Mapping[str, bool]) -> Policy | None:
-    """The background tmpdir-prune LaunchAgent as a Policy, macOS-only (ROADMAP
-    SC#2: invisible/inert on Linux) -- the single, shared construction point
-    both `_build_app` (the Policies list) and `_run_uninstall`'s non-interactive
-    CLI teardown sweep call, so the two paths' state reads can never silently
-    diverge.
+def _timer_state_cache(
+    platform: Platform,
+    *,
+    which: Callable[[str], str | None],
+    read_output: OutputRunner,
+) -> systemd_daemon.TimerStateCache | None:
+    """THE construction point for a TimerStateCache (D-01e): returns None for
+    a macOS platform and None when this Linux host has no `systemctl` -- the
+    SAME D-01b condition `_build_daemon_policy` gates on, so exactly one
+    place in the codebase decides "this host has no systemd". Otherwise
+    returns ONE cache over `timer_state(unit_dir, read_output=read_output)`
+    built from the module-level unit-dir constant.
 
-    Returns None immediately on any non-macOS platform. On macOS, resolves the
-    real per-user TMPDIR/HOME and the apply-time `uv` executable into named
-    locals: installer.daemon's own DaemonScheduleError is the fail-closed
-    backstop for an empty/unresolvable value here (11-REVIEWS.md cycle 1
-    finding #19, extended to HOME by cycle 2 finding #1's composition-root
-    half) -- this call site only resolves and names each value, it never
-    re-validates it itself. `path_value` extends the real interactive PATH
-    (never the raw, unmodified value alone) with both Homebrew prefixes and
-    this project's own managed bin dir, since a bare LaunchAgent's own default
-    environment PATH has neither (11-RESEARCH.md Pitfall 3).
+    Nothing else in this file may construct a TimerStateCache. Plan 15.7-06
+    calls this same helper once per route and hands the result to both
+    `_disk_pressure_probe` and `_build_daemon_policy`, which is what makes
+    the cross-plan "SAME instance" invariant true by construction instead of
+    by convention (review HIGH cycle 3).
+
+    Never issues a query of its own: constructing the cache is a cheap
+    object creation, and probing at construction would put a bounded-but-
+    real subprocess on every route including ones that never read it.
     """
-    if platform.os != "macos":
+    if platform.os == "macos" or not systemd_daemon.systemd_available(which=which):
         return None
-    tmpdir_value = os.environ.get("TMPDIR", "")  # DaemonScheduleError rejects empty/relative
+    return systemd_daemon.TimerStateCache(
+        lambda: systemd_daemon.timer_state(_LINUX_DAEMON_UNIT_DIR, read_output=read_output)
+    )
+
+
+def _build_daemon_policy(
+    platform: Platform,
+    installed: Mapping[str, bool],
+    *,
+    which: Callable[[str], str | None] | None = None,
+    run: Runner = run_captured,
+    read_output: OutputRunner = systemd_daemon.query_systemctl,
+    timer_cache: systemd_daemon.TimerStateCache | None = None,
+) -> Policy | None:
+    """The background tmpdir-prune daemon as a Policy -- the single, shared
+    construction point both `_build_app` (the Policies list) and
+    `_run_uninstall`'s non-interactive CLI teardown sweep call, so the two
+    paths' state reads can never silently diverge.
+
+    Dispatches on `platform.os`: a launchd policy on macOS, a systemd policy
+    on a Linux host that has `systemctl` (D-01b), and None on a Linux host
+    without it -- ROADMAP SC#2's "invisible/inert on Linux" is deliberately
+    SUPERSEDED by this phase (D-01a): the Linux row is on by default from the
+    interactive wizard's own `apply_daemon_default` allowlist, exactly like
+    macOS.
+
+    `which` defaults to None rather than being bound directly to
+    `shutil.which`, so the RESOLUTION happens inside this function body at
+    call time -- a dynamic `shutil.which(...)` lookup, not a value captured
+    once when this module was imported -- keeping
+    `test_build_daemon_policy_is_fail_closed_not_fail_hidden_for_a_bad_environment`'s
+    existing `monkeypatch.setattr(setup.shutil, "which", ...)` technique
+    working unchanged. It resolves BOTH the systemd-availability gate and
+    the apply-time `uv` executable -- one injected lookup, matching
+    `doctor_data`'s own `which` convention. `run`/`read_output` are
+    real-defaulted injected seams so the composition root's own tests never
+    touch the host's real systemctl/launchctl (review MEDIUM 15.7-03).
+    `timer_cache`, when None, means "build your own" -- kept for
+    `_run_uninstall`'s existing call site, which renders no probe, so
+    identity is moot there.
+
+    On macOS, resolves the real per-user TMPDIR/HOME and the apply-time `uv`
+    executable into named locals: installer.daemon's own DaemonScheduleError
+    is the fail-closed backstop for an empty/unresolvable value here
+    (11-REVIEWS.md cycle 1 finding #19, extended to HOME by cycle 2 finding
+    #1's composition-root half) -- this call site only resolves and names
+    each value, it never re-validates it itself. `path_value` extends the
+    real interactive PATH (never the raw, unmodified value alone) with both
+    Homebrew prefixes and this project's own managed bin dir, since a bare
+    LaunchAgent's own default environment PATH has neither (11-RESEARCH.md
+    Pitfall 3).
+    """
+    resolved_which = which if which is not None else shutil.which
+    if platform.os == "macos":
+        tmpdir_value = os.environ.get("TMPDIR", "")  # DaemonScheduleError rejects empty/relative
+        home_value = os.environ.get("HOME", "")  # DaemonScheduleError rejects empty/relative
+        uv_path = Path(resolved_which("uv") or "")  # rejects a non-absolute path
+        path_value = os.pathsep.join(
+            (
+                os.environ.get("PATH", ""),
+                str(_DEFAULT_BIN_DIR),
+                "/usr/local/bin",
+                "/opt/homebrew/bin",
+            )
+        )
+        return daemon_policy(
+            plist_path=_DAEMON_PLIST_PATH,
+            log_path=_DAEMON_LOG_PATH,
+            wrapper_bin_dir=_DEFAULT_BIN_DIR,
+            script_path=_DAEMON_SCRIPT_PATH,
+            state_path=_DAEMON_STATE_PATH,
+            installed_tools=installed,
+            path_value=path_value,
+            tmpdir_value=tmpdir_value,
+            home_value=home_value,
+            uv_path=uv_path,
+            uid=os.getuid(),
+            run=run,
+        )
+    # D-01b: the systemd-availability gate goes FIRST, before resolving any
+    # path or constructing anything -- a container, a WSL image without
+    # systemd, or a musl/openrc host degrades to exactly the behavior Linux
+    # had before this phase (no row, no argv, no artifacts).
+    if not systemd_daemon.systemd_available(which=resolved_which):
+        return None
+    tmpdir_value = os.environ.get("TMPDIR", "") or "/tmp"
     home_value = os.environ.get("HOME", "")  # DaemonScheduleError rejects empty/relative
-    uv_path = Path(shutil.which("uv") or "")  # DaemonScheduleError rejects a non-absolute path
+    uv_path = Path(resolved_which("uv") or "")  # rejects a non-absolute path
     path_value = os.pathsep.join(
         (
             os.environ.get("PATH", ""),
             str(_DEFAULT_BIN_DIR),
-            "/usr/local/bin",
-            "/opt/homebrew/bin",
+            *(str(brew_dir) for brew_dir in BREW_BIN_DIRS),
         )
     )
-    return daemon_policy(
-        plist_path=_DAEMON_PLIST_PATH,
-        log_path=_DAEMON_LOG_PATH,
+    return linux_daemon_policy(
+        unit_dir=_LINUX_DAEMON_UNIT_DIR,
+        log_path=_LINUX_DAEMON_LOG_PATH,
         wrapper_bin_dir=_DEFAULT_BIN_DIR,
-        script_path=_DAEMON_SCRIPT_PATH,
+        script_path=_LINUX_DAEMON_SCRIPT_PATH,
         state_path=_DAEMON_STATE_PATH,
         installed_tools=installed,
         path_value=path_value,
         tmpdir_value=tmpdir_value,
         home_value=home_value,
         uv_path=uv_path,
-        uid=os.getuid(),
+        run=run,
+        read_output=read_output,
+        timer_cache=timer_cache,
     )
 
 
@@ -561,12 +661,20 @@ def _build_app(
     # not on disk, so the total sweep costs nothing.
     bundles = applicable_bundles(platform)
 
+    # D-01e: THE single TimerStateCache construction point for this route,
+    # built BEFORE anything consumes it and injected into the Linux daemon
+    # Policy below. A future disk-pressure probe (plan 15.7-06) receives this
+    # SAME object, never a second cache it builds itself.
+    timer_cache = _timer_state_cache(
+        platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
+    )
+
     # Constructed once, here, and shared: the Policies list below, the
     # on-by-default auto-apply closure, and the Uninstall teardown closures
     # (all wired further down) must never each build their own independent
     # daemon_policy instance -- all three need to read and act on the exact
     # same object.
-    daemon = _build_daemon_policy(platform, installed)
+    daemon = _build_daemon_policy(platform, installed, timer_cache=timer_cache)
 
     # Hoisted above `uninstall_inputs` (Round-1 review HIGH's post-removal
     # invalidation): the Uninstall screen's seam binds to this instance, so
