@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from installer import daemon, systemd_daemon
+from installer import daemon, env_redirect, systemd_daemon
 from installer.agent_env import AgentAdapter
 from installer.enums import DaemonState
 from installer.guards import (
@@ -72,6 +72,16 @@ _TWEAK_DISABLE_HINT = (
     "session (re-sourcing your shell config cannot undefine something already "
     "loaded — you need a fresh shell, not a re-source)."
 )
+# environment.d is read by the systemd user manager's environment generator,
+# which runs when that manager starts — at login, not when a shell starts.
+# 15.7-RESEARCH.md Pitfall 2: a live probe showed systemctl --user
+# show-environment does not see a freshly written file, so a hint that says
+# "open a new shell" would overstate how soon the redirect becomes live.
+_CACHE_REDIRECT_LINUX_HINT = (
+    "Takes effect at the next login: the systemd user manager reads "
+    "~/.config/environment.d only when it starts."
+)
+_CACHE_REDIRECT_MACOS_HINT = _TWEAK_ENABLE_HINT
 
 
 def _display_path(path: Path) -> str:
@@ -421,6 +431,106 @@ def tweak_policy(
         remove=_remove,
         requires=bundle.requires,
         missing_requires=missing_requires,
+    )
+
+
+def cache_redirect_policy(
+    redirect: env_redirect.CacheRedirect,
+    *,
+    platform_os: str,
+    conf_dir: Path,
+    rc_path: Path,
+    home: Path,
+    ensure_sourced_from: tuple[Path, ...] | Callable[[], tuple[Path, ...]] = (),
+) -> Policy:
+    """One tool's cache redirect as a Policy.
+
+    macOS writes an exported marker block into ``rc_path``; every other OS
+    writes an ``environment.d`` conf. The branch matches
+    ``setup.py::_build_daemon_policy``: compare against ``macos``, never
+    against a ``linux`` string.
+
+    ``ensure_sourced_from`` is re-read at apply time (a tuple or a
+    zero-argument callable returning one) because the link mode is adjustable
+    while the app runs. A redirect sourced only into a file split mode never
+    reads is a silent no-op.
+    """
+    if isinstance(ensure_sourced_from, tuple):
+        captured_sourced = cast("tuple[Path, ...]", ensure_sourced_from)
+
+        def read_ensure_sourced_from() -> tuple[Path, ...]:
+            return captured_sourced
+    else:
+        read_ensure_sourced_from = ensure_sourced_from
+
+    macos = platform_os == "macos"
+
+    def _apply() -> PolicyResult:
+        if macos:
+            env_redirect.write_rc_redirect(redirect, home, rc_path)
+            layers = [
+                PolicyLayer(redirect.label, f"written to {_display_path(rc_path)}"),
+            ]
+            sourced = read_ensure_sourced_from()
+            if sourced:
+                for target in sourced:
+                    ensure_source(target, rc_path)
+                wired = ", ".join(_display_path(path) for path in sourced)
+                layers.append(
+                    PolicyLayer(
+                        "Split-mode sourcing",
+                        f"wired {wired} to source {_display_path(rc_path)}",
+                    )
+                )
+            return PolicyResult(
+                layers=tuple(layers),
+                reload_hint=_CACHE_REDIRECT_MACOS_HINT,
+                warning=None,
+            )
+        written = env_redirect.write_linux_redirect(redirect, home, conf_dir)
+        competing = env_redirect.competing_conf_paths(redirect, home, conf_dir)
+        warning = None
+        if competing:
+            names = ", ".join(_display_path(path) for path in competing)
+            warning = (
+                f"{names} also sets {redirect.variable}; left in place. "
+                f"{written.name} takes precedence because it sorts later."
+            )
+        return PolicyResult(
+            layers=(PolicyLayer(redirect.label, f"written to {_display_path(written)}"),),
+            reload_hint=_CACHE_REDIRECT_LINUX_HINT,
+            warning=warning,
+        )
+
+    def _remove() -> PolicyResult:
+        if macos:
+            env_redirect.remove_rc_redirect(redirect, rc_path)
+            detail = f"cleared from {_display_path(rc_path)}"
+        else:
+            env_redirect.remove_linux_redirect(redirect, conf_dir)
+            detail = f"cleared from {_display_path(conf_dir / redirect.conf_basename)}"
+        return PolicyResult(
+            layers=(PolicyLayer(redirect.label, detail),),
+            reload_hint=None,
+            warning=None,
+        )
+
+    def _is_active() -> bool:
+        if macos:
+            return env_redirect.rc_applied(redirect, home, rc_path)
+        return env_redirect.linux_applied(redirect, home, conf_dir)
+
+    target = home.joinpath(*redirect.target_parts)
+    return Policy(
+        id=f"cache-redirect:{redirect.id}",
+        label=redirect.label,
+        description=(
+            f"sets {redirect.variable} to {_display_path(target)}. {redirect.coverage_caveat}"
+        ),
+        active=_is_active(),
+        apply=_apply,
+        remove=_remove,
+        is_active=_is_active,
     )
 
 
