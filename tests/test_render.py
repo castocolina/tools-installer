@@ -555,3 +555,33 @@ def test_render_post_install_handoff_preserves_bracketed_instruction_text() -> N
         console,
     )
     assert "[this]" in buf.getvalue()
+
+
+def test_guidance_text_bolds_the_style_for_an_emphasised_item() -> None:
+    from installer.guidance import Guidance
+    from installer.render import guidance_text
+
+    items = [
+        Guidance(title="Ordinary error", meaning="m", next_step="n", severity="error"),
+        Guidance(
+            title="Emphasised error",
+            meaning="m2",
+            next_step="n2",
+            severity="error",
+            emphasis=True,
+        ),
+    ]
+    text = guidance_text(items)
+    styles = [str(span.style) for span in text.spans]
+    assert "red" in styles
+    assert "bold red" in styles
+
+
+def test_guidance_text_non_emphasised_item_renders_exactly_as_before() -> None:
+    from installer.guidance import Guidance
+    from installer.render import guidance_text
+
+    item = Guidance(title="Missing dir", meaning="m", next_step="n", severity="warn")
+    text = guidance_text([item])
+    styles = {str(span.style) for span in text.spans}
+    assert styles == {"yellow"}
