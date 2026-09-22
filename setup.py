@@ -71,7 +71,7 @@ from installer.settings import (
 )
 from installer.shellrc import collect_bin_dirs, has_managed_block
 from installer.status import is_installed
-from installer.terminal_shell import sync_terminal_shells
+from installer.terminal_shell import sync_terminal_shells, terminal_sync_warning
 from installer.tweaks import BUNDLES, applicable_bundles
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import (
@@ -409,12 +409,11 @@ def _sync_terminals_and_report(console: Console, platform: Platform) -> None:
     the console (D-01/15.6-06 Task 2) -- both non-interactive CLI lifecycle
     routes (`main`'s unattended install, `_run_uninstall`'s command-line
     teardown) call this after their own primary completion, so a raised
-    OSError is reported truthfully without ever flipping an already-determined
-    exit code."""
-    try:
-        warning = _sync_terminals(platform)
-    except OSError as exc:
-        warning = f"Terminal shell synchronization failed: {exc}"
+    exception is reported truthfully without ever flipping an already-determined
+    exit code. WR-03: the catch and the message live in the one shared
+    `terminal_sync_warning` contract, never in a try/except copied to this
+    site."""
+    warning = terminal_sync_warning(lambda: _sync_terminals(platform))
     if warning:
         console.print(warning)
 

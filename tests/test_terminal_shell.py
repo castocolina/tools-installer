@@ -7,7 +7,11 @@ from typing import TypedDict
 import pytest
 
 from installer.platform import Platform
-from installer.terminal_shell import TerminalShellError, sync_terminal_shells
+from installer.terminal_shell import (
+    TerminalShellError,
+    sync_terminal_shells,
+    terminal_sync_warning,
+)
 
 
 class _SyncArgs(TypedDict):
@@ -343,3 +347,30 @@ def test_non_utf8_kitty_config_is_refused_as_an_oserror_without_changing_bytes(
 
     assert isinstance(caught.value, OSError)
     assert config.read_bytes() == original
+
+
+def test_terminal_sync_warning_is_the_one_total_failure_contract() -> None:
+    """WR-03/CR-02: one catch set and one message, and it never raises.
+
+    A non-OSError -- CR-02's UnicodeDecodeError is a ValueError -- used to
+    escape the narrow `except OSError` each of the five call sites wrote for
+    itself, taking the already-completed primary operation down with it.
+    """
+
+    def raises_non_oserror() -> str | None:
+        raise ValueError("kitty.conf is not valid UTF-8")
+
+    def raises_oserror() -> str | None:
+        raise OSError("permission denied")
+
+    assert terminal_sync_warning(None) is None
+    assert terminal_sync_warning(lambda: None) is None
+    assert terminal_sync_warning(lambda: "wezterm: unsupported return shape") == (
+        "wezterm: unsupported return shape"
+    )
+    assert terminal_sync_warning(raises_non_oserror) == (
+        "Terminal shell synchronization failed: kitty.conf is not valid UTF-8"
+    )
+    assert terminal_sync_warning(raises_oserror) == (
+        "Terminal shell synchronization failed: permission denied"
+    )

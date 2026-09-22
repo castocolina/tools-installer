@@ -37,6 +37,7 @@ from installer.pnpm_globals import NodeGlobalsReport, reinstall_preview
 from installer.policy import Policy, PolicyResult
 from installer.render import guidance_text
 from installer.session import Summary
+from installer.terminal_shell import terminal_sync_warning
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import (
     BASE_VIEW,
@@ -1223,13 +1224,11 @@ class UninstallScreen(AppScreen):
         # summary, mirroring the invalidate seam's own both-directions
         # contract: never swallowed, never flips `applied` or the primary
         # outcome.
-        if self._terminal_sync is not None:
-            try:
-                terminal_warning = self._terminal_sync()
-            except OSError as exc:
-                terminal_warning = f"Terminal shell synchronization failed: {exc}"
-            if terminal_warning:
-                summary_parts.append(terminal_warning)
+        # WR-03: the one shared failure contract (terminal_sync_warning), not a
+        # local try/except -- it is total and None-tolerant by construction.
+        terminal_warning = terminal_sync_warning(self._terminal_sync)
+        if terminal_warning:
+            summary_parts.append(terminal_warning)
         self.status.set(multiline_summary(summary_parts), "ok")
 
     @work(thread=True, exclusive=True, group="uninstall-ownership-refresh", exit_on_error=False)
@@ -2290,12 +2289,12 @@ class UnifiedApp(App[list[str] | None]):
         # run_live like every other live core read this callback triggers
         # (rule 3): an OSError is a secondary, non-fatal warning and must
         # never flip an already-recorded run into a reported failure.
-        if self._terminal_sync is not None:
-            sync_warning, sync_error = run_live(self._terminal_sync)
-            if sync_error is not None:
-                warnings.append(f"terminal shell synchronization failed: {sync_error}")
-            elif sync_warning:
-                warnings.append(sync_warning)
+        # WR-03: not run_live -- terminal_sync_warning IS this seam's live
+        # guard, and routing through both produced the one message whose
+        # casing had already drifted from the other four call sites.
+        sync_warning = terminal_sync_warning(self._terminal_sync)
+        if sync_warning:
+            warnings.append(sync_warning)
         # A .get(), not an index: _catalogs is keyed by tier only
         # (system/user/ai) while current_view ranges over all six VIEWS
         # (doctor, uninstall and policies included). Only a catalog tier

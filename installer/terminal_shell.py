@@ -22,6 +22,38 @@ class TerminalShellError(OSError):
     """Terminal configuration cannot be changed without risking user data."""
 
 
+_SYNC_FAILURE_PREFIX = "Terminal shell synchronization failed"
+
+
+def terminal_sync_warning(sync: Callable[[], str | None] | None) -> str | None:
+    """Run a terminal-synchronizer closure and reduce it to one optional warning.
+
+    WR-03: the synchronizer itself is shared by all six lifecycle routes, but
+    its failure handling used to be five independently hand-written try/except
+    blocks that had already drifted on both axes a shared contract exists to
+    pin -- one caught OSError + CommandError where the others caught OSError,
+    and one spelled the message with a lower-case "terminal". This is that
+    contract, in the one place a defect in it can be fixed once: a terminal
+    synchronization is always a SECONDARY effect of an already-completed
+    primary operation, so it never raises out of here and never flips that
+    operation into a reported failure -- it yields a warning string or nothing.
+
+    The catch is deliberately broad, matching the `except Exception` this
+    codebase already uses for post-mutation side effects (update.py's pnpm
+    replay and cache invalidation, wizard_app's uninstall invalidate). A narrow
+    `except OSError` is exactly what let CR-02's UnicodeDecodeError -- a
+    ValueError -- escape into a Textual screen-result callback and into
+    main()'s exit path, and enumerating exception types at a seam whose whole
+    purpose is "must never take the caller down" is the wrong shape of guard.
+    """
+    if sync is None:
+        return None
+    try:
+        return sync()
+    except Exception as exc:  # noqa: BLE001 -- secondary effect, never downgrades the primary op
+        return f"{_SYNC_FAILURE_PREFIX}: {exc}"
+
+
 @dataclass(frozen=True)
 class TerminalShellResult:
     """Terminal synchronization outcomes, split by the action taken."""
