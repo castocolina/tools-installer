@@ -520,8 +520,18 @@ class _ProbeCache(Generic[_Probed]):
         return value
 
     def peek(self) -> _Probed | None:
-        """The last stored answer whatever its age, or None if never read.
-        NEVER probes, never blocks, never spawns."""
+        """The last stored answer whatever its age, or None if this cache has
+        never been probed. NEVER probes, never blocks, never spawns.
+
+        None means "never probed", NOT "the system state is unknown"
+        (lane-2 LOW-01). invalidate() marks the stored answer STALE without
+        discarding it (D-01e), so peek() still returns the last known value
+        after an invalidate -- the next read() re-probes, but a render path
+        in between keeps something to draw rather than falling back to None
+        and flickering. A non-None peek() after an invalidate is therefore
+        "cached, possibly stale"; only a cache that has never completed a
+        read() answers None.
+        """
         with self._lock:
             return self._value
 
