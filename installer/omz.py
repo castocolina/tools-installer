@@ -83,7 +83,23 @@ _ANY_PLUGINS_OPEN = re.compile(r"^[ \t]*plugins=\(")
 
 # An uncommented `source` / `.` command whose target is oh-my-zsh.sh. A comment
 # or other mention of the filename is not an executable source statement.
-_OH_MY_ZSH_SOURCE = re.compile(r"^[ \t]*(?:source|\.)[ \t]+[^\n#]*oh-my-zsh\.sh")
+#
+# WR-06 (15.6-REVIEW.md): anchored to the start of the (trimmed) line only,
+# the previous pattern classified the common guarded idiom
+# `[ -f "$ZSH/oh-my-zsh.sh" ] && source "$ZSH/oh-my-zsh.sh"` as "not sourced"
+# -- ensure_zshrc_template is called unconditionally whenever omz_present()
+# is true, bypassing write_plugins's own smarter already-has-an-array gate
+# entirely, so a fully correct .zshrc using this idiom got a second,
+# unconditional export ZSH=/source pair appended on every install-close,
+# update, and uninstall event. `(?:^|[;&|]\s*|\s)` requires the token to be
+# preceded by the string's own start, a shell operator (;, &&/&, ||/|), or
+# plain whitespace -- i.e. a position the shell would actually execute a
+# command from -- not merely anywhere the substring appears (inside a
+# string literal, as part of a longer identifier). `[^#\n]*` (rather than
+# `.*`) is what keeps "a comment never counts": it cannot cross a `#`, so
+# a `#` anywhere earlier on the line makes every position after it
+# unreachable for this match.
+_OH_MY_ZSH_SOURCE = re.compile(r"^[^#\n]*(?:^|[;&|]\s*|\s)(?:source|\.)\s+[^\n#]*oh-my-zsh\.sh")
 
 # The ownership record. It lives in ~/.myshellrc — a file this installer
 # created — because .zshrc must never carry a tools-installer marker. The body
@@ -332,10 +348,22 @@ def _repair_sourced_template(lines: list[str], source_idx: int) -> list[str] | N
     location. An active source with no plugins assignment at all receives the
     default `plugins=(git)` there. A governing multi-line array is left
     untouched so `_locate`'s fail-safe still refuses it.
+
+    WR-05 (15.6-REVIEW.md): an INDENTED single-line array is nested inside an
+    `if`/`case`/function body -- `_locate`'s own regex deliberately allows
+    leading indentation so ownership/enable/disable can still recognize it,
+    but relocating a nested assignment here has no awareness of the
+    surrounding block structure: popping it out and re-inserting it before
+    the source line turns a conditional plugin set into an unconditional
+    one and leaves the original conditional an empty no-op. Refused the
+    same way this function already refuses a governing multi-line array --
+    not ours to relocate.
     """
     located = _locate(lines)
     if located is not None:
-        plugins_idx, _ = located
+        plugins_idx, match = located
+        if match.group("indent"):
+            return None
         if plugins_idx < source_idx:
             return None
         plugin_line = lines.pop(plugins_idx)
@@ -357,7 +385,9 @@ def ensure_zshrc_template(zshrc_path: Path, root: Path | None = None) -> bool:
     When no source exists, the appended template is evaluated in order:
     export ZSH, plugins=(git), then source. When a source exists, a missing
     or post-source supported array is repaired at that source location.
-    Source-correct files and governing multi-line arrays are left unchanged.
+    Source-correct files, governing multi-line arrays, and an INDENTED
+    single-line array nested inside an if/case/function body (WR-05) are
+    all left unchanged.
 
     CR-01: `root` is the real oh-my-zsh install directory -- `omz_root`'s
     answer, not an assumption. `omz_present`, the predicate every caller

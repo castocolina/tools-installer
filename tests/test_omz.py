@@ -172,6 +172,88 @@ def test_commented_out_plugins_line_is_never_matched() -> None:
     assert disable_plugins(src) == src
 
 
+def test_ensure_zshrc_template_recognizes_the_guarded_source_idiom(tmp_path: Path) -> None:
+    """WR-06: `[ -f "$ZSH/oh-my-zsh.sh" ] && source "$ZSH/oh-my-zsh.sh"` is a
+    common, fully correct idiom -- before this fix it was classified as "not
+    sourced" (the old pattern only recognized source/. at the very start of
+    the line), so a fully source-correct .zshrc using it (plugins already
+    evaluated BEFORE the guarded source, exactly as real oh-my-zsh requires)
+    got a second, unconditional export ZSH=/source pair appended instead of
+    being left alone. The module's own stated contract ("source-correct
+    files are left unchanged") is what this pins."""
+    zshrc = tmp_path / ".zshrc"
+    original = 'plugins=(git)\n[ -f "$ZSH/oh-my-zsh.sh" ] && source "$ZSH/oh-my-zsh.sh"\n'
+    zshrc.write_text(original)
+
+    assert ensure_zshrc_template(zshrc) is False
+    assert zshrc.read_text() == original
+
+
+@pytest.mark.parametrize(
+    "original",
+    (
+        '[ -f "$ZSH/oh-my-zsh.sh" ] && source "$ZSH/oh-my-zsh.sh"\nplugins=(git)\n',
+        'test -f "$ZSH/oh-my-zsh.sh"; source "$ZSH/oh-my-zsh.sh"\nplugins=(git)\n',
+    ),
+)
+def test_ensure_zshrc_template_repairs_ordering_after_a_shell_operator(
+    tmp_path: Path, original: str
+) -> None:
+    """WR-06: both the &&-guarded and ;-separated forms are recognized as
+    executable source statements a real shell would run -- not just source
+    at the very start of the line -- so a plugins=(...) placed AFTER either
+    form is correctly repaired (relocated before the source line, the same
+    existing repair an unguarded source already gets) instead of the file
+    being left as "not sourced" and a duplicate export/source pair appended
+    to the end (the actual pre-fix bug, reproduced live in 15.6-REVIEW.md)."""
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text(original)
+
+    assert ensure_zshrc_template(zshrc) is True
+    text = zshrc.read_text()
+    assert "tools-installer" not in text
+    # Exactly one source statement -- never a second, duplicate export/source
+    # pair appended below the original (guarded) one.
+    assert text.count("oh-my-zsh.sh") == 2  # the [ -f ... ] test target + the source target
+    plugins_at = text.index("plugins=(git)")
+    source_at = text.index("source ")
+    assert plugins_at < source_at
+
+
+def test_ensure_zshrc_template_still_ignores_a_comment_naming_the_guarded_idiom(
+    tmp_path: Path,
+) -> None:
+    """WR-06's widened detection must not widen past "a comment never
+    counts": a line that only NAMES the guarded idiom inside a comment is
+    still not an executable source statement."""
+    zshrc = tmp_path / ".zshrc"
+    original = '# [ -f "$ZSH/oh-my-zsh.sh" ] && source "$ZSH/oh-my-zsh.sh"\n'
+    zshrc.write_text(original)
+
+    assert ensure_zshrc_template(zshrc) is True
+    text = zshrc.read_text()
+    assert text.startswith(original)
+    assert "source $ZSH/oh-my-zsh.sh" in text
+
+
+def test_repair_refuses_to_relocate_a_plugins_line_indented_inside_a_block(
+    tmp_path: Path,
+) -> None:
+    """WR-05: `_locate`'s own regex deliberately allows leading indentation
+    so an indented plugins=(...) is still recognized for enable/disable, but
+    relocating it in the template repair has no awareness of the enclosing
+    if/case/function block -- popping it out and reinserting it before the
+    source line silently turns a conditional plugin set into an
+    unconditional one and leaves the original conditional an empty no-op.
+    Refused, and the file left byte-identical."""
+    zshrc = tmp_path / ".zshrc"
+    original = 'source $ZSH/oh-my-zsh.sh\nif [[ -n "$X" ]]; then\n  plugins=(git)\nfi\n'
+    zshrc.write_text(original)
+
+    assert ensure_zshrc_template(zshrc) is False
+    assert zshrc.read_text() == original
+
+
 def test_last_matching_line_wins() -> None:
     src = "plugins=(a)\nZSH_THEME=x\nplugins=(b)\n"
     out = enable_plugins(src)
@@ -655,13 +737,21 @@ def test_write_plugins_refuses_a_source_correct_multiline_array(
 def test_write_plugins_preserves_comments_crlf_and_unrelated_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The plugins line here is deliberately UNINDENTED (WR-05, 15.6-REVIEW.md):
+    an indented plugins=(...) is presumed nested inside an if/case/function
+    body and _repair_sourced_template now refuses to relocate it, since doing
+    so would silently turn a conditional plugin set into an unconditional
+    one. This test's own purpose (comment/CRLF/unrelated-source preservation
+    across a repair+enable pass) is orthogonal to that safety check, so it
+    keeps a top-level array -- indented-and-refused is covered separately by
+    test_repair_refuses_to_relocate_a_plugins_line_indented_inside_a_block."""
     monkeypatch.setenv("HOME", str(tmp_path))
     src = (
         "# keep this comment\r\n"
         "source /etc/profile\r\n"
         'export ZSH="$HOME/.oh-my-zsh"\r\n'
         "source $ZSH/oh-my-zsh.sh\r\n"
-        "  plugins=(z git)  # mine\r\n"
+        "plugins=(z git)  # mine\r\n"
     )
     zshrc, state = _sandbox(tmp_path, src)
     zshrc.write_bytes(src.encode())
@@ -669,8 +759,8 @@ def test_write_plugins_preserves_comments_crlf_and_unrelated_source(
     text = zshrc.read_bytes().decode()
     assert text.startswith("# keep this comment\r\n")
     assert "source /etc/profile\r\n" in text
-    assert "  plugins=(z git docker)  # mine\r\n" in text
-    plugins_at = text.index("  plugins=(z git docker)  # mine\r\n")
+    assert "plugins=(z git docker)  # mine\r\n" in text
+    plugins_at = text.index("plugins=(z git docker)  # mine\r\n")
     source_at = text.index("source $ZSH/oh-my-zsh.sh\r\n")
     assert plugins_at < source_at
     assert owned_plugins(state) == ("docker",)
