@@ -1,4 +1,5 @@
 import ast
+import inspect
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
@@ -12,10 +13,17 @@ from textual.widgets import DataTable, Label, ListItem, ListView, Static
 from installer import daemon
 from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
+from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
-from installer.enums import Severity
+from installer.enums import DaemonState, Severity
 from installer.execute_screen import ExecuteInputs, ExecuteScreen
+from installer.guidance import (
+    disk_pressure_guidance,
+    doctor_guidance,
+    guard_guidance,
+    node_globals_guidance,
+)
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool, load_tools
 from installer.ownership import (
@@ -48,6 +56,7 @@ from installer.versions import TagResolver, VersionError
 from installer.wizard_app import (
     VIEW_ORDER,
     ConfirmUninstall,
+    DiskPressureProbe,
     DoctorScreen,
     LinkModeScreen,
     NavScreen,
@@ -210,12 +219,48 @@ def _policy_inputs(
     *,
     link_mode: Callable[[], str] | None = None,
     set_link_mode: Callable[[str], None] | None = None,
+    disk_pressure: DiskPressureProbe | None = None,
 ) -> PolicyInputs:
     return PolicyInputs(
         policies=policies if policies is not None else [_fake_policy()],
         link_mode=link_mode,
         set_link_mode=set_link_mode,
+        disk_pressure=disk_pressure,
     )
+
+
+def _pressure(
+    *,
+    root_free: float | None = 50.0,
+    tmp_used: float | None = 10.0,
+    daemon_state: DaemonState = DaemonState.INACTIVE,
+    tmp_threshold: bool = True,
+) -> DiskPressure:
+    return DiskPressure(
+        root_free_percent=root_free,
+        tmp_used_percent=tmp_used,
+        daemon=daemon_state,
+        tmp_threshold=tmp_threshold,
+    )
+
+
+def _probe(
+    read: DiskPressure | Callable[[], DiskPressure],
+    *,
+    blocking_calls: list[bool] | None = None,
+) -> DiskPressureProbe:
+    """A disk-pressure probe with the production closure's call shape.
+
+    `blocking_calls`, when given, records the `blocking` keyword of every
+    call, so a test can prove which cache verb a caller asked for.
+    """
+
+    def probe(*, blocking: bool = True) -> DiskPressure:
+        if blocking_calls is not None:
+            blocking_calls.append(blocking)
+        return read() if callable(read) else read
+
+    return probe
 
 
 def _app(
@@ -3685,6 +3730,204 @@ def test_unified_app_constructs_without_node_globals_closures() -> None:
         uninstall=_uninstall_inputs(),
         policies=_policy_inputs(),
     )
+
+
+# -- D-03 disk pressure on the Doctor screen (plan 15.7-06 task 2) --
+
+_AT_RISK = _pressure(root_free=5.0, daemon_state=DaemonState.INACTIVE)
+_HEALTHY_DOCTOR = doctor_guidance(DoctorReport(missing=(), broken=(), duplicated=()))
+
+
+def _doctor_body(app: UnifiedApp) -> str:
+    assert isinstance(app.screen, DoctorScreen)
+    return str(app.screen.query_one("#doctor-body", Static).render())
+
+
+def test_policy_inputs_disk_pressure_defaults_to_none() -> None:
+    inputs = PolicyInputs(policies=[_fake_policy()])
+    assert inputs.disk_pressure is None
+
+
+async def test_doctor_without_disk_pressure_renders_exactly_as_today() -> None:
+    report = DoctorReport(missing=(Path("/a/bin"),), broken=(), duplicated=())
+    app = _app(report=report, initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        assert app.screen.disk_pressure is None
+        assert app.screen.guidance == doctor_guidance(report) + guard_guidance(
+            {"pip": False, "npm": False}, None
+        )
+
+
+async def test_doctor_shows_the_at_risk_disk_pressure_item() -> None:
+    app = _app(policies=_policy_inputs(disk_pressure=_probe(_AT_RISK)), initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        [expected] = disk_pressure_guidance(_AT_RISK)
+        assert expected in app.screen.guidance
+        assert expected.title in _doctor_body(app)
+
+
+async def test_doctor_healthy_disk_pressure_adds_nothing() -> None:
+    app = _app(policies=_policy_inputs(disk_pressure=_probe(_pressure())), initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        assert app.screen.guidance == _HEALTHY_DOCTOR + guard_guidance(
+            {"pip": False, "npm": False}, None
+        )
+
+
+async def test_doctor_disk_item_sits_after_guard_and_before_pnpm_globals() -> None:
+    warning = "pip shim is shadowed"
+    app = _app(
+        guard_warning=warning,
+        node_globals=lambda: _mmdc_report(),
+        policies=_policy_inputs(disk_pressure=_probe(_AT_RISK)),
+        initial_view="doctor",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        guard_items = guard_guidance({"pip": False, "npm": False}, warning)
+        globals_items = node_globals_guidance(_mmdc_report())
+        assert guard_items
+        assert globals_items
+        assert app.screen.guidance == (
+            _HEALTHY_DOCTOR + guard_items + disk_pressure_guidance(_AT_RISK) + globals_items
+        )
+
+
+async def test_doctor_tui_rewrites_the_disk_pressure_next_step_to_the_policies_row() -> None:
+    app = _app(policies=_policy_inputs(disk_pressure=_probe(_AT_RISK)), initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        [console_item] = disk_pressure_guidance(_AT_RISK)
+        [tui_item] = [
+            item
+            for item in app.screen._tui_guidance()  # pyright: ignore[reportPrivateUsage]
+            if item.title == console_item.title
+        ]
+        assert tui_item.next_step != console_item.next_step
+        assert "Policies view" in tui_item.next_step
+        assert "Background tmpdir cleanup" in tui_item.next_step
+        assert "make setup" not in tui_item.next_step
+        assert tui_item == replace(console_item, next_step=tui_item.next_step)
+        body = _doctor_body(app)
+        assert "make setup`'s Policies view" not in body
+
+
+async def test_doctor_disk_pressure_step_is_never_rewritten_into_pnpm_advice() -> None:
+    # The generic `Run `make setup`` branch must not capture this item: a
+    # full disk answered with "press r to reinstall pnpm globals" is exactly
+    # the mis-routing the branch ordering exists to prevent.
+    app = _app(policies=_policy_inputs(disk_pressure=_probe(_AT_RISK)), initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        [console_item] = disk_pressure_guidance(_AT_RISK)
+        [tui_item] = [
+            item
+            for item in app.screen._tui_guidance()  # pyright: ignore[reportPrivateUsage]
+            if item.title == console_item.title
+        ]
+        assert "pnpm" not in tui_item.next_step
+        assert "Press r" not in tui_item.next_step
+
+
+async def test_doctor_unavailable_daemon_step_is_not_rewritten_to_a_missing_row() -> None:
+    # D-03c: a host with no managed daemon has no Policies row to point at.
+    unavailable = _pressure(root_free=5.0, daemon_state=DaemonState.UNAVAILABLE)
+    app = _app(policies=_policy_inputs(disk_pressure=_probe(unavailable)), initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        [console_item] = disk_pressure_guidance(unavailable)
+        tui = app.screen._tui_guidance()  # pyright: ignore[reportPrivateUsage]
+        assert console_item in tui
+        assert "Policies" not in console_item.next_step
+
+
+async def test_doctor_rereads_disk_pressure_on_enter_view() -> None:
+    current = [_pressure()]
+    calls: list[bool] = []
+    app = _app(
+        policies=_policy_inputs(disk_pressure=_probe(lambda: current[0], blocking_calls=calls))
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        [item] = disk_pressure_guidance(_AT_RISK)
+        assert item not in app.screen.guidance
+        seen = len(calls)
+        current[0] = _AT_RISK
+        await pilot.press("escape")
+        await pilot.press("4")
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        assert len(calls) > seen
+        assert item in app.screen.guidance
+        # Doctor entry is not the Textual row-highlight path: the blocking read
+        # is the correct one here (a stale daemon state would mislead).
+        assert all(calls)
+
+
+@pytest.mark.parametrize("error", [OSError("statvfs failed"), ValueError("bad reading")])
+async def test_doctor_survives_a_failing_disk_pressure_closure(error: Exception) -> None:
+    def broken() -> DiskPressure:
+        raise error
+
+    app = _app(policies=_policy_inputs(disk_pressure=_probe(broken)), initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        assert app.screen.guidance == _HEALTHY_DOCTOR + guard_guidance(
+            {"pip": False, "npm": False}, None
+        )
+        assert "PATH Doctor" in _doctor_body(app)
+
+
+async def test_unified_app_hands_the_policy_inputs_probe_to_the_doctor() -> None:
+    probe = _probe(_pressure())
+    app = _app(policies=_policy_inputs(disk_pressure=probe), initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        assert app.screen.disk_pressure is probe
+
+
+def test_unified_app_signature_carries_no_disk_pressure_parameter() -> None:
+    # The probe travels on PolicyInputs.disk_pressure; a parallel UnifiedApp
+    # kwarg would make every UnifiedApp(...) construction site grow for a
+    # value that already has a home (review HIGH 15.7-06).
+    assert list(inspect.signature(UnifiedApp.__init__).parameters) == [
+        "self",
+        "tools",
+        "installed",
+        "blurbs",
+        "report",
+        "guard_state",
+        "fix_preview",
+        "fix",
+        "uninstall",
+        "policies",
+        "node_globals",
+        "globals_preview",
+        "reinstall_globals",
+        "unavailable",
+        "initial_view",
+        "daemon_default",
+        "daemon_default_policy_id",
+        "version_refresh",
+        "updates",
+        "execute",
+        "prompt_link_mode",
+        "terminal_sync",
+    ]
 
 
 # -- on-by-default (ensure_daemon_default + the worker/message/guard wiring) --

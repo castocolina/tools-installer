@@ -2491,6 +2491,27 @@ def test_build_app_without_disk_pressure_still_binds_the_probe(
     assert policies.disk_pressure is marker
 
 
+def test_build_app_binds_the_callers_probe_without_building_another(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    built: list[object] = []
+
+    def fake_probe(*_args: object, **_kwargs: object) -> object:
+        built.append(object())
+        return built[-1]
+
+    monkeypatch.setattr(setup, "_disk_pressure_probe", fake_probe)
+    seen = _capture_app(monkeypatch)
+    setup._build_app(  # pyright: ignore[reportPrivateUsage]
+        [], _platform(), disk_pressure=_unused_probe
+    )
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    assert policies.disk_pressure is _unused_probe
+    assert built == []
+
+
 def test_build_app_omitted_arguments_still_share_one_cache(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
