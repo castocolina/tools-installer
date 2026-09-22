@@ -767,9 +767,10 @@ def disable_competing(
     path (T-15.7-10). This project has no sudo/pkexec/doas call anywhere;
     every argv this function can emit is a user-scope `systemctl` call.
 
-    Issues one `systemctl --user disable --now <name>` call per entry,
-    collecting a per-entry CommandError OR OSError into the failed list
-    instead of aborting the rest (D-02c, IN-07: an OSError partway through
+    Issues one `systemctl --user disable --now <name>` call per entry, in
+    NAME-SORTED order, collecting a per-entry CommandError OR OSError into
+    the failed list instead of aborting the rest (D-02c, IN-07: an OSError
+    partway through
     the loop used to escape and take the names already disabled, plus the
     system-scope disclosure, down with it) -- never a file-removing verb, never an unlink
     (D-02b): the competitor's unit files belong to whoever installed them,
@@ -778,11 +779,22 @@ def disable_competing(
     refusal to touch a same-named artifact it did not create), and a disabled
     unit is a state the user can undo while a deleted one is not.
 
-    Returns (disabled_names, failed_names).
+    The sort is load-bearing, not cosmetic (lane-2 HIGH-02): `systemctl
+    list-unit-files` output order is not guaranteed stable across systemd
+    versions or configurations, and detect_competing preserves whatever
+    order it read. Without the sort, WHICH unit a partial failure leaves
+    running -- and therefore every disclosure sentence built from the
+    (disabled, failed) split -- would vary between two runs on the same
+    machine. Mirrors system_scope_warning's own sorted() over the names it
+    discloses. D-02c keeps the partial takeover itself: it proceeds and is
+    disclosed, never rolled back by re-enabling what was already disabled.
+
+    Returns (disabled_names, failed_names), each in that same sorted order.
     """
     units = tuple(units)
     if any(unit.scope == SCOPE_SYSTEM for unit in units):
         raise ValueError("disable_competing refuses a system-scope competing unit")
+    units = tuple(sorted(units, key=lambda unit: unit.name))
     disabled: list[str] = []
     failed: list[str] = []
     for unit in units:

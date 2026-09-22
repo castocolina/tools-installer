@@ -1113,12 +1113,51 @@ def test_disable_competing_issues_one_disable_now_call_per_user_scope_entry() ->
     disabled, failed = systemd_daemon.disable_competing(
         [_user_unit(_TIMER_NAME), _user_unit(_SERVICE_NAME)], run=fake_run
     )
+    # Name-sorted, not listing-ordered (lane-2 HIGH-02): ".service" sorts
+    # before ".timer".
     assert fake_run.calls == [
-        ["systemctl", "--user", "disable", "--now", _TIMER_NAME],
         ["systemctl", "--user", "disable", "--now", _SERVICE_NAME],
+        ["systemctl", "--user", "disable", "--now", _TIMER_NAME],
     ]
-    assert disabled == (_TIMER_NAME, _SERVICE_NAME)
+    assert disabled == (_SERVICE_NAME, _TIMER_NAME)
     assert failed == ()
+
+
+def test_disable_competing_order_does_not_depend_on_the_listing_order() -> None:
+    """Lane-2 HIGH-02: `systemctl list-unit-files` output order is not
+    guaranteed stable across systemd versions, so detect_competing can hand
+    the same two units over in either order. Two runs must still attempt the
+    disables in the SAME order -- otherwise which unit a partial failure
+    leaves running depends on the listing, and so does every disclosure
+    sentence built from the (disabled, failed) split.
+    """
+    forward = _RecordingRun()
+    backward = _RecordingRun()
+    a, b = _user_unit(_TIMER_NAME), _user_unit(_SERVICE_NAME)
+
+    systemd_daemon.disable_competing([a, b], run=forward)
+    systemd_daemon.disable_competing([b, a], run=backward)
+
+    assert forward.calls == backward.calls
+    assert [cmd[-1] for cmd in forward.calls] == sorted([_TIMER_NAME, _SERVICE_NAME])
+
+
+def test_disable_competing_splits_deterministically_when_one_entry_fails() -> None:
+    """Lane-2 HIGH-02: the (disabled, failed) split is what every disclosure
+    sentence is built from, so it may not depend on the listing order
+    either."""
+
+    def run(cmd: list[str]) -> None:
+        if cmd[-1] == _TIMER_NAME:
+            raise CommandError(cmd, 1)
+
+    forward = systemd_daemon.disable_competing(
+        [_user_unit(_TIMER_NAME), _user_unit(_SERVICE_NAME)], run=run
+    )
+    backward = systemd_daemon.disable_competing(
+        [_user_unit(_SERVICE_NAME), _user_unit(_TIMER_NAME)], run=run
+    )
+    assert forward == backward == ((_SERVICE_NAME,), (_TIMER_NAME,))
 
 
 def test_disable_competing_collects_a_per_entry_failure_instead_of_aborting() -> None:

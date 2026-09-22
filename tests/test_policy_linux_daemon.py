@@ -697,12 +697,23 @@ def test_apply_two_user_scope_competitors_partial_failure_is_never_reported_as_c
     result = policy.apply()
     disable_calls = [c for c in fake_run.calls if c[2] == "disable"]
     assert len(disable_calls) == 2  # both attempted, never aborted after the first
+    # Lane-2 HIGH-02: the attempt order is name-sorted, so which unit the
+    # second (failing) call lands on is the same on every run and on every
+    # systemd version, whatever order list-unit-files happened to yield.
+    assert [c[-1] for c in disable_calls] == sorted([_COMPETING_SERVICE, _COMPETING_TIMER])
     assert result.warning is not None
-    assert _COMPETING_SERVICE in result.warning  # the one that failed, named
-    assert f"systemctl --user disable --now {_COMPETING_SERVICE}" in result.warning
+    # Lane-2 HIGH-02, transparency half: a partial takeover must let the user
+    # tell the two sets apart -- the unit that WAS disabled (with the command
+    # that puts it back) and the one that survived (with the command that
+    # stops it). Naming only one of them is what makes a partial takeover
+    # indistinguishable from a complete one.
+    assert f"Stopped and disabled {_COMPETING_SERVICE}" in result.warning
+    assert f"systemctl --user enable --now {_COMPETING_SERVICE}" in result.warning
+    assert f"{_COMPETING_TIMER} could not be stopped and disabled" in result.warning
+    assert f"systemctl --user disable --now {_COMPETING_TIMER}" in result.warning
     assert result.layers[-1] == PolicyLayer(
         "Competing mechanism",
-        f"disabled: {_COMPETING_TIMER}; disable failed, still running: {_COMPETING_SERVICE}",
+        f"disabled: {_COMPETING_SERVICE}; disable failed, still running: {_COMPETING_TIMER}",
     )
 
 
