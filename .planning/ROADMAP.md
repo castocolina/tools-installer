@@ -527,10 +527,10 @@ Plans:
 
 ### Phase 15.8: Fix real (not just cosmetic) PATH duplication from managed-block sourcing: installer/shellrc.py's managed_block() (line 101-111) emits a plain, unconditional 'export PATH="{dir}:$PATH"' per managed bin dir into .bashrc/.zshrc/.myshellrc. The rc-file block itself is idempotent (apply_block never writes it twice), but the block's RUNTIME EFFECT is not: every nested/child shell that sources it again (very common -- tmux/wezterm panes, IDE-integrated terminals, subshells) re-prepends the same directory onto an already-inherited PATH that has it, accumulating duplicates with every nesting level. Confirmed live this session: 5 copies of ~/.local/bin, 4 of fnm's dir, 3+ of several others, in a single real shell session -- this is why Doctor's PATH audit keeps reporting the same 'duplicated on PATH' findings even after applying the fix and opening a genuinely new terminal, not a UI staleness issue (that is Phase 15.1's separate finding). Fix by making managed_block() emit a self-deduping guarded form instead of a plain export -- this codebase already recognizes and special-cases exactly this shape from pnpm's own installer output (installer/rcclean.py:61-70's find_duplicate_path_lines explicitly skips pnpm's case-guarded '*) export PATH="$PNPM_HOME:$PATH" ;;' block as 'self-deduping ... nothing safe or necessary to strip' -- reuse that same case-guarded idiom for every managed dir instead of a plain export). User explicitly asked for a reusable function/mechanism that checks-before-adding, not a one-off patch to this single block -- audit installer/shellrc.py's other PATH-writing call site (pnpm_home block, line ~210) and any other PATH-modifying block in the codebase for the same non-idempotent-at-runtime defect. (INSERTED)
 
-**Goal:** On Linux, every available supported terminal emulator opens the discovered zsh login shell through its own user configuration, with Oh-My-Zsh sourced and plugins loadable when installed, while terminal configuration stays idempotent, safely owned, and independent of the system login shell.
-**Requirements**: D-01, D-02, D-03, D-04 (15.6-CONTEXT.md — inserted, roadmap-scoped phase, not a REQUIREMENTS.md id)
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
 **Depends on:** Phase 15
-**Plans:** 3 plans
+**Plans:** TBD
 
 Plans:
 
@@ -538,10 +538,10 @@ Plans:
 
 ### Phase 15.7: Unify tmp-prune tooling into an installable Tweaks module (from pending todo 2026-09-10-unify-tmp-prune-tooling-into-an-installable-tweaks-module.md): opencode/Bun's runtime-transpiler-cache orphans native .so/.node artifacts on a killed/crashed process, either in OS temp (macOS $TMPDIR, can reach 100GB+/day) or /tmp on Linux (a small-quota tmpfs on Bazzite, ~12GB, causing EDQUOT failures across the whole system once full). Two independent non-reusable scripts already solve pieces of this today (this repo's scripts/prune-user-tmpdir.sh, manual dry-run/--apply only; ai-kit's Linux-only systemd-timer bundle, confirmed working, keeps /tmp under 1%) but neither is cross-platform, wired into this project, or installable/uninstallable. Build one dedicated cross-platform module: (1) env-var wiring to redirect Bun's cache off tmp entirely (environment.d on Linux, shell-rc based on macOS), (2) a real background daemon install/uninstall -- systemd user timer+oneshot on Linux, launchd LaunchAgent on macOS -- never manual scripts, (3) Tweaks view toggle (install/uninstall, daemon-active status, current tmp usage %), (4) make doctor integration: red warning when the cleanup daemon is inactive AND disk space is below 30% (or /tmp exceeds 50% on Linux specifically), extra visual weight when both conditions are true together. Reuse this project's existing OS-detection conventions (Phase 12.3 precedent) rather than duplicating per-OS logic; user explicitly rejected manual-script-only as an acceptable outcome. (INSERTED)
 
-**Goal:** Linux users open kitty, WezTerm, or a live-detected Konsole directly into the discovered zsh login shell, with Oh-My-Zsh and its selected plugins loading whenever the framework is present, while all changes remain reversible user configuration and never alter the system login shell.
-**Requirements**: D-01, D-02, D-03, D-04 (15.6-CONTEXT.md locked decisions — inserted roadmap phase, not a REQUIREMENTS.md id)
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
 **Depends on:** Phase 15
-**Plans:** 6 plans
+**Plans:** TBD
 
 Plans:
 
@@ -549,8 +549,8 @@ Plans:
 
 ### Phase 15.6: Terminal-emulator default-shell configuration (Konsole/kitty/WezTerm on immutable Linux hosts): make zsh (+ oh-my-zsh plugins, when installed) the working shell whenever the user opens a terminal, without ever touching chsh/system login shell -- chsh is confirmed absent on Bazzite (util-linux-user removed by design, ublue-os/bazzite#4159) and Bazzite maintainers explicitly recommend configuring the terminal emulator instead of the system login shell. Scoped to Linux/immutable hosts where this problem exists (macOS is unaffected -- chsh works normally there via the existing Phase 14 flow, confirmed by user). Research leads found this session: kitty supports a launcher-level override (kitty -o shell=<path>) and WezTerm supports (wezterm start --config default_prog={<path>}) without mutating kitty.conf/wezterm.lua directly; Konsole has no equivalent single flag but supports the more universal -e <command> launch pattern as a fallback. Investigate desktop-launcher (.desktop file) level integration vs per-app config mutation. (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** Linux users open kitty, WezTerm, or a live-detected Konsole directly into the discovered zsh login shell, with Oh-My-Zsh and its selected plugins loading whenever the framework is present, while all changes remain reversible user configuration and never alter the system login shell.
+**Requirements**: D-01, D-02, D-03, D-04 (15.6-CONTEXT.md locked decisions — inserted roadmap phase, not a REQUIREMENTS.md id)
 **Depends on:** Phase 15
 **Plans:** 6/6 plans executed
 
