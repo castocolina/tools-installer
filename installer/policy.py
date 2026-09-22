@@ -141,6 +141,13 @@ class Policy:
     # field placed mid-list silently renumbers every positional construction.
     decided: Callable[[], bool] | None = None
     clear_decided: Callable[[], None] | None = None
+    # CR-01: "is anything of ours still on disk", for the uninstall sweep.
+    # Distinct from is_active, which may answer a RUNTIME question (the Linux
+    # timer's is-active state): a stopped-but-enabled timer, or one whose user
+    # manager is unreachable, is not running yet still has files that restart
+    # it at the next login. None means is_active/active already answers the
+    # footprint question for this policy.
+    owned: Callable[[], bool] | None = None
 
     def missing_requirements(self) -> tuple[str, ...]:
         """Read prerequisites at the point a policy is rendered or applied."""
@@ -836,6 +843,13 @@ def daemon_policy(
     )
 
 
+_UNREACHABLE_MANAGER_WARNING = (
+    "the systemd user manager could not be reached, so `systemctl --user daemon-reload` "
+    "did not run; the unit files are removed, but a timer it already loaded may keep "
+    "running until you log out, or until you run `systemctl --user daemon-reload` yourself"
+)
+
+
 def linux_daemon_policy(
     *,
     unit_dir: Path,
@@ -882,6 +896,12 @@ def linux_daemon_policy(
     also WARMS the cache before the first TUI frame) and the `is_active`
     closure, and exposed on `Policy.state_cache` so a test can assert
     identity with plan 15.7-06's disk-pressure probe.
+
+    CR-01: `owned()` is the separate FOOTPRINT answer the uninstall sweep
+    reads -- either unit file, the enablement symlink or the owned wrapper on
+    disk -- so a stopped-but-enabled timer, or one whose user manager is
+    unreachable, is still torn down. `remove` then deletes the files even when
+    the manager cannot be reached, and discloses that no daemon-reload ran.
 
     `installed_tools` is accepted for signature symmetry with daemon_policy
     and because setup.py's composition root already computes it uniformly
@@ -1071,20 +1091,27 @@ def linux_daemon_policy(
     def _remove() -> PolicyResult:
         # Same invalidate()-in-`finally` discipline as _apply above.
         try:
-            systemd_daemon.bootout(unit_dir, run=run, read_output=read_output)
+            reached = systemd_daemon.bootout(unit_dir, run=run, read_output=read_output)
             try:
                 systemd_daemon.remove_units(unit_dir)
             except OSError:
-                with contextlib.suppress(CommandError):
-                    systemd_daemon.bootstrap(unit_dir, run=run)
+                if reached:
+                    with contextlib.suppress(CommandError):
+                        systemd_daemon.bootstrap(unit_dir, run=run)
                 raise
-            # _remove's own unit-file deletion just changed what the user
-            # manager's already-loaded definition was read from -- the same
-            # compensating-reload reasoning the rollback branches above
-            # apply (review MEDIUM 15.7-01).
-            with contextlib.suppress(CommandError):
-                systemd_daemon.daemon_reload(run=run)
             warnings: list[str] = []
+            if reached:
+                # _remove's own unit-file deletion just changed what the user
+                # manager's already-loaded definition was read from -- the
+                # same compensating-reload reasoning the rollback branches
+                # above apply (review MEDIUM 15.7-01).
+                with contextlib.suppress(CommandError):
+                    systemd_daemon.daemon_reload(run=run)
+            else:
+                # CR-01: the files are gone, so nothing restarts the timer at
+                # the next login, but a manager this process could not reach
+                # may still hold the loaded unit until it reloads.
+                warnings.append(_UNREACHABLE_MANAGER_WARNING)
             try:
                 systemd_daemon.remove_wrapper(wrapper_bin_dir)
             except OSError as exc:
@@ -1107,7 +1134,15 @@ def linux_daemon_policy(
             cache.invalidate()
 
     def _is_active() -> bool:
+        # The Policies row: is the timer RUNNING right now.
         return cache.read() is DaemonState.ACTIVE
+
+    def _owned() -> bool:
+        # The uninstall sweep: is anything this policy installed still on
+        # disk (CR-01). File reads only, so it never spawns systemctl.
+        return systemd_daemon.footprint_present(unit_dir) or systemd_daemon.wrapper_present(
+            wrapper_bin_dir
+        )
 
     return Policy(
         id="daemon:prune-tmp-linux",
@@ -1124,6 +1159,7 @@ def linux_daemon_policy(
         state_cache=cache,
         decided=lambda: systemd_daemon.decided(state_path),
         clear_decided=lambda: systemd_daemon.clear_decided(state_path),
+        owned=_owned,
     )
 
 

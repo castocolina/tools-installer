@@ -1369,6 +1369,7 @@ class UninstallScreen(AppScreen):
                 parts.append(
                     f"could not disable {', '.join(swept.failed)} — check permissions and re-run."
                 )
+            parts.extend(f"warning: {warning}." for warning in swept.warnings)
             if not swept.swept and not swept.failed:
                 parts.append("no shell tweaks were still enabled — nothing to disable.")
         # One line per outcome: a single joined line overflows the terminal width and

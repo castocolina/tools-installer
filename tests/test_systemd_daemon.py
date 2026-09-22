@@ -669,6 +669,80 @@ def test_bootout_with_units_absent_disable_failing_and_probe_active_reraises(
         systemd_daemon.bootout(unit_dir, run=failing_run, read_output=_ScriptedReadOutput("active"))
 
 
+def test_bootout_with_units_present_and_manager_unreachable_reports_not_reached(
+    tmp_path: Path,
+) -> None:
+    # CR-01: `make uninstall` over ssh has no user bus. Raising here left the
+    # owned files on disk, so the timer restarted at the next login.
+    unit_dir = tmp_path / "unit"
+    _write_units_present(unit_dir)
+
+    def failing_run(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1)
+
+    assert (
+        systemd_daemon.bootout(unit_dir, run=failing_run, read_output=_RaisingReadOutput()) is False
+    )
+
+
+def test_bootout_with_units_present_disable_failing_and_timer_inactive_reports_reached(
+    tmp_path: Path,
+) -> None:
+    unit_dir = tmp_path / "unit"
+    _write_units_present(unit_dir)
+
+    def failing_run(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1)
+
+    assert (
+        systemd_daemon.bootout(
+            unit_dir, run=failing_run, read_output=_ScriptedReadOutput("inactive")
+        )
+        is True
+    )
+
+
+def test_bootout_successful_disable_reports_reached(tmp_path: Path) -> None:
+    unit_dir = tmp_path / "unit"
+    assert (
+        systemd_daemon.bootout(
+            unit_dir, run=_RecordingRun(), read_output=_ScriptedReadOutput("active")
+        )
+        is True
+    )
+
+
+def test_footprint_present_counts_either_unit_file_or_a_dangling_enable_link(
+    tmp_path: Path,
+) -> None:
+    unit_dir = tmp_path / "unit"
+    assert systemd_daemon.footprint_present(unit_dir) is False
+    unit_dir.mkdir(parents=True)
+    (unit_dir / systemd_daemon.TIMER_NAME).write_text("x")
+    assert systemd_daemon.footprint_present(unit_dir) is True
+    (unit_dir / systemd_daemon.TIMER_NAME).unlink()
+    link = systemd_daemon.wants_link_path(unit_dir)
+    link.parent.mkdir(parents=True)
+    link.symlink_to(unit_dir / systemd_daemon.TIMER_NAME)  # dangling
+    assert systemd_daemon.footprint_present(unit_dir) is True
+
+
+def test_remove_units_also_removes_the_enable_symlink_but_never_a_regular_file(
+    tmp_path: Path,
+) -> None:
+    unit_dir = tmp_path / "unit"
+    _write_units_present(unit_dir)
+    link = systemd_daemon.wants_link_path(unit_dir)
+    link.parent.mkdir(parents=True)
+    link.symlink_to(unit_dir / systemd_daemon.TIMER_NAME)
+    systemd_daemon.remove_units(unit_dir)
+    assert not link.is_symlink()
+    assert systemd_daemon.footprint_present(unit_dir) is False
+    link.write_text("not ours")
+    systemd_daemon.remove_units(unit_dir)
+    assert link.exists()
+
+
 def test_bootout_successful_disable_issues_no_reprobe(tmp_path: Path) -> None:
     unit_dir = tmp_path / "unit"
     fake_run = _RecordingRun()

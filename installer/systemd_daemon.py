@@ -65,6 +65,7 @@ __all__ = [
     "detect_competing",
     "disable_competing",
     "ensure_log_path",
+    "footprint_present",
     "install_wrapper",
     "last_run_summary",
     "parse_unit_files",
@@ -82,6 +83,7 @@ __all__ = [
     "units_present",
     "user_scope_failure_warning",
     "user_unit_dir",
+    "wants_link_path",
     "wrapper_present",
     "write_units",
 ]
@@ -290,6 +292,28 @@ def units_present(unit_dir: Path) -> bool:
     return service_path.exists() and timer_path.exists()
 
 
+def wants_link_path(unit_dir: Path) -> Path:
+    """The enablement symlink `systemctl --user enable` creates for the timer.
+
+    The name is this project's own timer name inside the user unit dir, so the
+    path identifies it as ours without reading the link target.
+    """
+    return unit_dir / "timers.target.wants" / TIMER_NAME
+
+
+def footprint_present(unit_dir: Path) -> bool:
+    """True when ANY file this project installs into unit_dir is on disk.
+
+    The uninstall question is "is this ours", not "is it running" (CR-01): a
+    stopped-but-enabled timer, or one whose user manager cannot be reached,
+    still has files that restart it at the next login. Either unit file or a
+    leftover enablement symlink (even a dangling one) counts.
+    """
+    service_path, timer_path = unit_paths(unit_dir)
+    link = wants_link_path(unit_dir)
+    return service_path.exists() or timer_path.exists() or link.is_symlink()
+
+
 def write_units(
     unit_dir: Path,
     *,
@@ -331,9 +355,19 @@ def write_units(
 
 
 def remove_units(unit_dir: Path) -> None:
-    """Delete both unit files (missing_ok) -- never raises when already gone."""
+    """Delete both unit files and the timer's enablement symlink.
+
+    missing_ok throughout, so it never raises when already gone. The symlink
+    is removed by hand because `systemctl --user disable` cannot run when the
+    user manager is unreachable, and a link left behind points at a deleted
+    unit that the manager reports as missing at every login. Only a symlink is
+    unlinked: a regular file at that path is not something enable creates.
+    """
     for path in unit_paths(unit_dir):
         path.unlink(missing_ok=True)
+    link = wants_link_path(unit_dir)
+    if link.is_symlink():
+        link.unlink(missing_ok=True)
 
 
 def daemon_reload(*, run: Runner = run_captured) -> None:
@@ -469,7 +503,7 @@ def bootout(
     *,
     run: Runner = run_captured,
     read_output: OutputRunner = query_systemctl,
-) -> None:
+) -> bool:
     """Unregister the timer, distinguishing "already gone" from a real
     failure -- the systemd equivalent of installer/daemon.py::bootout.
 
@@ -479,25 +513,32 @@ def bootout(
     hand-corrupted unit file can coexist with a still-loaded unit, and a
     presence gate would skip the one call that fixes it.
 
-    On CommandError it classifies: unit files present -> re-raise (this
-    project wrote those units; a failure to unregister them is real); unit
-    files absent -> re-probe systemd through probe_timer_state and re-raise
-    only when the timer is still ACTIVE, returning normally when it is
-    INACTIVE or UNAVAILABLE. Systemd has no single ESRCH-equivalent exit
-    code for `disable` (a missing unit exits 1, the same code a permission
-    or manager failure uses), so the classification is made on systemd's own
-    post-failure answer rather than on a code table or on stderr text, which
-    would be locale-dependent. Invariant: a caller can never proceed past a
-    real bootout failure and treat the daemon as removed while it may still
-    be loaded (review HIGH 15.7-01; T-15.7-39).
+    On CommandError it re-probes systemd through probe_timer_state and
+    classifies on that answer: ACTIVE -> re-raise (the timer is provably
+    still running, so the failure is real); INACTIVE -> return True (the
+    manager answered and nothing is running, so the caller may delete the
+    files); UNAVAILABLE -> return False (the user manager could not be
+    reached at all, e.g. `make uninstall` over ssh with no user bus). Systemd
+    has no single ESRCH-equivalent exit code for `disable` (a missing unit
+    exits 1, the same code a permission or manager failure uses), so the
+    classification is made on systemd's own post-failure answer rather than
+    on a code table or on stderr text, which would be locale-dependent.
+
+    Returns whether the user manager was reached. False tells the caller to
+    remove its owned files anyway and to DISCLOSE that no daemon-reload could
+    run (CR-01): refusing would leave the files that restart the timer at the
+    next login, which is worse. Invariant: a caller can never proceed past a
+    failure while the timer is provably ACTIVE (review HIGH 15.7-01;
+    T-15.7-39).
     """
     try:
         run(["systemctl", "--user", "disable", "--now", TIMER_NAME])
     except CommandError:
-        if units_present(unit_dir):
+        state = probe_timer_state(read_output=read_output)
+        if state is DaemonState.ACTIVE:
             raise
-        if probe_timer_state(read_output=read_output) is DaemonState.ACTIVE:
-            raise
+        return state is DaemonState.INACTIVE
+    return True
 
 
 # --- Competing-mechanism detection & takeover (D-02) -------------------------

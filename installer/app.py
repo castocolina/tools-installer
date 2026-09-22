@@ -74,6 +74,7 @@ from installer.uninstall import (
     SweepResult,
     active_policies,
     plan_uninstall,
+    policy_owned,
     remove_paths,
     sweep_policies,
     sweep_tweaks,
@@ -452,8 +453,9 @@ def run_uninstall(
     # not be told there is nothing to uninstall.
     if not paths and not shimmed and not tweaks:
         render_uninstall([], console)  # prints the "nothing to uninstall" line
-        # An already-disabled daemon never appears in `tweaks` (active_policies
-        # only includes it when is_active() is True) and needs no confirm --
+        # A daemon with no footprint left never appears in `tweaks`
+        # (active_policies includes it only when policy_owned() is True) and
+        # needs no confirm --
         # nothing destructive happens, only an internal marker resetting so a
         # later reinstall is genuinely fresh (11-REVIEWS.md cycle 3 finding
         # #13's "already disabled, nothing to sweep" case).
@@ -500,6 +502,8 @@ def run_uninstall(
         console.print(
             f"Could not disable: {', '.join(swept.failed)}. Check permissions and re-run."
         )
+    for warning in swept.warnings:
+        console.print(f"Warning: {warning}.")
     # Composition-root-only, and only AFTER the sweep: daemon_policy.remove()
     # itself still calls daemon.record_decided as part of that same sweep
     # call, so clearing the marker BEFORE the sweep would be immediately
@@ -594,11 +598,7 @@ def perform_uninstall(
     if (
         daemon_policy is not None
         and daemon_policy.clear_decided is not None
-        and not (
-            daemon_policy.is_active()
-            if daemon_policy.is_active is not None
-            else daemon_policy.active
-        )
+        and not policy_owned(daemon_policy)
     ):
         daemon_policy.clear_decided()
     return SweepResult()

@@ -4187,7 +4187,8 @@ def test_policy_appends_decided_closures_after_every_existing_field() -> None:
     import dataclasses
 
     names = [field.name for field in dataclasses.fields(Policy)]
-    assert names[-2:] == ["decided", "clear_decided"]
+    # Later optional fields are appended after them, never inserted before.
+    assert names[-3:] == ["decided", "clear_decided", "owned"]
 
 
 def test_unarmed_collector_wait_returns_immediately() -> None:
