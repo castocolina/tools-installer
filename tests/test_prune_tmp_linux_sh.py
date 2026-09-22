@@ -8,6 +8,11 @@ proven by actually running it, not by re-deriving its regex in Python.
 find/rm are real (never stubbed): every path this file exercises is created
 fresh under tmp_path, and --tmpdir always points inside it, so no test here
 ever touches the real machine's tmp directory or real $HOME.
+
+15.7-07 Task 2 ADDS the cross-script assertions at the bottom of this file
+(shared-core proof: one refusal guard demonstrably serving both wrappers, and
+the shared library refusing to do anything when executed directly) -- every
+assertion above this point is unmodified from plan 15.7-01.
 """
 
 import os
@@ -20,6 +25,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "prune-tmp-linux.sh"
+MACOS_SCRIPT = ROOT / "scripts" / "prune-user-tmpdir.sh"
+LIB_SCRIPT = ROOT / "scripts" / "lib" / "prune-tmp-common.sh"
 
 pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="bash not on PATH")
 
@@ -173,3 +180,60 @@ def test_files_outside_the_named_tmpdir_are_untouched(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert "deleted: 0" in result.stdout
     assert outside_file.exists()
+
+
+# --- 15.7-07 Task 2: shared-core proof (D-01d) --------------------------------
+#
+# Both scripts now source scripts/lib/prune-tmp-common.sh (see the module
+# docstring). These tests prove that sharing, not just assert each script's
+# own behavior in isolation.
+
+
+def _run_macos(*args: str, home: Path) -> "subprocess.CompletedProcess[str]":
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home)}
+    return subprocess.run(
+        ["bash", str(MACOS_SCRIPT), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_refusal_message_is_identical_in_shape_from_both_scripts(tmp_path: Path) -> None:
+    """One shared `_prune_common_refuse_broad_path` guard serves both
+    wrappers -- proved by running each script against the SAME broad path
+    ($HOME, which is in both scripts' own refusal list, unlike "/" which
+    scripts/prune-user-tmpdir.sh's own pre-existing trailing-slash-strip
+    quirk routes to a different check entirely; see
+    tests/test_prune_user_tmpdir_sh.py::test_refuses_root_via_not_a_directory_quirk)
+    and comparing the refusal line each one prints.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+
+    linux_result = _run("--tmpdir", str(home), "--apply", home=home)
+    macos_result = _run_macos("--tmpdir", str(home), "--apply", home=home)
+
+    expected = f"refusing broad path {home}"
+    assert linux_result.returncode != 0
+    assert macos_result.returncode != 0
+    assert expected in linux_result.stderr
+    assert expected in macos_result.stderr
+
+
+def test_shared_library_does_nothing_when_executed_directly(tmp_path: Path) -> None:
+    """scripts/lib/prune-tmp-common.sh defines functions only (T-15.7-49): a
+    stray direct execution must not traverse or delete anything, so it exits
+    cleanly instead of running any of its own traversal/deletion logic.
+    """
+    result = subprocess.run(
+        ["bash", str(LIB_SCRIPT)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert result.stderr == ""

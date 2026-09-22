@@ -17,6 +17,11 @@
 # ergonomics, mirroring scripts/prune-user-tmpdir.sh's own flag grammar and
 # broad-path refusal.
 #
+# 15.7-07 (D-01d): the traversal, refusal guard, and validation now live in
+# scripts/lib/prune-tmp-common.sh, shared with scripts/prune-user-tmpdir.sh.
+# This script owns only its own default age, its own --minutes flag, its
+# own help text, and its own single match pattern.
+#
 # Usage:
 #   ./scripts/prune-tmp-linux.sh              # dry-run (safe)
 #   ./scripts/prune-tmp-linux.sh --apply      # delete orphans older than 10min
@@ -63,29 +68,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$TMP_ROOT" ]]; then
-  printf 'error: tmpdir empty; pass --tmpdir PATH\n' >&2
-  exit 1
-fi
+_PRUNE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/prune-tmp-common.sh
+source "${_PRUNE_LIB_DIR}/lib/prune-tmp-common.sh"
+
+_prune_common_require_nonempty "$TMP_ROOT" tmpdir
 # Strip a trailing slash, but "/" itself must stay "/" (not become empty) so
 # the broad-path refusal below still recognizes it.
 if [[ "$TMP_ROOT" != "/" ]]; then
-  TMP_ROOT="${TMP_ROOT%/}"
+  TMP_ROOT="$(_prune_common_strip_trailing_slash "$TMP_ROOT")"
 fi
-case "$TMP_ROOT" in
-  /|/var|/private/var|"$HOME")
-    printf 'error: refusing broad path %s\n' "$TMP_ROOT" >&2
-    exit 1
-    ;;
-esac
-if [[ ! -d "$TMP_ROOT" ]]; then
-  printf 'error: not a directory: %s\n' "$TMP_ROOT" >&2
-  exit 1
-fi
-if ! [[ "$MINUTES" =~ ^[0-9]+$ ]] || [[ "$MINUTES" -lt 1 ]]; then
-  printf 'error: --minutes must be a positive integer\n' >&2
-  exit 1
-fi
+_prune_common_refuse_broad_path "$TMP_ROOT" "/" /var /private/var "$HOME"
+_prune_common_require_directory "$TMP_ROOT"
+_prune_common_validate_positive_int "$MINUTES" minutes
 
 mode="dry-run"; [[ "$APPLY" -eq 1 ]] && mode="APPLY"
 
@@ -97,12 +92,10 @@ printf '  target:   %s\n' "$TMP_ROOT"
 # Escape regex metacharacters that could appear in TMP_ROOT (only "." is
 # realistically present in a real temp path) so the anchor is matched
 # literally, not interpreted as "any character".
-root_escaped="${TMP_ROOT//./\\.}"
+root_escaped="$(_prune_common_escape_dots "$TMP_ROOT")"
+pattern="${root_escaped}/\.[0-9a-f]{16}-[0-9]{8}\.(so|node)"
 
-mapfile -t files < <(find "$TMP_ROOT" -maxdepth 1 \
-    -regextype posix-extended \
-    -regex "${root_escaped}/\.[0-9a-f]{16}-[0-9]{8}\.(so|node)" \
-    -mmin +"$MINUTES" 2>/dev/null)
+mapfile -t files < <(_prune_common_find_matches "$TMP_ROOT" "$MINUTES" "" regex "$pattern")
 
 if [[ "$APPLY" -eq 0 ]]; then
   printf '\n  matches: %s\n' "${#files[@]}"
@@ -111,7 +104,7 @@ if [[ "$APPLY" -eq 0 ]]; then
   done
   printf '\n--- dry-run complete ---\n'
   printf 'Nothing deleted. Re-run with --apply to reclaim.\n'
-  printf 'deleted: 0\n'
+  _prune_common_emit_deleted 0
   exit 0
 fi
 
@@ -124,4 +117,4 @@ for f in "${files[@]}"; do
 done
 
 printf '\n--- summary ---\n'
-printf 'deleted: %s\n' "$deleted"
+_prune_common_emit_deleted "$deleted"

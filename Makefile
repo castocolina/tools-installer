@@ -42,7 +42,10 @@ validate:  ## Lint, format-check, type-check, security, dead-code
 	uv run bandit -q -r installer --skip B404,B603,B310
 	uv run vulture
 	# install.sh is the curl|bash bootstrap; lint it as part of the gate.
-	uv run shellcheck install.sh scripts/prune-tmp-linux.sh
+	# scripts/lib/prune-tmp-common.sh is a sourced-only library (15.7-07);
+	# -x follows the wrappers' `source` into it so shellcheck sees the real
+	# call graph instead of reporting an unfollowable SC1091.
+	uv run shellcheck -x install.sh scripts/lib/prune-tmp-common.sh scripts/prune-tmp-linux.sh scripts/prune-user-tmpdir.sh
 
 test:  ## Run tests with coverage
 	uv run pytest --cov
