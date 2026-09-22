@@ -15,8 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from installer import daemon
+from installer import daemon, systemd_daemon
 from installer.agent_env import AgentAdapter
+from installer.enums import DaemonState
 from installer.guards import (
     guard_path_warning,
     guard_status,
@@ -28,7 +29,7 @@ from installer.guards import (
     write_ban_aliases,
 )
 from installer.omz import owned_plugins, plugins_owned, remove_plugins, write_plugins
-from installer.run import CommandError, Runner, run_captured
+from installer.run import CommandError, OutputRunner, Runner, run_captured
 from installer.shellrc import ensure_source
 from installer.terminal_shell import terminal_sync_warning
 from installer.tweaks import (
@@ -115,6 +116,16 @@ class Policy:
     read_schedule: Callable[[], tuple[int, int] | None] | None = None
     is_active: Callable[[], bool] | None = None
     missing_requires_now: Callable[[], tuple[str, ...]] | None = None
+    # D-01e: the shared TimerStateCache the Linux daemon Policy was injected
+    # with, exposed here so a cross-plan identity invariant (this Policy and
+    # plan 15.7-06's disk-pressure probe hold the SAME instance) is
+    # checkable by a test (`policy.state_cache is probe_cache`) rather than
+    # only asserted in prose. Not what makes the sharing WORK -- injection at
+    # the composition root is -- but it is the OBSERVATION point. Optional
+    # and defaults to None so every other Policy factory in this module
+    # (ban_policy, tweak_policy, omz_plugins_policy, daemon_policy) is
+    # unaffected.
+    state_cache: systemd_daemon.TimerStateCache | None = None
 
     def missing_requirements(self) -> tuple[str, ...]:
         """Read prerequisites at the point a policy is rendered or applied."""
@@ -482,24 +493,32 @@ def omz_plugins_policy(
     )
 
 
-def _record_decided_durably(state_path: Path) -> None:
-    """Retry daemon.record_decided once after a brief pause before giving up.
+def _record_decided_durably(record: Callable[[], None]) -> None:
+    """Retry a "decided" marker write once after a brief pause before giving up.
 
     A failed marker write after a MANUAL disable is worse than the symmetric
-    failure after apply: it leaves daemon.decided() False, so the next
-    interactive setup run's ensure_daemon_default silently re-applies (and
-    re-registers) a daemon the user explicitly just turned off -- a reversal
-    of user intent, not merely a lost audit trail (post-implementation review
+    failure after apply: it leaves the marker False, so the next interactive
+    setup run's ensure_daemon_default silently re-applies (and re-registers)
+    a daemon the user explicitly just turned off -- a reversal of user
+    intent, not merely a lost audit trail (post-implementation review
     finding). The write is a single atomic rename against a small text file,
     so a real failure is almost always a transient one (a momentary lock/
     EINTR on a network home directory); retrying once cheaply closes most of
     that window without a larger state-machine change.
+
+    `record` is a zero-argument recording callable (e.g.
+    `lambda: daemon.record_decided(state_path)`) rather than a state_path
+    argument bound to one module's own `record_decided`, so this ONE retry
+    policy serves both the macOS (`installer.daemon.record_decided`) and
+    Linux (`installer.systemd_daemon.record_decided`) markers -- each daemon
+    factory passes its own module's recorder rather than this helper
+    hardcoding one.
     """
     try:
-        daemon.record_decided(state_path)
+        record()
     except OSError:
         time.sleep(0.05)
-        daemon.record_decided(state_path)
+        record()
 
 
 def daemon_policy(
@@ -621,7 +640,7 @@ def daemon_policy(
             raise
         warning: str | None = None
         try:
-            _record_decided_durably(state_path)
+            _record_decided_durably(lambda: daemon.record_decided(state_path))
         except OSError as exc:
             warning = f"decision not recorded: {exc}"
         return PolicyResult(
@@ -648,7 +667,7 @@ def daemon_policy(
             # _apply: a failure that leaves daemon.decided() False after a
             # manual disable lets the NEXT interactive setup silently
             # re-enable the daemon the user just turned off.
-            _record_decided_durably(state_path)
+            _record_decided_durably(lambda: daemon.record_decided(state_path))
         except OSError as exc:
             warnings.append(f"decision not recorded: {exc}")
         return PolicyResult(
@@ -697,6 +716,227 @@ def daemon_policy(
         set_schedule=_set_schedule,
         read_schedule=lambda: daemon.read_schedule(plist_path),
         is_active=lambda: plist_path.exists(),
+    )
+
+
+def linux_daemon_policy(
+    *,
+    unit_dir: Path,
+    log_path: Path,
+    wrapper_bin_dir: Path,
+    script_path: Path,
+    state_path: Path,
+    installed_tools: Mapping[str, bool],
+    path_value: str,
+    tmpdir_value: str,
+    home_value: str,
+    uv_path: Path,
+    age_minutes: int = systemd_daemon.DEFAULT_AGE_MINUTES,
+    run: Runner = run_captured,
+    read_output: OutputRunner = systemd_daemon.query_systemctl,
+    timer_cache: systemd_daemon.TimerStateCache | None = None,
+) -> Policy:
+    """The background tmp-prune systemd user timer as a Policy, the Linux
+    mirror of daemon_policy (D-01): same ownership-marker convention, same
+    wrapper-executable pattern, same Policies-screen wiring -- only the
+    backend verbs differ (systemctl --user instead of launchctl).
+
+    apply/remove are transactional: each snapshots the prior unit-file bytes
+    (or absence) before any systemctl call and, on a real backend failure,
+    rolls back to that snapshot -- restoring the unit files via
+    installer.atomic's crash-safe write and, whenever a prior working
+    registration existed, making a best-effort systemd_daemon.bootstrap call
+    with the restored content, plus a compensating daemon-reload -- so a
+    failed apply/remove never leaves the unit files and the real
+    registration disagreeing with each other. A marker-write (record_decided)
+    failure AFTER an already-successful systemctl call degrades to
+    PolicyResult.warning instead of rolling back or propagating: the unit
+    files and the real registration already agree with each other at that
+    point, so undoing a working registration over a bookkeeping-only failure
+    would be strictly worse.
+
+    D-01c/D-01e: `active`/`is_active()` are bound to the shared
+    TimerStateCache's runtime-truthful answer, never unit-file presence
+    alone. Per D-01e this factory does NOT construct the cache when one is
+    injected: `timer_cache` is None means "build your own" (used by
+    `_run_uninstall`'s existing call site, which renders no probe, so
+    identity is moot there); otherwise the SAME injected instance is used
+    for both the frozen `active` field (a construction-time `read()`, which
+    also WARMS the cache before the first TUI frame) and the `is_active`
+    closure, and exposed on `Policy.state_cache` so a test can assert
+    identity with plan 15.7-06's disk-pressure probe.
+
+    `installed_tools` is accepted for signature symmetry with daemon_policy
+    and because setup.py's composition root already computes it uniformly
+    for every Policy factory -- unused here because `requires` is
+    deliberately left empty (the Linux cleanup script uses only find and rm,
+    so fd/rg are genuinely not prerequisites here, unlike the macOS script).
+    """
+    del installed_tools
+    cache = (
+        timer_cache
+        if timer_cache is not None
+        else systemd_daemon.TimerStateCache(
+            lambda: systemd_daemon.timer_state(unit_dir, read_output=read_output)
+        )
+    )
+
+    def _validate_and_write() -> None:
+        # Validation gate FIRST, discarding the result: a DaemonScheduleError
+        # here propagates with ZERO filesystem side effects, before
+        # install_wrapper/ensure_log_path ever run -- mirrors
+        # daemon_policy._validate_and_write's own ordering.
+        systemd_daemon.render_service(
+            uv_path=uv_path,
+            wrapper_path=wrapper_bin_dir / systemd_daemon.WRAPPER_COMMAND,
+            script_path=script_path,
+            log_path=log_path,
+            tmpdir=tmpdir_value,
+            home=home_value,
+            path_value=path_value,
+            age_minutes=age_minutes,
+        )
+        installed_wrapper = systemd_daemon.install_wrapper(wrapper_bin_dir)
+        systemd_daemon.ensure_log_path(log_path)
+        systemd_daemon.write_units(
+            unit_dir,
+            uv_path=uv_path,
+            wrapper_path=installed_wrapper,
+            script_path=script_path,
+            log_path=log_path,
+            tmpdir=tmpdir_value,
+            home=home_value,
+            path_value=path_value,
+            age_minutes=age_minutes,
+        )
+
+    def _snapshot_units() -> dict[Path, bytes | None]:
+        service_path, timer_path = systemd_daemon.unit_paths(unit_dir)
+        return {
+            path: path.read_bytes() if path.exists() else None
+            for path in (service_path, timer_path)
+        }
+
+    def _restore_units(snapshot: dict[Path, bytes | None]) -> None:
+        for path, previous in snapshot.items():
+            if previous is not None:
+                daemon._atomic_write(path, previous, mode=0o644)  # pyright: ignore[reportPrivateUsage]
+
+    def _apply() -> PolicyResult:
+        # invalidate() is called from a `finally` at the bottom of this
+        # closure (D-01e/D-01c) -- on the success AND the failure path
+        # alike, so a toggle or a rollback is never reported through a
+        # stale memoized answer.
+        had_prior_registration = systemd_daemon.units_present(unit_dir)
+        snapshot = _snapshot_units()
+        wrapper_existed_before = systemd_daemon.wrapper_present(wrapper_bin_dir)
+        log_existed_before = log_path.exists()
+        try:
+            try:
+                _validate_and_write()
+                systemd_daemon.bootstrap(unit_dir, run=run)
+            except (CommandError, OSError):
+                if had_prior_registration:
+                    # A reapply: bootstrap's own daemon-reload already made
+                    # the user manager read the NEW (possibly broken)
+                    # content before this attempt failed, so restoring only
+                    # the FILES would leave the manager holding a
+                    # definition the disk no longer matches. Restore, then
+                    # a compensating reload, then a best-effort
+                    # re-bootstrap of the restored content.
+                    _restore_units(snapshot)
+                    with contextlib.suppress(CommandError):
+                        systemd_daemon.daemon_reload(run=run)
+                    with contextlib.suppress(CommandError):
+                        systemd_daemon.bootstrap(unit_dir, run=run)
+                else:
+                    # A first-ever apply: roll back everything THIS call
+                    # created, never an artifact that legitimately
+                    # predates it. The apply path reloaded systemd BEFORE
+                    # enabling, so the user manager is already holding the
+                    # definition about to be deleted -- the compensating
+                    # reload keeps `systemctl --user list-units` honest
+                    # (review MEDIUM 15.7-01).
+                    systemd_daemon.remove_units(unit_dir)
+                    with contextlib.suppress(CommandError):
+                        systemd_daemon.daemon_reload(run=run)
+                    if not wrapper_existed_before:
+                        systemd_daemon.remove_wrapper(wrapper_bin_dir)
+                    if not log_existed_before:
+                        log_path.unlink(missing_ok=True)
+                raise
+            warning: str | None = None
+            try:
+                _record_decided_durably(lambda: systemd_daemon.record_decided(state_path))
+            except OSError as exc:
+                warning = f"decision not recorded: {exc}"
+            return PolicyResult(
+                layers=(
+                    PolicyLayer(
+                        "Schedule",
+                        f"runs every {systemd_daemon.DEFAULT_INTERVAL} via a systemd user timer",
+                    ),
+                ),
+                reload_hint=None,
+                warning=warning,
+            )
+        finally:
+            cache.invalidate()
+
+    def _remove() -> PolicyResult:
+        # Same invalidate()-in-`finally` discipline as _apply above.
+        try:
+            systemd_daemon.bootout(unit_dir, run=run, read_output=read_output)
+            try:
+                systemd_daemon.remove_units(unit_dir)
+            except OSError:
+                with contextlib.suppress(CommandError):
+                    systemd_daemon.bootstrap(unit_dir, run=run)
+                raise
+            # _remove's own unit-file deletion just changed what the user
+            # manager's already-loaded definition was read from -- the same
+            # compensating-reload reasoning the rollback branches above
+            # apply (review MEDIUM 15.7-01).
+            with contextlib.suppress(CommandError):
+                systemd_daemon.daemon_reload(run=run)
+            warnings: list[str] = []
+            try:
+                systemd_daemon.remove_wrapper(wrapper_bin_dir)
+            except OSError as exc:
+                warnings.append(f"wrapper removal failed: {exc}")
+            try:
+                # A retried write here matters more than the symmetric one
+                # in _apply: a failure that leaves systemd_daemon.decided()
+                # False after a manual disable lets the NEXT interactive
+                # setup silently re-enable the daemon the user just turned
+                # off.
+                _record_decided_durably(lambda: systemd_daemon.record_decided(state_path))
+            except OSError as exc:
+                warnings.append(f"decision not recorded: {exc}")
+            return PolicyResult(
+                layers=(PolicyLayer("Schedule", "unregistered; the unit files were removed"),),
+                reload_hint=None,
+                warning="; ".join(warnings) if warnings else None,
+            )
+        finally:
+            cache.invalidate()
+
+    def _is_active() -> bool:
+        return cache.read() is DaemonState.ACTIVE
+
+    return Policy(
+        id="daemon:prune-tmp-linux",
+        label="Background tmpdir cleanup",
+        description=(
+            f"runs scripts/prune-tmp-linux.sh every {systemd_daemon.DEFAULT_INTERVAL} via a "
+            "systemd user timer, deleting orphaned Bun runtime-cache files"
+        ),
+        active=_is_active(),
+        apply=_apply,
+        remove=_remove,
+        log_path=log_path,
+        is_active=_is_active,
+        state_cache=cache,
     )
 
 
