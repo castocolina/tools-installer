@@ -16,7 +16,7 @@ import pytest
 
 from installer import daemon, systemd_daemon
 from installer.enums import DaemonState
-from installer.policy import Policy, linux_daemon_policy
+from installer.policy import Policy, PolicyLayer, PolicyResult, linux_daemon_policy
 from installer.run import CommandError, OutputRunner, Runner
 
 _WRAPPER_COMMAND = "tools-installer-prune-daemon"  # mirrors installer.daemon.WRAPPER_COMMAND
@@ -70,6 +70,53 @@ def _make_paths(tmp_path: Path) -> _Paths:
 
 def _default_read_output(_cmd: list[str]) -> str:
     return "active"
+
+
+# --- Competing-mechanism detection fixtures (D-02) ----------------------------
+
+_COMPETING_TIMER = systemd_daemon.COMPETING_UNITS[0]
+_COMPETING_SERVICE = systemd_daemon.COMPETING_UNITS[1]
+
+
+def _competing_listing(*entries: tuple[str, str]) -> str:
+    lines = [f"{name}{' ' * 8}{state}{' ' * 8}-" for name, state in entries]
+    lines.append(f"{len(entries)} unit files listed.")
+    return "\n".join(lines) + "\n"
+
+
+class _DetectionReadOutput:
+    """Answers THIS policy's own timer is-active probe with `own_active`
+    (systemd_daemon.TIMER_NAME), and separately routes competing-unit
+    list-unit-files/is-active probes by scope -- records every argv issued."""
+
+    def __init__(
+        self,
+        *,
+        own_active: str = "active",
+        user_listing: str = "",
+        system_listing: str = "",
+        user_active: Mapping[str, str] | None = None,
+        system_active: Mapping[str, str] | None = None,
+    ) -> None:
+        self.calls: list[list[str]] = []
+        self._own_active = own_active
+        self._user_listing = user_listing
+        self._system_listing = system_listing
+        self._user_active = dict(user_active or {})
+        self._system_active = dict(system_active or {})
+
+    def __call__(self, cmd: list[str]) -> str:
+        self.calls.append(cmd)
+        is_user = "--user" in cmd
+        if "list-unit-files" in cmd:
+            return self._user_listing if is_user else self._system_listing
+        if "is-active" in cmd:
+            unit = cmd[-1]
+            if unit == systemd_daemon.TIMER_NAME:
+                return self._own_active
+            table = self._user_active if is_user else self._system_active
+            return table.get(unit, "inactive")
+        raise AssertionError(f"unexpected argv in _DetectionReadOutput: {cmd}")
 
 
 def _build(
@@ -432,3 +479,154 @@ def test_after_apply_linux_decided_true_and_macos_decided_false_on_same_file(
     policy.apply()
     assert systemd_daemon.decided(paths.state_path) is True
     assert daemon.decided(paths.state_path) is False
+
+
+# --- Competing-mechanism takeover wired into apply (D-02) ---------------------
+
+
+def test_apply_with_user_scope_competitor_registers_first_then_disables_it(
+    tmp_path: Path,
+) -> None:
+    paths = _make_paths(tmp_path)
+    fake_run = _FakeRun()
+    read_output = _DetectionReadOutput(
+        user_listing=_competing_listing((_COMPETING_TIMER, "enabled")),
+    )
+    policy = _build(paths, run=fake_run, read_output=read_output)
+    result = policy.apply()
+    verbs = [c[2] for c in fake_run.calls]
+    assert verbs == ["daemon-reload", "enable", "restart", "disable"]
+    assert fake_run.calls[-1] == ["systemctl", "--user", "disable", "--now", _COMPETING_TIMER]
+    assert result.warning is None
+    assert result.layers == (
+        PolicyLayer(
+            "Schedule", f"runs every {systemd_daemon.DEFAULT_INTERVAL} via a systemd user timer"
+        ),
+        PolicyLayer("Competing mechanism", f"disabled: {_COMPETING_TIMER}"),
+    )
+
+
+def test_apply_with_system_scope_competitor_issues_no_disable_call_and_warns(
+    tmp_path: Path,
+) -> None:
+    paths = _make_paths(tmp_path)
+    fake_run = _FakeRun()
+    read_output = _DetectionReadOutput(
+        system_listing=_competing_listing((_COMPETING_TIMER, "enabled")),
+    )
+    policy = _build(paths, run=fake_run, read_output=read_output)
+    result = policy.apply()
+    assert not any(_COMPETING_TIMER in cmd for cmd in fake_run.calls)
+    verbs = [c[2] for c in fake_run.calls]
+    assert verbs == ["daemon-reload", "enable", "restart"]  # no disable call at all
+    assert result.warning is not None
+    assert _COMPETING_TIMER in result.warning
+    assert f"sudo systemctl disable --now {_COMPETING_TIMER}" in result.warning
+    assert result.layers[-1] == PolicyLayer(
+        "Competing mechanism", f"system-scope, left running: {_COMPETING_TIMER}"
+    )
+
+
+def test_apply_with_both_scope_competitors_disables_only_the_user_scope_one(
+    tmp_path: Path,
+) -> None:
+    paths = _make_paths(tmp_path)
+    fake_run = _FakeRun()
+    read_output = _DetectionReadOutput(
+        user_listing=_competing_listing((_COMPETING_TIMER, "enabled")),
+        system_listing=_competing_listing((_COMPETING_SERVICE, "enabled")),
+    )
+    policy = _build(paths, run=fake_run, read_output=read_output)
+    result = policy.apply()
+    disable_calls = [c for c in fake_run.calls if c[2] == "disable"]
+    assert disable_calls == [["systemctl", "--user", "disable", "--now", _COMPETING_TIMER]]
+    assert result.warning is not None
+    assert _COMPETING_SERVICE in result.warning
+    assert f"sudo systemctl disable --now {_COMPETING_SERVICE}" not in result.warning  # not a timer
+    assert f"sudo systemctl stop {_COMPETING_SERVICE}" in result.warning
+
+
+def test_apply_failed_user_scope_disable_keeps_registration_and_discloses_the_survivor(
+    tmp_path: Path,
+) -> None:
+    paths = _make_paths(tmp_path)
+    fake_run = _FakeRun(fail_on=frozenset({("disable", 1)}))
+    read_output = _DetectionReadOutput(
+        user_listing=_competing_listing((_COMPETING_TIMER, "enabled")),
+    )
+    policy = _build(paths, run=fake_run, read_output=read_output)
+    result = policy.apply()  # must NOT raise -- D-02c: proceed and disclose
+    # Half 1: this project's own registration is unaffected by the foreign
+    # unit's failed disable.
+    service_path, timer_path = systemd_daemon.unit_paths(paths.unit_dir)
+    assert service_path.exists()
+    assert timer_path.exists()
+    assert policy.is_active is not None
+    assert policy.is_active() is True
+    # Half 2 + 3: the survivor is named, with the user-scope command.
+    assert result.warning is not None
+    assert _COMPETING_TIMER in result.warning
+    assert "still running" in result.warning
+    assert f"systemctl --user disable --now {_COMPETING_TIMER}" in result.warning
+    assert "sudo" not in result.warning  # a user-scope competitor never gets a sudo command
+
+
+def test_apply_two_user_scope_competitors_partial_failure_is_never_reported_as_complete(
+    tmp_path: Path,
+) -> None:
+    paths = _make_paths(tmp_path)
+    fake_run = _FakeRun(fail_on=frozenset({("disable", 2)}))
+    read_output = _DetectionReadOutput(
+        user_listing=_competing_listing(
+            (_COMPETING_TIMER, "enabled"), (_COMPETING_SERVICE, "enabled")
+        ),
+    )
+    policy = _build(paths, run=fake_run, read_output=read_output)
+    result = policy.apply()
+    disable_calls = [c for c in fake_run.calls if c[2] == "disable"]
+    assert len(disable_calls) == 2  # both attempted, never aborted after the first
+    assert result.warning is not None
+    assert _COMPETING_SERVICE in result.warning  # the one that failed, named
+    assert f"systemctl --user disable --now {_COMPETING_SERVICE}" in result.warning
+    assert result.layers[-1] == PolicyLayer(
+        "Competing mechanism",
+        f"disabled: {_COMPETING_TIMER}; disable failed, still running: {_COMPETING_SERVICE}",
+    )
+
+
+def test_apply_detection_probe_raising_behaves_identically_to_no_competitor(
+    tmp_path: Path,
+) -> None:
+    paths = _make_paths(tmp_path)
+    fake_run = _FakeRun()
+
+    def raising_read_output(cmd: list[str]) -> str:
+        if "list-unit-files" in cmd:
+            raise CommandError(cmd, 1)
+        return "active"
+
+    policy = _build(paths, run=fake_run, read_output=raising_read_output)
+    result = policy.apply()
+    assert not any(c[2] == "disable" for c in fake_run.calls)
+    assert result.warning is None
+    assert result.layers == (
+        PolicyLayer(
+            "Schedule", f"runs every {systemd_daemon.DEFAULT_INTERVAL} via a systemd user timer"
+        ),
+    )
+
+
+def test_apply_with_no_competitor_matches_the_pre_plan_result_exactly(tmp_path: Path) -> None:
+    paths = _make_paths(tmp_path)
+    fake_run = _FakeRun()
+    policy = _build(paths, run=fake_run)  # default read_output answers "active" to everything
+    result = policy.apply()
+    assert result == PolicyResult(
+        layers=(
+            PolicyLayer(
+                "Schedule", f"runs every {systemd_daemon.DEFAULT_INTERVAL} via a systemd user timer"
+            ),
+        ),
+        reload_hint=None,
+        warning=None,
+    )
