@@ -236,13 +236,13 @@ def _policy_inputs(
 
 def _pressure(
     *,
-    root_free: float | None = 50.0,
+    home_free: float | None = 50.0,
     tmp_used: float | None = 10.0,
     daemon_state: DaemonState = DaemonState.INACTIVE,
     tmp_threshold: bool = True,
 ) -> DiskPressure:
     return DiskPressure(
-        root_free_percent=root_free,
+        home_free_percent=home_free,
         tmp_used_percent=tmp_used,
         daemon=daemon_state,
         tmp_threshold=tmp_threshold,
@@ -3740,7 +3740,7 @@ def test_unified_app_constructs_without_node_globals_closures() -> None:
 
 # -- D-03 disk pressure on the Doctor screen (plan 15.7-06 task 2) --
 
-_AT_RISK = _pressure(root_free=5.0, daemon_state=DaemonState.INACTIVE)
+_AT_RISK = _pressure(home_free=5.0, daemon_state=DaemonState.INACTIVE)
 _HEALTHY_DOCTOR = doctor_guidance(DoctorReport(missing=(), broken=(), duplicated=()))
 
 
@@ -3829,7 +3829,7 @@ async def test_doctor_tui_rewrites_the_disk_pressure_next_step_to_the_policies_r
 async def test_doctor_tui_step_keeps_the_platforms_own_prune_command() -> None:
     """WR-08: the TUI rewrite used to hardcode the macOS script, so the Linux
     finding recommended a command that exits 1 on a stock Linux host."""
-    linux = _pressure(root_free=5.0, tmp_used=95.0, tmp_threshold=True)
+    linux = _pressure(home_free=5.0, tmp_used=95.0, tmp_threshold=True)
     app = _app(policies=_policy_inputs(disk_pressure=_probe(linux)), initial_view="doctor")
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
@@ -3933,7 +3933,7 @@ async def test_doctor_disk_pressure_step_is_never_rewritten_into_pnpm_advice() -
 
 async def test_doctor_unavailable_daemon_step_is_not_rewritten_to_a_missing_row() -> None:
     # D-03c: a host with no managed daemon has no Policies row to point at.
-    unavailable = _pressure(root_free=5.0, daemon_state=DaemonState.UNAVAILABLE)
+    unavailable = _pressure(home_free=5.0, daemon_state=DaemonState.UNAVAILABLE)
     app = _app(policies=_policy_inputs(disk_pressure=_probe(unavailable)), initial_view="doctor")
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
@@ -4052,13 +4052,13 @@ async def test_temp_usage_line_is_absent_on_every_non_daemon_row() -> None:
     _, details = await _policies_detail(rows, _probe(_pressure(tmp_used=42.0)))
     assert "temp-directory usage" in details[0]
     assert all("temp-directory usage" not in text for text in details[1:])
-    assert all("root filesystem" not in text for text in details[1:])
+    assert all("home filesystem" not in text for text in details[1:])
 
 
 async def test_temp_usage_line_is_absent_without_a_probe() -> None:
     detail, _ = await _policies_detail([_linux_daemon_row()], None)
     assert "temp-directory usage" not in detail
-    assert "root filesystem" not in detail
+    assert "home filesystem" not in detail
 
 
 @pytest.mark.parametrize("error", [OSError("statvfs failed"), ValueError("bad reading")])
@@ -4071,29 +4071,30 @@ async def test_temp_usage_line_survives_a_failing_probe(error: Exception) -> Non
     assert "temp-directory usage" not in detail
 
 
-async def test_macos_row_reports_tmpdir_usage_never_the_root_number() -> None:
-    # Deliberately different numbers, so substituting root for temp cannot pass.
-    macos = _pressure(root_free=81.0, tmp_used=12.5, tmp_threshold=False)
+async def test_macos_row_reports_tmpdir_usage_never_the_home_number() -> None:
+    # Deliberately different numbers, so substituting the home filesystem's
+    # free space for the temp usage cannot pass.
+    macos = _pressure(home_free=81.0, tmp_used=12.5, tmp_threshold=False)
     detail, _ = await _policies_detail([_macos_daemon_row()], _probe(macos))
     assert "Current temp-directory usage: 12.5%" in detail
     assert "81.0" not in detail
     assert "19.0" not in detail
 
 
-async def test_unreadable_temp_mount_falls_back_to_labelled_root_free_space() -> None:
+async def test_unreadable_temp_mount_falls_back_to_labelled_home_free_space() -> None:
     detail, _ = await _policies_detail(
-        [_linux_daemon_row()], _probe(_pressure(root_free=33.3, tmp_used=None))
+        [_linux_daemon_row()], _probe(_pressure(home_free=33.3, tmp_used=None))
     )
     assert "temp-directory usage" not in detail
-    assert detail.splitlines()[-1] == "Current root filesystem free space: 33.3%"
+    assert detail.splitlines()[-1] == "Current home filesystem free space: 33.3%"
 
 
 async def test_no_usage_line_when_neither_mount_was_measured() -> None:
     detail, _ = await _policies_detail(
-        [_linux_daemon_row()], _probe(_pressure(root_free=None, tmp_used=None))
+        [_linux_daemon_row()], _probe(_pressure(home_free=None, tmp_used=None))
     )
     assert "temp-directory usage" not in detail
-    assert "root filesystem" not in detail
+    assert "home filesystem" not in detail
 
 
 async def test_row_highlight_only_ever_asks_for_the_non_blocking_read() -> None:

@@ -565,7 +565,7 @@ def test_render_disk_pressure_prints_nothing_for_an_empty_guidance_list() -> Non
     console, buf = _console()
     render_disk_pressure(
         DiskPressure(
-            root_free_percent=80.0,
+            home_free_percent=80.0,
             tmp_used_percent=10.0,
             daemon=DaemonState.INACTIVE,
             tmp_threshold=True,
@@ -588,7 +588,7 @@ def test_render_disk_pressure_prints_an_emphasised_item_through_guidance_text() 
     )
     render_disk_pressure(
         DiskPressure(
-            root_free_percent=10.0,
+            home_free_percent=10.0,
             tmp_used_percent=10.0,
             daemon=DaemonState.INACTIVE,
             tmp_threshold=True,

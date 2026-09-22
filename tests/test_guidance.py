@@ -310,13 +310,13 @@ def test_node_globals_guidance_warns_when_an_installed_tool_fails_its_smoke_chec
 
 def _pressure(
     *,
-    root_free_percent: float | None,
+    home_free_percent: float | None,
     tmp_used_percent: float | None,
     daemon: DaemonState,
     tmp_threshold: bool = True,
 ) -> DiskPressure:
     return DiskPressure(
-        root_free_percent=root_free_percent,
+        home_free_percent=home_free_percent,
         tmp_used_percent=tmp_used_percent,
         daemon=daemon,
         tmp_threshold=tmp_threshold,
@@ -324,7 +324,7 @@ def _pressure(
 
 
 def test_disk_pressure_guidance_inactive_low_disk_is_one_emphasised_error() -> None:
-    pressure = _pressure(root_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.INACTIVE)
+    pressure = _pressure(home_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.INACTIVE)
     items = disk_pressure_guidance(pressure)
     assert len(items) == 1
     item = items[0]
@@ -337,7 +337,7 @@ def test_disk_pressure_guidance_inactive_low_disk_is_one_emphasised_error() -> N
 
 
 def test_disk_pressure_guidance_inactive_high_tmp_is_one_emphasised_error_naming_tmp() -> None:
-    pressure = _pressure(root_free_percent=None, tmp_used_percent=81.2, daemon=DaemonState.INACTIVE)
+    pressure = _pressure(home_free_percent=None, tmp_used_percent=81.2, daemon=DaemonState.INACTIVE)
     items = disk_pressure_guidance(pressure)
     assert len(items) == 1
     item = items[0]
@@ -349,7 +349,7 @@ def test_disk_pressure_guidance_inactive_high_tmp_is_one_emphasised_error_naming
 
 
 def test_disk_pressure_guidance_inactive_both_conditions_is_still_one_item() -> None:
-    pressure = _pressure(root_free_percent=9.5, tmp_used_percent=81.2, daemon=DaemonState.INACTIVE)
+    pressure = _pressure(home_free_percent=9.5, tmp_used_percent=81.2, daemon=DaemonState.INACTIVE)
     items = disk_pressure_guidance(pressure)
     assert len(items) == 1  # never two competing red findings
     item = items[0]
@@ -360,7 +360,7 @@ def test_disk_pressure_guidance_inactive_both_conditions_is_still_one_item() -> 
 
 
 def test_disk_pressure_guidance_active_low_disk_is_an_ordinary_non_emphasised_warning() -> None:
-    pressure = _pressure(root_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.ACTIVE)
+    pressure = _pressure(home_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.ACTIVE)
     items = disk_pressure_guidance(pressure)
     assert len(items) == 1
     item = items[0]
@@ -369,7 +369,7 @@ def test_disk_pressure_guidance_active_low_disk_is_an_ordinary_non_emphasised_wa
 
 
 def test_disk_pressure_guidance_active_high_tmp_is_an_ordinary_non_emphasised_warning() -> None:
-    pressure = _pressure(root_free_percent=None, tmp_used_percent=81.2, daemon=DaemonState.ACTIVE)
+    pressure = _pressure(home_free_percent=None, tmp_used_percent=81.2, daemon=DaemonState.ACTIVE)
     items = disk_pressure_guidance(pressure)
     assert len(items) == 1
     item = items[0]
@@ -379,7 +379,7 @@ def test_disk_pressure_guidance_active_high_tmp_is_an_ordinary_non_emphasised_wa
 
 def test_disk_pressure_guidance_unavailable_is_an_ordinary_non_emphasised_warning() -> None:
     pressure = _pressure(
-        root_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.UNAVAILABLE
+        home_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.UNAVAILABLE
     )
     items = disk_pressure_guidance(pressure)
     assert len(items) == 1
@@ -391,13 +391,13 @@ def test_disk_pressure_guidance_unavailable_is_an_ordinary_non_emphasised_warnin
 
 def test_disk_pressure_guidance_unavailable_next_step_is_the_runnable_prune_sentence() -> None:
     macos = _pressure(
-        root_free_percent=9.5,
+        home_free_percent=9.5,
         tmp_used_percent=None,
         daemon=DaemonState.UNAVAILABLE,
         tmp_threshold=False,
     )
     assert _RUNNABLE_PRUNE_SENTENCE in disk_pressure_guidance(macos)[0].next_step
-    linux = _pressure(root_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.UNAVAILABLE)
+    linux = _pressure(home_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.UNAVAILABLE)
     assert _RUNNABLE_PRUNE_SENTENCE_LINUX in disk_pressure_guidance(linux)[0].next_step
 
 
@@ -405,7 +405,7 @@ def test_disk_pressure_guidance_unavailable_never_denies_the_row_exists_here() -
     """IN-06: a timed-out or bus-error query is UNAVAILABLE on a host that
     does have the Policies row, so "no such policy on this host" was wrong."""
     pressure = _pressure(
-        root_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.UNAVAILABLE
+        home_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.UNAVAILABLE
     )
     item = disk_pressure_guidance(pressure)[0]
     assert "no such policy" not in item.next_step.lower()
@@ -415,12 +415,12 @@ def test_disk_pressure_guidance_unavailable_never_denies_the_row_exists_here() -
 def test_disk_pressure_guidance_next_step_names_the_platforms_own_prune_script() -> None:
     """WR-08: the emphasised INACTIVE finding's one immediate-relief command
     must run on the platform the /tmp rule applies to."""
-    linux = _pressure(root_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.INACTIVE)
+    linux = _pressure(home_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.INACTIVE)
     linux_step = disk_pressure_guidance(linux)[0].next_step
     assert "prune-tmp-linux.sh --apply" in linux_step
     assert "prune-user-tmpdir.sh" not in linux_step
     macos = _pressure(
-        root_free_percent=9.5,
+        home_free_percent=9.5,
         tmp_used_percent=None,
         daemon=DaemonState.INACTIVE,
         tmp_threshold=False,
@@ -432,7 +432,7 @@ def test_disk_pressure_guidance_next_step_names_the_platforms_own_prune_script()
 
 def test_disk_pressure_guidance_unavailable_next_step_never_offers_to_enable_a_row() -> None:
     pressure = _pressure(
-        root_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.UNAVAILABLE
+        home_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.UNAVAILABLE
     )
     item = disk_pressure_guidance(pressure)[0]
     assert "enable" not in item.next_step.lower()
@@ -441,7 +441,7 @@ def test_disk_pressure_guidance_unavailable_next_step_never_offers_to_enable_a_r
 
 
 def test_disk_pressure_guidance_inactive_next_step_points_at_enabling_the_policy() -> None:
-    pressure = _pressure(root_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.INACTIVE)
+    pressure = _pressure(home_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.INACTIVE)
     item = disk_pressure_guidance(pressure)[0]
     assert "enable" in item.next_step.lower()
     assert "prune-tmp-linux.sh" in item.next_step
@@ -449,10 +449,10 @@ def test_disk_pressure_guidance_inactive_next_step_points_at_enabling_the_policy
 
 def test_disk_pressure_guidance_inactive_and_active_never_use_the_unavailable_sentence() -> None:
     inactive = disk_pressure_guidance(
-        _pressure(root_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.INACTIVE)
+        _pressure(home_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.INACTIVE)
     )[0]
     active = disk_pressure_guidance(
-        _pressure(root_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.ACTIVE)
+        _pressure(home_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.ACTIVE)
     )[0]
     assert _RUNNABLE_PRUNE_SENTENCE not in inactive.next_step
     assert _RUNNABLE_PRUNE_SENTENCE not in active.next_step
@@ -461,25 +461,25 @@ def test_disk_pressure_guidance_inactive_and_active_never_use_the_unavailable_se
 
 
 def test_disk_pressure_guidance_empty_when_daemon_inactive_and_no_pressure() -> None:
-    pressure = _pressure(root_free_percent=90.0, tmp_used_percent=0.0, daemon=DaemonState.INACTIVE)
+    pressure = _pressure(home_free_percent=90.0, tmp_used_percent=0.0, daemon=DaemonState.INACTIVE)
     assert disk_pressure_guidance(pressure) == []
 
 
 def test_disk_pressure_guidance_empty_when_daemon_unavailable_and_no_pressure() -> None:
     pressure = _pressure(
-        root_free_percent=90.0, tmp_used_percent=0.0, daemon=DaemonState.UNAVAILABLE
+        home_free_percent=90.0, tmp_used_percent=0.0, daemon=DaemonState.UNAVAILABLE
     )
     assert disk_pressure_guidance(pressure) == []
 
 
 def test_disk_pressure_guidance_empty_when_daemon_active_and_no_pressure() -> None:
-    pressure = _pressure(root_free_percent=90.0, tmp_used_percent=0.0, daemon=DaemonState.ACTIVE)
+    pressure = _pressure(home_free_percent=90.0, tmp_used_percent=0.0, daemon=DaemonState.ACTIVE)
     assert disk_pressure_guidance(pressure) == []
 
 
 def test_disk_pressure_guidance_empty_for_every_daemon_state_when_percentages_unknown() -> None:
     for daemon in DaemonState:
-        pressure = _pressure(root_free_percent=None, tmp_used_percent=None, daemon=daemon)
+        pressure = _pressure(home_free_percent=None, tmp_used_percent=None, daemon=daemon)
         assert disk_pressure_guidance(pressure) == []
 
 

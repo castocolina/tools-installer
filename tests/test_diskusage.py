@@ -16,7 +16,7 @@ TMP = Path("/tmp")
 
 
 def _usage(
-    root_free_percent: float, tmp_used_percent: float
+    home_free_percent: float, tmp_used_percent: float
 ) -> Callable[[Path], tuple[int, int, int]]:
     """A recording-free fake `usage` callable: total is always 1000, and the
     two paths are keyed by literal `ROOT`/`TMP` so a test only has to state
@@ -25,7 +25,7 @@ def _usage(
     def fake(path: Path) -> tuple[int, int, int]:
         total = 1000
         if path == ROOT:
-            free = int(total * root_free_percent / 100)
+            free = int(total * home_free_percent / 100)
             return (total, total - free, free)
         if path == TMP:
             used = int(total * tmp_used_percent / 100)
@@ -102,7 +102,7 @@ def test_unreadable_root_mount_yields_none_percent_and_false_low_disk() -> None:
         return (1000, 500, 500)
 
     pressure = probe_disk_pressure(DaemonState.INACTIVE, True, ROOT, TMP, usage=raising)
-    assert pressure.root_free_percent is None
+    assert pressure.home_free_percent is None
     assert pressure.low_disk is False
 
 
@@ -116,7 +116,7 @@ def test_unreadable_tmp_mount_yields_none_percent_and_false_high_tmp_independent
     assert pressure.tmp_used_percent is None
     assert pressure.high_tmp is False
     # The root read is unaffected by the tmp mount's own failure.
-    assert pressure.root_free_percent == 90.0
+    assert pressure.home_free_percent == 90.0
 
 
 def test_at_risk_true_only_when_daemon_is_inactive_under_pressure() -> None:
@@ -142,7 +142,7 @@ def test_zero_total_filesystem_yields_none_rather_than_a_division_error() -> Non
         return (0, 0, 0)
 
     pressure = probe_disk_pressure(DaemonState.INACTIVE, True, ROOT, TMP, usage=degenerate)
-    assert pressure.root_free_percent is None
+    assert pressure.home_free_percent is None
     assert pressure.tmp_used_percent is None
     assert pressure.low_disk is False
     assert pressure.high_tmp is False
@@ -156,7 +156,7 @@ def test_probe_is_total_over_mount_read_failure(exc: Exception) -> None:
         raise exc
 
     pressure = probe_disk_pressure(DaemonState.INACTIVE, True, ROOT, TMP, usage=raising)
-    assert pressure.root_free_percent is None
+    assert pressure.home_free_percent is None
     assert pressure.tmp_used_percent is None
 
 
@@ -165,7 +165,7 @@ def test_probe_is_total_over_a_malformed_non_numeric_triple() -> None:
         return ("not", "a", "number")  # type: ignore[return-value]
 
     pressure = probe_disk_pressure(DaemonState.INACTIVE, True, ROOT, TMP, usage=malformed)
-    assert pressure.root_free_percent is None
+    assert pressure.home_free_percent is None
     assert pressure.tmp_used_percent is None
 
 
@@ -179,7 +179,7 @@ def test_probe_propagates_a_programming_error_rather_than_swallowing_it() -> Non
 
 def test_disk_pressure_is_frozen() -> None:
     pressure = DiskPressure(
-        root_free_percent=50.0, tmp_used_percent=10.0, daemon=DaemonState.ACTIVE, tmp_threshold=True
+        home_free_percent=50.0, tmp_used_percent=10.0, daemon=DaemonState.ACTIVE, tmp_threshold=True
     )
     with pytest.raises(AttributeError):
-        pressure.root_free_percent = 0.0  # type: ignore[misc]
+        pressure.home_free_percent = 0.0  # type: ignore[misc]
