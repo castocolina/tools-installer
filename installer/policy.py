@@ -9,6 +9,7 @@ with no screen changes.
 """
 
 import contextlib
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -136,6 +137,10 @@ class Policy:
     # (ban_policy, tweak_policy, omz_plugins_policy, daemon_policy) is
     # unaffected.
     state_cache: systemd_daemon.TimerStateCache | None = None
+    # New optional fields are APPENDED, never inserted: Policy is frozen and a
+    # field placed mid-list silently renumbers every positional construction.
+    decided: Callable[[], bool] | None = None
+    clear_decided: Callable[[], None] | None = None
 
     def missing_requirements(self) -> tuple[str, ...]:
         """Read prerequisites at the point a policy is rendered or applied."""
@@ -826,6 +831,8 @@ def daemon_policy(
         set_schedule=_set_schedule,
         read_schedule=lambda: daemon.read_schedule(plist_path),
         is_active=lambda: plist_path.exists(),
+        decided=lambda: daemon.decided(state_path),
+        clear_decided=lambda: daemon.clear_decided(state_path),
     )
 
 
@@ -1115,33 +1122,83 @@ def linux_daemon_policy(
         log_path=log_path,
         is_active=_is_active,
         state_cache=cache,
+        decided=lambda: systemd_daemon.decided(state_path),
+        clear_decided=lambda: systemd_daemon.clear_decided(state_path),
     )
 
 
-def ensure_daemon_default(policy: Policy, *, state_path: Path) -> bool:
+# A wedged or never-dispatched worker costs this delay, never a hang.
+DAEMON_DEFAULT_WAIT_SECONDS = 5.0
+
+
+class DaemonDefaultWarnings:
+    """Collects warnings from the on-by-default apply and says when it finished.
+
+    The daemon default runs on a Textual thread worker that ``app.run()`` does
+    not join. Without this event the competing-mechanism disclosure is printed
+    only when that worker happens to finish before the CLI's next line, and the
+    ``summary is None`` abort branch returns before any later print at all.
+    ``wait`` returns immediately, with completion True, when the collector was
+    never armed, so a run with no auto-apply pays nothing.
+    """
+
+    def __init__(self) -> None:
+        self._messages: list[str] = []
+        self._armed = False
+        self._finished = threading.Event()
+
+    def append(self, message: str) -> None:
+        self._messages.append(message)
+
+    def arm(self) -> None:
+        self._armed = True
+
+    def finish(self) -> None:
+        self._finished.set()
+
+    def wait(self, timeout: float) -> tuple[tuple[str, ...], bool]:
+        if not self._armed:
+            return (), True
+        completed = self._finished.wait(timeout)
+        return tuple(self._messages), completed
+
+
+def ensure_daemon_default(
+    policy: Policy, *, on_warning: Callable[[str], None] | None = None
+) -> bool:
     """Auto-apply a policy's default exactly once, ever, per machine.
 
-    Returns False without calling apply() when daemon.decided(state_path) is
-    already True -- this covers BOTH "already explicitly enabled" and
-    "already explicitly disabled" (11-RESEARCH.md Pitfall 2's own
-    distinction: a plist's mere absence cannot tell those two apart, but the
-    decided marker can). Otherwise calls policy.apply(), catching
-    (OSError, CommandError) and returning False on failure WITHOUT the
-    marker being recorded -- so a transient first-run failure (including a
+    Returns False without calling apply() when the policy has no ``decided``
+    closure (a policy with no ownership record has no once-per-machine default)
+    or when that closure already answers True -- this covers BOTH "already
+    explicitly enabled" and "already explicitly disabled" (11-RESEARCH.md
+    Pitfall 2's own distinction: a plist's mere absence cannot tell those two
+    apart, but the decided marker can). Otherwise calls policy.apply(),
+    catching (OSError, CommandError) and returning False on failure WITHOUT
+    the marker being recorded -- so a transient first-run failure (including a
     DaemonScheduleError, an OSError subclass per 11-01, from an unresolvable
     uv or an empty TMPDIR) is retried on the NEXT run, per 11-RESEARCH.md's
     Open Question 1 recommendation -- and returning True on success.
+
+    ``on_warning`` is called with ``policy.apply()``'s warning whenever that
+    warning is not None. This function is the ONLY apply path with no human
+    present: the Linux daemon is on by default from the interactive wizard,
+    and the competing-mechanism disclosure is produced by that apply. The
+    result used to be discarded, so a first-run takeover of another tool's
+    user-scope timer would happen with nothing said to anyone.
 
     A no-op call (already decided) and a genuinely failed apply both return
     False; callers that need to tell those two apart re-probe the policy's
     own live state (Policy.is_active), never this return value alone.
     """
-    if daemon.decided(state_path):
+    if policy.decided is None or policy.decided():
         return False
     try:
-        policy.apply()
+        result = policy.apply()
     except (OSError, CommandError):
         return False
+    if on_warning is not None and result.warning is not None:
+        on_warning(result.warning)
     return True
 
 

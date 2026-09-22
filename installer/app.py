@@ -7,7 +7,6 @@ from pathlib import Path
 
 from rich.console import Console
 
-from installer import daemon
 from installer.audit import audit
 from installer.cli import Options
 from installer.deps import resolve_dependencies
@@ -439,8 +438,8 @@ def run_uninstall(
         # nothing destructive happens, only an internal marker resetting so a
         # later reinstall is genuinely fresh (11-REVIEWS.md cycle 3 finding
         # #13's "already disabled, nothing to sweep" case).
-        if daemon_policy is not None:
-            daemon.clear_decided(myshellrc_path)
+        if daemon_policy is not None and daemon_policy.clear_decided is not None:
+            daemon_policy.clear_decided()
         return []
     if paths:
         render_uninstall(paths, console)
@@ -491,8 +490,12 @@ def run_uninstall(
     # sweep at all -- so a full uninstall+reinstall is genuinely fresh in
     # both cases, while a genuine removal failure still preserves the marker
     # (11-REVIEWS.md cycle 3 finding #13).
-    if daemon_policy is not None and daemon_policy.id not in swept.failed:
-        daemon.clear_decided(myshellrc_path)
+    if (
+        daemon_policy is not None
+        and daemon_policy.id not in swept.failed
+        and daemon_policy.clear_decided is not None
+    ):
+        daemon_policy.clear_decided()
     return paths
 
 
@@ -549,8 +552,12 @@ def perform_uninstall(
         )
         # Same post-sweep, composition-root-only marker clear as run_uninstall
         # (see that function's own comment for the full ordering rationale).
-        if daemon_policy is not None and daemon_policy.id not in swept.failed:
-            daemon.clear_decided(myshellrc_path)
+        if (
+            daemon_policy is not None
+            and daemon_policy.id not in swept.failed
+            and daemon_policy.clear_decided is not None
+        ):
+            daemon_policy.clear_decided()
         return swept
     # decision.remove_tweaks is False here -- either the user genuinely left
     # an ACTIVE tweaks row unselected (keep the marker, nothing to clear), or
@@ -561,8 +568,14 @@ def perform_uninstall(
     # already-off daemon leaves no active state for a skipped selection to
     # preserve, so a full visible uninstall must still leave the machine
     # genuinely fresh (post-implementation review finding, second lane).
-    if daemon_policy is not None and not (
-        daemon_policy.is_active() if daemon_policy.is_active is not None else daemon_policy.active
+    if (
+        daemon_policy is not None
+        and daemon_policy.clear_decided is not None
+        and not (
+            daemon_policy.is_active()
+            if daemon_policy.is_active is not None
+            else daemon_policy.active
+        )
     ):
-        daemon.clear_decided(myshellrc_path)
+        daemon_policy.clear_decided()
     return SweepResult()

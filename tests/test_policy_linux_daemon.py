@@ -151,6 +151,18 @@ def _build(
 # --- first-ever apply: enable failure rolls back everything ------------------
 
 
+def test_linux_factory_binds_its_own_decided_closures(tmp_path: Path) -> None:
+    paths = _make_paths(tmp_path)
+    policy = _build(paths, run=_FakeRun())
+    assert policy.decided is not None
+    assert policy.clear_decided is not None
+    systemd_daemon.record_decided(paths.state_path)
+    assert policy.decided() is True
+    assert daemon.decided(paths.state_path) is False
+    policy.clear_decided()
+    assert systemd_daemon.decided(paths.state_path) is False
+
+
 def test_first_ever_apply_enable_failure_leaves_no_artifacts_and_reraises(tmp_path: Path) -> None:
     paths = _make_paths(tmp_path)
     fake_run = _FakeRun(fail_on=frozenset({("enable", 1)}))

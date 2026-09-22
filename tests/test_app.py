@@ -1928,6 +1928,211 @@ def test_run_uninstall_preview_stays_byte_identical_when_the_daemon_is_absent(
     assert "background maintenance job" not in out
 
 
+def _linux_daemon_for_uninstall(tmp_path: Path) -> tuple[Policy, Path]:
+    from installer.policy import linux_daemon_policy
+
+    script_path = tmp_path / "scripts" / "prune-tmp-linux.sh"
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text("#!/bin/sh\n")
+    state_path = tmp_path / ".myshellrc"
+    policy = linux_daemon_policy(
+        unit_dir=tmp_path / "systemd" / "user",
+        log_path=tmp_path / "Logs" / "prune-daemon.log",
+        wrapper_bin_dir=tmp_path / ".local" / "bin",
+        script_path=script_path,
+        state_path=state_path,
+        installed_tools={},
+        path_value="/usr/bin:/bin",
+        tmpdir_value=str(tmp_path / "tmp"),
+        home_value=str(tmp_path),
+        uv_path=tmp_path / "uv",
+        run=lambda _cmd: None,
+        read_output=lambda _cmd: "inactive",
+    )
+    return policy, state_path
+
+
+def test_run_uninstall_clears_the_linux_marker_and_leaves_the_macos_one(
+    tmp_path: Path,
+) -> None:
+    from installer import daemon, systemd_daemon
+    from installer.app import run_uninstall
+
+    policy, state_path = _linux_daemon_for_uninstall(tmp_path)
+    systemd_daemon.record_decided(state_path)
+    daemon.record_decided(state_path)
+    console, _buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=state_path,
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=policy,
+    )
+    assert systemd_daemon.decided(state_path) is False
+    assert daemon.decided(state_path) is True
+
+
+def test_run_uninstall_clears_the_linux_marker_after_a_successful_sweep(
+    tmp_path: Path,
+) -> None:
+    from installer import daemon, systemd_daemon
+    from installer.app import run_uninstall
+
+    policy, state_path = _linux_daemon_for_uninstall(tmp_path)
+    systemd_daemon.record_decided(state_path)
+    daemon.record_decided(state_path)
+
+    from dataclasses import replace
+
+    from installer.policy import PolicyResult
+
+    def active() -> bool:
+        return True
+
+    def remove() -> PolicyResult:
+        return PolicyResult(layers=(), reload_hint=None, warning=None)
+
+    active_policy = replace(policy, active=True, is_active=active, remove=remove)
+    console, buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=state_path,
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=active_policy,
+    )
+    assert systemd_daemon.decided(state_path) is False
+    assert daemon.decided(state_path) is True
+    assert "daemon:prune-tmp-linux" in buf.getvalue()
+
+
+def test_perform_uninstall_clears_the_linux_marker_for_an_already_inactive_daemon(
+    tmp_path: Path,
+) -> None:
+    from installer import daemon, systemd_daemon
+    from installer.app import UninstallDecision, perform_uninstall
+
+    policy, state_path = _linux_daemon_for_uninstall(tmp_path)
+    systemd_daemon.record_decided(state_path)
+    daemon.record_decided(state_path)
+    decision = UninstallDecision(
+        paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=False
+    )
+    perform_uninstall(
+        decision,
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=state_path,
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=policy,
+    )
+    assert systemd_daemon.decided(state_path) is False
+    assert daemon.decided(state_path) is True
+
+
+def test_run_uninstall_preserves_the_linux_marker_when_removal_fails(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    from installer import systemd_daemon
+    from installer.app import run_uninstall
+    from installer.policy import PolicyResult
+    from installer.run import CommandError
+
+    policy, state_path = _linux_daemon_for_uninstall(tmp_path)
+    systemd_daemon.record_decided(state_path)
+
+    def active() -> bool:
+        return True
+
+    def remove() -> PolicyResult:
+        raise CommandError(["systemctl", "--user", "disable"], 1)
+
+    failed = replace(policy, active=True, is_active=active, remove=remove)
+    console, buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=state_path,
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=failed,
+    )
+    assert systemd_daemon.decided(state_path) is True
+    assert "Could not disable" in buf.getvalue()
+
+
+def test_clear_decided_none_is_a_noop_at_every_uninstall_branch(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    from installer.app import UninstallDecision, perform_uninstall, run_uninstall
+    from installer.policy import PolicyResult
+
+    policy, state_path = _linux_daemon_for_uninstall(tmp_path)
+    bare = replace(policy, clear_decided=None, decided=None)
+    console, _buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=state_path,
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=bare,
+    )
+    perform_uninstall(
+        UninstallDecision(paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=False),
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=state_path,
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=bare,
+    )
+
+    def active() -> bool:
+        return True
+
+    def remove() -> PolicyResult:
+        return PolicyResult(layers=(), reload_hint=None, warning=None)
+
+    swept = replace(bare, active=True, is_active=active, remove=remove)
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=state_path,
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=swept,
+    )
+    perform_uninstall(
+        UninstallDecision(paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True),
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=state_path,
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=swept,
+    )
+
+
 def test_run_wizard_surfaces_a_postinstall_warning_on_the_real_path() -> None:
     def install(
         tool: Tool,

@@ -187,6 +187,8 @@ def _fake_policy(
     log_path: Path | None = None,
     set_schedule: Callable[[int, int], PolicyResult] | None = None,
     read_schedule: Callable[[], tuple[int, int] | None] | None = None,
+    decided: Callable[[], bool] | None = None,
+    clear_decided: Callable[[], None] | None = None,
 ) -> Policy:
     return Policy(
         id=id,
@@ -198,6 +200,8 @@ def _fake_policy(
         log_path=log_path,
         set_schedule=set_schedule,
         read_schedule=read_schedule,
+        decided=decided,
+        clear_decided=clear_decided,
     )
 
 
@@ -3591,8 +3595,12 @@ def test_unified_app_constructs_without_node_globals_closures() -> None:
 def test_ensure_daemon_default_applies_once_when_undecided(tmp_path: Path) -> None:
     state_path = tmp_path / ".myshellrc"
     calls: list[str] = []
-    policy = _fake_policy(active=False, apply=lambda: (calls.append("apply"), _ok_result())[1])
-    assert ensure_daemon_default(policy, state_path=state_path) is True
+    policy = _fake_policy(
+        active=False,
+        apply=lambda: (calls.append("apply"), _ok_result())[1],
+        decided=lambda: daemon.decided(state_path),
+    )
+    assert ensure_daemon_default(policy) is True
     assert calls == ["apply"]
 
 
@@ -3600,8 +3608,12 @@ def test_ensure_daemon_default_is_a_noop_once_decided(tmp_path: Path) -> None:
     state_path = tmp_path / ".myshellrc"
     daemon.record_decided(state_path)
     calls: list[str] = []
-    policy = _fake_policy(active=False, apply=lambda: (calls.append("apply"), _ok_result())[1])
-    assert ensure_daemon_default(policy, state_path=state_path) is False
+    policy = _fake_policy(
+        active=False,
+        apply=lambda: (calls.append("apply"), _ok_result())[1],
+        decided=lambda: daemon.decided(state_path),
+    )
+    assert ensure_daemon_default(policy) is False
     assert calls == []
 
 
@@ -3613,9 +3625,150 @@ def test_ensure_daemon_default_returns_false_on_a_failed_apply_without_recording
     def boom() -> PolicyResult:
         raise CommandError(["launchctl", "bootstrap"], 5)
 
-    policy = _fake_policy(active=False, apply=boom)
-    assert ensure_daemon_default(policy, state_path=state_path) is False
+    policy = _fake_policy(active=False, apply=boom, decided=lambda: daemon.decided(state_path))
+    assert ensure_daemon_default(policy) is False
     assert daemon.decided(state_path) is False
+
+
+def test_ensure_daemon_default_skips_a_policy_with_no_decided_closure() -> None:
+    calls: list[str] = []
+    policy = _fake_policy(apply=lambda: (calls.append("apply"), _ok_result())[1])
+    assert policy.decided is None
+    assert ensure_daemon_default(policy) is False
+    assert calls == []
+
+
+def test_ensure_daemon_default_forwards_a_warning_to_the_sink() -> None:
+    warned = PolicyResult(layers=(), reload_hint=None, warning="another timer is still running")
+    sink: list[str] = []
+    policy = _fake_policy(apply=lambda: warned, decided=lambda: False)
+    assert ensure_daemon_default(policy, on_warning=sink.append) is True
+    assert sink == ["another timer is still running"]
+
+
+def test_ensure_daemon_default_stays_silent_without_a_warning() -> None:
+    sink: list[str] = []
+    policy = _fake_policy(apply=_ok_result, decided=lambda: False)
+    assert ensure_daemon_default(policy, on_warning=sink.append) is True
+    assert sink == []
+
+
+def test_ensure_daemon_default_does_not_warn_when_already_decided() -> None:
+    sink: list[str] = []
+    calls: list[str] = []
+    policy = _fake_policy(
+        apply=lambda: (calls.append("apply"), _ok_result())[1],
+        decided=lambda: True,
+    )
+    assert ensure_daemon_default(policy, on_warning=sink.append) is False
+    assert calls == []
+    assert sink == []
+
+
+def test_ensure_daemon_default_does_not_warn_when_apply_raises() -> None:
+    sink: list[str] = []
+
+    def boom() -> PolicyResult:
+        raise CommandError(["systemctl", "--user", "enable"], 1)
+
+    policy = _fake_policy(apply=boom, decided=lambda: False)
+    assert ensure_daemon_default(policy, on_warning=sink.append) is False
+    assert sink == []
+
+
+def test_policy_appends_decided_closures_after_every_existing_field() -> None:
+    import dataclasses
+
+    names = [field.name for field in dataclasses.fields(Policy)]
+    assert names[-2:] == ["decided", "clear_decided"]
+
+
+def test_unarmed_collector_wait_returns_immediately() -> None:
+    import time
+
+    from installer.policy import DaemonDefaultWarnings
+
+    collector = DaemonDefaultWarnings()
+    started = time.monotonic()
+    messages, completed = collector.wait(5)
+    assert time.monotonic() - started < 0.2
+    assert messages == ()
+    assert completed is True
+
+
+def test_finished_collector_returns_its_messages() -> None:
+    from installer.policy import DaemonDefaultWarnings
+
+    collector = DaemonDefaultWarnings()
+    collector.arm()
+    collector.append("another timer is still running")
+    collector.finish()
+    messages, completed = collector.wait(5)
+    assert messages == ("another timer is still running",)
+    assert completed is True
+
+
+def test_armed_collector_times_out_when_never_finished() -> None:
+    import time
+
+    from installer.policy import DaemonDefaultWarnings
+
+    collector = DaemonDefaultWarnings()
+    collector.arm()
+    collector.append("partial")
+    started = time.monotonic()
+    messages, completed = collector.wait(0.05)
+    elapsed = time.monotonic() - started
+    assert 0.04 <= elapsed < 0.5
+    assert messages == ("partial",)
+    assert completed is False
+
+
+def test_collector_finish_from_another_thread_unblocks_the_waiter() -> None:
+    import time
+
+    from installer.policy import DaemonDefaultWarnings
+
+    collector = DaemonDefaultWarnings()
+    collector.arm()
+    collector.append("taken over")
+    observed: list[tuple[tuple[str, ...], bool]] = []
+
+    def wait() -> None:
+        observed.append(collector.wait(5))
+
+    waiter = threading.Thread(target=wait)
+    waiter.start()
+    time.sleep(0.05)
+    assert waiter.is_alive()
+    threading.Thread(target=collector.finish).start()
+    waiter.join(timeout=1)
+    assert not waiter.is_alive()
+    assert observed == [(("taken over",), True)]
+
+
+def test_daemon_default_closure_finishes_when_apply_raises_runtime_error() -> None:
+    from installer.policy import DaemonDefaultWarnings, ensure_daemon_default
+
+    collector = DaemonDefaultWarnings()
+    collector.arm()
+
+    def boom() -> PolicyResult:
+        raise RuntimeError("outside the caught tuple")
+
+    policy = _fake_policy(apply=boom, decided=lambda: False)
+
+    def daemon_default() -> bool:
+        try:
+            return ensure_daemon_default(policy, on_warning=collector.append)
+        finally:
+            collector.finish()
+
+    with pytest.raises(RuntimeError):
+        daemon_default()
+    messages, completed = collector.wait(0.05)
+    assert messages == ()
+    assert completed is True
 
 
 class _FakeDaemonRun:
@@ -3695,7 +3848,7 @@ async def test_on_by_default_auto_applies_on_a_fresh_undecided_machine(tmp_path:
     app = _daemon_app(
         tmp_path,
         policy=policy,
-        daemon_default=lambda: ensure_daemon_default(policy, state_path=state_path),
+        daemon_default=lambda: ensure_daemon_default(policy),
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_daemon(app, pilot)
@@ -3716,7 +3869,7 @@ async def test_on_by_default_does_not_reenable_an_explicitly_disabled_daemon(
     app = _daemon_app(
         tmp_path,
         policy=policy,
-        daemon_default=lambda: ensure_daemon_default(policy, state_path=state_path),
+        daemon_default=lambda: ensure_daemon_default(policy),
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_daemon(app, pilot)
@@ -3732,7 +3885,7 @@ async def test_on_by_default_never_records_a_decision_on_a_failed_apply(tmp_path
     app = _daemon_app(
         tmp_path,
         policy=policy,
-        daemon_default=lambda: ensure_daemon_default(policy, state_path=state_path),
+        daemon_default=lambda: ensure_daemon_default(policy),
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_daemon(app, pilot)
@@ -3752,7 +3905,7 @@ async def test_manual_toggle_of_the_daemon_is_refused_while_the_worker_is_in_fli
     app = _daemon_app(
         tmp_path,
         policy=policy,
-        daemon_default=lambda: ensure_daemon_default(policy, state_path=state_path),
+        daemon_default=lambda: ensure_daemon_default(policy),
     )
     async with app.run_test(size=(100, 30)) as pilot:
         assert app.daemon_default_in_flight is True
@@ -3792,7 +3945,7 @@ async def test_reschedule_is_refused_while_the_worker_is_in_flight(tmp_path: Pat
 
     def slow_daemon_default() -> bool:
         release.wait(timeout=5)
-        return ensure_daemon_default(policy, state_path=state_path)
+        return ensure_daemon_default(policy)
 
     app = _daemon_app(tmp_path, policy=policy, daemon_default=slow_daemon_default)
     async with app.run_test(size=(100, 30)) as pilot:
@@ -3826,7 +3979,7 @@ async def test_on_by_default_leaves_an_already_active_daemon_active(tmp_path: Pa
     app = _daemon_app(
         tmp_path,
         policy=policy,
-        daemon_default=lambda: ensure_daemon_default(policy, state_path=state_path),
+        daemon_default=lambda: ensure_daemon_default(policy),
     )
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
@@ -3956,7 +4109,7 @@ async def test_on_by_default_treats_an_existing_installation_as_fresh(tmp_path: 
     app = _daemon_app(
         tmp_path,
         policy=policy,
-        daemon_default=lambda: ensure_daemon_default(policy, state_path=state_path),
+        daemon_default=lambda: ensure_daemon_default(policy),
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_daemon(app, pilot)

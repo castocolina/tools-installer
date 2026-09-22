@@ -2054,6 +2054,140 @@ def test_non_interactive_fix_with_link_mode_flag_writes_split_and_stores_nothing
 # showing an owner the mutation path re-resolves as unknown a moment later.
 
 
+def test_build_app_arms_the_collector_only_when_it_wires_the_daemon_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.policy import DaemonDefaultWarnings
+
+    _sandbox(monkeypatch, tmp_path)
+    armed = DaemonDefaultWarnings()
+    unarmed = DaemonDefaultWarnings()
+    setup._build_app(  # pyright: ignore[reportPrivateUsage]
+        [],
+        _platform(),
+        apply_daemon_default=True,
+        daemon_default_warnings=armed,
+    )
+    setup._build_app(  # pyright: ignore[reportPrivateUsage]
+        [],
+        _platform(),
+        apply_daemon_default=False,
+        daemon_default_warnings=unarmed,
+    )
+    assert armed.wait(0.05)[1] is False
+    messages, completed = unarmed.wait(5)
+    assert messages == ()
+    assert completed is True
+
+
+def test_interactive_wizard_prints_warnings_before_the_abort_return(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.policy import DaemonDefaultWarnings
+
+    buffer = io.StringIO()
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=120, no_color=True))
+    collector = DaemonDefaultWarnings()
+
+    class _Aborting:
+        install_summary = None
+
+        def run(self) -> None:
+            collector.append("another timer is still running")
+            collector.finish()
+
+    def fake_build(*_args: object, **kwargs: object) -> _Aborting:
+        handed = kwargs["daemon_default_warnings"]
+        assert handed is collector
+        handed.arm()
+        return _Aborting()
+
+    monkeypatch.setattr(setup, "_build_app", fake_build)
+    monkeypatch.setattr(setup, "DaemonDefaultWarnings", lambda: collector)
+    assert setup.main([]) == 0
+    text = buffer.getvalue()
+    warning_at = text.index("another timer is still running")
+    aborted_at = text.index("Aborted.")
+    assert warning_at < aborted_at
+
+
+def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_when_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.policy import DaemonDefaultWarnings
+    from installer.session import Summary
+
+    buffer = io.StringIO()
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=120, no_color=True))
+    monkeypatch.setattr(setup, "clean_rc_duplicates", lambda *_a, **_k: {})
+    monkeypatch.setattr(setup, "collect_bin_dirs", lambda *_a, **_k: [])
+    collector = DaemonDefaultWarnings()
+
+    class _Done:
+        install_summary = Summary(installed=("rg",), already=(), failed=(), no_method=())
+
+        def run(self) -> None:
+            collector.append("taken over")
+            collector.finish()
+
+    def fake_build(*_args: object, **_kwargs: object) -> _Done:
+        collector.arm()
+        return _Done()
+
+    monkeypatch.setattr(setup, "_build_app", fake_build)
+    monkeypatch.setattr(setup, "DaemonDefaultWarnings", lambda: collector)
+    assert setup.main([]) == 0
+    assert "taken over" in buffer.getvalue()
+    assert "Aborted." not in buffer.getvalue()
+
+    quiet = io.StringIO()
+    empty = DaemonDefaultWarnings()
+    monkeypatch.setattr(setup, "Console", lambda: Console(file=quiet, width=120, no_color=True))
+
+    class _Quiet:
+        install_summary = Summary(installed=("rg",), already=(), failed=(), no_method=())
+
+        def run(self) -> None:
+            return None
+
+    monkeypatch.setattr(setup, "_build_app", lambda *_a, **_k: _Quiet())
+    monkeypatch.setattr(setup, "DaemonDefaultWarnings", lambda: empty)
+    assert setup.main([]) == 0
+    assert quiet.getvalue() == ""
+
+
+def test_interactive_wizard_labels_a_timed_out_background_apply(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.policy import DAEMON_DEFAULT_WAIT_SECONDS, DaemonDefaultWarnings
+
+    buffer = io.StringIO()
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=120, no_color=True))
+    collector = DaemonDefaultWarnings()
+
+    class _Aborting:
+        install_summary = None
+
+        def run(self) -> None:
+            collector.append("partial")
+
+    def fake_build(*_args: object, **_kwargs: object) -> _Aborting:
+        collector.arm()
+        return _Aborting()
+
+    monkeypatch.setattr(setup, "_build_app", fake_build)
+    monkeypatch.setattr(setup, "DaemonDefaultWarnings", lambda: collector)
+    monkeypatch.setattr(setup, "DAEMON_DEFAULT_WAIT_SECONDS", 0.01)
+    assert setup.main([]) == 0
+    text = buffer.getvalue()
+    assert "partial" in text
+    assert "had not finished" in text
+    assert DAEMON_DEFAULT_WAIT_SECONDS > 0
+
+
 def test_native_probe_is_wired_at_both_the_display_and_mutation_sites() -> None:
     source = Path(setup.__file__).read_text()
     assert source.count("native_probe=") == 2, source.count("native_probe=")

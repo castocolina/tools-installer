@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from installer import daemon
+from installer import daemon, systemd_daemon
 from installer.daemon import DaemonScheduleError
 from installer.policy import Policy, daemon_policy
 from installer.run import CommandError, Runner
@@ -109,6 +109,18 @@ def _build(
 
 
 # --- missing_requires derivation --------------------------------------------
+
+
+def test_macos_factory_binds_its_own_decided_closures(tmp_path: Path) -> None:
+    paths = _make_paths(tmp_path)
+    policy = _build(paths, run=_FakeRun())
+    assert policy.decided is not None
+    assert policy.clear_decided is not None
+    daemon.record_decided(paths.state_path)
+    assert policy.decided() is True
+    assert systemd_daemon.decided(paths.state_path) is False
+    policy.clear_decided()
+    assert daemon.decided(paths.state_path) is False
 
 
 def test_missing_requires_derived_when_both_fd_and_rg_are_absent(tmp_path: Path) -> None:

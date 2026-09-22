@@ -50,6 +50,8 @@ from installer.ownership import (
 )
 from installer.platform import Platform, detect
 from installer.policy import (
+    DAEMON_DEFAULT_WAIT_SECONDS,
+    DaemonDefaultWarnings,
     Policy,
     ban_policy,
     daemon_policy,
@@ -565,6 +567,7 @@ def _build_app(
     execute: ExecuteInputs | None = None,
     settings: SettingsStore | None = None,
     prompt_link_mode: bool = False,
+    daemon_default_warnings: DaemonDefaultWarnings | None = None,
 ) -> UnifiedApp:
     installed = {tool.id: is_installed(tool) for tool in tools}
     unavailable = {tool.id: not platform_could_support(tool, platform) for tool in tools}
@@ -851,13 +854,30 @@ def _build_app(
     daemon_default_policy_id = None
     if daemon is not None and apply_daemon_default:
         daemon_policy_instance = daemon
+        if daemon_default_warnings is not None:
+            daemon_default_warnings.arm()
 
         def daemon_default() -> bool:
             # Closes over daemon_policy_instance, never the module-level
             # daemon_default local re-bound by this very assignment, and
             # never re-constructs a second daemon_policy: the SAME instance
             # already appended to policy_inputs.policies above.
-            return ensure_daemon_default(daemon_policy_instance, state_path=_DAEMON_STATE_PATH)
+            # finish() is unconditional for the same reason the worker's own
+            # finally always posts: an exception outside
+            # ensure_daemon_default's caught tuple must still signal, or the
+            # console waits the full timeout for a signal that never comes.
+            try:
+                return ensure_daemon_default(
+                    daemon_policy_instance,
+                    on_warning=(
+                        daemon_default_warnings.append
+                        if daemon_default_warnings is not None
+                        else None
+                    ),
+                )
+            finally:
+                if daemon_default_warnings is not None:
+                    daemon_default_warnings.finish()
 
         daemon_default_policy_id = daemon.id
 
@@ -975,6 +995,7 @@ def _run_interactive_wizard(
     settings: SettingsStore,
     prompt_link_mode: bool,
 ) -> int:
+    warnings = DaemonDefaultWarnings()
     with _stdin_on_tty():
         # Only the genuine interactive wizard flow auto-applies the daemon
         # default (allowlist at the _build_app call site).
@@ -988,8 +1009,19 @@ def _run_interactive_wizard(
             ),
             settings=settings,
             prompt_link_mode=prompt_link_mode,
+            daemon_default_warnings=warnings,
         )
         app.run()
+    # BEFORE the abort return: an aborted wizard is still a run whose
+    # on-by-default apply may already have taken over another tool's timer.
+    # app.run() does not join the thread worker, so this waits on the
+    # collector the closure finishes, bounded so a wedged worker delays
+    # rather than hangs.
+    messages, completed = warnings.wait(DAEMON_DEFAULT_WAIT_SECONDS)
+    for message in messages:
+        console.print(message)
+    if not completed:
+        console.print("The background cleanup apply had not finished.")
     summary = app.install_summary
     if summary is None:
         console.print("Aborted.")
