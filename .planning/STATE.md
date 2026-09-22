@@ -3,13 +3,13 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: "15.7"
 current_phase_name: unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr
-current_plan: 04 (Plans 01-03,07 complete)
+current_plan: 05 (Plans 01-04,07 complete)
 status: executing
-stopped_at: Completed 15.7-02-PLAN.md, 15.7-03-PLAN.md, 15.7-07-PLAN.md (wave 2, all merged)
-last_updated: "2026-09-22T12:33:14.788Z"
+stopped_at: Completed 15.7-04-PLAN.md (wave 3, cross-AI execution per Rule 12)
+last_updated: "2026-09-22T13:07:41Z"
 last_activity: 2026-09-22
-last_activity_desc: "Phase 15.7 Wave 2 complete: disk-pressure probe + Doctor guidance (D-03, Plan 02), competing-mechanism detection/takeover (D-02a, Plan 03), shared prune-tmp core + age-semantics convergence (D-01d/D-01f, Plan 07)"
-state_head: 9c92ee101f10b4d99b56b6ae21a3f5c3eb4be2b6
+last_activity_desc: "Phase 15.7 Wave 3: generalized cache-redirect mechanism (D-04, Plan 04) complete, executed via cross-AI (opencode router-env/my-coding) per ONESHOT-RULES.md Rule 12"
+state_head: 147b51d
 progress:
   total_phases: 27
   completed_phases: 17
@@ -107,6 +107,7 @@ Progress: [██████████] 100%
 | Phase 15.7 P02 | 15min | 2 tasks | 6 files |
 | Phase 15.7-unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr P03 | ~ | 2 tasks | 4 files |
 | Phase 15.7 P07 | ~1h | 2 tasks | 6 files |
+| Phase 15.7 P04 (cross-AI: opencode router-env/my-coding) | ~35min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -187,6 +188,7 @@ Recent decisions affecting current work:
 - [Phase 15.7]: D-02c: a failed user-scope disable keeps this project's own registration and discloses the survivor -- proceed and disclose, never rollback
 - [15.7-07, 2026-09-22]: D-01f — both prune scripts converge on `-mmin`/`--changed-before Nmin` (minute-precision, `fd`-matching semantics), never `-mtime`'s day-boundary semantics; "byte-for-byte" equivalence between the two scripts is narrowed to the flag/refusal/validation/family/depth/`deleted: N` contract, excluding exact age-cutoff arithmetic. Fixed a real production bug found while characterizing: macOS's `--apply` deletion pipeline ran its counting function in a bash pipeline subshell, so `deleted: N` (the line `installer.daemon.last_run_summary` parses) always reported 0 regardless of real work done; fixed by redirecting into the function's stdin instead of piping into it.
 - [15.7-07, 2026-09-22]: Extracted `scripts/lib/prune-tmp-common.sh` as the single shared implementation (broad-path refusal guard, root/age validation, fd-preferred/find-fallback depth-1 traversal, byte formatting, `deleted: N` summary) used by both `scripts/prune-tmp-linux.sh` and `scripts/prune-user-tmpdir.sh`. A pre-existing quirk (`--tmpdir /` bypassing the refusal guard via the trailing-slash strip turning `/` into an empty string) was pinned as-is, not fixed — out of this plan's must_haves scope.
+- [15.7-04, 2026-09-22]: One `CacheRedirect` declaration drives both platform writers (Linux: bare `KEY=VALUE` in an environment.d conf; macOS: `export KEY="VALUE"` in ~/.myshellrc via shellrc.py's existing apply_block/strip_block/ensure_source primitives) — Bun's `BUN_RUNTIME_TRANSPILER_CACHE_PATH` -> `~/.cache/bun/transpiler-cache` is the first wired-up case. Applied state reads from the owned file only (never live process env) and shares its ownership check with the remover so a policy can never read active for a file it would refuse to delete. Executed via cross-AI (opencode router-env/my-coding) per ONESHOT-RULES.md Rule 12; commits 2e9cdbe, 354655c, 147b51d.
 
 ### Pending Todos
 
@@ -227,6 +229,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-22T12:33:14.633Z
-Stopped at: Completed 15.7-02-PLAN.md, 15.7-03-PLAN.md, 15.7-07-PLAN.md (wave 2, all merged)
+Last session: 2026-09-22T13:07:41Z
+Stopped at: Completed 15.7-04-PLAN.md (wave 3, cross-AI)
 Resume file: None
