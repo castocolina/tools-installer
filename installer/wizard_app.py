@@ -1411,6 +1411,8 @@ class PoliciesScreen(AppScreen):
         self._policies = inputs.policies
         self._link_mode = inputs.link_mode
         self._set_link_mode = inputs.set_link_mode
+        # The SAME closure UnifiedApp hands the Doctor: one field, two screens.
+        self._disk_pressure = inputs.disk_pressure
         self.active_state: dict[str, bool] = {
             policy.id: policy.active for policy in inputs.policies
         }
@@ -1618,7 +1620,55 @@ class PoliciesScreen(AppScreen):
             if schedule is not None:
                 hour, minute = schedule
                 lines.append(f"scheduled daily at {hour:02d}:{minute:02d}")
+        if _has_daemon_id((policy.id,)):
+            usage = self._temp_usage_line()
+            if usage is not None:
+                lines.append(usage)
         return "\n".join(lines)
+
+    def _temp_usage_line(self) -> str | None:
+        """The live temp-usage line for a background-cleanup row, or None.
+
+        This runs on EVERY row-highlight, i.e. on every arrow key, so the two
+        halves of the probe are handled differently on purpose:
+
+        - The mount reads stay synchronous and un-cached. `shutil.disk_usage`
+          is one statvfs on an already-mounted filesystem -- the same order of
+          cost as the read_schedule/last_run_summary reads above, and it spawns
+          no process, unlike the pnpm audit the Doctor runs on a worker. A
+          worker here would buy nothing and cost a cross-thread hand-off plus a
+          stale-value window on a number whose whole point is being current.
+        - The daemon-state half is a `systemctl --user is-active` SUBPROCESS
+          (plan 15.7-01's D-01c), so this path does not run it AT ALL:
+          blocking=False makes the closure read TimerStateCache.peek(), which
+          never probes. Memoization alone is not the answer, although "it's
+          cached" reads like one: a memo still has a cold first read and a TTL
+          expiry, and on those a read() blocks the Textual event loop for up to
+          run.QUERY_TIMEOUT (20s) -- bounded, but a frozen UI. Nor is "move it
+          to a worker": the daemon state is not even shown on this line, so a
+          worker would add async plumbing to fetch a value nothing renders.
+
+        Failures follow plan 15.7-02's D-03b: probe_disk_pressure is TOTAL over
+        filesystem and probe-conversion failure, and any other exception
+        propagates uncaught. This guard is the documented second layer over the
+        injected closure, the same pairing the adjacent reads use.
+
+        Only a number the probe actually measured is stated: the temp-directory
+        usage (measured on macOS too, per D-03d), else -- only when the temp
+        mount was unreadable -- the root filesystem's free space, labelled as
+        such, else no line at all.
+        """
+        if self._disk_pressure is None:
+            return None
+        try:
+            pressure = self._disk_pressure(blocking=False)
+        except (OSError, ValueError):
+            return None
+        if pressure.tmp_used_percent is not None:
+            return f"Current temp-directory usage: {pressure.tmp_used_percent:.1f}%"
+        if pressure.root_free_percent is not None:
+            return f"Current root filesystem free space: {pressure.root_free_percent:.1f}%"
+        return None
 
     def _set_detail(self, policy: Policy | None) -> None:
         if policy is not None and self._log_view and policy.log_path is not None:

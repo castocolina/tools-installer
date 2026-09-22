@@ -48,6 +48,7 @@ from installer.policy import (
 from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError, Runner
 from installer.session import SensitiveInstall, Summary
+from installer.systemd_daemon import TimerStateCache
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, ToolRow, classify_tools
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
@@ -3898,6 +3899,171 @@ async def test_unified_app_hands_the_policy_inputs_probe_to_the_doctor() -> None
         await _settle(app, pilot)
         assert isinstance(app.screen, DoctorScreen)
         assert app.screen.disk_pressure is probe
+
+
+# -- D-03 live temp usage on the background-cleanup row (plan 15.7-06 task 3) --
+
+
+def _linux_daemon_row() -> Policy:
+    return Policy(
+        id="daemon:prune-tmp-linux",
+        label="Background tmpdir cleanup",
+        description="runs scripts/prune-tmp-linux.sh every 10 minutes via a systemd user timer",
+        active=False,
+        apply=_ok_result,
+        remove=_ok_result,
+    )
+
+
+def _macos_daemon_row() -> Policy:
+    return Policy(
+        id="daemon:prune-tmpdir",
+        label="Background tmpdir cleanup",
+        description="runs scripts/prune-user-tmpdir.sh daily via a LaunchAgent",
+        active=False,
+        apply=_ok_result,
+        remove=_ok_result,
+    )
+
+
+async def _policies_detail(
+    policies: list[Policy], probe: DiskPressureProbe | None
+) -> tuple[str, list[str]]:
+    """Every row's detail text, driven through the row-highlight render path."""
+    app = _app(policies=_policy_inputs(policies, disk_pressure=probe), initial_view="policies")
+    details: list[str] = []
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        details.append(screen.detail_text)
+        for _ in policies[1:]:
+            await pilot.press("down")
+            await pilot.pause()
+            details.append(screen.detail_text)
+    return details[0], details
+
+
+@pytest.mark.parametrize("row", [_linux_daemon_row, _macos_daemon_row])
+async def test_daemon_row_detail_ends_with_the_temp_directory_usage(
+    row: Callable[[], Policy],
+) -> None:
+    detail, _ = await _policies_detail([row()], _probe(_pressure(tmp_used=42.25)))
+    assert detail.splitlines()[-1] == "Current temp-directory usage: 42.2%"
+
+
+async def test_temp_usage_line_is_absent_on_every_non_daemon_row() -> None:
+    rows = [_linux_daemon_row(), _fake_policy(id="ban"), _fake_policy(id="tweak:x")]
+    _, details = await _policies_detail(rows, _probe(_pressure(tmp_used=42.0)))
+    assert "temp-directory usage" in details[0]
+    assert all("temp-directory usage" not in text for text in details[1:])
+    assert all("root filesystem" not in text for text in details[1:])
+
+
+async def test_temp_usage_line_is_absent_without_a_probe() -> None:
+    detail, _ = await _policies_detail([_linux_daemon_row()], None)
+    assert "temp-directory usage" not in detail
+    assert "root filesystem" not in detail
+
+
+@pytest.mark.parametrize("error", [OSError("statvfs failed"), ValueError("bad reading")])
+async def test_temp_usage_line_survives_a_failing_probe(error: Exception) -> None:
+    def broken() -> DiskPressure:
+        raise error
+
+    detail, _ = await _policies_detail([_linux_daemon_row()], _probe(broken))
+    assert "every ten minutes" in detail
+    assert "temp-directory usage" not in detail
+
+
+async def test_macos_row_reports_tmpdir_usage_never_the_root_number() -> None:
+    # Deliberately different numbers, so substituting root for temp cannot pass.
+    macos = _pressure(root_free=81.0, tmp_used=12.5, tmp_threshold=False)
+    detail, _ = await _policies_detail([_macos_daemon_row()], _probe(macos))
+    assert "Current temp-directory usage: 12.5%" in detail
+    assert "81.0" not in detail
+    assert "19.0" not in detail
+
+
+async def test_unreadable_temp_mount_falls_back_to_labelled_root_free_space() -> None:
+    detail, _ = await _policies_detail(
+        [_linux_daemon_row()], _probe(_pressure(root_free=33.3, tmp_used=None))
+    )
+    assert "temp-directory usage" not in detail
+    assert detail.splitlines()[-1] == "Current root filesystem free space: 33.3%"
+
+
+async def test_no_usage_line_when_neither_mount_was_measured() -> None:
+    detail, _ = await _policies_detail(
+        [_linux_daemon_row()], _probe(_pressure(root_free=None, tmp_used=None))
+    )
+    assert "temp-directory usage" not in detail
+    assert "root filesystem" not in detail
+
+
+async def test_row_highlight_only_ever_asks_for_the_non_blocking_read() -> None:
+    calls: list[bool] = []
+    rows = [_linux_daemon_row(), _fake_policy(id="ban"), _macos_daemon_row()]
+    await _policies_detail(rows, _probe(_pressure(), blocking_calls=calls))
+    assert calls
+    assert not any(calls)
+
+
+def _cache_backed_probe(
+    cache: TimerStateCache,
+) -> DiskPressureProbe:
+    """The production verb split over a real TimerStateCache: read() when
+    blocking, peek() otherwise, a cold peek answering UNAVAILABLE."""
+
+    def probe(*, blocking: bool = True) -> DiskPressure:
+        state = cache.read() if blocking else cache.peek()
+        return _pressure(
+            tmp_used=42.0, daemon_state=DaemonState.UNAVAILABLE if state is None else state
+        )
+
+    return probe
+
+
+async def test_row_highlight_issues_zero_systemd_queries_in_every_cache_state() -> None:
+    queries: list[str] = []
+    now = [0.0]
+
+    def is_active() -> DaemonState:
+        queries.append("is-active")
+        return DaemonState.INACTIVE
+
+    cache = TimerStateCache(is_active, ttl=10.0, clock=lambda: now[0])
+    cache.read()
+    assert queries == ["is-active"]
+    queries.clear()
+    rows = [_linux_daemon_row(), _fake_policy(id="ban"), _linux_daemon_row()]
+    rows[2] = replace(rows[2], id="daemon:second")
+    probe = _cache_backed_probe(cache)
+
+    # Warm memo.
+    detail, _ = await _policies_detail(rows, probe)
+    assert "temp-directory usage" in detail
+    # A memo the clock has advanced FAR past its TTL.
+    now[0] = 10_000.0
+    detail, _ = await _policies_detail(rows, probe)
+    assert "temp-directory usage" in detail
+    # A memo just marked stale.
+    cache.invalidate()
+    detail, _ = await _policies_detail(rows, probe)
+    assert "temp-directory usage" in detail
+    assert queries == []
+
+
+async def test_truly_cold_cache_still_renders_the_temp_usage() -> None:
+    queries: list[str] = []
+
+    def is_active() -> DaemonState:
+        queries.append("is-active")
+        return DaemonState.INACTIVE
+
+    cache = TimerStateCache(is_active)
+    detail, _ = await _policies_detail([_linux_daemon_row()], _cache_backed_probe(cache))
+    assert "Current temp-directory usage: 42.0%" in detail
+    assert queries == []
 
 
 def test_unified_app_signature_carries_no_disk_pressure_parameter() -> None:
