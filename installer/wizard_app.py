@@ -100,6 +100,13 @@ class UninstallInputs:
     # rest of the session. BLOCKING when called -- `_apply_removal` runs it
     # on a thread worker, never on the message loop.
     refresh: Callable[[], Any] | None = None
+    # D-01/15.6-06 Task 3: the SAME composition-root closure Policies, the
+    # direct `u` update, unattended installation, the CLI uninstall route,
+    # and interactive ExecuteScreen close already reuse. Called from
+    # `_apply_removal` only after `remove` reports a successful sweep, so a
+    # completed removal always leaves terminal shell configuration in sync
+    # (or safely reverted when zsh itself was just removed).
+    terminal_sync: Callable[[], str | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -680,6 +687,7 @@ class UninstallScreen(AppScreen):
             "; ".join(part for part in (rows_error, env_error) if part is not None) or None
         )
         self._remove = inputs.remove
+        self._terminal_sync = inputs.terminal_sync
         self.applied = False
         self.error: str | None = None
         self._entries = self._build_entries()
@@ -1206,6 +1214,22 @@ class UninstallScreen(AppScreen):
                 # -- an invalidate that raised did not drop anything, so there
                 # is nothing to replace.
                 self._refresh_ownership_worker()
+        # D-01/15.6-06 Task 3: called unconditionally on every successful
+        # sweep (never gated on tool_count -- unlike invalidate above, a
+        # terminal reapply/reversion is warranted even when only an env
+        # lever came off, since sync_terminal_shells' own no-zsh branch is
+        # exactly what a zsh-removing sweep needs). A raised OSError is a
+        # secondary, non-fatal warning appended to the same completed-removal
+        # summary, mirroring the invalidate seam's own both-directions
+        # contract: never swallowed, never flips `applied` or the primary
+        # outcome.
+        if self._terminal_sync is not None:
+            try:
+                terminal_warning = self._terminal_sync()
+            except OSError as exc:
+                terminal_warning = f"Terminal shell synchronization failed: {exc}"
+            if terminal_warning:
+                summary_parts.append(terminal_warning)
         self.status.set(multiline_summary(summary_parts), "ok")
 
     @work(thread=True, exclusive=True, group="uninstall-ownership-refresh", exit_on_error=False)

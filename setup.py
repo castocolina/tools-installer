@@ -560,6 +560,25 @@ def _build_app(
             daemon_policy=daemon,
         )
 
+    def _ban_apply_rc_paths() -> list[Path]:
+        return ban_rc_paths(_current_link_mode(), _SHELL)
+
+    def _tweak_ensure_sourced_from() -> tuple[Path, ...]:
+        mode = _current_link_mode()
+        if mode != "split":
+            return ()
+        return tuple(rc_paths_for_mode(mode, _SHELL))
+
+    def _sync_omz_terminals() -> str | None:
+        """Apply the shared terminal writer after a committed OMZ plugin edit,
+        a successful direct catalog update, an interactive close, or a
+        successful interactive Uninstall removal (D-01/15.6-05/15.6-06) -- a
+        zero-arg wrapper closing over this call's own resolved `platform`
+        around the one composition-root closure every call site reuses
+        (`_sync_terminals` above), so a stale terminal shell configuration
+        from any of them is corrected the same way."""
+        return _sync_terminals(platform)
+
     # Every field is a predicate, not its result: the Policies and Doctor
     # views mutate the three environment fields live in this same session,
     # and this screen's own removal action changes what `rows` returns next
@@ -567,7 +586,11 @@ def _build_app(
     # UninstallInputs). `invalidate` mirrors `UpdateService`'s own seam
     # (below): a successful removal falsifies the shared version/ownership
     # data exactly like an install or an update does, and this closure is
-    # what closes that hole (D-05).
+    # what closes that hole (D-05). `terminal_sync` is the SAME closure
+    # `omz_plugins_policy` below and `UnifiedApp`'s own `terminal_sync` kwarg
+    # are bound with (D-01/15.6-06 Task 3) -- defined just above this
+    # construction so the reference resolves at statement-execution time,
+    # not only at call time.
     uninstall_inputs = UninstallInputs(
         rows=_uninstall_rows,
         ban_names=lambda: [name for name, active in _guard_state()[0].items() if active],
@@ -586,26 +609,8 @@ def _build_app(
         # vocabulary of ownership feeds both screens. Called on a thread
         # worker by `_apply_removal` -- it re-probes every manager.
         refresh=lambda: version_refresh.refresh(tools),
+        terminal_sync=_sync_omz_terminals,
     )
-
-    def _ban_apply_rc_paths() -> list[Path]:
-        return ban_rc_paths(_current_link_mode(), _SHELL)
-
-    def _tweak_ensure_sourced_from() -> tuple[Path, ...]:
-        mode = _current_link_mode()
-        if mode != "split":
-            return ()
-        return tuple(rc_paths_for_mode(mode, _SHELL))
-
-    def _sync_omz_terminals() -> str | None:
-        """Apply the shared terminal writer after a committed OMZ plugin edit,
-        a successful direct catalog update, or an interactive close
-        (D-01/15.6-05/15.6-06 Task 1) -- a zero-arg wrapper closing over this
-        call's own resolved `platform` around the one composition-root
-        closure every call site reuses (`_sync_terminals` above), so a stale
-        terminal shell configuration from any of them is corrected the same
-        way."""
-        return _sync_terminals(platform)
 
     policy_inputs = PolicyInputs(
         policies=[

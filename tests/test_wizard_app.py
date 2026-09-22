@@ -148,6 +148,7 @@ def _uninstall_inputs(
     tweak_ids: tuple[str, ...] | Callable[[], tuple[str, ...]] = (),
     invalidate: Callable[[], object] | None = None,
     refresh: Callable[[], object] | None = None,
+    terminal_sync: Callable[[], str | None] | None = None,
 ) -> UninstallInputs:
     """`rows` is strictly a callable, matching `UninstallInputs`' own field
     (WR-05): a snapshot goes through `_frozen` above, which names itself.
@@ -164,6 +165,7 @@ def _uninstall_inputs(
         tweak_ids=_predicate(tweak_ids),
         invalidate=invalidate,
         refresh=refresh,
+        terminal_sync=terminal_sync,
     )
 
 
@@ -751,6 +753,96 @@ async def test_uninstall_apply_survives_a_raising_invalidate_seam() -> None:
         assert len(captured) == 1
         assert "version cache invalidation failed" in screen.status.text
         assert "cache write refused" in screen.status.text
+
+
+# -- D-01/15.6-06 Task 3: a successful interactive Uninstall removal
+# re-synchronizes terminal configuration through the SAME shared closure
+# Policies, the direct `u` update, unattended installation, the CLI
+# uninstall route, and interactive close already reuse.
+
+
+async def test_uninstall_apply_calls_the_terminal_synchronizer_once_on_success() -> None:
+    """Test 1: a successful removal invokes the injected terminal
+    synchronizer after perform_uninstall (here: `_remove`) completes, and
+    the normal completed-removal summary is retained."""
+    captured: list[UninstallDecision] = []
+    calls: list[None] = []
+
+    def _terminal_sync() -> str | None:
+        calls.append(None)
+        return None
+
+    rows = _rg_rows()
+    app = _app(
+        uninstall=_uninstall_inputs(
+            rows=rows, remove=_recorder(captured), terminal_sync=_terminal_sync
+        )
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert screen.applied is True
+        assert len(captured) == 1
+        assert len(calls) == 1
+        assert "Removed 1 tool(s)." in screen.status.text
+
+
+async def test_uninstall_apply_appends_a_terminal_sync_oserror_without_losing_applied() -> None:
+    """Test 2: a terminal synchronizer OSError appends a visible warning to
+    the successful removal result and never changes `applied` from the
+    primary removal outcome."""
+    captured: list[UninstallDecision] = []
+
+    def _boom() -> str | None:
+        raise OSError("EACCES: ~/.config/kitty/kitty.conf")
+
+    rows = _rg_rows()
+    app = _app(
+        uninstall=_uninstall_inputs(rows=rows, remove=_recorder(captured), terminal_sync=_boom)
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert screen.applied is True
+        assert len(captured) == 1
+        assert "terminal shell synchronization failed" in screen.status.text.lower()
+        assert "EACCES" in screen.status.text
+
+
+async def test_uninstall_apply_never_calls_the_terminal_synchronizer_after_a_failed_sweep() -> None:
+    """Test 2 (continued): a failed sweep must never call the synchronizer
+    at all -- nothing was mutated, so there is nothing to reapply."""
+    calls: list[None] = []
+
+    def _terminal_sync() -> str | None:
+        calls.append(None)
+        return None
+
+    def boom(_decision: UninstallDecision) -> SweepResult:
+        raise OSError("permission denied")
+
+    app = _app(
+        uninstall=_uninstall_inputs(rows=_rg_rows(), remove=boom, terminal_sync=_terminal_sync)
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.applied is False
+        assert calls == []
 
 
 # -- 15.4-04/Task 1: `rows` becomes the fourth live predicate -----------------

@@ -950,6 +950,25 @@ def test_the_interactive_uninstall_view_forwards_the_same_daemon_instance(
     assert forwarded[0]["daemon_policy"] is daemon_in_list
 
 
+def test_build_app_wires_the_shared_terminal_closure_into_uninstall_inputs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D-01/15.6-06 Task 3, Test 3: _build_app passes the SAME
+    composition-root closure to UninstallInputs that Policies, updates,
+    unattended installation, the CLI uninstall route, and interactive close
+    already reuse -- never a second, independently constructed synchronizer.
+    `seen[0]["terminal_sync"]` is the exact closure `_build_app` handed
+    UnifiedApp's own `terminal_sync` kwarg (Task 1); identity with
+    `inputs.terminal_sync` is the proof."""
+    _sandbox(monkeypatch, tmp_path)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--uninstall"]) == 0
+    inputs = seen[0]["uninstall"]
+    assert isinstance(inputs, UninstallInputs)
+    assert inputs.terminal_sync is not None
+    assert inputs.terminal_sync is seen[0]["terminal_sync"]
+
+
 def _stub_install_run(monkeypatch: pytest.MonkeyPatch, summary: Summary) -> list[str]:
     """Drive setup.main through a full (stubbed) install run and record whether
     the troubleshooting pointer was rendered."""
