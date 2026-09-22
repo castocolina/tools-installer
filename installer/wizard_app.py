@@ -118,6 +118,7 @@ class PolicyInputs:
     policies: list[Policy]
     link_mode: Callable[[], str] | None = None
     set_link_mode: Callable[[str], None] | None = None
+    disk_pressure: Callable[..., Any] | None = None
 
 
 # The l log-view toggle's tail length — a plain, bounded slice of the raw log,

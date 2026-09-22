@@ -1,4 +1,5 @@
 import importlib
+import inspect
 import io
 import os
 import pty
@@ -13,6 +14,7 @@ from rich.console import Console
 import setup
 from installer import pnpm_globals
 from installer.app import UninstallDecision
+from installer.diskusage import DiskPressure
 from installer.execute_screen import ExecuteInputs
 from installer.guards import install_shims
 from installer.model import Method, Tool
@@ -1473,7 +1475,7 @@ def test_build_app_rebinds_execute_onto_shared_services_when_execute_is_passed(
     _sandbox(monkeypatch, tmp_path)
     platform = _platform()
     execute = setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
-        [], platform, link_mode="centralized", unattended=False
+        [], platform, link_mode="centralized", unattended=False, disk_pressure=_unused_probe
     )
     app = setup._build_app(  # pyright: ignore[reportPrivateUsage]
         [], platform, execute=execute
@@ -1755,7 +1757,11 @@ def test_execute_inputs_wire_path_calls_configure_path_and_returns_captured_text
     monkeypatch.setattr(setup, "_MYSHELLRC", tmp_path / ".myshellrc")
     monkeypatch.setattr(setup, "_SHELL", "/bin/zsh")
     inputs = setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
-        [], _platform(), link_mode="single", unattended=True
+        [],
+        _platform(),
+        link_mode="single",
+        unattended=True,
+        disk_pressure=_unused_probe,
     )
     text = inputs.wire_path()
     assert "PATH configured" in text
@@ -1780,7 +1786,11 @@ def test_execute_inputs_verify_calls_run_doctor_and_returns_captured_text(
     monkeypatch.setattr(setup, "run_doctor", fake_run_doctor)
     monkeypatch.setattr(setup, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
     inputs = setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
-        [], _platform(), link_mode="centralized", unattended=False
+        [],
+        _platform(),
+        link_mode="centralized",
+        unattended=False,
+        disk_pressure=_unused_probe,
     )
     text = inputs.verify()
     assert "PATH audit" in text
@@ -1951,7 +1961,11 @@ def test_live_set_link_mode_rereads_fix_preview_apply_execute_and_policies(
         _platform(),
         settings=store,
         execute=setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
-            [], _platform(), link_mode=lambda: store.link_mode, unattended=True
+            [],
+            _platform(),
+            link_mode=lambda: store.link_mode,
+            unattended=True,
+            disk_pressure=_unused_probe,
         ),
     )
     preview = seen[0]["fix_preview"]
@@ -2248,6 +2262,328 @@ def test_both_uninstall_routes_pass_the_same_cache_redirect_set(
     assert interactive[0]["extra_policies"] == tuple(
         policy for policy in policies.policies if policy.id.startswith("cache-redirect:")
     )
+
+
+def _unused_probe() -> DiskPressure:
+    raise AssertionError("this test's path must not probe disk pressure")
+
+
+def _linux_platform() -> Platform:
+    return Platform(os="linux", arch="amd64", immutable=False, has_brew=True)
+
+
+def _recording_reader(queries: list[list[str]], answer: str = "inactive") -> Callable[..., str]:
+    def read(argv: Sequence[str]) -> str:
+        queries.append(list(argv))
+        return answer
+
+    return read
+
+
+def test_disk_pressure_probe_is_a_zero_arg_callable_returning_disk_pressure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.diskusage import DiskPressure
+
+    monkeypatch.setattr(setup, "_DAEMON_PLIST_PATH", tmp_path / "missing.plist")
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    probe = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
+        _platform(), timer_cache=None
+    )
+    pressure = probe()
+    assert isinstance(pressure, DiskPressure)
+
+
+def test_disk_pressure_probe_requires_timer_cache() -> None:
+    signature = inspect.signature(setup._disk_pressure_probe)  # pyright: ignore[reportPrivateUsage]
+    parameter = signature.parameters["timer_cache"]
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default is inspect.Parameter.empty
+
+
+def test_disk_pressure_probe_none_cache_is_unavailable_on_linux_and_plist_on_macos(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.enums import DaemonState
+
+    monkeypatch.setattr(setup, "_DAEMON_PLIST_PATH", tmp_path / "missing.plist")
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    linux = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
+        _linux_platform(), timer_cache=None
+    )()
+    assert linux.daemon is DaemonState.UNAVAILABLE
+
+    plist = tmp_path / "agent.plist"
+    plist.write_text("plist")
+    monkeypatch.setattr(setup, "_DAEMON_PLIST_PATH", plist)
+    macos = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
+        _platform(), timer_cache=None
+    )()
+    assert macos.daemon is DaemonState.ACTIVE
+    assert macos.tmp_threshold is False
+    assert linux.tmp_threshold is True
+
+
+def test_probe_and_policy_share_one_cache_and_issue_one_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.enums import DaemonState
+
+    queries: list[list[str]] = []
+    unit_dir = tmp_path / "user"
+    unit_dir.mkdir()
+    (unit_dir / "tools-installer-prune-tmp.timer").write_text("timer")
+    (unit_dir / "tools-installer-prune-tmp.service").write_text("service")
+    monkeypatch.setattr(setup, "_LINUX_DAEMON_UNIT_DIR", unit_dir)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    cache = setup._timer_state_cache(  # pyright: ignore[reportPrivateUsage]
+        _linux_platform(),
+        which=lambda _name: "/usr/bin/systemctl",
+        read_output=_recording_reader(queries),
+    )
+    assert cache is not None
+    policy = setup._build_daemon_policy(  # pyright: ignore[reportPrivateUsage]
+        _linux_platform(), {}, which=lambda _name: "/usr/bin/systemctl", timer_cache=cache
+    )
+    assert policy is not None
+    assert policy.state_cache is cache
+    active = policy.is_active
+    assert active is not None
+    assert active() is False
+    probe = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
+        _linux_platform(), timer_cache=cache
+    )
+    assert probe().daemon is DaemonState.INACTIVE
+    assert len(queries) == 1
+
+
+def test_run_doctor_non_tty_forwards_the_probe_closure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup.sys, "stdin", _NonTtyStdin())
+
+    def no_tty(_path: str, _flags: int) -> int:
+        raise OSError("no controlling terminal")
+
+    monkeypatch.setattr(setup.os, "open", no_tty)
+    seen: list[object] = []
+    forwarded: list[object] = []
+
+    def fake_probe(*_args: object, **_kwargs: object) -> object:
+        closure = object()
+        seen.append(closure)
+        return closure
+
+    def fake_run_doctor(*_args: object, **kwargs: object) -> object:
+        forwarded.append(kwargs.get("disk_pressure"))
+        return object()
+
+    monkeypatch.setattr(setup, "_disk_pressure_probe", fake_probe)
+    monkeypatch.setattr(setup, "run_doctor", fake_run_doctor)
+    assert setup._run_doctor(Console(file=io.StringIO())) == 0  # pyright: ignore[reportPrivateUsage]
+    assert seen and forwarded[0] is seen[0]
+
+
+def test_verify_and_clean_forwards_the_probe_closure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[object] = []
+    forwarded: list[object] = []
+
+    def fake_probe(*_args: object, **_kwargs: object) -> object:
+        closure = object()
+        calls.append(closure)
+        return closure
+
+    def fake_run_doctor(*_args: object, **kwargs: object) -> object:
+        forwarded.append(kwargs.get("disk_pressure"))
+        return object()
+
+    monkeypatch.setattr(setup, "_disk_pressure_probe", fake_probe)
+    monkeypatch.setattr(setup, "run_doctor", fake_run_doctor)
+
+    def no_duplicates(*_args: object, **_kwargs: object) -> dict[Path, list[str]]:
+        return {}
+
+    def no_dirs(*_args: object, **_kwargs: object) -> list[Path]:
+        return []
+
+    monkeypatch.setattr(setup, "clean_rc_duplicates", no_duplicates)
+    monkeypatch.setattr(setup, "collect_bin_dirs", no_dirs)
+    setup._verify_and_clean(  # pyright: ignore[reportPrivateUsage]
+        Console(file=io.StringIO()), [], _linux_platform(), assume_yes=True
+    )
+    assert len(calls) == 1
+    assert forwarded[0] is calls[0]
+
+
+def test_interactive_wizard_hands_one_probe_to_execute_and_policy_inputs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    marker = object()
+    built: list[object] = []
+
+    def fake_probe(*_args: object, **_kwargs: object) -> object:
+        built.append(marker)
+        return marker
+
+    received: list[object] = []
+
+    def fake_run_doctor(*_args: object, **kwargs: object) -> object:
+        received.append(kwargs.get("disk_pressure"))
+        return object()
+
+    monkeypatch.setattr(setup, "_disk_pressure_probe", fake_probe)
+    monkeypatch.setattr(setup, "run_doctor", fake_run_doctor)
+    seen = _capture_app(monkeypatch)
+    assert setup.main([]) == 0
+    policies = seen[0]["policies"]
+    execute = seen[0]["execute"]
+    assert isinstance(policies, PolicyInputs)
+    assert isinstance(execute, ExecuteInputs)
+    execute.verify()
+    assert policies.disk_pressure is marker
+    assert received == [marker]
+    assert built == [marker]
+
+
+def test_interactive_wizard_shares_one_cache_with_the_daemon_policy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "detect", _linux_platform)
+    from installer.enums import DaemonState
+    from installer.systemd_daemon import TimerStateCache
+
+    cache = TimerStateCache(lambda: DaemonState.INACTIVE)
+    calls: list[object] = []
+
+    def fake_cache(*_args: object, **_kwargs: object) -> TimerStateCache:
+        calls.append(cache)
+        return cache
+
+    monkeypatch.setattr(setup, "_timer_state_cache", fake_cache)
+    seen = _capture_app(monkeypatch)
+    assert setup.main([]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    daemon = next(policy for policy in policies.policies if policy.id.startswith("daemon:"))
+    assert daemon.state_cache is cache
+    assert calls == [cache]
+
+
+def test_build_app_without_disk_pressure_still_binds_the_probe(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    marker = object()
+
+    def fake_probe(*_args: object, **_kwargs: object) -> object:
+        return marker
+
+    monkeypatch.setattr(setup, "_disk_pressure_probe", fake_probe)
+    seen = _capture_app(monkeypatch)
+    setup._build_app([], _platform())  # pyright: ignore[reportPrivateUsage]
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    assert policies.disk_pressure is marker
+
+
+def test_build_app_omitted_arguments_still_share_one_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.enums import DaemonState
+
+    _sandbox(monkeypatch, tmp_path)
+    queries: list[list[str]] = []
+    unit_dir = tmp_path / "user"
+    unit_dir.mkdir()
+    (unit_dir / "tools-installer-prune-tmp.timer").write_text("timer")
+    (unit_dir / "tools-installer-prune-tmp.service").write_text("service")
+    monkeypatch.setattr(setup, "_LINUX_DAEMON_UNIT_DIR", unit_dir)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+
+    def which(name: str) -> str | None:
+        return "/usr/bin/systemctl" if name == "systemctl" else None
+
+    monkeypatch.setattr(setup.shutil, "which", which)
+    monkeypatch.setattr(setup.systemd_daemon, "query_systemctl", _recording_reader(queries))
+    seen = _capture_app(monkeypatch)
+    setup._build_app([], _linux_platform())  # pyright: ignore[reportPrivateUsage]
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    daemon = next(policy for policy in policies.policies if policy.id.startswith("daemon:"))
+    probe = policies.disk_pressure
+    assert callable(probe)
+    active = daemon.is_active
+    assert active is not None
+    assert active() is False
+    pressure = probe()
+    assert isinstance(pressure, DiskPressure)
+    assert pressure.daemon is DaemonState.INACTIVE
+    assert len(queries) == 1
+
+
+def test_build_app_calls_timer_state_cache_at_most_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    calls = {"n": 0}
+    original = setup._timer_state_cache  # pyright: ignore[reportPrivateUsage]
+
+    def counting(*args: object, **kwargs: object) -> object:
+        calls["n"] += 1
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(setup, "_timer_state_cache", counting)
+    setup._build_app([], _linux_platform())  # pyright: ignore[reportPrivateUsage]
+    assert calls["n"] == 1
+
+
+def test_probe_reports_unavailable_when_no_daemon_policy_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.enums import DaemonState
+
+    monkeypatch.setattr(setup, "_DAEMON_PLIST_PATH", tmp_path / "missing.plist")
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    cache = setup._timer_state_cache(  # pyright: ignore[reportPrivateUsage]
+        _linux_platform(), which=lambda _name: None, read_output=lambda _argv: "active"
+    )
+    assert cache is None
+    pressure = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
+        _linux_platform(), timer_cache=cache
+    )()
+    assert pressure.daemon is DaemonState.UNAVAILABLE
+
+
+def test_linux_probe_memoizes_is_active_inside_the_ttl(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.enums import DaemonState
+
+    queries: list[list[str]] = []
+    unit_dir = tmp_path / "user"
+    unit_dir.mkdir()
+    (unit_dir / "tools-installer-prune-tmp.timer").write_text("timer")
+    (unit_dir / "tools-installer-prune-tmp.service").write_text("service")
+    monkeypatch.setattr(setup, "_LINUX_DAEMON_UNIT_DIR", unit_dir)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    cache = setup._timer_state_cache(  # pyright: ignore[reportPrivateUsage]
+        _linux_platform(),
+        which=lambda _name: "/usr/bin/systemctl",
+        read_output=_recording_reader(queries, "active"),
+    )
+    probe = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
+        _linux_platform(), timer_cache=cache
+    )
+    assert probe().daemon is DaemonState.ACTIVE
+    assert probe().daemon is DaemonState.ACTIVE
+    assert probe().daemon is DaemonState.ACTIVE
+    assert len(queries) == 1
 
 
 def test_native_probe_is_wired_at_both_the_display_and_mutation_sites() -> None:

@@ -8,11 +8,18 @@ from rich.table import Table
 from rich.text import Text
 
 from installer.audit import ToolStatus
+from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.download import DOWNLOAD_KINDS
 from installer.engine import InstallOutcome
 from installer.enums import InstallStatus
-from installer.guidance import Guidance, doctor_guidance, guard_guidance, node_globals_guidance
+from installer.guidance import (
+    Guidance,
+    disk_pressure_guidance,
+    doctor_guidance,
+    guard_guidance,
+    node_globals_guidance,
+)
 from installer.links import TROUBLESHOOTING_URL
 from installer.pnpm_globals import NodeGlobalsReport
 from installer.sanitize import sanitize_log_line
@@ -227,6 +234,19 @@ def render_guard_status(status: dict[str, bool], warning: str | None, console: C
 def render_node_globals(report: NodeGlobalsReport, console: Console) -> None:
     """Read-only doctor lines: silent unless a pnpm-managed global is missing."""
     items = node_globals_guidance(report)
+    if items:
+        console.print(guidance_text(items))
+
+
+def render_disk_pressure(pressure: DiskPressure, console: Console) -> None:
+    """Read-only doctor lines: silent unless disk pressure was measured.
+
+    One named function per report section, matching render_doctor,
+    render_guard_status and render_node_globals. An empty guidance list
+    prints nothing — not a blank line, not a header — so a healthy machine's
+    `make doctor` output stays byte-identical to a run that never probed.
+    """
+    items = disk_pressure_guidance(pressure)
     if items:
         console.print(guidance_text(items))
 

@@ -9,7 +9,9 @@ from installer import daemon
 from installer.app import run_guard, run_wizard
 from installer.checksums import ChecksumMismatch
 from installer.cli import Options
+from installer.diskusage import DiskPressure
 from installer.engine import ChecksumPolicy, InstallOutcome
+from installer.enums import DaemonState
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.policy import Policy, daemon_policy
@@ -1180,6 +1182,178 @@ def test_run_doctor_reports_npx_redirect(tmp_path: Path, monkeypatch: pytest.Mon
         which=lambda name: str(shim_dir / name),
     )
     assert "npx: redirected to pnpm dlx" in buf.getvalue()
+
+
+def _present(_path: Path) -> bool:
+    return True
+
+
+def _no_binary(_name: str) -> None:
+    return None
+
+
+def _no_globals() -> tuple[str, ...]:
+    return ()
+
+
+def _healthy_doctor_kwargs(bin_dir: Path) -> dict[str, object]:
+    return {
+        "platform": _platform(),
+        "default_bin_dir": bin_dir,
+        "path_value": str(bin_dir),
+        "exists": _present,
+        "which": _no_binary,
+        "managed_globals": _no_globals,
+    }
+
+
+def _pressure(
+    *,
+    daemon: str,
+    root_free: float | None,
+    tmp_used: float | None,
+    tmp_threshold: bool,
+) -> DiskPressure:
+    return DiskPressure(
+        root_free_percent=root_free,
+        tmp_used_percent=tmp_used,
+        daemon=DaemonState(daemon),
+        tmp_threshold=tmp_threshold,
+    )
+
+
+def test_run_doctor_without_disk_pressure_matches_the_existing_report(tmp_path: Path) -> None:
+    from installer.app import run_doctor
+
+    bin_dir = tmp_path / "bin"
+    without, without_buf = _console()
+    with_omitted, omitted_buf = _console()
+    kwargs = _healthy_doctor_kwargs(bin_dir)
+    run_doctor([_tool("rg", "search")], without, **kwargs)  # type: ignore[arg-type]
+    run_doctor(
+        [_tool("rg", "search")],
+        with_omitted,
+        disk_pressure=None,
+        **kwargs,  # type: ignore[arg-type]
+    )
+    assert omitted_buf.getvalue() == without_buf.getvalue()
+    assert "Background cleanup" not in without_buf.getvalue()
+
+
+def test_run_doctor_emphasised_finding_carries_bold_style(tmp_path: Path) -> None:
+    from rich.console import Console
+
+    from installer.app import run_doctor
+
+    bin_dir = tmp_path / "bin"
+    buf = io.StringIO()
+    console = Console(
+        file=buf, width=120, force_terminal=True, color_system="standard", record=True
+    )
+    run_doctor(
+        [],
+        console,
+        disk_pressure=lambda: _pressure(
+            daemon="inactive", root_free=10.0, tmp_used=10.0, tmp_threshold=True
+        ),
+        **_healthy_doctor_kwargs(bin_dir),  # type: ignore[arg-type]
+    )
+    rendered = console.export_text(styles=True)
+    assert "Background cleanup is off" in rendered
+    assert "\x1b[1;" in rendered
+
+
+def test_run_doctor_healthy_disk_prints_nothing_extra(tmp_path: Path) -> None:
+    from installer.app import run_doctor
+
+    bin_dir = tmp_path / "bin"
+    kwargs = _healthy_doctor_kwargs(bin_dir)
+    baseline, baseline_buf = _console()
+    extra, extra_buf = _console()
+    run_doctor([], baseline, **kwargs)  # type: ignore[arg-type]
+    run_doctor(
+        [],
+        extra,
+        disk_pressure=lambda: _pressure(
+            daemon="inactive", root_free=80.0, tmp_used=10.0, tmp_threshold=True
+        ),
+        **kwargs,  # type: ignore[arg-type]
+    )
+    assert extra_buf.getvalue() == baseline_buf.getvalue()
+
+
+def test_run_doctor_swallows_a_probe_oserror(tmp_path: Path) -> None:
+    from installer.app import run_doctor
+
+    bin_dir = tmp_path / "bin"
+    kwargs = _healthy_doctor_kwargs(bin_dir)
+    baseline, baseline_buf = _console()
+    failed, failed_buf = _console()
+
+    def boom() -> DiskPressure:
+        raise OSError("unreadable mount")
+
+    run_doctor([], baseline, **kwargs)  # type: ignore[arg-type]
+    run_doctor([], failed, disk_pressure=boom, **kwargs)  # type: ignore[arg-type]
+    assert failed_buf.getvalue() == baseline_buf.getvalue()
+
+
+def test_run_doctor_macos_skips_tmp_threshold_but_keeps_the_measured_percentage(
+    tmp_path: Path,
+) -> None:
+    from installer.app import run_doctor
+
+    bin_dir = tmp_path / "bin"
+    seen: list[DiskPressure] = []
+
+    def probe() -> DiskPressure:
+        pressure = _pressure(daemon="inactive", root_free=80.0, tmp_used=95.0, tmp_threshold=False)
+        assert isinstance(pressure, DiskPressure)
+        seen.append(pressure)
+        return pressure
+
+    console, buf = _console()
+    run_doctor(
+        [],
+        console,
+        disk_pressure=probe,
+        **_healthy_doctor_kwargs(bin_dir),  # type: ignore[arg-type]
+    )
+    out = buf.getvalue()
+    assert "Background cleanup is off" not in out
+    assert "nearly full" not in out.lower()
+    # The threshold is off, so nothing is printed, but the measured temp
+    # percentage is still on the report the caller handed over — task 3's
+    # Policies row reads that number rather than a substituted root figure.
+    assert seen == [
+        _pressure(daemon="inactive", root_free=80.0, tmp_used=95.0, tmp_threshold=False)
+    ]
+
+
+def test_run_doctor_unavailable_daemon_is_an_ordinary_warning(tmp_path: Path) -> None:
+    from rich.console import Console
+
+    from installer.app import run_doctor
+
+    bin_dir = tmp_path / "bin"
+    buf = io.StringIO()
+    console = Console(
+        file=buf, width=160, force_terminal=True, color_system="standard", record=True
+    )
+    run_doctor(
+        [],
+        console,
+        disk_pressure=lambda: _pressure(
+            daemon="unavailable", root_free=10.0, tmp_used=10.0, tmp_threshold=True
+        ),
+        **_healthy_doctor_kwargs(bin_dir),  # type: ignore[arg-type]
+    )
+    rendered = console.export_text(styles=True)
+    plain = buf.getvalue()
+    assert "Free disk space is low" in plain
+    assert "\x1b[1;" not in rendered
+    assert "Enable the background cleanup" not in plain
+    assert "Policies" not in plain
 
 
 def test_run_uninstall_also_removes_guard_artifacts(tmp_path: Path):

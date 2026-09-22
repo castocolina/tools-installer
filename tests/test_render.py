@@ -557,6 +557,49 @@ def test_render_post_install_handoff_preserves_bracketed_instruction_text() -> N
     assert "[this]" in buf.getvalue()
 
 
+def test_render_disk_pressure_prints_nothing_for_an_empty_guidance_list() -> None:
+    from installer.diskusage import DiskPressure
+    from installer.enums import DaemonState
+    from installer.render import render_disk_pressure
+
+    console, buf = _console()
+    render_disk_pressure(
+        DiskPressure(
+            root_free_percent=80.0,
+            tmp_used_percent=10.0,
+            daemon=DaemonState.INACTIVE,
+            tmp_threshold=True,
+        ),
+        console,
+    )
+    assert buf.getvalue() == ""
+
+
+def test_render_disk_pressure_prints_an_emphasised_item_through_guidance_text() -> None:
+    from rich.console import Console
+
+    from installer.diskusage import DiskPressure
+    from installer.enums import DaemonState
+    from installer.render import render_disk_pressure
+
+    buf = io.StringIO()
+    console = Console(
+        file=buf, width=160, force_terminal=True, color_system="standard", record=True
+    )
+    render_disk_pressure(
+        DiskPressure(
+            root_free_percent=10.0,
+            tmp_used_percent=10.0,
+            daemon=DaemonState.INACTIVE,
+            tmp_threshold=True,
+        ),
+        console,
+    )
+    rendered = console.export_text(styles=True)
+    assert "Background cleanup is off" in rendered
+    assert "\x1b[1;" in rendered
+
+
 def test_guidance_text_bolds_the_style_for_an_emphasised_item() -> None:
     from installer.guidance import Guidance
     from installer.render import guidance_text

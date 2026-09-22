@@ -22,7 +22,7 @@ from prompt_toolkit.input import Input, create_input
 from prompt_toolkit.output import Output, create_output
 from rich.console import Console
 
-from installer import daemon, env_redirect, pnpm_globals, systemd_daemon
+from installer import daemon, diskusage, env_redirect, pnpm_globals, systemd_daemon
 from installer.app import (
     UninstallDecision,
     clean_rc_duplicates,
@@ -36,6 +36,8 @@ from installer.app import (
     run_wizard,
 )
 from installer.cli import Options, parse_args
+from installer.diskusage import DiskPressure
+from installer.enums import DaemonState
 from installer.execute_screen import ExecuteInputs
 from installer.install_ownership import run_probe
 from installer.locations import all_ban_rc_paths, ban_rc_paths, rc_paths_for_mode, zshrc_path
@@ -380,6 +382,73 @@ def _timer_state_cache(
     )
 
 
+class _DiskProbe:
+    """Zero-argument disk probe with a blocking switch for the render path.
+
+    The default is the blocking read: a `make doctor` run that reported a
+    stale daemon state to avoid a short wait would trade correctness for
+    nothing. The same wait on the Textual event loop is a frozen UI, so the
+    row-highlight path passes blocking=False and reads TimerStateCache.peek,
+    which never probes. A None peek omits the daemon-dependent half by
+    answering UNAVAILABLE — ordinary warning wording, never a red finding.
+    """
+
+    def __init__(
+        self,
+        *,
+        platform: Platform,
+        timer_cache: systemd_daemon.TimerStateCache | None,
+        plist_path: Path,
+        unit_dir: Path,
+    ) -> None:
+        self._platform = platform
+        self._timer_cache = timer_cache
+        self._plist_path = plist_path
+        self._unit_dir = unit_dir
+
+    def _daemon(self, *, blocking: bool) -> DaemonState:
+        if self._platform.os == "macos":
+            return DaemonState.ACTIVE if self._plist_path.exists() else DaemonState.INACTIVE
+        cache = self._timer_cache
+        if cache is None:
+            return DaemonState.UNAVAILABLE
+        if not blocking:
+            peeked = cache.peek()
+            return DaemonState.UNAVAILABLE if peeked is None else peeked
+        return cache.read()
+
+    def __call__(self, *, blocking: bool = True) -> DiskPressure:
+        tmp = os.environ.get("TMPDIR", "") or str(Path(os.sep) / "tmp")
+        return diskusage.probe_disk_pressure(
+            self._daemon(blocking=blocking),
+            self._platform.os != "macos",
+            Path("/"),
+            Path(tmp),
+        )
+
+
+def _disk_pressure_probe(
+    platform: Platform,
+    *,
+    timer_cache: systemd_daemon.TimerStateCache | None,
+) -> _DiskProbe:
+    """THE construction point for a disk-pressure probe.
+
+    Resolves daemon state from the platform and the module-level artifact
+    paths plus the INJECTED cache — never from a Policy, and never by
+    constructing a TimerStateCache of its own. `timer_cache` is required
+    because a default would silently build a second cache; None is a
+    meaningful value (macOS, or Linux without systemctl) meaning
+    DaemonState.UNAVAILABLE on Linux.
+    """
+    return _DiskProbe(
+        platform=platform,
+        timer_cache=timer_cache,
+        plist_path=_DAEMON_PLIST_PATH,
+        unit_dir=_LINUX_DAEMON_UNIT_DIR,
+    )
+
+
 def _build_daemon_policy(
     platform: Platform,
     installed: Mapping[str, bool],
@@ -590,7 +659,18 @@ def _build_app(
     settings: SettingsStore | None = None,
     prompt_link_mode: bool = False,
     daemon_default_warnings: DaemonDefaultWarnings | None = None,
+    disk_pressure: Callable[..., DiskPressure] | None = None,
+    timer_cache: systemd_daemon.TimerStateCache | None = None,
 ) -> UnifiedApp:
+    # One resolution, not two independent fallbacks: the routes that supply
+    # neither argument (_run_doctor's TTY branch, _run_fix, _run_uninstall)
+    # must still share one cache between the daemon Policy and the probe.
+    if timer_cache is None and disk_pressure is None:
+        timer_cache = _timer_state_cache(
+            platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
+        )
+    if disk_pressure is None:
+        disk_pressure = _disk_pressure_probe(platform, timer_cache=timer_cache)
     installed = {tool.id: is_installed(tool) for tool in tools}
     unavailable = {tool.id: not platform_could_support(tool, platform) for tool in tools}
     report, _status, _warning = doctor_data(
@@ -685,14 +765,6 @@ def _build_app(
     # tweak_present/tweak_executables_present already answer False for anything
     # not on disk, so the total sweep costs nothing.
     bundles = applicable_bundles(platform)
-
-    # D-01e: THE single TimerStateCache construction point for this route,
-    # built BEFORE anything consumes it and injected into the Linux daemon
-    # Policy below. A future disk-pressure probe (plan 15.7-06) receives this
-    # SAME object, never a second cache it builds itself.
-    timer_cache = _timer_state_cache(
-        platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
-    )
 
     # Constructed once, here, and shared: the Policies list below, the
     # on-by-default auto-apply closure, and the Uninstall teardown closures
@@ -814,6 +886,7 @@ def _build_app(
         ],
         link_mode=_current_link_mode if settings is not None else None,
         set_link_mode=settings.set_link_mode if settings is not None else None,
+        disk_pressure=disk_pressure,
     )
 
     def _apply_fix() -> None:
@@ -973,6 +1046,7 @@ def _execute_inputs(
     *,
     link_mode: str | Callable[[], str],
     unattended: bool,
+    disk_pressure: Callable[[], DiskPressure],
 ) -> ExecuteInputs:
     def current_mode() -> str:
         return link_mode() if callable(link_mode) else link_mode
@@ -1000,6 +1074,7 @@ def _execute_inputs(
             default_bin_dir=_DEFAULT_BIN_DIR,
             path_value=os.environ.get("PATH", ""),
             exists=Path.is_dir,
+            disk_pressure=disk_pressure,
         )
         return buffer.getvalue()
 
@@ -1022,6 +1097,13 @@ def _run_interactive_wizard(
     prompt_link_mode: bool,
 ) -> int:
     warnings = DaemonDefaultWarnings()
+    # Built BEFORE _build_app: execute= evaluates _execute_inputs inside that
+    # call's argument list, so the only way both receive the same probe (and
+    # the same cache) is to name them here and pass each in.
+    cache = _timer_state_cache(
+        platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
+    )
+    probe = _disk_pressure_probe(platform, timer_cache=cache)
     with _stdin_on_tty():
         # Only the genuine interactive wizard flow auto-applies the daemon
         # default (allowlist at the _build_app call site).
@@ -1031,11 +1113,17 @@ def _run_interactive_wizard(
             link_mode=settings.link_mode,
             apply_daemon_default=True,
             execute=_execute_inputs(
-                tools, platform, link_mode=lambda: settings.link_mode, unattended=options.yes
+                tools,
+                platform,
+                link_mode=lambda: settings.link_mode,
+                unattended=options.yes,
+                disk_pressure=probe,
             ),
             settings=settings,
             prompt_link_mode=prompt_link_mode,
             daemon_default_warnings=warnings,
+            disk_pressure=probe,
+            timer_cache=cache,
         )
         app.run()
     # BEFORE the abort return: an aborted wizard is still a run whose
@@ -1082,6 +1170,9 @@ def _run_doctor(console: Console) -> int:
         with _stdin_on_tty():
             _build_app(tools, platform, initial_view="doctor", settings=store).run()
         return 0
+    cache = _timer_state_cache(
+        platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
+    )
     run_doctor(
         tools,
         console,
@@ -1089,6 +1180,7 @@ def _run_doctor(console: Console) -> int:
         default_bin_dir=_DEFAULT_BIN_DIR,
         path_value=os.environ.get("PATH", ""),
         exists=Path.is_dir,
+        disk_pressure=_disk_pressure_probe(platform, timer_cache=cache),
     )
     return 0
 
@@ -1183,6 +1275,9 @@ def _run_guard(console: Console, *, remove: bool, rc_paths: list[Path], assume_y
 def _verify_and_clean(
     console: Console, tools: list[Tool], platform: Platform, *, assume_yes: bool
 ) -> None:
+    cache = _timer_state_cache(
+        platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
+    )
     run_doctor(
         tools,
         console,
@@ -1190,6 +1285,7 @@ def _verify_and_clean(
         default_bin_dir=_DEFAULT_BIN_DIR,
         path_value=os.environ.get("PATH", ""),
         exists=Path.is_dir,
+        disk_pressure=_disk_pressure_probe(platform, timer_cache=cache),
     )
     managed = set(collect_bin_dirs(tools, platform, _DEFAULT_BIN_DIR))
     confirm = (lambda _message: True) if assume_yes else _ask_confirm

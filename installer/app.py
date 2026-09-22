@@ -1,5 +1,6 @@
 """The interactive wizard flow: select -> audit -> confirm -> install -> summarize."""
 
+import contextlib
 import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from rich.console import Console
 from installer.audit import audit
 from installer.cli import Options
 from installer.deps import resolve_dependencies
+from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport, audit_path
 from installer.engine import install_tool
 from installer.guards import (
@@ -32,6 +34,7 @@ from installer.rcclean import find_duplicate_path_lines, strip_lines
 from installer.render import (
     render_audit,
     render_dependency_notice,
+    render_disk_pressure,
     render_doctor,
     render_failure_details,
     render_guard,
@@ -265,6 +268,7 @@ def run_doctor(
     exists: Callable[[Path], bool],
     which: Callable[[str], str | None] = shutil.which,
     managed_globals: Callable[[], tuple[str, ...] | None] = pnpm_global_packages,
+    disk_pressure: Callable[[], DiskPressure] | None = None,
 ) -> DoctorReport:
     """Audit the PATH (read-only) and render the report. Fixing the PATH
     remains a separate explicit action.
@@ -272,6 +276,14 @@ def run_doctor(
     `managed_globals` is injected beside `which` for the same reason: the
     pnpm-globals audit asks the real pnpm what it manages, and a test must be
     able to answer for it.
+
+    `disk_pressure` is the same injected-seam shape. None renders exactly
+    today's report, so every existing caller stays byte-identical. Plan
+    15.7-02's D-03b already makes `probe_disk_pressure` total over filesystem
+    and probe-conversion failure; the guard below covers the INJECTED
+    closure a caller composes around it, which a caller can make fail, rather
+    than re-guarding the probe itself. It is deliberately not a fourth
+    `doctor_data` element: that tuple is destructured positionally.
     """
     report, status, warning = doctor_data(
         tools,
@@ -284,6 +296,9 @@ def run_doctor(
     render_doctor(report, console)
     render_guard_status(status, warning, console)
     render_node_globals(audit_node_globals(tools, which=which, managed=managed_globals), console)
+    if disk_pressure is not None:
+        with contextlib.suppress(OSError, ValueError):
+            render_disk_pressure(disk_pressure(), console)
     return report
 
 
