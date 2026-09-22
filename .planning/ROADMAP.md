@@ -530,30 +530,33 @@ Plans:
 **Goal:** Every PATH entry this installer writes into a shell rc file is self-deduping at runtime — a nested or child shell that re-sources the file N times ends up with exactly one copy of each managed directory, proven by running real shells rather than by asserting on the emitted string — existing installations migrate automatically the next time apply/fix runs through the block-replacement mechanism that already exists, no PATH-writing code in the repo emits a plain unconditional export any more, and a machine carrying a generic ~/.shellrc ends up with one canonical file (~/.myshellrc) plus a marked stub, with the foreign content copied forward before anything is replaced.
 **Requirements**: D-01 (automatic migration through the existing apply_block), D-02 (+D-02a, the dated 2026-09-22 CONTEXT correction, authoritative over D-02's original text: the named second site is dead code and is DELETED rather than ported, with a port fallback if a live caller is found), D-03 (the case-guarded self-deduping idiom, still unrecognized-as-duplicate by installer/rcclean.py), D-04 (generic ~/.shellrc consolidated into ~/.myshellrc) — 15.8-CONTEXT.md locked decisions; an inserted roadmap phase with no REQUIREMENTS.md ids, following Phase 15.7's precedent.
 **Depends on:** Phase 15
-**Plans:** 6 plans
+**Plans:** 7 plans
 
 Plans:
 
+*Plan numbers are creation order, not wave order — 15.8-07 was added in cross-AI review round 2 and runs in wave 2.*
+
 **Wave 1**
 
-- [ ] 15.8-01-PLAN.md — The reusable self-deduping PATH-guard emitter (conditional PATH contribution, no empty component, `set -u` safe), managed_block rewired, and the real-shell runtime-idempotency + D-01 migration proofs (D-01, D-02, D-03)
+- [ ] 15.8-01-PLAN.md — The reusable self-deduping PATH-guard emitter (conditional PATH contribution, no empty component, `set -u` safe, and matching every spelling of a symlinked-home directory while writing only the declared one), managed_block rewired, and the real-shell runtime-idempotency + D-01 migration proofs (D-01, D-02, D-03)
 
-**Wave 2** *(blocked on Wave 1; the two plans touch disjoint files and run in parallel)*
+**Wave 2** *(blocked on Wave 1; the three plans touch disjoint files and run in parallel)*
 
 - [ ] 15.8-02-PLAN.md — Executable pins that installer/rcclean.py needs no change, in both directions (D-02, D-03)
-- [ ] 15.8-03-PLAN.md — D-02a: delete write_pnpm_home and existing_managed_bin_dirs after re-verifying zero callers, plus an AST-level no-accumulating-PATH-build invariant over installer/ and setup.py (D-02, D-02a)
+- [ ] 15.8-03-PLAN.md — D-02a: delete write_pnpm_home and existing_managed_bin_dirs after re-verifying zero callers; an AST-level no-accumulating-PATH-build invariant over installer/ and setup.py covering every PATH expansion spelling; and one atomic-write discipline across installer/shellrc.py (D-02, D-02a)
+- [ ] 15.8-07-PLAN.md — The shell-script half of the same invariant: convert scripts/container-e2e-verify.sh's two plain rc appends to the guarded form and prove it by running the committed script's own bytes, plus a text-level scan over install.sh and scripts/**/*.sh with the three one-shot assignments classified by property (D-02, D-03)
 
 **Wave 3** *(blocked on Wave 2: shares installer/shellrc.py with 15.8-03)*
 
-- [ ] 15.8-04-PLAN.md — D-04 consolidation, safe half: symlink/same-file preconditions before any write, a byte-exact no-clobber backup that refuses a stale one, and the happy path proven in a real shell (D-04)
+- [ ] 15.8-04-PLAN.md — D-04 consolidation, safe half: symlink/same-file/UTF-8 preconditions before any write, a backup that must be a regular file matching on bytes AND mode, and an identity-bound snapshot revalidated before the original is replaced (D-04)
 
 **Wave 4** *(blocked on Wave 3: shares installer/shellrc.py with 15.8-04 and extends consolidate_shellrc)*
 
-- [ ] 15.8-05-PLAN.md — D-04 consolidation, content half: one strict source-line classifier that rewrites only an unambiguous simple source and refuses every other shape, plus the real-shell sourcing-loop proofs and the documented foreign-export residual (D-04)
+- [ ] 15.8-05-PLAN.md — D-04 consolidation, content half: a conservative detector that normalizes and resolves rather than parses, three blanket refusals (here-document, eval, unresolvable source argument) in place of a shell lexer, one strict rewriter, and the real-shell sourcing-loop proofs (D-04)
 
 **Wave 5** *(blocked on Wave 4: consumes consolidate_shellrc, sources_file and remove_source_block)*
 
-- [ ] 15.8-06-PLAN.md — Wiring into configure_path and all four setup.py call sites, one route per rc file so a consolidated startup never runs the canonical file twice, a typed refusal that Doctor cannot report as success, test isolation for the new home constant, and the architecture.md invariants record (D-01, D-04)
+- [ ] 15.8-06-PLAN.md — Wiring into configure_path and all four setup.py call sites, one route per rc file (handling all three sources_file answers) so a consolidated startup never runs the canonical file twice, a typed refusal that Doctor cannot report as success, test isolation for the new home constant, and the architecture.md invariants record (D-01, D-04)
 
 ### Phase 15.7: Unify tmp-prune tooling into an installable Tweaks module (from pending todo 2026-09-10-unify-tmp-prune-tooling-into-an-installable-tweaks-module.md): opencode/Bun's runtime-transpiler-cache orphans native .so/.node artifacts on a killed/crashed process, either in OS temp (macOS $TMPDIR, can reach 100GB+/day) or /tmp on Linux (a small-quota tmpfs on Bazzite, ~12GB, causing EDQUOT failures across the whole system once full). Two independent non-reusable scripts already solve pieces of this today (this repo's scripts/prune-user-tmpdir.sh, manual dry-run/--apply only; ai-kit's Linux-only systemd-timer bundle, confirmed working, keeps /tmp under 1%) but neither is cross-platform, wired into this project, or installable/uninstallable. Build one dedicated cross-platform module: (1) env-var wiring to redirect Bun's cache off tmp entirely (environment.d on Linux, shell-rc based on macOS), (2) a real background daemon install/uninstall -- systemd user timer+oneshot on Linux, launchd LaunchAgent on macOS -- never manual scripts, (3) Tweaks view toggle (install/uninstall, daemon-active status, current tmp usage %), (4) make doctor integration: red warning when the cleanup daemon is inactive AND disk space is below 30% (or /tmp exceeds 50% on Linux specifically), extra visual weight when both conditions are true together. Reuse this project's existing OS-detection conventions (Phase 12.3 precedent) rather than duplicating per-OS logic; user explicitly rejected manual-script-only as an acceptable outcome. (INSERTED)
 
