@@ -2,20 +2,19 @@
 gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: "15.8"
-current_phase_name: "Fix real (not just cosmetic) PATH duplication from managed-block sourcing: installer/shellrc.py's managed_block() (line 101-111) emits a plain, unconditional 'export PATH=\"{dir}:$PATH\"' per managed bin dir into .bashrc/.zshrc/.myshellrc. The rc-file block itself is idempotent (apply_block never writes it twice), but the block's RUNTIME EFFECT is not: every nested/child shell that sources it again (very common -- tmux/wezterm panes, IDE-integrated terminals, subshells) re-prepends the same directory onto an already-inherited PATH that has it, accumulating duplicates with every nesting level. Confirmed live this session: 5 copies of ~/.local/bin, 4 of fnm's dir, 3+ of several others, in a single real shell session -- this is why Doctor's PATH audit keeps reporting the same 'duplicated on PATH' findings even after applying the fix and opening a genuinely new terminal, not a UI staleness issue (that is Phase 15.1's separate finding). Fix by making managed_block() emit a self-deduping guarded form instead of a plain export -- this codebase already recognizes and special-cases exactly this shape from pnpm's own installer output (installer/rcclean.py:61-70's find_duplicate_path_lines explicitly skips pnpm's case-guarded '*) export PATH=\"$PNPM_HOME:$PATH\" ;;' block as 'self-deduping ... nothing safe or necessary to strip' -- reuse that same case-guarded idiom for every managed dir instead of a plain export). User explicitly asked for a reusable function/mechanism that checks-before-adding, not a one-off patch to this single block -- audit installer/shellrc.py's other PATH-writing call site (pnpm_home block, line ~210) and any other PATH-modifying block in the codebase for the same non-idempotent-at-runtime defect."
+current_phase_name: fix-real-not-just-cosmetic-path-duplication-from-managed-blo
 current_plan: Not started
-status: planning
+status: executing
 stopped_at: Phase 15.7 complete, ready to plan Phase 15.8
-last_updated: "2026-09-22T19:20:52.690Z"
+last_updated: "2026-09-22T22:01:22.581Z"
 last_activity: 2026-09-22
 last_activity_desc: Phase 15.7 complete, transitioned to Phase 15.8
-state_head: ecd5d35779cbc3673eb65cb65942caaf19842281
+state_head: 368c10cde60b1710f0e7a699894f41696436e8e3
 progress:
   total_phases: 27
   completed_phases: 17
-  total_plans: 84
+  total_plans: 91
   completed_plans: 84
-  percent: 100
 ---
 
 Total Phases: 21
@@ -31,10 +30,10 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 
 ## Current Position
 
-Phase: 15.8 — Fix real (not just cosmetic) PATH duplication from managed-block sourcing: installer/shellrc.py's managed_block() (line 101-111) emits a plain, unconditional 'export PATH="{dir}:$PATH"' per managed bin dir into .bashrc/.zshrc/.myshellrc. The rc-file block itself is idempotent (apply_block never writes it twice), but the block's RUNTIME EFFECT is not: every nested/child shell that sources it again (very common -- tmux/wezterm panes, IDE-integrated terminals, subshells) re-prepends the same directory onto an already-inherited PATH that has it, accumulating duplicates with every nesting level. Confirmed live this session: 5 copies of ~/.local/bin, 4 of fnm's dir, 3+ of several others, in a single real shell session -- this is why Doctor's PATH audit keeps reporting the same 'duplicated on PATH' findings even after applying the fix and opening a genuinely new terminal, not a UI staleness issue (that is Phase 15.1's separate finding). Fix by making managed_block() emit a self-deduping guarded form instead of a plain export -- this codebase already recognizes and special-cases exactly this shape from pnpm's own installer output (installer/rcclean.py:61-70's find_duplicate_path_lines explicitly skips pnpm's case-guarded '*) export PATH="$PNPM_HOME:$PATH" ;;' block as 'self-deduping ... nothing safe or necessary to strip' -- reuse that same case-guarded idiom for every managed dir instead of a plain export). User explicitly asked for a reusable function/mechanism that checks-before-adding, not a one-off patch to this single block -- audit installer/shellrc.py's other PATH-writing call site (pnpm_home block, line ~210) and any other PATH-modifying block in the codebase for the same non-idempotent-at-runtime defect.
+Phase: 15.8 (fix-real-not-just-cosmetic-path-duplication-from-managed-blo) — READY TO EXECUTE
 Current Plan: Not started
 Total Plans in Phase: 7
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-09-22 — Phase 15.7 complete, transitioned to Phase 15.8
 
 Progress: [██████████] 100%
