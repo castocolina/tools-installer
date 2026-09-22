@@ -108,14 +108,14 @@ def path_export_guard(directory: Path) -> str:
 
     if resolved == declared:
         pattern = f":{declared}:"
-        patterns = pattern
+        guard_pattern = f'*"{pattern}"*'
     else:
         pattern1 = f":{declared}:"
         pattern2 = f":{resolved}:"
-        patterns = f"{pattern1}|{pattern2}"
+        guard_pattern = f'*"{pattern1}"*|*"{pattern2}"*'
 
     value = f"{declared}${{PATH:+:$PATH}}"
-    return f'case ":${{PATH-}}:" in *"{patterns}"*) ;; *) export PATH="{value}";;esac'
+    return f'case ":${{PATH-}}:" in {guard_pattern}) ;; *) export PATH="{value}";;esac'
 
 
 def existing_managed_bin_dirs(

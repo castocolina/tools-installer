@@ -358,3 +358,315 @@ def test_managed_block_is_runtime_idempotent_under_bash(tmp_path: Path) -> None:
     path_entries = result.stdout.strip().split(":")
     matching = [e for e in path_entries if e == str(bin_dir)]
     assert len(matching) == 1
+
+
+def test_path_export_guard_with_space_in_directory_name(tmp_path: Path) -> None:
+    bash_path = shutil.which("bash")
+    if bash_path is None:
+        pytest.skip("bash not available")
+
+    bin_dir = tmp_path / "a bin"
+    bin_dir.mkdir()
+    rc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], rc)
+
+    script = "\n".join([f". {rc}" for _ in range(5)]) + "\necho $PATH"
+    result = subprocess.run(
+        [bash_path, "-c", script],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    path_entries = result.stdout.strip().split(":")
+    matching = [e for e in path_entries if e == str(bin_dir)]
+    assert len(matching) == 1
+
+
+def test_empty_starting_path_becomes_exactly_the_managed_directory(
+    tmp_path: Path,
+) -> None:
+    bash_path = shutil.which("bash")
+    if bash_path is None:
+        pytest.skip("bash not available")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    rc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], rc)
+
+    script = f". {rc}\necho $PATH"
+    result = subprocess.run(
+        [bash_path, "-c", script],
+        env={"PATH": "", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    actual_path = result.stdout.strip()
+    assert actual_path == str(bin_dir)
+
+
+def test_a_cwd_executable_is_not_reachable_through_the_emitted_block(
+    tmp_path: Path,
+) -> None:
+    bash_path = shutil.which("bash")
+    if bash_path is None:
+        pytest.skip("bash not available")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    rc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], rc)
+
+    test_script = tmp_path / "hello.sh"
+    test_script.write_text("#!/bin/bash\necho 'executed'\n")
+    test_script.chmod(0o755)
+
+    script = f". {rc}\nhello.sh\n"
+    result = subprocess.run(
+        [bash_path, "-c", script],
+        cwd=str(tmp_path),
+        env={"PATH": "", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode != 0
+    assert "executed" not in result.stdout
+
+
+def test_unset_path_under_set_u_does_not_abort_shell(tmp_path: Path) -> None:
+    bash_path = shutil.which("bash")
+    if bash_path is None:
+        pytest.skip("bash not available")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    rc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], rc)
+
+    script = f"set -u\n. {rc}\necho $PATH"
+    result = subprocess.run(
+        [bash_path, "-c", script],
+        env={"HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    assert str(bin_dir) in result.stdout.strip()
+
+
+def test_the_directory_as_the_only_entry_on_path_stays_unique(tmp_path: Path) -> None:
+    bash_path = shutil.which("bash")
+    if bash_path is None:
+        pytest.skip("bash not available")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    rc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], rc)
+
+    script = "\n".join([f". {rc}" for _ in range(3)]) + "\necho $PATH"
+    result = subprocess.run(
+        [bash_path, "-c", script],
+        env={"PATH": str(bin_dir), "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    path_entries = result.stdout.strip().split(":")
+    matching = [e for e in path_entries if e == str(bin_dir)]
+    assert len(matching) == 1
+
+
+def test_an_aliased_home_spelling_on_path_is_not_duplicated(tmp_path: Path) -> None:
+    bash_path = shutil.which("bash")
+    if bash_path is None:
+        pytest.skip("bash not available")
+
+    real_home = tmp_path / "real_home"
+    real_home.mkdir()
+    link_home = tmp_path / "link_home"
+    link_home.symlink_to(real_home)
+    bin_dir = link_home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+
+    rc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], rc)
+
+    script = "\n".join([f". {rc}" for _ in range(3)]) + "\necho $PATH"
+    resolved_bin = real_home / ".local" / "bin"
+    result = subprocess.run(
+        [bash_path, "-c", script],
+        env={"PATH": str(resolved_bin), "HOME": str(link_home)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    path_entries = result.stdout.strip().split(":")
+    total_matches = sum(1 for e in path_entries if e == str(bin_dir) or e == str(resolved_bin))
+    assert total_matches == 1
+
+
+def test_the_declared_home_spelling_on_path_is_not_duplicated(tmp_path: Path) -> None:
+    bash_path = shutil.which("bash")
+    if bash_path is None:
+        pytest.skip("bash not available")
+
+    real_home = tmp_path / "real_home"
+    real_home.mkdir()
+    link_home = tmp_path / "link_home"
+    link_home.symlink_to(real_home)
+    bin_dir = link_home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+
+    rc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], rc)
+
+    script = "\n".join([f". {rc}" for _ in range(3)]) + "\necho $PATH"
+    result = subprocess.run(
+        [bash_path, "-c", script],
+        env={"PATH": str(bin_dir), "HOME": str(link_home)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    path_entries = result.stdout.strip().split(":")
+    matching = [e for e in path_entries if e == str(bin_dir)]
+    assert len(matching) == 1
+
+
+def test_an_aliased_home_gets_the_declared_spelling_when_path_lacks_both(
+    tmp_path: Path,
+) -> None:
+    bash_path = shutil.which("bash")
+    if bash_path is None:
+        pytest.skip("bash not available")
+
+    real_home = tmp_path / "real_home"
+    real_home.mkdir()
+    link_home = tmp_path / "link_home"
+    link_home.symlink_to(real_home)
+    bin_dir = link_home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+
+    rc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], rc)
+
+    script = f". {rc}\necho $PATH"
+    result = subprocess.run(
+        [bash_path, "-c", script],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(link_home)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    path_entries = result.stdout.strip().split(":")
+    declared_entries = [e for e in path_entries if e == str(bin_dir)]
+    assert len(declared_entries) == 1
+
+
+def test_two_managed_directories_maintain_order_under_bash(tmp_path: Path) -> None:
+    bash_path = shutil.which("bash")
+    if bash_path is None:
+        pytest.skip("bash not available")
+
+    bin_dir_a = tmp_path / "a_bin"
+    bin_dir_b = tmp_path / "b_bin"
+    bin_dir_a.mkdir()
+    bin_dir_b.mkdir()
+
+    rc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir_a, bin_dir_b], rc)
+
+    script = "\n".join([f". {rc}" for _ in range(3)]) + "\necho $PATH"
+    result = subprocess.run(
+        [bash_path, "-c", script],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    path_entries = result.stdout.strip().split(":")
+    a_indices = [i for i, e in enumerate(path_entries) if e == str(bin_dir_a)]
+    b_indices = [i for i, e in enumerate(path_entries) if e == str(bin_dir_b)]
+    assert len(a_indices) == 1
+    assert len(b_indices) == 1
+    assert b_indices[0] < a_indices[0]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh not on PATH")
+def test_managed_block_is_runtime_idempotent_under_zsh(tmp_path: Path) -> None:
+    zsh_path = shutil.which("zsh")
+    if zsh_path is None:
+        pytest.skip("zsh not available")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    rc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], rc)
+
+    script = "\n".join([f". {rc}" for _ in range(5)]) + "\necho $PATH"
+    result = subprocess.run(
+        [zsh_path, "-f", "-c", script],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    path_entries = result.stdout.strip().split(":")
+    matching = [e for e in path_entries if e == str(bin_dir)]
+    assert len(matching) == 1
+
+
+def test_managed_block_is_runtime_idempotent_under_bin_sh(tmp_path: Path) -> None:
+    sh_path = "/bin/sh"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    rc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], rc)
+
+    script = "\n".join([f". {rc}" for _ in range(5)]) + "\necho $PATH"
+    result = subprocess.run(
+        [sh_path, "-c", script],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    path_entries = result.stdout.strip().split(":")
+    matching = [e for e in path_entries if e == str(bin_dir)]
+    assert len(matching) == 1
