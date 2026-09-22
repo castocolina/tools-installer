@@ -3,13 +3,13 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: "15.7"
 current_phase_name: unify-tmp-prune-tooling-into-an-installable-tweaks-module-fr
-current_plan: 06 (Plans 01-05,07 complete)
+current_plan: all 7 plans complete (code review next)
 status: executing
-stopped_at: Completed 15.7-05-PLAN.md (wave 4, cross-AI execution per Rule 12)
+stopped_at: Completed 15.7-06-PLAN.md (wave 5; Task 1 cross-AI, Tasks 2-3 Rule 12 fallback after 2 cross-AI failures)
 last_updated: "2026-09-22T13:07:41Z"
 last_activity: 2026-09-22
 last_activity_desc: "Phase 15.7 Wave 3: generalized cache-redirect mechanism (D-04, Plan 04) complete, executed via cross-AI (opencode router-env/my-coding) per ONESHOT-RULES.md Rule 12"
-state_head: 2aac02e
+state_head: 9849a78
 progress:
   total_phases: 27
   completed_phases: 17
@@ -109,6 +109,7 @@ Progress: [██████████] 100%
 | Phase 15.7 P07 | ~1h | 2 tasks | 6 files |
 | Phase 15.7 P04 (cross-AI: opencode router-env/my-coding) | ~35min | 2 tasks | 4 files |
 | Phase 15.7 P05 (cross-AI: opencode router-env/my-coding) | 55min | 3 tasks | 11 files |
+| Phase 15.7 P06 (T1 cross-AI; T2-3 Rule 12 fallback) | ~2h incl. 1h cross-AI timeout | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -190,6 +191,7 @@ Recent decisions affecting current work:
 - [15.7-07, 2026-09-22]: D-01f — both prune scripts converge on `-mmin`/`--changed-before Nmin` (minute-precision, `fd`-matching semantics), never `-mtime`'s day-boundary semantics; "byte-for-byte" equivalence between the two scripts is narrowed to the flag/refusal/validation/family/depth/`deleted: N` contract, excluding exact age-cutoff arithmetic. Fixed a real production bug found while characterizing: macOS's `--apply` deletion pipeline ran its counting function in a bash pipeline subshell, so `deleted: N` (the line `installer.daemon.last_run_summary` parses) always reported 0 regardless of real work done; fixed by redirecting into the function's stdin instead of piping into it.
 - [15.7-07, 2026-09-22]: Extracted `scripts/lib/prune-tmp-common.sh` as the single shared implementation (broad-path refusal guard, root/age validation, fd-preferred/find-fallback depth-1 traversal, byte formatting, `deleted: N` summary) used by both `scripts/prune-tmp-linux.sh` and `scripts/prune-user-tmpdir.sh`. A pre-existing quirk (`--tmpdir /` bypassing the refusal guard via the trailing-slash strip turning `/` into an empty string) was pinned as-is, not fixed — out of this plan's must_haves scope.
 - [15.7-04, 2026-09-22]: One `CacheRedirect` declaration drives both platform writers (Linux: bare `KEY=VALUE` in an environment.d conf; macOS: `export KEY="VALUE"` in ~/.myshellrc via shellrc.py's existing apply_block/strip_block/ensure_source primitives) — Bun's `BUN_RUNTIME_TRANSPILER_CACHE_PATH` -> `~/.cache/bun/transpiler-cache` is the first wired-up case. Applied state reads from the owned file only (never live process env) and shares its ownership check with the remover so a policy can never read active for a file it would refuse to delete. Executed via cross-AI (opencode router-env/my-coding) per ONESHOT-RULES.md Rule 12; commits 2e9cdbe, 354655c, 147b51d.
+- [15.7-06, 2026-09-22]: Cross-AI (opencode router-env/my-coding) completed Task 1 (750d68b) then died on a grok 402 quota stop; a continuation retry hit the 1h timeout looping on RTK rewriting pytest output to a false "No tests collected" (same signature as 12.3-02). Tasks 2-3 finished via the Rule 12 direct-executor fallback. The Doctor screen reuses PolicyInputs.disk_pressure (one probe, no second construction); the Policies daemon row renders temp usage via the cache's non-blocking peek only (zero is-active queries across all memo states). Source todo moved pending -> completed.
 
 ### Pending Todos
 
@@ -231,5 +233,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-22T13:07:41Z
-Stopped at: Completed 15.7-05-PLAN.md (wave 4, cross-AI)
+Stopped at: Completed 15.7-06-PLAN.md (all 7 plans of 15.7 executed)
 Resume file: None
