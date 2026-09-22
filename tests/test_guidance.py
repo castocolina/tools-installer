@@ -5,12 +5,14 @@ from installer.doctor import DoctorReport
 from installer.enums import DaemonState
 from installer.guidance import (
     Guidance,
+    competing_mechanism_guidance,
     disk_pressure_guidance,
     doctor_guidance,
     guard_guidance,
     node_globals_guidance,
 )
 from installer.pnpm_globals import IncompleteGroup, NodeGlobal, NodeGlobalsReport
+from installer.systemd_daemon import CompetingUnit
 
 # The exact sentence D-03c's UNAVAILABLE branch uses for its one-off manual
 # prune next step. Pinned here, not imported, so this test independently
@@ -489,3 +491,27 @@ def test_guidance_emphasis_defaults_to_false() -> None:
 def test_guidance_emphasis_can_be_set_true() -> None:
     g = Guidance(title="t", meaning="m", next_step="n", severity="error", emphasis=True)
     assert g.emphasis is True
+
+
+def _competitor(name: str, scope: str) -> CompetingUnit:
+    return CompetingUnit(name=name, scope=scope, state="enabled")
+
+
+def test_competing_mechanism_guidance_is_silent_without_a_system_scope_unit() -> None:
+    assert competing_mechanism_guidance(()) == []
+    user_only = (_competitor("cleanup-bun-tmp-cache.timer", "user"),)
+    # A user-scope competitor is taken over by the apply, so it is not a
+    # standing disclosure here.
+    assert competing_mechanism_guidance(user_only) == []
+
+
+def test_competing_mechanism_guidance_names_the_unit_and_the_manual_root_command() -> None:
+    """WR-10: D-02a's disclosure existed only inside the first apply's result,
+    so a user who missed one console line never saw it again."""
+    units = (_competitor("cleanup-bun-tmp-cache.timer", "system"),)
+    [item] = competing_mechanism_guidance(units)
+    assert "cleanup-bun-tmp-cache.timer" in item.title
+    assert "sudo systemctl disable --now cleanup-bun-tmp-cache.timer" in item.meaning
+    assert item.severity == "warn"
+    assert item.emphasis is False
+    assert "sudo" in item.next_step  # named as the user's own action, never run here

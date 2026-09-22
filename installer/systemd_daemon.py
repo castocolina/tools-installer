@@ -20,6 +20,7 @@ import time
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Generic, TypeVar
 
 from installer.atomic import atomic_write_bytes
 from installer.daemon import (
@@ -54,7 +55,9 @@ __all__ = [
     "STATE_CACHE_TTL",
     "SYSTEMCTL_QUERY_TIMEOUT",
     "TIMER_NAME",
+    "COMPETITOR_CACHE_TTL",
     "CompetingUnit",
+    "CompetitorCache",
     "TimerStateCache",
     "UNIT_BASENAME",
     "WRAPPER_COMMAND",
@@ -460,23 +463,20 @@ def timer_state(unit_dir: Path, *, read_output: OutputRunner = query_systemctl) 
     return probe_timer_state(read_output=read_output)
 
 
-class TimerStateCache:
-    """Memoized runtime-state source over one DaemonState-returning probe,
-    with an injected monotonic clock for deterministic TTL tests.
+_Probed = TypeVar("_Probed")
 
-    D-01e: this is the ONE shared instance every consumer in this phase
-    reads -- constructed once by setup.py::_timer_state_cache and injected
-    into both the Linux daemon Policy and plan 15.7-06's disk-pressure
-    probe. D-01c: the split between read()/peek() is load-bearing --
-    read() may spawn one bounded probe (Policy.active/is_active, Doctor
-    entry: an explicit user action or a one-per-route construction, never a
-    per-keystroke path); peek() NEVER probes, never blocks, never spawns,
-    and is the ONLY verb a Textual render path may call.
+
+class _ProbeCache(Generic[_Probed]):
+    """Memoized value over one probe, with an injected monotonic clock.
+
+    The read/peek/invalidate split and the locking are identical for every
+    bounded systemd query this phase memoizes, so they live here once;
+    TimerStateCache and CompetitorCache differ only in what they answer.
     """
 
     def __init__(
         self,
-        probe: Callable[[], DaemonState],
+        probe: Callable[[], _Probed],
         *,
         ttl: float = STATE_CACHE_TTL,
         clock: Callable[[], float] = time.monotonic,
@@ -484,7 +484,7 @@ class TimerStateCache:
         self._probe = probe
         self._ttl = ttl
         self._clock = clock
-        self._value: DaemonState | None = None
+        self._value: _Probed | None = None
         self._at: float | None = None
         # WR-03: the cache is shared by the event loop and thread workers
         # (the daemon-default apply, the Doctor probe, the execute screen's
@@ -496,7 +496,7 @@ class TimerStateCache:
         self._lock = threading.Lock()
         self._generation = 0
 
-    def read(self) -> DaemonState:
+    def read(self) -> _Probed:
         """Return the memo when fresh; otherwise issue one bounded probe and
         store the answer. MAY block for up to the probe's own timeout.
 
@@ -517,7 +517,7 @@ class TimerStateCache:
                 self._at = now
         return value
 
-    def peek(self) -> DaemonState | None:
+    def peek(self) -> _Probed | None:
         """The last stored answer whatever its age, or None if never read.
         NEVER probes, never blocks, never spawns."""
         with self._lock:
@@ -530,6 +530,21 @@ class TimerStateCache:
         with self._lock:
             self._at = None
             self._generation += 1
+
+
+class TimerStateCache(_ProbeCache[DaemonState]):
+    """Memoized runtime-state source over one DaemonState-returning probe,
+    with an injected monotonic clock for deterministic TTL tests.
+
+    D-01e: this is the ONE shared instance every consumer in this phase
+    reads -- constructed once by setup.py::_timer_state_cache and injected
+    into both the Linux daemon Policy and plan 15.7-06's disk-pressure
+    probe. D-01c: the split between read()/peek() is load-bearing --
+    read() may spawn one bounded probe (Policy.active/is_active, Doctor
+    entry: an explicit user action or a one-per-route construction, never a
+    per-keystroke path); peek() NEVER probes, never blocks, never spawns,
+    and is the ONLY verb a Textual render path may call.
+    """
 
 
 def bootout(
@@ -718,6 +733,25 @@ def detect_competing(*, read_output: OutputRunner = query_systemctl) -> tuple[Co
         *_detect_in_scope(user=False, scope=SCOPE_SYSTEM, read_output=read_output),
     ]
     return tuple(found)
+
+
+# How long a memoized competing-mechanism answer is trusted. Longer than
+# STATE_CACHE_TTL: this answers "is another cleanup tool installed here",
+# which only a deliberate install or a root command changes, and each read
+# costs one list-unit-files per scope.
+COMPETITOR_CACHE_TTL = 30.0
+
+
+class CompetitorCache(_ProbeCache[tuple[CompetingUnit, ...]]):
+    """Memoized read-only competing-mechanism detection (WR-10).
+
+    The same read()/peek() contract TimerStateCache carries, for the same
+    reason: read() may spawn bounded `systemctl list-unit-files`/`is-active`
+    queries and so runs only on a worker or a CLI route, while a Textual
+    render path may only peek(). Detection is read-only in BOTH scopes and
+    this cache never reaches a mutation verb -- disclosure of a system-scope
+    competitor is the whole point (D-02a).
+    """
 
 
 def disable_competing(

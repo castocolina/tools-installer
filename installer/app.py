@@ -33,6 +33,7 @@ from installer.prompt import Prompter
 from installer.rcclean import find_duplicate_path_lines, strip_lines
 from installer.render import (
     render_audit,
+    render_competing_mechanisms,
     render_dependency_notice,
     render_disk_pressure,
     render_doctor,
@@ -50,7 +51,7 @@ from installer.render import (
     render_verification,
 )
 from installer.resolve import resolve_methods
-from installer.run import Runner, run_command
+from installer.run import CommandError, Runner, run_command
 from installer.selection import category_choices, select_tools, tool_choices
 from installer.session import (
     OnMismatch,
@@ -69,6 +70,7 @@ from installer.shellrc import (
     write_myshellrc,
 )
 from installer.status import is_installed
+from installer.systemd_daemon import CompetingUnit
 from installer.tweaks import TweakBundle
 from installer.uninstall import (
     SweepResult,
@@ -270,6 +272,7 @@ def run_doctor(
     which: Callable[[str], str | None] = shutil.which,
     managed_globals: Callable[[], tuple[str, ...] | None] = pnpm_global_packages,
     disk_pressure: Callable[[], DiskPressure] | None = None,
+    competing: Callable[[], tuple[CompetingUnit, ...]] | None = None,
 ) -> DoctorReport:
     """Audit the PATH (read-only) and render the report. Fixing the PATH
     remains a separate explicit action.
@@ -300,6 +303,13 @@ def run_doctor(
     if disk_pressure is not None:
         with contextlib.suppress(OSError, ValueError):
             render_disk_pressure(disk_pressure(), console)
+    # WR-10: the system-scope competitor disclosure used to exist only inside
+    # the first apply's result, so `make doctor` never mentioned the root-owned
+    # cleanup job running beside this one. Read-only, and guarded like the
+    # probe above: a detection failure must not fail the audit.
+    if competing is not None:
+        with contextlib.suppress(OSError, ValueError, CommandError):
+            render_competing_mechanisms(competing(), console)
     return report
 
 

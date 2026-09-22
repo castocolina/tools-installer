@@ -35,6 +35,7 @@ from installer.enums import Tier, UninstallState
 from installer.execute_screen import ExecuteInputs, ExecuteScreen, InstallRunFinished
 from installer.guidance import (
     Guidance,
+    competing_mechanism_guidance,
     disk_pressure_guidance,
     doctor_guidance,
     guard_guidance,
@@ -44,7 +45,9 @@ from installer.model import Tool
 from installer.pnpm_globals import NodeGlobalsReport, reinstall_preview
 from installer.policy import Policy, PolicyResult
 from installer.render import guidance_text
+from installer.run import CommandError
 from installer.session import Summary
+from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit
 from installer.terminal_shell import terminal_sync_warning
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import (
@@ -125,6 +128,11 @@ class UninstallInputs:
 # the Textual event loop needs. `...` rather than a Protocol spelling out that
 # keyword: a Protocol method's parameter reads as dead code to vulture.
 DiskPressureProbe = Callable[..., DiskPressure]
+# The composition root's competing-mechanism probe (WR-10), same
+# call shape and same blocking rule as DiskPressureProbe: blocking=True
+# may issue bounded read-only systemctl queries, blocking=False peeks
+# a memo and never spawns. Read-only in both systemd scopes.
+CompetingProbe = Callable[..., tuple[CompetingUnit, ...]]
 
 
 @dataclass(frozen=True)
@@ -140,6 +148,9 @@ class PolicyInputs:
     link_mode: Callable[[], str] | None = None
     set_link_mode: Callable[[str], None] | None = None
     disk_pressure: DiskPressureProbe | None = None
+    # WR-10: the same seam reasoning as disk_pressure -- one closure, both
+    # the Doctor's durable disclosure and the Policies row's detail line.
+    competing: CompetingProbe | None = None
 
 
 # The l log-view toggle's tail length — a plain, bounded slice of the raw log,
@@ -221,6 +232,14 @@ class DiskPressureProbed(Message):
     """
 
 
+class CompetingProbed(Message):
+    """The Policies screen's competing-mechanism warm-up worker finished.
+
+    Carries nothing: the worker only fills the shared memo, and the detail
+    line then reads it through the non-blocking peek (WR-10).
+    """
+
+
 class PolicyToggled(Message):
     """A scheduled-job toggle finished on its thread worker (WR-02).
 
@@ -279,6 +298,7 @@ class DoctorScreen(AppScreen):
         globals_preview: Callable[[NodeGlobalsReport], str],
         reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]],
         disk_pressure: DiskPressureProbe | None = None,
+        competing: CompetingProbe | None = None,
     ) -> None:
         super().__init__(view="doctor")
         self._report = report
@@ -291,6 +311,10 @@ class DoctorScreen(AppScreen):
         # _probe_disk_pressure_worker, which then asks for a re-render.
         self.disk_pressure = disk_pressure
         self.disk_probing = False
+        # WR-10: read-only competing-mechanism detection. Same split as
+        # disk_pressure: the render path peeks, the worker below does the
+        # blocking read that may issue `systemctl list-unit-files`.
+        self.competing = competing
         # A predicate, not its result: the Policies view installs and removes the
         # pip/npm ban live, one nav step away, and guard_guidance renders exactly
         # that state. The PATH audit beside it stays a snapshot on purpose — the
@@ -383,7 +407,7 @@ class DoctorScreen(AppScreen):
 
     @work(thread=True, exclusive=True, group="disk-pressure", exit_on_error=False)
     def _probe_disk_pressure_worker(self) -> None:
-        """Take the blocking disk-pressure read off the event loop (WR-02).
+        """Take the blocking background-state reads off the event loop (WR-02).
 
         The answer is not carried back: the read's purpose is to refresh the
         shared TimerStateCache, which the render path then peeks. The same
@@ -395,6 +419,12 @@ class DoctorScreen(AppScreen):
             if probe is not None:
                 with contextlib.suppress(OSError, ValueError):
                     probe()
+            competing = self.competing
+            if competing is not None:
+                # WR-10: warmed here for the same reason -- the detection
+                # spawns bounded read-only systemctl queries.
+                with contextlib.suppress(OSError, ValueError, CommandError):
+                    competing()
         finally:
             self.post_message(DiskPressureProbed())
 
@@ -433,6 +463,7 @@ class DoctorScreen(AppScreen):
             doctor_guidance(self._report)
             + guard_guidance(status, warning)
             + self._disk_pressure_items()
+            + self._competing_items()
             + (node_globals_guidance(globals_report) if globals_report is not None else [])
         )
 
@@ -449,6 +480,17 @@ class DoctorScreen(AppScreen):
         except (OSError, ValueError):
             return []
         return disk_pressure_guidance(pressure)
+
+    def _competing_items(self) -> list[Guidance]:
+        if self.competing is None:
+            return []
+        # peek only: this runs on the event loop, and a blocking read here
+        # would spawn the very systemctl queries WR-02 moved off it.
+        try:
+            units = self.competing(blocking=False)
+        except (OSError, ValueError, CommandError):
+            return []
+        return competing_mechanism_guidance(units)
 
     def _refresh_body(self) -> None:
         body = self.query_one("#doctor-body", _BodyStatic)
@@ -1476,6 +1518,7 @@ class PoliciesScreen(AppScreen):
         self._set_link_mode = inputs.set_link_mode
         # The SAME closure UnifiedApp hands the Doctor: one field, two screens.
         self._disk_pressure = inputs.disk_pressure
+        self._competing = inputs.competing
         self.active_state: dict[str, bool] = {
             policy.id: policy.active for policy in inputs.policies
         }
@@ -1484,6 +1527,8 @@ class PoliciesScreen(AppScreen):
         # True while a scheduled-job toggle runs on its thread worker (WR-02);
         # a second toggle or a reschedule waits for it.
         self.toggle_in_flight = False
+        # True while the one-shot competing-mechanism warm-up worker runs.
+        self.competing_probing = False
         # Explicit, not left to on_data_table_row_highlighted's own reset as the
         # sole assignment point: an AttributeError would otherwise be reachable
         # if action_toggle_log ever ran before any row-highlight event has fired
@@ -1514,6 +1559,26 @@ class PoliciesScreen(AppScreen):
         table.focus()
         self._set_detail(self._policies[0] if self._policies else None)
         self._refresh_link_mode_line()
+        if self._competing is not None:
+            self.competing_probing = True
+            self._probe_competing_worker()
+
+    @work(thread=True, exclusive=True, group="policies-competing", exit_on_error=False)
+    def _probe_competing_worker(self) -> None:
+        """Warm the competing-mechanism memo off the event loop (WR-02/WR-10),
+        then ask for a repaint so the detail line appears."""
+        try:
+            probe = self._competing
+            if probe is not None:
+                with contextlib.suppress(OSError, ValueError, CommandError):
+                    probe()
+        finally:
+            self.post_message(CompetingProbed())
+
+    def on_competing_probed(self, _message: CompetingProbed) -> None:
+        self.competing_probing = False
+        if self.is_mounted:
+            self._set_detail(self._highlighted_policy())
 
     def _refresh_link_mode_line(self) -> None:
         line = self.query_one("#link-mode-line", Static)
@@ -1690,7 +1755,32 @@ class PoliciesScreen(AppScreen):
             usage = self._temp_usage_line()
             if usage is not None:
                 lines.append(usage)
+            competing = self._competing_line()
+            if competing is not None:
+                lines.append(competing)
         return "\n".join(lines)
+
+    def _competing_line(self) -> str | None:
+        """WR-10: name a system-scope competitor on the background-cleanup row.
+
+        Peek only -- this runs on every row highlight -- so it says nothing
+        until the screen's own warm-up worker has landed an answer. Only
+        system-scope units appear: a user-scope one is taken over by the
+        apply, so repeating it here would describe a stopped mechanism.
+        """
+        if self._competing is None:
+            return None
+        try:
+            units = self._competing(blocking=False)
+        except (OSError, ValueError, CommandError):
+            return None
+        names = sorted({unit.name for unit in units if unit.scope == SCOPE_SYSTEM})
+        if not names:
+            return None
+        return (
+            f"Also installed system-wide: {', '.join(names)} (root-owned; this installer "
+            "cannot stop it without sudo)"
+        )
 
     def _temp_usage_line(self) -> str | None:
         """The live temp-usage line for a background-cleanup row, or None.
@@ -2299,6 +2389,7 @@ class UnifiedApp(App[list[str] | None]):
                     # PoliciesScreen reads the same field, so one closure
                     # reaches both screens.
                     disk_pressure=policies.disk_pressure,
+                    competing=policies.competing,
                 ),
                 "uninstall": UninstallScreen(uninstall),
                 "policies": PoliciesScreen(policies),

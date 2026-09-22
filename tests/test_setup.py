@@ -890,6 +890,45 @@ def test_the_policies_view_wires_split_mode_myshellrc_sourcing_for_the_cache_red
     assert any(layer.name == "Split-mode sourcing" for layer in result.layers)
 
 
+def test_the_policies_and_doctor_share_one_competing_probe_that_never_mutates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """WR-10: the system-scope disclosure needs a durable, read-only source.
+    The probe is built once per route and must issue only read verbs."""
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "detect", lambda: Platform("fedora", "amd64", False, False))
+
+    def which(name: str) -> str:
+        return f"/usr/bin/{name}"
+
+    monkeypatch.setattr(setup.shutil, "which", which)
+    issued: list[list[str]] = []
+
+    def read_output(cmd: list[str]) -> str:
+        issued.append(cmd)
+        if "list-unit-files" in cmd and "--user" not in cmd:
+            return "cleanup-bun-tmp-cache.timer enabled -\n"
+        return ""
+
+    monkeypatch.setattr(setup.systemd_daemon, "query_systemctl", read_output)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--guard"]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    probe = policies.competing
+    assert probe is not None
+    assert probe(blocking=False) == ()  # cold peek says nothing rather than guessing
+    units = probe()
+    assert [unit.name for unit in units] == ["cleanup-bun-tmp-cache.timer"]
+    assert [unit.scope for unit in units] == ["system"]
+    assert probe(blocking=False) == units  # memoized for the render path
+    assert issued  # and every query it issued was read-only
+    read_verbs = {"list-unit-files", "is-active", "is-enabled", "show"}
+    for cmd in issued:
+        assert read_verbs & set(cmd), cmd
+        assert not {"disable", "enable", "stop", "start", "daemon-reload"} & set(cmd), cmd
+
+
 def test_the_environment_d_dir_honours_xdg_config_home(tmp_path: Path) -> None:
     """WR-04: systemd's user environment generator reads
     $XDG_CONFIG_HOME/environment.d; a redirect written under ~/.config there

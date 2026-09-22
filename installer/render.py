@@ -15,6 +15,7 @@ from installer.engine import InstallOutcome
 from installer.enums import InstallStatus
 from installer.guidance import (
     Guidance,
+    competing_mechanism_guidance,
     disk_pressure_guidance,
     doctor_guidance,
     guard_guidance,
@@ -24,6 +25,7 @@ from installer.links import TROUBLESHOOTING_URL
 from installer.pnpm_globals import NodeGlobalsReport
 from installer.sanitize import sanitize_log_line
 from installer.session import Summary
+from installer.systemd_daemon import CompetingUnit
 from installer.ui_common import SEVERITY_STYLE
 
 
@@ -247,6 +249,14 @@ def render_disk_pressure(pressure: DiskPressure, console: Console) -> None:
     `make doctor` output stays byte-identical to a run that never probed.
     """
     items = disk_pressure_guidance(pressure)
+    if items:
+        console.print(guidance_text(items))
+
+
+def render_competing_mechanisms(units: tuple[CompetingUnit, ...], console: Console) -> None:
+    """Read-only WR-10 disclosure: silent unless a system-scope competitor
+    was detected. Same shape as render_disk_pressure above."""
+    items = competing_mechanism_guidance(units)
     if items:
         console.print(guidance_text(items))
 

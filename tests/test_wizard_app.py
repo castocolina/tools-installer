@@ -19,6 +19,7 @@ from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import DaemonState, Severity
 from installer.execute_screen import ExecuteInputs, ExecuteScreen
 from installer.guidance import (
+    competing_mechanism_guidance,
     disk_pressure_guidance,
     doctor_guidance,
     guard_guidance,
@@ -48,7 +49,7 @@ from installer.policy import (
 from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError, Runner
 from installer.session import SensitiveInstall, Summary
-from installer.systemd_daemon import TimerStateCache
+from installer.systemd_daemon import CompetingUnit, TimerStateCache
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, ToolRow, classify_tools
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
@@ -56,6 +57,7 @@ from installer.version_status import VersionRefreshService, VersionStatus
 from installer.versions import TagResolver, VersionError
 from installer.wizard_app import (
     VIEW_ORDER,
+    CompetingProbe,
     ConfirmUninstall,
     DiskPressureProbe,
     DoctorScreen,
@@ -221,12 +223,14 @@ def _policy_inputs(
     link_mode: Callable[[], str] | None = None,
     set_link_mode: Callable[[str], None] | None = None,
     disk_pressure: DiskPressureProbe | None = None,
+    competing: CompetingProbe | None = None,
 ) -> PolicyInputs:
     return PolicyInputs(
         policies=policies if policies is not None else [_fake_policy()],
         link_mode=link_mode,
         set_link_mode=set_link_mode,
         disk_pressure=disk_pressure,
+        competing=competing,
     )
 
 
@@ -3839,6 +3843,74 @@ async def test_doctor_tui_step_keeps_the_platforms_own_prune_command() -> None:
         assert "Policies view" in tui_item.next_step
         assert "prune-tmp-linux.sh --apply" in tui_item.next_step
         assert "prune-user-tmpdir.sh" not in tui_item.next_step
+
+
+def _competing_probe(
+    units: tuple[CompetingUnit, ...], *, blocking_calls: list[bool] | None = None
+) -> CompetingProbe:
+    """A competing-mechanism probe with the production closure's call shape:
+    a blocking read answers, a peek answers only after one has run."""
+    warmed = [False]
+
+    def probe(*, blocking: bool = True) -> tuple[CompetingUnit, ...]:
+        if blocking_calls is not None:
+            blocking_calls.append(blocking)
+        if blocking:
+            warmed[0] = True
+            return units
+        return units if warmed[0] else ()
+
+    return probe
+
+
+_SYSTEM_COMPETITOR = (
+    CompetingUnit(name="cleanup-bun-tmp-cache.timer", scope="system", state="enabled"),
+)
+
+
+async def test_doctor_discloses_a_system_scope_competitor_from_a_worker_read() -> None:
+    """WR-10: the disclosure existed only inside the first apply's result, so
+    every later run said nothing about the root-owned cleanup job."""
+    calls: list[bool] = []
+    app = _app(
+        policies=_policy_inputs(
+            disk_pressure=_probe(_pressure()),
+            competing=_competing_probe(_SYSTEM_COMPETITOR, blocking_calls=calls),
+        ),
+        initial_view="doctor",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        [item] = competing_mechanism_guidance(_SYSTEM_COMPETITOR)
+        assert item in app.screen.guidance
+        assert "cleanup-bun-tmp-cache.timer" in _doctor_body(app)
+        # The blocking detection never runs on the event loop (WR-02).
+        assert True in calls
+        assert app.screen.disk_probing is False
+
+
+async def test_policies_row_names_a_system_scope_competitor_after_its_warm_up() -> None:
+    policy = _fake_policy(active=True, log_path=Path("/tmp/x.log"))
+    policy = replace(policy, id="daemon:prune-tmp-linux")
+    app = _app(
+        policies=_policy_inputs(
+            [policy],
+            disk_pressure=_probe(_pressure()),
+            competing=_competing_probe(_SYSTEM_COMPETITOR),
+        ),
+        initial_view="policies",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        for _ in range(400):
+            if not screen.competing_probing:
+                break
+            await pilot.pause()
+        await pilot.pause()
+        assert "cleanup-bun-tmp-cache.timer" in screen.detail_text
+        assert "root-owned" in screen.detail_text
 
 
 async def test_doctor_disk_pressure_step_is_never_rewritten_into_pnpm_advice() -> None:

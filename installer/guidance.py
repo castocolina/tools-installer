@@ -12,6 +12,7 @@ from installer.doctor import DoctorReport, has_problems
 from installer.enums import DaemonState, Severity
 from installer.guards import GLOBAL_REDIRECTED, REDIRECTED, guard_label, guarded_names
 from installer.pnpm_globals import NodeGlobalsReport
+from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit, system_scope_warning
 
 
 @dataclass(frozen=True, init=False)
@@ -410,5 +411,36 @@ def disk_pressure_guidance(pressure: DiskPressure) -> list[Guidance]:
             next_step=_disk_pressure_next_step(pressure),
             severity=severity,
             emphasis=pressure.at_risk,
+        )
+    ]
+
+
+def competing_mechanism_guidance(units: tuple[CompetingUnit, ...]) -> list[Guidance]:
+    """WR-10: a durable, read-only disclosure of a SYSTEM-scope competitor.
+
+    D-02a requires naming the root-owned competing cleanup unit and the
+    manual command that stops it. Until now that sentence existed only inside
+    the first apply's result, so it was printed once (after the TUI exits)
+    and never again, because `decided()` is True on every later run. This
+    item is rendered from a memoized detection on every Doctor run instead.
+
+    User-scope competitors are deliberately absent: those are taken over by
+    the apply (D-02/D-02b) and disclosed by it, so repeating them here would
+    describe a mechanism that is no longer running. Nothing on this path
+    mutates anything, in either scope.
+    """
+    sentence = system_scope_warning(units)
+    if sentence is None:
+        return []
+    names = sorted({unit.name for unit in units if unit.scope == SCOPE_SYSTEM})
+    return [
+        Guidance(
+            title=f"Another system-level cleanup service is installed ({', '.join(names)})",
+            meaning=sentence,
+            next_step=(
+                "Nothing here can stop it: this installer never uses sudo. Run the command "
+                "named above yourself if you want only one cleanup job on this machine."
+            ),
+            severity=Severity.WARN,
         )
     ]

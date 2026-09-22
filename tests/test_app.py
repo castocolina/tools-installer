@@ -1282,6 +1282,42 @@ def test_run_doctor_healthy_disk_prints_nothing_extra(tmp_path: Path) -> None:
     assert extra_buf.getvalue() == baseline_buf.getvalue()
 
 
+def test_run_doctor_discloses_a_system_scope_competitor(tmp_path: Path) -> None:
+    """WR-10: `make doctor` never mentioned the root-owned cleanup unit
+    running alongside this project's own daemon."""
+    from installer.app import run_doctor
+    from installer.systemd_daemon import CompetingUnit
+
+    bin_dir = tmp_path / "bin"
+    kwargs = _healthy_doctor_kwargs(bin_dir)
+    console, buf = _console()
+    units = (CompetingUnit(name="cleanup-bun-tmp-cache.timer", scope="system", state="enabled"),)
+    run_doctor([], console, competing=lambda: units, **kwargs)  # type: ignore[arg-type]
+    out = buf.getvalue()
+    assert "cleanup-bun-tmp-cache.timer" in out
+    assert "sudo systemctl disable --now cleanup-bun-tmp-cache.timer" in out
+
+
+def test_run_doctor_without_a_competing_probe_is_byte_identical(tmp_path: Path) -> None:
+    from installer.app import run_doctor
+    from installer.run import CommandError
+
+    bin_dir = tmp_path / "bin"
+    kwargs = _healthy_doctor_kwargs(bin_dir)
+    baseline, baseline_buf = _console()
+    empty, empty_buf = _console()
+    failed, failed_buf = _console()
+
+    def boom() -> tuple[object, ...]:
+        raise CommandError(["systemctl", "list-unit-files"], 1)
+
+    run_doctor([], baseline, **kwargs)  # type: ignore[arg-type]
+    run_doctor([], empty, competing=tuple, **kwargs)  # type: ignore[arg-type]
+    run_doctor([], failed, competing=boom, **kwargs)  # type: ignore[arg-type]
+    assert empty_buf.getvalue() == baseline_buf.getvalue()
+    assert failed_buf.getvalue() == baseline_buf.getvalue()
+
+
 def test_run_doctor_swallows_a_probe_oserror(tmp_path: Path) -> None:
     from installer.app import run_doctor
 
