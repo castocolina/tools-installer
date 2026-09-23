@@ -35,36 +35,49 @@ pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="bash not o
 _PLATFORM = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
 
 
-def _source_n_times(  # pyright: ignore[reportUnusedFunction]
+class _ShellRun(NamedTuple):
+    """One shell subprocess: what it echoed, and whether it exited cleanly."""
+
+    stdout: str
+    returncode: int
+
+
+def _source_n_times(
     shell: str,
     rc: Path,
     *,
     times: int = 1,
     seed: str | None = "",
     home: Path | None = None,
-) -> str:
-    """Source an rc file N times in a subprocess and return the resulting $PATH.
+    echo: str = "$PATH",
+) -> _ShellRun:
+    """Source an rc file N times in a subprocess and return what `echo` printed.
 
     shell: absolute path to shell binary
     rc: path to rc file to source
     times: number of times to source it
     seed: initial PATH value (empty string means empty PATH, None means no PATH key)
     home: HOME directory for the subprocess
+    echo: the expression echoed after the sources; defaults to the resulting $PATH
+
+    The 30s timeout is an ASSERTION, not a convenience: a consolidation that
+    produced a self-sourcing file fails the suite here rather than hanging CI.
     """
     if home is None:
         home = Path("/tmp")
-    script = f". {rc}\n" * times + "echo $PATH"
+    script = f". {rc}\n" * times + f'echo "{echo}"'
     env = {"HOME": str(home)}
     if seed is not None:
         env["PATH"] = seed
-    return subprocess.run(
+    completed = subprocess.run(
         [shell, "-c", script],
         env=env,
         capture_output=True,
         text=True,
         check=False,
         timeout=30,
-    ).stdout.strip()
+    )
+    return _ShellRun(completed.stdout.strip(), completed.returncode)
 
 
 def _tool(tool_id: str, bin_dir: str | None) -> Tool:
@@ -2421,3 +2434,193 @@ def test_a_failed_remove_source_block_leaves_the_original_byte_identical(
 
     assert rc.read_bytes() == before
     assert not list(tmp_path.glob("*.tools-installer.tmp"))
+
+
+# --- Task 3: real shells prove the loop cannot come back ---
+#
+# These tests establish the consolidation MECHANISM against synthetic fixtures
+# built under tmp_path. They do NOT reproduce the real-world case: no ~/.shellrc
+# exists on this host, which is why 15.8-CONTEXT.md D-04 and research A1 both
+# mark that case [ASSUMED]. A fabricated HOME is the honest substitute, and the
+# timeout inside `_source_n_times` is what turns "it should not loop" into a
+# failure rather than a hang.
+
+_BASH = shutil.which("bash")
+_ZSH = shutil.which("zsh")
+
+
+def _managed_dir_count(path_value: str, managed_bin: Path) -> int:
+    return [Path(entry) for entry in path_value.split(":")].count(managed_bin)
+
+
+def _seed_self_sourcing_home(tmp_path: Path, line: str) -> tuple[Path, Path, Path]:
+    """A HOME whose ~/.shellrc sources ~/.myshellrc via `line`."""
+    managed_bin = tmp_path / "managed_bin"
+    managed_bin.mkdir()
+    myshellrc = tmp_path / ".myshellrc"
+    write_myshellrc([managed_bin], myshellrc)
+    shellrc = tmp_path / ".shellrc"
+    shellrc.write_text(f"export FROM_SHELLRC=yes\n{line}\n")
+    return shellrc, myshellrc, managed_bin
+
+
+@pytest.mark.parametrize("shell", [_BASH, _ZSH], ids=["bash", "zsh"])
+def test_consolidated_files_source_without_looping_when_the_original_sourced_myshellrc(
+    tmp_path: Path, shell: str | None
+) -> None:
+    if shell is None:
+        pytest.skip("shell not on PATH")
+    shellrc, myshellrc, managed_bin = _seed_self_sourcing_home(tmp_path, '. "$HOME/.myshellrc"')
+
+    assert consolidate_shellrc(shellrc, myshellrc).status == "consolidated"
+
+    run = _source_n_times(shell, shellrc, times=2, home=tmp_path, echo="$FROM_SHELLRC $PATH")
+    assert run.returncode == 0
+    assert run.stdout.startswith("yes ")
+    assert _managed_dir_count(run.stdout.split(" ", 1)[1], managed_bin) == 1
+
+
+def test_sourcing_myshellrc_directly_after_consolidation_is_also_safe(tmp_path: Path) -> None:
+    """Both entry points must be safe; a machine may source either."""
+    if _BASH is None:
+        pytest.skip("bash not on PATH")
+    shellrc, myshellrc, managed_bin = _seed_self_sourcing_home(tmp_path, '. "$HOME/.myshellrc"')
+
+    assert consolidate_shellrc(shellrc, myshellrc).status == "consolidated"
+
+    run = _source_n_times(_BASH, myshellrc, times=2, home=tmp_path)
+    assert run.returncode == 0
+    assert _managed_dir_count(run.stdout, managed_bin) == 1
+
+
+def test_an_ambiguous_source_line_never_reaches_a_shell(tmp_path: Path) -> None:
+    """A refusal must leave the user with a WORKING file, not a broken one."""
+    if _BASH is None:
+        pytest.skip("bash not on PATH")
+    shellrc, myshellrc, _managed_bin = _seed_self_sourcing_home(
+        tmp_path, 'if . "$HOME/.myshellrc"; then :; fi'
+    )
+    before_shellrc = shellrc.read_bytes()
+    before_myshellrc = myshellrc.read_bytes()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert shellrc.read_bytes() == before_shellrc
+    assert myshellrc.read_bytes() == before_myshellrc
+    run = _source_n_times(_BASH, shellrc, times=2, home=tmp_path, echo="$FROM_SHELLRC")
+    assert run.returncode == 0
+    assert run.stdout == "yes"
+
+
+# Bash only, deliberately. zsh's `command` does not run builtins, so
+# `command source` and `command . ` are ERRORS there rather than sources. That a
+# line's danger depends on which shell the user runs is a reason to keep
+# refusing these everywhere, NOT a reason to weaken the detector -- adding a zsh
+# arm here produces a failing test and then a wrong fix. The `sour\ce` form does
+# execute under zsh and carries its own arm below.
+@pytest.mark.parametrize(
+    "form",
+    [
+        "command source {path}",
+        "builtin source {path}",
+        "sour\\ce {path}",
+        "command . {path}",
+        "'source' {path}",
+        '"source" {path}',
+        "cmd=source; $cmd {path}",
+    ],
+)
+def test_wrapped_and_escaped_source_forms_really_execute_and_are_refused(
+    tmp_path: Path, form: str
+) -> None:
+    if _BASH is None:
+        pytest.skip("bash not on PATH")
+
+    # 1. Prove the form really executes the file it names.
+    marker = tmp_path / "marker.sh"
+    marker.write_text("MARKER_RAN=1\n")
+    script = form.format(path=marker) + '\necho "MARKER=${MARKER_RAN-}"'
+    executed = subprocess.run(
+        [_BASH, "--noprofile", "--norc", "-c", script],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert "MARKER=1" in executed.stdout, (
+        f"{form!r} did not source the file; investigate the shell, never delete the detection"
+    )
+
+    # 2. Prove consolidation refuses that same form, byte for byte.
+    shellrc, myshellrc, _managed_bin = _seed_self_sourcing_home(
+        tmp_path, form.format(path='"$HOME/.myshellrc"')
+    )
+    before_shellrc = shellrc.read_bytes()
+    before_myshellrc = myshellrc.read_bytes()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None
+    assert str(shellrc) in result.reason
+    assert "line" in result.reason
+    assert shellrc.read_bytes() == before_shellrc
+    assert myshellrc.read_bytes() == before_myshellrc
+    assert _no_backup_anywhere(tmp_path)
+
+
+def test_a_backslash_escaped_source_form_executes_under_zsh_too(tmp_path: Path) -> None:
+    if _ZSH is None:
+        pytest.skip("zsh not on PATH")
+    marker = tmp_path / "marker.sh"
+    marker.write_text("MARKER_RAN=1\n")
+
+    executed = subprocess.run(
+        [_ZSH, "-f", "-c", f'sour\\ce {marker}\necho "MARKER=${{MARKER_RAN-}}"'],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert "MARKER=1" in executed.stdout
+
+
+# This phase's documented RESIDUAL, stated as an assertion so a later phase
+# changing it must change a test rather than drift into or out of the behavior.
+# D-04 promises the user's own lines are copied forward VERBATIM, so a foreign
+# plain PATH export keeps its original accumulating behavior. Note the division
+# of labour: this test double-sources the stub IN ONE SHELL deliberately. Plan
+# 15.8-06 is what keeps a NORMAL shell startup from reaching ~/.myshellrc twice
+# in the first place -- without that note the "appears twice" assertion below
+# reads like nobody noticed.
+def test_a_carried_forward_foreign_path_export_keeps_its_original_behavior(
+    tmp_path: Path,
+) -> None:
+    if _BASH is None:
+        pytest.skip("bash not on PATH")
+    managed_bin = tmp_path / "managed_bin"
+    managed_bin.mkdir()
+    foreign_bin = tmp_path / "foreign_bin"
+    foreign_bin.mkdir()
+    myshellrc = tmp_path / ".myshellrc"
+    write_myshellrc([managed_bin], myshellrc)
+    shellrc = tmp_path / ".shellrc"
+    shellrc.write_text(f'export PATH="{foreign_bin}:$PATH"\n')
+
+    assert consolidate_shellrc(shellrc, myshellrc).status == "consolidated"
+
+    once = _source_n_times(_BASH, shellrc, times=1, home=tmp_path)
+    assert once.returncode == 0
+    assert _managed_dir_count(once.stdout, foreign_bin) == 1
+    assert _managed_dir_count(once.stdout, managed_bin) == 1
+
+    twice = _source_n_times(_BASH, shellrc, times=2, home=tmp_path)
+    assert twice.returncode == 0
+    # The unmanaged export accumulates; the managed block, guarded since
+    # plan 15.8-01, does not.
+    assert _managed_dir_count(twice.stdout, foreign_bin) == 2
+    assert _managed_dir_count(twice.stdout, managed_bin) == 1
