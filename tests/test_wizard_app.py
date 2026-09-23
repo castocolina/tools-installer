@@ -49,6 +49,7 @@ from installer.policy import (
 from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError, Runner
 from installer.session import SensitiveInstall, Summary
+from installer.shellrc import ShellrcRefusal
 from installer.systemd_daemon import CompetingUnit, TimerStateCache
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, ToolRow, classify_tools
@@ -7256,3 +7257,30 @@ async def test_uninstall_screen_renders_ripgrep_not_rg_for_the_dnf_split_package
         )
         assert "ripgrep" in entry.detail
         assert "dnf remove rg`" not in entry.detail
+
+
+async def test_doctor_apply_surfaces_a_consolidation_refusal_instead_of_reporting_success() -> None:
+    """A refused ~/.shellrc consolidation must never render as "PATH wired."
+
+    The Doctor route runs configure_path with a quiet console so its prints
+    cannot corrupt the TUI, and `action_apply` DISCARDS run_live's result. So a
+    printed refusal reaches nobody and a returned one is dropped -- the only way
+    the screen can learn about it is the typed raise that run_live catches.
+    """
+    reason = "~/.shellrc line 7 opens a here-document; consolidate it by hand"
+
+    def fix() -> None:
+        raise ShellrcRefusal(reason)
+
+    app = _app(fix=fix)
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        await pilot.press("enter")
+        assert isinstance(app.screen, DoctorScreen)
+        screen = app.screen
+        assert screen.applied is False
+        assert screen.error is not None
+        body = str(screen.query_one("#doctor-body", Static).render())
+        assert "PATH wired." not in body
+        assert reason in body

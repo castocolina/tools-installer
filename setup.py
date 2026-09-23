@@ -27,6 +27,7 @@ from installer.app import (
     UninstallDecision,
     clean_rc_duplicates,
     configure_path,
+    consolidation_refusal_message,
     doctor_data,
     guard_state,
     perform_uninstall,
@@ -76,7 +77,7 @@ from installer.settings import (
     load_settings,
     resolve_link_mode,
 )
-from installer.shellrc import collect_bin_dirs, has_managed_block
+from installer.shellrc import ShellrcRefusal, collect_bin_dirs, has_managed_block
 from installer.status import is_installed
 from installer.terminal_shell import sync_terminal_shells, terminal_sync_warning
 from installer.tweaks import BUNDLES, applicable_bundles
@@ -98,6 +99,10 @@ from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 _REGISTRY = Path(__file__).parent / "installer" / "registry.toml"
 _DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
 _MYSHELLRC = Path.home() / ".myshellrc"
+# The generic, FOREIGN ~/.shellrc some machines carry -- NOT a second file this
+# project writes freely. It is only ever read, backed up, and replaced by a stub
+# during D-04 consolidation, and only when that is provably safe.
+_SHELLRC = Path.home() / ".shellrc"
 # $ZDOTDIR-aware, so the file the installer edits is the one zsh actually reads
 # and agrees with omz_present's own environment-aware detection.
 _ZSHRC = zshrc_path(Path.home(), os.environ)
@@ -1001,15 +1006,25 @@ def _build_app(
         # result. Link mode is re-read here so a Policies-view change takes
         # effect without rebuilding the app.
         mode = _current_link_mode()
-        configure_path(
+        outcome = configure_path(
             tools,
             Console(file=io.StringIO()),
             platform=platform,
             default_bin_dir=_DEFAULT_BIN_DIR,
             myshellrc_path=_MYSHELLRC,
+            shellrc_path=_SHELLRC,
             rc_paths=rc_paths_for_mode(mode, _SHELL),
             link_mode=mode,
         )
+        # The raise happens AFTER configure_path returns, so the managed PATH
+        # block has already been written: the wiring succeeded, the consolidation
+        # did not, and the message says both. Do NOT "fix" this by raising
+        # earlier -- that would stop wiring PATH for every user whose ~/.shellrc
+        # cannot be consolidated. The quiet console above is why this route
+        # raises at all: a printed refusal never reaches this screen's user.
+        message = consolidation_refusal_message(outcome)
+        if message is not None:
+            raise ShellrcRefusal(message)
 
     def preview() -> str:
         mode = _current_link_mode()
@@ -1166,6 +1181,7 @@ def _execute_inputs(
             platform=platform,
             default_bin_dir=_DEFAULT_BIN_DIR,
             myshellrc_path=_MYSHELLRC,
+            shellrc_path=_SHELLRC,
             rc_paths=rc_paths_for_mode(mode, _SHELL),
             link_mode=mode,
         )
@@ -1318,6 +1334,7 @@ def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
         platform=platform,
         default_bin_dir=_DEFAULT_BIN_DIR,
         myshellrc_path=_MYSHELLRC,
+        shellrc_path=_SHELLRC,
         rc_paths=rc_paths_for_mode(store.link_mode, _SHELL),
         link_mode=store.link_mode,
     )
@@ -1475,6 +1492,7 @@ def main(argv: list[str]) -> int:
         platform=platform,
         default_bin_dir=_DEFAULT_BIN_DIR,
         myshellrc_path=_MYSHELLRC,
+        shellrc_path=_SHELLRC,
         rc_paths=rc_paths_for_mode(store.link_mode, _SHELL),
         link_mode=store.link_mode,
     )

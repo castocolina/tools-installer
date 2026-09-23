@@ -6,7 +6,7 @@ import pty
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import pytest
 from rich.console import Console
@@ -25,7 +25,7 @@ from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
 from installer.policy import Policy
 from installer.session import Summary
 from installer.settings import Settings, SettingsStore, load_settings, save_settings
-from installer.shellrc import write_myshellrc
+from installer.shellrc import ShellrcConsolidation, ShellrcRefusal, write_myshellrc
 from installer.terminal_shell import TerminalShellResult
 from installer.tweaks import BUNDLES
 from installer.uninstall import SweepResult
@@ -438,6 +438,7 @@ def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(setup, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
     monkeypatch.setattr(setup, "_MYSHELLRC", tmp_path / ".myshellrc")
+    monkeypatch.setattr(setup, "_SHELLRC", tmp_path / ".shellrc")
     monkeypatch.setattr(setup, "_ZSHRC", tmp_path / ".zshrc")
     monkeypatch.setattr(setup, "_RC_PATHS", [tmp_path / ".zshrc", tmp_path / ".bashrc"])
     monkeypatch.setattr(setup, "_DAEMON_PLIST_PATH", tmp_path / "LaunchAgents" / "daemon.plist")
@@ -1036,6 +1037,7 @@ def test_doctor_preview_carries_the_grouped_pinned_allowed_replay(
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(setup, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
     monkeypatch.setattr(setup, "_MYSHELLRC", tmp_path / ".myshellrc")
+    monkeypatch.setattr(setup, "_SHELLRC", tmp_path / ".shellrc")
     monkeypatch.setattr(setup, "_ZSHRC", tmp_path / ".zshrc")
     monkeypatch.setattr(setup, "_RC_PATHS", [tmp_path / ".zshrc", tmp_path / ".bashrc"])
     monkeypatch.setattr(setup, "load_categories", _no_categories)
@@ -1863,6 +1865,7 @@ def test_execute_inputs_wire_path_calls_configure_path_and_returns_captured_text
     monkeypatch.setattr(setup, "configure_path", fake_configure_path)
     monkeypatch.setattr(setup, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
     monkeypatch.setattr(setup, "_MYSHELLRC", tmp_path / ".myshellrc")
+    monkeypatch.setattr(setup, "_SHELLRC", tmp_path / ".shellrc")
     monkeypatch.setattr(setup, "_SHELL", "/bin/zsh")
     inputs = setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
         [],
@@ -1875,6 +1878,10 @@ def test_execute_inputs_wire_path_calls_configure_path_and_returns_captured_text
     assert "PATH configured" in text
     assert captured
     assert captured[0]["link_mode"] == "single"
+    # The new argument, and that it points inside the sandbox rather than at a
+    # real-home path: an un-redirected constant here would consolidate the
+    # developer's own ~/.shellrc.
+    assert captured[0]["shellrc_path"] == tmp_path / ".shellrc"
     rc_paths = captured[0]["rc_paths"]
     assert isinstance(rc_paths, list)
     rc_paths_list = cast("list[object]", rc_paths)
@@ -2910,3 +2917,110 @@ def test_native_probe_is_wired_at_both_the_display_and_mutation_sites() -> None:
     assert source.count("native_probe=") == 2, source.count("native_probe=")
     assert "run_probe" in source
     assert "install_ownership import run_probe" in source
+
+
+# --- 15.8-06 Task 2: the new constant, its isolation, and the refusal route ---
+
+
+def test_sandbox_redirects_the_shellrc_constant(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The isolation guard itself.
+
+    `setup.py` resolves its home constants at IMPORT time, so a test cannot
+    redirect them with `monkeypatch.setenv("HOME", ...)` alone. This fails if
+    someone later adds a home-derived constant and forgets `_sandbox`.
+    """
+    _sandbox(monkeypatch, tmp_path)
+
+    assert tmp_path / ".shellrc" == setup._SHELLRC  # pyright: ignore[reportPrivateUsage]
+    assert setup._SHELLRC.parent == tmp_path  # pyright: ignore[reportPrivateUsage]
+
+
+def test_every_configure_path_call_site_passes_a_shellrc_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """All four routes must carry the argument, or one user action half-fixes."""
+    _sandbox(monkeypatch, tmp_path)
+    captured: list[dict[str, object]] = []
+
+    def recorder(_tools: object, console: Console, **kwargs: object) -> None:
+        captured.append(dict(kwargs))
+        console.print("wired")
+
+    monkeypatch.setattr(setup, "configure_path", recorder)
+
+    # Route 1: the Doctor apply closure, and Route 2: the execute-inputs wire step.
+    inputs = setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
+        [],
+        _platform(),
+        link_mode="single",
+        unattended=True,
+        disk_pressure=_unused_probe,
+    )
+    inputs.wire_path()
+    app = setup._build_app([], _platform())  # pyright: ignore[reportPrivateUsage]
+    doctor = app._views["doctor"]  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(doctor, DoctorScreen)
+    doctor._fix()  # pyright: ignore[reportPrivateUsage]
+
+    assert len(captured) >= 2
+    for call in captured:
+        assert call["shellrc_path"] == tmp_path / ".shellrc"
+
+
+def _refused(reason: str = "a stated mechanism reason") -> ShellrcConsolidation:
+    return ShellrcConsolidation(status="refused", reason=reason)
+
+
+def test_doctor_apply_raises_on_a_consolidation_refusal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+
+    def refusing(_tools: object, _console: Console, **_kwargs: object) -> ShellrcConsolidation:
+        return _refused("~/.shellrc line 3 is ambiguous")
+
+    monkeypatch.setattr(setup, "configure_path", refusing)
+    app = setup._build_app([], _platform())  # pyright: ignore[reportPrivateUsage]
+    doctor = app._views["doctor"]  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(doctor, DoctorScreen)
+
+    with pytest.raises(ShellrcRefusal, match="ambiguous"):
+        doctor._fix()  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.parametrize("status", ["absent", "already", "consolidated"])
+def test_doctor_apply_does_not_raise_on_any_non_refusal_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    status: Literal["absent", "already", "consolidated"],
+) -> None:
+    """A raise on a success would make PATH wiring unusable."""
+    _sandbox(monkeypatch, tmp_path)
+
+    def succeeding(_tools: object, _console: Console, **_kwargs: object) -> ShellrcConsolidation:
+        return ShellrcConsolidation(status=status)
+
+    monkeypatch.setattr(setup, "configure_path", succeeding)
+    app = setup._build_app([], _platform())  # pyright: ignore[reportPrivateUsage]
+    doctor = app._views["doctor"]  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(doctor, DoctorScreen)
+
+    doctor._fix()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_doctor_apply_does_not_raise_when_no_outcome_is_returned(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+
+    def returning_none(_tools: object, _console: Console, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(setup, "configure_path", returning_none)
+    app = setup._build_app([], _platform())  # pyright: ignore[reportPrivateUsage]
+    doctor = app._views["doctor"]  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(doctor, DoctorScreen)
+
+    doctor._fix()  # pyright: ignore[reportPrivateUsage]

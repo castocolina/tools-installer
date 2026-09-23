@@ -7,9 +7,59 @@ ZDOTDIR-based zsh setup would otherwise get different paths than CI. Clearing
 it by default keeps every test that does not set it explicitly on ~/.zshrc.
 """
 
+import os
 from pathlib import Path
 
 import pytest
+
+# Captured at conftest IMPORT time, before any test can monkeypatch $HOME, so
+# this stays the developer's real home no matter what a test does later.
+_REAL_HOME = Path(os.path.expanduser("~"))  # noqa: PTH111 -- must not follow a patched Path.home()
+_GUARDED_DOTFILES = (".myshellrc", ".shellrc", ".bashrc", ".zshrc", ".profile")
+
+
+def _real_home_fingerprint() -> dict[str, tuple[int, float] | None]:
+    """(size, mtime) for each guarded file in the real home, None when absent.
+
+    Also covers `*.tools-installer.old`, the backup sibling consolidation writes:
+    its mere APPEARANCE is a violation even though no guarded file changed.
+    """
+    fingerprint: dict[str, tuple[int, float] | None] = {}
+    for name in _GUARDED_DOTFILES:
+        path = _REAL_HOME / name
+        try:
+            stat = path.stat()
+        except OSError:
+            fingerprint[name] = None
+        else:
+            fingerprint[name] = (stat.st_size, stat.st_mtime)
+    fingerprint["<backups>"] = (len(list(_REAL_HOME.glob("*.tools-installer.old"))), 0.0)
+    return fingerprint
+
+
+@pytest.fixture(scope="session", autouse=True)
+def real_home_untouched() -> "object":
+    """Fail the run if any test wrote to the developer's real shell files.
+
+    `setup.py` resolves its path constants at IMPORT time (`_MYSHELLRC`,
+    `_SHELLRC`, ...), so `monkeypatch.setenv("HOME", ...)` alone does NOT
+    redirect them -- each one must be patched by name. That makes isolation
+    opt-in, and an opt-in guarantee is one a future test will eventually forget:
+    a single un-redirected constant reaching `configure_path` would consolidate
+    the developer's own ~/.shellrc and leave a backup behind.
+
+    This is the net under that. It catches the whole class at session scope
+    rather than trusting every present and future test to remember.
+    """
+    before = _real_home_fingerprint()
+    yield
+    after = _real_home_fingerprint()
+    changed = sorted(name for name in before if before[name] != after[name])
+    assert not changed, (
+        f"the test suite modified real files under {_REAL_HOME}: {changed}. "
+        f"A test reached a home-derived constant without redirecting it; patch it "
+        f"the way tests/test_setup.py::_sandbox does."
+    )
 
 
 # Public name on purpose: pytest collects it by reference, so a private

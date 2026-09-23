@@ -21,6 +21,7 @@ from textual.widgets import DataTable, Rule, Static
 
 from installer.enums import Severity
 from installer.run import CommandError
+from installer.shellrc import ShellrcRefusal
 
 T = TypeVar("T")
 
@@ -43,10 +44,14 @@ def run_live(action: Callable[[], T]) -> tuple[T | None, str | None]:
     (None, message) on OSError or a failed command. The single apply workflow
     shared by the fix, uninstall, policies, and pnpm-globals screens — a failed
     core action is surfaced, never a silent crash (PRD), and no screen writes
-    its own try/except for it."""
+    its own try/except for it.
+
+    A typed refusal from the core — an operation the core declined to perform for
+    a stated reason — is surfaced the same way a failed command is, so a screen
+    that discards its console cannot record success."""
     try:
         return action(), None
-    except (OSError, CommandError) as exc:
+    except (OSError, CommandError, ShellrcRefusal) as exc:
         return None, str(exc)
 
 
