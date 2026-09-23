@@ -1,17 +1,22 @@
 import ast
+import os
 import re
 import shutil
+import stat
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
 import pytest
 
+from installer.atomic import OLD_SUFFIX, atomic_write_text, staged_sibling
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.shellrc import (
     apply_block,
     collect_bin_dirs,
+    consolidate_shellrc,
     ensure_source,
     has_managed_block,
     managed_block,
@@ -1462,3 +1467,571 @@ def test_ensure_source_creates_missing_file(tmp_path: Path) -> None:
 
     assert rc.exists()
     assert "tools-installer source" in rc.read_text()
+
+
+def _seed_consolidable_home(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Seed a tmp HOME with a generic ~/.shellrc and this project's ~/.myshellrc.
+
+    Returns (shellrc, myshellrc, managed_bin).
+    """
+    managed_bin = tmp_path / "managed_bin"
+    managed_bin.mkdir()
+    myshellrc = tmp_path / ".myshellrc"
+    write_myshellrc([managed_bin], myshellrc)
+    shellrc = tmp_path / ".shellrc"
+    shellrc.write_text(
+        "alias gs='git status'\nexport EDITOR=vim\n__SHELLRC_RUNS=$((${__SHELLRC_RUNS:-0}+1))\n"
+    )
+    return shellrc, myshellrc, managed_bin
+
+
+def _backup_path(shellrc: Path) -> Path:
+    return staged_sibling(shellrc, OLD_SUFFIX)
+
+
+def _no_backup_anywhere(root: Path) -> bool:
+    return not list(root.glob(f"*{OLD_SUFFIX}"))
+
+
+def test_refuses_when_shellrc_is_a_symlink_to_myshellrc(tmp_path: Path) -> None:
+    myshellrc = tmp_path / ".myshellrc"
+    myshellrc.write_text("export EDITOR=vim\n")
+    shellrc = tmp_path / ".shellrc"
+    shellrc.symlink_to(myshellrc)
+
+    before_myshellrc = myshellrc.read_bytes()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None and "symlink" in result.reason
+    assert myshellrc.read_bytes() == before_myshellrc
+    assert shellrc.is_symlink()
+    assert shellrc.resolve() == myshellrc
+    assert _no_backup_anywhere(tmp_path)
+
+
+def test_refuses_when_myshellrc_is_a_symlink_to_shellrc(tmp_path: Path) -> None:
+    shellrc = tmp_path / ".shellrc"
+    shellrc.write_text("alias gs='git status'\n")
+    myshellrc = tmp_path / ".myshellrc"
+    myshellrc.symlink_to(shellrc)
+
+    before_shellrc = shellrc.read_bytes()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None and "symlink" in result.reason
+    assert shellrc.read_bytes() == before_shellrc
+    assert myshellrc.is_symlink()
+    assert myshellrc.resolve() == shellrc
+    assert _no_backup_anywhere(tmp_path)
+
+
+def test_refuses_when_shellrc_is_a_symlink_to_an_unrelated_file(tmp_path: Path) -> None:
+    dots = tmp_path / "dots"
+    dots.mkdir()
+    real = dots / "shellrc"
+    real.write_text("alias gs='git status'\n")
+
+    shellrc = tmp_path / ".shellrc"
+    shellrc.symlink_to(real)
+    myshellrc = tmp_path / ".myshellrc"
+    myshellrc.write_text("# mine\n")
+
+    before_real = real.read_bytes()
+    before_myshellrc = myshellrc.read_bytes()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None and "symlink" in result.reason
+    assert real.read_bytes() == before_real
+    assert myshellrc.read_bytes() == before_myshellrc
+    assert shellrc.is_symlink()
+    assert _no_backup_anywhere(tmp_path)
+
+
+def test_refuses_a_non_utf8_shellrc_without_writing_anything(tmp_path: Path) -> None:
+    shellrc = tmp_path / ".shellrc"
+    shellrc.write_bytes(b"alias x=1\n\xff\xfe not utf-8\n")
+    myshellrc = tmp_path / ".myshellrc"
+    myshellrc.write_text("# mine\n")
+
+    before_shellrc = shellrc.read_bytes()
+    before_myshellrc = myshellrc.read_bytes()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None
+    assert ".shellrc" in result.reason
+    assert "UTF-8" in result.reason
+    assert shellrc.read_bytes() == before_shellrc
+    assert myshellrc.read_bytes() == before_myshellrc
+    assert _no_backup_anywhere(tmp_path)
+
+
+def test_consolidation_end_to_end_leaves_one_canonical_file(tmp_path: Path) -> None:
+    shellrc, myshellrc, managed_bin = _seed_consolidable_home(tmp_path)
+    original_bytes = shellrc.read_bytes()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "consolidated"
+
+    merged = myshellrc.read_text()
+    assert merged.count("# >>> tools-installer path >>>") == 1
+    assert merged.count("# >>> tools-installer consolidated shellrc >>>") == 1
+    assert "alias gs='git status'" in merged
+    assert "export EDITOR=vim" in merged
+    assert "__SHELLRC_RUNS=" in merged
+
+    stub = shellrc.read_text()
+    assert "# >>> tools-installer shellrc stub >>>" in stub
+    assert f'[ -f "{myshellrc}" ] && . "{myshellrc}"' in stub
+    assert "alias gs='git status'" not in stub
+
+    backup = _backup_path(shellrc)
+    assert backup.exists()
+    assert backup.read_bytes() == original_bytes
+
+    bash_path = shutil.which("bash")
+    if bash_path is None:
+        pytest.skip("bash not available")
+
+    script = "\n".join(
+        [
+            ". $HOME/.shellrc",
+            ". $HOME/.shellrc",
+            "echo $PATH",
+            "echo $EDITOR",
+            "echo $__SHELLRC_RUNS",
+        ]
+    )
+    proc = subprocess.run(
+        [bash_path, "--noprofile", "--norc", "-c", script],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0
+    out_lines = proc.stdout.splitlines()
+    path_entries = out_lines[0].split(":")
+    assert path_entries.count(str(managed_bin)) == 1
+    assert out_lines[1] == "vim"
+    assert out_lines[2] == "2"
+
+
+# The backup is not a convenience artifact: it is the executable form of D-04's
+# `Reversibility: reversible` line. Every rule below -- raw bytes, no-clobber
+# creation, refuse on mismatch, resume on match, never deleted -- exists because
+# some specific way of getting it wrong made that line untrue.
+
+
+def test_the_original_shellrc_is_recoverable_from_the_backup(tmp_path: Path) -> None:
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    os.chmod(shellrc, 0o600)
+    original_bytes = shellrc.read_bytes()
+    original_mode = stat.S_IMODE(shellrc.stat().st_mode)
+
+    assert consolidate_shellrc(shellrc, myshellrc).status == "consolidated"
+
+    backup = _backup_path(shellrc)
+    os.replace(backup, shellrc)
+
+    assert shellrc.read_bytes() == original_bytes
+    assert stat.S_IMODE(shellrc.stat().st_mode) == original_mode
+
+
+def test_a_crlf_original_is_backed_up_byte_for_byte(tmp_path: Path) -> None:
+    shellrc = tmp_path / ".shellrc"
+    raw = b"alias gs='git status'\r\nexport EDITOR=vim\r\nno-trailing-newline"
+    shellrc.write_bytes(raw)
+    myshellrc = tmp_path / ".myshellrc"
+    myshellrc.write_text("# mine\n")
+
+    assert consolidate_shellrc(shellrc, myshellrc).status == "consolidated"
+
+    backup = _backup_path(shellrc)
+    assert backup.read_bytes() == raw
+    assert b"\r\n" in backup.read_bytes()
+
+
+def test_a_stale_backup_refuses_the_whole_consolidation(tmp_path: Path) -> None:
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    before_shellrc = shellrc.read_bytes()
+    before_myshellrc = myshellrc.read_bytes()
+
+    backup = _backup_path(shellrc)
+    backup.write_bytes(b"# some other tool's file\n")
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None and str(backup) in result.reason
+    assert shellrc.read_bytes() == before_shellrc
+    assert myshellrc.read_bytes() == before_myshellrc
+    assert backup.read_bytes() == b"# some other tool's file\n"
+
+
+def test_a_matching_backup_is_treated_as_a_resumed_run(tmp_path: Path) -> None:
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    os.chmod(shellrc, 0o600)
+    mode = stat.S_IMODE(shellrc.stat().st_mode)
+    original_bytes = shellrc.read_bytes()
+
+    backup = _backup_path(shellrc)
+    backup.write_bytes(original_bytes)
+    os.chmod(backup, mode)
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "consolidated"
+    assert "# >>> tools-installer shellrc stub >>>" in shellrc.read_text()
+    assert myshellrc.read_text().count("# >>> tools-installer consolidated shellrc >>>") == 1
+    assert backup.read_bytes() == original_bytes
+
+
+def test_a_symlinked_backup_refuses_even_though_its_bytes_match(tmp_path: Path) -> None:
+    # Accepted as a resumed run, this backup would resolve to the stub the moment
+    # the stub was written, the original bytes would be gone, and the promised
+    # `mv` would point a link at itself.
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    before_shellrc = shellrc.read_bytes()
+    before_myshellrc = myshellrc.read_bytes()
+
+    backup = _backup_path(shellrc)
+    backup.symlink_to(shellrc)
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None and str(backup) in result.reason
+    assert shellrc.read_bytes() == before_shellrc
+    assert "# >>> tools-installer shellrc stub >>>" not in shellrc.read_text()
+    assert myshellrc.read_bytes() == before_myshellrc
+    assert backup.is_symlink()
+    assert backup.resolve() == shellrc
+
+
+def test_a_backup_with_matching_bytes_but_a_different_mode_refuses(tmp_path: Path) -> None:
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    os.chmod(shellrc, 0o600)
+    before_shellrc = shellrc.read_bytes()
+    before_myshellrc = myshellrc.read_bytes()
+
+    backup = _backup_path(shellrc)
+    backup.write_bytes(shellrc.read_bytes())
+    os.chmod(backup, 0o644)
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None
+    assert "600" in result.reason and "644" in result.reason
+    assert shellrc.read_bytes() == before_shellrc
+    assert myshellrc.read_bytes() == before_myshellrc
+
+
+def test_a_backup_that_is_a_directory_refuses(tmp_path: Path) -> None:
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    before_shellrc = shellrc.read_bytes()
+    before_myshellrc = myshellrc.read_bytes()
+
+    backup = _backup_path(shellrc)
+    backup.mkdir()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None and str(backup) in result.reason
+    assert shellrc.read_bytes() == before_shellrc
+    assert myshellrc.read_bytes() == before_myshellrc
+    assert backup.is_dir()
+
+
+def test_a_second_migration_with_changed_content_refuses_rather_than_reconsolidating(
+    tmp_path: Path,
+) -> None:
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    assert consolidate_shellrc(shellrc, myshellrc).status == "consolidated"
+
+    backup = _backup_path(shellrc)
+    backup_before = backup.read_bytes()
+    shellrc.write_text("# new content a user restored by hand\n")
+    myshellrc_before = myshellrc.read_bytes()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None and str(backup) in result.reason
+    assert shellrc.read_text() == "# new content a user restored by hand\n"
+    assert myshellrc.read_bytes() == myshellrc_before
+    assert backup.read_bytes() == backup_before
+
+
+def test_consolidation_is_idempotent(tmp_path: Path) -> None:
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    assert consolidate_shellrc(shellrc, myshellrc).status == "consolidated"
+    shellrc_after = shellrc.read_bytes()
+    myshellrc_after = myshellrc.read_bytes()
+    backup_after = _backup_path(shellrc).read_bytes()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "already"
+    assert shellrc.read_bytes() == shellrc_after
+    assert myshellrc.read_bytes() == myshellrc_after
+    assert _backup_path(shellrc).read_bytes() == backup_after
+
+
+def test_a_second_consecutive_run_returns_already_and_writes_nothing(tmp_path: Path) -> None:
+    # After a successful run the backup holds the ORIGINAL while ~/.shellrc holds
+    # the STUB, so they are SUPPOSED to differ. An implementation that validates
+    # the backup before recognizing its own stub reads that expected difference as
+    # a stale backup and returns `refused` on this and every later run, so plan
+    # 15.8-06 would add a second direct route to ~/.myshellrc each time.
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    assert consolidate_shellrc(shellrc, myshellrc).status == "consolidated"
+
+    backup = _backup_path(shellrc)
+    paths = (shellrc, myshellrc, backup)
+    captured = {
+        path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths
+    }
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "already"
+    for path in paths:
+        data, ino, mtime = captured[path]
+        assert path.read_bytes() == data
+        assert path.stat().st_ino == ino
+        assert path.stat().st_mtime_ns == mtime
+
+
+def test_absent_shellrc_is_a_no_op(tmp_path: Path) -> None:
+    shellrc = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+    myshellrc.write_text("# mine\n")
+    before_myshellrc = myshellrc.read_bytes()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "absent"
+    assert not shellrc.exists()
+    assert not _backup_path(shellrc).exists()
+    assert myshellrc.read_bytes() == before_myshellrc
+
+
+def test_absent_shellrc_and_absent_myshellrc_is_a_no_op(tmp_path: Path) -> None:
+    shellrc = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "absent"
+    assert not shellrc.exists()
+    assert not myshellrc.exists()
+
+
+def test_a_dangling_shellrc_symlink_is_absent_not_refused(tmp_path: Path) -> None:
+    shellrc = tmp_path / ".shellrc"
+    shellrc.symlink_to(tmp_path / "does-not-exist")
+    myshellrc = tmp_path / ".myshellrc"
+    myshellrc.write_text("# mine\n")
+    before_myshellrc = myshellrc.read_bytes()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "absent"
+    assert not _backup_path(shellrc).exists()
+    assert myshellrc.read_bytes() == before_myshellrc
+
+
+def _inject_edit_on_first_write(
+    monkeypatch: pytest.MonkeyPatch,
+    shellrc: Path,
+    edit: Callable[[], None],
+) -> None:
+    """Wrap atomic_write_text so the FIRST call also mutates ~/.shellrc.
+
+    The first call is the copy-forward into ~/.myshellrc; the edit therefore
+    lands after the snapshot read and before the stub write.
+    """
+    real = atomic_write_text
+    state = {"fired": False}
+
+    def wrapper(path: Path, text: str, *, mode: int | None = None) -> None:
+        real(path, text, mode=mode)
+        if not state["fired"] and path != shellrc:
+            state["fired"] = True
+            edit()
+
+    monkeypatch.setattr("installer.shellrc.atomic_write_text", wrapper)
+
+
+def test_a_concurrent_edit_between_the_read_and_the_stub_write_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    before_myshellrc = myshellrc.read_bytes()
+
+    def edit() -> None:
+        shellrc.write_bytes(b"# concurrently edited\n")
+
+    _inject_edit_on_first_write(monkeypatch, shellrc, edit)
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None
+    assert str(shellrc) in result.reason
+    assert "changed" in result.reason
+    assert shellrc.read_bytes() == b"# concurrently edited\n"
+    assert myshellrc.read_bytes() == before_myshellrc
+    assert _no_backup_anywhere(tmp_path)
+
+
+def test_a_concurrent_replacement_of_the_file_refuses_even_with_identical_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    before_bytes = shellrc.read_bytes()
+    before_myshellrc = myshellrc.read_bytes()
+
+    def edit() -> None:
+        shellrc.unlink()
+        shellrc.write_bytes(before_bytes)
+
+    _inject_edit_on_first_write(monkeypatch, shellrc, edit)
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None and "changed" in result.reason
+    assert shellrc.read_bytes() == before_bytes
+    assert myshellrc.read_bytes() == before_myshellrc
+    assert _no_backup_anywhere(tmp_path)
+
+
+def test_a_concurrent_edit_leaves_a_previously_existing_backup_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    os.chmod(shellrc, 0o600)
+    mode = stat.S_IMODE(shellrc.stat().st_mode)
+    backup = _backup_path(shellrc)
+    backup.write_bytes(shellrc.read_bytes())
+    os.chmod(backup, mode)
+    backup_before = backup.read_bytes()
+
+    def edit() -> None:
+        shellrc.write_bytes(b"# concurrently edited\n")
+
+    _inject_edit_on_first_write(monkeypatch, shellrc, edit)
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert backup.exists()
+    assert backup.read_bytes() == backup_before
+
+
+def test_a_concurrent_edit_restores_an_absent_myshellrc_by_removing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shellrc = tmp_path / ".shellrc"
+    shellrc.write_text("alias gs='git status'\n")
+    myshellrc = tmp_path / ".myshellrc"
+    assert not myshellrc.exists()
+
+    def edit() -> None:
+        shellrc.write_bytes(b"# concurrently edited\n")
+
+    _inject_edit_on_first_write(monkeypatch, shellrc, edit)
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert not myshellrc.exists()
+    assert _no_backup_anywhere(tmp_path)
+
+
+def test_the_happy_path_still_writes_the_stub(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    calls = {"n": 0}
+    real = atomic_write_text
+
+    def counting(path: Path, text: str, *, mode: int | None = None) -> None:
+        calls["n"] += 1
+        real(path, text, mode=mode)
+
+    monkeypatch.setattr("installer.shellrc.atomic_write_text", counting)
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "consolidated"
+    assert "# >>> tools-installer shellrc stub >>>" in shellrc.read_text()
+    assert calls["n"] >= 2
+
+
+def test_refuses_when_shellrc_and_myshellrc_are_the_same_file(tmp_path: Path) -> None:
+    real = tmp_path / "one_file"
+    real.write_text("alias gs='git status'\n")
+    shellrc = tmp_path / ".shellrc"
+    os.link(real, shellrc)
+    myshellrc = tmp_path / ".myshellrc"
+    os.link(real, myshellrc)
+    before = real.read_bytes()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None
+    assert "one file" in result.reason
+    assert real.read_bytes() == before
+    assert _no_backup_anywhere(tmp_path)
+
+
+def test_refuses_when_the_samefile_comparison_cannot_be_answered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+
+    def raise_oserror(_self: Path, _other: Path) -> bool:
+        raise OSError("cannot compare")
+
+    monkeypatch.setattr("pathlib.Path.samefile", raise_oserror)
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None
+    assert "could not be compared" in result.reason
+
+
+def test_refuses_when_the_snapshot_cannot_be_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    before_myshellrc = myshellrc.read_bytes()
+
+    def raise_oserror(_path: Path) -> object:
+        raise OSError("vanished")
+
+    monkeypatch.setattr("installer.shellrc._snapshot", raise_oserror)
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None
+    assert myshellrc.read_bytes() == before_myshellrc
+    assert _no_backup_anywhere(tmp_path)
