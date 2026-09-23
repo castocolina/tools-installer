@@ -1,11 +1,13 @@
 import io
+import shutil
+import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
 from rich.console import Console
 
-from installer import daemon
+from installer import daemon, shellrc
 from installer.app import run_guard, run_wizard
 from installer.checksums import ChecksumMismatch
 from installer.cli import Options
@@ -490,6 +492,435 @@ def test_configure_path_split_inlines_block_and_skips_myshellrc(tmp_path: Path):
         text = rc.read_text()
         assert "# >>> tools-installer path >>>" in text  # block written inline
         assert str(myshellrc) not in text  # and no source line
+
+
+def test_configure_path_consolidates_a_generic_shellrc(tmp_path: Path) -> None:
+    from installer.app import configure_path
+
+    shellrc_path = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+    shellrc_path.write_text("export FOREIGN_CONTENT=present\n")
+    console, buffer = _console()
+
+    outcome = configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        shellrc_path=shellrc_path,
+        rc_paths=[],
+    )
+
+    assert outcome is not None and outcome.status == "consolidated"
+    consolidated = myshellrc.read_text()
+    assert "FOREIGN_CONTENT=present" in consolidated
+    assert "# >>> tools-installer consolidated shellrc >>>" in consolidated
+    assert consolidated.count("# >>> tools-installer path >>>") == 1
+    assert shellrc_path.read_text().count("# >>> tools-installer shellrc stub >>>") == 1
+    assert "consolidated" in buffer.getvalue().lower()
+
+
+def test_configure_path_writes_the_managed_block_after_the_consolidated_content(
+    tmp_path: Path,
+) -> None:
+    from installer.app import configure_path
+
+    shellrc_path = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+    shellrc_path.write_text("export FOREIGN_CONTENT=present\n")
+    console, _buffer = _console()
+
+    configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        shellrc_path=shellrc_path,
+        rc_paths=[],
+    )
+
+    result = myshellrc.read_text()
+    assert result.index("# >>> tools-installer consolidated shellrc >>>") < result.index(
+        "# >>> tools-installer path >>>"
+    )
+
+
+def test_configure_path_skips_consolidation_in_split_mode(tmp_path: Path) -> None:
+    from installer.app import configure_path
+
+    shellrc_path = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+    original = "export FOREIGN_CONTENT=present\n"
+    shellrc_path.write_text(original)
+    buffer = io.StringIO()
+    console = Console(file=buffer, width=1000, no_color=True)
+
+    outcome = configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        shellrc_path=shellrc_path,
+        rc_paths=[],
+        link_mode="split",
+    )
+
+    assert outcome is None
+    assert shellrc_path.read_text() == original
+    assert not myshellrc.exists()
+    assert "consolid" not in buffer.getvalue().lower()
+
+
+def test_configure_path_says_nothing_when_there_is_no_generic_shellrc(tmp_path: Path) -> None:
+    from installer.app import configure_path
+
+    myshellrc = tmp_path / ".myshellrc"
+    buffer = io.StringIO()
+    console = Console(file=buffer, width=1000, no_color=True)
+
+    outcome = configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        shellrc_path=tmp_path / ".shellrc",
+        rc_paths=[],
+    )
+
+    assert outcome is not None and outcome.status == "absent"
+    assert buffer.getvalue() == (
+        f"PATH configured in {myshellrc} (restart your shell or source it).\n"
+    )
+
+
+def test_configure_path_without_a_shellrc_path_argument_is_unchanged(tmp_path: Path) -> None:
+    from installer.app import configure_path
+
+    myshellrc = tmp_path / ".myshellrc"
+    buffer = io.StringIO()
+    console = Console(file=buffer, width=1000, no_color=True)
+
+    outcome = configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        rc_paths=[],
+    )
+
+    assert outcome is None
+    assert buffer.getvalue() == (
+        f"PATH configured in {myshellrc} (restart your shell or source it).\n"
+    )
+
+
+def test_an_rc_that_already_sources_shellrc_does_not_also_get_our_source_block(
+    tmp_path: Path,
+) -> None:
+    from installer.app import configure_path
+
+    shellrc_path = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+    rc_path = tmp_path / ".bashrc"
+    shellrc_path.write_text("export FOREIGN_CONTENT=present\n")
+    original = f'export KEEP=1\nsource "{shellrc_path}"\n'
+    rc_path.write_text(original)
+    console, _buffer = _console()
+
+    configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        shellrc_path=shellrc_path,
+        rc_paths=[rc_path],
+    )
+
+    assert rc_path.read_text() == original
+    assert "tools-installer source" not in rc_path.read_text()
+
+
+def test_a_stale_source_block_is_removed_when_the_rc_already_reaches_the_stub(
+    tmp_path: Path,
+) -> None:
+    from installer.app import configure_path
+
+    shellrc_path = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+    rc_path = tmp_path / ".bashrc"
+    shellrc_path.write_text("export FOREIGN_CONTENT=present\n")
+    original = f'export KEEP=1\nsource "{shellrc_path}"\n'
+    rc_path.write_text(original)
+    shellrc.ensure_source(rc_path, myshellrc)
+    seeded = rc_path.read_text()
+    console, _buffer = _console()
+
+    configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        shellrc_path=shellrc_path,
+        rc_paths=[rc_path],
+    )
+
+    assert "tools-installer source" not in rc_path.read_text()
+    assert original in rc_path.read_text()
+    assert "export KEEP=1" in seeded
+
+
+def test_an_rc_that_does_not_source_shellrc_still_gets_our_source_block(tmp_path: Path) -> None:
+    from installer.app import configure_path
+
+    shellrc_path = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+    rc_path = tmp_path / ".bashrc"
+    shellrc_path.write_text("export FOREIGN_CONTENT=present\n")
+    rc_path.write_text("export KEEP=1\n")
+    console, _buffer = _console()
+
+    configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        shellrc_path=shellrc_path,
+        rc_paths=[rc_path],
+    )
+
+    assert rc_path.read_text().count("# >>> tools-installer source >>>") == 1
+
+
+def test_an_rc_with_an_unresolvable_source_command_still_gets_our_block_and_a_diagnostic(
+    tmp_path: Path,
+) -> None:
+    from installer.app import configure_path
+
+    shellrc_path = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+    rc_path = tmp_path / ".bashrc"
+    shellrc_path.write_text("export FOREIGN_CONTENT=present\n")
+    rc_path.write_text('eval "$(brew shellenv)"\n. "$ZDOTDIR/extra"\n')
+    console, buffer = _console()
+    assert shellrc.sources_file(rc_path.read_text(), shellrc_path) == "unprovable"
+
+    configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        shellrc_path=shellrc_path,
+        rc_paths=[rc_path],
+    )
+
+    assert rc_path.read_text().count("# >>> tools-installer source >>>") == 1
+    assert str(rc_path) in buffer.getvalue()
+    assert "source command this tool could not resolve" in " ".join(buffer.getvalue().split())
+
+
+@pytest.mark.parametrize("verdict", ["yes", "no", "unprovable"])
+def test_the_single_route_rule_handles_every_sources_file_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verdict: str
+) -> None:
+    from installer import app as app_module
+    from installer.app import configure_path
+
+    shellrc_path = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+    rc_path = tmp_path / ".bashrc"
+    shellrc_path.write_text("export FOREIGN_CONTENT=present\n")
+    rc_path.write_text("export KEEP=1\n")
+
+    def fixed_verdict(_text: str, _target: Path) -> str:
+        return verdict
+
+    monkeypatch.setattr(app_module.shellrc, "sources_file", fixed_verdict)
+    console, _buffer = _console()
+
+    configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        shellrc_path=shellrc_path,
+        rc_paths=[rc_path],
+    )
+
+    has_source_block = "# >>> tools-installer source >>>" in rc_path.read_text()
+    assert has_source_block is (verdict != "yes")
+
+
+def test_the_single_route_rule_only_applies_once_the_stub_exists(tmp_path: Path) -> None:
+    from installer.app import configure_path
+
+    shellrc_path = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+    rc_path = tmp_path / ".bashrc"
+    rc_path.write_text(f'source "{shellrc_path}"\n')
+    console, _buffer = _console()
+
+    configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        shellrc_path=shellrc_path,
+        rc_paths=[rc_path],
+    )
+
+    assert "# >>> tools-installer source >>>" in rc_path.read_text()
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not on PATH")
+def test_a_consolidated_bashrc_runs_the_canonical_file_once_per_startup(tmp_path: Path) -> None:
+    from installer.app import configure_path
+
+    bash_path = shutil.which("bash")
+    assert bash_path is not None
+    shellrc_path = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+    bashrc = tmp_path / ".bashrc"
+    managed_dir = tmp_path / ".local" / "bin"
+    shellrc_path.write_text(
+        "__SHELLRC_RUNS=$((${__SHELLRC_RUNS:-0}+1))\nexport __COPIED_FORWARD=yes\n"
+    )
+    bashrc.write_text(f'source "{shellrc_path}"\n')
+    console, _buffer = _console()
+
+    configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=managed_dir,
+        myshellrc_path=myshellrc,
+        shellrc_path=shellrc_path,
+        rc_paths=[bashrc],
+    )
+
+    completed = subprocess.run(
+        [
+            bash_path,
+            "--noprofile",
+            "--norc",
+            "-c",
+            'source "$HOME/.bashrc"; '
+            'printf \'%s\\n\' "$__SHELLRC_RUNS" "$PATH" "$__COPIED_FORWARD"',
+        ],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0
+    lines = completed.stdout.splitlines()
+    assert lines[0] == "1"
+    assert lines[2] == "yes"
+    assert lines[1].split(":").count(str(managed_dir)) == 1
+
+
+def test_configure_path_reports_a_consolidation_refusal(tmp_path: Path) -> None:
+    from installer.app import configure_path
+
+    shellrc_path = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+    rc_path = tmp_path / ".bashrc"
+    shellrc_path.write_text("export FOREIGN_CONTENT=present\n")
+    myshellrc.write_text(f'source "{shellrc_path}"\n')
+    before = shellrc_path.read_bytes()
+    console, buffer = _console()
+
+    outcome = configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        shellrc_path=shellrc_path,
+        rc_paths=[rc_path],
+    )
+
+    assert outcome is not None and outcome.status == "refused"
+    assert outcome.reason is not None
+    assert outcome.reason in " ".join(buffer.getvalue().split())
+    assert shellrc_path.read_bytes() == before
+    assert "# >>> tools-installer path >>>" in myshellrc.read_text()
+
+
+def test_configure_path_returns_the_consolidation_outcome(tmp_path: Path) -> None:
+    from installer.app import configure_path
+
+    shellrc_path = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+    shellrc_path.write_text("export FOREIGN_CONTENT=present\n")
+    myshellrc.write_text(f'source "{shellrc_path}"\n')
+    console, _buffer = _console()
+
+    refused = configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / "bin",
+        myshellrc_path=myshellrc,
+        shellrc_path=shellrc_path,
+        rc_paths=[],
+    )
+    split = configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / "bin2",
+        myshellrc_path=tmp_path / ".myshellrc2",
+        shellrc_path=shellrc_path,
+        rc_paths=[],
+        link_mode="split",
+    )
+    omitted = configure_path(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / "bin3",
+        myshellrc_path=tmp_path / ".myshellrc3",
+        rc_paths=[],
+    )
+
+    assert refused is not None and refused.status == "refused"
+    assert refused.reason is not None
+    assert split is None
+    assert omitted is None
+
+
+def test_consolidation_refusal_message_is_none_for_every_non_refusal_outcome() -> None:
+    from installer.app import consolidation_refusal_message
+
+    assert consolidation_refusal_message(None) is None
+    for status in ("absent", "already", "consolidated"):
+        assert consolidation_refusal_message(shellrc.ShellrcConsolidation(status=status)) is None
+
+
+def test_consolidation_refusal_message_includes_the_mechanism_reason() -> None:
+    from installer.app import consolidation_refusal_message
+
+    outcome = shellrc.ShellrcConsolidation(status="refused", reason="the exact mechanism reason")
+
+    message = consolidation_refusal_message(outcome)
+
+    assert message is not None
+    assert "managed path block was written" in message.lower()
+    assert "~/.shellrc consolidation was refused" in message
+    assert "the exact mechanism reason" in message
 
 
 def test_clean_rc_duplicates_removes_after_confirm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

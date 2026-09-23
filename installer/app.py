@@ -8,6 +8,7 @@ from pathlib import Path
 
 from rich.console import Console
 
+from installer import shellrc
 from installer.audit import audit
 from installer.cli import Options
 from installer.deps import resolve_dependencies
@@ -194,26 +195,84 @@ def configure_path(
     myshellrc_path: Path,
     rc_paths: list[Path],
     link_mode: str = "centralized",
+    shellrc_path: Path | None = None,
     exists: Callable[[Path], bool] = Path.is_dir,
-) -> None:
+) -> shellrc.ShellrcConsolidation | None:
     """Wire the managed PATH into the shells per `link_mode`.
 
     centralized/single: write ~/.myshellrc and `source` it from each rc path (the
     caller passes one rc for single, both for centralized). split: write the managed
     PATH block directly into each rc path, with no ~/.myshellrc indirection.
-    Only bin dirs that pass `exists` are managed (the default always is).
+    When given, consolidate the foreign ~/.shellrc before writing the managed block;
+    each rc then reaches ~/.myshellrc through exactly one route. Only bin dirs that
+    pass `exists` are managed (the default always is).
     """
+    consolidation: shellrc.ShellrcConsolidation | None = None
+    # Bound to the path ONLY when ~/.shellrc really is this project's stub, so the
+    # single-route check below has a non-optional path and cannot run against a
+    # file consolidation refused or never touched.
+    stub_shellrc: Path | None = None
+    if shellrc_path is not None and link_mode != "split":
+        consolidation = shellrc.consolidate_shellrc(shellrc_path, myshellrc_path)
+        if consolidation.status in {"consolidated", "already"}:
+            stub_shellrc = shellrc_path
+        if consolidation.status == "consolidated":
+            console.print(f"Consolidated {shellrc_path} into {myshellrc_path}.")
     bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir, exists)
     if link_mode == "split":
+        # Split mode maintains no ~/.myshellrc; consolidating into a file nothing
+        # sources would relocate foreign content while reporting a false success.
         for rc_path in rc_paths:
             write_managed_path(rc_path, bin_dirs)
         targets = ", ".join(str(rc_path) for rc_path in rc_paths)
         console.print(f"PATH written into {targets} (restart your shell).")
-        return
+        return consolidation
     write_myshellrc(bin_dirs, myshellrc_path)
     for rc_path in rc_paths:
+        rc_text = rc_path.read_text() if rc_path.exists() else ""
+        if stub_shellrc is not None:
+            # A generic ~/.shellrc exists precisely because an rc commonly sources it.
+            # Skipping our block prevents the canonical file from running twice; the
+            # accepted residuals are conditional source lines (detected as yes) and
+            # unprovable commands, which take the ordinary route with a diagnostic.
+            # `unprovable` is not `yes`: eval "$(brew shellenv)" and source
+            # "$ZDOTDIR/foo" are ordinary rc content, and treating them as wired
+            # would leave PATH unwired for users who need the ordinary route.
+            route = shellrc.sources_file(rc_text, stub_shellrc)
+            if route == "yes":
+                shellrc.remove_source_block(rc_path)
+                console.print(f"{rc_path} reaches {myshellrc_path} through {stub_shellrc}.")
+                continue
+            if route == "unprovable":
+                console.print(
+                    f"{rc_path} contains a source command this tool could not resolve; "
+                    "the ordinary source route is retained."
+                )
         ensure_source(rc_path, myshellrc_path)
     console.print(f"PATH configured in {myshellrc_path} (restart your shell or source it).")
+    # Printed AFTER the writes, so its claim that the block was written is true at
+    # the moment it is made: an exception above reaches the caller with no message
+    # rather than with a message asserting a write that did not happen.
+    refusal = consolidation_refusal_message(consolidation)
+    if refusal is not None:
+        console.print(refusal)
+    return consolidation
+
+
+def consolidation_refusal_message(
+    outcome: shellrc.ShellrcConsolidation | None,
+) -> str | None:
+    """Build the one user-facing message for a refused shellrc consolidation.
+
+    No `assert` narrows `reason` here: asserts vanish under `python -O`, and this
+    is the one path whose entire job is making a refusal impossible to mistake
+    for success. A refusal always carries a reason, but if one were ever missing
+    the message must still be printed, not silently dropped.
+    """
+    if outcome is None or outcome.status != "refused":
+        return None
+    reason = outcome.reason or "no reason was recorded"
+    return f"Managed PATH block was written, but ~/.shellrc consolidation was refused: {reason}"
 
 
 def guard_state(
