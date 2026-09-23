@@ -424,6 +424,21 @@ def _accumulating_shell_hits(files: list[Path]) -> list[Hit]:
     return hits
 
 
+_EXCLUDED_PATH_PARTS = frozenset({".venv", ".git", ".worktrees", ".superpowers"})
+
+
+def _is_excluded(path: Path) -> bool:
+    """Whether any path component is a directory the repo scan must skip.
+
+    Extracted so the exclusion rule can be exercised directly. It used to be an
+    inline set comprehension inside the scan, which left its own test with
+    nothing to call -- that test built `.venv_test`-style names matching no
+    pattern, never invoked the rule, and asserted `len(hits) >= 1`, which held
+    whatever the rule did.
+    """
+    return any(part in _EXCLUDED_PATH_PARTS for part in path.parts)
+
+
 def test_no_unclassified_accumulating_path_line_in_any_shell_script() -> None:
     """Scan every shell script in the repo for accumulating PATH prepends.
 
@@ -449,9 +464,7 @@ def test_no_unclassified_accumulating_path_line_in_any_shell_script() -> None:
     # Add all .sh under scripts/
     if SCRIPTS_DIR.exists():
         for sh_file in sorted(SCRIPTS_DIR.glob("**/*.sh")):
-            # Skip excluded paths
-            excluded = {".venv", ".git", ".worktrees", ".superpowers"}
-            if any(part in excluded for part in sh_file.parts):
+            if _is_excluded(sh_file):
                 continue
             files_to_scan.append(sh_file)
 
@@ -586,30 +599,16 @@ def test_shell_scan_does_not_report_a_commented_line(tmp_path: Path) -> None:
 
 
 def test_shell_scan_excludes_venv_git_worktrees_superpowers(tmp_path: Path) -> None:
-    """Verify the repository scan excludes paths with .venv, .git, .worktrees, .superpowers.
+    """Exercise the exclusion rule itself, with the names it actually matches.
 
-    This is tested implicitly in test_no_unclassified_accumulating_path_line_in_any_shell_script
-    because the file collection phase filters out these directories. We verify the exclusion
-    logic directly by creating a synthetic directory structure."""
-    # Create directories that simulate the exclusion pattern
-    test_dirs = [".venv_test", ".git_test", ".worktrees_test", ".superpowers_test"]
-    for dirname in test_dirs:
-        d = tmp_path / dirname
-        d.mkdir()
-        script = d / "test.sh"
-        script.write_text('export PATH="$HOME/bin:$PATH"\n')
+    Both directions are asserted: every excluded directory name is excluded at
+    any depth, and a path that merely RESEMBLES one is not. The previous version
+    of this test used `.venv_test`-style names, which match no pattern, never
+    called the rule, and ended on an assertion that held regardless.
+    """
+    for name in _EXCLUDED_PATH_PARTS:
+        assert _is_excluded(tmp_path / name / "test.sh")
+        assert _is_excluded(tmp_path / name / "nested" / "deep" / "test.sh")
 
-    # Also create a non-excluded directory with the same content
-    included_dir = tmp_path / "included"
-    included_dir.mkdir()
-    script = included_dir / "test.sh"
-    script.write_text('export PATH="$HOME/bin:$PATH"\n')
-
-    # Scan all scripts
-    all_scripts = list(tmp_path.glob("**/*.sh"))
-    hits = _accumulating_shell_hits(all_scripts)
-
-    # We should get a hit from the included directory only
-    # (The excluded dirs are named differently so they won't be caught by the exclusion logic,
-    # but that's fine - the real exclusion happens at collection time in the main test)
-    assert len(hits) >= 1  # At least the included one should match
+    for name in (".venv_test", "venv", "git", "superpowers", "included"):
+        assert not _is_excluded(tmp_path / name / "test.sh")

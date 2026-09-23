@@ -335,6 +335,23 @@ class _SourceInspection:
 _NO_SOURCE = _SourceInspection("none", False, False, False)
 
 
+def _physical_lines(text: str) -> list[str]:
+    """Split on newline ONLY, matching what a POSIX shell calls a line.
+
+    `_physical_lines(str)` also splits on \r, \v, \f, \x1c-\x1e, \x85, U+2028 and
+    U+2029. A shell treats none of those as a line separator, so using it
+    normalized a CRLF file to LF and tore a single shell line in two at a form
+    feed -- both of which break D-04's promise that user content is copied
+    forward VERBATIM. The trailing empty element from a text ending in a newline
+    is dropped, so this matches `splitlines()` exactly for newline-only text and
+    every existing caller stays aligned.
+    """
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def _normalized_word(word: str) -> str:
     """Approximate shell quote removal for one whitespace-delimited word."""
     return word.replace("\\", "").replace('"', "").replace("'", "")
@@ -561,7 +578,7 @@ def _classify_source_lines(text: str, target: Path) -> list[_SourceInspection]:
     """
     if not text:
         return []
-    lines = text.splitlines()
+    lines = _physical_lines(text)
     inspections: list[_SourceInspection] = [_NO_SOURCE] * len(lines)
     index = 0
     while index < len(lines):
@@ -665,7 +682,7 @@ def sources_file(text: str, target: Path) -> SourceVerdict:
     reaches, _line_number, unprovable_argument = _text_sources_target(text, target)
     if reaches:
         return "yes"
-    if unprovable_argument or any(_has_live_eval(line) for line in text.splitlines()):
+    if unprovable_argument or any(_has_live_eval(line) for line in _physical_lines(text)):
         return "unprovable"
     return "no"
 
@@ -683,7 +700,7 @@ def consolidated_body(shellrc_text: str, myshellrc_path: Path) -> str:
     DISABLED, never deleted (D-04). Nothing else is altered: same line count,
     same order, same trailing whitespace on every untouched line.
     """
-    lines = shellrc_text.splitlines()
+    lines = _physical_lines(shellrc_text)
     inspections = _classify_source_lines(shellrc_text, myshellrc_path)
     rewritten = [
         (
@@ -715,7 +732,7 @@ def consolidation_refusal(
     body can silently destroy content. The fail-safe mirrors ``installer/omz.py``'s
     multi-line-array refusal and ``installer/daemon.py``'s sentinel refusal.
     """
-    for number, line in enumerate(shellrc_text.splitlines(), start=1):
+    for number, line in enumerate(_physical_lines(shellrc_text), start=1):
         stripped = line.strip()
         if stripped.startswith("# >>> tools-installer") or stripped.startswith(
             "# <<< tools-installer"
@@ -737,7 +754,7 @@ def consolidation_refusal(
 
     inspections = _classify_source_lines(shellrc_text, myshellrc_path)
     for number, (line, inspection) in enumerate(
-        zip(shellrc_text.splitlines(), inspections, strict=True), start=1
+        zip(_physical_lines(shellrc_text), inspections, strict=True), start=1
     ):
         if inspection.has_unresolvable_source:
             return _source_inspection_reason(shellrc_path, number, line)

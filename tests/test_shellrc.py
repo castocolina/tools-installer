@@ -2908,3 +2908,35 @@ def test_a_single_quoted_argument_is_not_expanded(tmp_path: Path) -> None:
     assert classify_source_line(". '~/.myshellrc'", target).verdict == "none"
     # An absolute single-quoted path needs no expansion, so it still matches.
     assert classify_source_line(f". '{target}'", target).verdict == "rewritable"
+
+
+@pytest.mark.parametrize(
+    ("label", "original"),
+    [
+        ("crlf", b"export A=1\r\nexport B=2\r\n"),
+        ("u2028", 'export A="x y"\n'.encode()),
+        ("form_feed", b"export A=1\x0cexport B=2\n"),
+        ("nel", b"export A=1\xc2\x85export B=2\n"),
+    ],
+)
+def test_copy_forward_preserves_bytes_a_shell_does_not_treat_as_newlines(
+    tmp_path: Path, label: str, original: bytes
+) -> None:
+    """D-04 promises user content is copied forward VERBATIM.
+
+    `str.splitlines()` splits on \\r, \\v, \\f, \\x1c-\\x1e, \\x85, U+2028 and
+    U+2029 -- none of which a POSIX shell treats as a line separator. Using it
+    normalized a CRLF file to LF and tore one shell line in two at a form feed,
+    so the copied content was not what the user wrote.
+    """
+    managed_bin = tmp_path / "managed_bin"
+    managed_bin.mkdir()
+    myshellrc = tmp_path / ".myshellrc"
+    write_myshellrc([managed_bin], myshellrc)
+    shellrc = tmp_path / ".shellrc"
+    shellrc.write_bytes(original)
+
+    assert consolidate_shellrc(shellrc, myshellrc).status == "consolidated"
+
+    assert original.rstrip(b"\n") in myshellrc.read_bytes()
+    assert _backup_path(shellrc).read_bytes() == original
