@@ -192,6 +192,28 @@ def remove_managed_block(path: Path) -> None:
         atomic_write_text(path, stripped)
 
 
+def remove_source_block(path: Path) -> None:
+    """Strip this project's own source block from `path`, preserving the rest.
+
+    Mirrors `remove_managed_block` exactly, down to the atomic write: a missing
+    file is a no-op, a file without the block is left untouched, and the file is
+    rewritten only when stripping actually changed it.
+
+    Plan 15.8-06 calls this when an rc file already reaches ~/.myshellrc through
+    the consolidated ~/.shellrc stub, so this project's own block is removed
+    rather than left duplicating the route. The file is a user-owned .bashrc or
+    .zshrc, which is exactly why the write goes through `atomic_write_text`: a
+    truncating write there is the unrecoverable outcome `installer/atomic.py`
+    exists to prevent.
+    """
+    if not path.exists():
+        return
+    original = path.read_text()
+    stripped = strip_block(original, _SOURCE_BEGIN, _SOURCE_END)
+    if stripped != original:
+        atomic_write_text(path, stripped)
+
+
 def has_managed_block(path: Path) -> bool:
     """True when `path` exists and contains the managed PATH block begin marker."""
     if not path.exists():
@@ -266,6 +288,7 @@ def consolidation_stub(myshellrc_path: Path) -> str:
 
 
 _LineVerdict = Literal["none", "rewritable", "ambiguous"]
+SourceVerdict = Literal["yes", "no", "unprovable"]
 _SOURCE_COMMANDS = {".", "source"}
 _COMMAND_PREFIXES = {"if", "then", "elif", "else", "while", "until", "do", "!"}
 
@@ -508,6 +531,60 @@ def _text_sources_target(text: str, target: Path) -> tuple[bool, int | None, boo
         if inspection.has_unresolvable_source:
             unprovable = True
     return target_line is not None, target_line, unprovable
+
+
+def sources_file(text: str, target: Path) -> SourceVerdict:
+    """Whether `text` live-sources `target`: ``yes``, ``no``, or ``unprovable``.
+
+    Deliberately BROADER than the rewriter. Its caller (`configure_path`) is
+    deciding whether to add a SECOND route to ~/.myshellrc, not whether it may
+    edit a line, so a shape this module refuses to rewrite must still count as
+    reaching the file. Answering `no` there would wire a duplicate route and run
+    the canonical file twice on every shell startup.
+
+    `unprovable` must NOT be folded into `yes` by any caller. A live source whose
+    argument does not statically resolve (`source "$ZDOTDIR/foo"`) or a live
+    `eval` (`eval "$(brew shellenv)"`) is ORDINARY content in a real rc file; a
+    predicate that answered `yes` on those would stop this project from wiring
+    PATH for most users. The correct handling is to take the ordinary route and
+    SAY SO -- plan 15.8-06 prints a diagnostic naming the line.
+    """
+    reaches, _line_number, unprovable_argument = _text_sources_target(text, target)
+    if reaches:
+        return "yes"
+    if unprovable_argument or any(_has_live_eval(line) for line in text.splitlines()):
+        return "unprovable"
+    return "no"
+
+
+def consolidated_body(shellrc_text: str, myshellrc_path: Path) -> str:
+    """Return `shellrc_text` with every rewritable self-source line disabled.
+
+    PRECONDITION: `consolidation_refusal` has already returned None for this
+    text. That is why there is no branch here for an ambiguous line -- by the
+    time this runs, the only line that can resolve to `myshellrc_path` is the
+    one simple shape the classifier certified as rewritable. Calling this on
+    unvetted text is a programming error, not an input to defend against.
+
+    The original text is preserved verbatim on the comment, so content is
+    DISABLED, never deleted (D-04). Nothing else is altered: same line count,
+    same order, same trailing whitespace on every untouched line.
+    """
+    lines = shellrc_text.splitlines()
+    inspections = _classify_source_lines(shellrc_text, myshellrc_path)
+    rewritten = [
+        (
+            f"# tools-installer disabled this line; "
+            f"{myshellrc_path} is now the file it was sourcing: {line}"
+        )
+        if inspection.verdict == "rewritable"
+        else line
+        for line, inspection in zip(lines, inspections, strict=True)
+    ]
+    body = "\n".join(rewritten)
+    if shellrc_text.endswith("\n"):
+        return f"{body}\n"
+    return body
 
 
 def consolidation_refusal(
@@ -806,9 +883,12 @@ def consolidate_shellrc(shellrc_path: Path, myshellrc_path: Path) -> ShellrcCons
 
     pre_myshellrc_bytes = myshellrc_path.read_bytes() if myshellrc_path.exists() else None
     existing = pre_myshellrc_bytes.decode("utf-8") if pre_myshellrc_bytes is not None else ""
+    # The rewrite applies to the COPY only. `snapshot.data` still holds the
+    # original bytes and is what the backup below is written from, so D-04's
+    # one-`mv` reversibility is unaffected by anything done here.
     merged = apply_block(
         existing,
-        consolidation_block(original_text),
+        consolidation_block(consolidated_body(original_text, myshellrc_path)),
         begin=_SHELLRC_BEGIN,
         end=_SHELLRC_END,
     )

@@ -24,6 +24,8 @@ from installer.shellrc import (
     managed_block,
     path_export_guard,
     remove_managed_block,
+    remove_source_block,
+    sources_file,
     strip_block,
     write_myshellrc,
 )
@@ -2202,3 +2204,220 @@ def test_refuses_when_the_snapshot_cannot_be_read(
     assert result.reason is not None
     assert myshellrc.read_bytes() == before_myshellrc
     assert _no_backup_anywhere(tmp_path)
+
+
+# --- Task 2: the narrow rewriter and the two helpers plan 15.8-06 consumes ---
+
+
+_PROVENANCE_LINES = 2
+
+
+def _consolidated_span(myshellrc: Path) -> list[str]:
+    """The copied-forward body inside ~/.myshellrc, without the provenance header.
+
+    `consolidation_block` emits BEGIN, two provenance comments, the body, END;
+    the body is what these tests assert on.
+    """
+    lines = myshellrc.read_text().split("\n")
+    start = lines.index("# >>> tools-installer consolidated shellrc >>>")
+    stop = lines.index("# <<< tools-installer consolidated shellrc <<<")
+    return lines[start + 1 + _PROVENANCE_LINES : stop]
+
+
+def test_a_simple_line_sourcing_myshellrc_is_disabled_not_deleted(tmp_path: Path) -> None:
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    original_line = '. "$HOME/.myshellrc"'
+    shellrc.write_text(f"export KEEP=1\n{original_line}\nexport TAIL=2\n")
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "consolidated"
+    span = _consolidated_span(myshellrc)
+    disabled = [line for line in span if original_line in line]
+    assert len(disabled) == 1
+    # The original text survives verbatim, on a comment that says why.
+    assert disabled[0].lstrip().startswith("#")
+    assert disabled[0].endswith(original_line)
+    assert str(myshellrc) in disabled[0]
+    # And no LIVE source of the target is left behind in the copied content.
+    assert all(
+        classify_source_line(line, myshellrc).verdict == "none"
+        for line in span
+        if not line.lstrip().startswith("#")
+    )
+
+
+def test_the_rewritten_body_changes_nothing_else(tmp_path: Path) -> None:
+    shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
+    original_lines = [
+        "export KEEP=1   ",
+        "",
+        "alias gs='git status'",
+        '. "$HOME/.myshellrc"',
+        "\texport INDENTED=1",
+        "# a comment",
+    ]
+    shellrc.write_text("\n".join(original_lines) + "\n")
+
+    assert consolidate_shellrc(shellrc, myshellrc).status == "consolidated"
+
+    span = _consolidated_span(myshellrc)
+    # `consolidation_block` splits a trailing-newline body, so the final "" is
+    # the text's terminator, not an added line.
+    expected = [*original_lines, ""]
+    assert len(span) == len(expected)
+    rewritten_index = 3
+    for index, (before, after) in enumerate(zip(expected, span, strict=True)):
+        if index == rewritten_index:
+            assert after != before
+            assert after.endswith(before)
+        else:
+            assert after == before
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '. "$HOME/.myshellrc"',
+        ". ~/.myshellrc",
+        "source ~/.myshellrc",
+        "sour\\ce ~/.myshellrc",
+        "command source ~/.myshellrc",
+        "builtin source ~/.myshellrc",
+        "true && . ~/.myshellrc",
+        "FOO=bar . ~/.myshellrc",
+        'if . "$HOME/.myshellrc"; then :; fi',
+        '. "$HOME"/.myshellrc',
+    ],
+)
+def test_sources_file_is_broader_than_the_rewriter(tmp_path: Path, line: str) -> None:
+    target = tmp_path / ".myshellrc"
+    target.write_text("x\n")
+    # Every rewritable AND every path-resolving ambiguous shape answers yes.
+    assert classify_source_line(line, target).verdict in {"rewritable", "ambiguous"}
+    assert sources_file(f"{line}\n", target) == "yes"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "# . ~/.myshellrc",
+        ". ~/.other",
+        'export PATH="$HOME/bin:$PATH"',
+        "alias ll='ls -la'",
+    ],
+)
+def test_sources_file_answers_no_for_every_none_shape(tmp_path: Path, line: str) -> None:
+    target = tmp_path / ".myshellrc"
+    target.write_text("x\n")
+    assert classify_source_line(line, target).verdict == "none"
+    assert sources_file(f"{line}\n", target) == "no"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ['. "$ZDOTDIR/foo"\n', 'eval "$(brew shellenv)"\n', 'source "$SOME_DIR/rc"\n'],
+)
+def test_sources_file_reports_unprovable_for_a_non_static_source_argument(
+    tmp_path: Path, text: str
+) -> None:
+    target = tmp_path / ".myshellrc"
+    target.write_text("x\n")
+    assert sources_file(text, target) == "unprovable"
+
+
+def test_sources_file_is_not_unprovable_for_an_ordinary_rc_file(tmp_path: Path) -> None:
+    """The third answer must not swallow every real user.
+
+    If `unprovable` were the common answer, plan 15.8-06 would stop wiring PATH
+    for most people, so a realistic .bashrc whose sources all resolve statically
+    has to answer plainly `no`.
+    """
+    target = tmp_path / ".myshellrc"
+    target.write_text("x\n")
+    bashrc = "\n".join(
+        [
+            "# .bashrc",
+            '[ -z "$PS1" ] && return',
+            "export EDITOR=vim",
+            'export PATH="$HOME/.local/bin:$PATH"',
+            "alias ll='ls -la'",
+            "[ -f ~/.bash_aliases ] && . ~/.bash_aliases",
+            ". /etc/profile.d/bash_completion.sh",
+            'if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi',
+        ]
+    )
+
+    assert sources_file(bashrc + "\n", target) == "no"
+
+
+def test_sources_file_matches_an_aliased_spelling(tmp_path: Path) -> None:
+    real_home = tmp_path / "var" / "home" / "u"
+    real_home.mkdir(parents=True)
+    target_real = real_home / ".shellrc"
+    target_real.write_text("x\n")
+    alias_root = tmp_path / "home"
+    alias_root.symlink_to(tmp_path / "var" / "home")
+    target_alias = alias_root / "u" / ".shellrc"
+    assert target_alias.exists()
+
+    # Sourced under one spelling, asked about under the other.
+    assert sources_file(f'. "{target_real}"\n', target_alias) == "yes"
+    assert sources_file(f'. "{target_alias}"\n', target_real) == "yes"
+
+
+def test_remove_source_block_strips_only_our_own_block(tmp_path: Path) -> None:
+    rc = tmp_path / ".bashrc"
+    myshellrc = tmp_path / ".myshellrc"
+    head = "export KEEP=1\nalias ll='ls -la'\n"
+    tail = "export TAIL=2\n"
+    rc.write_text(head)
+    ensure_source(rc, myshellrc)
+    rc.write_text(rc.read_text() + tail)
+    assert "# >>> tools-installer source >>>" in rc.read_text()
+
+    remove_source_block(rc)
+
+    after = rc.read_text()
+    assert "tools-installer source" not in after
+    assert head in after
+    assert tail in after
+
+
+def test_remove_source_block_is_a_no_op_without_the_block(tmp_path: Path) -> None:
+    rc = tmp_path / ".bashrc"
+    rc.write_text("export KEEP=1\n")
+    before = rc.read_bytes()
+
+    remove_source_block(rc)
+
+    assert rc.read_bytes() == before
+
+
+def test_remove_source_block_is_a_no_op_on_a_missing_file(tmp_path: Path) -> None:
+    missing = tmp_path / "nope"
+
+    remove_source_block(missing)
+
+    assert not missing.exists()
+
+
+def test_a_failed_remove_source_block_leaves_the_original_byte_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rc = tmp_path / ".bashrc"
+    myshellrc = tmp_path / ".myshellrc"
+    rc.write_text("export KEEP=1\n")
+    ensure_source(rc, myshellrc)
+    before = rc.read_bytes()
+
+    def raise_oserror(_self: Path, _data: bytes) -> int:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_bytes", raise_oserror)
+
+    with pytest.raises(OSError, match="disk full"):
+        remove_source_block(rc)
+
+    assert rc.read_bytes() == before
+    assert not list(tmp_path.glob("*.tools-installer.tmp"))
