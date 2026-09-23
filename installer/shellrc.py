@@ -429,10 +429,31 @@ def _expanded_argument(raw: str, target: Path) -> Path | None:
     return Path(candidate)
 
 
+def _single_quoted_literal(raw: str) -> str | None:
+    """The literal content of a fully single-quoted word, else None.
+
+    Single quotes suppress EVERY expansion in every POSIX shell, so
+    `. '$HOME/.myshellrc'` sources a file literally named `$HOME/.myshellrc`
+    relative to the cwd -- not the target. Stripping quotes before expanding
+    made that word look like the target and marked the line rewritable, which
+    would have commented out a working command that sources a different file.
+    """
+    if len(raw) < 2 or raw[0] != "'" or raw[-1] != "'":
+        return None
+    inner = raw[1:-1]
+    return None if "'" in inner else inner
+
+
 def _resolves_to(raw: str | None, target: Path) -> tuple[bool, bool]:
     """Return ``(is_resolvable, is_target)`` for a candidate source argument."""
     if raw is None:
         return False, False
+    literal = _single_quoted_literal(raw)
+    if literal is not None:
+        if not os.path.isabs(literal):
+            # Statically known, and it cannot be the absolute target.
+            return True, False
+        return True, os.path.realpath(literal) == os.path.realpath(target)
     expanded = _expanded_argument(raw, target)
     if expanded is None:
         return False, False

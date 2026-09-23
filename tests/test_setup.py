@@ -2940,7 +2940,16 @@ def test_sandbox_redirects_the_shellrc_constant(
 def test_every_configure_path_call_site_passes_a_shellrc_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """All four routes must carry the argument, or one user action half-fixes."""
+    """The routes this test can drive must carry the argument.
+
+    HONEST SCOPE: this exercises TWO of the four `configure_path` call sites --
+    the execute-inputs wire step and the Doctor apply closure. The `--fix` CLI
+    route (`_run_fix`) and the unattended post-wizard route both sit inside
+    `main`'s argument handling and cannot be driven from here without running
+    the whole CLI. They are covered by inspection only, which is why the
+    constant is passed identically at all four sites and why `_sandbox`
+    redirects it globally rather than per-route.
+    """
     _sandbox(monkeypatch, tmp_path)
     captured: list[dict[str, object]] = []
 
@@ -2964,7 +2973,7 @@ def test_every_configure_path_call_site_passes_a_shellrc_path(
     assert isinstance(doctor, DoctorScreen)
     doctor._fix()  # pyright: ignore[reportPrivateUsage]
 
-    assert len(captured) >= 2
+    assert len(captured) == 2
     for call in captured:
         assert call["shellrc_path"] == tmp_path / ".shellrc"
 

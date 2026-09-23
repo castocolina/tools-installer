@@ -1519,7 +1519,6 @@ def _no_backup_anywhere(root: Path) -> bool:
         ". ${HOME}/.myshellrc",
         ". ~/.myshellrc",
         '. "$HOME/.myshellrc"',
-        ". '$HOME/.myshellrc'",
         "  source {target}   ",
     ],
 )
@@ -2892,3 +2891,20 @@ def test_an_unrelated_rc_path_does_not_refuse(tmp_path: Path) -> None:
     shellrc.write_text("alias gs='git status'\n")
 
     assert consolidate_shellrc(shellrc, myshellrc, (bashrc,)).status == "consolidated"
+
+
+def test_a_single_quoted_argument_is_not_expanded(tmp_path: Path) -> None:
+    """Single quotes suppress every expansion, so this is a DIFFERENT file.
+
+    Stripping quotes before expanding made `. '$HOME/.myshellrc'` look like the
+    target and marked it rewritable -- which would have commented out a working
+    command that sources some other file. A wrong verdict is content mutation
+    even when it never loops.
+    """
+    target = tmp_path / ".myshellrc"
+    target.write_text("x\n")
+
+    assert classify_source_line(". '$HOME/.myshellrc'", target).verdict == "none"
+    assert classify_source_line(". '~/.myshellrc'", target).verdict == "none"
+    # An absolute single-quoted path needs no expansion, so it still matches.
+    assert classify_source_line(f". '{target}'", target).verdict == "rewritable"
