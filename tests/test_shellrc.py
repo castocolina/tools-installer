@@ -2692,3 +2692,203 @@ def test_a_reserved_word_prefix_does_not_refuse_an_unrelated_command(tmp_path: P
 
     for line in ("time make build", "time ls -la", "noglob echo *"):
         assert classify_source_line(line, target).verdict == "none"
+
+
+# --- Phase 15.8 review blockers: six independently reproduced defects ---
+#
+# Each of these produced a real failure before it was fixed. CR-01, CR-02 and
+# CR-03/04 all ended in a shell that could not start (SIGSEGV from stack
+# exhaustion) or in silently altered unmanaged content.
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        ">/dev/null . {p}",
+        "2>/dev/null . {p}",
+        "> /dev/null . {p}",
+        "&>/dev/null . {p}",
+        "2>&1 . {p}",
+        ">>log . {p}",
+        "<&0 . {p}",
+        "2>&1 source {p}",
+    ],
+)
+def test_a_leading_redirection_never_hides_a_source_command(tmp_path: Path, form: str) -> None:
+    """CR-02: a redirection may lead a command and the command still runs.
+
+    Treating the redirection as the command word classified these `none`, so
+    consolidation copied them forward and produced a self-sourcing file. Note
+    `2>&1` also required protecting the duplicating-redirection `&` from the
+    segment splitter, which had been tearing the line in half.
+    """
+    if _BASH is None:
+        pytest.skip("bash not on PATH")
+    marker = tmp_path / "marker.sh"
+    marker.write_text("MARKER_RAN=1\n")
+    executed = subprocess.run(
+        [_BASH, "--noprofile", "--norc", "-c", form.format(p=marker) + '\necho "M=${MARKER_RAN-}"'],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert "M=1" in executed.stdout, f"{form!r} did not source; investigate the shell"
+
+    shellrc, myshellrc, _bin = _seed_self_sourcing_home(
+        tmp_path, form.format(p='"$HOME/.myshellrc"')
+    )
+    before = (shellrc.read_bytes(), myshellrc.read_bytes())
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert (shellrc.read_bytes(), myshellrc.read_bytes()) == before
+    assert _no_backup_anywhere(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "line", ["echo hi > /tmp/x", "cat < /etc/hosts", "make 2>&1 | tee log", "ls >out 2>&1"]
+)
+def test_ordinary_redirections_are_not_refused(tmp_path: Path, line: str) -> None:
+    """The mirror risk of CR-02: redirecting anything else stays invisible."""
+    target = tmp_path / ".myshellrc"
+    target.write_text("x\n")
+    assert classify_source_line(line, target).verdict == "none"
+
+
+@pytest.mark.parametrize("opener", ["cat <<\\EOF", "cat >out<<EOF", "cat <<-\\EOF"])
+def test_an_escaped_or_glued_heredoc_opener_refuses(tmp_path: Path, opener: str) -> None:
+    """CR-03: `<<\\EOF` is as ordinary as the quoted forms.
+
+    Missing it let the BODY be scanned as shell, and the rewriter then commented
+    out a line inside it -- silently altering content the user relies on, which
+    is the over-reach direction of the same defect.
+    """
+    shellrc, myshellrc, _bin = _seed_self_sourcing_home(tmp_path, "placeholder")
+    shellrc.write_text(f'{opener}\n. "$HOME/.myshellrc"\nEOF\n')
+    before = (shellrc.read_bytes(), myshellrc.read_bytes())
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None
+    assert "here-document" in result.reason
+    assert (shellrc.read_bytes(), myshellrc.read_bytes()) == before
+
+
+def test_a_backslash_continued_source_line_is_seen_as_one_command(tmp_path: Path) -> None:
+    """CR-04: the shell joins the halves, so the classifier must too.
+
+    `. ~/.mysh\\` + `ellrc` really sources the file; classifying the halves
+    separately saw neither, and the line was copied forward verbatim.
+    """
+    if _BASH is None:
+        pytest.skip("bash not on PATH")
+    marker = tmp_path / "marker.sh"
+    marker.write_text("MARKER_RAN=1\n")
+    head = str(marker)[:-3]
+    executed = subprocess.run(
+        [
+            _BASH,
+            "--noprofile",
+            "--norc",
+            "-c",
+            f". {head}\\\n{str(marker)[-3:]}\necho M=${{MARKER_RAN-}}",
+        ],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert "M=1" in executed.stdout
+
+    shellrc, myshellrc, _bin = _seed_self_sourcing_home(tmp_path, "placeholder")
+    target = str(myshellrc)
+    shellrc.write_text(f". {target[:-3]}\\\n{target[-3:]}\n")
+    before = (shellrc.read_bytes(), myshellrc.read_bytes())
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert (shellrc.read_bytes(), myshellrc.read_bytes()) == before
+
+
+def test_a_non_regular_shellrc_refuses_instead_of_blocking_forever(tmp_path: Path) -> None:
+    """CR-05: a FIFO made the snapshot's `os.open` block with no timeout.
+
+    The installer simply never returned, with nothing to tell the user why.
+    """
+    managed_bin = tmp_path / "managed_bin"
+    managed_bin.mkdir()
+    myshellrc = tmp_path / ".myshellrc"
+    write_myshellrc([managed_bin], myshellrc)
+    shellrc = tmp_path / ".shellrc"
+    os.mkfifo(shellrc)
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None
+    assert "regular file" in result.reason
+
+
+def test_a_non_utf8_myshellrc_refuses_as_a_typed_outcome(tmp_path: Path) -> None:
+    """CR-06: UnicodeDecodeError is a ValueError, which run_live does not catch.
+
+    It would have escaped as a raw traceback instead of a stated reason.
+    """
+    myshellrc = tmp_path / ".myshellrc"
+    myshellrc.write_bytes(b"\xff\xfe not utf-8\n")
+    shellrc = tmp_path / ".shellrc"
+    shellrc.write_text("export KEEP=1\n")
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None
+    assert "UTF-8" in result.reason
+
+
+def test_consolidation_refuses_when_shellrc_sources_an_rc_this_run_will_wire(
+    tmp_path: Path,
+) -> None:
+    """CR-01: the cycle that needs no classifier hole at all.
+
+    Before the run there is no loop, so every other check passes. But the
+    content copied into ~/.myshellrc sources .bashrc, and the same run wires
+    .bashrc to source ~/.myshellrc -- closing .bashrc -> .myshellrc -> .bashrc.
+    """
+    managed_bin = tmp_path / "managed_bin"
+    managed_bin.mkdir()
+    myshellrc = tmp_path / ".myshellrc"
+    write_myshellrc([managed_bin], myshellrc)
+    bashrc = tmp_path / ".bashrc"
+    bashrc.write_text("export KEEP=1\n")
+    shellrc = tmp_path / ".shellrc"
+    shellrc.write_text('. "$HOME/.bashrc"\n')
+    before = (shellrc.read_bytes(), myshellrc.read_bytes())
+
+    result = consolidate_shellrc(shellrc, myshellrc, (bashrc,))
+
+    assert result.status == "refused"
+    assert result.reason is not None
+    assert str(bashrc) in result.reason
+    assert (shellrc.read_bytes(), myshellrc.read_bytes()) == before
+    assert _no_backup_anywhere(tmp_path)
+
+
+def test_an_unrelated_rc_path_does_not_refuse(tmp_path: Path) -> None:
+    """The mirror risk of CR-01: only a real cycle may refuse."""
+    managed_bin = tmp_path / "managed_bin"
+    managed_bin.mkdir()
+    myshellrc = tmp_path / ".myshellrc"
+    write_myshellrc([managed_bin], myshellrc)
+    bashrc = tmp_path / ".bashrc"
+    bashrc.write_text("export KEEP=1\n")
+    shellrc = tmp_path / ".shellrc"
+    shellrc.write_text("alias gs='git status'\n")
+
+    assert consolidate_shellrc(shellrc, myshellrc, (bashrc,)).status == "consolidated"

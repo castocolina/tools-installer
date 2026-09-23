@@ -290,6 +290,12 @@ def consolidation_stub(myshellrc_path: Path) -> str:
 _LineVerdict = Literal["none", "rewritable", "ambiguous"]
 SourceVerdict = Literal["yes", "no", "unprovable"]
 _SOURCE_COMMANDS = {".", "source"}
+# A leading redirection, in two forms that must NOT be conflated: the operator
+# standing alone (its target is the NEXT word) and the operator with its target
+# glued on (the target is part of this word). One regex covering both consumed
+# the following word in the glued case, which ate the source command itself.
+_REDIRECTION_BARE = re.compile(r"\d*(?:>>|>&|>\||>|<>|<&|<)")
+_REDIRECTION_GLUED = re.compile(r"\d*(?:>>|>&|>\||>|<>|<&|<)\S+")
 # Reserved words and precommand modifiers that may legally precede a command and
 # still let it run. `time` is the dangerous one: it is a shell KEYWORD, not an
 # external binary, so `time . file` really sources the file under bash, zsh and
@@ -324,6 +330,11 @@ class _SourceInspection:
     has_unresolvable_source: bool
 
 
+# The verdict for a physical line that is a CONTINUATION of the line above: the
+# joined logical line already carries the real verdict on its first line.
+_NO_SOURCE = _SourceInspection("none", False, False, False)
+
+
 def _normalized_word(word: str) -> str:
     """Approximate shell quote removal for one whitespace-delimited word."""
     return word.replace("\\", "").replace('"', "").replace("'", "")
@@ -346,6 +357,21 @@ def _command_head(segment: str) -> tuple[list[str], bool, bool]:
 
     while words:
         normalized = _normalized_word(words[0])
+        # A redirection may lead a command: `>/dev/null . f` and `2>/dev/null . f`
+        # all really source f, under bash, sh AND zsh. Treating the redirection as
+        # the command word classified the line `none`, which is the direction that
+        # ships a self-sourcing file. A bare operator carries its target in the
+        # next word (`> /dev/null . f`), so that word is consumed too.
+        if _REDIRECTION_BARE.fullmatch(words[0]):
+            had_prefix = True
+            words.pop(0)
+            if words:  # the operator's target is the next word
+                words.pop(0)
+            continue
+        if _REDIRECTION_GLUED.fullmatch(words[0]):
+            had_prefix = True
+            words.pop(0)
+            continue
         if normalized in _COMMAND_PREFIXES or _is_assignment_word(words[0]):
             had_prefix = True
             words.pop(0)
@@ -361,11 +387,19 @@ def _command_head(segment: str) -> tuple[list[str], bool, bool]:
 
 
 def _split_command_segments(line: str) -> list[str]:
-    """Split at obvious command separators without attempting shell parsing."""
-    sentinel = "__TOOLS_INSTALLER_HOME_EXPANSION__"
-    protected = line.replace("${HOME}", sentinel)
+    """Split at obvious command separators without attempting shell parsing.
+
+    The `&` in a duplicating redirection (`2>&1`, `<&0`) is NOT a separator. Left
+    unprotected it tore `2>&1 . f` into two segments, leaving the second starting
+    with the redirection's target digit, so the source command that followed was
+    never seen in command position at all.
+    """
+    home_sentinel = "__TOOLS_INSTALLER_HOME_EXPANSION__"
+    dup_sentinel = "__TOOLS_INSTALLER_DUP_REDIRECT__"
+    protected = line.replace("${HOME}", home_sentinel)
+    protected = re.sub(r"([<>])&", rf"\1{dup_sentinel}", protected)
     return [
-        segment.replace(sentinel, "${HOME}")
+        segment.replace(dup_sentinel, "&").replace(home_sentinel, "${HOME}")
         for segment in re.split(r"&&|\|\||[;|&(){}]", protected)
     ]
 
@@ -495,15 +529,36 @@ def classify_source_line(line: str, target: Path) -> _SourceInspection:
 
 
 def _classify_source_lines(text: str, target: Path) -> list[_SourceInspection]:
-    """Classify every physical line without attempting to parse shell syntax."""
-    inspections: list[_SourceInspection] = []
-    continued_before = False
-    for line in text.splitlines():
-        inspection = _inspect_source_line(line, target, continued_before=continued_before)
-        inspections.append(inspection)
-        continued_before = line.rstrip().endswith("\\")
+    """Classify every physical line without attempting to parse shell syntax.
+
+    A backslash continuation is JOINED before classification, because the shell
+    joins it too: `. ~/.mysh\\` + `ellrc` is one command sourcing one file, and
+    classifying the halves separately saw neither. The joined verdict is carried
+    by the FIRST physical line of the logical line and never `rewritable` when it
+    spans more than one -- rewriting a multi-line command by commenting only its
+    first line would leave the remainder as live shell.
+    """
     if not text:
         return []
+    lines = text.splitlines()
+    inspections: list[_SourceInspection] = [_NO_SOURCE] * len(lines)
+    index = 0
+    while index < len(lines):
+        start = index
+        joined = lines[index]
+        while joined.rstrip().endswith("\\") and index + 1 < len(lines):
+            joined = f"{joined.rstrip()[:-1]}{lines[index + 1]}"
+            index += 1
+        inspection = _inspect_source_line(joined, target)
+        if index > start and inspection.verdict == "rewritable":
+            inspection = _SourceInspection(
+                "ambiguous",
+                inspection.has_source_command,
+                inspection.resolves_to_target,
+                inspection.has_unresolvable_source,
+            )
+        inspections[start] = inspection
+        index += 1
     return inspections
 
 
@@ -522,8 +577,24 @@ def _has_here_document_opener(line: str) -> bool:
     """Recognize common here-document openers without parsing their body."""
     if line.lstrip().startswith("#"):
         return False
+    # The delimiter may be quoted in three ways, and a BACKSLASH-escaped one
+    # (`<<\EOF`) is the fourth -- it is as common as the quoted forms and means
+    # exactly the same thing to the shell. Missing it let the body be scanned as
+    # shell, and `consolidated_body` then commented out a line inside it,
+    # silently altering unmanaged content.
+    #
+    # The opener also need not follow whitespace or a command separator: a
+    # redirection may be glued to it (`cat >f<<EOF`), so `>` and `<` join the
+    # set of characters an opener may follow.
     return (
-        re.search(r"(?:^|[\s;|&({])<<-?\s*(?:'[^']*'|\"[^\"]*\"|[A-Za-z_][A-Za-z0-9_-]*)", line)
+        re.search(
+            # `<<` not part of a `<<<` here-string, anywhere on the line: an
+            # opener may be glued to a redirection target (`cat >out<<EOF`), so
+            # requiring a separator in front of it missed real openers.
+            r"(?<!<)<<(?!<)-?\s*"
+            r"(?:'[^']*'|\"[^\"]*\"|\\?[A-Za-z_][A-Za-z0-9_-]*)",
+            line,
+        )
         is not None
     )
 
@@ -614,6 +685,7 @@ def consolidation_refusal(
     *,
     shellrc_path: Path,
     myshellrc_path: Path,
+    rc_paths: tuple[Path, ...] = (),
 ) -> str | None:
     """Return a refusal reason for unsafe content, or ``None`` when safe.
 
@@ -657,6 +729,20 @@ def consolidation_refusal(
             f"{myshellrc_path} line {line_number} already sources {shellrc_path}; replacing "
             f"{shellrc_path} with a stub would create a sourcing loop. Consolidate by hand."
         )
+    # The OTHER direction of the same cycle, and it needs no classifier hole to
+    # reach. The content being copied into ~/.myshellrc may itself source an rc
+    # file that the caller is about to wire back to ~/.myshellrc, closing
+    # .bashrc -> .myshellrc -> .bashrc. Nothing above sees it: before the run
+    # there is no loop at all, so every other check passes and consolidation
+    # reports success while producing a shell that dies of stack exhaustion.
+    for rc_path in rc_paths:
+        reaches_rc, rc_line, _unprovable_rc = _text_sources_target(shellrc_text, rc_path)
+        if reaches_rc and rc_line is not None:
+            return (
+                f"{shellrc_path} line {rc_line} sources {rc_path}, which this run would wire "
+                f"back to {myshellrc_path}; consolidating would make the two files source each "
+                f"other. Consolidate by hand."
+            )
     return None
 
 
@@ -724,6 +810,20 @@ def consolidation_precondition(shellrc_path: Path, myshellrc_path: Path) -> str 
             f"{myshellrc_path} is a symlink; writing the consolidated content through it "
             f"would replace its target. Remove the link or consolidate by hand."
         )
+    # Neither path may be a non-regular file. A FIFO at either path makes the
+    # snapshot's `os.open` block FOREVER with no timeout and no way for the user
+    # to tell what is wrong -- the installer simply never returns. `lstat` so the
+    # link itself is seen; symlinks are already refused above.
+    for path in (shellrc_path, myshellrc_path):
+        try:
+            mode = os.lstat(path).st_mode
+        except OSError:
+            continue
+        if not stat.S_ISREG(mode):
+            return (
+                f"{path} is not a regular file; refusing rather than reading something "
+                f"that may never return. Remove it or consolidate by hand."
+            )
     if shellrc_path.exists() and myshellrc_path.exists():
         try:
             same = shellrc_path.samefile(myshellrc_path)
@@ -833,7 +933,11 @@ def _is_owned_stub(text: str) -> bool:
     return lines.index(_STUB_BEGIN) < lines.index(_STUB_END)
 
 
-def consolidate_shellrc(shellrc_path: Path, myshellrc_path: Path) -> ShellrcConsolidation:
+def consolidate_shellrc(
+    shellrc_path: Path,
+    myshellrc_path: Path,
+    rc_paths: tuple[Path, ...] = (),
+) -> ShellrcConsolidation:
     """Consolidate a generic ~/.shellrc into ~/.myshellrc, leaving one canonical file.
 
     The CHECK order is FIXED and may not be re-ordered: (1) absence, (2) symlink
@@ -889,11 +993,26 @@ def consolidate_shellrc(shellrc_path: Path, myshellrc_path: Path) -> ShellrcCons
     if _is_owned_stub(original_text):
         return ShellrcConsolidation(status="already")
 
+    # A non-UTF-8 ~/.myshellrc is a typed refusal, exactly as a non-UTF-8
+    # ~/.shellrc already is. `UnicodeDecodeError` is a ValueError, NOT an
+    # OSError, so `ui_common.run_live` would not catch it and the Doctor screen
+    # would take a raw traceback instead of showing a reason.
+    try:
+        myshellrc_text = myshellrc_path.read_text() if myshellrc_path.exists() else ""
+    except UnicodeDecodeError:
+        return ShellrcConsolidation(
+            status="refused",
+            reason=(
+                f"{myshellrc_path} is not valid UTF-8; refusing to merge into it. "
+                f"Consolidate it by hand."
+            ),
+        )
     content_conflict = consolidation_refusal(
         original_text,
-        myshellrc_path.read_text() if myshellrc_path.exists() else "",
+        myshellrc_text,
         shellrc_path=shellrc_path,
         myshellrc_path=myshellrc_path,
+        rc_paths=rc_paths,
     )
     if content_conflict is not None:
         return ShellrcConsolidation(status="refused", reason=content_conflict)

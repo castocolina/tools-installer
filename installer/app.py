@@ -213,7 +213,7 @@ def configure_path(
     # file consolidation refused or never touched.
     stub_shellrc: Path | None = None
     if shellrc_path is not None and link_mode != "split":
-        consolidation = shellrc.consolidate_shellrc(shellrc_path, myshellrc_path)
+        consolidation = shellrc.consolidate_shellrc(shellrc_path, myshellrc_path, tuple(rc_paths))
         if consolidation.status in {"consolidated", "already"}:
             stub_shellrc = shellrc_path
         if consolidation.status == "consolidated":
