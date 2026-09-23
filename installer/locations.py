@@ -106,3 +106,27 @@ def prepend_path(directory: Path) -> None:
     parts = os.environ.get("PATH", "").split(os.pathsep)
     parts = [p for p in parts if p and p != entry]
     os.environ["PATH"] = os.pathsep.join([entry, *parts])
+
+
+def path_scan_rc_paths() -> list[Path]:
+    """Every startup file a login or interactive shell may read that could add
+    to PATH. READ-ONLY: this is the diagnostic set the Doctor scans to explain a
+    duplicate PATH entry, never a write target.
+
+    It is deliberately WIDER than `all_ban_rc_paths` (the write set). Two of the
+    most common duplicate sources are login files this installer never writes:
+    a plain prepend in `~/.bash_profile` plus the stock Fedora `~/.bashrc`
+    snippet yields exactly the structural 2x that no new terminal clears. A
+    scan limited to our own write targets would find neither and would leave
+    the user with a finding and no explanation.
+    """
+    home = Path.home()
+    return [
+        home / ".myshellrc",
+        home / ".shellrc",
+        _zshrc(),
+        home / ".zprofile",
+        home / ".bashrc",
+        home / ".bash_profile",
+        home / ".profile",
+    ]

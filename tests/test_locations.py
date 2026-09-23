@@ -221,3 +221,14 @@ def test_rc_paths_and_ban_sweep_follow_zdotdir(
         zdotdir / ".zshrc",
         tmp_path / ".bashrc",
     ]
+
+
+def test_path_scan_covers_the_login_files_the_write_set_omits() -> None:
+    """The structural duplicate the Doctor must explain lives in login files
+    this installer never writes to, so the scan set must be wider than the
+    write set or the finding stays unexplained."""
+    from installer.locations import all_ban_rc_paths, path_scan_rc_paths
+
+    scanned = {p.name for p in path_scan_rc_paths()}
+    assert {".bash_profile", ".profile"} <= scanned
+    assert {p.name for p in all_ban_rc_paths()} <= scanned

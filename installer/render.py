@@ -1,5 +1,6 @@
 """Render the pre-flight audit and the post-install summary to a Console."""
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from rich.console import Console
@@ -209,9 +210,13 @@ def guidance_text(items: list[Guidance]) -> Text:
     return text
 
 
-def render_doctor(report: DoctorReport, console: Console) -> None:
+def render_doctor(
+    report: DoctorReport,
+    console: Console,
+    duplicate_writers: Mapping[Path, tuple[Path, ...]] | None = None,
+) -> None:
     """Print each PATH finding with its meaning and exact next step (color by severity)."""
-    console.print(guidance_text(doctor_guidance(report)))
+    console.print(guidance_text(doctor_guidance(report, duplicate_writers)))
 
 
 def render_guard(

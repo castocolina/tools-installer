@@ -54,11 +54,56 @@ def test_missing_dir_warns_and_points_at_make_fix() -> None:
     assert "new terminal" in item.next_step or "source" in item.next_step
 
 
-def test_duplicated_dir_warns_and_says_duplicates_clear_on_reload() -> None:
+def test_duplicated_dir_with_no_known_writer_suggests_the_transient_cause() -> None:
+    """With no rc writer found, a nested shell really is the likely cause — but
+    the wording must stay a hypothesis the user can check, not a promise."""
     items = doctor_guidance(DoctorReport(missing=(), broken=(), duplicated=(Path("/b/bin"),)))
     item = next(i for i in items if "/b/bin" in i.title)
     assert item.severity == "warn"
     assert "new shell" in item.next_step.lower() or "reload" in item.next_step.lower()
+
+
+def test_duplicated_dir_with_a_known_writer_never_promises_a_new_shell_clears_it() -> None:
+    """The live defect: Doctor told the user duplicates were "harmless" and
+    would "clear when you open a new shell", while `.bashrc` re-added the
+    directory on every shell. A clean login shell still showed 2 copies, so the
+    advice could never work and the finding reappeared forever."""
+    items = doctor_guidance(
+        DoctorReport(missing=(), broken=(), duplicated=(Path("/b/bin"),)),
+        duplicate_writers={Path("/b/bin"): (Path("/home/u/.bashrc"),)},
+    )
+    item = next(i for i in items if "/b/bin" in i.title)
+    assert item.severity == "warn"
+    assert "harmless" not in item.next_step.lower()
+    assert "harmless" not in item.meaning.lower()
+    assert "clear when you open a new shell" not in item.next_step.lower()
+
+
+def test_duplicated_dir_names_every_file_that_adds_it() -> None:
+    """Naming one of two writers sends the user back for a second round."""
+    items = doctor_guidance(
+        DoctorReport(missing=(), broken=(), duplicated=(Path("/b/bin"),)),
+        duplicate_writers={
+            Path("/b/bin"): (Path("/home/u/.bashrc"), Path("/home/u/.bash_profile"))
+        },
+    )
+    item = next(i for i in items if "/b/bin" in i.title)
+    rendered = item.meaning + " " + item.next_step
+    assert "/home/u/.bashrc" in rendered
+    assert "/home/u/.bash_profile" in rendered
+
+
+def test_a_writer_for_one_directory_does_not_change_another_directorys_advice() -> None:
+    """Per-finding evidence: a structural duplicate elsewhere must not restate
+    an unrelated directory's cause."""
+    items = doctor_guidance(
+        DoctorReport(missing=(), broken=(), duplicated=(Path("/b/bin"), Path("/c/bin"))),
+        duplicate_writers={Path("/b/bin"): (Path("/home/u/.bashrc"),)},
+    )
+    structural = next(i for i in items if "/b/bin" in i.title)
+    transient = next(i for i in items if "/c/bin" in i.title)
+    assert "/home/u/.bashrc" in structural.meaning + structural.next_step
+    assert "/home/u/.bashrc" not in transient.meaning + transient.next_step
 
 
 def test_every_problem_finding_carries_meaning_and_next_step() -> None:

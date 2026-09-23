@@ -13,6 +13,7 @@ bottom: the stack is always `[base]` or `[base, <one other view>]`.
 """
 
 import contextlib
+import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -41,9 +42,11 @@ from installer.guidance import (
     guard_guidance,
     node_globals_guidance,
 )
+from installer.locations import path_scan_rc_paths
 from installer.model import Tool
 from installer.pnpm_globals import NodeGlobalsReport, reinstall_preview
 from installer.policy import Policy, PolicyResult
+from installer.rcclean import scan_rc_path_writers
 from installer.render import guidance_text
 from installer.run import CommandError
 from installer.session import Summary
@@ -299,9 +302,15 @@ class DoctorScreen(AppScreen):
         reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]],
         disk_pressure: DiskPressureProbe | None = None,
         competing: CompetingProbe | None = None,
+        duplicate_writers: Mapping[Path, tuple[Path, ...]] | None = None,
     ) -> None:
         super().__init__(view="doctor")
         self._report = report
+        # Computed ONCE by the composition root, which already does IO, and
+        # held as data. _refresh_guidance is IO-free by construction and runs
+        # on every navigation, so it must never be the thing that reads rc
+        # files off disk.
+        self._duplicate_writers = duplicate_writers or {}
         # A predicate, not its result, for the guard_state reason: the
         # Policies view can enable the background cleanup one navigation step
         # away, so every entry re-reads it. WR-02: the daemon half of the
@@ -460,7 +469,7 @@ class DoctorScreen(AppScreen):
         # Position is a decision, pinned by a test: disk pressure follows the
         # guard items and precedes the pnpm-globals items.
         self.guidance = (
-            doctor_guidance(self._report)
+            doctor_guidance(self._report, self._duplicate_writers)
             + guard_guidance(status, warning)
             + self._disk_pressure_items()
             + self._competing_items()
@@ -2378,6 +2387,11 @@ class UnifiedApp(App[list[str] | None]):
                     guard_state,
                     fix_preview,
                     fix,
+                    duplicate_writers=scan_rc_path_writers(
+                        path_scan_rc_paths(), set(report.duplicated), os.environ
+                    )
+                    if report.duplicated
+                    else {},
                     node_globals=read_node_globals,
                     globals_preview=read_preview,
                     reinstall_globals=run_reinstall,

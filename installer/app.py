@@ -1,6 +1,7 @@
 """The interactive wizard flow: select -> audit -> confirm -> install -> summarize."""
 
 import contextlib
+import os
 import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -26,12 +27,13 @@ from installer.guards import (
     remove_shims,
     write_ban_aliases,
 )
+from installer.locations import path_scan_rc_paths
 from installer.model import Tool
 from installer.platform import Platform
 from installer.pnpm_globals import audit_node_globals, pnpm_global_packages
 from installer.policy import Policy, omz_removal_detail
 from installer.prompt import Prompter
-from installer.rcclean import find_duplicate_path_lines, strip_lines
+from installer.rcclean import find_duplicate_path_lines, scan_rc_path_writers, strip_lines
 from installer.render import (
     render_audit,
     render_competing_mechanisms,
@@ -303,6 +305,19 @@ def guard_state(
     return status, warning
 
 
+def _duplicate_path_writers(report: DoctorReport) -> dict[Path, tuple[Path, ...]]:
+    """Which rc files add each DUPLICATED directory unconditionally.
+
+    Scoped to `report.duplicated` rather than every managed dir: a writer only
+    changes the advice for a directory that is actually reported twice, and
+    scanning for the rest would read every rc file to answer a question nobody
+    asked. Read-only, and total over unreadable files.
+    """
+    if not report.duplicated:
+        return {}
+    return scan_rc_path_writers(path_scan_rc_paths(), set(report.duplicated), os.environ)
+
+
 def doctor_data(
     tools: list[Tool],
     *,
@@ -356,7 +371,7 @@ def run_doctor(
         exists=exists,
         which=which,
     )
-    render_doctor(report, console)
+    render_doctor(report, console, _duplicate_path_writers(report))
     render_guard_status(status, warning, console)
     render_node_globals(audit_node_globals(tools, which=which, managed=managed_globals), console)
     if disk_pressure is not None:

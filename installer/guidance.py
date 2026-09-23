@@ -5,7 +5,9 @@ consume the same Guidance list, so each finding's wording lives in exactly one
 place. `severity` drives color-coding downstream.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 from installer.diskusage import DISK_FREE_WARN_PERCENT, TMP_USED_WARN_PERCENT, DiskPressure
 from installer.doctor import DoctorReport, has_problems
@@ -52,8 +54,18 @@ _HEALTHY = Guidance(
 )
 
 
-def doctor_guidance(report: DoctorReport) -> list[Guidance]:
-    """One Guidance per finding; a single healthy item when there are no problems."""
+def doctor_guidance(
+    report: DoctorReport,
+    duplicate_writers: Mapping[Path, tuple[Path, ...]] | None = None,
+) -> list[Guidance]:
+    """One Guidance per finding; a single healthy item when there are no problems.
+
+    `duplicate_writers` maps a duplicated directory to the rc files that add it
+    unconditionally (see `installer.rcclean.unguarded_path_writers`). It decides
+    which of two opposite remedies a duplicate finding gets, and omitting it
+    keeps the older, cause-agnostic wording rather than asserting a cause that
+    was never checked.
+    """
     if not has_problems(report):
         return [_HEALTHY]
     items: list[Guidance] = []
@@ -75,12 +87,48 @@ def doctor_guidance(report: DoctorReport) -> list[Guidance]:
                 severity=Severity.WARN,
             )
         )
+    writers = duplicate_writers or {}
     for directory in report.duplicated:
+        # Two opposite causes wear the same symptom. A nested shell re-adding an
+        # inherited entry clears in a fresh terminal; an rc file that prepends
+        # unconditionally re-adds it on EVERY shell, so "open a new shell" is
+        # advice that can never work and the finding returns forever. Only the
+        # second case is knowable from the rc files, so it is the one stated as
+        # fact -- the other stays a hypothesis with the command to check it.
+        adding = writers.get(directory, ())
+        if adding:
+            named = ", ".join(str(rc_file) for rc_file in adding)
+            if len(adding) > 1:
+                cause = f"{len(adding)} startup files add it unconditionally: {named}"
+                remedy = f"Edit the PATH line in each of them ({named})"
+            else:
+                cause = f"{named} adds it unconditionally"
+                remedy = f"Edit the PATH line in {named}"
+            items.append(
+                Guidance(
+                    title=f"{directory} duplicated on PATH",
+                    meaning=(
+                        f"{directory} appears more than once on PATH, and {cause}. "
+                        f"Opening a new terminal will not clear this one."
+                    ),
+                    next_step=(
+                        f"{remedy} — either remove it, or guard it so it skips a "
+                        f"directory that is already on PATH."
+                    ),
+                    severity=Severity.WARN,
+                )
+            )
+            continue
         items.append(
             Guidance(
                 title=f"{directory} duplicated on PATH",
                 meaning=f"{directory} appears more than once on PATH.",
-                next_step="Harmless — transient duplicates clear when you open a new shell.",
+                next_step=(
+                    "Usually a nested shell re-adding an inherited entry, which "
+                    "clears when you open a new shell. To confirm, run "
+                    "`env -i HOME=\"$HOME\" bash -lic 'echo $PATH'` — if it still "
+                    "repeats there, an rc file is adding it on every shell."
+                ),
                 severity=Severity.WARN,
             )
         )
