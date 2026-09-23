@@ -272,3 +272,101 @@ def test_is_default_shell_true_when_shell_env_basename_matches_cmd() -> None:
 
 def test_is_default_shell_false_when_shell_env_basename_differs() -> None:
     assert is_default_shell(_shell_tool("zsh"), env={"SHELL": "/bin/bash"}) is False
+
+
+def _which_none(cmd: str) -> str | None:
+    return None
+
+
+def _bin_dir_tool(bin_dir: str, cmd: str = "spring") -> Tool:
+    """An SDKMAN candidate: the binary lands in a declared `bin_dir` that only
+    reaches PATH through a shell rc file, so `which` cannot see it until the
+    user opens a brand-new shell."""
+    return Tool(
+        id="springbootcli",
+        name="Spring Boot CLI",
+        category="runtime",
+        cmd=cmd,
+        methods=(Method(kind="sdkman", params={"candidate": "springboot", "bin_dir": bin_dir}),),
+    )
+
+
+def test_declared_bin_dir_holding_the_command_counts_as_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The live defect: an SDKMAN candidate installed into its declared bin_dir
+    read as "not installed" in every shell started before the install, because
+    only PATH was consulted. The tool is on disk; that is the question asked."""
+    import installer.status as status
+
+    monkeypatch.setattr(status.shutil, "which", _which_none)
+    bin_dir = tmp_path / "candidates" / "springboot" / "current" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "spring").touch()
+    assert is_installed(_bin_dir_tool(str(bin_dir))) is True
+
+
+def test_empty_declared_bin_dir_is_not_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A leftover directory an uninstall emptied must not read as installed —
+    the command file is the marker, never the directory."""
+    import installer.status as status
+
+    monkeypatch.setattr(status.shutil, "which", _which_none)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    assert is_installed(_bin_dir_tool(str(bin_dir))) is False
+
+
+def test_dangling_current_symlink_is_not_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SDKMAN's `current` is a symlink to the active version. When the version
+    it points at is removed, the symlink survives and the path still "exists"
+    by lstat — following it is what makes this answer honest."""
+    import installer.status as status
+
+    monkeypatch.setattr(status.shutil, "which", _which_none)
+    versioned = tmp_path / "4.1.0" / "bin"
+    versioned.mkdir(parents=True)
+    (versioned / "spring").touch()
+    current = tmp_path / "current"
+    current.symlink_to(tmp_path / "4.1.0")
+    tool = _bin_dir_tool(str(current / "bin"))
+    assert is_installed(tool) is True
+
+    import shutil as real_shutil
+
+    real_shutil.rmtree(tmp_path / "4.1.0")
+    assert is_installed(tool) is False
+
+
+def test_bin_dir_holding_a_different_command_is_not_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A populated bin_dir is not a blanket yes: it must hold THIS tool's cmd.
+    Pins that the check never degrades to `any(bin_dir.iterdir())`."""
+    import installer.status as status
+
+    monkeypatch.setattr(status.shutil, "which", _which_none)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "unrelated").touch()
+    assert is_installed(_bin_dir_tool(str(bin_dir))) is False
+
+
+def test_bin_dir_is_expanded_from_a_tilde_spelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every bin_dir in registry.toml is written `~/.sdkman/...`; an unexpanded
+    `~` would make this whole check silently dead."""
+    import installer.status as status
+
+    monkeypatch.setattr(status.shutil, "which", _which_none)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".sdkman" / "candidates" / "springboot" / "current" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "spring").touch()
+    tool = _bin_dir_tool("~/.sdkman/candidates/springboot/current/bin")
+    assert is_installed(tool) is True

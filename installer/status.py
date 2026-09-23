@@ -22,12 +22,37 @@ def is_installed(tool: Tool, app_roots: tuple[Path, ...] | None = None) -> bool:
     detect_path exists for tools whose "is it here" marker is not an
     executable that `which` can find — e.g. SDKMAN's sdkman-init.sh is a
     sourced (non-executable) script, not a PATH binary.
+
+    A declared bin_dir is consulted for the same reason, and answers the
+    question this function is actually asked. PATH is ambient state inherited
+    from whenever the calling shell started, so it answers "can this process
+    run the tool right now", not "is the tool on this machine". An SDKMAN
+    candidate lands in its declared bin_dir and only reaches PATH through a
+    shell rc file, so every shell started before the install reported the tool
+    as missing — the live defect this check closes.
+
+    The bin_dir check is a UNION with `which`, never a replacement: the
+    registry declares where WE would install a tool, while the machine decides
+    where it actually is. groovy is declared SDKMAN-exclusive but is a brew
+    formula on some hosts, so its declared bin_dir does not exist while the
+    tool is plainly installed. Widening only ever turns False into True.
     """
     if shutil.which(tool.cmd) is not None:
         return True
     for method in tool.methods:
         detect_path = method.params.get("detect_path")
         if isinstance(detect_path, str) and detect_path and Path(detect_path).expanduser().exists():
+            return True
+    for method in tool.methods:
+        bin_dir = method.params.get("bin_dir")
+        if not isinstance(bin_dir, str) or not bin_dir:
+            continue
+        # The COMMAND file is the marker, never the directory: an uninstall
+        # that empties a bin_dir must not keep reading as installed. is_file()
+        # follows symlinks, so SDKMAN's `current -> <version>` link stops
+        # counting once the version it points at is removed — a bare exists()
+        # on the lstat would still call a dangling link present.
+        if (Path(bin_dir).expanduser() / tool.cmd).is_file():
             return True
     roots = _default_app_roots() if app_roots is None else app_roots
     for method in tool.methods:
