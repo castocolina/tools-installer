@@ -2624,3 +2624,71 @@ def test_a_carried_forward_foreign_path_export_keeps_its_original_behavior(
     # plan 15.8-01, does not.
     assert _managed_dir_count(twice.stdout, foreign_bin) == 2
     assert _managed_dir_count(twice.stdout, managed_bin) == 1
+
+
+# Reserved words and precommand modifiers that let a command still run. Found by
+# the phase-15.8 review sweep, not by the plans: `time` is a shell KEYWORD, not
+# an external binary, so `time . file` really sources the file. Before this was
+# handled the classifier answered "none", consolidation copied the line forward
+# verbatim, and the resulting ~/.myshellrc killed bash with SIGSEGV on every
+# startup -- the exact failure this phase exists to prevent, reached through a
+# shape the wrapped/escaped sweep above did not cover.
+@pytest.mark.parametrize(
+    ("modifier", "shells"),
+    [
+        ("time", ("bash", "zsh", "sh")),
+        ("nocorrect", ("zsh",)),  # zsh precommand modifiers; no-ops elsewhere
+        ("noglob", ("zsh",)),
+    ],
+)
+def test_reserved_word_prefixed_source_forms_execute_and_are_refused(
+    tmp_path: Path, modifier: str, shells: tuple[str, ...]
+) -> None:
+    # 1. Prove the form really sources the file, in every shell that has the word.
+    marker = tmp_path / "marker.sh"
+    marker.write_text("MARKER_RAN=1\n")
+    for name in shells:
+        shell = shutil.which(name)
+        if shell is None:
+            continue
+        executed = subprocess.run(
+            [shell, "-c", f'{modifier} . {marker}\necho "MARKER=${{MARKER_RAN-}}"'],
+            env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        assert "MARKER=1" in executed.stdout, (
+            f"{modifier!r} did not source under {name}; investigate the shell, "
+            f"never delete the detection"
+        )
+
+    # 2. Prove consolidation refuses that same form, byte for byte.
+    shellrc, myshellrc, _managed_bin = _seed_self_sourcing_home(
+        tmp_path, f'{modifier} . "$HOME/.myshellrc"'
+    )
+    before_shellrc = shellrc.read_bytes()
+    before_myshellrc = myshellrc.read_bytes()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None
+    assert str(shellrc) in result.reason
+    assert shellrc.read_bytes() == before_shellrc
+    assert myshellrc.read_bytes() == before_myshellrc
+    assert _no_backup_anywhere(tmp_path)
+
+
+def test_a_reserved_word_prefix_does_not_refuse_an_unrelated_command(tmp_path: Path) -> None:
+    """The mirror risk: `time` before anything else must stay invisible.
+
+    Widening the prefix set must not turn an ordinary timed command into a
+    refusal, or consolidation becomes unusable for anyone who times a build.
+    """
+    target = tmp_path / ".myshellrc"
+    target.write_text("x\n")
+
+    for line in ("time make build", "time ls -la", "noglob echo *"):
+        assert classify_source_line(line, target).verdict == "none"

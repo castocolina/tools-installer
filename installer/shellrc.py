@@ -290,7 +290,28 @@ def consolidation_stub(myshellrc_path: Path) -> str:
 _LineVerdict = Literal["none", "rewritable", "ambiguous"]
 SourceVerdict = Literal["yes", "no", "unprovable"]
 _SOURCE_COMMANDS = {".", "source"}
-_COMMAND_PREFIXES = {"if", "then", "elif", "else", "while", "until", "do", "!"}
+# Reserved words and precommand modifiers that may legally precede a command and
+# still let it run. `time` is the dangerous one: it is a shell KEYWORD, not an
+# external binary, so `time . file` really sources the file under bash, zsh and
+# sh -- verified in all three. Omitting it classified such a line as `none`, so
+# consolidation copied it forward verbatim into ~/.myshellrc and produced a file
+# that killed bash with SIGSEGV on every startup. `nocorrect` and `noglob` are
+# zsh precommand modifiers with the same property. Note that an ESCAPED `\time`
+# is a different thing entirely -- it resolves to the external binary, which
+# cannot source into the parent shell -- so it is correctly not listed here.
+_COMMAND_PREFIXES = {
+    "if",
+    "then",
+    "elif",
+    "else",
+    "while",
+    "until",
+    "do",
+    "!",
+    "time",
+    "nocorrect",
+    "noglob",
+}
 
 
 @dataclass(frozen=True)
