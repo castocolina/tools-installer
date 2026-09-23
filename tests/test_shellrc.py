@@ -15,8 +15,10 @@ from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.shellrc import (
     apply_block,
+    classify_source_line,
     collect_bin_dirs,
     consolidate_shellrc,
+    consolidation_refusal,
     ensure_source,
     has_managed_block,
     managed_block,
@@ -1491,6 +1493,171 @@ def _backup_path(shellrc: Path) -> Path:
 
 def _no_backup_anywhere(root: Path) -> bool:
     return not list(root.glob(f"*{OLD_SUFFIX}"))
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        ". {target}",
+        "source {target}",
+        ". $HOME/.myshellrc",
+        ". ${HOME}/.myshellrc",
+        ". ~/.myshellrc",
+        '. "$HOME/.myshellrc"',
+        ". '$HOME/.myshellrc'",
+        "  source {target}   ",
+    ],
+)
+def test_source_classifier_marks_only_simple_target_lines_rewritable(
+    tmp_path: Path, line: str
+) -> None:
+    target = tmp_path / ".myshellrc"
+    assert (
+        classify_source_line(line.replace("{target}", str(target)), target).verdict == "rewritable"
+    )
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'export A=1; . "$HOME/.myshellrc"; export B=1',
+        '[ -f "$HOME/.myshellrc" ] && . "$HOME/.myshellrc"',
+        'if . "$HOME/.myshellrc"; then',
+        '! source "$HOME/.myshellrc"',
+        '. "$HOME/.myshellrc" \\',
+        '. "$target"',
+        '. "$HOME"/.myshellrc',
+        'FOO=bar . "$HOME/.myshellrc"',
+        '*) . "$HOME/.myshellrc" ;;',
+        'root=$HOME; . "$root/.myshellrc"',
+        'command source "$HOME/.myshellrc"',
+        'builtin source "$HOME/.myshellrc"',
+        'command . "$HOME/.myshellrc"',
+        r'sour\ce "$HOME/.myshellrc"',
+        "'source' \"$HOME/.myshellrc\"",
+        'command -p source "$HOME/.myshellrc"',
+        'cmd=source; $cmd "$HOME/.myshellrc"',
+    ],
+)
+def test_source_classifier_marks_every_ambiguous_target_line(tmp_path: Path, line: str) -> None:
+    target = tmp_path / ".myshellrc"
+    inspection = classify_source_line(line, target)
+    assert inspection.verdict == "ambiguous", line
+    if line in {'. "$target"', 'root=$HOME; . "$root/.myshellrc"'}:
+        assert inspection.has_unresolvable_source is True, line
+    else:
+        assert inspection.resolves_to_target is True, line
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "# source $HOME/.myshellrc",
+        'export MYSHELLRC="$HOME/.myshellrc"',
+        'echo "$HOME/.myshellrc"',
+        '. "$HOME/.other.myshellrc"',
+        '. "$HOME/.shellrc"',
+        '. "$HOME/.cargo/env"',
+        '$EDITOR "$HOME/.bashrc"',
+        'command ls "$HOME"',
+    ],
+)
+def test_source_classifier_does_not_overdetect_unrelated_lines(tmp_path: Path, line: str) -> None:
+    target = tmp_path / ".myshellrc"
+    assert classify_source_line(line, target).verdict == "none", line
+
+
+def test_source_classifier_compares_real_paths_for_aliased_literal(tmp_path: Path) -> None:
+    real_home = tmp_path / "var" / "home" / "u"
+    real_home.mkdir(parents=True)
+    aliased_home = tmp_path / "home" / "u"
+    aliased_home.parent.mkdir()
+    aliased_home.symlink_to(real_home)
+    target = aliased_home / ".myshellrc"
+
+    inspection = classify_source_line(f'. "{real_home}/.myshellrc"', target)
+
+    assert inspection.verdict in {"rewritable", "ambiguous"}
+    assert inspection.resolves_to_target is True
+
+
+def _assert_content_refusal(
+    tmp_path: Path,
+    shellrc_text: str,
+    *,
+    expected_line: int = 1,
+) -> None:
+    shellrc = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+    shellrc.write_text(shellrc_text)
+    myshellrc.write_text("# owned content\n")
+    before_shellrc = shellrc.read_bytes()
+    before_myshellrc = myshellrc.read_bytes()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None
+    assert str(shellrc) in result.reason
+    assert f"line {expected_line}" in result.reason
+    assert shellrc.read_bytes() == before_shellrc
+    assert myshellrc.read_bytes() == before_myshellrc
+    assert _no_backup_anywhere(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'cat <<EOF\n. "$HOME/.myshellrc"\nEOF\n',
+        "cat <<-EOF\nunrelated body\nEOF\n",
+        'cat <<"EOF"\nunrelated body\nEOF\n',
+        "cat <<'EOF'\nunrelated body\nEOF\n",
+        'eval "$(brew shellenv)"\n',
+    ],
+)
+def test_file_level_unknown_shell_constructs_refuse_without_writing(
+    tmp_path: Path, text: str
+) -> None:
+    _assert_content_refusal(tmp_path, text)
+
+
+def test_refusal_reports_a_tools_installer_marker_without_writing(tmp_path: Path) -> None:
+    _assert_content_refusal(tmp_path, "# >>> tools-installer path >>>\n")
+
+
+def test_refusal_reports_a_preexisting_source_loop_without_writing(tmp_path: Path) -> None:
+    shellrc = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+    shellrc.write_text("export KEEP=1\n")
+    myshellrc.write_text(f'. "{shellrc}"\n')
+    before_shellrc = shellrc.read_bytes()
+    before_myshellrc = myshellrc.read_bytes()
+
+    result = consolidate_shellrc(shellrc, myshellrc)
+
+    assert result.status == "refused"
+    assert result.reason is not None
+    assert str(myshellrc) in result.reason
+    assert "loop" in result.reason
+    assert shellrc.read_bytes() == before_shellrc
+    assert myshellrc.read_bytes() == before_myshellrc
+    assert _no_backup_anywhere(tmp_path)
+
+
+def test_consolidation_refusal_is_pure_and_reports_the_offending_line(tmp_path: Path) -> None:
+    shellrc = tmp_path / ".shellrc"
+    myshellrc = tmp_path / ".myshellrc"
+
+    reason = consolidation_refusal(
+        'export KEEP=1\n. "$target"\n',
+        "# owned\n",
+        shellrc_path=shellrc,
+        myshellrc_path=myshellrc,
+    )
+
+    assert reason is not None
+    assert str(shellrc) in reason
+    assert "line 2" in reason
 
 
 def test_refuses_when_shellrc_is_a_symlink_to_myshellrc(tmp_path: Path) -> None:

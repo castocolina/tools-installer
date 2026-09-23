@@ -7,6 +7,7 @@ these files are edited read-modify-write.
 """
 
 import os
+import re
 import stat
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -264,6 +265,303 @@ def consolidation_stub(myshellrc_path: Path) -> str:
     )
 
 
+_LineVerdict = Literal["none", "rewritable", "ambiguous"]
+_SOURCE_COMMANDS = {".", "source"}
+_COMMAND_PREFIXES = {"if", "then", "elif", "else", "while", "until", "do", "!"}
+
+
+@dataclass(frozen=True)
+class _SourceInspection:
+    """The conservative facts found while inspecting one physical line."""
+
+    verdict: _LineVerdict
+    has_source_command: bool
+    resolves_to_target: bool
+    has_unresolvable_source: bool
+
+
+def _normalized_word(word: str) -> str:
+    """Approximate shell quote removal for one whitespace-delimited word."""
+    return word.replace("\\", "").replace('"', "").replace("'", "")
+
+
+def _is_assignment_word(word: str) -> bool:
+    return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", word) is not None
+
+
+def _command_head(segment: str) -> tuple[list[str], bool, bool]:
+    """Return words after simple command prefixes and source wrappers.
+
+    This is intentionally a small collection of string rules, not a shell
+    lexer. Anything that needs quote state, nesting, or expansion tracking is
+    refused by the caller instead of being interpreted here.
+    """
+    words = segment.strip().split()
+    had_prefix = False
+    had_wrapper = False
+
+    while words:
+        normalized = _normalized_word(words[0])
+        if normalized in _COMMAND_PREFIXES or _is_assignment_word(words[0]):
+            had_prefix = True
+            words.pop(0)
+            continue
+        if normalized in {"command", "builtin"}:
+            had_wrapper = True
+            words.pop(0)
+            while words and _normalized_word(words[0]).startswith("-"):
+                words.pop(0)
+            continue
+        break
+    return words, had_prefix, had_wrapper
+
+
+def _split_command_segments(line: str) -> list[str]:
+    """Split at obvious command separators without attempting shell parsing."""
+    sentinel = "__TOOLS_INSTALLER_HOME_EXPANSION__"
+    protected = line.replace("${HOME}", sentinel)
+    return [
+        segment.replace(sentinel, "${HOME}")
+        for segment in re.split(r"&&|\|\||[;|&(){}]", protected)
+    ]
+
+
+def _expanded_argument(raw: str, target: Path) -> Path | None:
+    """Resolve the intentionally small set of statically knowable arguments."""
+    candidate = raw.replace('"', "").replace("'", "")
+    if not candidate or any(character in candidate for character in "*?["):
+        return None
+    if "`" in candidate or "$(" in candidate:
+        return None
+
+    home = target.parent
+    if candidate == "~":
+        candidate = str(home)
+    elif candidate.startswith("~/"):
+        candidate = str(home / candidate[2:])
+    elif candidate == "$HOME":
+        candidate = str(home)
+    elif candidate.startswith("${HOME}/"):
+        candidate = str(home / candidate[len("${HOME}/") :])
+    elif candidate.startswith("$HOME/"):
+        candidate = str(home / candidate[len("$HOME/") :])
+
+    if "$" in candidate or "~" in candidate or not os.path.isabs(candidate):
+        return None
+    return Path(candidate)
+
+
+def _resolves_to(raw: str | None, target: Path) -> tuple[bool, bool]:
+    """Return ``(is_resolvable, is_target)`` for a candidate source argument."""
+    if raw is None:
+        return False, False
+    expanded = _expanded_argument(raw, target)
+    if expanded is None:
+        return False, False
+    return True, os.path.realpath(expanded) == os.path.realpath(target)
+
+
+def _simple_argument(raw: str) -> bool:
+    """Whether ``raw`` has no quotes or one matching quote layer."""
+    if not any(character in raw for character in "'\""):
+        return True
+    if len(raw) < 2 or raw[0] not in "'\"" or raw[-1] != raw[0]:
+        return False
+    return raw[1:-1].count(raw[0]) == 0
+
+
+def _is_dynamic_word(word: str) -> bool:
+    return "$" in word or "`" in word
+
+
+def _inspect_source_line(
+    line: str,
+    target: Path,
+    *,
+    continued_before: bool = False,
+) -> _SourceInspection:
+    """Classify one line using conservative command-position string rules."""
+    if line.lstrip().startswith("#"):
+        return _SourceInspection("none", False, False, False)
+
+    stripped = line.strip()
+    if not stripped:
+        return _SourceInspection("none", False, False, False)
+
+    has_source = False
+    resolves_to_target = False
+    has_unresolvable = False
+    rewritable = False
+    segments = _split_command_segments(stripped)
+
+    for segment in segments:
+        words, had_prefix, had_wrapper = _command_head(segment)
+        if not words:
+            continue
+        command_word = words[0]
+        normalized_command = _normalized_word(command_word)
+        if normalized_command == "eval":
+            continue
+
+        dynamic_command = _is_dynamic_word(command_word)
+        is_source = normalized_command in _SOURCE_COMMANDS
+        if not is_source and not dynamic_command:
+            continue
+
+        raw_argument = words[1] if len(words) > 1 else None
+        resolvable, is_target = _resolves_to(raw_argument, target)
+        if dynamic_command:
+            if is_target:
+                has_source = True
+                resolves_to_target = True
+                rewritable = False
+            continue
+
+        has_source = True
+        if not resolvable:
+            has_unresolvable = True
+            continue
+        if not is_target:
+            continue
+
+        resolves_to_target = True
+        simple_line = (
+            len(segments) == 1
+            and not had_prefix
+            and not had_wrapper
+            and len(words) == 2
+            and command_word == normalized_command
+            and command_word in _SOURCE_COMMANDS
+            and _simple_argument(raw_argument or "")
+            and not stripped.endswith("\\")
+            and not continued_before
+        )
+        rewritable = rewritable or simple_line
+
+    if has_unresolvable or resolves_to_target and not rewritable:
+        return _SourceInspection("ambiguous", has_source, resolves_to_target, has_unresolvable)
+    if resolves_to_target and rewritable:
+        return _SourceInspection("rewritable", has_source, True, False)
+    return _SourceInspection("none", has_source, False, has_unresolvable)
+
+
+def classify_source_line(line: str, target: Path) -> _SourceInspection:
+    """Expose the pure line classifier for focused tests and diagnostics."""
+    return _inspect_source_line(line, target)
+
+
+def _classify_source_lines(text: str, target: Path) -> list[_SourceInspection]:
+    """Classify every physical line without attempting to parse shell syntax."""
+    inspections: list[_SourceInspection] = []
+    continued_before = False
+    for line in text.splitlines():
+        inspection = _inspect_source_line(line, target, continued_before=continued_before)
+        inspections.append(inspection)
+        continued_before = line.rstrip().endswith("\\")
+    if not text:
+        return []
+    return inspections
+
+
+def _has_live_eval(line: str) -> bool:
+    """Return whether a simple command-position rule sees a live ``eval``."""
+    if line.lstrip().startswith("#"):
+        return False
+    for segment in _split_command_segments(line.strip()):
+        words, _had_prefix, _had_wrapper = _command_head(segment)
+        if words and _normalized_word(words[0]) == "eval":
+            return True
+    return False
+
+
+def _has_here_document_opener(line: str) -> bool:
+    """Recognize common here-document openers without parsing their body."""
+    if line.lstrip().startswith("#"):
+        return False
+    return (
+        re.search(r"(?:^|[\s;|&({])<<-?\s*(?:'[^']*'|\"[^\"]*\"|[A-Za-z_][A-Za-z0-9_-]*)", line)
+        is not None
+    )
+
+
+def _source_inspection_reason(path: Path, line_number: int, line: str) -> str:
+    return (
+        f"{path} line {line_number} contains a source command this tool cannot prove safe: "
+        f"{line!r}. Remove the construct or consolidate the file by hand."
+    )
+
+
+def _source_target_reason(path: Path, line_number: int, line: str) -> str:
+    return (
+        f"{path} line {line_number} contains an ambiguous source of the consolidation target: "
+        f"{line!r}. Consolidate the file by hand."
+    )
+
+
+def _text_sources_target(text: str, target: Path) -> tuple[bool, int | None, bool]:
+    """Return target-hit, line number, and unprovable-source presence."""
+    target_line: int | None = None
+    unprovable = False
+    for number, inspection in enumerate(_classify_source_lines(text, target), start=1):
+        if inspection.resolves_to_target and target_line is None:
+            target_line = number
+        if inspection.has_unresolvable_source:
+            unprovable = True
+    return target_line is not None, target_line, unprovable
+
+
+def consolidation_refusal(
+    shellrc_text: str,
+    myshellrc_text: str,
+    *,
+    shellrc_path: Path,
+    myshellrc_path: Path,
+) -> str | None:
+    """Return a refusal reason for unsafe content, or ``None`` when safe.
+
+    This deliberately refuses rather than guessing. Missing a source line can
+    create a self-sourcing loop; commenting out a compound line or here-document
+    body can silently destroy content. The fail-safe mirrors ``installer/omz.py``'s
+    multi-line-array refusal and ``installer/daemon.py``'s sentinel refusal.
+    """
+    for number, line in enumerate(shellrc_text.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("# >>> tools-installer") or stripped.startswith(
+            "# <<< tools-installer"
+        ):
+            return (
+                f"{shellrc_path} line {number} carries a tools-installer marker; remove it "
+                f"or consolidate the file by hand."
+            )
+        if _has_here_document_opener(line):
+            return (
+                f"{shellrc_path} line {number} opens a here-document; this tool does not "
+                f"parse its body. Remove it or consolidate the file by hand."
+            )
+        if _has_live_eval(line):
+            return (
+                f"{shellrc_path} line {number} uses eval, which can source any file; "
+                f"remove it or consolidate the file by hand."
+            )
+
+    inspections = _classify_source_lines(shellrc_text, myshellrc_path)
+    for number, (line, inspection) in enumerate(
+        zip(shellrc_text.splitlines(), inspections, strict=True), start=1
+    ):
+        if inspection.has_unresolvable_source:
+            return _source_inspection_reason(shellrc_path, number, line)
+        if inspection.verdict == "ambiguous":
+            return _source_target_reason(shellrc_path, number, line)
+
+    reaches_shellrc, line_number, _unprovable = _text_sources_target(myshellrc_text, shellrc_path)
+    if reaches_shellrc and line_number is not None:
+        return (
+            f"{myshellrc_path} line {line_number} already sources {shellrc_path}; replacing "
+            f"{shellrc_path} with a stub would create a sourcing loop. Consolidate by hand."
+        )
+    return None
+
+
 _Status = Literal["absent", "already", "refused", "consolidated"]
 
 
@@ -492,6 +790,15 @@ def consolidate_shellrc(shellrc_path: Path, myshellrc_path: Path) -> ShellrcCons
 
     if _is_owned_stub(original_text):
         return ShellrcConsolidation(status="already")
+
+    content_conflict = consolidation_refusal(
+        original_text,
+        myshellrc_path.read_text() if myshellrc_path.exists() else "",
+        shellrc_path=shellrc_path,
+        myshellrc_path=myshellrc_path,
+    )
+    if content_conflict is not None:
+        return ShellrcConsolidation(status="refused", reason=content_conflict)
 
     conflict = backup_precondition(shellrc_path, snapshot)
     if conflict is not None:
