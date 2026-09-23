@@ -854,11 +854,17 @@ Two scans replaced that vigilance. An AST-level test over `installer/`
 and `setup.py` reconstructs the shell text each module builds —
 including text assembled from fragments across statements — and fails
 the suite if any module outside the one emitter builds an accumulating
-PATH assignment in ANY parameter-expansion spelling, with its two
-exemptions scoped to a function and a docstring node rather than to a
-whole file, and with liveness asserted on the KIND of node, so the
-invariant cannot be kept green by a docstring after the emitter stops
-building the shape. An AST scan is structurally blind to shell scripts,
+PATH assignment in ANY parameter-expansion spelling, with its single
+exemption scoped to one docstring node rather than to a whole file, and
+with that exemption asserted to be live — it must match a real hit of
+the expected node KIND, so an entry that has quietly stopped matching
+anything cannot sit there as a blanket allowance. The emitter itself,
+`path_export_guard`, carries no exemption: it assembles its assignment
+through an intermediate local, so the reconstruction yields no hit for
+it, and an entry would therefore cover whatever that function might
+later build. Its runtime guarantee is carried instead by the real-shell
+repeated-source tests, which observe actual PATH contents rather than
+source shape. An AST scan is structurally blind to shell scripts,
 and two live instances of this same defect were found in
 `scripts/container-e2e-verify.sh` writing plain exports into a
 container's rc files, so a second text-level scan covers `install.sh`

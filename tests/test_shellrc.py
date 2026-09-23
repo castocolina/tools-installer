@@ -1032,7 +1032,7 @@ def _accumulating_hits(files: list[Path]) -> list[_Hit]:
 
 
 def test_no_accumulating_path_build_under_installer_or_setup() -> None:
-    """Assert no plain PATH prepend in installer/ or setup.py outside two exemptions.
+    """Assert no plain PATH prepend in installer/ or setup.py outside one exemption.
 
     The accumulating PATH shape is: an assignment to PATH whose value
     references the PATH variable through ANY parameter-expansion spelling
@@ -1046,13 +1046,21 @@ def test_no_accumulating_path_build_under_installer_or_setup() -> None:
     by construction and cannot produce duplicates — that is not this defect.
     Such assignments are outside the needle by the shape's property.
 
-    EXEMPTIONS (keyed to (relative_path, enclosing_function, is_docstring)):
-    1. path_export_guard() in installer/shellrc.py — the one function that
-       legitimately builds a guarded PATH line (the fix for the defect).
-    2. find_duplicate_path_lines() docstring in installer/rcclean.py — the
+    EXEMPTION (keyed to (relative_path, enclosing_function, is_docstring)):
+    1. find_duplicate_path_lines() docstring in installer/rcclean.py — the
        documentation node that describes the old shape for reference and
        education. A non-docstring production expression anywhere in rcclean.py
        is a violation.
+
+    There is deliberately NO exemption for path_export_guard() in
+    installer/shellrc.py, even though that emitter is the one place allowed to
+    build a guarded PATH line. The scan reports zero hits for it today (see the
+    reconstruction-limit comment at the end of this function), so an exemption
+    entry would match nothing while reading as though it were load-bearing —
+    a blanket allowance covering whatever that function might later build. If a
+    refactor of the emitter ever makes this test fail on path_export_guard,
+    that failure is the correct outcome: re-adding the exemption is then a
+    conscious decision with a live hit to point at.
 
     TOTAL ASSIGNMENTS OUTSIDE THE NEEDLE (reasoned exclusions, not allowlist):
     - installer/executors.py:31-38 — sh -c command prefix with complete
@@ -1066,9 +1074,10 @@ def test_no_accumulating_path_build_under_installer_or_setup() -> None:
 
     Liveness is carried by this module's seeded-violation tests
     (`test_scan_reports_*`), which require the scanner to flag a known-bad
-    shape. A needle narrowed until it matches nothing fails those, so this
-    invariant cannot be kept green by gutting the scan. See the comment at the
-    end of this function for why no hit is asserted inside `path_export_guard`.
+    shape, and by the assertion at the end of this function that the one
+    exemption really does match a node of the expected KIND. A needle narrowed
+    until it matches nothing fails those, so this invariant cannot be kept
+    green by gutting the scan.
     """
     repo_root = Path(__file__).resolve().parent.parent
     installer_py = list((repo_root / "installer").glob("**/*.py"))
@@ -1078,7 +1087,6 @@ def test_no_accumulating_path_build_under_installer_or_setup() -> None:
     hits = _accumulating_hits(files)
 
     exempted_triples = {
-        (Path("installer/shellrc.py"), "path_export_guard", False),
         (Path("installer/rcclean.py"), "find_duplicate_path_lines", True),
     }
 
@@ -1105,8 +1113,9 @@ def test_no_accumulating_path_build_under_installer_or_setup() -> None:
     # matches nothing fails THEM, so this assertion cannot be kept green by
     # gutting the scanner.
     #
-    # It deliberately does NOT assert a hit inside path_export_guard. The
-    # emitter assembles its assignment through an intermediate local
+    # It deliberately does NOT assert a hit inside path_export_guard, and
+    # carries no exemption for it either. The emitter assembles its assignment
+    # through an intermediate local
     # (`value = f"{declared}${{PATH:+:$PATH}}"`, then `export PATH="{value}"`),
     # so no single reconstructed expression carries both the assignment head
     # and a `$PATH` reference, and the scan reports zero hits for that function
@@ -1123,12 +1132,16 @@ def test_no_accumulating_path_build_under_installer_or_setup() -> None:
     # existed to prevent. It is removed rather than weakened further: the
     # assertion that carries this test is `assert not non_exempt` above.
 
-    rcclean_doc_hits = [
-        h for h in hits if h.file_path == Path("installer/rcclean.py") and h.is_docstring
-    ]
-    assert rcclean_doc_hits, (
-        "Liveness check failed: rcclean docstring exemption did not match "
-        "(documentation of the old shape must be present)"
+    # Every exemption must be live: an entry that matches no hit is a blanket
+    # allowance dressed as a scoped one, and would let a future violation of
+    # that exact shape land silently. Keyed on the node KIND (is_docstring), so
+    # a docstring exemption cannot be satisfied by production code, nor the
+    # reverse.
+    matched_triples = {(h.file_path, h.enclosing_function, h.is_docstring) for h in hits}
+    inert = exempted_triples - matched_triples
+    assert not inert, (
+        "Liveness check failed: exemption(s) matched no hit and are therefore "
+        f"inert blanket allowances: {sorted(map(str, inert))}"
     )
 
 
