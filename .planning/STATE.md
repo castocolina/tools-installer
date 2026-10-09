@@ -1,16 +1,17 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: "15.8"
+current_phase: 16
+current_phase_name: "Catalog truth: detection, version and ownership from the filesystem, not from a binary invocation"
 current_plan: Not started
-status: completed
-stopped_at: Phase 15.8 complete — all phases complete
-last_updated: "2026-09-23T15:06:13.290Z"
-last_activity: 2026-09-23
-last_activity_desc: Phase 15.8 complete
-state_head: 648e5e0f4c3a67cf12e04cb4ef1153ce2555805d
+status: planning
+stopped_at: Phase 15.8 complete, ready to plan Phase 16
+last_updated: "2026-10-09T21:53:05.925Z"
+last_activity: 2026-10-09
+last_activity_desc: Phase 15.8 complete, transitioned to Phase 16
+state_head: 76f5eb1c1eaa4ca6c7a653d4d11289b8bc0931f4
 progress:
-  total_phases: 27
+  total_phases: 28
   completed_phases: 17
   total_plans: 91
   completed_plans: 91
@@ -26,15 +27,15 @@ Total Phases: 21
 See: .planning/PROJECT.md (updated 2026-09-04)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 15.1 — Catalog post-update refresh staleness and version-status color disambiguation
+**Current focus:** Phase 15.8 — Fix real (not just cosmetic) PATH duplication from managed-block sourcing
 
 ## Current Position
 
-Phase: 15.8
+Phase: 16 — Catalog truth: detection, version and ownership from the filesystem, not from a binary invocation
 Current Plan: Not started
 Total Plans in Phase: 7
-Status: All phases complete
-Last activity: 2026-09-23 — Phase 15.8 complete
+Status: Ready to plan
+Last activity: 2026-10-09 — Phase 15.8 complete, transitioned to Phase 16
 
 Progress: [██████████] 100%
 
@@ -234,5 +235,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-22T13:07:41Z
-Stopped at: Phase 15.8 complete — all phases complete
+Stopped at: Phase 15.8 complete, ready to plan Phase 16
 Resume file: None
