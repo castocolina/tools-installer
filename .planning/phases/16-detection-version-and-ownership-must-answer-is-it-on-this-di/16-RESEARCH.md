@@ -397,7 +397,7 @@ _VER_STALE = "~"
    - What we know: CONTEXT.md explicitly defers this ("Full audit list of other tools needing per-OS location fixes beyond kitty (D-19) — to be discovered during research/planning, not pre-enumerated here").
    - What's unclear: no systematic audit of every registry tool's declared methods against their real install locations was performed this session (out of scope for a single research pass against a 3000+ line registry file).
    - Recommendation: the planner should scope a dedicated audit task/wave that checks every `script`/`app`/`cask` method's declared `bin_dir`/`app`/`detect_path` against the vendor's actual documented install layout, following the same live-verification convention `REQ-registry-authoring-verification-checklist` already established.
-   - **RESOLVED:** plan 16-10 Task 2 is that dedicated location audit for own-installer script methods.
+   - **RESOLVED:** plan 16-10 Task 2 is that dedicated location audit for own-installer script methods. The scope is narrower than recommended on purpose: `cask` is excluded because plan 16-01 forbids location-only proof for inventory-backed kinds (cask keeps Homebrew inventory proof), and `app` is excluded because none of the registry's 7 `app` methods declares a `bin_dir`, the only location field 16-01's branch reads, so auditing them could not change any ownership answer in this phase.
 
 ## Validation Architecture
 
