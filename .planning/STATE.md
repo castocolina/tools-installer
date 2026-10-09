@@ -24,10 +24,10 @@ Total Phases: 21
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-04)
+See: .planning/PROJECT.md (updated 2026-10-09)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 15.8 — Fix real (not just cosmetic) PATH duplication from managed-block sourcing
+**Current focus:** Phase 16 — Catalog truth: detection, version and ownership from the filesystem, not from a binary invocation
 
 ## Current Position
 
@@ -194,6 +194,7 @@ Recent decisions affecting current work:
 - [15.7-07, 2026-09-22]: Extracted `scripts/lib/prune-tmp-common.sh` as the single shared implementation (broad-path refusal guard, root/age validation, fd-preferred/find-fallback depth-1 traversal, byte formatting, `deleted: N` summary) used by both `scripts/prune-tmp-linux.sh` and `scripts/prune-user-tmpdir.sh`. A pre-existing quirk (`--tmpdir /` bypassing the refusal guard via the trailing-slash strip turning `/` into an empty string) was pinned as-is, not fixed — out of this plan's must_haves scope.
 - [15.7-04, 2026-09-22]: One `CacheRedirect` declaration drives both platform writers (Linux: bare `KEY=VALUE` in an environment.d conf; macOS: `export KEY="VALUE"` in ~/.myshellrc via shellrc.py's existing apply_block/strip_block/ensure_source primitives) — Bun's `BUN_RUNTIME_TRANSPILER_CACHE_PATH` -> `~/.cache/bun/transpiler-cache` is the first wired-up case. Applied state reads from the owned file only (never live process env) and shares its ownership check with the remover so a policy can never read active for a file it would refuse to delete. Executed via cross-AI (opencode router-env/my-coding) per ONESHOT-RULES.md Rule 12; commits 2e9cdbe, 354655c, 147b51d.
 - [15.7-06, 2026-09-22]: Cross-AI (opencode router-env/my-coding) completed Task 1 (750d68b) then died on a grok 402 quota stop; a continuation retry hit the 1h timeout looping on RTK rewriting pytest output to a false "No tests collected" (same signature as 12.3-02). Tasks 2-3 finished via the Rule 12 direct-executor fallback. The Doctor screen reuses PolicyInputs.disk_pressure (one probe, no second construction); the Policies daemon row renders temp usage via the cache's non-blocking peek only (zero is-active queries across all memo states). Source todo moved pending -> completed.
+- [15.8, 2026-10-09]: Re-verified `human_needed` -> `passed` via a disposable Fedora container (podman): `make fix` against a real hand-authored `~/.shellrc`, `dash` (pure-POSIX), and the real wired `~/.bashrc`→`~/.myshellrc` route all confirmed the managed PATH directory never exceeds 1 after 5 sources, with foreign plain exports duplicating as documented. `15.8-VALIDATION.md` (18/18 Nyquist) and `15.8-SECURITY.md` (56/56 threats closed) both written this session.
 
 ### Pending Todos
 
@@ -206,6 +207,7 @@ None yet.
 - Six companion PRDs from the same 2026-09-04 batch (`package-manager-policy`, `postinstall-hooks`, `catalog-expansion`, `live-package-management`, `background-maintenance-daemon`, `agent-cli-ergonomics`) are queued for ingestion immediately after this roadmap — expect ROADMAP.md to grow with additional phases soon.
 - REQ-dependency-chain-requires' illustrative examples (`oh-my-zsh`, `volta`) now have both tools in `registry.toml` (`volta` since 04-02, `oh-my-zsh` since 07-01).
 - Phase 15.4's one `<human-check>` item (15.4-05 task 3, `human_verify_mode: end-of-phase`) is outstanding: run `make setup`, confirm real manager names render in the Uninstall "Installed via" column, confirm attribution sharpens in place after a background refresh, confirm codex shows no Homebrew instruction on this Linux host, confirm a split-package removal command (e.g. `git`/`git-core`) matches `rpm -qf $(command -v git)`, and confirm `make setup ARGS="--uninstall"` renders a complete generic-attribution screen. Not performed by the executor per plan instruction — end-of-phase verification.
+- [Phase 15.8] Doctor's new foreign-PATH-writer diagnosis (`installer/rcclean.py::unguarded_path_writers`, wired into `installer/app.py`'s Doctor screen) has 9 open code-review findings (1 critical — misreports a correctly-guarded line as an unconditional writer; 5 warning; 3 info — `15.8-REVIEW.md`/`15.8-REVIEW-DISPOSITION.md`). This landed via a direct out-of-phase commit (`2eaae39`), not a 15.8 plan, and does not affect 15.8's own D-01..D-04 deliverable — but it's exactly Phase 16's subject matter (catalog truth / ownership attribution from the filesystem) and should be picked up there.
 
 ### Roadmap Evolution
 
@@ -234,6 +236,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-22T13:07:41Z
+Last session: 2026-10-09T21:55:30Z
 Stopped at: Phase 15.8 complete, ready to plan Phase 16
 Resume file: None
