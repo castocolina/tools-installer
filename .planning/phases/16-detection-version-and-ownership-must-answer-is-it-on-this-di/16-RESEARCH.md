@@ -379,22 +379,25 @@ _VER_STALE = "~"
 | A3 | Recommending `bin_dir = "~/.local/kitty.app/bin"` as sufficient for kitty's Linux detection, without a new "app bundle with nested bin" schema shape | Common Pitfall 7 | If kitty's actual install script places the binary somewhere other than `<install-root>/bin/kitty`, this recommendation is wrong and the planner needs to verify kitty's actual official installer output layout directly (not done this session — CONTEXT.md's own live investigation only confirmed the `~/.local/bin/kitty -> ~/.local/kitty.app/bin/kitty` symlink target, which is consistent with this recommendation but was not independently re-verified here) |
 | A4 | Whether SDKMAN should additionally be added to a `competing_owners`-recognized set for `_INSTALLER_KINDS` or stay entirely separate | Common Pitfall 2 | Low — this is a sub-detail of A1; getting it wrong only affects which fallback branch a SDKMAN tool with zero competing methods takes, not whether SDKMAN ownership attribution works at all once the primary branch (Pattern 2) is added |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does `installer/registry.toml`'s `superpowers` row's other 9 tools need a corrected `supported_harnesses` audit too, or only `superpowers`?**
    - What we know: D-09 names `superpowers` explicitly as verified-wrong. The other four skill_pack tools (`openspec`, `softaworks-agent-toolkit`, `matt-pocock-skills`, `opengsd`, `spec-kit`) plus `ponytail` were read this session and their `supported_harnesses` lists look plausible on their face (they're all `mode="manual-required"` CLI-driven tools whose harness lists are narrower and match their own install-instruction text), but none were independently cross-checked against each tool's own upstream docs this session.
    - What's unclear: whether any of the other five have the same class of staleness `superpowers` had.
    - Recommendation: the planner should budget one verification pass per skill_pack tool against its own upstream README/docs before trusting any of the six `supported_harnesses` lists, per D-09's own instruction ("Every skill_pack entry's supported_harnesses must be re-audited").
+   - **RESOLVED:** all packs are audited. Plan 16-07 Task 1 corrects `superpowers`; plan 16-07 Task 2 audits the remaining six against their upstream docs.
 
 2. **Exact shape of the per-method install-location schema field (D-19)**
    - What we know: CONTEXT.md explicitly delegates this to the planner ("Exact registry schema shape for per-method install-location declarations (D-19) — a field name/structure decision for the planner, not a user-facing choice"). The existing `bin_dir`/`detect_path`/`app` params already cover most of the shape needed (Pitfall 7's recommendation).
    - What's unclear: whether a *new* field name is needed at all, or whether auditing+filling in the *existing* `bin_dir`/`app` params on every tool missing them is sufficient — i.e., is D-19 a schema change or a data-completeness audit?
    - Recommendation: attempt the kitty fix using only existing params (`bin_dir`) first; only introduce new schema if a tool is found during the audit whose real install location genuinely cannot be expressed by `bin_dir`/`detect_path`/`app`.
+   - **RESOLVED:** no new field. Plan 16-01 reuses the existing `bin_dir` param as the per-method location proof (recorded as its D-19 design choice); plan 16-10 Task 1 expresses kitty with `bin_dir` too.
 
 3. **Full list of other tools needing the same per-OS location audit beyond kitty**
    - What we know: CONTEXT.md explicitly defers this ("Full audit list of other tools needing per-OS location fixes beyond kitty (D-19) — to be discovered during research/planning, not pre-enumerated here").
    - What's unclear: no systematic audit of every registry tool's declared methods against their real install locations was performed this session (out of scope for a single research pass against a 3000+ line registry file).
    - Recommendation: the planner should scope a dedicated audit task/wave that checks every `script`/`app`/`cask` method's declared `bin_dir`/`app`/`detect_path` against the vendor's actual documented install layout, following the same live-verification convention `REQ-registry-authoring-verification-checklist` already established.
+   - **RESOLVED:** plan 16-10 Task 2 is that dedicated location audit for own-installer script methods.
 
 ## Validation Architecture
 
