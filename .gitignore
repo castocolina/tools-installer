@@ -50,3 +50,11 @@ graphify-out/
 
 # GSD milestone-run lock file (session id/pid/timestamp) - runtime-only, never audit trail
 .planning/milestone.lock
+
+.codex/
+.claude/
+.cursor/
+.opencode/
+
+# Empty file some test/validate run regenerates at the repo root - reproducible, not audit trail
+/log

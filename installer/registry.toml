@@ -2605,6 +2605,38 @@ os = ["macos"]
 cask = "wezterm"
 app = "WezTerm.app"
 
+# Verified 2026-10-09: GitHub release v0.17.0 publishes a macOS DMG, Windows
+# installers, terminfo, man pages, and completions — no Linux binary, AppImage,
+# .deb, or .rpm (api.github.com/repos/alacritty/alacritty/releases/latest).
+# Fedora 44's package alacritty is that same 0.17.0
+# (packages.fedoraproject.org/pkgs/rust-alacritty/alacritty). Debian and Arch
+# ship the package name alacritty. No Homebrew formula. The cask is macOS-only
+# and disabled 2026-09-01 because the unsigned build fails Gatekeeper
+# (formulae.brew.sh/cask/alacritty; alacritty issue 8749), so this entry
+# declares no cask. A github_release method would rank ahead of dnf and fail
+# on the missing Linux asset, including on immutable Fedora where native
+# kinds are skipped (installer/resolve.py). Same accepted Bazzite gap as kitty:
+# no applicable method on immutable Fedora. Distrobox is not a method kind.
+[[tool]]
+id = "alacritty"
+name = "Alacritty"
+category = "terminal"
+cmd = "alacritty"
+priority = "P3"
+audience = "human"
+tier = "user"
+desc = "Cross-platform OpenGL terminal emulator"
+owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
+[[tool.method]]
+kind = "dnf"
+package = "alacritty"
+[[tool.method]]
+kind = "apt"
+package = "alacritty"
+[[tool.method]]
+kind = "pacman"
+package = "alacritty"
+
 [[tool]]
 id = "glab"
 name = "GitLab CLI"

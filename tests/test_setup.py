@@ -436,6 +436,11 @@ def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Point every import-time home constant at tmp_path, so the real
     _build_app can run without touching the developer's shell files."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    # omz_root() falls back to $ZSH when ~/.oh-my-zsh is absent (installer/omz.py).
+    # On a developer machine that actually has oh-my-zsh installed, $ZSH is set
+    # in the real environment and leaks straight through HOME's sandboxing,
+    # pointing "isolated" tests at the real install.
+    monkeypatch.delenv("ZSH", raising=False)
     monkeypatch.setattr(setup, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
     monkeypatch.setattr(setup, "_MYSHELLRC", tmp_path / ".myshellrc")
     monkeypatch.setattr(setup, "_SHELLRC", tmp_path / ".shellrc")

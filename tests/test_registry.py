@@ -183,7 +183,9 @@ _PRE_15_3_HUMAN_TOOLS = {
 # only one that may grow: the two above are frozen historical records of
 # what Phase 15.3 found and what it changed, and adding a new id to either
 # would make that set's own comment false.
-_POST_15_3_HUMAN_TOOLS: set[str] = set()
+_POST_15_3_HUMAN_TOOLS = {
+    "alacritty",
+}
 
 
 def test_audience_human_set_is_exactly_the_reviewed_tools() -> None:
@@ -204,7 +206,7 @@ def test_registry_audience_distribution_is_pinned() -> None:
     assert dict(Counter(t.audience for t in load_tools(REGISTRY))) == {
         "both": 47,
         "ai": 9,
-        "human": 33,
+        "human": 34,
     }
 
 
@@ -651,6 +653,12 @@ NO_LINUX_ARM64 = {"puppeteer", "jetbrains-toolbox"}
 # variants, no arm64 AppImage. A gap bounded by upstream asset availability,
 # not a project scoping choice.
 NO_DEBIAN_FEDORA_ARM64 = {"wezterm"}
+# alacritty: the official Homebrew cask is macOS-only and has been disabled
+# since 2026-09-01 (unsigned build fails Gatekeeper). No formula exists, and
+# the GitHub release has no macOS asset this installer can place. Linux uses
+# the distro package. Membership means no reviewed macOS method, not that
+# Alacritty cannot run on macOS.
+NO_MACOS = {"alacritty"}
 
 
 def test_every_tool_resolves_at_least_one_method_on_each_platform() -> None:
@@ -678,6 +686,8 @@ def test_every_tool_resolves_at_least_one_method_on_each_platform() -> None:
                 allowed |= NO_LINUX_ARM64
             if platform_os in ("debian", "fedora") and arch == "arm64":
                 allowed |= NO_DEBIAN_FEDORA_ARM64
+            if platform_os == "macos":
+                allowed |= NO_MACOS
             stranded = [
                 t.id for t in tools if not resolve_methods(t, platform) and t.id not in allowed
             ]
@@ -743,6 +753,23 @@ def test_no_debian_fedora_arm64_allowlist_stays_honest() -> None:
         arch_arm64 = Platform(os="arch", arch="arm64", immutable=False, has_brew=True)
         assert resolve_methods(tools[tool_id], arch_arm64), (
             f"'{tool_id}' must still resolve on arch/arm64"
+        )
+
+
+def test_no_macos_allowlist_stays_honest() -> None:
+    tools = {t.id: t for t in load_tools(REGISTRY)}
+    for tool_id in sorted(NO_MACOS):
+        assert tool_id in tools, f"NO_MACOS entry '{tool_id}' is not in the registry"
+        for arch in ("amd64", "arm64"):
+            macos = Platform(
+                os="macos", arch=arch, immutable=False, has_brew=True, os_version="26.0"
+            )
+            assert resolve_methods(tools[tool_id], macos) == [], (
+                f"'{tool_id}' unexpectedly resolves on macos/{arch}"
+            )
+        debian = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+        assert resolve_methods(tools[tool_id], debian), (
+            f"'{tool_id}' must still resolve on debian/amd64"
         )
 
 
@@ -1097,7 +1124,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 26,
         "ai": 17,
-        "user": 46,
+        "user": 47,
     }
 
 
@@ -1433,6 +1460,34 @@ def test_kitty_entry_records_the_txz_extraction_gap() -> None:
         'platform.os == "macos"',
     ):
         assert fragment in window, f'missing {fragment!r} above id = "kitty"'
+
+
+def test_alacritty_uses_distro_packages_only() -> None:
+    alacritty = _tools_by_id()["alacritty"]
+    fedora = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+    debian = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    arch = Platform(os="arch", arch="arm64", immutable=False, has_brew=True)
+    bazzite = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0")
+    assert [m.kind for m in resolve_methods(alacritty, fedora)] == ["dnf"]
+    assert [m.kind for m in resolve_methods(alacritty, debian)] == ["apt"]
+    assert [m.kind for m in resolve_methods(alacritty, arch)] == ["pacman"]
+    assert resolve_methods(alacritty, bazzite) == []
+    assert resolve_methods(alacritty, macos) == []
+    assert {m.kind for m in alacritty.methods} == {"dnf", "apt", "pacman"}
+
+
+def test_alacritty_entry_records_the_missing_linux_release_and_disabled_cask() -> None:
+    lines = REGISTRY.read_text(encoding="utf-8").splitlines()
+    idx = next(i for i, line in enumerate(lines) if line == 'id = "alacritty"')
+    window = "\n".join(lines[max(0, idx - 20) : idx])
+    for fragment in (
+        "v0.17.0",
+        "no Linux binary",
+        "disabled 2026-09-01",
+        "immutable Fedora",
+    ):
+        assert fragment in window, f'missing {fragment!r} above id = "alacritty"'
 
 
 def test_wezterm_entry_records_the_checksum_sidecar_verification() -> None:
@@ -1817,10 +1872,10 @@ def test_only_codegraph_rtk_and_graphify_declare_a_postinstall_hook() -> None:
 
 
 def test_native_package_manager_rows_declare_their_owner_probes() -> None:
-    # D-05: exactly the ten rows that can be installed through a native
+    # D-05: exactly the eleven rows that can be installed through a native
     # OS package manager (or, for opencode/wezterm, pacman alone) declare
     # owner_probes so detect_owner can actually answer for them.
-    # rpm-ostree is listed FIRST on the eight dnf/apt/pacman-capable rows: on
+    # rpm-ostree is listed FIRST on the nine dnf/apt/pacman-capable rows: on
     # an ostree host the rpm database still answers `rpm -q`, so probing dnf
     # first would attribute a package the user explicitly layered to the
     # wrong mechanism -- see install_ownership.py's _rpm_ostree docstring.
@@ -1835,6 +1890,7 @@ def test_native_package_manager_rows_declare_their_owner_probes() -> None:
         "docker": full,
         "podman": full,
         "kitty": full,
+        "alacritty": full,
         "opencode": ("pacman",),
         "wezterm": ("pacman",),
     }
