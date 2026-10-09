@@ -46,7 +46,7 @@
     "use_worktrees": true,
     "plan_review_convergence": true,
     "cross_ai_execution": true,
-    "cross_ai_command": "opencode run --model router-env/my-coding --auto",
+    "cross_ai_command": "opencode run --model xai/grok-4.7 --auto",
     "cross_ai_timeout": 3600
   },
   "review": {
@@ -54,10 +54,6 @@
       "opencode-plan-review": {
         "cli": "opencode",
         "model": "router-env/my-plan-review"
-      },
-      "opencode-sol": {
-        "cli": "opencode",
-        "model": "openai/gpt-5.6-sol"
       }
     },
     "default_reviewers": [
@@ -79,7 +75,19 @@
   },
   "project_code": null,
   "phase_naming": "sequential",
-  "agent_skills": {},
+  "agent_skills": {
+    "gsd-plan-checker": ["global:jev-fast-decision"],
+    "gsd-verifier": ["global:jev-fast-decision"],
+    "gsd-code-reviewer": ["global:jev-fast-decision"],
+    "gsd-security-auditor": ["global:jev-fast-decision"],
+    "gsd-ui-checker": ["global:jev-fast-decision"],
+    "gsd-ui-auditor": ["global:jev-fast-decision"],
+    "gsd-eval-auditor": ["global:jev-fast-decision"],
+    "gsd-integration-checker": ["global:jev-fast-decision"],
+    "gsd-doc-verifier": ["global:jev-fast-decision"],
+    "gsd-nyquist-auditor": ["global:jev-fast-decision"],
+    "gsd-dom-verifier": ["global:jev-fast-decision"]
+  },
   "claude_md_path": "./CLAUDE.md",
   "plan_review": {
     "source_grounding": true,

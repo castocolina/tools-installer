@@ -146,10 +146,11 @@ evidenced.
     is non-negotiable, with no exceptions and no alternative path.** Plan
     EXECUTION is delegated to cross-AI, never run on this session's own token
     budget. `workflow.cross_ai_execution` is `true` in `.planning/config.json`
-    specifically so `/gsd-execute-phase` routes each plan to the configured
-    external command (`workflow.cross_ai_command`, currently `/usr/local/bin/opencode
-    run --model xai/grok-4.6`) instead of spawning a `gsd-executor` subagent
-    on this Claude session. The config flag alone does not activate
+    specifically so `/gsd-execute-phase` routes each plan to whatever
+    external command `workflow.cross_ai_command` currently resolves to in
+    `.planning/config.json` (read it live — don't assume a past value still
+    holds) instead of spawning a `gsd-executor` subagent on this Claude
+    session. The config flag alone does not activate
     delegation — `execute-phase.md`'s `cross_ai_delegation` step also
     requires the plan's own frontmatter `cross_ai: true` (Checklist item 2
     above). A plan is not considered planned until this field is present; do
@@ -168,8 +169,12 @@ evidenced.
 14. **Three verification tiers — pick the right one, never stop for the wrong reason.** `.planning/config.json` already has `workflow.human_verify_mode: "end-of-phase"`: GSD's own planner suppresses mid-flight `checkpoint:human-verify` tasks and its executor auto-approves any `gate="blocking"` checkpoint in autonomous mode (`gsd-core/references/checkpoints.md`) — only `gate="blocking-human"` ever stops an autonomous run. Combined with this project's real risk surface (Rule 5), that means:
     - **Tier 1 — sandboxed automated tests (`make test`).** Already fully isolated (`monkeypatch.setenv("HOME", str(tmp_path))`, confirmed by the existing `test_real_home_rc_files_are_untouched`). Never touches the real machine. Run freely, no gate of any kind.
     - **Tier 2 — TUI structural checks (Checklist item 7).** A monospace Textual TUI's correctness (nav labels, mode badges, footer text) is verified via `tmux` `capture-pane` **text** matching, not a screenshot/visual judgment call — Claude does this itself. Stays navigation-only (Rule 5), so nothing mutates. No gate needed.
-    - **Tier 3 — real-machine-effect verification.** Anything that needs to prove an installer/tweak/uninstall genuinely works against a real filesystem (not the Tier-1 simulation) — e.g. Oh-My-Zsh's real `.zshrc` rewrite, `sdk install java` actually pulling a JDK, a real uninstall sweep leaving no stray files — runs inside a disposable container via **colima + the `docker` CLI** (the committed choice, verified working live on this exact machine 2026-09-04: `colima start` then `docker run --rm alpine:latest ...` succeeded end-to-end). **`podman` does NOT work on this machine** — its current Homebrew formula pulls in an Apple-Silicon-only dependency (`vfkit`, Homebrew reports it as `depends_on arch: :arm64`) and fails to build on Intel; this was hit live and confirmed, not theoretical. Apple's native `container` CLI also does NOT work here — it requires Apple Silicon too. Docker-in-docker is not needed: this session runs directly on the host, not inside a container itself, so one level of isolation (a container inside colima's VM) is sufficient — no nesting required. **If colima isn't running when Tier 3 is first needed: `brew install docker` (CLI only, no Docker Desktop) if missing, then `colima start`** — both already verified working here; this is a normal feature use, not a Rule 5 violation. Never fall back to testing against the real host because the runtime isn't up yet. Spin up before the verification (or leave colima running across the whole session — it's a background VM, not a per-check cost), tear the specific container down after each check with `--rm`. Capture the evidence (command output, resulting file diffs, `tmux capture-pane` text from inside the container) and fold it into the phase's end-of-phase UAT/verification report per `human_verify_mode: end-of-phase`'s existing consolidation design, so the single human review at the end of the run (or milestone) has real evidence to look at — never a mid-run stop to ask for it.
-    - **Known gap to route into GSD, not silently patch:** `REQUIREMENTS.md`'s `REQ-linux-bazzite-shell-parity` (Phase 7) assumes `podman` is this project's cross-platform container-runtime catalog entry, but `podman` cannot install via Homebrew on Intel macOS today (confirmed live, see above). This is a real product-catalog finding, not just a ONESHOT-rules concern — flag it for the user to decide whether `registry.toml`'s `podman` entry needs an arch-gate or a fallback to `colima`+`docker` on Intel Macs, rather than silently reworking the catalog here.
+    - **Tier 3 — real-machine-effect verification.** Anything that needs to prove an installer/tweak/uninstall genuinely works against a real filesystem (not the Tier-1 simulation) — e.g. Oh-My-Zsh's real `.zshrc` rewrite, `sdk install java` actually pulling a JDK, a real uninstall sweep leaving no stray files — runs inside a disposable container. **This project targets both Linux and macOS, on multiple architectures, so this rule names no single runtime — the choice of runtime is a per-machine fact, not a project-wide constant.** Before Tier 3 is first needed in a run, detect what's actually available on *this* machine, in this preference order:
+      1. **A native container CLI already on PATH** — `podman` or `docker`, whichever is present (`command -v podman`, `command -v docker`). On native Linux, `podman` runs rootless with no VM layer and is the simplest option when present — prefer it over a VM-backed runtime.
+      2. **A VM-backed Docker CLI** (e.g. `colima` + `docker` on macOS) when no native option is on PATH. Start the VM (`colima start`) if the CLI is present but not running; install the CLI only if it's genuinely missing on *this* machine — never because a past run on a different machine needed it.
+      3. If neither materializes, this is a real blocker (Rule 9) — record exactly what was checked and why, rather than silently falling back to testing against the real host.
+      Whichever runtime is selected, confirm it works end-to-end once (a trivial container run, e.g. `alpine echo ok`, with the `--rm`-equivalent flag) before relying on it, and record which runtime this run actually used in the verification evidence — a future run on a different machine may pick a different one, and that's expected, not a regression. Docker-in-docker/podman-in-podman is not needed: this session runs directly on the host, not inside a container itself, so one level of isolation is sufficient. Capture the evidence (command output, resulting file diffs, `tmux capture-pane` text from inside the container) and fold it into the phase's end-of-phase UAT/verification report per `human_verify_mode: end-of-phase`'s existing consolidation design, so the single human review at the end of the run (or milestone) has real evidence to look at — never a mid-run stop to ask for it.
+    - **Known gap to route into GSD, not silently patch:** `REQUIREMENTS.md`'s `REQ-linux-bazzite-shell-parity` (Phase 7) assumes `podman` is this project's cross-platform container-runtime catalog entry. Whether that holds is a fact about the *end user's* machine and architecture, not about this run's own verification host — on Intel macOS, `podman`'s Homebrew formula has historically pulled in an Apple-Silicon-only dependency (`vfkit`) and failed to build (hit live on a prior run, on that machine); on native Linux (confirmed live on this run's own host) `podman` installs and works natively with no such issue. This is a real product-catalog finding, not just a ONESHOT-rules concern — flag it for the user to decide whether `registry.toml`'s `podman` entry needs an OS/arch gate or a documented fallback, rather than silently reworking the catalog here.
 
 15. **Code review (Checklist item 5) gets a codex-sol-high pass, run in
     parallel with the internal opus-based `gsd-code-reviewer`, not in
@@ -192,8 +197,11 @@ evidenced.
     - Reachability check before trusting the pass:
       `codex exec -m gpt-5.6-sol -c model_reasoning_effort='"high"' '...'`
       and confirm `model: gpt-5.6-sol` / `reasoning effort: high` in the
-      banner. Verified working on this machine 2026-09-05 (codex-cli
-      0.149.1, `/Users/ramon/.local/bin/codex`).
+      banner. Resolve the `codex` binary via PATH (`command -v codex`) —
+      never hardcode a path; its location and the installed codex-cli
+      version vary by machine and user. Run this reachability check live at
+      the start of each run that needs this lane — a pass on one
+      machine/session does not carry forward to another.
     - Fold its findings into the SAME fix loop as the internal reviewer's —
       a Critical/High finding from either lane must be fixed or explicitly
       deferred/rejected with reasoning before Checklist item 5 counts as
@@ -204,13 +212,13 @@ evidenced.
       phase) — one reviewer's blind spot should not silently mean a phase
       shipped with only one set of eyes on it.
 
-## Cross-AI Execution — Verified Behavior (smoke-tested 2026-09-04)
+## Cross-AI Execution — Verified Behavior of the `opencode run` CLI Shape
 
-`workflow.cross_ai_command` (`/usr/local/bin/opencode run --model xai/grok-4.6`) was smoke-tested directly against `execute-phase.md`'s actual invocation shape (stdin prompt, stdout redirected to a real file, matching `> "$CANDIDATE_SUMMARY"`) before trusting it for an unattended run:
+`workflow.cross_ai_command` in `.planning/config.json` is this project's live source of truth for which command/model Rule 12 dispatches to — it has already changed once since this playbook was first drafted (model and binary resolution both moved on), so **never quote a specific command/model string here as current; always read it live from `.planning/config.json` at run time.** The findings below are about `opencode run`'s CLI behavior itself (stdin prompt, stdout redirected to a real file, matching `execute-phase.md`'s `> "$CANDIDATE_SUMMARY"` invocation shape) and should hold regardless of which model is configured — but re-run the reachability + output-shape check once per run rather than trusting a past date, since the configured command can change between runs or machines:
 
 - **Real tool use (file writes) executes non-interactively with no `--auto` flag and no hang** — `opencode run` does not gate on a TTY permission prompt the way an interactive session would. This means cross-AI execution already has full non-interactive write access to the working tree regardless of `--auto` — the same permission-bypass caveat as any other unattended agent, not something `--auto`'s absence protects against.
 - **Stdout redirected to a real file (not a pipe/terminal) is clean plain markdown** — no ANSI escape codes, no banner chrome. That noise only appeared when testing interactively through a piped terminal capture; it does not occur in GSD's actual file-redirect invocation. **Do not add `--format json` to this command** — it was tried and reverted: it turns the clean markdown `SUMMARY.md` content into a stream of JSON event objects, which fails `execute-phase.md`'s "has at least a heading and description" validation.
-- Conclusion: `cross_ai_command` as configured needs no changes and is confirmed safe to rely on for Rule 12.
+- Conclusion: `cross_ai_command`, whatever it currently resolves to, needs no special-casing in this playbook and is safe to rely on for Rule 12 as long as it keeps this same stdin-prompt/stdout-to-file shape.
 
 ## Milestone Close
 
