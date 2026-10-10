@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 from typing import Literal
@@ -517,3 +518,123 @@ def test_empty_cli_output_is_absent(tmp_path: Path) -> None:
     tool = _pack("ponytail", (SkillStatusProbe("codex", "plugin-cli", "ponytail"),))
 
     assert inspect_skill_packs([tool], lambda _argv: "", tmp_path)["ponytail"]["codex"] == "absent"
+
+
+def _lock_pack(tool_id: str = "softaworks") -> Tool:
+    return _pack(tool_id, (SkillStatusProbe("claude", "skills-lock", "softaworks/agent-toolkit"),))
+
+
+def _write_lock(home: Path, payload: object) -> None:
+    agents = home / ".agents"
+    agents.mkdir(parents=True, exist_ok=True)
+    (agents / ".skill-lock.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_skills_lock_present_when_source_and_skill_dir_exist(tmp_path: Path) -> None:
+    _write_lock(
+        tmp_path,
+        {"skills": {"c4-architecture": {"source": "softaworks/agent-toolkit"}}},
+    )
+    (tmp_path / ".claude" / "skills" / "c4-architecture").mkdir(parents=True)
+
+    result = inspect_skill_packs([_lock_pack()], lambda _argv: "", tmp_path)
+
+    assert result["softaworks"]["claude"] == "present"
+
+
+def test_skills_lock_absent_when_skill_dir_missing(tmp_path: Path) -> None:
+    _write_lock(
+        tmp_path,
+        {"skills": {"c4-architecture": {"source": "softaworks/agent-toolkit"}}},
+    )
+
+    result = inspect_skill_packs([_lock_pack()], lambda _argv: "", tmp_path)
+
+    assert result["softaworks"]["claude"] == "absent"
+
+
+def test_skills_lock_absent_when_lock_file_missing(tmp_path: Path) -> None:
+    result = inspect_skill_packs([_lock_pack()], lambda _argv: "", tmp_path)
+
+    assert result["softaworks"]["claude"] == "absent"
+
+
+@pytest.mark.parametrize("payload", ("{", '{"skills": ["nope"]}'))
+def test_skills_lock_malformed_or_wrong_shape_is_unknown(tmp_path: Path, payload: str) -> None:
+    agents = tmp_path / ".agents"
+    agents.mkdir()
+    (agents / ".skill-lock.json").write_text(payload, encoding="utf-8")
+
+    result = inspect_skill_packs([_lock_pack()], lambda _argv: "", tmp_path)
+
+    assert result["softaworks"]["claude"] == "unknown"
+
+
+def test_skills_lock_ignores_traversal_skill_names(tmp_path: Path) -> None:
+    _write_lock(tmp_path, {"skills": {"../evil": {"source": "softaworks/agent-toolkit"}}})
+    decoy = tmp_path / ".claude" / "evil"
+    decoy.parent.mkdir(parents=True)
+    decoy.write_text("decoy", encoding="utf-8")
+
+    result = inspect_skill_packs([_lock_pack()], lambda _argv: "", tmp_path)
+
+    assert result["softaworks"]["claude"] == "absent"
+
+
+def test_skills_lock_unknown_harness_is_unknown(tmp_path: Path) -> None:
+    tool = _pack(
+        "softaworks", (SkillStatusProbe("codex", "skills-lock", "softaworks/agent-toolkit"),)
+    )
+    _write_lock(
+        tmp_path,
+        {"skills": {"c4-architecture": {"source": "softaworks/agent-toolkit"}}},
+    )
+    (tmp_path / ".codex" / "skills" / "c4-architecture").mkdir(parents=True)
+
+    result = inspect_skill_packs([tool], lambda _argv: "", tmp_path)
+
+    assert result["softaworks"]["codex"] == "unknown"
+
+
+def test_install_state_file_is_present_and_missing_is_absent(tmp_path: Path) -> None:
+    tool = _pack("opengsd", (SkillStatusProbe("claude", "install-state", "gsd-core"),))
+    absent = inspect_skill_packs([tool], lambda _argv: "", tmp_path)
+    state = tmp_path / ".claude" / "gsd-install-state.json"
+    state.parent.mkdir()
+    state.write_text("{}", encoding="utf-8")
+    present = inspect_skill_packs([tool], lambda _argv: "", tmp_path)
+
+    assert absent["opengsd"]["claude"] == "absent"
+    assert present["opengsd"]["claude"] == "present"
+
+
+def test_install_state_unknown_harness_is_unknown(tmp_path: Path) -> None:
+    tool = _pack("opengsd", (SkillStatusProbe("pi", "install-state", "gsd-core"),))
+    (tmp_path / ".pi" / "gsd-install-state.json").parent.mkdir()
+    (tmp_path / ".pi" / "gsd-install-state.json").write_text("{}", encoding="utf-8")
+
+    result = inspect_skill_packs([tool], lambda _argv: "", tmp_path)
+
+    assert result["opengsd"]["pi"] == "unknown"
+
+
+def test_skills_lock_is_read_once_per_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_lock(
+        tmp_path,
+        {"skills": {"c4-architecture": {"source": "softaworks/agent-toolkit"}}},
+    )
+    (tmp_path / ".claude" / "skills" / "c4-architecture").mkdir(parents=True)
+    reads = 0
+    real_loads = json.loads
+
+    def counting(text: str) -> object:
+        nonlocal reads
+        reads += 1
+        return real_loads(text)
+
+    monkeypatch.setattr("installer.skill_lifecycle.json.loads", counting)
+    packs = [_lock_pack("a"), _lock_pack("b")]
+
+    inspect_skill_packs(packs, lambda _argv: "", tmp_path)
+
+    assert reads == 1

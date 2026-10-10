@@ -1,10 +1,12 @@
 """Typed install, status, update, and removal behavior for skill packs."""
 
+import json
+import re
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from installer.model import SKILL_HARNESSES, SkillLifecycle, SkillOperation, SkillStatusProbe, Tool
 from installer.run import Runner
@@ -13,6 +15,7 @@ LifecycleAction = Literal["install", "update", "removal"]
 LifecycleStatus = Literal["completed", "manual-required", "present", "absent", "unknown"]
 HarnessStatus = Literal["present", "absent", "unknown"]
 ProbeRunner = Callable[[list[str]], str]
+_SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,24 @@ HARNESS_CLI_STATUS: dict[str, HarnessCli] = {
     "claude": HarnessCli(("claude", "plugin", "list"), _claude_matches),
     "codex": HarnessCli(("codex", "plugin", "list"), _codex_matches),
     "pi": HarnessCli(("pi", "list"), _pi_matches),
+}
+
+# Only claude is verified on this host. Other harness dirs stay out until checked.
+SKILL_LOCK_HARNESS_DIRS: dict[str, str] = {"claude": ".claude/skills"}
+
+# Env-var-unset defaults of opengsd's per-runtime config dirs. claude is the
+# global ~/.claude, not a project .claude. kimi is KIMI_CODE_HOME (~/.kimi-code),
+# not KIMI_CONFIG_DIR (~/.config/agents). Env overrides are not read.
+INSTALL_STATE_HARNESS_DIRS: dict[str, str] = {
+    "antigravity": ".gemini/antigravity",
+    "claude": ".claude",
+    "codex": ".codex",
+    "copilot": ".copilot",
+    "cursor": ".cursor",
+    "kilo": ".config/kilo",
+    "kimi": ".kimi-code",
+    "opencode": ".config/opencode",
+    "windsurf": ".codeium/windsurf",
 }
 
 
@@ -119,11 +140,69 @@ def _probe_outputs(
     return outputs
 
 
-def _harness_status(
-    status_probe: SkillStatusProbe, outputs: dict[tuple[str, ...], str | None]
+def _skills_lock_skills(home: Path) -> dict[str, str] | None:
+    path = home / ".agents" / ".skill-lock.json"
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        parsed: object = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    skills = cast(dict[object, object], parsed).get("skills")
+    if not isinstance(skills, dict):
+        return None
+    result: dict[str, str] = {}
+    for name, entry in cast(dict[object, object], skills).items():
+        if (
+            not isinstance(name, str)
+            or name in {".", ".."}
+            or _SKILL_NAME_RE.fullmatch(name) is None
+        ):
+            continue
+        if not isinstance(entry, dict):
+            continue
+        source = cast(dict[object, object], entry).get("source")
+        if isinstance(source, str):
+            result[name] = source
+    return result
+
+
+def _skills_lock_status(
+    status_probe: SkillStatusProbe, home: Path, skills: dict[str, str] | None
 ) -> HarnessStatus:
-    if status_probe.via != "plugin-cli":
+    rel = SKILL_LOCK_HARNESS_DIRS.get(status_probe.harness)
+    if rel is None or skills is None:
         return "unknown"
+    root = home / rel
+    for name, source in skills.items():
+        if source == status_probe.match and (root / name).exists():
+            return "present"
+    return "absent"
+
+
+def _install_state_status(status_probe: SkillStatusProbe, home: Path) -> HarnessStatus:
+    rel = INSTALL_STATE_HARNESS_DIRS.get(status_probe.harness)
+    if rel is None:
+        return "unknown"
+    return "present" if (home / rel / "gsd-install-state.json").is_file() else "absent"
+
+
+def _harness_status(
+    status_probe: SkillStatusProbe,
+    outputs: dict[tuple[str, ...], str | None],
+    home: Path,
+    skills: dict[str, str] | None,
+) -> HarnessStatus:
+    if status_probe.via == "skills-lock":
+        return _skills_lock_status(status_probe, home, skills)
+    if status_probe.via == "install-state":
+        return _install_state_status(status_probe, home)
     cli = HARNESS_CLI_STATUS.get(status_probe.harness)
     if cli is None:
         return "unknown"
@@ -134,24 +213,39 @@ def _harness_status(
 
 
 def _pack_status(
-    lifecycle: SkillLifecycle, outputs: dict[tuple[str, ...], str | None]
+    lifecycle: SkillLifecycle,
+    outputs: dict[tuple[str, ...], str | None],
+    home: Path,
+    skills: dict[str, str] | None,
 ) -> dict[str, HarnessStatus]:
     by_harness = {status_probe.harness: status_probe for status_probe in lifecycle.status_probes}
     return {
-        harness: _harness_status(by_harness[harness], outputs)
+        harness: _harness_status(by_harness[harness], outputs, home, skills)
         for harness in SKILL_HARNESSES
         if harness in by_harness
     }
+
+
+def _needs_skill_lock(tools: Sequence[Tool]) -> bool:
+    return any(
+        tool.skill_lifecycle is not None
+        and any(probe.via == "skills-lock" for probe in tool.skill_lifecycle.status_probes)
+        for tool in tools
+    )
 
 
 def inspect_skill_packs(
     tools: Sequence[Tool], probe: ProbeRunner, home: Path
 ) -> dict[str, dict[str, HarnessStatus]]:
     """Probe each distinct harness CLI once and report present, absent, or unknown."""
-    del home
     outputs = _probe_outputs(_needed_argvs(tools), probe)
+    skills = _skills_lock_skills(home) if _needs_skill_lock(tools) else {}
     return {
-        tool.id: {} if tool.skill_lifecycle is None else _pack_status(tool.skill_lifecycle, outputs)
+        tool.id: (
+            {}
+            if tool.skill_lifecycle is None
+            else _pack_status(tool.skill_lifecycle, outputs, home, skills)
+        )
         for tool in tools
     }
 
