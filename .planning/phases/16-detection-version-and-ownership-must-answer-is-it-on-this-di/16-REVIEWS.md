@@ -1,12 +1,12 @@
 ---
 phase: 16
-cycle: 2
+cycle: 3
 reviewers: [opencode-plan-review, opencode-glm-5.2]
-reviewed_at: 2026-10-10T09:18:54Z
-plans_reviewed: [16-01-PLAN.md, 16-02-PLAN.md, 16-03-PLAN.md, 16-04-PLAN.md, 16-05-PLAN.md, 16-06-PLAN.md, 16-07-PLAN.md, 16-08-PLAN.md, 16-09-PLAN.md, 16-10-PLAN.md, 16-11-PLAN.md, 16-12-PLAN.md, 16-13-PLAN.md, 16-14-PLAN.md, 16-15-PLAN.md, 16-16-PLAN.md]
+reviewed_at: 2026-10-10T19:06:44Z
+plans_reviewed: [16-17-PLAN.md, 16-18-PLAN.md, 16-01-PLAN.md, 16-02-PLAN.md, 16-03-PLAN.md, 16-04-PLAN.md, 16-05-PLAN.md, 16-06-PLAN.md, 16-07-PLAN.md, 16-08-PLAN.md, 16-09-PLAN.md, 16-10-PLAN.md, 16-11-PLAN.md, 16-12-PLAN.md, 16-13-PLAN.md, 16-14-PLAN.md, 16-15-PLAN.md, 16-16-PLAN.md]
 models:
   opencode-plan-review: "router-env/my-plan-review (reasoning=medium)"
-  opencode-glm-5.2: "opencode-go/glm-5.2 (reasoning=high)"
+  opencode-glm-5.2: "opencode-go/glm-5.2 (reasoning=high)"  # cycle 3 (16-17, 16-18) used this identity only
 model_sources:
   opencode-plan-review: "pinned"
   opencode-glm-5.2: "pinned"
@@ -17,6 +17,9 @@ plan_coverage:            # per-identity by design (batched run); the union cove
   opencode-glm-5.2:
     total: 16
     missing: ["16-01", "16-02", "16-03", "16-04", "16-05", "16-06"]
+  cycle_3_opencode-glm-5.2:   # gap plans, reviewed in 2 rounds
+    total: 2
+    missing: []
 ---
 
 # Cross-AI Plan Review — Phase 16 (convergence cycle 2)
@@ -573,3 +576,197 @@ Not covered by any reviewer: execution of any plan (waves 1-4 unexecuted, so cro
 ## Cycle Verdict
 - **current_high = 0**
 - **current_actionable = 0** (3 actionable findings raised this cycle, all fixed in 4a3ef8c, 3ac3b57 and 04aa62e; 2 reviewer MEDIUMs adjudicated as already covered by plan text; the remaining items are advisory LOWs)
+
+
+---
+
+# Cross-AI Plan Review — Phase 16 (convergence cycle 3: gap-closure plans 16-17 and 16-18)
+
+Reviewer: `opencode-glm-5.2` = `opencode-go/glm-5.2` (reasoning=high, `--agent plan`, read-only), source-grounded against HEAD (tree = 920abef plus the two untracked gap plans). The two plans close the 22 open findings of 16-REVIEW.md and its second review lane (WR-01..04, IN-01..IN-18): 15 are planned as fixes (16-17: WR-01, WR-02, IN-01, IN-02, IN-06, IN-11, IN-14; 16-18: WR-03, WR-04, IN-10, IN-12, IN-15, IN-16, IN-17, IN-18) and 7 are accepted with rationale in 16-REVIEW-DISPOSITION.md (IN-03, IN-04, IN-05, IN-07, IN-08, IN-09, IN-13; plus the puppeteer D-18 observation recorded as a true positive).
+
+> Note (run history): the first 16-17 attempt died with `database is locked` (two opencode runs in parallel); it was re-run alone. A first re-run ended after tool calls with no final review (the #1936 shape seen in cycles 1-2), so the final run adds a "stop after about 25 tool calls and write the review" instruction. The round-1 16-17 output file contains a second, partly spliced copy of the review (it carries the HIGH below); both parts were adjudicated. Round 2 re-reviewed each revised plan with a list of the round-1 findings. 16-17 and 16-18 were reviewed sequentially, never in parallel.
+
+## Round 1
+### 16-17 (round 1)
+
+**Summary:** Plan 16-17 covers exactly the seven rc-scanner/guard findings the disposition ledger assigns to it (WR-01, WR-02, IN-01, IN-02, IN-06, IN-11, IN-14 at 16-REVIEW-DISPOSITION.md:104-121) and defers the rest to 16-18. I verified every mechanism against HEAD (working tree clean except the two new plan files): the WR-02 strip-corruption trace reproduces exactly as stated, the WR-01 "consolidation" refusal text is live at installer/shellrc.py:966-969, and the guard/strip disagreement the plan closes is real. All proposed fixes are feasible in the cited code shapes and none of the existing tests I traced breaks. Two RED fixtures are mislabeled (they pass on current code) and a few read_first line anchors have drifted, but no mechanism is wrong and nothing unsafe is planned.
+
+**Strengths:**
+- WR-02 is correctly identified as the only corruption-capable defect and the fix point is exact: `plain_only` (installer/rcclean.py:320-325) is the only expression that lets a `then PATH=...` column-0 line become `simple`, and `find_duplicate_path_lines`' gate (rcclean.py:406-412) passes today for both stated fixtures — I traced `if [...]\nthen PATH=...\nfi` and `until false\ndo PATH=...\ndone` by hand through `_split_unquoted` → `_command_text` (rcclean.py:245-246) → `_judge_line` and both genuinely return `[1]` today, so the RED tests fail for the stated reason.
+- The plan correctly keeps `_command_text` untouched (reporting still sees through `then`), and correctly predicts the post-fix guard behavior: `path_writer_lines` still reports the then-form with `guardable is False` — today via `_PATH_EXPORT.match(line.text)` returning None (rcclean.py:479-481), post-fix via `not line.simple` (rcclean.py:475-476); same `_REFUSE_COMPOUND` text either way, so the guard path is byte-stable.
+- WR-01 anchors are all exact: `backup_precondition` (installer/shellrc.py:935), refusal text (:966-969), exactly two call sites (:1095 consolidation, :1184 guard — verified by grep), and the keyword-only `flow=` parameter changes only the guard site's wording while the single-backup-slot invariant and `_create_backup` (create-exclusive, :979-995) are untouched. The existing `test_guard_refuses_a_preexisting_backup_with_different_bytes` (tests/test_shellrc.py:2959-2971) asserts only status and bytes, not the reason text, so the rewording breaks nothing the plan fails to mention.
+- IN-11's comment-closer RED case reproduces exactly: `_has_standalone_closer` (installer/rcclean.py:106-107) matches the trailing ` fi` after `# keep until` (space before, EOL after — both in the regex's boundary classes), no frame is pushed, and the body line is reported guardable with `refusal None`. The plan also correctly limits the fix to `_has_standalone_closer` and does NOT touch `_condition_references_path` (rcclean.py:110-123), which must keep searching raw text — the first fixture's `:$PATH:` guard lives inside double quotes, so an over-broad `_code_text` use there would have broken the guard it is trying to preserve.
+- IN-14's mechanism is correct and surgical: `_guard_refusal` (rcclean.py:479-487) falls through to `_REFUSE_MULTI` for `PATH=/a:/b` today (traced), the proposed `$PATH`-membership check keeps `PATH=/a:/b:$PATH` on `_REFUSE_MULTI` and `PATH=$PATH:/m` on `_REFUSE_APPEND`, and the only test pinning `_REFUSE_MULTI` (tests/test_rcclean.py:713-718) uses a fixture that references `$PATH`, so it survives unchanged.
+- IN-06 is a real raise: `Path.is_file()` only suppresses a fixed errno set (ENOENT/ENOTDIR/ELOOP), not EACCES, so `p.is_file()` at installer/locations.py:128 can raise `PermissionError`; the helper fix and the monkeypatched-`is_file` RED test are both feasible.
+- Hygiene is good: frontmatter has `cross_ai: true`, `gap_closure: true`, wave/depends_on, a `files_modified` list that matches what the tasks touch; every fix task is RED-first with a `fails_when` that rejects a RED run that passed; threat model present; safety rules (tmp_path-only, no real rc, no installs, no sudo/pkexec/doas, English only) are stated and consistent with every task; Task 6 is a final `make validate && make test` gate with a no-bypass rule; the codegraph-first restatement is in the objective.
+- IN-13's acceptance rationale is sound: I traced the one-line `if/elif` fixture — it is reported with `_REFUSE_COMPOUND`'s "edit it by hand" (5 segments, so `simple` is already False), i.e. reported and refused for guarding, which is exactly the fail-safe behavior the disposition claims (16-REVIEW-DISPOSITION.md:120).
+
+**Concerns:**
+- MEDIUM: Task 2's second IN-11 case is not a RED test — it already passes on current code. For `if [ -n "x; fi" ]; then`, the closer regex's suffix class `(?:$|[;\s#])` (installer/rcclean.py:107) does not match `fi` followed by `"`, so the frame is already pushed and the body is already reported-inside-the-if exactly as the plan specifies. The quote bug the review names is real but needs a quoted closer followed by whitespace/`;`/`#` inside the quotes (e.g. `if [ -n "x fi y" ]; then`); the plan's chosen fixture exercises nothing. The plan's "RED first (all FAIL on current code)" heading (16-17-PLAN.md:122) is factually wrong for this case.
+- MEDIUM: Task 3's second IN-02 RED fixture also already passes: for `PATH="$HOME/m/bin:$PATH" env FOO=1 cmd`, `_unquote` (installer/rcclean.py:43-46) does not strip (first and last chars differ), the colon-split segment keeps a leading `"` so `_directory_for` (rcclean.py:375-384) never matches the managed dir, and `path_writer_lines` (rcclean.py:539-552) appends records only per matched managed directory — so it returns `[]` today, for the wrong reason. Valid as a post-fix pin; mislabeled RED (16-17-PLAN.md:157).
+- MEDIUM: Task 2's read_first anchors have drifted: `_update_block_stack` is at installer/rcclean.py:141-168, not ":163-196", and `_split_unquoted` is at :171-242, not ":199-262" (16-17-PLAN.md:119). The mechanism descriptions are still accurate; only the line ranges are wrong (they match neither HEAD nor the review's anchors).
+- LOW: The `requirements:` frontmatter lists D-09..D-14 (16-17-PLAN.md:17), which are the skill-pack detection decisions (16-CONTEXT.md:33-38) — this plan touches none of that; the governing decisions are D-21..D-24 (16-CONTEXT.md:49-51, the guard-in-place and backup-convention decisions).
+- LOW: Task 3's insistence that `_remember_assign` "is NOT called" for a one-shot `PATH=... cmd` segment is moot — `_remember_assign` already returns early for the PATH variable (installer/rcclean.py:266). Unaddressed side detail: in the current else branch such a segment also sets `chain_has_presence` (rcclean.py:316-317) via `_PATH_REF`; after the fix, whether the dropped segment still sets it changes `&&`-chain guarding for shapes like `cmd && PATH=/m:$PATH cmd2 && export PATH=...`. Edge case; worth one pin test or an explicit decision.
+- LOW: Task 4's RED test needs the first guard call to receive a partial record list — `guard_path_writers` rewrites every guardable line passed to it in one call (installer/shellrc.py:1151, 1188-1201), so a "second remaining writer line" only exists if call one is given a subset. The plan implies it ("guards a second remaining writer line") but never states it; the default `_seed_guard_rc` fixture (tests/test_shellrc.py:2915-2922) has only one writer line.
+- LOW: Task 2's heredoc opener regex `<<-?\s*(['"]?)([A-Za-z_]\w*)\1` accepts a space between `<<` and the delimiter, which is correct shell, but combined with `_code_text` it will also treat a `cat << EOF` inside a managed block differently than today — no, managed blocks are skipped before the walk (rcclean.py:350-351), so a heredoc opened inside a managed block is never seen and its body outside the block is judged normally. Edge case worth the one `shortcut:` comment the plan already mandates (16-17-PLAN.md:133).
+
+**Suggestions:** Relabel the two passing-today fixtures as regression pins (or swap the IN-11 quote case for one that actually self-closes today, e.g. a quoted `"x fi y"` closer) and correct the "all FAIL" claim; fix the two drifted read_first ranges in Task 2; change `requirements:` to D-21..D-24; state in Task 4 that the first guard call is given a one-record subset of a two-writer fixture; add one pin for the `&&`-chain `chain_has_presence` question in Task 3.
+
+**Risk Assessment:** MEDIUM — no mechanism defects, no safety violations, no existing test broken by any traced change; the risk is that two mislabeled RED cases confuse the executor at the "confirm RED" step and the drifted anchors send it to the wrong lines first.
+
+**Second pass in the same output (verbatim verdict, carries the HIGH):**
+
+### Batch verdict
+Unresolved HIGH findings: 1 — Task 2 (IN-01) opener detection on `_code_text` cannot detect the quoted delimiters `cat <<'EOF'`/`cat <<"EOF"` that the plan itself requires (16-17-PLAN.md:131-132 vs :30/:124-125; rcclean.py:43-46, :337-358).
+
+Unresolved non-HIGH findings that still need a plan change: 4 —
+1. Frontmatter `requirements` D-09..D-14 → should be D-21..D-24 (16-17-PLAN.md:17; 16-CONTEXT.md:33-38 vs :49-52; 16-11-PLAN.md:17).
+2. Task 1's `segment.lstrip()` alternative misclassifies indented plain writers and breaks tests/test_rcclean.py:760-765 (16-17-PLAN.md:98; rcclean.py:246, :320-325).
+3. Task 3's quoted-prefix RED fixture already returns `[]` today — not RED (16-17-PLAN.md:157; rcclean.py:43-46, :90-98, :382, :539-542).
+4. Task 3's "must still take the else branch" sets `chain_has_presence` and suppresses `&&`/`||`-chained real writers; ambiguous wording plus the contradictory `_remember_assign` parenthetical (16-17-PLAN.md:163; rcclean.py:299, :309, :315-317, :341-343).
+
+Note: all traces were done by hand from the source at HEAD; I did not execute the test suite (read-only review). The LOW items (is_dir residual, numeric delimiters, Path.home wording) need no plan change.
+
+### 16-18 (round 1)
+
+**Summary:** The plan is source-accurate and execution-ready. Every file:line anchor I checked matches HEAD, all eight RED tests are hand-traceable to fail on current code for the stated reason, and each proposed mechanism fits the real code shape (the WR-03 `_installed` fallback, the WR-04 label/header emission inside `_filtered_install_lines`, the IN-10 generalization of the existing D-06 `shadow_brew` gate, the IN-17/18 closed-table and load-time checks). Hygiene is complete: frontmatter (`cross_ai: true`, `gap_closure: true`, wave 9 after 16-17's wave 8, full `files_modified`), test-first tasks, threat model, codegraph-first restatement, safety rules, and a final gate task. One MEDIUM spec gap in Task 5 and a few LOW notes.
+
+**Strengths:**
+- WR-03 verified end-to-end: `_present` returns `None` on empty hosts (installer/catalog_tui.py:483-484), `_inst_cell` falls back to the PATH check (installer/catalog_tui.py:515), `_ver_cell` blanks on a falsy `_present` (installer/catalog_tui.py:518-519); openspec (registry.toml:2945, no `status_probes` in its block) and spec-kit (registry.toml:3361, none in 3361-3455) declare zero probes, and `inspect_skill_packs`/`_pack_status` (installer/skill_lifecycle.py:414-421, :392) yield `hosts={}` forever for them. `_installed[tool.id]` is a complete map (read unconditionally at installer/catalog_tui.py:613), so the fallback adds no new data source — the key_link claim is true.
+- WR-04 anchors and mechanism check out: `perform_action`'s by_harness branch at installer/skill_lifecycle.py:270-278, `_filtered_install_lines` at :242-256, `SKILL_HARNESS_LABELS` at :66 (56/56 harness coverage — I verified programmatically), `_NO_HOST_HEADER` at :194; `_parse_by_harness` builds pairs in `SKILL_HARNESSES` order (installer/model.py:462), so the "both labeled blocks in SKILL_HARNESSES order" assertion is satisfiable without reordering; `_skill_string_tuple` accepts any non-empty string (installer/model.py:380-388), so the prose `or,` line and the single parenthesized codex line pass load; the existing no-host test's last assertion is exactly `"superpowers" in outcome.instructions` (tests/test_skill_lifecycle.py:262) and the plan updates it in the same commit.
+- IN-10 premises verified: "script" is in `_INSTALLER_KINDS` (installer/ownership.py:150), so kitty's method produces a location candidate; java's sdkman method declares `bin_dir = "~/.sdkman/candidates/java/current/bin"` (registry.toml:1786-1789); `_native_owner`/`_os_package_owner` return `None` on any non-empty `candidates` (installer/ownership.py:770, :867); the D-06 flow to generalize is at :576-588, :629-631, :632-638, :666-675. Hand-traced both RED fixtures: today they fall to the active-path unknown branch (:676) with owner `unknown`; after the fix the location candidate (owner in `_location_dirs`, location-proof evidence, not in `attributed`, active_path set) becomes a shadow, `gated` empties, and the OS-package branch fires — exactly as the plan states.
+- Task 4's unchanged-behavior claims hold against the real tests: the artifact-blocker test uses `artifacts=[...]`, not a location proof (tests/test_ownership.py:543-561), and the by-elimination script tests use `which=None` (tests/test_ownership.py:349-393), so neither is touched by the evidence-based/active_path-gated shadow conditions.
+- IN-17/IN-18 verified: `_install_state_status` hardcodes the filename and ignores `match` (installer/skill_lifecycle.py:360-364); all shipped install-state probes use `match = "gsd-core"` (registry.toml:3318-3326), so the closed table key matches the data and is pinned by tests/test_registry.py:1989; `_parse_status_probes` has no duplicate-harness check (installer/model.py:401-445) and `SkillStatusProbe` positional order is (harness, via, match) (installer/model.py:253-256), so the RED constructions are correct.
+- IN-15: the three existing "already current" tests all set `stale=False` (tests/test_catalog_tui.py:2764, :2837, :2870), so the stale-gated wording change breaks none of them; the gate is at installer/catalog_tui.py:912-913 as cited.
+- IN-12/IN-16 anchors verified: `action_apply` early-return at installer/wizard_app.py:622-624, `_tui_guidance` at :589 rendered into the body at :523, the inert fragment emitted at installer/guidance.py:86-90, the pinned no-restart test at tests/test_wizard_app.py:711; the "Same accepted Bazzite gap as kitty" comment exists just before the alacritty entry (registry.toml, immediately preceding `id = "alacritty"` at :2655) and kitty's script method with `os = [... "fedora"]` is at registry.toml:~2551-2553.
+- Accepted findings (IN-03/04/05/07/08/09, IN-13 via 16-17, puppeteer) all have label-only or fails-closed harm with non-trivial fix cost; the rationales are sound and consistently recorded in the disposition ledger.
+- No overlap with 16-17 (wave 8, files rcclean/shellrc/locations vs this plan's catalog/skills/model/ownership/wizard/registry), and `depends_on` includes 16-17, so the two never edit or gate the tree concurrently.
+
+**Concerns:**
+- MEDIUM: Task 5 (IN-12) does not specify how to match the guard fragment, and its RED fixture as described would pass a wrong implementation. The fragment "Press enter (apply) to guard it in place" is usually mid-string: `_writer_next_step` appends the block-owner fragment first and joins with "; " (installer/guidance.py:79-99), while every existing rewrite in `_tui_guidance` is prefix-based `startswith` (installer/wizard_app.py:593, :603, :611). An executor who copies the startswith pattern passes the plan's RED test (a plain `_writer_line(rc)` record, no block_owner — the shape used at tests/test_wizard_app.py:713) yet leaves the defect in place whenever a block-owner fragment precedes the guard sentence. The RED fixture should include a guardable record with a `block_owner`, or the plan should state containment-based matching.
+- LOW: Task 2's action uses direct indexing `SKILL_HARNESS_LABELS[harness]` (plan line 137). Coverage is complete today (verified 56/56), but catalog_tui deliberately uses `.get(harness, harness)` (installer/catalog_tui.py:569); a future harness added to `SKILL_HARNESSES` without a label would raise KeyError at render time. `.get` with the raw-id fallback is one character-class cheaper than the crash.
+- LOW: Task 3's read_first cites `tests/test_registry.py:1990` for `test_install_state_probes_match_gsd_core`; the `def` is at line 1989. Off-by-one, harmless.
+- LOW: Task 5's read_first calls tests/test_wizard_app.py:4190-4330 "guard-chain tests ... for the pilot fixtures"; that range is actually the disk-pressure `_tui_guidance` pilots (tests/test_wizard_app.py:4192-4330). Useful precedent for calling `_tui_guidance()` directly, but mislabeled; the guard-chain pilots are near :711, which the plan also cites.
+- LOW: Task 4's "no existing test breaks" claim is verified by reading the candidate tests (artifact blocker at tests/test_ownership.py:543, by-elimination at :349/:365, brew-shadow family at :2133-2198, pnpm-blocker at :273), not by executing the suite — I found no test that pins the location-candidate-blocks-native behavior, but final confidence comes from the plan's own gate run.
+
+**Suggestions:**
+- Task 5: add to the RED fixture a second guardable record with `block_owner="my-kitty PATH"` (the helper shape at tests/test_wizard_app.py:740-747) and assert the post-apply text drops the enter hint for both items; that pins containment matching.
+- Task 2: use `SKILL_HARNESS_LABELS.get(harness, harness)` for the label line, mirroring installer/catalog_tui.py:569.
+
+**Risk Assessment:** LOW — no mutation path changes (mutations still refuse; ownership is label-only), tests are sandboxed under `tmp_path`, no real installs or rc writes, and the two concrete defects (WR-03 self-contradicting rows, IN-10 wrong `unknown` labels) are display-layer only.
+
+### Batch verdict
+Unresolved HIGH findings: 0
+
+Unresolved non-HIGH findings that still need a plan change: 1
+- MEDIUM (Task 5 / IN-12): specify containment-based matching (or extend the RED fixture with a block-owner guardable record) so a prefix-based `startswith` rewrite cannot pass the test while leaving the mid-string case broken (evidence: installer/guidance.py:79-99, installer/wizard_app.py:593-617, tests/test_wizard_app.py:713).
+
+### Round-1 adjudication and plan fixes
+
+| Finding | Severity | Plan | Verified against source | Fix | Status |
+|---|---|---|---|---|---|
+| Heredoc opener detection ran on `_code_text`, which blanks quotes, so `<<'EOF'`/`<<"EOF"` could not match | HIGH | 16-17 Task 2 | rcclean.py:43-46, :337-358 (confirmed: a quote-blanking mask removes the delimiter) | `_code_text` is length-preserving; the opener regex runs on the raw line and a match is accepted only when the masked line shows `<<` as code and no `<` precedes it | resolved |
+| IN-11 second fixture `"x; fi"` already passes (suffix class does not match `fi"`) | MEDIUM | 16-17 Task 2 | rcclean.py:107 | fixture changed to `"x fi y"`; per-case RED/pin labels | resolved |
+| IN-02 quoted-prefix fixture already returns `[]` today | MEDIUM | 16-17 Task 3 | rcclean.py:43-46, :382 | unquoted RED fixture; quoted form kept as a regression pin | resolved |
+| Drifted read_first anchors (`_update_block_stack` 141-168, `_split_unquoted` 171-242) | MEDIUM | 16-17 Task 2 | rcclean.py | anchors corrected | resolved |
+| IN-12 guard sentence is mid-string (block-owner fragment first); a `startswith` rewrite passes the plain RED fixture | MEDIUM | 16-18 Task 5 | guidance.py:79-99, wizard_app.py:593-617 | RED fixture adds a `block_owner` record; action mandates containment `str.replace` | resolved |
+| `requirements` frontmatter D-09..D-14 (skill-pack decisions) | LOW | 16-17 | 16-CONTEXT.md:33-38 vs :49-52 | `[D-21, D-22, D-23, D-24]` | resolved |
+| Task 1 `lstrip` alternative; Task 3 `chain_has_presence`/`_remember_assign` ambiguity; Task 4 subset-call not stated | LOW | 16-17 | rcclean.py:246, :266, :316-317; shellrc.py:1151 | prescribed `_LEADING_THEN_DO.match`; command-prefix segment skipped before `_PATH_REF` with a pin test; two-call subset fixture stated | resolved |
+| `SKILL_HARNESS_LABELS[harness]` vs `.get`; off-by-one/mislabeled read_first anchors | LOW | 16-18 Tasks 2, 3, 5 | catalog_tui.py:569 | `.get(harness, harness)`; anchors corrected | resolved |
+
+## Round 2 (re-review of the revised plans)
+
+### 16-17 (round 2)
+
+**Summary:**
+Round-2 review of gap-closure plan 16-17 (rc scanner/guard group: WR-01, WR-02, IN-01, IN-02, IN-06, IN-11, IN-14) against real source at HEAD. Every round-1 finding is now fixed in the revised plan: the HIGH heredoc-opener defect is resolved by running the opener regex on the raw line with `_code_text` used only for position validation (traced by hand through all four opener shapes and all four negative shapes — every one classifies correctly); both previously mislabeled RED fixtures are now correctly labeled (I verified `"x fi y"` matches the closer regex today at rcclean.py:107 while `"x; fi"` already passes, and the IN-02 quoted form already returns `[]` today because the stray leading `"` pollutes every expanded target past `_directory_for`'s absolute check at rcclean.py:382); all read_first anchors now match HEAD exactly; the requirements frontmatter, chain_has_presence pin, lstrip prescription, and the Task 4 subset explanation are all present and correct. Every fix mechanism is feasible against the actual code shape; no existing test breaks unaccounted (`test_refuse_multi_directory` at tests/test_rcclean.py:713-718 uses a `$PATH`-referencing fixture so IN-14 keeps it green, and the guidance/wizard pins at tests/test_guidance.py:156 and tests/test_wizard_app.py:688 are hand-built records, not scanner output). Two new LOW edge defects in the proposed heredoc opener regex are the only findings that still warrant a plan touch.
+
+**Strengths:**
+- WR-02 fix is minimal and placed exactly right: `plain_only` at rcclean.py:320-325 is the only strip gate (`simple` required at :407), `_guard_refusal` already maps `not simple` to the compound refusal at :475-476, so one `_LEADING_THEN_DO.match(segment)` clause (rcclean.py:27, `^\s*(?:then|do)\s+`) closes the corruption path; both RED fixtures traced to return `[1]` today and `[]` after.
+- The raw-regex-plus-masked-position opener design (plan Task 2, action 3) is mechanically sound: `cat <<'EOF'` matches on raw and its `<<` survives masking; `echo "<<EOF"` and `echo hi # <<EOF` are rejected because masking blanks the quoted/commented span; `cat <<< "x"` is rejected by the `masked[m.start()-1] != "<"` check (the regex's leftmost match starts at the second `<`).
+- IN-11's RED claims reproduce exactly: the comment-closer case (`# keep until fi`) matches `(?:^|[;\s]|;;)fi(?:$|[;\s#])` at rcclean.py:107 today, so the frame is not pushed at :164-167 and the guarded body is reported with `refusal None` — matching the review's verified probe at 16-REVIEW.md:163.
+- WR-01's flow split is the review's first suggested option, keeps the single-backup-slot invariant (`_create_backup` create-exclusive at shellrc.py:987-989) and the fail-closed path (refusal at :1184-1186 precedes every write), and the consolidation text at :1095 is untouched; the two-call subset fixture is now justified — `guard_path_writers` rewrites every guardable record passed to it (shellrc.py:1151, :1188-1201).
+- All cited anchors verified exact: rcclean.py:27/:106-108/:141-168/:171-242/:245/:266/:283-334/:316-317/:337-358/:387-413/:465-487/:482/:490, shellrc.py:935-976/:1095/:1145-1211/:1184, locations.py:128, Makefile:34/:50, tests/test_shellrc.py:1861/:2959/:2974, tests/test_rcclean.py:576/:760-765; D-21..D-24 exist at 16-CONTEXT.md:49-52.
+- Hygiene complete: `cross_ai: true`, `gap_closure: true`, wave/depends_on, files_modified covers all touched sources and tests, threat model present and mapped to real mechanisms, codegraph-first restatement in the objective, sandbox/tmp_path safety rules in every task, final gate task (Task 6) with a no-bypass rule.
+
+**Concerns:**
+- LOW: The heredoc opener regex `<<-?\s*(['"]?)([A-Za-z_]\w*)\1` (plan 16-17-PLAN.md:132) accepts a word right operand, so an arithmetic shift with a variable — `$(( 1 << MASK ))` — passes all three acceptance checks (raw match, masked `<<`, `masked[m.start()-1] != "<"`) and is treated as a heredoc, swallowing all subsequent lines to EOF. That regresses today's behavior (a real writer after such a line is currently reported at `_path_line_targets`, rcclean.py:337-358, and would go silent). The negative-opener test group (16-17-PLAN.md:125) pins only the digit form `$(( 1 << 2 ))` (plan:30), and the `shortcut:` comment (plan:133) does not mention the word form.
+- LOW: The same regex mis-captures delimiter words: on `cat << -EOF` the `<<-?` eats the dash, so the scan ends at a line `EOF` while bash's delimiter is `-EOF`; a quoted delimiter containing a space (`<< "E O F"`) never matches at all. Both mis-track the heredoc extent in the over-report direction (fail-safe), but they are unbudgeted acceptance-set gaps next to the plan's four pinned negative shapes (16-17-PLAN.md:125).
+- LOW: Task 1's warning that comparing against `segment.lstrip()` "would misclassify an indented plain writer and break the indented-writer test at tests/test_rcclean.py:760-765" (16-17-PLAN.md:98) is not accurate: `_LEADING_THEN_DO` (rcclean.py:27) begins `^\s*`, so matching the raw or lstripped segment classifies the `  export PATH=...` fixture (tests/test_rcclean.py:761) identically. The prescribed mechanism is correct; only the stated consequence is wrong.
+- LOW: Tasks 3, 4 and 5 `fails_when` clauses (16-17-PLAN.md:168-169, 196-197, 223-224) omit the "RED passed before the fix" guard that Tasks 1-2 carry (:104, :138), even though must_haves truth 1 (:27) states it globally — a small enforcement asymmetry.
+- LOW: must_haves cites IN-02 at `installer/rcclean.py:337` (16-17-PLAN.md:31) while the fix site is `_judge_line` at :283-334 (Task 3's read_first cites it correctly); the ledger table (:301) inherits the same anchor from the review.
+
+**Suggestions:**
+- Add `$(( 1 << MASK ))` (word right operand) to the negative-opener test group and one clause to the `shortcut:` comment, or reject a match whose masked left neighbor is inside `$((`—one test line plus one comment line closes the only under-report regression in the plan.
+- Either tighten the opener regex for the `<< -EOF` shape (e.g. forbid whitespace between `<<-` and the delimiter, mirroring bash's token rule) or name it in the same `shortcut:` comment alongside the space-containing-delimiter case.
+- Copy the Tasks 1-2 RED-run `fails_when` clause into Tasks 3-5, and fix the two anchor nits (:31 IN-02, and the lstrip rationale at :98).
+
+**Risk Assessment:** LOW — every planned fix was traced against HEAD and lands on the exact mechanism it claims; the strip corruption (WR-02), the dead-end refusal (WR-01) and all five scanner heuristics are closed fail-safe, and the two residual edges are rare heredoc-opener shapes that misreport in the safe direction.
+
+### Batch verdict
+Unresolved HIGH findings: 0.
+Unresolved non-HIGH findings that still need a plan change: 2 — (1) the arithmetic `<< <word>` false heredoc opener (16-17-PLAN.md:132, negative tests at :125): add one negative test + shortcut-comment clause, since it is the only place the plan regresses today's reporting; (2) the opener regex's delimiter-acceptance mismatch for `<< -EOF` and space-containing quoted delimiters (16-17-PLAN.md:132): tighten the regex or record both in the shortcut comment. The remaining LOW items (lstrip rationale at :98, fails_when asymmetry, IN-02 anchor at :31) are cosmetic and need no plan change to execute safely.
+
+### 16-18 (round 2)
+
+**Summary:** Round-2 re-review of gap-closure plan 16-18 (catalog/skills/ownership group, runs after 16-17). All eight cited findings (WR-03, WR-04, IN-10, IN-12, IN-15, IN-16, IN-17, IN-18) were verified against the real source at HEAD: every cited anchor, mechanism, and RED-fixture premise traces correctly, and all three round-1 findings are addressed. No new defect found that would block execution.
+
+**Strengths:**
+- Round-1 MEDIUM (IN-12 containment) is properly fixed: Task 5's behavior now mandates a second guardable record with `block_owner="my-kitty PATH"` (fixture shape verified at tests/test_wizard_app.py:739-744), correctly models `_writer_next_step`'s ordering — block-owner fragment appended first (installer/guidance.py:79-85), guard sentence appended mid-list (:86-90), joined with `"; "` (:99), so the sentence is genuinely mid-string — and the action mandates `str.replace` containment, correctly contrasting the existing `startswith` rewrites at wizard_app.py:593/:603/:611. A `startswith` rewrite can no longer pass the RED test.
+- Round-1 LOW (`.get` fallback) fixed: Task 2 uses `SKILL_HARNESS_LABELS.get(harness, harness)`, and the cited mirror is real (catalog_tui.py:569 does exactly this).
+- WR-03 mechanism is sound and minimal: `_present` (catalog_tui.py:479-490) returning `self._installed[tool.id]` when `status_probes` is empty fixes all four consumers through the existing call graph — `_ver_cell` gates on `_present` at :518, `_presence` at :645-646, `_groups` at :648-652 — while `_inst_cell`'s fallback (:511-515) already used `installed`, so the columns will agree. Verified against the registry that openspec ([[tool]] at registry.toml:2944) and spec-kit (:3361) really declare no `status_probes` (only 5 packs have them; the 3082 block belongs to superpowers).
+- IN-10's generalization is structurally correct: the location-proven candidate is what makes `_native_owner` (ownership.py:745) and `_os_package_owner`'s guard at :867 (`if probe is None or candidates or unreadable or active_path is None`) return None today; the existing D-06 `shadow_brew` gate (:576-588, :629-631, native append :636-638, os append :670-675) is exactly the pattern to generalize, and the plan's shadow filter (owner in `_location_dirs` at :914-922, evidence-is-location-proof, not in `attributed`, `active_path is not None`) provably keeps the active-copy case on the existing `active_candidate`/direct branch (:600-618) — `_collect_candidates`' `found.setdefault` (:953) means the artifact-backed candidate is correctly excluded by the evidence filter. RED fixtures reuse the pinned `test_os_package_owner_resolves_git_shaped_tool_on_fedora` helpers.
+- IN-17's closed table is safe for shipped data: every `install-state` probe in the registry uses `match = "gsd-core"` (registry.toml:3318-3326), so all keep resolving; `_install_state_status` (skill_lifecycle.py:360-364) currently hardcodes the filename, confirming the defect and the fix shape.
+- IN-18: the last-wins collapse is real (skill_lifecycle.py:392 dict comprehension); the parser (model.py:401-445) has no dup check today and the planned seen-set + `ValueError` matches the file's existing error-message style; the registry-wide no-dup assertion guards the data.
+- WR-04: `_filtered_install_lines` (skill_lifecycle.py:242-256) confirmed to drop labels; the Claude-only sibling test (tests/test_skill_lifecycle.py:213-228) uses membership assertions that survive the new label/marker lines, and the no-host test's update is named; consumers are display-only (engine.py:86-89 `return False, outcome.instructions`; app.py:189). The codex bare `"superpowers"` element exists exactly as described (registry.toml:3100).
+- Hygiene: frontmatter complete (`cross_ai: true`, `gap_closure: true`, wave 9, depends_on ends with 16-17, files_modified covers every touched file including tests/test_registry.py); every code task is RED-first with concrete fixtures; IN-16 correctly needs no test (comment-only, registry.toml:2652 sentence confirmed present, kitty `script` method at :2552-2558 confirmed); threat model present; safety rules (tmp_path rc, no real installs, no sudo) hold; Task 8 is the final gate with the summary ledger mapping each finding to a commit.
+
+**Concerns:**
+- LOW: Residual off-by-one/mislabeled read_first anchors (round-1 LOW, partially fixed): `tests/test_registry.py:1989` — the test def is at :1990; `_native_owner` cited as ownership.py:770 — the def is at :745 (:770 is inside it, matching the finding's own anchor); `_writer_next_step` cited as guidance.py:79-99 — the def is at :58. All are read-first hints, not claims about changed code; no correctness impact.
+- LOW: The plan's codegraph-first restatement is moot — this repo has no `.codegraph/` index (codegraph_explore rejects it), so the executor will fall back to grep/read. Not harmful, but the restatement adds no value here.
+- LOW: Task 1's `done` says "version shown" for an installed openspec; in the real (non-faked) refresh `_ver_cell` depends on `self._version_statuses.get(tool.id)` (catalog_tui.py:520), so if the service yields no status the cell renders the dim "no version" marker — consistent, but not literally "the version shown". The RED test fakes the service, so the guarantee covers the mechanism, not the live data.
+- LOW (unverified beyond inference): I did not fully read `_parse_by_harness` (model.py:448+), so I did not byte-verify that the new prose line `"or, instead, from the obra marketplace:"` passes registry parsing; existing `by_harness` values already contain spaces and the `instructions` list already contains full prose sentences (registry.toml:3089-3092), so free text is evidently accepted — risk minimal.
+
+**Suggestions:** None required. Optionally fix the three cosmetic read_first anchors (test_registry.py:1990; ownership.py:745; guidance.py:58) in passing; they cost one line and close the round-1 LOW completely.
+
+**Risk Assessment:** LOW — every mechanism was traced to real source and holds; the only residual items are cosmetic anchors and one parser check whose existing data makes failure very unlikely.
+
+### Batch verdict
+Unresolved HIGH findings: 0
+Unresolved non-HIGH findings that still need a plan change: 0 (the LOW anchor nits and the moot codegraph restatement are cosmetic and do not require a plan change before execution)
+
+### Round-2 adjudication and plan fixes
+
+| Finding | Severity | Plan | Fix | Status |
+|---|---|---|---|---|
+| Opener regex treats `$(( 1 << MASK ))` (word right operand) as a heredoc, swallowing the rest of the file (under-report regression) | LOW (actionable) | 16-17 Task 2 | open-arithmetic check (`masked[:m.start()].rfind("((") > ...rfind("))")`) plus a negative test line | resolved |
+| `<< -EOF` and space-containing quoted delimiters mis-tracked (fail-safe direction) | LOW | 16-17 Task 2 | named in the `shortcut:` comment | resolved |
+| Task 1 lstrip rationale inaccurate; Tasks 3-5 `fails_when` lack the RED-passed guard; IN-02 anchor | LOW | 16-17 | rationale reworded, guard added to every `fails_when`, anchor names `_judge_line` | resolved |
+| 16-18: residual cosmetic anchors (test_registry.py def line differs between reviewer passes, `_native_owner`/`_writer_next_step` def lines); moot codegraph restatement (repo has no `.codegraph/`) | LOW | 16-18 | none (read_first hints only; the restatement is a mandated line) | advisory |
+
+## Consensus Summary (cycle 3)
+
+Single reviewer identity (`opencode-glm-5.2`), two rounds, two plans. Every reviewer claim that drove a change was re-checked against source by the orchestrator (the HIGH: a quote-blanking mask cannot match a quoted delimiter, rcclean.py:43-46).
+
+### Agreed Strengths
+- Both plans anchor every fix to real code with working RED fixtures (hand-traced by the reviewer), keep the guard/strip single-walk invariant (`_path_line_targets`), and plan no mutation path change: the 16-17 fixes close the one corruption-capable defect (WR-02) and the guard dead end (WR-01) fail-closed; the 16-18 fixes are display-layer or label-only.
+- Accepted findings carry sound rationales (label-only or fail-closed harm, fix cost above risk); IN-03 conflicts with IN-18's no-duplicate-harness rule and the registry's two legitimate marketplaces.
+- Hygiene: `cross_ai: true`, `gap_closure: true`, waves 8 then 9 (no concurrent edits or gates), `<threat_model>`, safety rules, final `make validate && make test` task.
+
+### Agreed Concerns
+None open at HIGH or actionable MEDIUM after round 2.
+
+### Divergent Views
+None (single reviewer).
+
+## Verification coverage (cycle 3)
+| Round | Plans | Reviewer | Tree verified | Sections | HIGH | Needs plan change (after fixes) |
+|---|---|---|---|---|---|---|
+| 1 | 16-17, 16-18 | opencode-glm-5.2 | 920abef + untracked plans | 2/2 | 1 (16-17) | 0 (HIGH + 4 MEDIUM fixed) |
+| 2 | 16-17, 16-18 | opencode-glm-5.2 | 920abef + revised plans | 2/2 | 0 | 0 (2 actionable LOWs in 16-17 fixed; cosmetic anchors advisory) |
+
+Not covered: execution of either plan (traces were by hand; no test was run), and the final text of 16-17 after the round-2 LOW fixes (checked by the orchestrator only).
+
+## Cycle Verdict (cycle 3)
+- **current_high = 0**
+- **current_actionable = 0** (round 1 raised 1 HIGH and 4 MEDIUM, all fixed; round 2 raised 2 actionable LOWs, fixed; 2 convergence rounds of the 3 allowed)
