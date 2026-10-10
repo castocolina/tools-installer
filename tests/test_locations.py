@@ -279,3 +279,45 @@ def test_path_scan_honors_zdotdir_for_zsh_startup_files(
     for name in (".zshrc", ".zprofile", ".zshenv", ".zlogin"):
         assert zdotdir / name in scanned
         assert tmp_path / name not in scanned
+
+
+def _home_is(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.delenv("ZDOTDIR", raising=False)
+
+
+def test_path_scan_skips_an_unreadable_bashrc_d_entry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.locations import path_scan_rc_paths
+
+    _home_is(tmp_path, monkeypatch)
+    snippets = tmp_path / ".bashrc.d"
+    snippets.mkdir()
+    (snippets / "a.sh").write_text("")
+    (snippets / "b.sh").write_text("")
+    real_is_file = Path.is_file
+
+    def raising_is_file(self: Path) -> bool:
+        if self.name == "b.sh":
+            raise PermissionError(self)
+        return real_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", raising_is_file)
+    scanned = path_scan_rc_paths()
+    assert [p.name for p in scanned if p.parent == snippets] == ["a.sh"]
+
+
+def test_path_scan_bashrc_d_order_unchanged_without_a_failing_entry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.locations import path_scan_rc_paths
+
+    _home_is(tmp_path, monkeypatch)
+    snippets = tmp_path / ".bashrc.d"
+    snippets.mkdir()
+    (snippets / "b.sh").write_text("")
+    (snippets / "a.sh").write_text("")
+    (snippets / "nested").mkdir()
+    scanned = path_scan_rc_paths()
+    assert [p.name for p in scanned if p.parent == snippets] == ["a.sh", "b.sh"]

@@ -125,7 +125,14 @@ def path_scan_rc_paths() -> list[Path]:
     home = Path.home()
     zdir = zshrc_path(home, os.environ).parent
     bashrc_d = home / ".bashrc.d"
-    snippets = sorted(p for p in bashrc_d.glob("*") if p.is_file()) if bashrc_d.is_dir() else []
+
+    def _is_file(path: Path) -> bool:
+        try:
+            return path.is_file()
+        except OSError:
+            return False
+
+    snippets = sorted(p for p in bashrc_d.glob("*") if _is_file(p)) if bashrc_d.is_dir() else []
     return [
         home / ".myshellrc",
         home / ".shellrc",
