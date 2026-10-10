@@ -20,7 +20,7 @@ from textual.widgets import DataTable
 from installer.deps import missing_requires
 from installer.enums import Audience, Priority
 from installer.model import Tool
-from installer.ownership import MUTATION_GRADE, owner_detail, owner_label
+from installer.ownership import MUTATION_GRADE, OWNER_LABELS, owner_detail, owner_label
 from installer.selection import select_tools, unstaged_recommends
 from installer.skill_lifecycle import SKILL_HARNESS_LABELS
 from installer.status import is_default_shell
@@ -214,6 +214,8 @@ _VER_NO_VERSION = "no version"
 _VER_SOURCE_UNKNOWN = "(source unknown)"
 _VER_NO_COMPARISON = "(no comparison)"
 _VER_STALE = "~"
+# Already this wide for one owner, so a host list truncates only if it would widen the column (D-13)
+_OWNER_CELL_MAX = max(len(label) for label in OWNER_LABELS.values())
 
 # D-03/D-04: the Ver: line below is appended to the one existing legend string
 # (never a second widget/region -- BrowserAdapter.legend / the docked
@@ -460,14 +462,42 @@ class CatalogScreen(AppScreen):
             return None
         return service.skill_status_of(tool.id)
 
-    def _inst_cell(self, tool: Tool, installed: bool) -> Text:
+    def _present(self, tool: Tool) -> bool | None:
+        if tool.skill_lifecycle is None:
+            return self._installed[tool.id]
         status = self._skill_status(tool)
-        if status is not None and any(value == "present" for value in status.hosts.values()):
-            return Text("✓", style="green")
+        if status is None or not status.hosts:
+            return None
+        values = status.hosts.values()
+        if any(value == "present" for value in values):
+            return True
+        if all(value == "absent" for value in values):
+            return False
+        return None
+
+    def _inst_cell(self, tool: Tool, installed: bool) -> Text:
+        if tool.skill_lifecycle is None:
+            return Text("✓", style="green") if installed else Text("○", style="yellow")
+        status = self._skill_status(tool)
+        if status is not None and status.hosts:
+            values = list(status.hosts.values())
+            if any(value == "present" for value in values):
+                glyph, style = "✓", "green"
+            elif all(value == "absent" for value in values):
+                glyph, style = "○", "yellow"
+            else:
+                glyph, style = "?", "dim"
+            if status.stale:
+                return Text.assemble((glyph, style), (f" {_VER_STALE}", "dim"))
+            return Text(glyph, style=style)
+        if self.skill_refreshing:
+            glyph = "✓" if installed else "○"
+            style = "green" if installed else "yellow"
+            return Text.assemble((glyph, style), (f" {_VER_STALE}", "dim"))
         return Text("✓", style="green") if installed else Text("○", style="yellow")
 
     def _ver_cell(self, tool: Tool) -> Text:
-        if not self._installed.get(tool.id, False):
+        if not bool(self._present(tool)):
             return Text("")
         status = self._version_statuses.get(tool.id)
         if status is None:
@@ -516,13 +546,22 @@ class CatalogScreen(AppScreen):
         return Text(base, style=color)
 
     # -- catalog data wiring for the browser adapter -----------------------
-    def _owner_cell(self, tool: Tool) -> Text:
-        status = self._skill_status(tool)
-        if status is not None:
-            for harness, value in status.hosts.items():
-                if value == "present":
-                    return Text(SKILL_HARNESS_LABELS.get(harness, harness))
+    def _skill_owner_cell(self, status: SkillHostStatus) -> Text:
+        labels = [
+            SKILL_HARNESS_LABELS.get(harness, harness)
+            for harness, value in status.hosts.items()
+            if value == "present"
+        ]
+        if not labels:
             return Text("")
+        if len(labels) == 1 or len(", ".join(labels)) <= _OWNER_CELL_MAX:
+            return Text(", ".join(labels))
+        return Text(f"{labels[0]} +{len(labels) - 1}")
+
+    def _owner_cell(self, tool: Tool) -> Text:
+        if tool.skill_lifecycle is not None:
+            status = self._skill_status(tool)
+            return self._skill_owner_cell(status) if status is not None else Text("")
         # D-02: blank means exactly "genuinely don't know" -- no service
         # wired, no ownership record produced for this tool yet, or the
         # record itself resolved to `unknown` (owner_label returns `None`
@@ -560,7 +599,7 @@ class CatalogScreen(AppScreen):
                 Text(tool.id, style="dim"),
                 Text(tool.category, style="dim"),
                 Text(AUDIENCE_LABEL[tool.audience], style="dim"),
-                Text("✓" if installed else "○", style="dim"),
+                Text(self._inst_cell(tool, installed).plain, style="dim"),
                 Text(ver.plain, style="dim"),
                 Text(self._owner_cell(tool).plain, style="dim"),
                 Text(desc, style="dim"),
@@ -577,10 +616,14 @@ class CatalogScreen(AppScreen):
             Text(desc, style="dim"),
         ]
 
+    def _presence(self) -> dict[str, bool]:
+        return {tool.id: bool(self._present(tool)) for tool in self.tools}
+
     def _groups(self, view: str) -> list[Section[Tool]]:
+        presence = self._presence()
         if view == "table":
-            return [("", "", sort_for_table(self.tools, self._installed, self.table_sort))]
-        return group_tools(self.tools, self._installed, view, self._blurbs)
+            return [("", "", sort_for_table(self.tools, presence, self.table_sort))]
+        return group_tools(self.tools, presence, view, self._blurbs)
 
     def _detail_text(self, tool: Tool) -> str:
         detail = (
@@ -600,14 +643,38 @@ class CatalogScreen(AppScreen):
             detail += f"  |  pairs well with {', '.join(tool.recommends)}"
         if self._unavailable.get(tool.id, False):
             detail += "  |  (not available on this machine)"
-        if self._installed.get(tool.id, False):
+        if bool(self._present(tool)):
             default_shell = is_default_shell(tool)
             if default_shell is True:
                 detail += "  |  this is your default shell"
             elif default_shell is False:
                 detail += "  |  installed, but not your default shell"
         detail += self._version_detail(tool)
+        detail += self._skill_detail(tool)
         return detail
+
+    def _skill_detail(self, tool: Tool) -> str:
+        status = self._skill_status(tool)
+        if status is None:
+            return ""
+        present = [
+            SKILL_HARNESS_LABELS.get(harness, harness)
+            for harness, value in status.hosts.items()
+            if value == "present"
+        ]
+        unknown = [
+            SKILL_HARNESS_LABELS.get(harness, harness)
+            for harness, value in status.hosts.items()
+            if value == "unknown"
+        ]
+        segments: list[str] = []
+        if present:
+            segments.append(f"installed in: {', '.join(present)}")
+        if unknown:
+            segments.append(f"not probed: {', '.join(unknown)}")
+        if not segments:
+            return ""
+        return "  |  " + "  |  ".join(segments)
 
     def _version_detail(self, tool: Tool) -> str:
         status = self._version_statuses.get(tool.id)

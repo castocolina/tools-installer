@@ -58,7 +58,7 @@ from installer.selection import select_tools
 from installer.uninstall import SweepResult
 from installer.update import UpdateService
 from installer.version_cache import VersionCacheEntry, save_version_cache
-from installer.version_status import VersionRefreshService, VersionStatus
+from installer.version_status import SkillHostStatus, VersionRefreshService, VersionStatus
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 from tests.test_registry import REGISTRY
 
@@ -3112,3 +3112,145 @@ async def test_skill_worker_paints_superpowers_installed_with_claude_code_owner(
         assert table.get_cell("superpowers", "inst").plain == "✓"
         assert table.get_cell("superpowers", "owner").plain == "Claude Code"
     assert calls
+
+
+def _stale_mark_is_dim(cell: Text) -> bool:
+    start = cell.plain.rfind(_VER_STALE)
+    return start >= 0 and any(
+        span.start <= start and span.end >= start + len(_VER_STALE) and "dim" in str(span.style)
+        for span in cell.spans
+    )
+
+
+def _skill_screen(
+    tmp_path: Path,
+    hosts: dict[str, str] | None,
+    *,
+    installed: bool = False,
+    stale: bool = False,
+    refreshing: bool = False,
+) -> tuple[CatalogScreen, Tool]:
+    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: None,
+        skill_home=tmp_path,
+    )
+    if hosts is not None:
+        service._skills = {  # pyright: ignore[reportPrivateUsage]
+            pack.id: SkillHostStatus(hosts=dict(hosts), stale=stale)
+        }
+    screen = _screen([pack], {pack.id: installed}, version_refresh=service)
+    screen.skill_refreshing = refreshing
+    return screen, pack
+
+
+def test_skill_inst_cell_shows_persisted_answer_with_stale_mark(tmp_path: Path) -> None:
+    from installer.version_cache import save_version_cache
+
+    path = tmp_path / "versions.json"
+    save_version_cache(path, {}, skills={"superpowers": {"claude": "present"}})
+    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    service = _offline_service(
+        path,
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: None,
+        skill_home=tmp_path,
+    )
+    service.seed_skills_from_cache()
+    screen = _screen([pack], {pack.id: False}, version_refresh=service)
+    cell = screen._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
+    assert cell.plain == f"✓ {_VER_STALE}"
+    assert _stale_mark_is_dim(cell)
+    assert _VER_CHECKING not in cell.plain
+
+
+def test_skill_inst_cell_drops_stale_mark_after_the_probe_lands(tmp_path: Path) -> None:
+    screen, pack = _skill_screen(tmp_path, {"claude": "present"}, stale=False)
+    cell = screen._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
+    assert cell.plain == "✓"
+    assert _VER_STALE not in cell.plain
+
+
+def test_skill_inst_cell_uses_filesystem_answer_while_refreshing(tmp_path: Path) -> None:
+    missing, pack = _skill_screen(tmp_path, None, installed=False, refreshing=True)
+    missing_cell = missing._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
+    assert missing_cell.plain == f"○ {_VER_STALE}"
+    assert _stale_mark_is_dim(missing_cell)
+    assert _VER_CHECKING not in missing_cell.plain
+
+    present, pack = _skill_screen(tmp_path, None, installed=True, refreshing=True)
+    present_cell = present._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
+    assert present_cell.plain == f"✓ {_VER_STALE}"
+    assert _stale_mark_is_dim(present_cell)
+
+
+def test_skill_inst_cell_is_dim_question_when_every_host_is_unknown(tmp_path: Path) -> None:
+    screen, pack = _skill_screen(tmp_path, {"claude": "unknown", "pi": "unknown"})
+    cell = screen._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
+    assert cell.plain == "?"
+    assert "dim" in str(cell.style)
+
+
+def test_skill_owner_cell_lists_hosts_and_truncates_when_wider_than_the_column(
+    tmp_path: Path,
+) -> None:
+    from installer.catalog_tui import _OWNER_CELL_MAX  # pyright: ignore[reportPrivateUsage]
+    from installer.ownership import OWNER_LABELS
+
+    assert max(len(label) for label in OWNER_LABELS.values()) == _OWNER_CELL_MAX
+
+    claude_pi, pack = _skill_screen(tmp_path, {"claude": "present", "pi": "present"})
+    assert claude_pi._owner_cell(pack).plain == "Claude Code, Pi"  # pyright: ignore[reportPrivateUsage]
+
+    three, pack = _skill_screen(
+        tmp_path, {"claude": "present", "codex": "present", "pi": "present"}
+    )
+    assert three._owner_cell(pack).plain == "Claude Code +2"  # pyright: ignore[reportPrivateUsage]
+
+    codex_pi, pack = _skill_screen(tmp_path, {"codex": "present", "pi": "present"})
+    assert codex_pi._owner_cell(pack).plain == "Codex, Pi"  # pyright: ignore[reportPrivateUsage]
+
+    none, pack = _skill_screen(tmp_path, {"claude": "absent", "pi": "unknown"})
+    assert none._owner_cell(pack).plain == ""  # pyright: ignore[reportPrivateUsage]
+
+
+def test_skill_detail_lists_every_present_host_and_unprobed_hosts(tmp_path: Path) -> None:
+    screen, pack = _skill_screen(
+        tmp_path,
+        {
+            "claude": "present",
+            "codex": "present",
+            "pi": "present",
+            "gemini-cli": "unknown",
+        },
+    )
+    detail = screen._detail_text(pack)  # pyright: ignore[reportPrivateUsage]
+    assert "installed in: Claude Code, Codex, Pi" in detail
+    assert "not probed: Gemini CLI" in detail
+
+
+def test_skill_rendering_leaves_a_non_pack_row_unchanged(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    plain = _screen([tool], {"rg": True})
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: None,
+    )
+    service._skills = {  # pyright: ignore[reportPrivateUsage]
+        "superpowers": SkillHostStatus(hosts={"claude": "present"}, stale=True)
+    }
+    wired = _screen([tool], {"rg": True}, version_refresh=service)
+    wired.skill_refreshing = True
+
+    def signature(screen: CatalogScreen) -> list[tuple[str, str]]:
+        return [
+            (cell.plain, str(cell.style))
+            for cell in screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
+        ]
+
+    assert signature(plain) == signature(wired)
+    assert "installed in:" not in plain._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    assert "installed in:" not in wired._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
