@@ -764,3 +764,34 @@ def test_indented_if_body_is_guardable() -> None:
     assert records[0].index == 1
     assert records[0].guardable is True
     assert records[0].block_owner is None
+
+
+def test_then_prefixed_path_line_is_not_a_strip_candidate() -> None:
+    text = 'if [ -d "$HOME/.local/bin" ]\nthen PATH="$HOME/.local/bin:$PATH"\nfi'
+    managed = {Path("/home/u/.local/bin")}
+    env = {"HOME": "/home/u"}
+    assert find_duplicate_path_lines(text, managed, env) == []
+    assert strip_lines(text, find_duplicate_path_lines(text, managed, env)) == text
+
+
+def test_do_prefixed_path_line_is_not_a_strip_candidate() -> None:
+    text = 'until false\ndo PATH="$HOME/.local/bin:$PATH"\ndone'
+    managed = {Path("/home/u/.local/bin")}
+    env = {"HOME": "/home/u"}
+    assert find_duplicate_path_lines(text, managed, env) == []
+    assert strip_lines(text, find_duplicate_path_lines(text, managed, env)) == text
+
+
+def test_then_prefixed_path_line_is_still_reported_but_not_guardable() -> None:
+    text = 'if [ -d "$HOME/.local/bin" ]\nthen PATH="$HOME/.local/bin:$PATH"\nfi'
+    records = path_writer_lines(
+        {Path("rc"): text}, {Path("/home/u/.local/bin")}, {"HOME": "/home/u"}
+    )
+    assert len(records) == 1
+    assert records[0].guardable is False
+    assert records[0].refusal == rcclean._REFUSE_COMPOUND  # pyright: ignore[reportPrivateUsage]
+
+
+def test_plain_column_zero_export_is_still_a_strip_candidate() -> None:
+    text = 'export PATH="$HOME/.local/bin:$PATH"'
+    assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == [0]

@@ -322,6 +322,7 @@ def _judge_line(
         and not comment_dropped
         and matched_plain
         and _ZSH_PATH_ARRAY.match(_command_text(segments[0][1])) is None
+        and not any(_LEADING_THEN_DO.match(segment) for _, segment in segments)
     )
     return _PathLine(
         index=index,
