@@ -20,6 +20,8 @@ from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import DaemonState, Severity
 from installer.execute_screen import ExecuteInputs, ExecuteScreen
 from installer.guidance import (
+    GUARD_ENTER_HINT,
+    SAFE_FIX_ENTER_HINT,
     competing_mechanism_guidance,
     disk_pressure_guidance,
     doctor_guidance,
@@ -733,7 +735,8 @@ async def test_doctor_guard_chain_does_not_restart_after_apply() -> None:
         assert calls == [rc]
 
 
-_RESTART_GUARD = "The guard is offered again after restarting the installer."
+_GUARD_AFTER_APPLY = "The guard is offered again after restarting the installer"
+_GUARD_BACKUP_TAIL = ". A backup of the original is saved as .tools-installer.old first"
 
 
 async def test_doctor_drops_inert_enter_hint_after_apply(tmp_path: Path) -> None:
@@ -758,29 +761,38 @@ async def test_doctor_drops_inert_enter_hint_after_apply(tmp_path: Path) -> None
     async with app.run_test(size=(120, 40)) as pilot:
         doctor = await _ready_doctor(app, pilot)
         before = [item.next_step for item in doctor._tui_guidance()]  # pyright: ignore[reportPrivateUsage]
-        assert (
-            "Press enter (apply) to guard it in place. A backup of the original is "
-            "saved as .tools-installer.old first"
-        ) in before
-        assert any(
-            step.startswith("inside the 'my-kitty PATH' block")
-            and "Press enter (apply) to guard it in place" in step
-            for step in before
+        plain_guard_before = f"{GUARD_ENTER_HINT}{_GUARD_BACKUP_TAIL}"
+        block_guard_before = (
+            "inside the 'my-kitty PATH' block; fix it in that tool, "
+            "because that tool may regenerate the block; "
+            f"{GUARD_ENTER_HINT}{_GUARD_BACKUP_TAIL}"
         )
-        assert any(step.startswith("Press enter to apply the safe fix below") for step in before)
+        safe_fix_before = (
+            f"{SAFE_FIX_ENTER_HINT}, then open a new terminal (or `source ~/.myshellrc`)."
+        )
+        assert plain_guard_before in before
+        assert block_guard_before in before
+        assert safe_fix_before in before
         await pilot.press("enter")
         await pilot.pause()
         await pilot.press("y")
         await pilot.pause()
         doctor = await _ready_doctor(app, pilot)
         assert doctor.applied is True
-        after = "\n".join(
-            item.next_step
-            for item in doctor._tui_guidance()  # pyright: ignore[reportPrivateUsage]
+        after_steps = [
+            item.next_step for item in doctor._tui_guidance()  # pyright: ignore[reportPrivateUsage]
+        ]
+        after = "\n".join(after_steps)
+        assert "Press enter" not in after
+        assert ".." not in after
+        assert (
+            f"{_GUARD_AFTER_APPLY}{_GUARD_BACKUP_TAIL}" in after_steps
         )
-        assert "Press enter (apply)" not in after
-        assert "Press enter to apply" not in after
-        assert after.count(_RESTART_GUARD) == 3
+        assert block_guard_before.replace(GUARD_ENTER_HINT, _GUARD_AFTER_APPLY) in after_steps
+        assert (
+            "The safe fix was applied; open a new terminal (or `source ~/.myshellrc`)."
+            in after_steps
+        )
         assert "my-kitty PATH" in after
 
 

@@ -183,8 +183,14 @@ _GLOBALS_UNREADABLE_PREVIEW = _GLOBALS_UNKNOWN_COUNT
 # the UNAVAILABLE wording (D-03c) names no row, because on that host there is
 # no row to enable, so it is deliberately never rewritten into one.
 _DISK_PRESSURE_ENABLE_PREFIX = "Enable the background cleanup policy"
-_RESTART_GUARD = "The guard is offered again after restarting the installer."
-_INERT_ENTER_HINTS = (GUARD_ENTER_HINT, SAFE_FIX_ENTER_HINT)
+_POST_APPLY_REWRITES = (
+    (
+        f"{SAFE_FIX_ENTER_HINT}, then open a new terminal",
+        "The safe fix was applied; open a new terminal",
+    ),
+    (GUARD_ENTER_HINT, "The guard is offered again after restarting the installer"),
+    (SAFE_FIX_ENTER_HINT, "The safe fix was applied"),
+)
 # The console sentence's own tail names the platform's real one-off command
 # (WR-08), so only its leading clause is rewritten for the TUI -- rebuilding
 # the whole sentence here would re-introduce a second, platform-blind copy of
@@ -626,8 +632,8 @@ class DoctorScreen(AppScreen):
         settled: list[Guidance] = []
         for item in rewritten:
             step = item.next_step
-            for hint in _INERT_ENTER_HINTS:
-                step = step.replace(hint, _RESTART_GUARD)
+            for old, new in _POST_APPLY_REWRITES:
+                step = step.replace(old, new)
             settled.append(item if step == item.next_step else replace(item, next_step=step))
         return settled
 
