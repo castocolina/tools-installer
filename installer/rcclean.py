@@ -24,6 +24,7 @@ _REFUSE_REPLACE = "replaces PATH entirely; edit it by hand"
 _OWN_MARKER_PREFIX = "tools-installer"
 _ASSIGN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.+?)\s*$")
 _PATH_EXPORT = re.compile(r"^\s*(?:export\s+)?PATH=(.+?)\s*$")
+_EXPORT_WORD = re.compile(r"^\s*export\s")
 _ZSH_PATH_ARRAY = re.compile(r"^\s*(?:export\s+|typeset\s+-U\s+)?path=\((.*)\)\s*$")
 _LEADING_THEN_DO = re.compile(r"^\s*(?:then|do)\s+")
 _VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
@@ -373,6 +374,7 @@ def _judge_line(
     matched_plain = False
     matched_any = False
     unresolved = False
+    suffixed = False
     for separator, segment in segments:
         if separator in ("", ";"):
             chain_has_presence = False
@@ -380,11 +382,17 @@ def _judge_line(
         body = _command_text(segment)
         zsh = _ZSH_PATH_ARRAY.match(body)
         path = None if zsh else _PATH_EXPORT.match(body)
-        if path is not None and _has_command_suffix(path.group(1)):
+        if (
+            path is not None
+            and _has_command_suffix(path.group(1))
+            and not _EXPORT_WORD.match(body)
+        ):
             continue
         if zsh is not None or path is not None:
             matched_any = True
             if path is not None:
+                if _EXPORT_WORD.match(body) and _has_command_suffix(path.group(1)):
+                    suffixed = True
                 matched_plain = True
                 if _value_has_unresolved(path.group(1), local):
                     unresolved = True
@@ -403,6 +411,7 @@ def _judge_line(
         len(segments) == 1
         and not comment_dropped
         and matched_plain
+        and not suffixed
         and _ZSH_PATH_ARRAY.match(_command_text(segments[0][1])) is None
         and not any(_LEADING_THEN_DO.match(segment) for _, segment in segments)
     )

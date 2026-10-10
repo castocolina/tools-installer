@@ -941,6 +941,36 @@ def test_plain_path_assignment_is_still_a_writer(text: str) -> None:
     assert len(records) == 1
 
 
+def test_export_path_with_extra_assignments_is_a_persistent_writer() -> None:
+    text = "export PATH=/m/bin:$PATH FOO=1\n"
+    records = path_writer_lines({Path("rc"): text}, {_M_BIN}, _ENV)
+    assert len(records) == 1
+    assert records[0].directory == _M_BIN
+    assert records[0].guardable is False
+    assert records[0].refusal == rcclean._REFUSE_COMPOUND  # pyright: ignore[reportPrivateUsage]
+    assert find_duplicate_path_lines(text, {_M_BIN}, _ENV) == []
+
+
+def test_quoted_export_path_with_extra_assignments_is_a_known_limit() -> None:
+    # shortcut: quote-blind colon split in _expanded_segments; upgrade when split is quote-aware
+    text = 'export PATH="/m/bin:$PATH" FOO=1\n'
+    assert path_writer_lines({Path("rc"): text}, {_M_BIN}, _ENV) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "export PATH=/m/bin:$PATH FOO=1\n",
+        "then export PATH=/m/bin:$PATH FOO=1\n",
+        "\texport PATH=/m/bin:$PATH FOO=1\n",
+    ],
+)
+def test_export_path_with_extra_assignments_reported_after_then_or_indent(text: str) -> None:
+    records = path_writer_lines({Path("rc"): text}, {_M_BIN}, _ENV)
+    assert len(records) == 1
+    assert records[0].directory == _M_BIN
+
+
 def test_quoted_space_in_path_value_is_not_a_command_prefix() -> None:
     directory = Path("/m/bin dir")
     text = 'PATH="/m/bin dir:$PATH"\n'
