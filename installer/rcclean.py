@@ -28,6 +28,7 @@ _LEADING_THEN_DO = re.compile(r"^\s*(?:then|do)\s+")
 _VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 _PATH_REF = re.compile(r"\$\{?PATH\b")
 _WORD = re.compile(r"[A-Za-z_]\w*")
+_HEREDOC_OPENER = re.compile(r"""<<-?\s*(['"]?)([A-Za-z_]\w*)\1""")
 _OPENERS = {
     "if": "fi",
     "while": "done",
@@ -103,8 +104,51 @@ def _first_word(stripped: str) -> str:
     return match.group(0) if match else ""
 
 
+def _code_text(line: str) -> str:
+    """Length-preserving copy with quoted spans and a trailing comment blanked."""
+    chars = list(line)
+    in_single = False
+    in_double = False
+    index = 0
+    length = len(line)
+    while index < length:
+        char = line[index]
+        if in_single:
+            chars[index] = " "
+            if char == "'":
+                in_single = False
+            index += 1
+            continue
+        if in_double:
+            chars[index] = " "
+            if char == "\\" and index + 1 < length:
+                chars[index + 1] = " "
+                index += 2
+                continue
+            if char == '"':
+                in_double = False
+            index += 1
+            continue
+        if char == "\\" and index + 1 < length:
+            index += 2
+            continue
+        if char in "'\"":
+            chars[index] = " "
+            in_single = char == "'"
+            in_double = char == '"'
+            index += 1
+            continue
+        if char == "#" and (index == 0 or line[index - 1] in " \t;|&"):
+            for rest in range(index, length):
+                chars[rest] = " "
+            break
+        index += 1
+    return "".join(chars)
+
+
 def _has_standalone_closer(line: str, closer: str) -> bool:
-    return re.search(rf"(?:^|[;\s]|;;){re.escape(closer)}(?:$|[;\s#])", line) is not None
+    code = _code_text(line)
+    return re.search(rf"(?:^|[;\s]|;;){re.escape(closer)}(?:$|[;\s#])", code) is not None
 
 
 def _condition_references_path(keyword: str, stripped: str) -> bool:
@@ -347,9 +391,30 @@ def _path_line_targets(lines: list[str], env: Mapping[str, str]) -> Iterator[_Pa
     blocked = _managed_line_indices(lines)
     local: dict[str, str] = dict(env)
     stack: list[_Frame] = []
+    heredoc: tuple[str, bool] | None = None
     for index, line in enumerate(lines):
+        if heredoc is not None:
+            delimiter, strip_tabs = heredoc
+            candidate = line.lstrip("\t") if strip_tabs else line
+            if candidate == delimiter:
+                heredoc = None
+            continue
         if index in blocked:
             continue
+        # shortcut: only the first heredoc on a line is tracked, and numeric
+        # delimiters (<<5), a dash-led delimiter (<< -EOF), and a quoted delimiter
+        # containing a space are not recognized, upgrade if a real rc needs either.
+        masked = _code_text(line)
+        for match in _HEREDOC_OPENER.finditer(line):
+            start = match.start()
+            if masked[start : start + 2] != "<<":
+                continue
+            if start != 0 and masked[start - 1] == "<":
+                continue
+            if masked[:start].rfind("((") > masked[:start].rfind("))"):
+                continue
+            heredoc = (match.group(2), line.startswith("<<-", start))
+            break
         presence_guarded = _update_block_stack(stack, line)
         segments, comment_dropped = _split_unquoted(line)
         if segments and _first_word(segments[0][1].lstrip()) == "case":

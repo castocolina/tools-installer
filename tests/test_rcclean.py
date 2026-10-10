@@ -795,3 +795,106 @@ def test_then_prefixed_path_line_is_still_reported_but_not_guardable() -> None:
 def test_plain_column_zero_export_is_still_a_strip_candidate() -> None:
     text = 'export PATH="$HOME/.local/bin:$PATH"'
     assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == [0]
+
+
+_HOME_BIN = Path("/home/u/bin")
+
+
+def test_commented_closer_keeps_the_body_presence_guarded() -> None:
+    text = (
+        'if [[ ":$PATH:" != *":$HOME/bin:"* ]]; then  # keep until fi\n'
+        '    PATH="$HOME/bin:$PATH"\n'
+        "fi"
+    )
+    assert path_writer_lines({Path("rc"): text}, {_HOME_BIN}, _ENV) == []
+
+
+def test_quoted_fi_on_a_non_path_if_is_still_reported() -> None:
+    text = 'if [ -n "x fi y" ]; then\n    PATH="$HOME/bin:$PATH"\nfi'
+    records = path_writer_lines({Path("rc"): text}, {_HOME_BIN}, _ENV)
+    assert len(records) == 1
+    assert records[0].index == 1
+    assert records[0].text.startswith("    ")
+    assert records[0].refusal is None
+
+
+def test_quoted_fi_does_not_unguard_a_path_condition_body() -> None:
+    text = (
+        'if [[ ":$PATH:" != *":$HOME/bin:"* && -n "x fi y" ]]; then\n    PATH="$HOME/bin:$PATH"\nfi'
+    )
+    assert path_writer_lines({Path("rc"): text}, {_HOME_BIN}, _ENV) == []
+
+
+def test_quoted_fi_does_not_pop_an_outer_presence_guard() -> None:
+    text = (
+        'if [[ ":$PATH:" != *":$HOME/outer:"* ]]; then\n'
+        'if [ -n "x fi y" ]; then\n'
+        '    PATH="$HOME/bin:$PATH"\n'
+        "fi\n"
+        'PATH="$HOME/.local/bin:$PATH"\n'
+        "fi"
+    )
+    records = path_writer_lines({Path("rc"): text}, {_HOME_BIN, _LOCAL_BIN}, _ENV)
+    assert records == []
+
+
+@pytest.mark.parametrize(
+    "opener",
+    ["cat <<EOF", "cat <<-EOF", "cat <<'EOF'", 'cat <<"EOF"'],
+)
+def test_heredoc_body_is_not_a_path_writer(opener: str) -> None:
+    body = 'PATH="$HOME/.local/bin:$PATH"'
+    text = f"{opener}\n{body}\nEOF\n{body}\n"
+    records = _records(text)
+    assert [record.index for record in records] == [3]
+    assert find_duplicate_path_lines(f"{opener}\n{body}\nEOF\n", {_LOCAL_BIN}, _ENV) == []
+
+
+def test_heredoc_keywords_do_not_disturb_an_enclosing_guard() -> None:
+    text = (
+        'if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then\n'
+        "cat <<EOF\n"
+        "fi\n"
+        "done\n"
+        "EOF\n"
+        'PATH="$HOME/.local/bin:$PATH"\n'
+        "fi"
+    )
+    assert _records(text) == []
+    assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == []
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        'cat <<< "x"',
+        "echo $(( 1 << 2 ))",
+        "echo $(( 1 << MASK ))",
+        'echo "<<EOF"',
+        "echo hi # <<EOF",
+    ],
+)
+def test_non_heredoc_left_shift_still_reports_the_writer(prefix: str) -> None:
+    text = prefix + '\nPATH="$HOME/.local/bin:$PATH"\n'
+    records = _records(text)
+    assert len(records) == 1
+    assert records[0].index == 1
+
+
+def test_unterminated_heredoc_swallows_to_eof() -> None:
+    text = 'cat <<EOF\nPATH="$HOME/.local/bin:$PATH"\n'
+    assert _records(text) == []
+    assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == []
+
+
+def test_dash_heredoc_closes_on_a_tab_indented_delimiter() -> None:
+    body = 'PATH="$HOME/.local/bin:$PATH"'
+    text = f"cat <<-EOF\n{body}\n\tEOF\n{body}\n"
+    assert [record.index for record in _records(text)] == [3]
+
+
+def test_plain_heredoc_requires_an_exact_delimiter_line() -> None:
+    body = 'PATH="$HOME/.local/bin:$PATH"'
+    text = f"cat <<EOF\n{body}\n EOF\n{body}\nEOF\n{body}\n"
+    assert [record.index for record in _records(text)] == [5]
+    assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == [5]
