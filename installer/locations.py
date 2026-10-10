@@ -118,15 +118,23 @@ def path_scan_rc_paths() -> list[Path]:
     a plain prepend in `~/.bash_profile` plus the stock Fedora `~/.bashrc`
     snippet yields exactly the structural 2x that no new terminal clears. A
     scan limited to our own write targets would find neither and would leave
-    the user with a finding and no explanation.
+    the user with a finding and no explanation. Fedora's stock .bashrc sources
+    ~/.bashrc.d/*, and zsh also reads .zshenv, .zprofile and .zlogin from the
+    same directory as .zshrc.
     """
     home = Path.home()
+    zdir = zshrc_path(home, os.environ).parent
+    bashrc_d = home / ".bashrc.d"
+    snippets = sorted(p for p in bashrc_d.glob("*") if p.is_file()) if bashrc_d.is_dir() else []
     return [
         home / ".myshellrc",
         home / ".shellrc",
-        _zshrc(),
-        home / ".zprofile",
+        zdir / ".zshrc",
+        zdir / ".zprofile",
+        zdir / ".zshenv",
+        zdir / ".zlogin",
         home / ".bashrc",
+        *snippets,
         home / ".bash_profile",
         home / ".profile",
     ]

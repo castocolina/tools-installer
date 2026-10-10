@@ -232,3 +232,50 @@ def test_path_scan_covers_the_login_files_the_write_set_omits() -> None:
     scanned = {p.name for p in path_scan_rc_paths()}
     assert {".bash_profile", ".profile"} <= scanned
     assert {p.name for p in all_ban_rc_paths()} <= scanned
+
+
+def test_path_scan_includes_zsh_startup_files_and_sorted_bashrc_d(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.locations import path_scan_rc_paths
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("ZDOTDIR", raising=False)
+    snippets = tmp_path / ".bashrc.d"
+    snippets.mkdir()
+    (snippets / "b.sh").write_text("")
+    (snippets / "a.sh").write_text("")
+    (snippets / "nested").mkdir()
+    before = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*"))
+    scanned = path_scan_rc_paths()
+    assert tmp_path / ".zshenv" in scanned
+    assert tmp_path / ".zlogin" in scanned
+    assert tmp_path / ".zprofile" in scanned
+    assert [p.name for p in scanned if p.parent == snippets] == ["a.sh", "b.sh"]
+    assert before == sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*"))
+
+
+def test_path_scan_missing_bashrc_d_adds_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.locations import path_scan_rc_paths
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("ZDOTDIR", raising=False)
+    scanned = path_scan_rc_paths()
+    assert all(".bashrc.d" not in p.parts for p in scanned)
+
+
+def test_path_scan_honors_zdotdir_for_zsh_startup_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.locations import path_scan_rc_paths
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zdotdir = tmp_path / "zd"
+    zdotdir.mkdir()
+    monkeypatch.setenv("ZDOTDIR", str(zdotdir))
+    scanned = path_scan_rc_paths()
+    for name in (".zshrc", ".zprofile", ".zshenv", ".zlogin"):
+        assert zdotdir / name in scanned
+        assert tmp_path / name not in scanned
