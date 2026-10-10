@@ -19,6 +19,11 @@ all. Dispatch sits on the post-success path of the install ladder, and the
 already-present branch returns before it. That is the intended
 single-direction trigger: a re-run cannot re-propose a system mutation the
 user already declined. It is not an oversight to be widened.
+
+The single exception is a tool the user EXPLICITLY selects again while it is
+installed. ExecuteScreen dispatches its actions once for that selection via
+`engine.reapply_post_install`; drag-ins and plain re-runs still never reach
+this table, and sensitive actions still ask.
 """
 
 import shutil

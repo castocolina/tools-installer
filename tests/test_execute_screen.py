@@ -163,7 +163,12 @@ _OUTPUTS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _tool(tool_id: str, *, requires: tuple[str, ...] = ()) -> Tool:
+def _tool(
+    tool_id: str,
+    *,
+    requires: tuple[str, ...] = (),
+    post_install: tuple[str, ...] = (),
+) -> Tool:
     return Tool(
         id=tool_id,
         name=tool_id,
@@ -175,6 +180,7 @@ def _tool(tool_id: str, *, requires: tuple[str, ...] = ()) -> Tool:
         tier="system",
         desc="",
         requires=requires,
+        post_install=post_install,
     )
 
 
@@ -3706,3 +3712,170 @@ async def test_mixed_install_and_current_names_already_current(tmp_path: Path) -
         assert prompt.startswith("Install 1 tools?")
         assert "Already current: wezterm." in prompt
         assert "Install 0 tools" not in prompt
+
+
+def _counting_reapply(
+    calls: list[str],
+    confirms: list[object],
+) -> Callable[..., InstallOutcome]:
+    def reapply(tool: Tool, platform: Platform, confirm: object) -> InstallOutcome:
+        del platform
+        calls.append(tool.id)
+        confirms.append(confirm)
+        return InstallOutcome(
+            tool.id,
+            InstallStatus.ALREADY_INSTALLED,
+            post_install_handoff=("reviewed step",),
+        )
+
+    return reapply
+
+
+async def test_explicit_current_selection_reapplies_post_install_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shelltool = _tool("shelltool", post_install=("set_login_shell",))
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, shelltool, outdated=False)
+    calls: list[str] = []
+    confirms: list[object] = []
+    monkeypatch.setattr(
+        installer.execute_screen,
+        "reapply_post_install",
+        _counting_reapply(calls, confirms),
+    )
+    inputs = _inputs(
+        tools=[shelltool],
+        installed=lambda tool: tool.id == "shelltool",
+        version_refresh=refresh,
+        updates=_RecordingUpdateService(),
+    )
+    app = _host(inputs, [shelltool])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["shelltool"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert calls == ["shelltool"]
+        assert confirms[0] is not None
+        assert "reviewed step" in _log_text(screen)
+        assert screen.summary is not None
+        assert screen.summary.already == ()
+
+
+async def test_explicit_outdated_selection_reapplies_post_install_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shelltool = _tool("shelltool", post_install=("set_login_shell",))
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, shelltool, outdated=True)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        installer.execute_screen,
+        "reapply_post_install",
+        _counting_reapply(calls, []),
+    )
+    inputs = _inputs(
+        tools=[shelltool],
+        installed=lambda tool: tool.id == "shelltool",
+        version_refresh=refresh,
+        updates=_RecordingUpdateService(),
+    )
+    _screen, recorded = await _run_execute(inputs, ["shelltool"])
+    assert recorded is not None
+    assert [target.tool.id for target in recorded.recorded] == ["shelltool"]
+    assert calls == ["shelltool"]
+
+
+async def test_cancel_stops_reapply_before_any_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rg = _tool("rg")
+    shelltool = _tool("shelltool", post_install=("set_login_shell",))
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    _seed_refresh(refresh, shelltool, outdated=False)
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
+    monkeypatch.setattr(
+        installer.execute_screen,
+        "reapply_post_install",
+        _counting_reapply(calls, []),
+    )
+
+    class _GatedUpdateService(_RecordingUpdateService):
+        def run(self, target: UpdateTarget) -> UpdateOutcome:
+            started.set()
+            assert release.wait(timeout=5)
+            return super().run(target)
+
+    inputs = _inputs(
+        tools=[rg, shelltool],
+        installed=lambda _tool: True,
+        version_refresh=refresh,
+        updates=_GatedUpdateService(),
+    )
+    app = _host(inputs, [rg, shelltool])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "shelltool"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        await pilot.press("c")
+        await pilot.pause()
+        release.set()
+        await _settle_execute(screen, pilot)
+    assert calls == []
+
+
+async def test_installed_drag_in_is_not_reapplied(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = _tool("parent", requires=("shelltool",))
+    shelltool = _tool("shelltool", post_install=("set_login_shell",))
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, shelltool, outdated=False)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        installer.execute_screen,
+        "reapply_post_install",
+        _counting_reapply(calls, []),
+    )
+    inputs = _inputs(
+        tools=[parent, shelltool],
+        installed=lambda tool: tool.id == "shelltool",
+        version_refresh=refresh,
+        updates=_RecordingUpdateService(),
+    )
+    screen, _recorded = await _run_execute(inputs, ["parent"])
+    assert screen.finished is True
+    assert calls == []
+
+
+async def test_fresh_install_is_not_reapplied(monkeypatch: pytest.MonkeyPatch) -> None:
+    shelltool = _tool("shelltool", post_install=("set_login_shell",))
+    captured: list[str] = []
+    calls: list[str] = []
+    monkeypatch.setattr(
+        installer.execute_screen,
+        "reapply_post_install",
+        _counting_reapply(calls, []),
+    )
+    inputs = _inputs(tools=[shelltool], install=_install_with_output(captured))
+    screen, _recorded = await _run_execute(inputs, ["shelltool"])
+    assert screen.finished is True
+    assert captured == ["shelltool"]
+    assert calls == []

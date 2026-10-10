@@ -122,8 +122,8 @@ def install_tool(
     instruction lines on `post_install_handoff`. `confirm_sensitive_action` is
     the optional confirmation callback those actions consult; `None` is the
     unattended case and skips them. The ALREADY_INSTALLED short-circuit never
-    dispatches postinstall or post_install at all (D-01's single-direction
-    trigger).
+    dispatches postinstall or post_install at all. `reapply_post_install` is
+    the separate, explicit-selection-only entry point (D-20).
 
     `repair` exists for D-18's broken state. It takes the identical ladder a
     fresh install takes, and is only ever set for a tool the user explicitly
@@ -168,15 +168,11 @@ def install_tool(
                     warning = run_postinstall(tool.postinstall, method, runner, tools or {})
                 except Exception as exc:  # noqa: BLE001 -- isolation boundary, see design_decisions
                     warning = f"postinstall hook {tool.postinstall!r} crashed: {exc}"
-            post_install_handoff: tuple[str, ...] = ()
-            if tool.post_install:
-                try:
-                    post_install_handoff = run_post_install(
-                        tool, platform, confirm_sensitive_action
-                    )
-                except Exception as exc:  # noqa: BLE001 -- isolation boundary, see design_decisions
-                    crash = f"post-install actions crashed: {exc}"
-                    warning = f"{warning}; {crash}" if warning else crash
+            post_install_handoff, crash = _dispatch_post_install(
+                tool, platform, confirm_sensitive_action
+            )
+            if crash:
+                warning = f"{warning}; {crash}" if warning else crash
             return InstallOutcome(
                 tool.id,
                 InstallStatus.INSTALLED,
@@ -186,3 +182,35 @@ def install_tool(
                 post_install_handoff=post_install_handoff,
             )
     return InstallOutcome(tool.id, InstallStatus.FAILED, errors=tuple(errors))
+
+
+def _dispatch_post_install(
+    tool: Tool,
+    platform: Platform,
+    confirm: ConfirmSensitiveAction | None,
+) -> tuple[tuple[str, ...], str | None]:
+    if not tool.post_install:
+        return (), None
+    try:
+        return run_post_install(tool, platform, confirm), None
+    except Exception as exc:  # noqa: BLE001 -- isolation boundary, see design_decisions
+        return (), f"post-install actions crashed: {exc}"
+
+
+def reapply_post_install(
+    tool: Tool,
+    platform: Platform,
+    confirm: ConfirmSensitiveAction | None,
+) -> InstallOutcome:
+    """Dispatch post_install for one explicit re-selection. Not an install.
+
+    install_tool still returns before this table on ALREADY_INSTALLED. Callers
+    must pass only a tool the user selected while it was already installed.
+    """
+    handoff, warning = _dispatch_post_install(tool, platform, confirm)
+    return InstallOutcome(
+        tool.id,
+        InstallStatus.ALREADY_INSTALLED,
+        postinstall_warning=warning,
+        post_install_handoff=handoff,
+    )

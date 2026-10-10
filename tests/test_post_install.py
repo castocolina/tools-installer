@@ -193,3 +193,12 @@ def test_post_install_tables_are_disjoint_and_match_their_schema_sets() -> None:
     assert hooks == hook_names, sorted(hooks.symmetric_difference(hook_names))
     assert len(actions) == 1, sorted(actions)
     assert actions <= sensitive, sorted(actions - sensitive)
+
+
+def test_docstring_names_the_explicit_selection_exception() -> None:
+    import installer.post_install as module
+
+    text = module.__doc__ or ""
+    assert "EXPLICITLY" in text
+    assert "reapply_post_install" in text
+    assert "drag-ins" in text

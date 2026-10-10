@@ -29,7 +29,7 @@ from textual.widgets import Label, ListItem, ListView, RichLog, Static
 
 from installer.audit import audit
 from installer.deps import resolve_dependencies
-from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
+from installer.engine import ChecksumPolicy, InstallOutcome, install_tool, reapply_post_install
 from installer.enums import InstallStatus, Severity
 from installer.model import Tool
 from installer.platform import Platform
@@ -397,6 +397,7 @@ class ExecuteScreen(ModalScreen[None]):
         self._to_update: list[Tool] = []
         self._current: list[Tool] = []
         self._repair: list[Tool] = []
+        self._reapply: list[Tool] = []
         self._by_id: dict[str, Tool] = {}
         self._last_tool_id: str | None = None
         self._progress: dict[str, ProgressState] = {}
@@ -469,6 +470,15 @@ class ExecuteScreen(ModalScreen[None]):
         self._current = current
         self._to_update = [
             tool for tool in self._update_targets(selected) if tool.id not in repair_ids
+        ]
+        eligible = {tool.id for tool in (*current, *self._to_update, *repair)}
+        self._reapply = [
+            tool
+            for tool in selected
+            if tool.id in eligible
+            and tool.id not in repair_ids
+            and tool.post_install
+            and self._inputs.installed(tool)
         ]
 
     def _update_targets(self, selected: list[Tool]) -> list[Tool]:
@@ -569,6 +579,16 @@ class ExecuteScreen(ModalScreen[None]):
                 seen = {outcome.tool_id for outcome in outcomes}
                 not_attempted = [tool.id for tool in self._ordered if tool.id not in seen]
                 update_outcomes, update_errors, update_skips, update_versions = self._run_updates()
+                reapplied: list[InstallOutcome] = []
+                for tool in self._reapply:
+                    if not self._should_continue():
+                        break
+                    applied, _fail = run_live(
+                        partial(reapply_post_install, tool, self._inputs.platform, on_confirm)
+                    )
+                    if applied is not None:
+                        reapplied.append(applied)
+                outcomes = [*outcomes, *reapplied]
                 path_result, path_fail = run_live(self._inputs.wire_path)
                 if path_result is None:
                     path_error = path_fail
@@ -832,7 +852,10 @@ class ExecuteScreen(ModalScreen[None]):
         self._clear_in_flight()
         self.summary = message.summary
         self.not_attempted = list(message.not_attempted)
+        reapply_ids = {tool.id for tool in self._reapply}
         for outcome in message.outcomes:
+            if outcome.tool_id in reapply_ids:
+                continue
             self._progress[outcome.tool_id] = (
                 "done" if outcome.status in _DONE_STATUSES else "not-done"
             )
