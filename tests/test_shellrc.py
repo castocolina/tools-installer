@@ -2986,6 +2986,36 @@ def test_guard_accepts_a_preexisting_backup_with_identical_bytes_and_mode(tmp_pa
     assert backup.read_bytes() == original
 
 
+def test_second_guard_refuses_with_guard_wording_and_keeps_both_files(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    directory = home / ".local" / "bin"
+    env = {"HOME": str(home)}
+    text = 'export PATH="$HOME/.local/bin:$PATH"\nexport PATH="$HOME/.local/bin:$PATH"\n'
+    rc = tmp_path / ".bashrc"
+    rc.write_text(text)
+    records = path_writer_lines({rc: text}, {directory}, env)
+    assert len(records) == 2
+
+    first = guard_path_writers(rc, records[:1])
+    assert first.status == "guarded"
+    backup = staged_sibling(rc, OLD_SUFFIX)
+    assert backup.read_bytes() == text.encode()
+    before_rc = rc.read_bytes()
+    before_backup = backup.read_bytes()
+
+    second = guard_path_writers(rc, records[1:])
+
+    assert second.status == "refused"
+    assert second.reason is not None
+    assert str(backup) in second.reason
+    assert "earlier guard" in second.reason
+    assert "move it aside" in second.reason
+    assert "edit the remaining line by hand" in second.reason
+    assert "consolidation" not in second.reason
+    assert rc.read_bytes() == before_rc
+    assert backup.read_bytes() == before_backup
+
+
 def test_guard_refuses_a_symlinked_bashrc(tmp_path: Path) -> None:
     _rc, directory, env, text = _seed_guard_rc(tmp_path)
     target = tmp_path / "real.bashrc"

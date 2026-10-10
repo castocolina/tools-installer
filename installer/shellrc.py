@@ -932,7 +932,12 @@ def _snapshot_matches(path: Path, snapshot: _Snapshot) -> bool:
     )
 
 
-def backup_precondition(shellrc_path: Path, snapshot: _Snapshot) -> str | None:
+def backup_precondition(
+    shellrc_path: Path,
+    snapshot: _Snapshot,
+    *,
+    flow: Literal["consolidation", "guard"] = "consolidation",
+) -> str | None:
     """A refusal reason, or None, for an existing backup at OLD_SUFFIX.
 
     Takes the STEP-3 snapshot rather than re-reading `shellrc_path`, so the bytes
@@ -963,6 +968,11 @@ def backup_precondition(shellrc_path: Path, snapshot: _Snapshot) -> str | None:
     finally:
         os.close(fd)
     if existing != snapshot.data:
+        if flow == "guard":
+            return (
+                f"{backup} already holds the original from before an earlier guard and is kept; "
+                f"move it aside to guard again, or edit the remaining line by hand."
+            )
         return (
             f"{backup} already holds a different original; move or remove it if you want "
             f"consolidation to proceed."
@@ -1181,7 +1191,7 @@ def guard_path_writers(rc_path: Path, lines: Sequence[PathWriterLine]) -> PathGu
                 status="refused", reason=f"{rc_path} changed since Doctor scanned it"
             )
 
-    conflict = backup_precondition(rc_path, snapshot)
+    conflict = backup_precondition(rc_path, snapshot, flow="guard")
     if conflict is not None:
         return PathGuardOutcome(status="refused", reason=conflict)
 
