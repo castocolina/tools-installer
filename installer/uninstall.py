@@ -217,14 +217,9 @@ def _manager_hint(tool: Tool, platform: Platform) -> str:
             name = manager_name(method, "formula", tool.cmd)
             return f"managed by Homebrew — `brew uninstall {name}`"
         if method.kind == "sdkman":
-            # No `Owner` value can ever carry "sdkman" (installer/ownership.py
-            # task 1's own docstring): no registry row declares
-            # `owner_probes = ["sdkman"]`, so `install_ownership._sdkman`
-            # never runs and the ownership seam can never produce this
-            # phrase itself. This is registry-derived, exactly like the two
-            # branches above it -- no probe, no resolver. `_applies` accepts
-            # `sdkman` unconditionally, so the platform filter above leaves
-            # this branch reachable on every platform.
+            # ownership.py can now attribute SDKMAN by location. This
+            # registry-derived phrase remains the fallback when no ownership
+            # record is passed.
             candidate = manager_name(method, "candidate", tool.cmd)
             return f"managed by SDKMAN — `sdk uninstall {candidate} <version>`"
     return "managed outside this installer — remove with your package manager"

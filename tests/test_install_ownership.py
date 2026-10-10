@@ -157,7 +157,7 @@ def test_host_setup_owner_uses_the_reviewed_setup_probe() -> None:
         ),
         (
             "sdkman",
-            (Method(kind="script", params={"sdk_candidate": "java"}),),
+            (Method(kind="sdkman", params={"candidate": "java"}),),
             "Using java version 21.0.1-tem\n",
             "SDKMAN",
             "sdkman lists java",
@@ -604,6 +604,72 @@ def test_pnpm_owner_fails_closed_on_a_recursion_bomb_from_the_probe() -> None:
     )
     owner = detect_owner(tool, _probe({"pnpm": _recursion_bomb_json(5_000)}), immutable=False)
     assert owner == Ownership(None, "unknown", "no verified manager")
+
+
+def test_sdkman_probe_uses_declared_candidate_not_tool_id() -> None:
+    calls: list[list[str]] = []
+
+    def probe(command: list[str]) -> str:
+        calls.append(command)
+        return "Using springboot version 4.1.0\n"
+
+    tool = Tool(
+        id="springbootcli",
+        name="Spring Boot CLI",
+        category="runtime",
+        cmd="spring",
+        methods=(Method(kind="sdkman", params={"candidate": "springboot"}),),
+    )
+    ownership._sdkman(tool, probe)  # pyright: ignore[reportPrivateUsage]
+    assert calls == [["sdk", "current", "springboot"]]
+    assert "springbootcli" not in str(calls)
+
+
+def test_sdkman_probe_verified_output_names_the_candidate() -> None:
+    tool = Tool(
+        id="springbootcli",
+        name="Spring Boot CLI",
+        category="runtime",
+        cmd="spring",
+        methods=(Method(kind="sdkman", params={"candidate": "springboot"}),),
+    )
+    result = ownership._sdkman(  # pyright: ignore[reportPrivateUsage]
+        tool, lambda _command: "Using springboot version 4.1.0"
+    )
+    assert result == Ownership("SDKMAN", "verified", "sdkman lists springboot", package="springboot")
+
+
+def test_sdkman_probe_falls_back_to_tool_id_without_an_sdkman_method() -> None:
+    calls: list[list[str]] = []
+    tool = Tool(
+        id="springbootcli",
+        name="Spring Boot CLI",
+        category="runtime",
+        cmd="spring",
+        methods=(Method(kind="brew", params={"formula": "spring-boot"}),),
+    )
+    assert (
+        ownership._sdkman(  # pyright: ignore[reportPrivateUsage]
+            tool, lambda command: calls.append(command) or ""
+        )
+        is None
+    )
+    assert calls == [["sdk", "current", "springbootcli"]]
+
+
+def test_sdkman_probe_returns_none_when_the_probe_raises() -> None:
+    tool = Tool(
+        id="java",
+        name="Java",
+        category="runtime",
+        cmd="java",
+        methods=(Method(kind="sdkman", params={"candidate": "java"}),),
+    )
+
+    def probe(_command: list[str]) -> str:
+        raise FileNotFoundError("sdk")
+
+    assert ownership._sdkman(tool, probe) is None  # pyright: ignore[reportPrivateUsage]
 
 
 def test_owner_probes_closed_set_and_probe_registry_are_the_same_set() -> None:

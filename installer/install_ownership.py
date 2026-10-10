@@ -361,8 +361,10 @@ def _pnpm(tool: Tool, probe: ProbeRunner) -> Ownership | None:
     return None
 
 
+# `sdk` is a sourced shell function, so this argv probe fails closed on most
+# hosts; location proof in ownership.py is the primary evidence.
 def _sdkman(tool: Tool, probe: ProbeRunner) -> Ownership | None:
-    candidates = _method_values(tool, {"script"}, "sdk_candidate") or (tool.id,)
+    candidates = _method_values(tool, {"sdkman"}, "candidate") or (tool.id,)
     for candidate in candidates:
         output = _run(probe, ["sdk", "current", candidate])
         if output is not None and f"Using {candidate} version " in output:
