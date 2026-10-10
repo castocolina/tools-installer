@@ -395,6 +395,8 @@ class ExecuteScreen(ModalScreen[None]):
         self._inputs = inputs
         self._ordered: list[Tool] = []
         self._to_update: list[Tool] = []
+        self._current: list[Tool] = []
+        self._repair: list[Tool] = []
         self._by_id: dict[str, Tool] = {}
         self._last_tool_id: str | None = None
         self._progress: dict[str, ProgressState] = {}
@@ -426,6 +428,7 @@ class ExecuteScreen(ModalScreen[None]):
     def on_mount(self) -> None:
         selected = select_tools(self._inputs.catalog, self._ids)
         platform = self._inputs.platform
+        self._classify_selection(selected)
         resolved = resolve_dependencies(
             order_for_install(selected),
             self._inputs.catalog,
@@ -433,7 +436,6 @@ class ExecuteScreen(ModalScreen[None]):
             is_installed=self._inputs.installed,
         )
         self._ordered = list(resolved.order)
-        self._to_update = self._update_targets(selected)
         self._by_id = {tool.id: tool for tool in self._inputs.catalog}
         self._progress = {tool.id: "pending" for tool in (*self._ordered, *self._to_update)}
         self._refresh_progress()
@@ -446,6 +448,28 @@ class ExecuteScreen(ModalScreen[None]):
         self.query_one("#execute-head", Static).update(self._render_captured(render_head))
         if self._inputs.unattended:
             self.action_start()
+
+    def _classify_selection(self, selected: list[Tool]) -> None:
+        refresh = self._inputs.version_refresh
+        repair: list[Tool] = []
+        current: list[Tool] = []
+        if refresh is not None:
+            for tool in selected:
+                if not self._inputs.installed(tool):
+                    continue
+                ownership = refresh.ownership_of(tool.id)
+                if ownership is not None and ownership.broken:
+                    repair.append(tool)
+                    continue
+                status = refresh.statuses.get(tool.id)
+                if status is not None and status.outdated is False:
+                    current.append(tool)
+        repair_ids = {tool.id for tool in repair}
+        self._repair = repair
+        self._current = current
+        self._to_update = [
+            tool for tool in self._update_targets(selected) if tool.id not in repair_ids
+        ]
 
     def _update_targets(self, selected: list[Tool]) -> list[Tool]:
         refresh = self._inputs.version_refresh
@@ -912,11 +936,20 @@ class ExecuteScreen(ModalScreen[None]):
         install_n = len(self._ordered)
         update_n = len(self._to_update)
         hint = "enter start · esc cancel"
+        current_ids = [tool.id for tool in self._current]
+        if install_n == 0 and update_n == 0 and current_ids:
+            joined = ", ".join(current_ids)
+            return f"{joined} already current — nothing to do. {hint}"
+        if install_n == 0 and update_n == 0:
+            return "Nothing to do. esc cancel"
+        current_clause = ""
+        if current_ids:
+            current_clause = f" Already current: {', '.join(current_ids)}."
         if install_n and update_n:
-            return f"Install {install_n} tools, update {update_n}? {hint}"
+            return f"Install {install_n} tools, update {update_n}?{current_clause} {hint}"
         if update_n:
-            return f"Update {update_n} tools? {hint}"
-        return f"Install {install_n} tools? {hint}"
+            return f"Update {update_n} tools?{current_clause} {hint}"
+        return f"Install {install_n} tools?{current_clause} {hint}"
 
     def _refresh_progress(self) -> None:
         rows = Text()
@@ -935,6 +968,11 @@ class ExecuteScreen(ModalScreen[None]):
             state = self._progress.get(tool.id, "pending")
             glyph, style, label = _PROGRESS_GLYPH[state]
             rows.append(f"{glyph} {tool.id} update [{label}]", style=style)
+        for tool in self._current:
+            if not first:
+                rows.append("\n")
+            first = False
+            rows.append(f"✓ {tool.id} [already current]", style=SEVERITY_STYLE[Severity.OK])
         self.query_one("#execute-progress", Static).update(rows)
 
     def _render_captured(self, render: Callable[[Console], None]) -> str:

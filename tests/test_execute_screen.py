@@ -3636,3 +3636,73 @@ async def test_child_output_reaches_the_widget_while_the_child_is_still_alive(
         log = _log_text(screen)
         assert "child line 1" in log
         assert "child line 2" in log
+
+
+async def test_current_only_selection_says_already_current_not_install_zero(
+    tmp_path: Path,
+) -> None:
+    wezterm = _tool("wezterm")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, wezterm, outdated=False)
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[wezterm],
+        installed=lambda tool: tool.id == "wezterm",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [wezterm])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["wezterm"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        prompt = screen._preflight_prompt()  # pyright: ignore[reportPrivateUsage]
+        assert "wezterm already current — nothing to do." in prompt
+        assert "Install 0 tools" not in prompt
+        assert "wezterm [already current]" in _progress_text(screen)
+
+
+async def test_outdated_selected_tool_stays_an_update_target(tmp_path: Path) -> None:
+    wezterm = _tool("wezterm")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, wezterm, outdated=True)
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[wezterm],
+        installed=lambda tool: tool.id == "wezterm",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [wezterm])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["wezterm"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert [tool.id for tool in screen._to_update] == ["wezterm"]  # pyright: ignore[reportPrivateUsage]
+        assert screen._preflight_prompt().startswith("Update 1 tools?")  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_mixed_install_and_current_names_already_current(tmp_path: Path) -> None:
+    wezterm = _tool("wezterm")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, wezterm, outdated=False)
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[wezterm, fd],
+        installed=lambda tool: tool.id == "wezterm",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [wezterm, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["wezterm", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        prompt = screen._preflight_prompt()  # pyright: ignore[reportPrivateUsage]
+        assert prompt.startswith("Install 1 tools?")
+        assert "Already current: wezterm." in prompt
+        assert "Install 0 tools" not in prompt
