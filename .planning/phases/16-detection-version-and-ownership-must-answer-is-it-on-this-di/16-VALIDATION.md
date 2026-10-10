@@ -66,9 +66,16 @@ backfilled: "2026-10-10"
 
 ## Manual-Only Verifications
 
-| Behavior | Requirement | Why Manual | Test Instructions |
-|----------|-------------|------------|-------------------|
-| Live proof against the real defects this phase fixes (skill_pack detection, sdkman version/ownership, kitty's silent no-method row, outdated-tool re-select no-op) | Phase goal ("Proven against the real defects below on a host that reproduces each one") | Unit tests prove the mechanism; the phase goal demands proof against a host that actually reproduces each original live defect — not satisfiable by mocked unit tests alone | Run the built app (or a disposable container reproducing the five defect shapes) at end-of-phase, per the `human_verify_mode: end-of-phase` pattern already used by prior phases (e.g. 15.4-05) |
+| Behavior | Requirement | Why Manual | Test Instructions | Status |
+|----------|-------------|------------|-------------------|--------|
+| Live proof against the real defects this phase fixes (skill_pack detection, sdkman version/ownership, kitty's silent no-method row, outdated-tool re-select no-op) | Phase goal ("Proven against the real defects below on a host that reproduces each one") | Unit tests prove the mechanism; the phase goal demands proof against a host that actually reproduces each original live defect — not satisfiable by mocked unit tests alone | Read-only production composition recorded in 16-16-SUMMARY.md. TUI states are the Phase 16 walkthrough rows below. | recorded |
+| Phase 16 walkthrough (1): Owner reads `Homebrew ≠ policy` for groovy, gradle, maven, and java. `u` is pressed only on a current row. | D-02 | Rendered Owner cell, detail, and status line | `uv run python setup.py` (no flags). Find groovy/gradle/maven/java. Press `u` only on a row whose Ver cell shows it is current. Do not press `u` on an outdated row. | pending |
+| Phase 16 walkthrough (2): springbootcli and sdkman show versions, never `no version`. | D-01 | Rendered Ver cell | Find springbootcli and sdkman. Read the versions. No install or update key. | pending |
+| Phase 16 walkthrough (3): after a System-view wait, the AI view shows skill packs present, with hosts in Owner. | D-10 | Rendered Inst and Owner after the launch probe | The app opens on the System view. Wait a few seconds, then switch to the AI view (view navigation only). Find superpowers, ponytail, softaworks-agent-toolkit, and opengsd. | pending |
+| Phase 16 walkthrough (4): kitty is selectable with Owner `own installer`; alacritty is dim with the immutable-host reason. | D-07, D-16 | Dim styling and detail sentence | Find kitty and alacritty. Browse only. | pending |
+| Phase 16 walkthrough (5): execute preflight says already current. Exit key is esc. Enter is not pressed on the execute screen. | D-17 | On-mount preflight text | Select wezterm (or any current tool) and open the execute screen, read the preflight shown on mount, then leave with esc. Enter is not pressed on the execute screen. | pending |
+| Phase 16 walkthrough (6): mmdc Inst is a red `!` only if the shim is still dangling. Browse only, no keypress. | D-18 | Rendered Inst mark | Find mmdc if its shim is still dangling. Host proof on 2026-10-10 read `broken=False` and `owner='brew'`, so the row may be absent. Browse only, no keypress. | pending |
+| Phase 16 walkthrough (7): Doctor guidance names the kitty block and the guard offer. Exit key is esc. Enter is not pressed. | D-22 | Rendered guidance text | Open Doctor and read its guidance. Enter is not pressed (enter is Doctor's apply). Leave with esc. | pending |
 
 ---
 
