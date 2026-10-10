@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: 16
 current_phase_name: Catalog truth
-current_plan: 1
-status: executing
-stopped_at: Phase 15.8 complete, ready to plan Phase 16
+current_plan: 19
+status: verification_deferred_human
+stopped_at: Phase 16 plans 16-01..16-19 executed and verified; 3 human UAT items deferred (see .planning/RUN-REPORT.md)
 last_updated: "2026-10-10T09:20:22.890Z"
 last_activity: 2026-10-10
-last_activity_desc: Phase 16 execution started
+last_activity_desc: Phase 16 executed, verified (human_needed), UAT deferred
 state_head: 762501fca964d2649fda8ab10838c381217c2d81
 progress:
   total_phases: 28
   completed_phases: 17
-  total_plans: 107
-  completed_plans: 91
+  total_plans: 110
+  completed_plans: 110
 ---
 
 Total Phases: 21
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-10-09)
 
 ## Current Position
 
-Phase: 16 (Catalog truth) — EXECUTING
-Current Plan: 1
-Total Plans in Phase: 16
-Status: Executing Phase 16
-Last activity: 2026-10-10 — Phase 16 execution started
+Phase: 16 (Catalog truth) — VERIFICATION DEFERRED (human)
+Current Plan: 19
+Total Plans in Phase: 19
+Status: Executed; verification human_needed (7/7 must-haves); UAT tests 2-4 pending
+Last activity: 2026-10-10 — Phase 16 executed, verified, UAT deferred
 
 Progress: [██████████] 100%
 
@@ -238,3 +238,9 @@ Items acknowledged and deferred at milestone close, most recent first:
 Last session: 2026-10-09T21:55:30Z
 Stopped at: Phase 15.8 complete, ready to plan Phase 16
 Resume file: None
+
+## Deferred Verification
+
+| Phase | State | Resume |
+|-------|-------|--------|
+| 16 | verification_deferred_human | /gsd-verify-work 16 |
