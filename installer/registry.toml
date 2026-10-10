@@ -1340,15 +1340,26 @@ desc = "OpenAI coding agent for the user; coordinates local coding sessions rath
 # per-host table for the one exception, codex, where rtk's integration is
 # instructions-based rather than a runtime hook).
 recommends = ["codegraph", "graphify", "rtk"]
+# Verified 2026-10-10: https://chatgpt.com/codex/install.sh places the binary
+# at ${CODEX_HOME:-$HOME/.codex}/packages/standalone/current/bin/codex. Live
+# host symlink target agrees. ~/.local/bin/codex is only that symlink;
+# CODEX_INSTALL_DIR moves the symlink, not the binary.
 [[tool.method]]
 kind = "script"
 url = "https://chatgpt.com/codex/install.sh"
 shell = "sh"
+bin_dir = "~/.codex/packages/standalone/current/bin"
 [[tool.method]]
 kind = "cask"
 os = ["macos"]
 cask = "codex"
 
+# Verified 2026-10-10: https://claude.ai/install.sh downloads into
+# ~/.claude/downloads and then runs `claude install`. That shell script never
+# names the launcher directory. The live host symlink
+# ~/.local/bin/claude -> ~/.local/share/claude/versions/<version> is chosen by
+# the binary, so no bin_dir is declared. The phrase `no bin_dir` is
+# load-bearing for tests/test_registry.py; do not reword it.
 [[tool]]
 id = "claude"
 name = "Claude Code"
@@ -1389,10 +1400,14 @@ desc = "Open source coding agent for the user, useful when teams want provider-f
 # than a runtime hook).
 recommends = ["codegraph", "graphify", "rtk"]
 owner_probes = ["pacman"]
+# Verified 2026-10-10: https://opencode.ai/install hardcodes
+# INSTALL_DIR=$HOME/.opencode/bin and moves the binary there. Live host has
+# the file at that path.
 [[tool.method]]
 kind = "script"
 url = "https://opencode.ai/install"
 shell = "bash"
+bin_dir = "~/.opencode/bin"
 [[tool.method]]
 kind = "pacman"
 package = "opencode"
@@ -1416,6 +1431,12 @@ formula = "anomalyco/tap/opencode"
 # formulae.brew.sh/api/cask/cursor.json), installs the GUI IDE app -- a
 # different product from this terminal CLI -- so no kind="cask" fallback is
 # declared here.
+# Verified 2026-10-10: https://cursor.com/install writes the binary under
+# ~/.local/share/cursor-agent/versions/<release> (the release id is baked into
+# each fetched script) and only symlinks ~/.local/bin/cursor-agent. Live host
+# matches that layout. The directory holding the binary itself is not static,
+# so no bin_dir is declared. The phrase `no bin_dir` is load-bearing for
+# tests/test_registry.py; do not reword it.
 [[tool]]
 id = "cursor-agent"
 name = "Cursor Agent CLI"
@@ -1454,6 +1475,9 @@ shell = "bash"
 # declared here. No recommends field is declared on this entry per
 # CONTEXT.md D-01 (deferred, not dropped -- antigravity's own
 # companion-tool ecosystem is unresearched, revisit later).
+# Re-verified 2026-10-10: https://antigravity.google/cli/install.sh defaults
+# TARGET_DIR=$HOME/.local/bin and copies agy there. Live host file (not a
+# symlink) agrees. --dir is an override this method does not pass.
 [[tool]]
 id = "antigravity"
 name = "Antigravity CLI"
@@ -1467,6 +1491,7 @@ desc = "Google's terminal-based Antigravity agent CLI; installs via its own offi
 kind = "script"
 url = "https://antigravity.google/cli/install.sh"
 shell = "bash"
+bin_dir = "~/.local/bin"
 
 # Verified 2026-09-05 against release tag v1.6.0 via the GitHub Releases API
 # (repos/colbymchenry/codegraph/releases/latest): the release publishes
@@ -1723,6 +1748,9 @@ url = "https://get.sdkman.io?ci=true"
 shell = "bash"
 bin_dir = "~/.sdkman/bin"
 detect_path = "~/.sdkman/bin/sdkman-init.sh"
+# Verified 2026-10-10: ~/.sdkman/var/version read as 5.23.0 on this host.
+# installer/version_status.py::_version_file (plan 16-06) reads that file.
+version_file = "~/.sdkman/var/version"
 
 # Verified 2026-09-06 (Tier-3 container, colima+docker, ubuntu:24.04; SDKMAN
 # script 5.23.0 / native 0.7.34 — see 06-01-SUMMARY.md for the verbatim

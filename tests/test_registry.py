@@ -263,6 +263,7 @@ def test_sdkman_uses_init_script_and_declares_bin_dir() -> None:
     # sdkman-init.sh is sourced, not executed — it never carries the execute
     # bit, so `which` can never find it; detect_path is the fallback marker.
     assert sdkman.methods[0].params["detect_path"] == "~/.sdkman/bin/sdkman-init.sh"
+    assert sdkman.methods[0].params["version_file"] == "~/.sdkman/var/version"
 
 
 def test_java_tools_install_exclusively_through_sdkman() -> None:
@@ -1417,6 +1418,38 @@ def test_kitty_linux_script_declares_vendor_bin_dir() -> None:
     assert script.params["args"] == ["launch=n"]
     assert script.params["bin_dir"] == "~/.local/kitty.app/bin"
     assert script.params["shell"] == "sh"
+
+
+def test_every_script_method_declares_a_location_or_explains_no_bin_dir() -> None:
+    """Load-bearing contract: the literal phrase `no bin_dir` inside a
+    `# Verified` comment is what this scan accepts in place of `bin_dir` or
+    `detect_path`. Do not reword that phrase.
+    """
+    lines = REGISTRY.read_text(encoding="utf-8").splitlines()
+    tool_at = [index for index, line in enumerate(lines) if line.strip() == "[[tool]]"]
+    missing: list[int] = []
+    for index, line in enumerate(lines):
+        if line.strip() != 'kind = "script"':
+            continue
+        method_end = index + 1
+        while method_end < len(lines) and not lines[method_end].startswith("[["):
+            method_end += 1
+        body = "\n".join(lines[index:method_end])
+        if "bin_dir" in body or "detect_path" in body:
+            continue
+        tool_start = max(start for start in tool_at if start < index)
+        comment_start = tool_start
+        while comment_start > 0 and (
+            lines[comment_start - 1].startswith("#") or not lines[comment_start - 1].strip()
+        ):
+            comment_start -= 1
+        window = "\n".join(lines[comment_start:method_end])
+        if any(item.startswith("# Verified") for item in lines[comment_start:tool_start]) and (
+            "no bin_dir" in window
+        ):
+            continue
+        missing.append(index + 1)
+    assert missing == []
 
 
 def test_kitty_declared_location_counts_as_installed(
