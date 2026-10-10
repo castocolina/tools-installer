@@ -2287,8 +2287,154 @@ def test_detail_line_names_competing_manager_and_active_path(tmp_path: Path) -> 
     }
     screen = _screen([tool], {"rg": True}, version_refresh=service)
     text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
-    assert "installer" in text
-    assert str(path) in text
+    assert f"also installed via installer artifact — live copy at {path}" in text
+
+
+def test_detail_names_also_installed_via_the_shadowed_manager(tmp_path: Path) -> None:
+    tool = _sdkman_tool("java")
+    path = Path("/home/user/.sdkman/candidates/java/current/bin/java")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {  # pyright: ignore[reportPrivateUsage]
+        "java": (
+            service.epoch,
+            _ownership(
+                tool,
+                owner="brew",
+                shadowed=True,
+                active_path=path,
+                candidates=(
+                    OwnershipCandidate(
+                        owner="brew",
+                        method=None,
+                        package="openjdk",
+                        current_version=None,
+                        evidence="cellar",
+                    ),
+                    OwnershipCandidate(
+                        owner="sdkman",
+                        method=tool.methods[0],
+                        package="java",
+                        current_version=None,
+                        evidence="candidate",
+                    ),
+                ),
+            ),
+        )
+    }
+    screen = _screen([tool], {"java": True}, version_refresh=service)
+    text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    assert f"also installed via SDKMAN — live copy at {path}" in text
+
+
+def test_unknown_detail_names_the_active_binary(tmp_path: Path) -> None:
+    tool = _tool("foo")
+    path = Path("/opt/x/bin/foo")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {  # pyright: ignore[reportPrivateUsage]
+        "foo": (
+            service.epoch,
+            _ownership(
+                tool,
+                owner="unknown",
+                unknown_reason="no manager claimed this tool",
+                active_path=path,
+            ),
+        )
+    }
+    screen = _screen([tool], {"foo": True}, version_refresh=service)
+    text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    assert "active binary resolves to /opt/x/bin/foo" in text
+
+
+def test_update_unknown_appends_the_active_path(tmp_path: Path) -> None:
+    tool = _tool("foo")
+    path = Path("/opt/x/bin/foo")
+    ownership = _ownership(
+        tool,
+        owner="unknown",
+        unknown_reason="no manager claimed this tool",
+        active_path=path,
+    )
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"foo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    updates = _update_service(lambda _tool: ownership)
+    screen = _screen([tool], {"foo": True}, version_refresh=service, updates=updates)
+    screen._browser.highlighted_id = lambda: "foo"  # type: ignore[method-assign]
+    messages: list[str] = []
+    screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
+    screen.action_update_tool()
+    assert messages
+    assert messages[-1].endswith("— active binary resolves to /opt/x/bin/foo")
+
+
+def test_detail_escapes_path_with_bracket(tmp_path: Path) -> None:
+    path = Path("/opt/a[red]b/bin/foo")
+    unknown = _tool("foo")
+    shadowed = _tool("bar")
+    records = (
+        (
+            unknown,
+            _ownership(
+                unknown,
+                owner="unknown",
+                unknown_reason="no manager claimed this tool",
+                active_path=path,
+            ),
+        ),
+        (
+            shadowed,
+            _ownership(
+                shadowed,
+                owner="brew",
+                shadowed=True,
+                active_path=path,
+                candidates=(
+                    OwnershipCandidate(
+                        owner="sdkman",
+                        method=None,
+                        package=None,
+                        current_version=None,
+                        evidence="candidate",
+                    ),
+                    OwnershipCandidate(
+                        owner="brew",
+                        method=shadowed.methods[0],
+                        package="bar",
+                        current_version=None,
+                        evidence="inventory",
+                    ),
+                ),
+            ),
+        ),
+    )
+    needle = "/opt/a[red]b/bin/foo"
+    for tool, ownership in records:
+        service = _offline_service(
+            tmp_path / "versions.json",
+            resolve_tag=lambda repo: "v1",
+            probe_output=lambda argv: "1.0",
+        )
+        service._ownership = {tool.id: (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+        screen = _screen([tool], {tool.id: True}, version_refresh=service)
+        screen._browser.detail_text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+        rendered = Text.from_markup(screen.detail_text)
+        assert needle in rendered.plain
+        start = rendered.plain.find("[red]")
+        assert not any(
+            span.start <= start < span.end and "red" in str(span.style) for span in rendered.spans
+        )
 
 
 def test_detail_text_flags_installed_shell_as_default_or_not(
@@ -2552,8 +2698,11 @@ def test_action_update_tool_skips_confirmed_current(tmp_path: Path) -> None:
     }
     screen._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
     screen._update_tool_worker = lambda tool_id: started.append(tool_id)  # type: ignore[method-assign]
+    messages: list[str] = []
+    screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
     screen.action_update_tool()
     assert started == []
+    assert messages == ["rg is already current"]
 
 
 def _sdkman_tool(tool_id: str) -> Tool:

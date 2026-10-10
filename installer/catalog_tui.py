@@ -10,6 +10,7 @@ reusable `ToolBrowser` widget; this screen wires the catalog's data into it.
 from collections.abc import Mapping
 from typing import ClassVar, Literal
 
+from rich.markup import escape
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
@@ -23,6 +24,8 @@ from installer.model import Tool
 from installer.ownership import (
     MUTATION_GRADE,
     OWNER_LABELS,
+    active_path_note,
+    also_installed_note,
     declared_manager_label,
     owner_detail,
     owner_label,
@@ -721,17 +724,21 @@ class CatalogScreen(AppScreen):
                         f"{tool.id} via {declared}"
                     )
             if ownership.shadowed:
-                others = [
-                    candidate.owner
-                    for candidate in ownership.candidates
-                    if candidate.owner != ownership.owner
-                ]
-                extra = f"also claimed by {', '.join(others)}" if others else "shadowed"
-                if ownership.active_path is not None:
-                    extra += f" — live copy at {ownership.active_path}"
-                segments.append(extra)
+                note = also_installed_note(ownership)
+                if note is not None and ownership.active_path is not None:
+                    segments.append(escape(f"{note} — live copy at {ownership.active_path}"))
+                elif note is not None:
+                    segments.append(note)
+                elif ownership.active_path is not None:
+                    segments.append(escape(f"shadowed — live copy at {ownership.active_path}"))
+                else:
+                    segments.append("shadowed")
         if ownership is not None and ownership.owner == "unknown" and ownership.unknown_reason:
-            segments.append(ownership.unknown_reason)
+            segments.append(escape(ownership.unknown_reason))
+        if ownership is not None:
+            path_note = active_path_note(ownership)
+            if path_note:
+                segments.append(escape(path_note))
         if (
             status is not None
             and status.source == "installer"
@@ -916,7 +923,11 @@ class CatalogScreen(AppScreen):
             return
         if ownership.owner == "unknown" or ownership.confidence not in MUTATION_GRADE:
             reason = ownership.unknown_reason or "no manager claimed this tool"
-            self.status.set(f"cannot update {tool_id}: {reason}", "warn")
+            line = f"cannot update {tool_id}: {reason}"
+            note = active_path_note(ownership)
+            if note:
+                line += f" — {note}"
+            self.status.set(line, "warn")
             return
         if not self._updates.begin(tool_id):
             in_flight = self._updates.in_flight or "another tool"
