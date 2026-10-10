@@ -181,6 +181,11 @@ _GLOBALS_UNREADABLE_PREVIEW = _GLOBALS_UNKNOWN_COUNT
 # the UNAVAILABLE wording (D-03c) names no row, because on that host there is
 # no row to enable, so it is deliberately never rewritten into one.
 _DISK_PRESSURE_ENABLE_PREFIX = "Enable the background cleanup policy"
+_RESTART_GUARD = "The guard is offered again after restarting the installer."
+_INERT_ENTER_HINTS = (
+    "Press enter (apply) to guard it in place",
+    "Press enter to apply the safe fix below",
+)
 # The console sentence's own tail names the platform's real one-off command
 # (WR-08), so only its leading clause is rewritten for the TUI -- rebuilding
 # the whole sentence here would re-introduce a second, platform-blind copy of
@@ -617,7 +622,15 @@ class DoctorScreen(AppScreen):
                 )
             else:
                 rewritten.append(item)
-        return rewritten
+        if not self.applied:
+            return rewritten
+        settled: list[Guidance] = []
+        for item in rewritten:
+            step = item.next_step
+            for hint in _INERT_ENTER_HINTS:
+                step = step.replace(hint, _RESTART_GUARD)
+            settled.append(item if step == item.next_step else replace(item, next_step=step))
+        return settled
 
     def action_apply(self) -> None:
         if self.applied:
