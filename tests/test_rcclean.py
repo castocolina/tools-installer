@@ -4,6 +4,7 @@ import pytest
 
 from installer.rcclean import (
     find_duplicate_path_lines,
+    path_writer_lines,
     scan_rc_path_writers,
     strip_lines,
     unguarded_path_writers,
@@ -611,3 +612,24 @@ def test_assignment_segment_resolves_a_later_path_segment() -> None:
         directory: (Path("rc"),)
     }
     assert find_duplicate_path_lines(text, {directory}, _ENV) == []
+
+
+def test_path_writer_lines_prepend_is_guardable() -> None:
+    text = "alias ll='ls -l'\nexport PATH=\"$HOME/.local/bin:$PATH\"\necho end\n"
+    rc = Path("rc")
+    records = path_writer_lines({rc: text}, {_LOCAL_BIN}, _ENV)
+    assert len(records) == 1
+    assert records[0].index == 1
+    assert records[0].rc_path == rc
+    assert records[0].directory == _LOCAL_BIN
+    assert records[0].guardable is True
+    assert records[0].refusal is None
+    assert records[0].block_owner is None
+
+
+def test_path_writer_lines_zsh_array_is_not_guardable() -> None:
+    text = 'path=("$HOME/.local/bin" $path)\n'
+    records = path_writer_lines({Path("rc"): text}, {_LOCAL_BIN}, _ENV)
+    assert len(records) == 1
+    assert records[0].guardable is False
+    assert records[0].refusal is not None

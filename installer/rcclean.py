@@ -397,6 +397,71 @@ def strip_lines(rc_text: str, indices: list[int]) -> str:
     return "\n".join(line for index, line in enumerate(lines) if index not in drop)
 
 
+@dataclass(frozen=True)
+class PathWriterLine:
+    """One unconditional PATH writer, and whether it is safe to rewrite in place."""
+
+    rc_path: Path
+    index: int
+    text: str
+    directory: Path
+    guardable: bool
+    refusal: str | None
+    block_owner: str | None
+
+
+def _guard_refusal(line: _PathLine) -> str | None:
+    """None when the line is a single-directory prepend we can rewrite.
+
+    A zsh array is simple==False, so it has to be recognized before the
+    compound check or every array line would be reported as compound.
+    """
+    if _ZSH_PATH_ARRAY.match(line.text.strip()):
+        return "edit it by hand"
+    if not line.simple:
+        return "edit it by hand"
+    match = _PATH_EXPORT.match(line.text)
+    if match is None:
+        return "edit it by hand"
+    segments = _unquote(match.group(1)).split(":")
+    if (
+        len(segments) == 2
+        and segments[1] in ("$PATH", "${PATH}")
+        and segments[0] not in ("$PATH", "${PATH}")
+    ):
+        return None
+    return "edit it by hand"
+
+
+def path_writer_lines(
+    rc_texts: Mapping[Path, str], managed_dirs: set[Path], env: Mapping[str, str]
+) -> list[PathWriterLine]:
+    """One record per unconditional writer line and each managed directory it adds."""
+    records: list[PathWriterLine] = []
+    targets = {Path(directory): directory for directory in managed_dirs}
+    for rc_path, rc_text in rc_texts.items():
+        for record in _path_line_targets(rc_text.split("\n"), env):
+            if record.presence_guarded:
+                continue
+            refusal = _guard_refusal(record)
+            for segment in record.targets:
+                directory = _directory_for(segment, targets)
+                if directory is None:
+                    continue
+                records.append(
+                    PathWriterLine(
+                        rc_path=rc_path,
+                        index=record.index,
+                        text=record.text,
+                        directory=directory,
+                        guardable=refusal is None,
+                        refusal=refusal,
+                        block_owner=None,
+                    )
+                )
+    return records
+
+
 def unguarded_path_writers(
     rc_texts: Mapping[Path, str], managed_dirs: set[Path], env: Mapping[str, str]
 ) -> dict[Path, tuple[Path, ...]]:
@@ -434,15 +499,10 @@ def unguarded_path_writers(
     Flagging one would point the user at a correct line.
     """
     writers: dict[Path, list[Path]] = {}
-    targets = {Path(directory): directory for directory in managed_dirs}
-    for rc_path, rc_text in rc_texts.items():
-        for record in _path_line_targets(rc_text.split("\n"), env):
-            if record.presence_guarded:
-                continue
-            for segment in record.targets:
-                directory = _directory_for(segment, targets)
-                if directory is not None and rc_path not in writers.setdefault(directory, []):
-                    writers[directory].append(rc_path)
+    for record in path_writer_lines(rc_texts, managed_dirs, env):
+        files = writers.setdefault(record.directory, [])
+        if record.rc_path not in files:
+            files.append(record.rc_path)
     return {directory: tuple(files) for directory, files in writers.items()}
 
 

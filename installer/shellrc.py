@@ -9,7 +9,7 @@ these files are edited read-modify-write.
 import os
 import re
 import stat
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -17,6 +17,7 @@ from typing import Literal
 from installer.atomic import OLD_SUFFIX, atomic_write_bytes, atomic_write_text, staged_sibling
 from installer.model import Tool
 from installer.platform import Platform
+from installer.rcclean import PathWriterLine
 from installer.resolve import resolve_methods
 
 _PATH_BEGIN = "# >>> tools-installer path >>>"
@@ -824,6 +825,31 @@ class _Snapshot:
     mode: int
 
 
+def _path_hazard(path: Path) -> str | None:
+    """A refusal when a write aimed at path could land on a different file, or block.
+
+    A symlink is followed by this project's atomic writer, which is correct for a
+    dotfile this project owns and destructive for a foreign file. A FIFO makes
+    the snapshot's open block forever. `lstat` so the link itself is seen.
+    """
+    if path.is_symlink():
+        return (
+            f"{path} is a symlink; a write would follow it and replace its "
+            f"target because this project's atomic writer resolves a symlinked target by "
+            f"design. Remove the link or consolidate by hand."
+        )
+    try:
+        mode = os.lstat(path).st_mode
+    except OSError:
+        return None
+    if not stat.S_ISREG(mode):
+        return (
+            f"{path} is not a regular file; refusing rather than reading something "
+            f"that may never return. Remove it or consolidate by hand."
+        )
+    return None
+
+
 def consolidation_precondition(shellrc_path: Path, myshellrc_path: Path) -> str | None:
     """A refusal reason, or None, when neither path is a hazard.
 
@@ -837,6 +863,8 @@ def consolidation_precondition(shellrc_path: Path, myshellrc_path: Path) -> str 
     helper that runs after the owned-stub check and needs a snapshot the caller
     has not taken yet. Nothing may move it back into this function.
     """
+    shellrc_hazard = _path_hazard(shellrc_path)
+    myshellrc_hazard = _path_hazard(myshellrc_path)
     if shellrc_path.is_symlink():
         return (
             f"{shellrc_path} is a symlink; a stub write would follow it and replace its "
@@ -848,20 +876,10 @@ def consolidation_precondition(shellrc_path: Path, myshellrc_path: Path) -> str 
             f"{myshellrc_path} is a symlink; writing the consolidated content through it "
             f"would replace its target. Remove the link or consolidate by hand."
         )
-    # Neither path may be a non-regular file. A FIFO at either path makes the
-    # snapshot's `os.open` block FOREVER with no timeout and no way for the user
-    # to tell what is wrong -- the installer simply never returns. `lstat` so the
-    # link itself is seen; symlinks are already refused above.
-    for path in (shellrc_path, myshellrc_path):
-        try:
-            mode = os.lstat(path).st_mode
-        except OSError:
-            continue
-        if not stat.S_ISREG(mode):
-            return (
-                f"{path} is not a regular file; refusing rather than reading something "
-                f"that may never return. Remove it or consolidate by hand."
-            )
+    if shellrc_hazard is not None:
+        return shellrc_hazard
+    if myshellrc_hazard is not None:
+        return myshellrc_hazard
     if shellrc_path.exists() and myshellrc_path.exists():
         try:
             same = shellrc_path.samefile(myshellrc_path)
@@ -956,6 +974,25 @@ def backup_precondition(shellrc_path: Path, snapshot: _Snapshot) -> str | None:
             f"is refused."
         )
     return None
+
+
+def _create_backup(path: Path, snapshot: _Snapshot) -> bool:
+    """Write snapshot bytes to path's .old sibling, create-exclusive.
+
+    Returns False when the sibling already exists. The caller has already
+    refused a backup whose bytes or mode differ, so an existing sibling here
+    is the same original and must not be replaced.
+    """
+    backup = staged_sibling(path, OLD_SUFFIX)
+    if backup.exists():
+        return False
+    fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, snapshot.data)
+    finally:
+        os.close(fd)
+    os.chmod(backup, snapshot.mode)
+    return True
 
 
 def _is_owned_stub(text: str) -> bool:
@@ -1073,15 +1110,7 @@ def consolidate_shellrc(
     atomic_write_text(myshellrc_path, merged)
 
     backup = staged_sibling(shellrc_path, OLD_SUFFIX)
-    created_backup = False
-    if not backup.exists():
-        fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            os.write(fd, snapshot.data)
-        finally:
-            os.close(fd)
-        os.chmod(backup, snapshot.mode)
-        created_backup = True
+    created_backup = _create_backup(shellrc_path, snapshot)
 
     if not _snapshot_matches(shellrc_path, snapshot):
         if pre_myshellrc_bytes is None:
@@ -1100,3 +1129,84 @@ def consolidate_shellrc(
 
     atomic_write_text(shellrc_path, consolidation_stub(myshellrc_path))
     return ShellrcConsolidation(status="consolidated")
+
+
+_GuardStatus = Literal["guarded", "refused", "nothing"]
+
+
+@dataclass(frozen=True)
+class PathGuardOutcome:
+    """The outcome of one `guard_path_writers` call."""
+
+    status: _GuardStatus
+    reason: str | None = None
+
+
+def guard_path_writers(rc_path: Path, lines: Sequence[PathWriterLine]) -> PathGuardOutcome:
+    """Rewrite each guardable PATH line in place. Never delete a line.
+
+    The directory comes from the managed-dir set, never from the foreign line's
+    text. A backup of the original bytes and mode is taken before the write.
+    """
+    chosen = [line for line in lines if line.guardable and line.rc_path == rc_path]
+    if not chosen:
+        return PathGuardOutcome(status="nothing")
+
+    hazard = _path_hazard(rc_path)
+    if hazard is not None:
+        return PathGuardOutcome(status="refused", reason=hazard)
+
+    try:
+        snapshot = _snapshot(rc_path)
+    except OSError as exc:
+        return PathGuardOutcome(status="refused", reason=f"{rc_path} could not be read: {exc}")
+
+    try:
+        text = snapshot.data.decode("utf-8")
+    except UnicodeDecodeError:
+        return PathGuardOutcome(
+            status="refused",
+            reason=f"{rc_path} is not valid UTF-8; refusing to rewrite it.",
+        )
+
+    text_lines = text.split("\n")
+    for record in chosen:
+        if record.index < 0 or record.index >= len(text_lines):
+            return PathGuardOutcome(
+                status="refused", reason=f"{rc_path} changed since Doctor scanned it"
+            )
+        # record.text keeps its trailing CR; strip it on both sides before comparing.
+        if text_lines[record.index].rstrip("\r") != record.text.rstrip("\r"):
+            return PathGuardOutcome(
+                status="refused", reason=f"{rc_path} changed since Doctor scanned it"
+            )
+
+    conflict = backup_precondition(rc_path, snapshot)
+    if conflict is not None:
+        return PathGuardOutcome(status="refused", reason=conflict)
+
+    by_index: dict[int, PathWriterLine] = {}
+    for record in chosen:
+        by_index.setdefault(record.index, record)
+    rewritten: list[str] = []
+    for index, original in enumerate(text_lines):
+        record = by_index.get(index)
+        if record is None:
+            rewritten.append(original)
+            continue
+        carriage = original.endswith("\r")
+        body = original[:-1] if carriage else original
+        indent = body[: len(body) - len(body.lstrip(" \t"))]
+        line = indent + path_export_guard(record.directory)
+        rewritten.append(line + "\r" if carriage else line)
+
+    created = _create_backup(rc_path, snapshot)
+    if not _snapshot_matches(rc_path, snapshot):
+        if created:
+            staged_sibling(rc_path, OLD_SUFFIX).unlink(missing_ok=True)
+        return PathGuardOutcome(
+            status="refused", reason=f"{rc_path} changed while it was being guarded"
+        )
+
+    atomic_write_text(rc_path, "\n".join(rewritten), mode=snapshot.mode)
+    return PathGuardOutcome(status="guarded")

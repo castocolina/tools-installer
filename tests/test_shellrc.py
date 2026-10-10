@@ -13,6 +13,7 @@ import pytest
 from installer.atomic import OLD_SUFFIX, atomic_write_text, staged_sibling
 from installer.model import Method, Tool
 from installer.platform import Platform
+from installer.rcclean import path_writer_lines
 from installer.shellrc import (
     apply_block,
     classify_source_line,
@@ -20,6 +21,7 @@ from installer.shellrc import (
     consolidate_shellrc,
     consolidation_refusal,
     ensure_source,
+    guard_path_writers,
     has_managed_block,
     managed_block,
     path_export_guard,
@@ -2862,6 +2864,52 @@ def test_a_non_utf8_myshellrc_refuses_as_a_typed_outcome(tmp_path: Path) -> None
     assert result.status == "refused"
     assert result.reason is not None
     assert "UTF-8" in result.reason
+
+
+def _bash_n(rc: Path, home: Path) -> subprocess.CompletedProcess[str]:
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home)}
+    return subprocess.run(
+        ["bash", "-n", str(rc)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_guard_in_place_rewrites_one_foreign_bashrc_line(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    directory = home / ".local" / "bin"
+    env = {"HOME": str(home)}
+    text = "alias ll='ls -l'\nexport PATH=\"$HOME/.local/bin:$PATH\"\necho end\n"
+    rc = tmp_path / ".bashrc"
+    rc.write_text(text)
+    original = rc.read_bytes()
+    original_mode = stat.S_IMODE(rc.stat().st_mode)
+
+    records = path_writer_lines({rc: text}, {directory}, env)
+    assert len(records) == 1
+    assert records[0].index == 1
+    assert records[0].guardable is True
+
+    outcome = guard_path_writers(rc, records)
+
+    assert outcome.status == "guarded"
+    lines = rc.read_text().split("\n")
+    assert lines[0] == "alias ll='ls -l'"
+    assert lines[1] == path_export_guard(directory)
+    assert lines[2] == "echo end"
+    backup = staged_sibling(rc, OLD_SUFFIX)
+    assert backup.read_bytes() == original
+    assert stat.S_IMODE(backup.stat().st_mode) == original_mode
+    assert _bash_n(rc, home).returncode == 0
+
+    again = path_writer_lines({rc: rc.read_text()}, {directory}, env)
+    assert not any(record.guardable for record in again)
+    second = guard_path_writers(rc, [])
+    assert second.status == "nothing"
+    assert rc.read_bytes() != original
+    assert backup.read_bytes() == original
 
 
 def test_consolidation_refuses_when_shellrc_sources_an_rc_this_run_will_wire(
