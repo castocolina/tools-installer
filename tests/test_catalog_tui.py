@@ -2092,6 +2092,7 @@ def _ownership(
     active_path: Path | None = None,
     candidates: tuple[OwnershipCandidate, ...] = (),
     package: str | None = None,
+    off_policy: bool = False,
 ) -> ManagerOwnership:
     if not candidates:
         candidates = (
@@ -2115,6 +2116,7 @@ def _ownership(
         active_candidate=None if owner == "unknown" else owner,
         active_path=active_path,
         unknown_reason=unknown_reason,
+        off_policy=off_policy,
     )
 
 
@@ -2552,6 +2554,111 @@ def test_action_update_tool_skips_confirmed_current(tmp_path: Path) -> None:
     screen._update_tool_worker = lambda tool_id: started.append(tool_id)  # type: ignore[method-assign]
     screen.action_update_tool()
     assert started == []
+
+
+def _sdkman_tool(tool_id: str) -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="lang",
+        cmd=tool_id,
+        methods=(Method(kind="sdkman", params={"candidate": tool_id}),),
+    )
+
+
+def _counting_begin(updates: UpdateService) -> list[str]:
+    begins: list[str] = []
+    original = updates.begin
+
+    def begin(tool_id: str) -> bool:
+        begins.append(tool_id)
+        return original(tool_id)
+
+    updates.begin = begin  # type: ignore[method-assign]
+    return begins
+
+
+def test_off_policy_owner_cell_and_detail_name_the_declared_manager(tmp_path: Path) -> None:
+    tool = _sdkman_tool("groovy")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {  # pyright: ignore[reportPrivateUsage]
+        "groovy": (service.epoch, _ownership(tool, owner="brew", off_policy=True))
+    }
+    screen = _screen([tool], {"groovy": True}, version_refresh=service)
+    cell = screen._owner_cell(tool)  # pyright: ignore[reportPrivateUsage]
+    assert cell.plain == "Homebrew ≠ policy"
+    tag = " ≠ policy"
+    start = cell.plain.find(tag)
+    assert any(span.start <= start < span.end and "dim" in str(span.style) for span in cell.spans)
+    detail = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    assert "the catalog's policy installs groovy via SDKMAN" in detail
+
+
+def test_update_on_current_off_policy_tool_explains_and_does_not_begin(tmp_path: Path) -> None:
+    tool = _sdkman_tool("groovy")
+    ownership = _ownership(tool, owner="brew", off_policy=True)
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"groovy": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    updates = _update_service(lambda _tool: ownership)
+    begins = _counting_begin(updates)
+    screen = _screen([tool], {"groovy": True}, version_refresh=service, updates=updates)
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "groovy": VersionStatus(
+            tool_id="groovy",
+            installed="4.0.0",
+            latest="4.0.0",
+            outdated=False,
+            stale=False,
+            source="brew",
+        )
+    }
+    screen._browser.highlighted_id = lambda: "groovy"  # type: ignore[method-assign]
+    messages: list[str] = []
+    screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
+    screen.action_update_tool()
+    assert begins == []
+    assert messages == [
+        "groovy is already current — Homebrew owns this copy; the catalog installs it via "
+        "SDKMAN, and moving it there is not available yet"
+    ]
+
+
+def test_update_on_current_tool_says_already_current(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    ownership = _ownership(tool, owner="brew")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    updates = _update_service(lambda _tool: ownership)
+    begins = _counting_begin(updates)
+    screen = _screen([tool], {"rg": True}, version_refresh=service, updates=updates)
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "rg": VersionStatus(
+            tool_id="rg",
+            installed="14.1.1",
+            latest="14.1.1",
+            outdated=False,
+            stale=False,
+            source="brew",
+        )
+    }
+    screen._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
+    messages: list[str] = []
+    screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
+    screen.action_update_tool()
+    assert begins == []
+    assert messages == ["rg is already current"]
 
 
 def test_action_update_tool_refuses_non_mutation_grade(tmp_path: Path) -> None:

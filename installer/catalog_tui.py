@@ -20,7 +20,13 @@ from textual.widgets import DataTable
 from installer.deps import missing_requires
 from installer.enums import Audience, Priority
 from installer.model import Tool
-from installer.ownership import MUTATION_GRADE, OWNER_LABELS, owner_detail, owner_label
+from installer.ownership import (
+    MUTATION_GRADE,
+    OWNER_LABELS,
+    declared_manager_label,
+    owner_detail,
+    owner_label,
+)
 from installer.resolve import UnavailableReason
 from installer.selection import select_tools, unstaged_recommends
 from installer.skill_lifecycle import SKILL_HARNESS_LABELS
@@ -586,7 +592,11 @@ class CatalogScreen(AppScreen):
             # inventing a second word for the same state.
             return Text(_VER_CHECKING, style="dim") if self.version_refreshing else Text("")
         label = owner_label(ownership)
-        return Text(label) if label else Text("")
+        if not label:
+            return Text("")
+        if ownership.off_policy:
+            return Text.assemble(label, (" ≠ policy", "dim"))
+        return Text(label)
 
     def _row_cells(self, tool: Tool) -> list[Text]:
         installed = self._installed[tool.id]
@@ -702,6 +712,14 @@ class CatalogScreen(AppScreen):
             label = owner_detail(ownership)
             if label:
                 segments.append(label)
+            if ownership.off_policy and service is not None:
+                declared = declared_manager_label(tool, service.platform)
+                real = owner_label(ownership)
+                if declared is not None and real is not None:
+                    segments.append(
+                        f"{real} owns this copy; the catalog's policy installs "
+                        f"{tool.id} via {declared}"
+                    )
             if ownership.shadowed:
                 others = [
                     candidate.owner
@@ -870,9 +888,19 @@ class CatalogScreen(AppScreen):
         if tool is None:
             return
         status = self._version_statuses.get(tool_id)
-        if status is not None and status.outdated is False:
-            return
         ownership = self._version_refresh.ownership_of(tool_id)
+        if status is not None and status.outdated is False:
+            line = f"{tool_id} is already current"
+            if ownership is not None and ownership.off_policy:
+                declared = declared_manager_label(tool, self._version_refresh.platform)
+                real = owner_label(ownership)
+                if declared is not None and real is not None:
+                    line += (
+                        f" — {real} owns this copy; the catalog installs it via {declared}, "
+                        "and moving it there is not available yet"
+                    )
+            self.status.set(line, "ok")
+            return
         if ownership is None:
             # CR-02 (15.4-REVIEW.md): never a silent return. A `None` here is
             # overwhelmingly "a mutation bumped the epoch and the replacing
