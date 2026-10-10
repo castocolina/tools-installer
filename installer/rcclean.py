@@ -15,6 +15,8 @@ _MANAGED_BEGINS = ("# >>> tools-installer path >>>", "# >>> tools-installer sour
 _MANAGED_ENDS = ("# <<< tools-installer path <<<", "# <<< tools-installer source <<<")
 _ASSIGN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.+?)\s*$")
 _PATH_EXPORT = re.compile(r"^\s*(?:export\s+)?PATH=(.+?)\s*$")
+_ZSH_PATH_ARRAY = re.compile(r"^\s*(?:export\s+|typeset\s+-U\s+)?path=\((.*)\)\s*$")
+_LEADING_THEN_DO = re.compile(r"^\s*(?:then|do)\s+")
 _VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 _PATH_REF = re.compile(r"\$\{?PATH\b")
 _WORD = re.compile(r"[A-Za-z_]\w*")
@@ -157,12 +159,166 @@ def _update_block_stack(stack: list[_Frame], line: str) -> bool:
     return outer or own
 
 
+def _split_unquoted(line: str) -> tuple[list[tuple[str, str]], bool]:
+    """Split on unquoted separators and drop an unquoted comment word.
+
+    Returns (separator, segment) pairs. The first separator is empty; later
+    ones are a semicolon, &&, or ||. A doubled semicolon stays in the segment
+    so a case row is not torn apart.
+
+    Quote-aware on purpose. installer/shellrc.py::_split_command_segments is
+    quote-blind and also splits on parentheses, so it cannot parse a shell
+    array or a hash that sits inside quotes.
+    """
+    segments: list[tuple[str, str]] = []
+    buf: list[str] = []
+    separator = ""
+    comment_dropped = False
+    in_single = False
+    in_double = False
+    index = 0
+    length = len(line)
+    while index < length:
+        char = line[index]
+        if in_single:
+            buf.append(char)
+            if char == "'":
+                in_single = False
+            index += 1
+            continue
+        if char == "\\" and not in_double and index + 1 < length:
+            buf.append(char)
+            buf.append(line[index + 1])
+            index += 2
+            continue
+        if in_double:
+            if char == "\\" and index + 1 < length:
+                buf.append(char)
+                buf.append(line[index + 1])
+                index += 2
+                continue
+            buf.append(char)
+            if char == '"':
+                in_double = False
+            index += 1
+            continue
+        if char in "'\"":
+            in_single = char == "'"
+            in_double = char == '"'
+            buf.append(char)
+            index += 1
+            continue
+        if char == "#" and (index == 0 or line[index - 1] in " \t;|&"):
+            comment_dropped = True
+            break
+        if line.startswith(";;", index):
+            buf.append(";;")
+            index += 2
+            continue
+        if char == ";":
+            segments.append((separator, "".join(buf)))
+            buf = []
+            separator = ";"
+            index += 1
+            continue
+        if line.startswith("&&", index) or line.startswith("||", index):
+            segments.append((separator, "".join(buf)))
+            buf = []
+            separator = line[index : index + 2]
+            index += 2
+            continue
+        buf.append(char)
+        index += 1
+    segments.append((separator, "".join(buf)))
+    return segments, comment_dropped
+
+
+def _command_text(segment: str) -> str:
+    return _LEADING_THEN_DO.sub("", segment, count=1)
+
+
+def _zsh_array_targets(body: str, env: Mapping[str, str]) -> tuple[str, ...]:
+    # shortcut: a quoted array element containing a space mis-splits, acceptable
+    # for a diagnostic because PATH dirs with spaces are rare (and the guard
+    # writer in plan 16-08 refuses zsh arrays anyway).
+    found: list[str] = []
+    for element in body.split():
+        raw = _unquote(element)
+        if raw in ("$path", "${path[@]}"):
+            continue
+        expanded = _expand(raw, env)
+        if expanded is not None:
+            found.append(expanded)
+    return tuple(found)
+
+
+def _remember_assign(body: str, local: dict[str, str]) -> None:
+    assign = _ASSIGN.match(body)
+    if assign is None or assign.group(1) in ("PATH", "path"):
+        return
+    expanded = _expand(_unquote(assign.group(2)), local)
+    if expanded is not None:
+        local[assign.group(1)] = expanded
+
+
+def _judge_line(
+    index: int,
+    line: str,
+    segments: list[tuple[str, str]],
+    comment_dropped: bool,
+    presence_guarded: bool,
+    local: dict[str, str],
+) -> _PathLine | None:
+    chain_has_presence = False
+    targets: list[str] = []
+    matched_plain = False
+    matched_any = False
+    for separator, segment in segments:
+        if separator in ("", ";"):
+            chain_has_presence = False
+        chain_guarded = separator in ("&&", "||") and chain_has_presence
+        body = _command_text(segment)
+        zsh = _ZSH_PATH_ARRAY.match(body)
+        path = None if zsh else _PATH_EXPORT.match(body)
+        if zsh is not None or path is not None:
+            matched_any = True
+            if path is not None:
+                matched_plain = True
+            if not chain_guarded:
+                if zsh is not None:
+                    targets.extend(_zsh_array_targets(zsh.group(1), local))
+                elif path is not None:
+                    targets.extend(_expanded_segments(path.group(1), local))
+        else:
+            _remember_assign(body, local)
+            if _PATH_REF.search(segment):
+                chain_has_presence = True
+    if not matched_any:
+        return None
+    plain_only = (
+        len(segments) == 1
+        and not comment_dropped
+        and matched_plain
+        and _ZSH_PATH_ARRAY.match(_command_text(segments[0][1])) is None
+    )
+    return _PathLine(
+        index=index,
+        text=line,
+        targets=tuple(targets),
+        simple=plain_only,
+        indented=line[:1] in (" ", "\t"),
+        presence_guarded=presence_guarded,
+    )
+
+
 def _path_line_targets(lines: list[str], env: Mapping[str, str]) -> Iterator[_PathLine]:
     """Yield PATH assignments outside managed blocks, with guard context.
 
     A block whose condition references PATH is presence-guarded. A condition
-    that only tests that a directory exists is not. A line whose first word is
-    case is a guard header, not an assignment.
+    that only tests that a directory exists is not. An && or || segment is
+    also presence-guarded when an earlier non-assignment segment of that chain
+    references PATH. A line whose first segment starts with case is a guard
+    header, not an assignment.
     """
     blocked = _managed_line_indices(lines)
     local: dict[str, str] = dict(env)
@@ -171,24 +327,12 @@ def _path_line_targets(lines: list[str], env: Mapping[str, str]) -> Iterator[_Pa
         if index in blocked:
             continue
         presence_guarded = _update_block_stack(stack, line)
-        if _first_word(line.strip()) == "case":
+        segments, comment_dropped = _split_unquoted(line)
+        if segments and _first_word(segments[0][1].lstrip()) == "case":
             continue
-        path_match = _PATH_EXPORT.match(line)
-        if path_match:
-            yield _PathLine(
-                index=index,
-                text=line,
-                targets=_expanded_segments(path_match.group(1), local),
-                simple=True,
-                indented=line[:1] in (" ", "\t"),
-                presence_guarded=presence_guarded,
-            )
-            continue
-        assign = _ASSIGN.match(line)
-        if assign:
-            expanded = _expand(_unquote(assign.group(2)), local)
-            if expanded is not None:
-                local[assign.group(1)] = expanded
+        record = _judge_line(index, line, segments, comment_dropped, presence_guarded, local)
+        if record is not None:
+            yield record
 
 
 def _managed_line_indices(lines: list[str]) -> set[int]:

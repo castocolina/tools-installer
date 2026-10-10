@@ -514,3 +514,100 @@ def test_writer_nested_loop_inside_guarded_if_not_reported(loop_header: str) -> 
     managed = {_LOCAL_BIN}
     assert unguarded_path_writers({Path("rc"): text}, managed, _ENV) == {}
     assert find_duplicate_path_lines(text, managed, _ENV) == []
+
+
+def _writer(text: str, directory: Path = _LOCAL_BIN) -> dict[Path, tuple[Path, ...]]:
+    return unguarded_path_writers({Path("rc"): text}, {directory}, _ENV)
+
+
+def test_trailing_comment_is_a_writer_not_a_strip_candidate() -> None:
+    text = 'export PATH="$HOME/.local/bin:$PATH"  # added by uv\n'
+    assert _writer(text) == {_LOCAL_BIN: (Path("rc"),)}
+    assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == []
+
+
+def test_semicolon_suffix_is_a_writer_not_a_strip_candidate() -> None:
+    text = 'export PATH="$HOME/.local/bin:$PATH"; export X=1\n'
+    assert _writer(text) == {_LOCAL_BIN: (Path("rc"),)}
+    assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == []
+
+
+def test_and_prefix_is_a_writer_not_a_strip_candidate() -> None:
+    text = '[ -d "$HOME/.local/bin" ] && export PATH="$HOME/.local/bin:$PATH"\n'
+    assert _writer(text) == {_LOCAL_BIN: (Path("rc"),)}
+    assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == []
+
+
+def test_or_prefix_is_a_writer() -> None:
+    text = 'true || export PATH="$HOME/.local/bin:$PATH"\n'
+    assert _writer(text) == {_LOCAL_BIN: (Path("rc"),)}
+    assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "reported"),
+    [
+        ('if [ -d "$HOME/bin" ]; then PATH="$HOME/bin:$PATH"; fi\n', True),
+        ('if [[ ":$PATH:" != *":$HOME/bin:"* ]]; then PATH="$HOME/bin:$PATH"; fi\n', False),
+    ],
+)
+def test_one_line_if_shapes(text: str, reported: bool) -> None:
+    directory = Path("/home/u/bin")
+    expected = {directory: (Path("rc"),)} if reported else {}
+    assert unguarded_path_writers({Path("rc"): text}, {directory}, _ENV) == expected
+    assert find_duplicate_path_lines(text, {directory}, _ENV) == []
+
+
+@pytest.mark.parametrize(
+    "idiom",
+    [
+        '[[ ":$PATH:" != *":$HOME/.local/bin:"* ]] && export PATH="$HOME/.local/bin:$PATH"',
+        '[[ ":$PATH:" == *":$HOME/.local/bin:"* ]] || export PATH="$HOME/.local/bin:$PATH"',
+    ],
+)
+def test_one_line_presence_idiom_is_not_a_writer(idiom: str) -> None:
+    assert _writer(idiom + "\n") == {}
+    text = idiom + '\nexport PATH="$HOME/.local/bin:$PATH"\n'
+    assert _writer(text) == {_LOCAL_BIN: (Path("rc"),)}
+    assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == [1]
+
+
+def test_earlier_assignment_is_not_a_presence_test() -> None:
+    text = '[ -d "$HOME/a" ] && PATH="$HOME/a:$PATH" && PATH="$HOME/.local/bin:$PATH"\n'
+    assert _writer(text) == {_LOCAL_BIN: (Path("rc"),)}
+    assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'path=("$HOME/.local/bin" $path)\n',
+        'typeset -U path; path=("$HOME/.local/bin" $path)\n',
+        'export path=("$HOME/.local/bin" $path)\n',
+    ],
+)
+def test_zsh_path_array_shapes_are_writers(text: str) -> None:
+    assert _writer(text) == {_LOCAL_BIN: (Path("rc"),)}
+
+
+def test_zsh_array_line_is_not_a_strip_candidate() -> None:
+    text = 'path=("$HOME/.local/bin" $path)\n'
+    assert _writer(text) == {_LOCAL_BIN: (Path("rc"),)}
+    assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == []
+
+
+def test_hash_inside_quotes_is_data_not_a_comment() -> None:
+    directory = Path("/opt/a#b")
+    text = 'export PATH="/opt/a#b:$PATH"\n'
+    assert unguarded_path_writers({Path("rc"): text}, {directory}, _ENV) == {
+        directory: (Path("rc"),)
+    }
+
+
+def test_assignment_segment_resolves_a_later_path_segment() -> None:
+    directory = Path("/home/u/.bun/bin")
+    text = 'export BUN_INSTALL="$HOME/.bun"; export PATH="$BUN_INSTALL/bin:$PATH"\n'
+    assert unguarded_path_writers({Path("rc"): text}, {directory}, _ENV) == {
+        directory: (Path("rc"),)
+    }
+    assert find_duplicate_path_lines(text, {directory}, _ENV) == []
