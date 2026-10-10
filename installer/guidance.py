@@ -17,6 +17,9 @@ from installer.pnpm_globals import NodeGlobalsReport
 from installer.rcclean import PathWriterLine
 from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit, system_scope_warning
 
+GUARD_ENTER_HINT = "Press enter (apply) to guard it in place"
+SAFE_FIX_ENTER_HINT = "Press enter to apply the safe fix below"
+
 
 @dataclass(frozen=True, init=False)
 class Guidance:
@@ -85,7 +88,7 @@ def _writer_next_step(
         )
     if any(record.guardable for record in records):
         fragments.append(
-            "Press enter (apply) to guard it in place. A backup of the original is "
+            f"{GUARD_ENTER_HINT}. A backup of the original is "
             "saved as .tools-installer.old first"
         )
     reasons: list[str] = []

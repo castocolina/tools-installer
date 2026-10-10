@@ -34,6 +34,8 @@ from installer.doctor import DoctorReport
 from installer.enums import Tier, UninstallState
 from installer.execute_screen import ExecuteInputs, ExecuteScreen, InstallRunFinished
 from installer.guidance import (
+    GUARD_ENTER_HINT,
+    SAFE_FIX_ENTER_HINT,
     Guidance,
     competing_mechanism_guidance,
     disk_pressure_guidance,
@@ -182,10 +184,7 @@ _GLOBALS_UNREADABLE_PREVIEW = _GLOBALS_UNKNOWN_COUNT
 # no row to enable, so it is deliberately never rewritten into one.
 _DISK_PRESSURE_ENABLE_PREFIX = "Enable the background cleanup policy"
 _RESTART_GUARD = "The guard is offered again after restarting the installer."
-_INERT_ENTER_HINTS = (
-    "Press enter (apply) to guard it in place",
-    "Press enter to apply the safe fix below",
-)
+_INERT_ENTER_HINTS = (GUARD_ENTER_HINT, SAFE_FIX_ENTER_HINT)
 # The console sentence's own tail names the platform's real one-off command
 # (WR-08), so only its leading clause is rewritten for the TUI -- rebuilding
 # the whole sentence here would re-introduce a second, platform-blind copy of
@@ -600,7 +599,7 @@ class DoctorScreen(AppScreen):
                     replace(
                         item,
                         next_step=(
-                            "Press enter to apply the safe fix below, then open a new terminal "
+                            f"{SAFE_FIX_ENTER_HINT}, then open a new terminal "
                             "(or `source ~/.myshellrc`)."
                         ),
                     )
