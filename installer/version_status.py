@@ -49,7 +49,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from installer.guards import real_pnpm
 from installer.install_ownership import ProbeRunner
@@ -159,6 +159,7 @@ def resolve_github_release_status(
     probe_output: Callable[[list[str]], str | None],
     resolve_tag: TagResolver,
     allow_fetch: bool = True,
+    ownership: ManagerOwnership | None = None,
 ) -> tuple[VersionStatus, VersionCacheEntry | None]:
     """Probe the installed tool, optionally fetch the latest tag, build status.
 
@@ -168,7 +169,7 @@ def resolve_github_release_status(
     `allow_fetch=False` skips the network even when `should_fetch` is True
     (the per-pass GitHub budget) and forces stale=True.
     """
-    output = probe_output([tool.cmd, "--version"])
+    output = probe_output(_version_argv(tool, ownership))
     installed = extract_observed_version(output) if output else None
     now_iso = now.astimezone(UTC).isoformat()
     fetched = False
@@ -219,8 +220,46 @@ def _pinned_spec(ownership: ManagerOwnership) -> str | None:
     return None
 
 
-def _probed_version(tool: Tool, probe_output: Callable[[list[str]], str | None]) -> str | None:
-    output = probe_output([tool.cmd, "--version"])
+def _version_argv(tool: Tool, ownership: ManagerOwnership | None) -> list[str]:
+    if ownership is not None and ownership.active_path is not None:
+        return [str(ownership.active_path), "--version"]
+    methods: list[Method] = []
+    if ownership is not None and ownership.method is not None:
+        methods.append(ownership.method)
+    methods.extend(tool.methods)
+    for method in methods:
+        bin_dir = method.params.get("bin_dir")
+        if not isinstance(bin_dir, str) or not bin_dir:
+            continue
+        candidate = Path(bin_dir).expanduser() / tool.cmd
+        if candidate.is_file():
+            return [str(candidate), "--version"]
+    return [tool.cmd, "--version"]
+
+
+def _version_file(ownership: ManagerOwnership) -> str | None | Literal[False]:
+    if ownership.method is None:
+        return False
+    raw = ownership.method.params.get("version_file")
+    if not isinstance(raw, str) or not raw:
+        return False
+    try:
+        text = Path(raw).expanduser().read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    lines = text.splitlines()
+    return extract_observed_version(lines[0] if lines else "")
+
+
+def _probed_version(
+    tool: Tool,
+    ownership: ManagerOwnership,
+    probe_output: Callable[[list[str]], str | None],
+) -> str | None:
+    from_file = _version_file(ownership)
+    if from_file is not False:
+        return from_file
+    output = probe_output(_version_argv(tool, ownership))
     return extract_observed_version(output) if output else None
 
 
@@ -268,6 +307,7 @@ def resolve_status(
                 probe_output=probe_output,
                 resolve_tag=resolve_tag,
                 allow_fetch=allow_fetch,
+                ownership=ownership,
             )
             if pin is None:
                 return status, new_entry
@@ -281,7 +321,7 @@ def resolve_status(
                 pinned_spec=pin,
             )
             return pinned, new_entry
-        probed = _probed_version(tool, probe_output)
+        probed = _probed_version(tool, ownership, probe_output)
         return (
             VersionStatus(
                 tool_id=tool.id,
@@ -301,7 +341,7 @@ def resolve_status(
             "pnpm": outdated.pnpm,
             "uv": outdated.uv,
         }[owner]
-        probed = _probed_version(tool, probe_output)
+        probed = _probed_version(tool, ownership, probe_output)
         if mapping is None:
             return (
                 VersionStatus(
@@ -357,7 +397,7 @@ def resolve_status(
             ),
             None,
         )
-    probed = _probed_version(tool, probe_output)
+    probed = _probed_version(tool, ownership, probe_output)
     return (
         VersionStatus(
             tool_id=tool.id,

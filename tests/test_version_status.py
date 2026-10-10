@@ -2,6 +2,7 @@ import json
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -1530,3 +1531,144 @@ def test_sdkman_version_through_real_resolve_ownership(tmp_path: Path) -> None:
     )
     assert calls == []
     assert status.installed == "4.1.0"
+
+
+def _tool(cmd: str, *methods: Method) -> Tool:
+    return Tool(id=cmd, name=cmd, category="dev", cmd=cmd, methods=methods)
+
+
+def _probe_calls() -> tuple[list[list[str]], Callable[[list[str]], str]]:
+    calls: list[list[str]] = []
+
+    def probe(argv: list[str]) -> str:
+        calls.append(argv)
+        return "9.9.9"
+
+    return calls, probe
+
+
+def test_probe_uses_resolved_active_path() -> None:
+    tool = _tool("tool")
+    ownership = replace(_owned(tool, "unknown"), active_path=Path("/opt/x/bin/tool"), method=None)
+    calls, probe = _probe_calls()
+    resolve_status(
+        tool,
+        ownership=ownership,
+        outdated=_empty_outdated(),
+        entry=None,
+        now=_status_now(),
+        probe_output=probe,
+        resolve_tag=lambda _repo: "v0",
+        platform=_platform(),
+    )
+    assert calls == [["/opt/x/bin/tool", "--version"]]
+
+
+def test_probe_uses_declared_bin_dir_when_active_path_is_absent(tmp_path: Path) -> None:
+    declared = tmp_path / "declared"
+    other = tmp_path / "other"
+    declared.mkdir()
+    other.mkdir()
+    (declared / "tool").write_text("#!/bin/sh\n")
+    (other / "tool").write_text("#!/bin/sh\n")
+    method = Method(kind="script", params={"bin_dir": str(declared)})
+    tool = _tool("tool", Method(kind="script", params={"bin_dir": str(other)}))
+    ownership = replace(_owned(tool, "unknown", method=method), active_path=None)
+    calls, probe = _probe_calls()
+    resolve_status(
+        tool,
+        ownership=ownership,
+        outdated=_empty_outdated(),
+        entry=None,
+        now=_status_now(),
+        probe_output=probe,
+        resolve_tag=lambda _repo: "v0",
+        platform=_platform(),
+    )
+    assert calls == [[str(declared / "tool"), "--version"]]
+
+
+def test_probe_falls_back_to_bare_cmd_when_no_path_is_known() -> None:
+    tool = _tool("tool")
+    ownership = replace(_owned(tool, "unknown"), active_path=None, method=None)
+    calls, probe = _probe_calls()
+    resolve_status(
+        tool,
+        ownership=ownership,
+        outdated=_empty_outdated(),
+        entry=None,
+        now=_status_now(),
+        probe_output=probe,
+        resolve_tag=lambda _repo: "v0",
+        platform=_platform(),
+    )
+    assert calls == [["tool", "--version"]]
+    direct: list[list[str]] = []
+    resolve_github_release_status(
+        _codegraph(),
+        repo="colbymchenry/codegraph",
+        entry=None,
+        now=_status_now(),
+        probe_output=lambda argv: direct.append(argv) or "1.2.0",
+        resolve_tag=lambda _repo: "v1.6.0",
+    )
+    assert direct == [["codegraph", "--version"]]
+
+
+def test_version_file_is_read_without_a_subprocess_probe(tmp_path: Path) -> None:
+    path = tmp_path / "version"
+    method = Method(kind="script", params={"version_file": str(path)})
+    tool = _tool("sdkman-init.sh", method)
+    ownership = replace(
+        _owned(tool, "installer", method=method),
+        active_path=Path("/opt/x/bin/sdkman-init.sh"),
+    )
+
+    def installed_for(contents: str | bytes | None) -> tuple[str | None, list[list[str]]]:
+        if isinstance(contents, bytes):
+            path.write_bytes(contents)
+            declared = path
+        elif contents is None:
+            declared = tmp_path / "missing"
+        else:
+            path.write_text(contents)
+            declared = path
+        record = replace(
+            ownership,
+            method=Method(kind="script", params={"version_file": str(declared)}),
+        )
+        calls, probe = _probe_calls()
+        status, _entry = resolve_status(
+            tool,
+            ownership=record,
+            outdated=_empty_outdated(),
+            entry=None,
+            now=_status_now(),
+            probe_output=probe,
+            resolve_tag=lambda _repo: "v0",
+            platform=_platform(),
+        )
+        return status.installed, calls
+
+    assert installed_for("5.23.0\n") == ("5.23.0", [])
+    assert installed_for("garbage") == (None, [])
+    assert installed_for(None) == (None, [])
+    assert installed_for(b"\xff\xfe") == (None, [])
+    assert installed_for("") == (None, [])
+
+
+def test_github_release_probes_at_the_active_path() -> None:
+    tool = _codegraph()
+    ownership = replace(_owned(tool, "installer"), active_path=Path("/opt/x/bin/codegraph"))
+    calls, probe = _probe_calls()
+    resolve_status(
+        tool,
+        ownership=ownership,
+        outdated=_empty_outdated(),
+        entry=None,
+        now=_status_now(),
+        probe_output=probe,
+        resolve_tag=lambda _repo: "v1.6.0",
+        platform=_platform(),
+    )
+    assert calls == [["/opt/x/bin/codegraph", "--version"]]
