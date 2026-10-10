@@ -2,14 +2,14 @@
 gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: 16
-current_phase_name: "Catalog truth: detection, version and ownership from the filesystem"
+current_phase_name: detection-version-and-ownership
 current_plan: Not started
 status: executing
 stopped_at: Phase 15.8 complete, ready to plan Phase 16
-last_updated: "2026-10-10T03:16:06.791Z"
+last_updated: "2026-10-10T04:36:19.436Z"
 last_activity: 2026-10-09
 last_activity_desc: Phase 15.8 complete, transitioned to Phase 16
-state_head: afd232495f2cee77e17454f5dbb22d9272e6eb7a
+state_head: 1cf1f8dcafce4ae1be8c4ed62f3da86e185feb06
 progress:
   total_phases: 28
   completed_phases: 17
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-10-09)
 
 ## Current Position
 
-Phase: 16 (Catalog truth: detection, version and ownership from the filesystem) — READY TO EXECUTE
+Phase: 16 (detection-version-and-ownership) — READY TO EXECUTE
 Current Plan: Not started
 Total Plans in Phase: 16
 Status: Ready to execute
