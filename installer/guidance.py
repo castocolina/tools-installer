@@ -5,7 +5,7 @@ consume the same Guidance list, so each finding's wording lives in exactly one
 place. `severity` drives color-coding downstream.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +14,7 @@ from installer.doctor import DoctorReport, has_problems
 from installer.enums import DaemonState, Severity
 from installer.guards import GLOBAL_REDIRECTED, REDIRECTED, guard_label, guarded_names
 from installer.pnpm_globals import NodeGlobalsReport
+from installer.rcclean import PathWriterLine
 from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit, system_scope_warning
 
 
@@ -54,17 +55,64 @@ _HEALTHY = Guidance(
 )
 
 
+def _writer_next_step(
+    named: str, adding: tuple[Path, ...], records: Sequence[PathWriterLine]
+) -> str:
+    """Per-directory remedy. Empty records keep the edit-it-yourself wording."""
+    if len(adding) > 1:
+        fallback = (
+            f"Edit the PATH line in each of them ({named}) — either remove it, or guard "
+            "it so it skips a directory that is already on PATH."
+        )
+    else:
+        fallback = (
+            f"Edit the PATH line in {named} — either remove it, or guard it so it skips "
+            "a directory that is already on PATH."
+        )
+    if not records:
+        return fallback
+    fragments: list[str] = []
+    owners: list[str] = []
+    for record in records:
+        if record.block_owner and record.block_owner not in owners:
+            owners.append(record.block_owner)
+    if owners:
+        named_blocks = " and ".join(f"'{owner}'" for owner in owners)
+        noun = "block" if len(owners) == 1 else "blocks"
+        fragments.append(
+            f"inside the {named_blocks} {noun}; fix it in that tool, "
+            "because that tool may regenerate the block"
+        )
+    if any(record.guardable for record in records):
+        fragments.append(
+            "Press enter (apply) to guard it in place. A backup of the original is "
+            "saved as .tools-installer.old first"
+        )
+    reasons: list[str] = []
+    for record in records:
+        if record.block_owner or record.guardable or not record.refusal:
+            continue
+        if record.refusal not in reasons:
+            reasons.append(record.refusal)
+    if reasons:
+        fragments.append(f"Edit the PATH line in {named}: {'; '.join(reasons)}")
+    return "; ".join(fragments) if fragments else fallback
+
+
 def doctor_guidance(
     report: DoctorReport,
     duplicate_writers: Mapping[Path, tuple[Path, ...]] | None = None,
+    writer_lines: Sequence[PathWriterLine] = (),
 ) -> list[Guidance]:
     """One Guidance per finding; a single healthy item when there are no problems.
 
     `duplicate_writers` maps a duplicated directory to the rc files that add it
-    unconditionally (see `installer.rcclean.unguarded_path_writers`). It decides
-    which of two opposite remedies a duplicate finding gets, and omitting it
-    keeps the older, cause-agnostic wording rather than asserting a cause that
-    was never checked.
+    without checking whether it is already present (see
+    `installer.rcclean.path_writer_lines`). It decides which of two opposite
+    remedies a duplicate finding gets, and omitting it keeps the older,
+    cause-agnostic wording rather than asserting a cause that was never checked.
+    `writer_lines` chooses the per-directory next step from each line's real
+    status. Omitting it keeps the edit-it-yourself wording.
     """
     if not has_problems(report):
         return [_HEALTHY]
@@ -91,19 +139,22 @@ def doctor_guidance(
     for directory in report.duplicated:
         # Two opposite causes wear the same symptom. A nested shell re-adding an
         # inherited entry clears in a fresh terminal; an rc file that prepends
-        # unconditionally re-adds it on EVERY shell, so "open a new shell" is
-        # advice that can never work and the finding returns forever. Only the
-        # second case is knowable from the rc files, so it is the one stated as
-        # fact -- the other stays a hypothesis with the command to check it.
+        # without checking whether the directory is already present re-adds it
+        # on EVERY shell, so "open a new shell" is advice that can never work
+        # and the finding returns forever. Only the second case is knowable
+        # from the rc files, so it is the one stated as fact -- the other stays
+        # a hypothesis with the command to check it.
         adding = writers.get(directory, ())
         if adding:
             named = ", ".join(str(rc_file) for rc_file in adding)
             if len(adding) > 1:
-                cause = f"{len(adding)} startup files add it unconditionally: {named}"
-                remedy = f"Edit the PATH line in each of them ({named})"
+                cause = (
+                    f"{len(adding)} startup files add it without checking whether "
+                    f"it is already present: {named}"
+                )
             else:
-                cause = f"{named} adds it unconditionally"
-                remedy = f"Edit the PATH line in {named}"
+                cause = f"{named} adds it without checking whether it is already present"
+            records = [record for record in writer_lines if record.directory == directory]
             items.append(
                 Guidance(
                     title=f"{directory} duplicated on PATH",
@@ -111,10 +162,7 @@ def doctor_guidance(
                         f"{directory} appears more than once on PATH, and {cause}. "
                         f"Opening a new terminal will not clear this one."
                     ),
-                    next_step=(
-                        f"{remedy} — either remove it, or guard it so it skips a "
-                        f"directory that is already on PATH."
-                    ),
+                    next_step=_writer_next_step(named, adding, records),
                     severity=Severity.WARN,
                 )
             )

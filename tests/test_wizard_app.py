@@ -438,19 +438,22 @@ def _writer_line(
 
 def _guard_doctor(
     *,
+    report: DoctorReport | None = None,
+    duplicate_writers: Mapping[Path, tuple[Path, ...]] | None = None,
     fix: Callable[[], None] | None = None,
     writer_lines: Sequence[PathWriterLine] = (),
     rescan: Callable[[], Sequence[PathWriterLine]] | None = None,
     guard_file: Callable[[Path, Sequence[PathWriterLine]], PathGuardOutcome] | None = None,
 ) -> DoctorScreen:
     return DoctorScreen(
-        DoctorReport(missing=(), broken=(), duplicated=()),
+        report or DoctorReport(missing=(), broken=(), duplicated=()),
         lambda: ({"pip": False, "npm": False}, None),
         "preview",
         fix or (lambda: None),
         node_globals=lambda: NodeGlobalsReport(entries=(), missing=(), managed=()),
         globals_preview=lambda _report: "",
         reinstall_globals=lambda _packages: (),
+        duplicate_writers=duplicate_writers,
         writer_lines=writer_lines,
         rescan_writer_lines=rescan,
         guard_file=guard_file,
@@ -621,6 +624,30 @@ async def test_doctor_guard_queue_falls_back_to_writer_lines_without_rescan() ->
         await pilot.press("y")
         await pilot.pause()
         assert calls == [[record]]
+
+
+async def test_doctor_screen_guidance_names_a_foreign_block() -> None:
+    directory = Path("/opt/tools/bin")
+    rc = Path("tmp/.bashrc")
+    record = _writer_line(
+        rc,
+        guardable=False,
+        refusal=(
+            "inside the 'my-kitty PATH' block another tool manages; fix it in that tool"
+        ),
+        block_owner="my-kitty PATH",
+    )
+    screen = _guard_doctor(
+        report=DoctorReport(missing=(), broken=(), duplicated=(directory,)),
+        duplicate_writers={directory: (rc,)},
+        writer_lines=[record],
+    )
+    app = _DoctorHost(screen)
+    async with app.run_test(size=(100, 30)) as pilot:
+        doctor = await _ready_doctor(app, pilot)
+        text = "".join(item.next_step for item in doctor.guidance)
+        assert "inside the 'my-kitty PATH' block" in text
+        assert "fix it in that tool" in text
 
 
 async def test_doctor_composition_scans_writer_lines_once(

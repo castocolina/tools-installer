@@ -490,7 +490,35 @@ def _guard_refusal(line: _PathLine) -> str | None:
 def path_writer_lines(
     rc_texts: Mapping[Path, str], managed_dirs: set[Path], env: Mapping[str, str]
 ) -> list[PathWriterLine]:
-    """One record per unconditional writer line and each managed directory it adds."""
+    """One record per writer line and each managed directory it adds.
+
+    A duplicate PATH entry has two very different causes, and the remedy is the
+    opposite in each case. A nested shell re-adding an inherited entry is
+    transient and really does clear in a fresh terminal. A plain prepend in an
+    rc file — an assignment that puts the directory in front of the previous
+    value with no test first — re-adds it on every single shell, so no new
+    terminal will ever clear it and the user has to edit the line. Telling the
+    second case to "open a new shell" is advice that can never work, so the
+    Doctor needs to know which one it is looking at.
+
+    (The shape itself is deliberately described rather than spelled out here:
+    this repo's AST invariant forbids an accumulating PATH assignment anywhere
+    under installer/, and a docstring is not exempt from it by default.)
+
+    This differs from `find_duplicate_path_lines` because REPORTING a writer
+    and STRIPPING one are different questions. Indented lines COUNT here when
+    the enclosing condition does not test PATH. A directory-existence test
+    still adds the directory on every shell that reaches the body, so omitting
+    it would hide a real writer. `find_duplicate_path_lines` still skips
+    indented lines, because deleting one would leave an empty then-clause (a
+    bash syntax error).
+
+    A presence-guarded block is not a writer: an if, elif, while, until, or
+    case whose condition references PATH already skips a directory that is
+    present. A non-PATH test such as a directory-existence check still is.
+    Our own case-guarded emitter and pnpm's idiom are the same kind of guard.
+    Flagging one would point the user at a correct line.
+    """
     records: list[PathWriterLine] = []
     targets = {Path(directory): directory for directory in managed_dirs}
     for rc_path, rc_text in rc_texts.items():
@@ -527,52 +555,18 @@ def path_writer_lines(
 
 
 def group_writer_lines(lines: Iterable[PathWriterLine]) -> dict[Path, tuple[Path, ...]]:
-    """Map each managed directory to the rc files that write it, in first-seen order."""
+    """Map each managed directory to the rc files that write it, in first-seen order.
+
+    The answer is keyed by directory and collects every file, since the
+    structural case is typically one writer in `.bashrc` and another in
+    `.bash_profile`; naming only one sends the user back for a second round.
+    """
     writers: dict[Path, list[Path]] = {}
     for record in lines:
         files = writers.setdefault(record.directory, [])
         if record.rc_path not in files:
             files.append(record.rc_path)
     return {directory: tuple(files) for directory, files in writers.items()}
-
-
-def unguarded_path_writers(
-    rc_texts: Mapping[Path, str], managed_dirs: set[Path], env: Mapping[str, str]
-) -> dict[Path, tuple[Path, ...]]:
-    """Map each managed directory to the rc files that add it UNCONDITIONALLY.
-
-    A duplicate PATH entry has two very different causes, and the remedy is the
-    opposite in each case. A nested shell re-adding an inherited entry is
-    transient and really does clear in a fresh terminal. A plain unconditional
-    prepend in an rc file — an assignment that puts the directory in front of
-    the previous value with no test first — re-adds it on every single shell,
-    so no new terminal will ever clear it and the user has to edit the line.
-    Telling the second case to "open a new shell" is advice that can never
-    work, so the Doctor needs to know which one it is looking at.
-
-    (The shape itself is deliberately described rather than spelled out here:
-    this repo's AST invariant forbids an accumulating PATH assignment anywhere
-    under installer/, and a docstring is not exempt from it by default.)
-
-    This differs from `find_duplicate_path_lines` in two deliberate ways,
-    because REPORTING a writer and STRIPPING one are different questions:
-
-    * Indented lines COUNT here when the enclosing condition does not test
-      PATH. A directory-existence test still adds the directory on every shell
-      that reaches the body, so omitting it would hide a real writer.
-      `find_duplicate_path_lines` still skips indented lines, because deleting
-      one would leave an empty then-clause (a bash syntax error).
-    * The answer is keyed by DIRECTORY and collects EVERY file, since the
-      structural case is typically one writer in `.bashrc` and another in
-      `.bash_profile`; naming only one sends the user back for a second round.
-
-    A presence-guarded block is not a writer: an if, elif, while, until, or
-    case whose condition references PATH already skips a directory that is
-    present. A non-PATH test such as a directory-existence check still is.
-    Our own case-guarded emitter and pnpm's idiom are the same kind of guard.
-    Flagging one would point the user at a correct line.
-    """
-    return group_writer_lines(path_writer_lines(rc_texts, managed_dirs, env))
 
 
 def _read_rc_texts(rc_paths: Iterable[Path]) -> dict[Path, str]:
@@ -596,17 +590,3 @@ def scan_rc_path_writer_lines(
 ) -> list[PathWriterLine]:
     """`path_writer_lines` over files on disk; unreadable files are skipped."""
     return path_writer_lines(_read_rc_texts(rc_paths), managed_dirs, env)
-
-
-def scan_rc_path_writers(
-    rc_paths: Iterable[Path], managed_dirs: set[Path], env: Mapping[str, str]
-) -> dict[Path, tuple[Path, ...]]:
-    """`unguarded_path_writers` over files on disk; unreadable files are skipped.
-
-    The IO seam is deliberately this thin so the classification itself stays a
-    pure function under test. A file that cannot be read yields no writers
-    rather than raising: this feeds a diagnostic, and a Doctor that crashes on
-    an unreadable rc file is worse than one that reports a cause it could not
-    determine.
-    """
-    return unguarded_path_writers(_read_rc_texts(rc_paths), managed_dirs, env)

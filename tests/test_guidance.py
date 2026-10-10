@@ -12,6 +12,7 @@ from installer.guidance import (
     node_globals_guidance,
 )
 from installer.pnpm_globals import IncompleteGroup, NodeGlobal, NodeGlobalsReport
+from installer.rcclean import PathWriterLine
 from installer.systemd_daemon import CompetingUnit
 
 # The exact sentence D-03c's UNAVAILABLE branch uses for its one-off manual
@@ -91,6 +92,90 @@ def test_duplicated_dir_names_every_file_that_adds_it() -> None:
     rendered = item.meaning + " " + item.next_step
     assert "/home/u/.bashrc" in rendered
     assert "/home/u/.bash_profile" in rendered
+
+
+def _record(
+    rc_path: Path,
+    directory: Path,
+    *,
+    guardable: bool,
+    refusal: str | None = None,
+    block_owner: str | None = None,
+) -> PathWriterLine:
+    return PathWriterLine(
+        rc_path=rc_path,
+        index=1,
+        text='export PATH="/b/bin:$PATH"',
+        directory=directory,
+        guardable=guardable,
+        refusal=refusal,
+        block_owner=block_owner,
+    )
+
+
+def test_foreign_block_writer_is_named_and_not_offered() -> None:
+    directory = Path("/b/bin")
+    rc = Path("/home/u/.bashrc")
+    items = doctor_guidance(
+        DoctorReport(missing=(), broken=(), duplicated=(directory,)),
+        duplicate_writers={directory: (rc,)},
+        writer_lines=[
+            _record(
+                rc,
+                directory,
+                guardable=False,
+                refusal=(
+                    "inside the 'my-kitty PATH' block another tool manages; "
+                    "fix it in that tool"
+                ),
+                block_owner="my-kitty PATH",
+            )
+        ],
+    )
+    item = next(i for i in items if "/b/bin" in i.title)
+    assert "inside the 'my-kitty PATH' block" in item.next_step
+    assert "fix it in that tool" in item.next_step
+    assert "Press enter (apply) to guard" not in item.next_step
+
+
+def test_guardable_writer_offers_an_in_place_guard_and_a_backup() -> None:
+    directory = Path("/b/bin")
+    rc = Path("/home/u/.bashrc")
+    items = doctor_guidance(
+        DoctorReport(missing=(), broken=(), duplicated=(directory,)),
+        duplicate_writers={directory: (rc,)},
+        writer_lines=[_record(rc, directory, guardable=True)],
+    )
+    item = next(i for i in items if "/b/bin" in i.title)
+    assert "Press enter (apply) to guard it in place" in item.next_step
+    assert ".tools-installer.old" in item.next_step
+
+
+def test_unguardable_writer_keeps_the_edit_remedy_and_the_refusal() -> None:
+    directory = Path("/b/bin")
+    rc = Path("/home/u/.bashrc")
+    refusal = "adds more than one directory; edit it by hand"
+    items = doctor_guidance(
+        DoctorReport(missing=(), broken=(), duplicated=(directory,)),
+        duplicate_writers={directory: (rc,)},
+        writer_lines=[_record(rc, directory, guardable=False, refusal=refusal)],
+    )
+    item = next(i for i in items if "/b/bin" in i.title)
+    assert refusal in item.next_step
+    assert "Edit the PATH line in" in item.next_step
+
+
+def test_writer_lines_omitted_keeps_today_wording() -> None:
+    report = DoctorReport(missing=(), broken=(), duplicated=(Path("/b/bin"),))
+    writers = {Path("/b/bin"): (Path("/home/u/.bashrc"),)}
+    without = doctor_guidance(report, writers)
+    with_empty = doctor_guidance(report, writers, writer_lines=())
+    assert with_empty == without
+    item = next(i for i in without if "/b/bin" in i.title)
+    assert "without checking whether it is already present" in item.meaning
+    assert "unconditionally" not in item.meaning
+    assert "Edit the PATH line in" in item.next_step
+    assert "Press enter (apply)" not in item.next_step
 
 
 def test_a_writer_for_one_directory_does_not_change_another_directorys_advice() -> None:

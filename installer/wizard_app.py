@@ -476,7 +476,7 @@ class DoctorScreen(AppScreen):
         # Position is a decision, pinned by a test: disk pressure follows the
         # guard items and precedes the pnpm-globals items.
         self.guidance = (
-            doctor_guidance(self._report, self._duplicate_writers)
+            doctor_guidance(self._report, self._duplicate_writers, self._writer_lines)
             + guard_guidance(status, warning)
             + self._disk_pressure_items()
             + self._competing_items()

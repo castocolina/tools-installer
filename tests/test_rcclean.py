@@ -6,10 +6,10 @@ from installer import rcclean
 from installer.rcclean import (
     PathWriterLine,
     find_duplicate_path_lines,
+    group_writer_lines,
     path_writer_lines,
-    scan_rc_path_writers,
+    scan_rc_path_writer_lines,
     strip_lines,
-    unguarded_path_writers,
 )
 from installer.shellrc import managed_block, path_export_guard
 
@@ -323,10 +323,12 @@ def test_unguarded_writer_is_reported_with_its_file(tmp_path: Path) -> None:
     """A plain prepend survives every new shell, so naming its file is the only
     thing that lets a user act on a duplicate PATH entry."""
     bashrc = tmp_path / ".bashrc"
-    writers = unguarded_path_writers(
-        {bashrc: 'export PATH="/home/u/.local/bin:$PATH"\n'},
-        {Path("/home/u/.local/bin")},
-        {"HOME": "/home/u"},
+    writers = group_writer_lines(
+        path_writer_lines(
+            {bashrc: 'export PATH="/home/u/.local/bin:$PATH"\n'},
+            {Path("/home/u/.local/bin")},
+            {"HOME": "/home/u"},
+        )
     )
     assert writers == {Path("/home/u/.local/bin"): (bashrc,)}
 
@@ -338,8 +340,8 @@ def test_writer_dir_test_if_reported(tmp_path: Path) -> None:
     test_writer_fedora_presence_guard_not_reported."""
     bashrc = tmp_path / ".bashrc"
     text = 'if [ -d "$HOME/.local/bin" ]; then\n    export PATH="$HOME/.local/bin:$PATH"\nfi\n'
-    writers = unguarded_path_writers(
-        {bashrc: text}, {Path("/home/u/.local/bin")}, {"HOME": "/home/u"}
+    writers = group_writer_lines(
+        path_writer_lines({bashrc: text}, {Path("/home/u/.local/bin")}, {"HOME": "/home/u"})
     )
     assert writers == {Path("/home/u/.local/bin"): (bashrc,)}
 
@@ -353,7 +355,10 @@ def test_case_guarded_line_is_not_a_writer(tmp_path: Path) -> None:
         '*) export PATH="/home/u/.local/bin${PATH:+:$PATH}";;esac\n'
     )
     assert (
-        unguarded_path_writers({rc: text}, {Path("/home/u/.local/bin")}, {"HOME": "/home/u"}) == {}
+        group_writer_lines(
+            path_writer_lines({rc: text}, {Path("/home/u/.local/bin")}, {"HOME": "/home/u"})
+        )
+        == {}
     )
 
 
@@ -367,7 +372,10 @@ def test_managed_block_is_not_a_writer(tmp_path: Path) -> None:
         "# <<< tools-installer path <<<\n"
     )
     assert (
-        unguarded_path_writers({rc: text}, {Path("/home/u/.local/bin")}, {"HOME": "/home/u"}) == {}
+        group_writer_lines(
+            path_writer_lines({rc: text}, {Path("/home/u/.local/bin")}, {"HOME": "/home/u"})
+        )
+        == {}
     )
 
 
@@ -377,8 +385,10 @@ def test_every_writer_of_the_same_directory_is_reported(tmp_path: Path) -> None:
     bashrc = tmp_path / ".bashrc"
     profile = tmp_path / ".bash_profile"
     line = 'export PATH="/home/u/.local/bin:$PATH"\n'
-    writers = unguarded_path_writers(
-        {bashrc: line, profile: line}, {Path("/home/u/.local/bin")}, {"HOME": "/home/u"}
+    writers = group_writer_lines(
+        path_writer_lines(
+            {bashrc: line, profile: line}, {Path("/home/u/.local/bin")}, {"HOME": "/home/u"}
+        )
     )
     assert writers == {Path("/home/u/.local/bin"): (bashrc, profile)}
 
@@ -387,11 +397,14 @@ def test_unrelated_directory_is_not_reported(tmp_path: Path) -> None:
     rc = tmp_path / ".bashrc"
     text = 'export PATH="/opt/other/bin:$PATH"\n'
     assert (
-        unguarded_path_writers({rc: text}, {Path("/home/u/.local/bin")}, {"HOME": "/home/u"}) == {}
+        group_writer_lines(
+            path_writer_lines({rc: text}, {Path("/home/u/.local/bin")}, {"HOME": "/home/u"})
+        )
+        == {}
     )
 
 
-def test_scan_rc_path_writers_reads_real_files_and_skips_unreadable(tmp_path: Path) -> None:
+def test_writer_scan_reads_real_files_and_skips_unreadable(tmp_path: Path) -> None:
     """A Doctor that raises on an unreadable rc file is worse than one that
     reports a cause it could not determine."""
     bashrc = tmp_path / ".bashrc"
@@ -400,8 +413,10 @@ def test_scan_rc_path_writers_reads_real_files_and_skips_unreadable(tmp_path: Pa
     binary = tmp_path / ".binaryrc"
     binary.write_bytes(b"\xff\xfe\x00export PATH=/home/u/.local/bin:$PATH\n")
 
-    writers = scan_rc_path_writers(
-        [bashrc, missing, binary], {Path("/home/u/.local/bin")}, {"HOME": "/home/u"}
+    writers = group_writer_lines(
+        scan_rc_path_writer_lines(
+            [bashrc, missing, binary], {Path("/home/u/.local/bin")}, {"HOME": "/home/u"}
+        )
     )
     assert writers == {Path("/home/u/.local/bin"): (bashrc,)}
 
@@ -416,7 +431,7 @@ def test_writer_guarded_if_not_reported() -> None:
         '    export PATH="$HOME/.local/bin:$PATH"\n'
         "fi\n"
     )
-    assert unguarded_path_writers({Path("rc"): text}, {_LOCAL_BIN}, _ENV) == {}
+    assert group_writer_lines(path_writer_lines({Path("rc"): text}, {_LOCAL_BIN}, _ENV)) == {}
 
 
 def test_writer_fedora_presence_guard_not_reported() -> None:
@@ -426,7 +441,7 @@ def test_writer_fedora_presence_guard_not_reported() -> None:
         '    PATH="$HOME/.local/bin:$HOME/bin:$PATH"\n'
         "fi\n"
     )
-    assert unguarded_path_writers({Path("rc"): text}, {_LOCAL_BIN}, _ENV) == {}
+    assert group_writer_lines(path_writer_lines({Path("rc"): text}, {_LOCAL_BIN}, _ENV)) == {}
 
 
 def test_writer_pnpm_case_block_not_reported() -> None:
@@ -438,14 +453,14 @@ def test_writer_pnpm_case_block_not_reported() -> None:
         "esac\n"
     )
     managed = {Path("/home/u/.local/share/pnpm")}
-    assert unguarded_path_writers({Path("rc"): text}, managed, _ENV) == {}
+    assert group_writer_lines(path_writer_lines({Path("rc"): text}, managed, _ENV)) == {}
 
 
 def test_path_export_guard_output_never_flagged() -> None:
     guard = path_export_guard(_LOCAL_BIN)
     managed = {_LOCAL_BIN}
     for text in (guard + "\n", "    " + guard + "\n"):
-        assert unguarded_path_writers({Path("rc"): text}, managed, _ENV) == {}
+        assert group_writer_lines(path_writer_lines({Path("rc"): text}, managed, _ENV)) == {}
         assert find_duplicate_path_lines(text, managed, _ENV) == []
 
 
@@ -479,28 +494,32 @@ def test_writer_after_block_shape_still_reported(shape: str) -> None:
     text = prefixes[shape] + trailing + "\n"
     managed = {_LOCAL_BIN}
     rc = Path("rc")
-    assert unguarded_path_writers({rc: text}, managed, _ENV) == {_LOCAL_BIN: (rc,)}
+    assert group_writer_lines(path_writer_lines({rc: text}, managed, _ENV)) == {_LOCAL_BIN: (rc,)}
     assert find_duplicate_path_lines(text, managed, _ENV) == [text.split("\n").index(trailing)]
 
 
 def test_trailing_slash_writer_is_normalized() -> None:
     text = 'export PATH="$HOME/.local/bin/:$PATH"\n'
     rc = Path("rc")
-    assert unguarded_path_writers({rc: text}, {_LOCAL_BIN}, _ENV) == {_LOCAL_BIN: (rc,)}
+    assert group_writer_lines(path_writer_lines({rc: text}, {_LOCAL_BIN}, _ENV)) == {
+        _LOCAL_BIN: (rc,)
+    }
     assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == [0]
 
 
 def test_double_slash_writer_is_normalized() -> None:
     text = 'export PATH="$HOME//.local/bin:$PATH"\n'
     rc = Path("rc")
-    assert unguarded_path_writers({rc: text}, {_LOCAL_BIN}, _ENV) == {_LOCAL_BIN: (rc,)}
+    assert group_writer_lines(path_writer_lines({rc: text}, {_LOCAL_BIN}, _ENV)) == {
+        _LOCAL_BIN: (rc,)
+    }
     assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == [0]
 
 
 def test_relative_or_empty_segment_never_matches() -> None:
     managed = {_LOCAL_BIN, Path("bin")}
     for text in ('export PATH="bin:$PATH"\n', 'export PATH=":$PATH"\n'):
-        assert unguarded_path_writers({Path("rc"): text}, managed, _ENV) == {}
+        assert group_writer_lines(path_writer_lines({Path("rc"): text}, managed, _ENV)) == {}
         assert find_duplicate_path_lines(text, managed, _ENV) == []
 
 
@@ -515,12 +534,12 @@ def test_writer_nested_loop_inside_guarded_if_not_reported(loop_header: str) -> 
         "fi\n"
     )
     managed = {_LOCAL_BIN}
-    assert unguarded_path_writers({Path("rc"): text}, managed, _ENV) == {}
+    assert group_writer_lines(path_writer_lines({Path("rc"): text}, managed, _ENV)) == {}
     assert find_duplicate_path_lines(text, managed, _ENV) == []
 
 
 def _writer(text: str, directory: Path = _LOCAL_BIN) -> dict[Path, tuple[Path, ...]]:
-    return unguarded_path_writers({Path("rc"): text}, {directory}, _ENV)
+    return group_writer_lines(path_writer_lines({Path("rc"): text}, {directory}, _ENV))
 
 
 def test_trailing_comment_is_a_writer_not_a_strip_candidate() -> None:
@@ -557,7 +576,7 @@ def test_or_prefix_is_a_writer() -> None:
 def test_one_line_if_shapes(text: str, reported: bool) -> None:
     directory = Path("/home/u/bin")
     expected = {directory: (Path("rc"),)} if reported else {}
-    assert unguarded_path_writers({Path("rc"): text}, {directory}, _ENV) == expected
+    assert group_writer_lines(path_writer_lines({Path("rc"): text}, {directory}, _ENV)) == expected
     assert find_duplicate_path_lines(text, {directory}, _ENV) == []
 
 
@@ -602,7 +621,7 @@ def test_zsh_array_line_is_not_a_strip_candidate() -> None:
 def test_hash_inside_quotes_is_data_not_a_comment() -> None:
     directory = Path("/opt/a#b")
     text = 'export PATH="/opt/a#b:$PATH"\n'
-    assert unguarded_path_writers({Path("rc"): text}, {directory}, _ENV) == {
+    assert group_writer_lines(path_writer_lines({Path("rc"): text}, {directory}, _ENV)) == {
         directory: (Path("rc"),)
     }
 
@@ -610,7 +629,7 @@ def test_hash_inside_quotes_is_data_not_a_comment() -> None:
 def test_assignment_segment_resolves_a_later_path_segment() -> None:
     directory = Path("/home/u/.bun/bin")
     text = 'export BUN_INSTALL="$HOME/.bun"; export PATH="$BUN_INSTALL/bin:$PATH"\n'
-    assert unguarded_path_writers({Path("rc"): text}, {directory}, _ENV) == {
+    assert group_writer_lines(path_writer_lines({Path("rc"): text}, {directory}, _ENV)) == {
         directory: (Path("rc"),)
     }
     assert find_duplicate_path_lines(text, {directory}, _ENV) == []
