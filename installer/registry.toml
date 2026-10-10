@@ -2649,8 +2649,8 @@ app = "WezTerm.app"
 # (formulae.brew.sh/cask/alacritty; alacritty issue 8749), so this entry
 # declares no cask. A github_release method would rank ahead of dnf and fail
 # on the missing Linux asset, including on immutable Fedora where native
-# kinds are skipped (installer/resolve.py). Same accepted Bazzite gap as kitty:
-# no applicable method on immutable Fedora. Distrobox is not a method kind.
+# kinds are skipped (installer/resolve.py). Alacritty itself has no applicable
+# method on immutable Fedora. Distrobox is not a method kind.
 [[tool]]
 id = "alacritty"
 name = "Alacritty"
