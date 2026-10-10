@@ -2,14 +2,14 @@
 gsd_state_version: "1.0"
 milestone: v0.49.0
 current_phase: 16
-current_phase_name: detection-version-and-ownership
-current_plan: Not started
+current_phase_name: Catalog truth
+current_plan: 1
 status: executing
 stopped_at: Phase 15.8 complete, ready to plan Phase 16
-last_updated: "2026-10-10T09:19:18.771Z"
-last_activity: 2026-10-09
-last_activity_desc: Phase 15.8 complete, transitioned to Phase 16
-state_head: ae036b79ef7bb6cbaa3d0cbb7154d847cf40af83
+last_updated: "2026-10-10T09:20:22.890Z"
+last_activity: 2026-10-10
+last_activity_desc: Phase 16 execution started
+state_head: 762501fca964d2649fda8ab10838c381217c2d81
 progress:
   total_phases: 28
   completed_phases: 17
@@ -26,15 +26,15 @@ Total Phases: 21
 See: .planning/PROJECT.md (updated 2026-10-09)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 16 — Catalog truth: detection, version and ownership from the filesystem, not from a binary invocation
+**Current focus:** Phase 16 — Catalog truth
 
 ## Current Position
 
-Phase: 16 (detection-version-and-ownership) — READY TO EXECUTE
-Current Plan: Not started
+Phase: 16 (Catalog truth) — EXECUTING
+Current Plan: 1
 Total Plans in Phase: 16
-Status: Ready to execute
-Last activity: 2026-10-09 — Phase 15.8 complete, transitioned to Phase 16
+Status: Executing Phase 16
+Last activity: 2026-10-10 — Phase 16 execution started
 
 Progress: [██████████] 100%
 
