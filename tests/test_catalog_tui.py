@@ -2879,6 +2879,68 @@ def test_update_on_current_tool_says_already_current(tmp_path: Path) -> None:
     assert messages == ["rg is already current"]
 
 
+def test_update_on_stale_current_qualifies_the_last_check(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    ownership = _ownership(tool, owner="brew")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    updates = _update_service(lambda _tool: ownership)
+    screen = _screen([tool], {"rg": True}, version_refresh=service, updates=updates)
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "rg": VersionStatus(
+            tool_id="rg",
+            installed="14.1.1",
+            latest="14.1.1",
+            outdated=False,
+            stale=True,
+            source="brew",
+        )
+    }
+    screen._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
+    messages: list[tuple[str, str]] = []
+    screen.status.set = lambda text, severity: messages.append((text, severity))  # type: ignore[method-assign]
+    screen.action_update_tool()
+    assert messages == [("rg is current as of the last check", "ok")]
+
+
+def test_update_on_stale_current_off_policy_keeps_the_tail(tmp_path: Path) -> None:
+    tool = _sdkman_tool("groovy")
+    ownership = _ownership(tool, owner="brew", off_policy=True)
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"groovy": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    updates = _update_service(lambda _tool: ownership)
+    screen = _screen([tool], {"groovy": True}, version_refresh=service, updates=updates)
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        "groovy": VersionStatus(
+            tool_id="groovy",
+            installed="4.0.0",
+            latest="4.0.0",
+            outdated=False,
+            stale=True,
+            source="brew",
+        )
+    }
+    screen._browser.highlighted_id = lambda: "groovy"  # type: ignore[method-assign]
+    messages: list[tuple[str, str]] = []
+    screen.status.set = lambda text, severity: messages.append((text, severity))  # type: ignore[method-assign]
+    screen.action_update_tool()
+    assert messages == [
+        (
+            "groovy is current as of the last check — Homebrew owns this copy; the catalog "
+            "installs it via SDKMAN, and moving it there is not available yet",
+            "ok",
+        )
+    ]
+
+
 def test_action_update_tool_refuses_non_mutation_grade(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(

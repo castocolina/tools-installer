@@ -912,7 +912,8 @@ class CatalogScreen(AppScreen):
             self.status.set(f"{tool_id}: {_BROKEN_DETAIL}", "warn")
             return
         if status is not None and status.outdated is False:
-            line = f"{tool_id} is already current"
+            lead = "current as of the last check" if status.stale else "already current"
+            line = f"{tool_id} is {lead}"
             if ownership is not None and ownership.off_policy:
                 declared = declared_manager_label(tool, self._version_refresh.platform)
                 real = owner_label(ownership)
