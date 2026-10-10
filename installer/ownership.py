@@ -573,7 +573,7 @@ def resolve_ownership(
     active_path = _resolve_active_path(which(tool.cmd))
     candidates = _collect_candidates(tool, methods, inventory, artifacts)
     undeclared_brew = False
-    shadow_brew: OwnershipCandidate | None = None
+    pending_shadows: list[OwnershipCandidate] = []
     if not any(candidate.owner == "brew" for candidate in candidates):
         proof = _undeclared_brew_candidate(tool, inventory, active_path)
         if proof is not None:
@@ -585,11 +585,12 @@ def resolve_ownership(
             )
             # D-06: link-proven brew is not the live binary, so it must not block native/os-package.
             if via_link and active_path is not None:
-                shadow_brew = brew_candidate
+                pending_shadows.append(brew_candidate)
     declared_policy = declared_manager_label(tool, platform) is not None
     unreadable = _unreadable(tool, platform, inventory)
     dirs = owner_dirs(inventory=inventory, managed_bin_dir=managed_bin_dir, platform=platform)
-    for owner, prefixes in _location_dirs(tool, methods).items():
+    location_dirs = _location_dirs(tool, methods)
+    for owner, prefixes in location_dirs.items():
         dirs[owner] = dirs.get(owner, ()) + prefixes
     broken = dangling_shim(
         tool,
@@ -598,6 +599,19 @@ def resolve_ownership(
         pnpm_globals=inventory.pnpm_globals,
     )
     attributed = attribute_path(active_path, dirs)
+    if active_path is not None:
+        for candidate in candidates:
+            if candidate.owner not in location_dirs or candidate.owner in attributed:
+                continue
+            declared = (
+                candidate.method.params.get("bin_dir") if candidate.method is not None else None
+            )
+            if candidate.evidence != (
+                f"{tool.cmd} present at the method's declared location {declared}"
+            ):
+                continue
+            pending_shadows.append(candidate)
+    shadows: tuple[OwnershipCandidate, ...] = tuple(pending_shadows)
     matching = [candidate for candidate in candidates if candidate.owner in attributed]
     active_candidate: Owner | None = matching[0].owner if len(matching) == 1 else None
 
@@ -627,14 +641,18 @@ def resolve_ownership(
     # call site covers both unknown branches, both by-elimination branches,
     # and the real-machine case.
     gated = candidates
-    if shadow_brew is not None:
-        gated = tuple(candidate for candidate in candidates if candidate is not shadow_brew)
+    if shadows:
+        gated = tuple(
+            candidate
+            for candidate in candidates
+            if all(candidate is not shadow for shadow in shadows)
+        )
     native = _native_owner(tool, native_probe, gated, unreadable, active_path, platform)
     if native is not None:
-        if shadow_brew is None:
+        if not shadows:
             return replace(native, broken=broken)
         return replace(
-            native, candidates=(*native.candidates, shadow_brew), shadowed=True, broken=broken
+            native, candidates=(*native.candidates, *shadows), shadowed=True, broken=broken
         )
     # 15.4-01/D-01: the same call-site reasoning as `_native_owner` above, one
     # rung lower. This is the plan's resolution of 15.4-RESEARCH.md Open
@@ -665,11 +683,11 @@ def resolve_ownership(
     # failing before writing it.
     os_package = _os_package_owner(tool, native_probe, gated, unreadable, active_path, platform)
     if os_package is not None:
-        if shadow_brew is None:
+        if not shadows:
             return replace(os_package, broken=broken)
         return replace(
             os_package,
-            candidates=(*os_package.candidates, shadow_brew),
+            candidates=(*os_package.candidates, *shadows),
             shadowed=True,
             broken=broken,
         )

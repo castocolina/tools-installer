@@ -2509,3 +2509,136 @@ def test_os_package_owner_broken_matches_computed_false() -> None:
     )
     assert expected is False
     assert result.broken is expected
+
+
+def _script_location_tool(bin_dir: Path, *, cmd: str = "kitty") -> Tool:
+    return Tool(
+        id=cmd,
+        name=cmd,
+        category="terminal",
+        cmd=cmd,
+        methods=(
+            Method(
+                kind="script",
+                params={
+                    "bin_dir": str(bin_dir),
+                    "url": "https://example.invalid/installer.sh",
+                    "shell": "sh",
+                },
+            ),
+            Method(kind="dnf", params={"package": cmd}),
+        ),
+        owner_probes=("rpm-ostree", "dnf"),
+    )
+
+
+def test_non_active_script_location_shadows_instead_of_blocking_os_package(
+    tmp_path: Path,
+) -> None:
+    bin_dir = tmp_path / ".local" / "kitty.app" / "bin"
+    _touch_executable(bin_dir, "kitty")
+    calls: list[list[str]] = []
+    result = _resolve(
+        _script_location_tool(bin_dir),
+        inventory=_empty_readable(),
+        which="/usr/bin/kitty",
+        platform=_FEDORA,
+        native_probe=_os_package_probe("kitty-terminfo", calls),
+    )
+    assert result.owner == "os-package"
+    assert result.shadowed is True
+    assert any(candidate.owner == "installer" for candidate in result.candidates)
+    assert calls
+
+
+def test_non_active_sdkman_location_shadows_instead_of_blocking_os_package(
+    tmp_path: Path,
+) -> None:
+    bin_dir = tmp_path / ".sdkman" / "candidates" / "java" / "current" / "bin"
+    _touch_executable(bin_dir, "java")
+    calls: list[list[str]] = []
+    result = _resolve(
+        Tool(
+            id="java",
+            name="java",
+            category="runtime",
+            cmd="java",
+            methods=(
+                Method(kind="sdkman", params={"candidate": "java", "bin_dir": str(bin_dir)}),
+                Method(kind="dnf", params={"package": "java-21-openjdk"}),
+            ),
+            owner_probes=("dnf",),
+        ),
+        inventory=_empty_readable(),
+        which="/usr/bin/java",
+        platform=_FEDORA,
+        native_probe=_os_package_probe("java-21-openjdk-headless", calls),
+    )
+    assert result.owner == "os-package"
+    assert result.shadowed is True
+    assert any(candidate.owner == "sdkman" for candidate in result.candidates)
+    assert calls
+
+
+def test_active_script_location_stays_installer_direct(tmp_path: Path) -> None:
+    bin_dir = tmp_path / ".local" / "kitty.app" / "bin"
+    binary = _touch_executable(bin_dir, "kitty")
+    result = _resolve(
+        _script_location_tool(bin_dir),
+        inventory=_empty_readable(),
+        which=str(binary),
+        platform=_FEDORA,
+    )
+    assert result.owner == "installer"
+    assert result.confidence == "direct"
+
+
+@pytest.mark.parametrize(
+    ("kind", "param", "inventory", "platform"),
+    [
+        (
+            "brew",
+            "formula",
+            _readable(brew_formulae={"jq": "1.7"}),
+            Platform(os="fedora", arch="amd64", immutable=False, has_brew=True),
+        ),
+        ("node", "npm_pkg", _readable(pnpm_globals=frozenset({"jq"})), _FEDORA),
+        ("uv-tool", "pypi_pkg", _readable(uv_tools={"jq": "1.7"}), _FEDORA),
+    ],
+)
+def test_inactive_inventory_candidate_still_blocks_os_package(
+    kind: str, param: str, inventory: ManagerInventory, platform: Platform
+) -> None:
+    tool = Tool(
+        id="jq",
+        name="jq",
+        category="data",
+        cmd="jq",
+        methods=(Method(kind=kind, params={param: "jq"}),),
+        owner_probes=("dnf",),
+    )
+    calls: list[list[str]] = []
+    result = _resolve(
+        tool,
+        inventory=inventory,
+        which="/usr/bin/jq",
+        platform=platform,
+        native_probe=_os_package_probe("jq", calls),
+    )
+    assert result.owner != "os-package"
+    assert result.owner != "dnf"
+
+
+def test_script_location_without_active_path_stays_by_elimination(tmp_path: Path) -> None:
+    bin_dir = tmp_path / ".local" / "kitty.app" / "bin"
+    _touch_executable(bin_dir, "kitty")
+    result = _resolve(
+        _script_location_tool(bin_dir),
+        inventory=_empty_readable(),
+        which=None,
+        platform=_FEDORA,
+    )
+    assert result.owner == "installer"
+    assert result.confidence == "by-elimination"
+    assert result.shadowed is False
+
