@@ -270,6 +270,12 @@ class _BodyStatic(Static):
 class DoctorScreen(AppScreen):
     """PATH audit and safe PATH repair in one view."""
 
+    # Narrow .app from App[Unknown] (MessagePump default) so push_screen is typed.
+    if TYPE_CHECKING:
+
+        @property
+        def app(self) -> "UnifiedApp": ...
+
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "apply", "apply", show=True),
         Binding("a", "apply", "apply", show=False),
@@ -656,12 +662,17 @@ class DoctorScreen(AppScreen):
             self._finish_guard_chain()
             return
         path, records = self._pending_guards.pop(0)
-        self.app.push_screen(
-            ConfirmGuardFile(path, records),
-            lambda confirmed, path=path, records=records: self._guard_answered(
-                path, records, confirmed
-            ),
-        )
+        self.app.push_screen(ConfirmGuardFile(path, records), self._guard_callback(path, records))
+
+    def _guard_callback(
+        self, path: Path, records: Sequence[PathWriterLine]
+    ) -> Callable[[bool | None], None]:
+        # Same strict callback type as UninstallScreen._on_confirm: Textual
+        # passes Optional[ScreenResultType], so a bare nested function is Unknown.
+        def answer(confirmed: bool | None) -> None:
+            self._guard_answered(path, records, confirmed)
+
+        return answer
 
     def _guard_answered(
         self, path: Path, records: Sequence[PathWriterLine], confirmed: bool | None
