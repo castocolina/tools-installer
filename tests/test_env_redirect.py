@@ -12,6 +12,22 @@ from installer.env_redirect import BUN_CACHE_REDIRECT, REDIRECTS
 
 _HOME_PARTS = (".cache", "bun", "transpiler-cache")
 _HAND_INSTALLED = "51-bun-cache-redirect.conf"
+_GENERATOR_NAME = "30-systemd-environment-d-generator"
+# Distros install the generator under a libdir that is never on PATH (Fedora/Bazzite use
+# /usr/lib, Debian/Ubuntu may use /lib or a multiarch libexec).
+_GENERATOR_DIRS = (
+    "/usr/lib/systemd/user-environment-generators",
+    "/lib/systemd/user-environment-generators",
+    "/usr/libexec/systemd/user-environment-generators",
+)
+
+
+def _find_environment_d_generator() -> str | None:
+    for directory in _GENERATOR_DIRS:
+        candidate = Path(directory, _GENERATOR_NAME)
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return shutil.which("systemd-environment-d-generator")
 
 
 def _bun() -> env_redirect.CacheRedirect:
@@ -266,9 +282,9 @@ def test_project_conf_sorts_after_the_hand_installed_name() -> None:
 
 
 def test_real_environment_d_generator_prefers_the_later_file(tmp_path: Path) -> None:
-    generator = shutil.which("systemd-environment-d-generator")
+    generator = _find_environment_d_generator()
     if generator is None:
-        pytest.skip("systemd-environment-d-generator is not resolvable")
+        pytest.skip("systemd-environment-d-generator is not installed on this host")
     home = tmp_path / "home"
     conf_dir = tmp_path / "environment.d"
     conf_dir.mkdir()
@@ -277,11 +293,13 @@ def test_real_environment_d_generator_prefers_the_later_file(tmp_path: Path) -> 
         "BUN_RUNTIME_TRANSPILER_CACHE_PATH=/tmp/hand-installed\n"
     )
     (conf_dir / _bun().conf_basename).write_text(env_redirect.render_conf(_bun(), home))
+    # The generator takes no arguments; it reads $XDG_CONFIG_HOME/environment.d.
     completed = subprocess.run(
-        [generator, str(conf_dir)],
+        [generator],
         check=False,
         capture_output=True,
         text=True,
+        env={"HOME": str(home), "XDG_CONFIG_HOME": str(tmp_path), "PATH": os.defpath},
     )
     assert completed.returncode == 0, completed.stderr
     assignment = f"BUN_RUNTIME_TRANSPILER_CACHE_PATH={target}"
