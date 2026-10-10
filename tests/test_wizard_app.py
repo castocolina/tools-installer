@@ -626,15 +626,120 @@ async def test_doctor_guard_queue_falls_back_to_writer_lines_without_rescan() ->
         assert calls == [[record]]
 
 
+async def test_doctor_guard_chain_confirms_files_in_record_order() -> None:
+    bashrc = Path("tmp/.bashrc")
+    profile = Path("tmp/.profile")
+    records = [_writer_line(bashrc), _writer_line(profile)]
+    calls: list[Path] = []
+
+    def guard_file(path: Path, _lines: Sequence[PathWriterLine]) -> PathGuardOutcome:
+        calls.append(path)
+        return PathGuardOutcome("guarded")
+
+    screen = _guard_doctor(writer_lines=records, rescan=lambda: records, guard_file=guard_file)
+    app = _DoctorHost(screen)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _ready_doctor(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "tmp/.bashrc" in _guard_modal_text(app.screen)
+        assert "tmp/.profile" not in _guard_modal_text(app.screen)
+        await pilot.press("y")
+        await pilot.pause()
+        assert "tmp/.profile" in _guard_modal_text(app.screen)
+        await pilot.press("n")
+        await pilot.pause()
+        await _ready_doctor(app, pilot)
+        assert calls == [bashrc]
+
+
+async def test_doctor_guard_chain_continues_after_a_refused_file() -> None:
+    bashrc = Path("tmp/.bashrc")
+    profile = Path("tmp/.profile")
+    records = [_writer_line(bashrc), _writer_line(profile)]
+
+    def guard_file(path: Path, _lines: Sequence[PathWriterLine]) -> PathGuardOutcome:
+        if path == bashrc:
+            raise OSError("read-only rc file")
+        return PathGuardOutcome("guarded")
+
+    screen = _guard_doctor(writer_lines=records, rescan=lambda: records, guard_file=guard_file)
+    app = _DoctorHost(screen)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _ready_doctor(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        assert "tmp/.profile" in _guard_modal_text(app.screen)
+        await pilot.press("n")
+        await pilot.pause()
+        doctor = await _ready_doctor(app, pilot)
+        body = str(doctor.query_one("#doctor-body", Static).render())
+        assert f"refused {bashrc}" in body
+        assert "read-only rc file" in body
+
+
+async def test_doctor_guard_chain_skips_a_file_with_no_guardable_line() -> None:
+    bashrc = Path("tmp/.bashrc")
+    profile = Path("tmp/.profile")
+    records = [
+        _writer_line(bashrc),
+        _writer_line(profile, guardable=False, refusal="adds more than one directory"),
+    ]
+    calls: list[Path] = []
+
+    def guard_file(path: Path, _lines: Sequence[PathWriterLine]) -> PathGuardOutcome:
+        calls.append(path)
+        return PathGuardOutcome("guarded")
+
+    screen = _guard_doctor(writer_lines=records, rescan=lambda: records, guard_file=guard_file)
+    app = _DoctorHost(screen)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _ready_doctor(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "tmp/.bashrc" in _guard_modal_text(app.screen)
+        assert "tmp/.profile" not in _guard_modal_text(app.screen)
+        await pilot.press("y")
+        await pilot.pause()
+        doctor = await _ready_doctor(app, pilot)
+        assert calls == [bashrc]
+        assert "tmp/.profile" not in str(doctor.query_one("#doctor-body", Static).render())
+
+
+async def test_doctor_guard_chain_does_not_restart_after_apply() -> None:
+    rc = Path("tmp/.bashrc")
+    record = _writer_line(rc)
+    calls: list[Path] = []
+
+    def guard_file(path: Path, _lines: Sequence[PathWriterLine]) -> PathGuardOutcome:
+        calls.append(path)
+        return PathGuardOutcome("guarded")
+
+    screen = _guard_doctor(writer_lines=[record], rescan=lambda: [record], guard_file=guard_file)
+    app = _DoctorHost(screen)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _ready_doctor(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        doctor = await _ready_doctor(app, pilot)
+        assert doctor.applied is True
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, DoctorScreen)
+        assert calls == [rc]
+
+
 async def test_doctor_screen_guidance_names_a_foreign_block() -> None:
     directory = Path("/opt/tools/bin")
     rc = Path("tmp/.bashrc")
     record = _writer_line(
         rc,
         guardable=False,
-        refusal=(
-            "inside the 'my-kitty PATH' block another tool manages; fix it in that tool"
-        ),
+        refusal=("inside the 'my-kitty PATH' block another tool manages; fix it in that tool"),
         block_owner="my-kitty PATH",
     )
     screen = _guard_doctor(
