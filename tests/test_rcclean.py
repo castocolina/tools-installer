@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from installer.rcclean import find_duplicate_path_lines, strip_lines
+from installer.rcclean import (
+    find_duplicate_path_lines,
+    scan_rc_path_writers,
+    strip_lines,
+    unguarded_path_writers,
+)
 from installer.shellrc import managed_block, path_export_guard
 
 
@@ -314,8 +319,6 @@ def test_pnpm_case_guard_and_our_guard_are_both_skipped_in_one_file() -> None:
 def test_unguarded_writer_is_reported_with_its_file(tmp_path: Path) -> None:
     """A plain prepend survives every new shell, so naming its file is the only
     thing that lets a user act on a duplicate PATH entry."""
-    from installer.rcclean import unguarded_path_writers
-
     bashrc = tmp_path / ".bashrc"
     writers = unguarded_path_writers(
         {bashrc: 'export PATH="/home/u/.local/bin:$PATH"\n'},
@@ -325,19 +328,13 @@ def test_unguarded_writer_is_reported_with_its_file(tmp_path: Path) -> None:
     assert writers == {Path("/home/u/.local/bin"): (bashrc,)}
 
 
-def test_indented_writer_still_counts_as_a_writer(tmp_path: Path) -> None:
-    """Fedora's stock .bashrc wraps its prepend in an `if`, so the line is
-    indented. strip_lines must never touch it (removing it would leave an empty
-    then-clause), but it adds the directory on every shell all the same —
-    REPORTING it and STRIPPING it are different questions."""
-    from installer.rcclean import unguarded_path_writers
-
+def test_writer_dir_test_if_reported(tmp_path: Path) -> None:
+    """An indented line inside a block whose condition does not test PATH still
+    counts for REPORTING (reporting and stripping are different questions).
+    Fedora's presence-guard header is the CR-01 case and is covered by
+    test_writer_fedora_presence_guard_not_reported."""
     bashrc = tmp_path / ".bashrc"
-    text = (
-        'if ! [[ "$PATH" =~ "$HOME/.local/bin:$HOME/bin:" ]]; then\n'
-        '    export PATH="$HOME/.local/bin:$PATH"\n'
-        "fi\n"
-    )
+    text = 'if [ -d "$HOME/.local/bin" ]; then\n    export PATH="$HOME/.local/bin:$PATH"\nfi\n'
     writers = unguarded_path_writers(
         {bashrc: text}, {Path("/home/u/.local/bin")}, {"HOME": "/home/u"}
     )
@@ -347,8 +344,6 @@ def test_indented_writer_still_counts_as_a_writer(tmp_path: Path) -> None:
 def test_case_guarded_line_is_not_a_writer(tmp_path: Path) -> None:
     """The self-deduping form this installer emits (and pnpm's own) cannot
     duplicate, so reporting it would send the user to fix a correct line."""
-    from installer.rcclean import unguarded_path_writers
-
     rc = tmp_path / ".myshellrc"
     text = (
         'case ":${PATH-}:" in *":/home/u/.local/bin:"*) ;; '
@@ -362,8 +357,6 @@ def test_case_guarded_line_is_not_a_writer(tmp_path: Path) -> None:
 def test_managed_block_is_not_a_writer(tmp_path: Path) -> None:
     """Our own managed block is guarded; flagging it would tell the user to edit
     the very file this installer maintains."""
-    from installer.rcclean import unguarded_path_writers
-
     rc = tmp_path / ".bashrc"
     text = (
         "# >>> tools-installer path >>>\n"
@@ -378,8 +371,6 @@ def test_managed_block_is_not_a_writer(tmp_path: Path) -> None:
 def test_every_writer_of_the_same_directory_is_reported(tmp_path: Path) -> None:
     """Two files each adding the directory is exactly the structural 2x case;
     naming only the first would send the user back for a second round."""
-    from installer.rcclean import unguarded_path_writers
-
     bashrc = tmp_path / ".bashrc"
     profile = tmp_path / ".bash_profile"
     line = 'export PATH="/home/u/.local/bin:$PATH"\n'
@@ -390,8 +381,6 @@ def test_every_writer_of_the_same_directory_is_reported(tmp_path: Path) -> None:
 
 
 def test_unrelated_directory_is_not_reported(tmp_path: Path) -> None:
-    from installer.rcclean import unguarded_path_writers
-
     rc = tmp_path / ".bashrc"
     text = 'export PATH="/opt/other/bin:$PATH"\n'
     assert (
@@ -402,8 +391,6 @@ def test_unrelated_directory_is_not_reported(tmp_path: Path) -> None:
 def test_scan_rc_path_writers_reads_real_files_and_skips_unreadable(tmp_path: Path) -> None:
     """A Doctor that raises on an unreadable rc file is worse than one that
     reports a cause it could not determine."""
-    from installer.rcclean import scan_rc_path_writers
-
     bashrc = tmp_path / ".bashrc"
     bashrc.write_text('export PATH="/home/u/.local/bin:$PATH"\n')
     missing = tmp_path / ".does-not-exist"
@@ -414,3 +401,95 @@ def test_scan_rc_path_writers_reads_real_files_and_skips_unreadable(tmp_path: Pa
         [bashrc, missing, binary], {Path("/home/u/.local/bin")}, {"HOME": "/home/u"}
     )
     assert writers == {Path("/home/u/.local/bin"): (bashrc,)}
+
+
+_ENV = {"HOME": "/home/u"}
+_LOCAL_BIN = Path("/home/u/.local/bin")
+
+
+def test_writer_guarded_if_not_reported() -> None:
+    text = (
+        'if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then\n'
+        '    export PATH="$HOME/.local/bin:$PATH"\n'
+        "fi\n"
+    )
+    assert unguarded_path_writers({Path("rc"): text}, {_LOCAL_BIN}, _ENV) == {}
+
+
+def test_writer_fedora_presence_guard_not_reported() -> None:
+    text = (
+        'if ! [[ "$PATH" =~ "$HOME/.local/bin:$HOME/bin:" ]]\n'
+        "then\n"
+        '    PATH="$HOME/.local/bin:$HOME/bin:$PATH"\n'
+        "fi\n"
+    )
+    assert unguarded_path_writers({Path("rc"): text}, {_LOCAL_BIN}, _ENV) == {}
+
+
+def test_writer_pnpm_case_block_not_reported() -> None:
+    text = (
+        'export PNPM_HOME="$HOME/.local/share/pnpm"\n'
+        'case ":$PATH:" in\n'
+        '  *":$PNPM_HOME:"*) ;;\n'
+        '  *) export PATH="$PNPM_HOME:$PATH" ;;\n'
+        "esac\n"
+    )
+    managed = {Path("/home/u/.local/share/pnpm")}
+    assert unguarded_path_writers({Path("rc"): text}, managed, _ENV) == {}
+
+
+def test_path_export_guard_output_never_flagged() -> None:
+    guard = path_export_guard(_LOCAL_BIN)
+    managed = {_LOCAL_BIN}
+    for text in (guard + "\n", "    " + guard + "\n"):
+        assert unguarded_path_writers({Path("rc"): text}, managed, _ENV) == {}
+        assert find_duplicate_path_lines(text, managed, _ENV) == []
+
+
+@pytest.mark.parametrize(
+    "shape",
+    ["one_line_if", "if_elif_else", "case_guard", "pnpm_case", "one_line_for"],
+)
+def test_writer_after_block_shape_still_reported(shape: str) -> None:
+    trailing = 'export PATH="$HOME/.local/bin:$PATH"'
+    prefixes = {
+        "one_line_if": 'if [ -d "$HOME/bin" ]; then PATH="$HOME/bin:$PATH"; fi\n',
+        "if_elif_else": (
+            'if [[ ":$PATH:" != *":$HOME/other:"* ]]; then\n'
+            "  :\n"
+            'elif [[ ":$PATH:" == *":$HOME/other:"* ]]; then\n'
+            "  :\n"
+            "else\n"
+            "  :\n"
+            "fi\n"
+        ),
+        "case_guard": path_export_guard(_LOCAL_BIN) + "\n",
+        "pnpm_case": (
+            'export PNPM_HOME="$HOME/.local/share/pnpm"\n'
+            'case ":$PATH:" in\n'
+            '  *":$PNPM_HOME:"*) ;;\n'
+            '  *) export PATH="$PNPM_HOME:$PATH" ;;\n'
+            "esac\n"
+        ),
+        "one_line_for": "for d in a b; do :; done\n",
+    }
+    text = prefixes[shape] + trailing + "\n"
+    managed = {_LOCAL_BIN}
+    rc = Path("rc")
+    assert unguarded_path_writers({rc: text}, managed, _ENV) == {_LOCAL_BIN: (rc,)}
+    assert find_duplicate_path_lines(text, managed, _ENV) == [text.split("\n").index(trailing)]
+
+
+@pytest.mark.parametrize("loop_header", ["for d in a b; do", "while read -r d; do"])
+def test_writer_nested_loop_inside_guarded_if_not_reported(loop_header: str) -> None:
+    text = (
+        'if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then\n'
+        f"{loop_header}\n"
+        "  :\n"
+        "done\n"
+        'export PATH="$HOME/.local/bin:$PATH"\n'
+        "fi\n"
+    )
+    managed = {_LOCAL_BIN}
+    assert unguarded_path_writers({Path("rc"): text}, managed, _ENV) == {}
+    assert find_duplicate_path_lines(text, managed, _ENV) == []

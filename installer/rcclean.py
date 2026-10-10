@@ -7,7 +7,8 @@ clean the redundant lines bun/pnpm/fnm append to .bashrc/.zshrc.
 """
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 _MANAGED_BEGINS = ("# >>> tools-installer path >>>", "# >>> tools-installer source >>>")
@@ -15,6 +16,18 @@ _MANAGED_ENDS = ("# <<< tools-installer path <<<", "# <<< tools-installer source
 _ASSIGN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.+?)\s*$")
 _PATH_EXPORT = re.compile(r"^\s*(?:export\s+)?PATH=(.+?)\s*$")
 _VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+_PATH_REF = re.compile(r"\$\{?PATH\b")
+_WORD = re.compile(r"[A-Za-z_]\w*")
+_OPENERS = {
+    "if": "fi",
+    "while": "done",
+    "until": "done",
+    "for": "done",
+    "select": "done",
+    "case": "esac",
+}
+_CLOSERS = frozenset({"fi", "esac", "done"})
+_Frame = tuple[str, bool]
 
 
 def _unquote(value: str) -> str:
@@ -44,6 +57,140 @@ def _expand(value: str, env: Mapping[str, str]) -> str | None:
     return expanded
 
 
+@dataclass(frozen=True)
+class _PathLine:
+    """One PATH assignment outside a managed block, plus how it may be used.
+
+    targets are expanded segments other than the previous PATH value. simple is
+    true only when the whole line is one plain assignment, with no comment and
+    no second command. presence_guarded is true when a condition tests PATH, so
+    the assignment does not re-add a directory that is already present. text is
+    the raw line, kept for a later in-place rewrite.
+    """
+
+    index: int
+    text: str
+    targets: tuple[str, ...]
+    simple: bool
+    indented: bool
+    presence_guarded: bool
+
+
+def _expanded_segments(value: str, env: Mapping[str, str]) -> tuple[str, ...]:
+    found: list[str] = []
+    for segment in _unquote(value).split(":"):
+        if segment in ("$PATH", "${PATH}"):
+            continue
+        expanded = _expand(segment, env)
+        if expanded is not None:
+            found.append(expanded)
+    return tuple(found)
+
+
+def _first_word(stripped: str) -> str:
+    match = _WORD.match(stripped)
+    return match.group(0) if match else ""
+
+
+def _has_standalone_closer(line: str, closer: str) -> bool:
+    return re.search(rf"(?:^|[;\s]|;;){re.escape(closer)}(?:$|[;\s#])", line) is not None
+
+
+def _condition_references_path(keyword: str, stripped: str) -> bool:
+    if keyword in ("for", "select"):
+        return False
+    if keyword == "case":
+        # Known limit: a multi-line case whose word does not reference PATH
+        # (for example case ":$PNPM_HOME:" in) leaves its rows unguarded, so
+        # they are reported. The real pnpm shape tests PATH.
+        match = re.search(r"\bcase\b(.*?)\bin\b", stripped)
+        condition = match.group(1) if match else ""
+        return _PATH_REF.search(condition) is not None
+    rest = stripped[len(keyword) :].lstrip()
+    cut = re.search(r";\s*(?:then|do)\b", rest)
+    condition = rest[: cut.start()] if cut else rest
+    return _PATH_REF.search(condition) is not None
+
+
+def _pop_closer(stack: list[_Frame], closer: str) -> None:
+    for index in range(len(stack) - 1, -1, -1):
+        if stack[index][0] == closer:
+            del stack[index:]
+            return
+
+
+def _replace_fi_condition(stack: list[_Frame], refs: bool) -> None:
+    for index in range(len(stack) - 1, -1, -1):
+        if stack[index][0] == "fi":
+            stack[index] = ("fi", refs)
+            return
+    stack.append(("fi", refs))
+
+
+def _update_block_stack(stack: list[_Frame], line: str) -> bool:
+    """Apply this line's block syntax. Return whether the line is presence-guarded.
+
+    A frame pushed here governs the following lines, not this one. A same-line
+    closer is frame-neutral: the line is guarded only by its own condition or
+    an outer frame.
+    """
+    outer = any(refs for _, refs in stack)
+    stripped = line.strip()
+    first = _first_word(stripped)
+    own = False
+    if first == "elif":
+        refs = _condition_references_path("elif", stripped)
+        if _has_standalone_closer(line, "fi"):
+            _pop_closer(stack, "fi")
+            own = refs
+        else:
+            _replace_fi_condition(stack, refs)
+    elif first in _CLOSERS:
+        _pop_closer(stack, first)
+    elif first in _OPENERS:
+        closer = _OPENERS[first]
+        refs = _condition_references_path(first, stripped)
+        if _has_standalone_closer(line, closer):
+            own = refs
+        else:
+            stack.append((closer, refs))
+    return outer or own
+
+
+def _path_line_targets(lines: list[str], env: Mapping[str, str]) -> Iterator[_PathLine]:
+    """Yield PATH assignments outside managed blocks, with guard context.
+
+    A block whose condition references PATH is presence-guarded. A condition
+    that only tests that a directory exists is not. A line whose first word is
+    case is a guard header, not an assignment.
+    """
+    blocked = _managed_line_indices(lines)
+    local: dict[str, str] = dict(env)
+    stack: list[_Frame] = []
+    for index, line in enumerate(lines):
+        if index in blocked:
+            continue
+        presence_guarded = _update_block_stack(stack, line)
+        if _first_word(line.strip()) == "case":
+            continue
+        path_match = _PATH_EXPORT.match(line)
+        if path_match:
+            yield _PathLine(
+                index=index,
+                text=line,
+                targets=_expanded_segments(path_match.group(1), local),
+                simple=True,
+                indented=line[:1] in (" ", "\t"),
+                presence_guarded=presence_guarded,
+            )
+            continue
+        assign = _ASSIGN.match(line)
+        if assign:
+            expanded = _expand(_unquote(assign.group(2)), local)
+            if expanded is not None:
+                local[assign.group(1)] = expanded
+
+
 def _managed_line_indices(lines: list[str]) -> set[int]:
     """Indices inside any tools-installer managed/source block (markers included)."""
     blocked: set[int] = set()
@@ -70,35 +217,20 @@ def find_duplicate_path_lines(
     present — so there is nothing safe (or necessary) to strip.
     """
     lines = rc_text.split("\n")
-    blocked = _managed_line_indices(lines)
-    local: dict[str, str] = dict(env)
     targets = {str(directory) for directory in managed_dirs}
     flagged: list[int] = []
-    for index, line in enumerate(lines):
-        if index in blocked:
-            continue
-        path_match = _PATH_EXPORT.match(line)
-        if path_match:
-            # An indented line is never one bun/fnm/this installer appended (always
-            # column 0) and is very likely the body of an if/case/for the rc file's
-            # own template wraps it in (e.g. Fedora's default .bashrc). Stripping
-            # such a line but leaving its block would corrupt the file (an empty
-            # then-clause is a bash syntax error), so it is never a strip candidate.
-            if line[:1] not in (" ", "\t"):
-                value = _unquote(path_match.group(1))
-                for segment in value.split(":"):
-                    if segment in ("$PATH", "${PATH}"):
-                        continue
-                    expanded = _expand(segment, local)
-                    if expanded is not None and expanded in targets:
-                        flagged.append(index)
-                        break
-            continue
-        assign = _ASSIGN.match(line)
-        if assign:
-            expanded = _expand(_unquote(assign.group(2)), local)
-            if expanded is not None:
-                local[assign.group(1)] = expanded
+    for record in _path_line_targets(lines, env):
+        # An indented line is never one bun/fnm/this installer appended (always
+        # column 0). Stripping it and leaving its block would corrupt the file
+        # (an empty then-clause is a bash syntax error), so it is never a strip
+        # candidate. A presence-guarded line is not one either.
+        if (
+            record.simple
+            and not record.indented
+            and not record.presence_guarded
+            and any(segment in targets for segment in record.targets)
+        ):
+            flagged.append(record.index)
     return flagged
 
 
@@ -130,44 +262,31 @@ def unguarded_path_writers(
     This differs from `find_duplicate_path_lines` in two deliberate ways,
     because REPORTING a writer and STRIPPING one are different questions:
 
-    * Indented lines COUNT here. Fedora's stock `.bashrc` wraps its prepend in
-      an `if`, so the line sits at column 4. `find_duplicate_path_lines` skips
-      it because deleting it would leave an empty then-clause (a bash syntax
-      error) — but it still adds the directory on every shell, so a report that
-      omitted it would leave the user's most common duplicate unexplained.
+    * Indented lines COUNT here when the enclosing condition does not test
+      PATH. A directory-existence test still adds the directory on every shell
+      that reaches the body, so omitting it would hide a real writer.
+      `find_duplicate_path_lines` still skips indented lines, because deleting
+      one would leave an empty then-clause (a bash syntax error).
     * The answer is keyed by DIRECTORY and collects EVERY file, since the
       structural case is typically one writer in `.bashrc` and another in
       `.bash_profile`; naming only one sends the user back for a second round.
 
-    Guarded forms are not writers: our own `case`-guarded emitter and pnpm's
-    own idiom both skip a directory that is already present, so they cannot
-    duplicate. Flagging one would point the user at a correct line.
+    A presence-guarded block is not a writer: an if, elif, while, until, or
+    case whose condition references PATH already skips a directory that is
+    present. A non-PATH test such as a directory-existence check still is.
+    Our own case-guarded emitter and pnpm's idiom are the same kind of guard.
+    Flagging one would point the user at a correct line.
     """
     writers: dict[Path, list[Path]] = {}
     targets = {str(directory): directory for directory in managed_dirs}
     for rc_path, rc_text in rc_texts.items():
-        lines = rc_text.split("\n")
-        blocked = _managed_line_indices(lines)
-        local: dict[str, str] = dict(env)
-        for index, line in enumerate(lines):
-            if index in blocked:
+        for record in _path_line_targets(rc_text.split("\n"), env):
+            if record.presence_guarded:
                 continue
-            path_match = _PATH_EXPORT.match(line)
-            if path_match:
-                value = _unquote(path_match.group(1))
-                for segment in value.split(":"):
-                    if segment in ("$PATH", "${PATH}"):
-                        continue
-                    expanded = _expand(segment, local)
-                    directory = targets.get(expanded) if expanded is not None else None
-                    if directory is not None and rc_path not in writers.setdefault(directory, []):
-                        writers[directory].append(rc_path)
-                continue
-            assign = _ASSIGN.match(line)
-            if assign:
-                expanded = _expand(_unquote(assign.group(2)), local)
-                if expanded is not None:
-                    local[assign.group(1)] = expanded
+            for segment in record.targets:
+                directory = targets.get(segment)
+                if directory is not None and rc_path not in writers.setdefault(directory, []):
+                    writers[directory].append(rc_path)
     return {directory: tuple(files) for directory, files in writers.items()}
 
 
