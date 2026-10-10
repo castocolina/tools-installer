@@ -224,6 +224,8 @@ _VER_NO_VERSION = "no version"
 _VER_SOURCE_UNKNOWN = "(source unknown)"
 _VER_NO_COMPARISON = "(no comparison)"
 _VER_STALE = "~"
+_BROKEN_MARK = "!"
+_BROKEN_DETAIL = "shim present, package missing — select it and press enter to reinstall and repair"
 # Already this wide for one owner, so a host list truncates only if it would widen the column (D-13)
 _OWNER_CELL_MAX = max(len(label) for label in OWNER_LABELS.values())
 
@@ -245,7 +247,9 @@ _OWNER_CELL_MAX = max(len(label) for label in OWNER_LABELS.values())
 # see 15.1-VERIFICATION.md's second pass). The three lines are grouped by
 # BUDGET, not strict semantics, because the Ver group's own content (all four
 # dim labels + the two colored states + the stale marker) cannot fit in a
-# single 78-column row alongside anything else: line 1 is Priorities alone;
+# single 78-column row alongside anything else: line 1 is Priorities plus the
+# D-18 broken mark, placed there for budget, the same grouping-by-budget rule
+# this comment already states for lines 2 and 3 (lines 2 and 3 have no room);
 # line 2 is Audience/State plus the two colored Ver states (their combined
 # length fits the leftover budget); line 3 is the four dim labels plus the
 # stale marker. Each line is plain-text-measured (Rich markup stripped) to
@@ -272,7 +276,7 @@ _OWNER_CELL_MAX = max(len(label) for label in OWNER_LABELS.values())
 # that carries a real key) or force a cramped rewrite of the three that do.
 _LEGEND = (
     "[bold red]P0[/] essential · [bold yellow]P1[/] recommended · [blue]P2[/] nice-to-have"
-    " · [dim]P3[/] niche\n"
+    " · [dim]P3[/] niche · [red]! broken[/]\n"
     "[bold cyan]AI[/] / [magenta]human[/] / both"
     " · [green]✓ installed[/] · [yellow]○ missing[/]"
     " · Ver: [green]up to date[/] · [yellow]update avail[/]\n"
@@ -487,6 +491,10 @@ class CatalogScreen(AppScreen):
 
     def _inst_cell(self, tool: Tool, installed: bool) -> Text:
         if tool.skill_lifecycle is None:
+            service = self._version_refresh
+            ownership = service.ownership_of(tool.id) if service is not None else None
+            if ownership is not None and ownership.broken:
+                return Text(_BROKEN_MARK, style="red")
             return Text("✓", style="green") if installed else Text("○", style="yellow")
         status = self._skill_status(tool)
         if status is not None and status.hosts:
@@ -702,6 +710,8 @@ class CatalogScreen(AppScreen):
         service = self._version_refresh
         ownership = service.ownership_of(tool.id) if service is not None else None
         segments: list[str] = []
+        if ownership is not None and ownership.broken:
+            segments.append(_BROKEN_DETAIL)
         if ownership is not None and ownership.owner != "unknown":
             # D-05 (Round-1 review 15.4-03 HIGH/MEDIUM): the per-owner
             # explanation requirement here is now satisfied by an
@@ -896,6 +906,9 @@ class CatalogScreen(AppScreen):
             return
         status = self._version_statuses.get(tool_id)
         ownership = self._version_refresh.ownership_of(tool_id)
+        if ownership is not None and ownership.broken:
+            self.status.set(f"{tool_id}: {_BROKEN_DETAIL}", "warn")
+            return
         if status is not None and status.outdated is False:
             line = f"{tool_id} is already current"
             if ownership is not None and ownership.off_policy:

@@ -1779,6 +1779,73 @@ async def test_refresh_cursor_survives_both_repaints_of_one_cycle(tmp_path: Path
 # -- D-03/D-04/Task 3: an always-on legend names every version state --------
 
 
+_BROKEN_HINT = "shim present, package missing — select it and press enter to reinstall and repair"
+
+
+def test_broken_row_marks_inst_red_and_explains_repair(tmp_path: Path) -> None:
+    tool = _tool("mmdc")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {  # pyright: ignore[reportPrivateUsage]
+        "mmdc": (service.epoch, _ownership(tool, owner="pnpm", broken=True))
+    }
+    screen = _screen([tool], {"mmdc": True}, version_refresh=service)
+    cell = screen._row_cells(tool)[5]  # pyright: ignore[reportPrivateUsage]
+    assert cell.plain == "!"
+    assert "red" in str(cell.style)
+    detail = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    assert _BROKEN_HINT in detail
+
+
+def test_update_on_broken_row_hints_repair_without_updating(tmp_path: Path) -> None:
+    tool = _tool("mmdc")
+    ownership = _ownership(tool, owner="pnpm", broken=True)
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"mmdc": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    updates = _update_service(lambda _tool: ownership)
+    begins = _counting_begin(updates)
+    screen = _screen([tool], {"mmdc": True}, version_refresh=service, updates=updates)
+    screen._version_statuses = {"mmdc": _outdated_status("mmdc")}  # pyright: ignore[reportPrivateUsage]
+    screen._browser.highlighted_id = lambda: "mmdc"  # type: ignore[method-assign]
+    started: list[str] = []
+    screen._update_tool_worker = lambda tool_id: started.append(tool_id)  # type: ignore[method-assign]
+    messages: list[str] = []
+    screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
+    screen.action_update_tool()
+    assert begins == []
+    assert started == []
+    assert messages == [f"mmdc: {_BROKEN_HINT}"]
+
+
+def test_legend_names_the_broken_mark() -> None:
+    lines = _LEGEND.split("\n")
+    assert "! broken" in lines[0]
+    for line in lines:
+        plain = re.sub(r"\[[^\]]*\]", "", line)
+        assert len(plain) <= 78, (len(plain), plain)
+
+
+def test_installed_row_without_broken_still_shows_green_check(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    service._ownership = {"rg": (service.epoch, _ownership(tool, owner="brew"))}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {"rg": True}, version_refresh=service)
+    cell = screen._row_cells(tool)[5]  # pyright: ignore[reportPrivateUsage]
+    assert cell.plain == "✓"
+    assert "green" in str(cell.style)
+
+
 def test_legend_names_every_ver_cell_marker_and_style_token() -> None:
     # D-03/D-04 (locked): every rendered Ver state -- both colored states,
     # each of the four dim gray cases, and the `~` suffix -- has its own
@@ -2093,6 +2160,7 @@ def _ownership(
     candidates: tuple[OwnershipCandidate, ...] = (),
     package: str | None = None,
     off_policy: bool = False,
+    broken: bool = False,
 ) -> ManagerOwnership:
     if not candidates:
         candidates = (
@@ -2117,6 +2185,7 @@ def _ownership(
         active_path=active_path,
         unknown_reason=unknown_reason,
         off_policy=off_policy,
+        broken=broken,
     )
 
 
