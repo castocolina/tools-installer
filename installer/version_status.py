@@ -42,6 +42,7 @@ ownership record report as unavailable until a fresh pass commits one.
 
 from __future__ import annotations
 
+import os
 import shutil
 import threading
 from collections.abc import Callable, Sequence
@@ -223,6 +224,23 @@ def _probed_version(tool: Tool, probe_output: Callable[[list[str]], str | None])
     return extract_observed_version(output) if output else None
 
 
+def _sdkman_current_version(ownership: ManagerOwnership) -> str | None:
+    if ownership.method is None:
+        return None
+    bin_dir = ownership.method.params.get("bin_dir")
+    if not isinstance(bin_dir, str) or not bin_dir:
+        return None
+    bin_path = Path(bin_dir).expanduser()
+    if not bin_path.is_dir():
+        return None
+    current = bin_path.parent
+    try:
+        target = os.readlink(current)
+    except OSError:
+        return None
+    return extract_observed_version(Path(target).name)
+
+
 def resolve_status(
     tool: Tool,
     *,
@@ -323,6 +341,19 @@ def resolve_status(
                 stale=False,
                 source=owner,
                 pinned_spec=pin,
+            ),
+            None,
+        )
+    if owner == "sdkman":
+        return (
+            VersionStatus(
+                tool_id=tool.id,
+                installed=_sdkman_current_version(ownership),
+                latest=None,
+                outdated=None,
+                stale=False,
+                source="sdkman",
+                pinned_spec=None,
             ),
             None,
         )

@@ -10,7 +10,13 @@ import pytest
 
 from installer.manager_versions import ManagerVersion, OutdatedReport
 from installer.model import Method, Tool
-from installer.ownership import ManagerInventory, ManagerOwnership, Owner, OwnershipCandidate
+from installer.ownership import (
+    ManagerInventory,
+    ManagerOwnership,
+    Owner,
+    OwnershipCandidate,
+    resolve_ownership,
+)
 from installer.platform import Platform
 from installer.version_cache import (
     MANAGER_RETRY_BACKOFF,
@@ -26,6 +32,7 @@ from installer.version_cache import (
 from installer.version_status import (
     MAX_FETCHES_PER_REFRESH,
     VersionRefreshService,
+    VersionStatus,
     resolve_github_release_status,
     resolve_status,
 )
@@ -1355,3 +1362,171 @@ def test_no_probe_default_never_acquires_a_native_subprocess(tmp_path: Path) -> 
     ownership = service.ownership_of("jq")
     assert ownership is not None
     assert ownership.owner == "unknown"
+
+
+def _springboot_current(tmp: Path, target: str, *, create_target: bool) -> Path:
+    root = tmp / "c" / "springboot"
+    if create_target:
+        version_bin = root / target / "bin"
+        version_bin.mkdir(parents=True)
+        (version_bin / "spring").write_text("#!/bin/sh\n")
+    else:
+        root.mkdir(parents=True)
+    (root / "current").symlink_to(target)
+    return root / "current" / "bin"
+
+
+def _sdkman_springboot(bin_dir: Path) -> tuple[Tool, ManagerOwnership]:
+    method = Method(
+        kind="sdkman",
+        params={"candidate": "springboot", "bin_dir": str(bin_dir)},
+    )
+    tool = Tool(
+        id="springbootcli",
+        name="Spring Boot CLI",
+        category="runtime",
+        cmd="spring",
+        methods=(method,),
+    )
+    candidate = OwnershipCandidate(
+        owner="sdkman",
+        method=method,
+        package="springboot",
+        current_version=None,
+        evidence="test",
+    )
+    ownership = ManagerOwnership(
+        tool_id=tool.id,
+        owner="sdkman",
+        method=method,
+        package="springboot",
+        current_version=None,
+        confidence="direct",
+        shadowed=False,
+        candidates=(candidate,),
+        active_candidate="sdkman",
+        active_path=bin_dir / "spring",
+        unknown_reason=None,
+    )
+    return tool, ownership
+
+
+def _status_now() -> datetime:
+    return datetime(2026, 9, 7, tzinfo=UTC)
+
+
+def test_sdkman_current_symlink_is_the_installed_version_without_a_probe(tmp_path: Path) -> None:
+    bin_dir = _springboot_current(tmp_path, "4.1.0", create_target=True)
+    tool, ownership = _sdkman_springboot(bin_dir)
+    calls: list[list[str]] = []
+
+    def probe(argv: list[str]) -> str:
+        calls.append(argv)
+        return "9.9.9"
+
+    status, entry = resolve_status(
+        tool,
+        ownership=ownership,
+        outdated=_empty_outdated(),
+        entry=None,
+        now=_status_now(),
+        probe_output=probe,
+        resolve_tag=lambda _repo: "v0",
+        platform=_platform(),
+    )
+    assert calls == []
+    assert entry is None
+    assert status == VersionStatus(
+        tool_id="springbootcli",
+        installed="4.1.0",
+        latest=None,
+        outdated=None,
+        stale=False,
+        source="sdkman",
+        pinned_spec=None,
+    )
+
+
+def test_sdkman_dangling_current_has_no_installed_version(tmp_path: Path) -> None:
+    bin_dir = _springboot_current(tmp_path, "missing", create_target=False)
+    tool, ownership = _sdkman_springboot(bin_dir)
+    status, _entry = resolve_status(
+        tool,
+        ownership=ownership,
+        outdated=_empty_outdated(),
+        entry=None,
+        now=_status_now(),
+        probe_output=lambda _argv: "9.9.9",
+        resolve_tag=lambda _repo: "v0",
+        platform=_platform(),
+    )
+    assert status.installed is None
+    assert status.source == "sdkman"
+
+
+def test_sdkman_unparseable_current_target_has_no_installed_version(tmp_path: Path) -> None:
+    bin_dir = _springboot_current(tmp_path, "not-a-version", create_target=True)
+    tool, ownership = _sdkman_springboot(bin_dir)
+    status, _entry = resolve_status(
+        tool,
+        ownership=ownership,
+        outdated=_empty_outdated(),
+        entry=None,
+        now=_status_now(),
+        probe_output=lambda _argv: "9.9.9",
+        resolve_tag=lambda _repo: "v0",
+        platform=_platform(),
+    )
+    assert status.installed is None
+    assert status.source == "sdkman"
+
+
+def test_sdkman_version_through_real_resolve_ownership(tmp_path: Path) -> None:
+    bin_dir = _springboot_current(tmp_path, "4.1.0", create_target=True)
+    method = Method(
+        kind="sdkman",
+        params={"candidate": "springboot", "bin_dir": str(bin_dir)},
+    )
+    tool = Tool(
+        id="springbootcli",
+        name="Spring Boot CLI",
+        category="runtime",
+        cmd="spring",
+        methods=(method,),
+    )
+    binary = bin_dir / "spring"
+    ownership = resolve_ownership(
+        tool,
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        inventory=ManagerInventory(
+            brew_formulae=None,
+            brew_casks=None,
+            pnpm_globals=None,
+            uv_tools=None,
+            brew_prefix=None,
+        ),
+        artifacts=(),
+        managed_bin_dir=tmp_path / "managed",
+        which=lambda _cmd: str(binary),
+    )
+    assert ownership.owner == "sdkman"
+    assert ownership.method is not None
+    assert ownership.method.params["bin_dir"] == str(bin_dir)
+    calls: list[list[str]] = []
+
+    def probe(argv: list[str]) -> str:
+        calls.append(argv)
+        return "9.9.9"
+
+    status, _entry = resolve_status(
+        tool,
+        ownership=ownership,
+        outdated=_empty_outdated(),
+        entry=None,
+        now=_status_now(),
+        probe_output=probe,
+        resolve_tag=lambda _repo: "v0",
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+    )
+    assert calls == []
+    assert status.installed == "4.1.0"
