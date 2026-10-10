@@ -1,6 +1,7 @@
 import subprocess
 import typing
 from collections.abc import Callable
+from dataclasses import replace
 from itertools import product
 from pathlib import Path
 
@@ -22,7 +23,10 @@ from installer.ownership import (
     ManagerOwnership,
     Owner,
     OwnershipCandidate,
+    active_path_note,
+    also_installed_note,
     attribute_path,
+    declared_manager_label,
     owner_detail,
     owner_dirs,
     owner_label,
@@ -2226,6 +2230,174 @@ def test_undeclared_brew_dangling_link(tmp_path: Path) -> None:
     )
     assert result.owner == "unknown"
     assert all(candidate.owner != "brew" for candidate in result.candidates)
+
+
+def _candidate(
+    owner: Owner, package: str | None = None, method: Method | None = None
+) -> OwnershipCandidate:
+    return OwnershipCandidate(
+        owner=owner,
+        method=method,
+        package=package,
+        current_version=None,
+        evidence="test",
+    )
+
+
+def test_declared_manager_label_names_the_first_applicable_method() -> None:
+    assert declared_manager_label(_sdkman_tool("/no/such/bin"), _MAC) == "SDKMAN"
+    release = Tool(
+        id="rg",
+        name="rg",
+        category="search",
+        cmd="rg",
+        methods=(Method(kind="github_release", params={"repo": "BurntSushi/ripgrep"}),),
+    )
+    assert declared_manager_label(release, _MAC) == "GitHub release"
+    skipped = Tool(
+        id="rg",
+        name="rg",
+        category="search",
+        cmd="rg",
+        methods=(Method(kind="apt", params={"package": "ripgrep"}, os=("debian",)),),
+    )
+    assert declared_manager_label(skipped, _MAC) is None
+
+
+def test_declared_manager_label_native_kind() -> None:
+    fedora = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
+    dnf_tool = Tool(
+        id="jq",
+        name="jq",
+        category="search",
+        cmd="jq",
+        methods=(Method(kind="dnf", params={"package": "jq"}),),
+    )
+    assert declared_manager_label(dnf_tool, fedora) == "dnf"
+    atomic = Platform(os="fedora", arch="amd64", immutable=True, has_brew=False)
+    ostree = Tool(
+        id="jq",
+        name="jq",
+        category="search",
+        cmd="jq",
+        methods=(Method(kind="rpm_ostree", params={"package": "jq"}),),
+    )
+    assert declared_manager_label(ostree, atomic) == "rpm-ostree"
+
+
+def test_off_policy_requires_a_declared_policy(tmp_path: Path) -> None:
+    prefix = tmp_path / "brew"
+    _binary, link = _link_cellar(prefix, "demo", "1.0", "demo")
+    tool = Tool(
+        id="demo",
+        name="demo",
+        category="search",
+        cmd="demo",
+        methods=(Method(kind="apt", params={"package": "demo"}, os=("debian",)),),
+    )
+    result = _resolve(
+        tool,
+        inventory=_readable(brew_formulae={"demo": "1.0"}, brew_prefix=prefix),
+        which=str(link),
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=True),
+    )
+    assert result.owner == "brew"
+    assert result.off_policy is False
+
+
+def test_also_installed_note_names_the_other_manager() -> None:
+    sdk = Method(kind="sdkman", params={"candidate": "java"})
+    record = replace(
+        _record("brew", package="openjdk"),
+        candidates=(_candidate("brew", "openjdk"), _candidate("sdkman", "java", sdk)),
+        shadowed=True,
+    )
+    assert also_installed_note(record) == "also installed via SDKMAN"
+    assert also_installed_note(_record("brew")) is None
+
+
+def test_also_installed_note_joins_other_owners_in_candidate_order() -> None:
+    release = Method(kind="github_release", params={"repo": "o/r"})
+    record = replace(
+        _record("sdkman"),
+        candidates=(
+            _candidate("brew", "openjdk"),
+            _candidate("installer", method=release),
+            _candidate("sdkman", "java"),
+        ),
+    )
+    assert also_installed_note(record) == "also installed via Homebrew, GitHub release"
+
+
+def test_also_installed_note_names_homebrew_when_sdkman_is_active(tmp_path: Path) -> None:
+    prefix = tmp_path / "brew"
+    _cellar_binary(prefix, "openjdk", "21.0.4", "java")
+    bin_dir = prefix / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "java").symlink_to(prefix / "Cellar" / "openjdk" / "21.0.4" / "bin" / "java")
+    sdk_bin = tmp_path / "sdk" / "candidates" / "java" / "current" / "bin"
+    sdk_java = _touch_executable(sdk_bin, "java")
+    result = _resolve(
+        _sdkman_tool(str(sdk_bin), cmd="java", candidate="java"),
+        inventory=_readable(brew_formulae={"openjdk": "21.0.4"}, brew_prefix=prefix),
+        which=str(sdk_java),
+    )
+    assert also_installed_note(result) == "also installed via Homebrew"
+
+
+def test_also_installed_note_names_homebrew_when_os_package_is_active(tmp_path: Path) -> None:
+    prefix = tmp_path / "brew"
+    _cellar_binary(prefix, "openjdk", "21.0.4", "java")
+    bin_dir = prefix / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "java").symlink_to(prefix / "Cellar" / "openjdk" / "21.0.4" / "bin" / "java")
+    calls: list[list[str]] = []
+    result = _resolve(
+        _absent_sdkman("java"),
+        inventory=_readable(brew_formulae={"openjdk": "21.0.4"}, brew_prefix=prefix),
+        which="/usr/bin/java",
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=True),
+        native_probe=_os_package_probe("java-21-openjdk-headless", calls),
+    )
+    assert also_installed_note(result) == "also installed via Homebrew"
+
+
+def test_also_installed_note_names_homebrew_for_keg_only_shadow(tmp_path: Path) -> None:
+    prefix = tmp_path / "brew"
+    _cellar_binary(prefix, "openjdk", "21.0.4", "java")
+    opt = prefix / "opt" / "openjdk"
+    opt.parent.mkdir(parents=True)
+    opt.symlink_to(prefix / "Cellar" / "openjdk" / "21.0.4")
+    sdk_bin = tmp_path / "sdk" / "candidates" / "java" / "current" / "bin"
+    sdk_java = _touch_executable(sdk_bin, "java")
+    result = _resolve(
+        _sdkman_tool(str(sdk_bin), cmd="java", candidate="java"),
+        inventory=_readable(brew_formulae={"openjdk": "21.0.4"}, brew_prefix=prefix),
+        which=str(sdk_java),
+    )
+    assert also_installed_note(result) == "also installed via Homebrew"
+
+
+def test_active_path_note_names_the_resolved_path() -> None:
+    path = Path("/opt/homebrew/Cellar/groovy/4.0.24/bin/groovy")
+    record = replace(
+        _record("unknown"),
+        active_path=path,
+        unknown_reason="no manager claimed the tool",
+    )
+    assert active_path_note(record) == f"active binary resolves to {path}"
+
+
+def test_active_path_note_is_silent_when_already_named_or_known() -> None:
+    path = Path("/usr/bin/java")
+    named = replace(
+        _record("unknown"),
+        active_path=path,
+        unknown_reason=f"the active binary at {path} is not attributable to any candidate",
+    )
+    assert active_path_note(named) is None
+    assert active_path_note(_record("brew")) is None
+    assert active_path_note(_record("unknown")) is None
 
 
 def test_undeclared_script_only_by_elimination_unchanged(tmp_path: Path) -> None:

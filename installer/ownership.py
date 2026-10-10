@@ -54,7 +54,7 @@ import shutil
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from installer.apps import APP_KINDS
 from installer.download import DOWNLOAD_KINDS
@@ -585,6 +585,7 @@ def resolve_ownership(
             # D-06: link-proven brew is not the live binary, so it must not block native/os-package.
             if via_link and active_path is not None:
                 shadow_brew = brew_candidate
+    declared_policy = declared_manager_label(tool, platform) is not None
     unreadable = _unreadable(tool, platform, inventory)
     dirs = owner_dirs(inventory=inventory, managed_bin_dir=managed_bin_dir, platform=platform)
     for owner, prefixes in _location_dirs(tool, methods).items():
@@ -603,7 +604,7 @@ def resolve_ownership(
             candidates=candidates,
             active_candidate=active_candidate,
             active_path=active_path,
-            off_policy=undeclared_brew and winner.owner == "brew",
+            off_policy=undeclared_brew and declared_policy and winner.owner == "brew",
         )
     # D-05: consult the native-package-manager adapter HERE -- immediately
     # after the tracked-candidate active-path branch above and immediately
@@ -677,7 +678,7 @@ def resolve_ownership(
             candidates=candidates,
             active_candidate=None,
             active_path=None,
-            off_policy=undeclared_brew and candidates[0].owner == "brew",
+            off_policy=undeclared_brew and declared_policy and candidates[0].owner == "brew",
         )
     script_method = next((method for method in applicable if method.kind == "script"), None)
     if not candidates and script_method is not None and is_installed(tool) and not unreadable:
@@ -1242,6 +1243,61 @@ def owner_detail(ownership: ManagerOwnership) -> str | None:
             mechanism = OWNER_LABELS["installer"]
         return template.format(mechanism=mechanism)
     return template
+
+
+def declared_manager_label(tool: Tool, platform: Platform) -> str | None:
+    """Label of the catalog's first applicable install method, or None.
+
+    Lookups use `.get()` so an unmapped kind cannot raise after a mutation
+    that already succeeded. Native kinds are not in `_KIND_TO_OWNER`; `dnf`
+    stays `dnf` and `rpm_ostree` becomes `rpm-ostree`, matching OWNER_LABELS.
+    """
+    methods = resolve_methods(tool, platform)
+    if not methods:
+        # resolve.py always skips rpm_ostree, but it is still a declared policy.
+        methods = [
+            method
+            for method in tool.methods
+            if method.kind == "rpm_ostree" and _method_targets_platform(method, platform)
+        ]
+    if not methods:
+        return None
+    kind = methods[0].kind
+    if kind in _INSTALLER_KINDS:
+        return _INSTALLER_KIND_LABELS.get(kind, OWNER_LABELS["installer"])
+    owner = _KIND_TO_OWNER.get(kind, kind.replace("_", "-"))
+    return OWNER_LABELS.get(cast(Owner, owner))
+
+
+def _candidate_label(candidate: OwnershipCandidate) -> str | None:
+    if candidate.owner == "installer" and candidate.method is not None:
+        kind_label = _INSTALLER_KIND_LABELS.get(candidate.method.kind)
+        if kind_label is not None:
+            return kind_label
+    return OWNER_LABELS.get(candidate.owner)
+
+
+def also_installed_note(ownership: ManagerOwnership) -> str | None:
+    labels = [
+        label
+        for candidate in ownership.candidates
+        if candidate.owner != ownership.owner
+        if (label := _candidate_label(candidate)) is not None
+    ]
+    if not labels:
+        return None
+    return f"also installed via {', '.join(labels)}"
+
+
+def active_path_note(ownership: ManagerOwnership) -> str | None:
+    path = ownership.active_path
+    if ownership.owner != "unknown" or path is None:
+        return None
+    rendered = str(path)
+    reason = ownership.unknown_reason
+    if reason is not None and rendered in reason:
+        return None
+    return f"active binary resolves to {rendered}"
 
 
 # 15.4-05/D-03/D-04: `removal_hint` -- the Uninstall screen's per-owner removal
