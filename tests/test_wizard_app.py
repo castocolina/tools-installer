@@ -388,6 +388,20 @@ async def test_doctor_screen_renders_guidance() -> None:
         assert "make fix" in text
 
 
+async def test_doctor_tui_route_uses_duplicate_path_writers_seam(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake(_report: DoctorReport) -> dict[Path, tuple[Path, ...]]:
+        return {Path("/x/bin"): (Path("/tmp/fake/.bashrc"),)}
+
+    monkeypatch.setattr("installer.wizard_app.duplicate_path_writers", fake)
+    app = _app(report=DoctorReport(missing=(), broken=(), duplicated=(Path("/x/bin"),)))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("4")
+        text = "".join(item.title + item.meaning + item.next_step for item in app.screen.guidance)
+        assert "/tmp/fake/.bashrc" in text
+
+
 async def test_doctor_screen_adapts_missing_path_guidance_for_tui() -> None:
     app = _app(
         report=DoctorReport(missing=(Path("/a/bin"),), broken=(), duplicated=()),

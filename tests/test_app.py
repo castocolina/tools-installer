@@ -326,6 +326,53 @@ def test_run_doctor_healthy_says_healthy(tmp_path: Path):
     assert "healthy" in buf.getvalue().lower()
 
 
+def test_run_doctor_names_the_injected_rc_writer() -> None:
+    from installer.app import run_doctor
+
+    console, buf = _console()
+    run_doctor(
+        [],
+        console,
+        platform=_platform(),
+        default_bin_dir=Path("/x/bin"),
+        path_value="/x/bin:/x/bin",
+        exists=lambda _p: True,
+        duplicate_writers=lambda _report: {Path("/x/bin"): (Path("/tmp/fake/.bashrc"),)},
+    )
+    assert "/tmp/fake/.bashrc" in buf.getvalue()
+
+
+def test_writer_scan_skipped_when_nothing_is_duplicated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from installer.app import duplicate_path_writers
+    from installer.doctor import DoctorReport
+
+    calls: list[object] = []
+
+    def counting(*_args: object, **_kwargs: object) -> dict[Path, tuple[Path, ...]]:
+        calls.append(True)
+        return {}
+
+    monkeypatch.setattr("installer.app.scan_rc_path_writers", counting)
+    report = DoctorReport(missing=(), broken=(), duplicated=())
+    assert duplicate_path_writers(report) == {}
+    assert calls == []
+
+
+def test_writer_scan_reads_only_the_given_files(tmp_path: Path) -> None:
+    from installer.app import duplicate_path_writers
+    from installer.doctor import DoctorReport
+
+    rc = tmp_path / ".bashrc"
+    rc.write_text('export PATH="/x/bin:$PATH"\n')
+    other = tmp_path / ".profile"
+    other.write_text('export PATH="/x/bin:$PATH"\n')
+    report = DoctorReport(missing=(), broken=(), duplicated=(Path("/x/bin"),))
+    writers = duplicate_path_writers(report, rc_paths=[rc], env={"HOME": str(tmp_path)})
+    assert writers == {Path("/x/bin"): (rc,)}
+
+
 def test_configure_path_honors_exists_filter(tmp_path: Path):
     from installer.app import configure_path
 

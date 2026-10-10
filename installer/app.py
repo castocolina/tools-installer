@@ -3,7 +3,7 @@
 import contextlib
 import os
 import shutil
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -305,7 +305,12 @@ def guard_state(
     return status, warning
 
 
-def _duplicate_path_writers(report: DoctorReport) -> dict[Path, tuple[Path, ...]]:
+def duplicate_path_writers(
+    report: DoctorReport,
+    *,
+    rc_paths: Iterable[Path] | None = None,
+    env: Mapping[str, str] | None = None,
+) -> dict[Path, tuple[Path, ...]]:
     """Which rc files add each DUPLICATED directory unconditionally.
 
     Scoped to `report.duplicated` rather than every managed dir: a writer only
@@ -315,7 +320,9 @@ def _duplicate_path_writers(report: DoctorReport) -> dict[Path, tuple[Path, ...]
     """
     if not report.duplicated:
         return {}
-    return scan_rc_path_writers(path_scan_rc_paths(), set(report.duplicated), os.environ)
+    paths = path_scan_rc_paths() if rc_paths is None else rc_paths
+    environ = os.environ if env is None else env
+    return scan_rc_path_writers(paths, set(report.duplicated), environ)
 
 
 def doctor_data(
@@ -347,6 +354,9 @@ def run_doctor(
     managed_globals: Callable[[], tuple[str, ...] | None] = pnpm_global_packages,
     disk_pressure: Callable[[], DiskPressure] | None = None,
     competing: Callable[[], tuple[CompetingUnit, ...]] | None = None,
+    duplicate_writers: Callable[[DoctorReport], Mapping[Path, tuple[Path, ...]]] = (
+        duplicate_path_writers
+    ),
 ) -> DoctorReport:
     """Audit the PATH (read-only) and render the report. Fixing the PATH
     remains a separate explicit action.
@@ -371,7 +381,7 @@ def run_doctor(
         exists=exists,
         which=which,
     )
-    render_doctor(report, console, _duplicate_path_writers(report))
+    render_doctor(report, console, duplicate_writers(report))
     render_guard_status(status, warning, console)
     render_node_globals(audit_node_globals(tools, which=which, managed=managed_globals), console)
     if disk_pressure is not None:

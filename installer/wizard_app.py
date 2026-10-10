@@ -13,7 +13,6 @@ bottom: the stack is always `[base]` or `[base, <one other view>]`.
 """
 
 import contextlib
-import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -28,7 +27,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
 from installer import daemon, env_redirect
-from installer.app import UninstallDecision
+from installer.app import UninstallDecision, duplicate_path_writers
 from installer.catalog_tui import CatalogScreen, OwnershipRefreshed
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
@@ -42,11 +41,9 @@ from installer.guidance import (
     guard_guidance,
     node_globals_guidance,
 )
-from installer.locations import path_scan_rc_paths
 from installer.model import Tool
 from installer.pnpm_globals import NodeGlobalsReport, reinstall_preview
 from installer.policy import Policy, PolicyResult
-from installer.rcclean import scan_rc_path_writers
 from installer.render import guidance_text
 from installer.run import CommandError
 from installer.session import Summary
@@ -2387,11 +2384,7 @@ class UnifiedApp(App[list[str] | None]):
                     guard_state,
                     fix_preview,
                     fix,
-                    duplicate_writers=scan_rc_path_writers(
-                        path_scan_rc_paths(), set(report.duplicated), os.environ
-                    )
-                    if report.duplicated
-                    else {},
+                    duplicate_writers=duplicate_path_writers(report),
                     node_globals=read_node_globals,
                     globals_preview=read_preview,
                     reinstall_globals=run_reinstall,
