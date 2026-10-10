@@ -43,8 +43,56 @@ findings:
     severity: info
     disposition: open
     title: "Test-only suppressions are concentrated in TUI tests"
-open: 10
-total: 10
+  - id: WR-02
+    severity: warning
+    disposition: open
+    title: "`then`/`do` body line is a strip candidate; stripping it breaks the rc file"
+  - id: WR-03
+    severity: warning
+    disposition: open
+    title: "Skill packs with no `status_probes` (openspec, spec-kit) render as missing with an empty Ver cell"
+  - id: WR-04
+    severity: warning
+    disposition: open
+    title: "by_harness install handoff drops the framing text and ships unattributed, ambiguous lines"
+  - id: IN-10
+    severity: info
+    disposition: open
+    title: "A location-proven candidate that is not the live binary blocks native and OS-package attribution"
+  - id: IN-11
+    severity: info
+    disposition: open
+    title: "Closer word inside a trailing comment or quote makes an opener look self-closing"
+  - id: IN-12
+    severity: info
+    disposition: open
+    title: "Doctor keeps advertising an enter action that `applied` has made inert"
+  - id: IN-13
+    severity: info
+    disposition: open
+    title: "One-line `if/elif` consults only the `if` condition"
+  - id: IN-14
+    severity: info
+    disposition: open
+    title: "A single-directory PATH replacement is refused as 'adds more than one directory'"
+  - id: IN-15
+    severity: info
+    disposition: open
+    title: "'Already current' is stated for rows whose status is flagged stale"
+  - id: IN-16
+    severity: info
+    disposition: open
+    title: "alacritty comment says kitty has no applicable method on immutable Fedora"
+  - id: IN-17
+    severity: info
+    disposition: open
+    title: "`install-state` status probe ignores its declared `match`"
+  - id: IN-18
+    severity: info
+    disposition: open
+    title: "Duplicate-harness `status_probes` pass validation and collapse last-wins"
+open: 22
+total: 22
 recorded: 2026-10-10T17:37:50.355Z
 ---
 
@@ -62,6 +110,18 @@ recorded: 2026-10-10T17:37:50.355Z
 | IN-07 | info | open | - |
 | IN-08 | info | open | - |
 | IN-09 | info | open | - |
+| WR-02 | warning | open | second lane (opencode-go/glm-5.2) |
+| WR-03 | warning | open | second lane (opencode-go/glm-5.2) |
+| WR-04 | warning | open | second lane (opencode-go/glm-5.2) |
+| IN-10 | info | open | second lane (opencode-go/glm-5.2) |
+| IN-11 | info | open | second lane (opencode-go/glm-5.2) |
+| IN-12 | info | open | second lane (opencode-go/glm-5.2) |
+| IN-13 | info | open | second lane (opencode-go/glm-5.2) |
+| IN-14 | info | open | second lane (opencode-go/glm-5.2) |
+| IN-15 | info | open | second lane (opencode-go/glm-5.2) |
+| IN-16 | info | open | second lane (opencode-go/glm-5.2) |
+| IN-17 | info | open | second lane (opencode-go/glm-5.2) |
+| IN-18 | info | open | second lane (opencode-go/glm-5.2) |
 
 Dispositions: `open` (recorded, not yet triaged), `fixed`, `skipped`, `deferred`.
 Set `deferred` by hand and put the reason in the Source cell; both are preserved. A `|` in the reason is kept as prose and escaped on the next run.

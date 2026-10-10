@@ -31,9 +31,9 @@ files_reviewed_list:
   - tests/ (23 files: conftest and test_* for each module above)
 findings:
   critical: 0
-  warning: 1
-  info: 9
-  total: 10
+  warning: 4
+  info: 18
+  total: 22
 ---
 
 # Phase 16: Code Review Report
@@ -118,3 +118,100 @@ The review was done inline by the fork rather than through a spawned `gsd-code-r
 _Reviewed: 2026-10-10_
 _Reviewer: Claude (gsd-code-review, inline fork run)_
 _Depth: standard_
+
+## Second lane (opencode-go/glm-5.2; codex unavailable: expired login)
+
+**Lane:** `opencode run --model opencode-go/glm-5.2 --agent plan` (read-only plan agent), four calls over the production diff `2eaae39..HEAD` grouped as ownership, versions/TUI, rc/guard, engine/skills/registry. Each prompt carried the diff, AGENTS.md, 16-CONTEXT.md and the first lane's findings (to skip). The tree stayed clean (`git status --short` empty) after the run.
+**Result:** 12 new findings, all re-checked against the source (rc scanner claims reproduced by calling the pure functions; ownership claim verified by reading, no test run). Every finding below was raised by this lane; none duplicates WR-01 or IN-01..IN-09. Severity mapping: lane High/Medium become `WR-`, Low becomes `IN-`; two lane Medium findings were lowered to Low after checking impact. No claim was rejected as false.
+
+### Warnings
+
+#### WR-02: `then`/`do` body line is a strip candidate; stripping it breaks the rc file
+
+**Source:** opencode-go/glm-5.2 lane. **Lane rating:** High (lane rating; rare trigger, severe effect).
+**File:** `installer/rcclean.py:245`
+**Issue:** `_command_text` removes a leading `then `/`do ` so `find_duplicate_path_lines` treats `then PATH="$HOME/.local/bin:$PATH"` (column 0) as a plain strip candidate (`installer/rcclean.py:406-412`). Verified by calling the pure functions: input `if [ -d "$HOME/.local/bin" ]\nthen PATH=...\nfi` returns `[1]`, and `until false\ndo PATH=...\ndone` returns `[1]`. `strip_lines` then deletes the `then`/`do` line, leaving `if ...` followed by `fi`, a bash syntax error on every shell start. The guard flow already refuses the same line ('shares its line with other commands', `_guard_refusal`), so the two flows disagree. Base 2eaae39 matched raw lines and never saw these.
+**Fix:** Mark records whose original segment started with `then`/`do` as non-simple (or compare against the raw line start) so `find_duplicate_path_lines` skips them.
+
+#### WR-03: Skill packs with no `status_probes` (openspec, spec-kit) render as missing with an empty Ver cell
+
+**Source:** opencode-go/glm-5.2 lane. **Lane rating:** Medium.
+**File:** `installer/catalog_tui.py:479`
+**Issue:** `_present` returns `None` when `SkillHostStatus.hosts` is empty. `openspec` and `spec-kit` declare zero `status_probes` (checked by parsing registry.toml), so `inspect_skill_packs` gives `hosts={}` for them forever. `_ver_cell` (line 517) then blanks the Ver cell and `_presence`/`_groups` (line 645) put the row in the missing group, while `_inst_cell` (line 499) falls back to the PATH answer and draws a green check. The row contradicts itself and loses the version the pre-phase code showed.
+**Fix:** In `_present`, fall back to `self._installed[tool.id]` when the pack declares no `status_probes`.
+
+#### WR-04: by_harness install handoff drops the framing text and ships unattributed, ambiguous lines
+
+**Source:** opencode-go/glm-5.2 lane. **Lane rating:** Medium.
+**File:** `installer/skill_lifecycle.py:270`
+**Issue:** `perform_action` returns only `_filtered_install_lines(...)` for a `by_harness` install, so `operation.instructions` is never shown. For `superpowers` (installer/registry.toml, `[tool.skill_lifecycle.install.by_harness]`), a Codex-only host sees just `/plugins` and `superpowers` with no verb or host name, and a Claude-only host sees three lines that read as one sequence although the official-marketplace line and the obra marketplace pair are alternative sources. Nothing mutates, but this is the flagship handoff of the phase and D-15 wants filtered, understandable instructions.
+**Fix:** Prefix each host's lines with the host name and a verb, and mark alternatives (`or`) in the registry; render `operation.instructions` or a short header once.
+
+### Info
+
+#### IN-10: A location-proven candidate that is not the live binary blocks native and OS-package attribution
+
+**Source:** opencode-go/glm-5.2 lane. **Lane rating:** Low (lane rated Medium; verified by reading, not by a test run).
+**File:** `installer/ownership.py:948`
+**Issue:** `_collect_candidates` creates a sdkman or installer candidate from bare presence at the method's `bin_dir`. `_native_owner` (line 770) and `_os_package_owner` (line 867) return `None` whenever `candidates` is non-empty, and only the undeclared-brew candidate is stripped by the D-06 `gated` step in `resolve_ownership`. With kitty at `~/.local/kitty.app/bin/kitty` plus a dnf copy active at `/usr/bin/kitty`, or java at `~/.sdkman/candidates/java/current/bin/java` plus a distro `/usr/bin/java`, the Owner cell becomes `unknown` where the base commit attributed the OS package. Mutations still refuse, so only the label is wrong, and only on hosts with two copies.
+**Fix:** Treat a non-active location candidate like the shadow brew candidate: exclude it from the gate and attach it as a shadow.
+
+#### IN-11: Closer word inside a trailing comment or quote makes an opener look self-closing
+
+**Source:** opencode-go/glm-5.2 lane. **Lane rating:** Low (lane rated Medium).
+**File:** `installer/rcclean.py:106`
+**Issue:** `_has_standalone_closer` searches the whole raw line. `if [[ ":$PATH:" != *":$HOME/bin:"* ]]; then  # keep until fi` followed by an indented `PATH=...` and `fi` pushes no frame, so the properly guarded body line is reported as unguarded and guardable (verified: record index 1, `presence_guarded=False`, refusal `None`). Confirming rewrites a correct line and burns the single `.tools-installer.old` backup slot (see WR-01).
+**Fix:** Strip comments and quoted text before the closer search.
+
+#### IN-12: Doctor keeps advertising an enter action that `applied` has made inert
+
+**Source:** opencode-go/glm-5.2 lane. **Lane rating:** Low (lane rated Medium).
+**File:** `installer/wizard_app.py:622`
+**Issue:** `action_apply` returns at once when `self.applied`, but `_writer_next_step` (`installer/guidance.py:86-89`) still says 'Press enter (apply) to guard it in place' whenever a guardable record remains, and `_finish_guard_chain` re-adopts the records the user declined. After enter then escape on the modal, the text stays and enter does nothing until the app restarts (pinned as intended by `test_doctor_guard_chain_does_not_restart_after_apply`).
+**Fix:** Drop the enter hint once `applied` is true, or let enter restart the guard chain.
+
+#### IN-13: One-line `if/elif` consults only the `if` condition
+
+**Source:** opencode-go/glm-5.2 lane. **Lane rating:** Low.
+**File:** `installer/rcclean.py:296`
+**Issue:** `if [ -x /a ]; then :; elif [[ ":$PATH:" != *":$HOME/bin:"* ]]; then PATH="$HOME/bin:$PATH"; fi` is reported as an unguarded writer with 'edit it by hand' advice (verified: refusal 'shares its line with other commands or a comment'), although the PATH line only runs when the directory is absent. The multi-line form is handled.
+**Fix:** Parse `elif` conditions on the one-line form or classify the line as unknown rather than unguarded.
+
+#### IN-14: A single-directory PATH replacement is refused as 'adds more than one directory'
+
+**Source:** opencode-go/glm-5.2 lane. **Lane rating:** Low.
+**File:** `installer/rcclean.py:482`
+**Issue:** `PATH=/opt/tools/bin` (no `$PATH`) falls through every check to `_REFUSE_MULTI` (verified). The refusal is right, the reason names the wrong hazard; the real one is a total PATH replacement.
+**Fix:** Add a dedicated refusal text for a line that never references `$PATH`.
+
+#### IN-15: 'Already current' is stated for rows whose status is flagged stale
+
+**Source:** opencode-go/glm-5.2 lane. **Lane rating:** Low.
+**File:** `installer/catalog_tui.py:912`
+**Issue:** `action_update_tool` prints '<id> is already current' whenever `status.outdated is False`. A github_release row with a failed or budget-skipped tag fetch has `outdated=False, stale=True` (`installer/version_status.py:196-198`), so the message contradicts the cached-latest marker on the same screen.
+**Fix:** Gate on `not status.stale` or word it as 'current as of the last check'.
+
+#### IN-16: alacritty comment says kitty has no applicable method on immutable Fedora
+
+**Source:** opencode-go/glm-5.2 lane. **Lane rating:** Low.
+**File:** `installer/registry.toml:2652`
+**Issue:** kitty now has a `script` method with `os = ["debian","arch","fedora"]` (registry.toml:2553), which `resolve._applies` allows on immutable hosts, so 'Same accepted Bazzite gap as kitty' is false and can mislead a registry editor.
+**Fix:** Reword the alacritty comment to drop the kitty comparison.
+
+#### IN-17: `install-state` status probe ignores its declared `match`
+
+**Source:** opencode-go/glm-5.2 lane. **Lane rating:** Low.
+**File:** `installer/skill_lifecycle.py:360`
+**Issue:** `_install_state_status` hardcodes `gsd-install-state.json`, while `installer/model.py` requires and validates a `match` for every probe. A future pack declaring `via = "install-state"` with another match passes load and is answered from GSD's state file.
+**Fix:** Use `match` as the state-file stem, or reject `install-state` for non-GSD packs at load time.
+
+#### IN-18: Duplicate-harness `status_probes` pass validation and collapse last-wins
+
+**Source:** opencode-go/glm-5.2 lane. **Lane rating:** Low.
+**File:** `installer/skill_lifecycle.py:392`
+**Issue:** `_pack_status` builds `{probe.harness: probe ...}`; `_parse_status_probes` (`installer/model.py:401`) has no duplicate-harness check, unlike other list fields. Two probes for the same harness silently drop the first.
+**Fix:** Raise at load time on a repeated harness.
+
+### Rejected claims
+
+None. Not repeated from the lane output: its 'verified clean' notes (cache locking, epoch discard, `_undeclared_brew_candidate`, `install_tool` repair flag, `executors._script` args), which are not findings.
