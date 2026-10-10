@@ -398,7 +398,9 @@ async def test_doctor_tui_route_uses_duplicate_path_writers_seam(
     app = _app(report=DoctorReport(missing=(), broken=(), duplicated=(Path("/x/bin"),)))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("4")
-        text = "".join(item.title + item.meaning + item.next_step for item in app.screen.guidance)
+        screen = app.screen
+        assert isinstance(screen, DoctorScreen)
+        text = "".join(item.title + item.meaning + item.next_step for item in screen.guidance)
         assert "/tmp/fake/.bashrc" in text
 
 
