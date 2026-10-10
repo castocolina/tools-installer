@@ -663,20 +663,32 @@ Detection, version and ownership must answer "is it on this disk and who put it 
 **Plans:** 16 plans
 
 Plans:
-
+**Wave 1**
 - [ ] 16-01-PLAN.md — SDKMAN owner + declared-location (bin_dir) ownership proof, `own installer` label, `_sdkman` probe fix (W1)
 - [ ] 16-02-PLAN.md — per-harness skill_pack status probes (closed CLI/disk tables, batched once per harness) (W1)
 - [ ] 16-03-PLAN.md — rcclean writer diagnosis correctness: 15.8 review CR-01, WR-01, WR-02, IN-01, IN-03 (W1)
 - [ ] 16-04-PLAN.md — Doctor writer seam: WR-03, WR-04, WR-05, IN-02 (W1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 16-05-PLAN.md — real-owner-wins Homebrew attribution, off-policy flag, dual-owner/unknown-path notes, D-05 update note (W2)
 - [ ] 16-06-PLAN.md — version from disk: probe at the resolved path, SDKMAN `current` symlink, `version_file` (W2)
 - [ ] 16-07-PLAN.md — D-09 upstream audit of all skill packs, host presence + per-host install instructions (D-15) (W2)
 - [ ] 16-08-PLAN.md — guard-in-place write for foreign PATH lines with 15.8 backup/refusal guardrails, foreign-block exclusion (W2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 16-09-PLAN.md — dangling-shim `broken` verdict + `install_tool(repair=True)` (W3)
 - [ ] 16-10-PLAN.md — kitty's real Linux method (`launch=n`), own-installer location audit, sdkman `version_file` (W3)
 - [ ] 16-11-PLAN.md — Doctor apply step: per-file guard confirmation, foreign-block naming (W3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
 - [ ] 16-12-PLAN.md — skill_pack status cache + background worker + Inst/Owner/detail rendering (W4)
 - [ ] 16-13-PLAN.md — enter on installed tools: already-current, update, repair, explicit-selection post-install re-apply (W4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 16-14-PLAN.md — reasons for rows with no install method (W5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
 - [ ] 16-15-PLAN.md — catalog rendering: `≠ policy`, never-silent `u`, dual-owner/unknown-path detail, broken `!` (W6)
+
+**Wave 7** *(blocked on Wave 6 completion)*
 - [ ] 16-16-PLAN.md — real-host proof of the five defects + validation backfill + batched human check (W7)
