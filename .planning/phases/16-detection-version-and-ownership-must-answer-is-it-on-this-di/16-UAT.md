@@ -8,11 +8,9 @@ updated: 2026-10-10T19:45:00Z
 
 ## Current Test
 
-number: 1
-name: Alacritty row styling
-expected: |
-  The row renders dim (SGR dim) with `(not available: immutable host)`; text,
-  non-selectability and the detail sentence were already asserted by the tmux capture.
+number: 2
+name: Execute-screen enter on a real host
+expected: see Tests section
 awaiting: user response
 
 ## Tests
@@ -24,7 +22,8 @@ expected: Open the catalog (`uv run python setup.py`), User view, move the curso
 evidence so far: 16-UI-CHECK.md row 4 (text, no `[ ]` box, detail sentence) passed via
   `tmux capture-pane`. Dim SGR is code-only (`_row_cells`); a plain-text capture cannot
   assert it and the cursor highlight overrides it on the focused row.
-result: [pending]
+result: passed
+  note: tmux capture -e (2026-10-10, real host): alacritty row id/category/audience/Inst/desc carry fg 38;2;161;161;161 (Textual's blended `dim`, not SGR 2), no bold; kitty/wezterm rows carry bold id and coloured audience/Inst; text ends `(not available: immutable host)`. rc checksums identical.
 
 ### 2. Execute-screen enter on a real host
 expected: Select a current tool (e.g. wezterm), open the execute screen, read the on-mount
@@ -60,9 +59,9 @@ result: [pending]
 ## Summary
 
 total: 4
-passed: 0
+passed: 1
 issues: 0
-pending: 4
+pending: 3
 skipped: 0
 blocked: 0
 

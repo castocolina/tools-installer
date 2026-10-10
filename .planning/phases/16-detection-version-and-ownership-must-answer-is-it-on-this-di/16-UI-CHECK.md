@@ -89,3 +89,13 @@ aa07cc3f...eb0627  .zshrc
 6808eecd...ef1e9e  .bash_profile
 4c5ba1ae...112bdf  .myshellrc
 ```
+
+## Alacritty dim styling (UAT test 1), 2026-10-10
+
+Session `p16-sgr` (270x60), User view, cursor away from the alacritty row, `tmux capture-pane -p -e`.
+Textual renders `dim` as a blended foreground colour (`38;2;161;161;161`), not SGR 2.
+```
+alacritty: id/cat/audience/Inst/desc all fg 38;2;161;161;161, no SGR 1; ends "(not available: immutable host)"
+kitty/wezterm: SGR 1 on id, audience fg 38;2;244;0;95, Inst fg 38;2;152;224;36
+```
+PASS. rc-file checksums identical before/after; session killed.
