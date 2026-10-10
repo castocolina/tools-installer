@@ -636,7 +636,9 @@ def test_sdkman_probe_verified_output_names_the_candidate() -> None:
     result = ownership._sdkman(  # pyright: ignore[reportPrivateUsage]
         tool, lambda _command: "Using springboot version 4.1.0"
     )
-    assert result == Ownership("SDKMAN", "verified", "sdkman lists springboot", package="springboot")
+    assert result == Ownership(
+        "SDKMAN", "verified", "sdkman lists springboot", package="springboot"
+    )
 
 
 def test_sdkman_probe_falls_back_to_tool_id_without_an_sdkman_method() -> None:
