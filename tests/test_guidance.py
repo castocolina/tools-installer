@@ -125,8 +125,7 @@ def test_foreign_block_writer_is_named_and_not_offered() -> None:
                 directory,
                 guardable=False,
                 refusal=(
-                    "inside the 'my-kitty PATH' block another tool manages; "
-                    "fix it in that tool"
+                    "inside the 'my-kitty PATH' block another tool manages; fix it in that tool"
                 ),
                 block_owner="my-kitty PATH",
             )
