@@ -101,7 +101,10 @@ from installer.versions import TagResolver, VersionError, resolve_github_tag
 PostinstallFn = Callable[[str, Method, Runner, Mapping[str, Tool]], str | None]
 
 _FALLBACK_UNKNOWN = "no manager claimed this tool"
-_SDKMAN_DETAIL = "SDKMAN updates use `sdk upgrade <candidate>`, which this phase does not implement"
+_SDKMAN_DETAIL = (
+    "SDKMAN owns this tool; this installer does not run SDKMAN's interactive upgrade "
+    "— update it with `sdk upgrade {candidate}` in your own terminal"
+)
 # D-05/A2: attribution correctness is in scope; privileged system-package
 # mutation is not. Every OTHER owner here (brew, cask, pnpm, uv, installer)
 # is user-space; really updating a dnf/apt/pacman/rpm-ostree package needs
@@ -251,7 +254,7 @@ def _perform(
             tool_id=target.tool.id,
             status="unsupported",
             owner=ownership.owner,
-            detail=_SDKMAN_DETAIL,
+            detail=_SDKMAN_DETAIL.format(candidate=ownership.package or target.tool.id),
         )
     if ownership.owner in UNMANAGEABLE_OWNERS:
         # D-05/T-15-15/15.4-01: this branch must precede the owner-dispatch

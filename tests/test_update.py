@@ -213,9 +213,21 @@ def test_sdkman_owned_is_unsupported() -> None:
     method = Method(kind="sdkman", params={"candidate": "java"})
     tool = _tool("java", method)
     calls: list[list[str]] = []
-    outcome = _perform(_target(tool, "installer", method=method), calls.append)
+    outcome = _perform(_target(tool, "sdkman", method=method, package="java"), calls.append)
     assert outcome.status == "unsupported"
     assert "sdk" in outcome.detail.lower()
+    assert calls == []
+
+
+def test_sdkman_owned_update_refuses_with_real_command() -> None:
+    method = Method(kind="sdkman", params={"candidate": "groovy"})
+    tool = _tool("groovy", method)
+    calls: list[list[str]] = []
+    outcome = _perform(_target(tool, "sdkman", method=method, package="groovy"), calls.append)
+    assert outcome.status == "unsupported"
+    assert "sdk upgrade groovy" in outcome.detail
+    assert "not attributable" not in outcome.detail
+    assert "this phase does not implement" not in outcome.detail
     assert calls == []
 
 

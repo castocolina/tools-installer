@@ -1899,3 +1899,55 @@ def test_cask_removal_hint_and_label_both_name_homebrew_and_the_cask_concept() -
     assert "Homebrew" in hint
     assert "cask" in label.lower()
     assert "--cask" in hint
+
+
+def _sdkman_tool(bin_dir: str, *, cmd: str = "groovy", candidate: str = "groovy") -> Tool:
+    return Tool(
+        id=cmd,
+        name=cmd,
+        category="runtime",
+        cmd=cmd,
+        methods=(Method(kind="sdkman", params={"candidate": candidate, "bin_dir": bin_dir}),),
+    )
+
+
+def _touch_executable(bin_dir: Path, cmd: str) -> Path:
+    bin_dir.mkdir(parents=True)
+    path = bin_dir / cmd
+    path.write_text("#!/bin/sh\n")
+    path.chmod(0o755)
+    return path
+
+
+def test_sdkman_location_proof_resolves_direct_when_which_matches(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "sdk" / "candidates" / "groovy" / "current" / "bin"
+    binary = _touch_executable(bin_dir, "groovy")
+    result = _resolve(_sdkman_tool(str(bin_dir)), inventory=_empty_readable(), which=str(binary))
+    assert result.owner == "sdkman"
+    assert result.confidence == "direct"
+    assert owner_label(result) == "SDKMAN"
+    assert result.method is not None
+    assert result.method.params["bin_dir"] == str(bin_dir)
+    hint = removal_hint(result, "groovy")
+    assert hint is not None
+    assert "`sdk uninstall groovy <version>`" in hint
+
+
+def test_sdkman_location_proof_is_by_elimination_when_not_on_path(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "sdk" / "candidates" / "groovy" / "current" / "bin"
+    _touch_executable(bin_dir, "groovy")
+    result = _resolve(_sdkman_tool(str(bin_dir)), inventory=_empty_readable(), which=None)
+    assert result.owner == "sdkman"
+    assert result.confidence == "by-elimination"
+
+
+def test_sdkman_absent_bin_dir_file_is_unknown(tmp_path: Path) -> None:
+    bin_dir = str(tmp_path / "sdk" / "candidates" / "groovy" / "current" / "bin")
+    result = _resolve(_sdkman_tool(bin_dir), inventory=_empty_readable(), which=None)
+    assert result.owner == "unknown"
+
+
+def test_sdkman_removal_hint_degrades_without_a_package() -> None:
+    without_package = removal_hint(_record("sdkman"), "groovy")
+    assert without_package is not None
+    assert chr(96) not in without_package

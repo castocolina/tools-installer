@@ -80,6 +80,7 @@ Owner = Literal[
     "cask",
     "pnpm",
     "uv",
+    "sdkman",
     "unknown",
     "dnf",
     "apt",
@@ -144,9 +145,10 @@ _KIND_TO_OWNER: dict[str, Owner] = {
     "cask": "cask",
     "node": "pnpm",
     "uv-tool": "uv",
+    "sdkman": "sdkman",
 }
 _INSTALLER_KINDS = frozenset((*DOWNLOAD_KINDS, *APP_KINDS, "script"))
-_CANDIDATE_ORDER: tuple[Owner, ...] = ("installer", "brew", "cask", "pnpm", "uv")
+_CANDIDATE_ORDER: tuple[Owner, ...] = ("installer", "brew", "cask", "pnpm", "uv", "sdkman")
 
 # 15.4-02/D-01 (second half): the closed, declared set of method kinds allowed
 # on the ownership-only path (`_ownership_only_methods` below), mapped to the
@@ -501,12 +503,13 @@ def resolve_ownership(
     native_probe: ProbeRunner | None = None,
 ) -> ManagerOwnership:
     applicable = resolve_methods(tool, platform)
-    candidates = _collect_candidates(
-        tool, (*applicable, *_ownership_only_methods(tool, platform)), inventory, artifacts
-    )
+    methods = (*applicable, *_ownership_only_methods(tool, platform))
+    candidates = _collect_candidates(tool, methods, inventory, artifacts)
     unreadable = _unreadable(tool, platform, inventory)
     active_path = _resolve_active_path(which(tool.cmd))
     dirs = owner_dirs(inventory=inventory, managed_bin_dir=managed_bin_dir, platform=platform)
+    for owner, prefixes in _location_dirs(tool, methods).items():
+        dirs[owner] = dirs.get(owner, ()) + prefixes
     attributed = attribute_path(active_path, dirs)
     matching = [candidate for candidate in candidates if candidate.owner in attributed]
     active_candidate: Owner | None = matching[0].owner if len(matching) == 1 else None
@@ -771,6 +774,35 @@ def _os_package_owner(
     )
 
 
+def _location_proof(tool: Tool, method: Method) -> Path | None:
+    """Declared install location as ownership proof, for kinds with no inventory.
+
+    Same `<bin_dir>/<cmd>` `is_file()` rule as `status.is_installed`. Brew,
+    cask, node, and uv-tool keep their inventory proof: a stray file in those
+    directories must not impersonate the manager.
+    """
+    if method.kind != "sdkman" and method.kind not in _INSTALLER_KINDS:
+        return None
+    bin_dir = method.params.get("bin_dir")
+    if not isinstance(bin_dir, str) or not bin_dir:
+        return None
+    expanded = Path(bin_dir).expanduser()
+    if (expanded / tool.cmd).is_file():
+        return expanded
+    return None
+
+
+def _location_dirs(tool: Tool, methods: Sequence[Method]) -> dict[Owner, tuple[Path, ...]]:
+    found: dict[Owner, list[Path]] = {}
+    for method in methods:
+        proven = _location_proof(tool, method)
+        if proven is None:
+            continue
+        owner: Owner = "sdkman" if method.kind == "sdkman" else "installer"
+        found.setdefault(owner, []).append(proven)
+    return {owner: tuple(paths) for owner, paths in found.items()}
+
+
 def _collect_candidates(
     tool: Tool,
     applicable: Sequence[Method],
@@ -795,6 +827,22 @@ def _collect_candidates(
             evidence=f"installer artifact at {artifacts[0]}",
         )
     for method in applicable:
+        proven = _location_proof(tool, method)
+        if proven is not None:
+            owner: Owner = "sdkman" if method.kind == "sdkman" else "installer"
+            declared = method.params.get("bin_dir")
+            found.setdefault(
+                owner,
+                OwnershipCandidate(
+                    owner=owner,
+                    method=method,
+                    package=(
+                        manager_name(method, "candidate", tool.cmd) if owner == "sdkman" else None
+                    ),
+                    current_version=None,
+                    evidence=f"{tool.cmd} present at the method's declared location {declared}",
+                ),
+            )
         if method.kind == "brew" and inventory.brew_formulae is not None:
             name = manager_name(method, "formula", tool.cmd)
             if name in inventory.brew_formulae:
@@ -980,6 +1028,7 @@ OWNER_LABELS: dict[Owner, str] = {
     "cask": "Homebrew cask",
     "pnpm": "pnpm",
     "uv": "uv",
+    "sdkman": "SDKMAN",
     "dnf": "dnf",
     "apt": "apt",
     "pacman": "pacman",
@@ -1052,6 +1101,7 @@ OWNER_DETAIL_LABELS: dict[Owner, str] = {
     "cask": "managed by Homebrew",
     "pnpm": "managed by pnpm",
     "uv": "managed by uv",
+    "sdkman": "managed by SDKMAN",
     "dnf": "managed by dnf — this installer will not update it",
     "apt": "managed by apt — this installer will not update it",
     "pacman": "managed by pacman — this installer will not update it",
@@ -1130,6 +1180,7 @@ _REMOVAL_COMMANDS: dict[Owner, str | None] = {
     "cask": "brew uninstall --cask {package}",
     "pnpm": "pnpm remove --global {package}",
     "uv": "uv tool uninstall {package}",
+    "sdkman": "sdk uninstall {package} <version>",
     "dnf": "dnf remove {package}",
     "apt": "apt remove {package}",
     "pacman": "pacman -R {package}",
@@ -1149,6 +1200,7 @@ _REMOVAL_DESCRIPTIONS: dict[Owner, str] = {
     "cask": "managed by {label} — remove {name} with Homebrew (no verified cask name)",
     "pnpm": "managed by {label} — remove {name} with pnpm (no verified package name)",
     "uv": "managed by {label} — remove {name} with uv (no verified package name)",
+    "sdkman": "managed by {label} — remove {name} with SDKMAN (no verified candidate name)",
     "dnf": "managed by {label} — remove {name} with dnf (no verified package name)",
     "apt": "managed by {label} — remove {name} with apt (no verified package name)",
     "pacman": "managed by {label} — remove {name} with pacman (no verified package name)",
