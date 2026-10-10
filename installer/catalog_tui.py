@@ -479,6 +479,8 @@ class CatalogScreen(AppScreen):
     def _present(self, tool: Tool) -> bool | None:
         if tool.skill_lifecycle is None:
             return self._installed[tool.id]
+        if not tool.skill_lifecycle.status_probes:
+            return self._installed[tool.id]
         status = self._skill_status(tool)
         if status is None or not status.hosts:
             return None

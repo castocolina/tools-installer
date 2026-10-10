@@ -3767,3 +3767,55 @@ async def test_skill_probe_covers_packs_when_system_view_mounts_first(tmp_path: 
         assert cell.plain == "✓"
         assert "~" not in cell.plain
         assert len(calls) == before
+
+
+def _probe_less_pack_screen(tmp_path: Path, *, installed: bool) -> tuple[CatalogScreen, Tool]:
+    pack = _skill_pack("openspec", ())
+    assert pack.skill_lifecycle is not None
+    assert pack.skill_lifecycle.status_probes == ()
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: None,
+        skill_home=tmp_path,
+    )
+    service._skills = {pack.id: SkillHostStatus(hosts={}, stale=False)}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([pack], {pack.id: installed}, version_refresh=service)
+    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
+        pack.id: VersionStatus(
+            tool_id=pack.id,
+            installed="1.2.3",
+            latest="1.2.3",
+            outdated=False,
+            stale=False,
+            source="github",
+        )
+    }
+    return screen, pack
+
+
+def test_skill_pack_with_no_status_probes_uses_path_presence(tmp_path: Path) -> None:
+    screen, pack = _probe_less_pack_screen(tmp_path, installed=True)
+    assert screen._present(pack) is True  # pyright: ignore[reportPrivateUsage]
+    assert screen._presence()[pack.id] is True  # pyright: ignore[reportPrivateUsage]
+    assert screen._ver_cell(pack).plain == "1.2.3"  # pyright: ignore[reportPrivateUsage]
+    assert screen._inst_cell(pack, True).plain == "✓"  # pyright: ignore[reportPrivateUsage]
+    groups = screen._groups("status")  # pyright: ignore[reportPrivateUsage]
+    installed_members = next(members for title, _detail, members in groups if title == "installed")
+    assert pack in installed_members
+
+
+def test_skill_pack_with_no_status_probes_is_absent_when_not_on_path(tmp_path: Path) -> None:
+    screen, pack = _probe_less_pack_screen(tmp_path, installed=False)
+    assert screen._present(pack) is False  # pyright: ignore[reportPrivateUsage]
+    assert screen._inst_cell(pack, False).plain == "○"  # pyright: ignore[reportPrivateUsage]
+
+
+def test_skill_pack_with_probes_and_empty_hosts_stays_unknown(tmp_path: Path) -> None:
+    screen, pack = _skill_screen(tmp_path, {})
+    assert screen._present(pack) is None  # pyright: ignore[reportPrivateUsage]
+
+
+def test_skill_pack_with_probes_present_host_stays_present(tmp_path: Path) -> None:
+    screen, pack = _skill_screen(tmp_path, {"claude": "present"})
+    assert screen._present(pack) is True  # pyright: ignore[reportPrivateUsage]
