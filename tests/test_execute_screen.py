@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import ClassVar
 
@@ -3879,3 +3880,147 @@ async def test_fresh_install_is_not_reapplied(monkeypatch: pytest.MonkeyPatch) -
     assert screen.finished is True
     assert captured == ["shelltool"]
     assert calls == []
+
+
+def _mark_broken(refresh: VersionRefreshService, tool: Tool) -> None:
+    refresh._ownership[tool.id] = (  # pyright: ignore[reportPrivateUsage]
+        refresh.epoch,
+        replace(_brew_ownership(tool), broken=True),
+    )
+
+
+def _repair_install(calls: list[tuple[str, bool]]) -> SensitiveInstall:
+    def strict(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        calls.append((tool.id, False))
+        return InstallOutcome(tool.id, "installed")
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+        **extra: object,
+    ) -> InstallOutcome:
+        if tool.id != "mmdc":
+            return strict(
+                tool,
+                platform,
+                runner,
+                resolve_tag,
+                checksum_policy=checksum_policy,
+                tools=tools,
+                confirm_sensitive_action=confirm_sensitive_action,
+                **extra,
+            )
+        calls.append((tool.id, extra.get("repair") is True))
+        return InstallOutcome(tool.id, "installed")
+
+    return install
+
+
+async def test_broken_selection_is_installed_with_repair(tmp_path: Path) -> None:
+    mmdc = _tool("mmdc")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, mmdc, outdated=False)
+    _mark_broken(refresh, mmdc)
+    calls: list[tuple[str, bool]] = []
+    inputs = _inputs(
+        tools=[mmdc, fd],
+        install=_repair_install(calls),
+        installed=lambda tool: tool.id == "mmdc",
+        version_refresh=refresh,
+        updates=_RecordingUpdateService(),
+    )
+    app = _host(inputs, [mmdc, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["mmdc", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert [tool.id for tool in screen._ordered] == ["mmdc", "fd"]  # pyright: ignore[reportPrivateUsage]
+        assert screen._to_update == []  # pyright: ignore[reportPrivateUsage]
+        assert screen._current == []  # pyright: ignore[reportPrivateUsage]
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+    assert ("mmdc", True) in calls
+    assert ("fd", False) in calls
+
+
+async def test_non_broken_install_omits_the_repair_kwarg(tmp_path: Path) -> None:
+    mmdc = _tool("mmdc")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, mmdc, outdated=False)
+    _mark_broken(refresh, mmdc)
+    calls: list[tuple[str, bool]] = []
+    inputs = _inputs(
+        tools=[mmdc, fd],
+        install=_repair_install(calls),
+        installed=lambda tool: tool.id == "mmdc",
+        version_refresh=refresh,
+        updates=_RecordingUpdateService(),
+    )
+    screen, _recorded = await _run_execute(inputs, ["mmdc", "fd"])
+    assert screen.finished is True
+    assert ("fd", False) in calls
+
+
+async def test_broken_and_outdated_repairs_instead_of_updating(tmp_path: Path) -> None:
+    mmdc = _tool("mmdc")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, mmdc, outdated=True)
+    _mark_broken(refresh, mmdc)
+    calls: list[tuple[str, bool]] = []
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[mmdc],
+        install=_repair_install(calls),
+        installed=lambda tool: tool.id == "mmdc",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    screen, recorded = await _run_execute(inputs, ["mmdc"])
+    assert [tool.id for tool in screen._to_update] == []  # pyright: ignore[reportPrivateUsage]
+    assert "mmdc" in [tool.id for tool in screen._ordered]  # pyright: ignore[reportPrivateUsage]
+    assert recorded is not None
+    assert recorded.recorded == []
+    assert ("mmdc", True) in calls
+
+
+async def test_broken_tool_preflight_counts_as_install(tmp_path: Path) -> None:
+    mmdc = _tool("mmdc")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, mmdc, outdated=True)
+    _mark_broken(refresh, mmdc)
+    inputs = _inputs(
+        tools=[mmdc],
+        installed=lambda tool: tool.id == "mmdc",
+        version_refresh=refresh,
+        updates=_RecordingUpdateService(),
+    )
+    app = _host(inputs, [mmdc])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["mmdc"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        prompt = screen._preflight_prompt()  # pyright: ignore[reportPrivateUsage]
+        assert prompt.startswith("Install 1 tools?")
+        line = next(row for row in _progress_text(screen).splitlines() if "mmdc" in row)
+        assert "update" not in line.lower()
+        assert "[pending]" in line

@@ -33,6 +33,7 @@ from installer.engine import ChecksumPolicy, InstallOutcome, install_tool, reapp
 from installer.enums import InstallStatus, Severity
 from installer.model import Tool
 from installer.platform import Platform
+from installer.post_install import ConfirmSensitiveAction
 from installer.render import (
     render_audit,
     render_dependency_notice,
@@ -235,6 +236,46 @@ def attributed_install(
     return wrapped
 
 
+def _with_repair(
+    install: Callable[..., InstallOutcome],
+    repair_ids: frozenset[str],
+) -> SensitiveInstall:
+    """Pass repair=True only for ids the user selected while they read broken."""
+
+    def repaired(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        if tool.id not in repair_ids:
+            return install(
+                tool,
+                platform,
+                runner,
+                resolve_tag,
+                checksum_policy=checksum_policy,
+                tools=tools,
+                confirm_sensitive_action=confirm_sensitive_action,
+            )
+        return install(
+            tool,
+            platform,
+            runner,
+            resolve_tag,
+            checksum_policy=checksum_policy,
+            tools=tools,
+            confirm_sensitive_action=confirm_sensitive_action,
+            repair=True,
+        )
+
+    return repaired
+
+
 class InstallLogLine(Message):
     """One attributed line of child-process output, posted from the worker thread.
 
@@ -397,6 +438,7 @@ class ExecuteScreen(ModalScreen[None]):
         self._to_update: list[Tool] = []
         self._current: list[Tool] = []
         self._repair: list[Tool] = []
+        self._repair_ids: frozenset[str] = frozenset()
         self._reapply: list[Tool] = []
         self._by_id: dict[str, Tool] = {}
         self._last_tool_id: str | None = None
@@ -430,11 +472,15 @@ class ExecuteScreen(ModalScreen[None]):
         selected = select_tools(self._inputs.catalog, self._ids)
         platform = self._inputs.platform
         self._classify_selection(selected)
+
+        def installed_for_order(tool: Tool) -> bool:
+            return self._inputs.installed(tool) and tool.id not in self._repair_ids
+
         resolved = resolve_dependencies(
             order_for_install(selected),
             self._inputs.catalog,
             available=lambda tool: bool(resolve_methods(tool, platform)),
-            is_installed=self._inputs.installed,
+            is_installed=installed_for_order,
         )
         self._ordered = list(resolved.order)
         self._by_id = {tool.id: tool for tool in self._inputs.catalog}
@@ -443,7 +489,7 @@ class ExecuteScreen(ModalScreen[None]):
 
         def render_head(console: Console) -> None:
             render_dependency_notice(resolved.dragged_in, resolved.warnings, console)
-            render_audit(audit(self._ordered, self._inputs.installed), console)
+            render_audit(audit(self._ordered, installed_for_order), console)
             console.print(self._preflight_prompt())
 
         self.query_one("#execute-head", Static).update(self._render_captured(render_head))
@@ -467,6 +513,7 @@ class ExecuteScreen(ModalScreen[None]):
                     current.append(tool)
         repair_ids = {tool.id for tool in repair}
         self._repair = repair
+        self._repair_ids = frozenset(repair_ids)
         self._current = current
         self._to_update = [
             tool for tool in self._update_targets(selected) if tool.id not in repair_ids
@@ -563,7 +610,10 @@ class ExecuteScreen(ModalScreen[None]):
                     self._inputs.resolve_tag,
                     attributed_install(
                         runner,
-                        with_sensitive_confirm(on_confirm, self._inputs.install),
+                        with_sensitive_confirm(
+                            on_confirm,
+                            _with_repair(self._inputs.install, self._repair_ids),
+                        ),
                         on_outcome,
                     ),
                     on_mismatch=on_mismatch,
