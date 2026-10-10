@@ -3094,10 +3094,11 @@ instructions = [
 antigravity = ["agy plugin install https://github.com/obra/superpowers"]
 claude = [
   "/plugin install superpowers@claude-plugins-official",
+  "or, instead, from the obra marketplace:",
   "/plugin marketplace add obra/superpowers-marketplace",
   "/plugin install superpowers@superpowers-marketplace",
 ]
-codex = ["/plugins", "superpowers"]
+codex = ["/plugins (opens the plugin browser; search for superpowers and install it)"]
 copilot = [
   "copilot plugin marketplace add obra/superpowers-marketplace",
   "copilot plugin install superpowers@superpowers-marketplace",

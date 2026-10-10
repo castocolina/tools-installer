@@ -1987,6 +1987,21 @@ def test_every_skill_pack_records_a_verified_comment() -> None:
         assert any(line.startswith("# Verified ") for line in window), window
 
 
+def test_superpowers_by_harness_marks_claude_alternative_and_explains_codex() -> None:
+    lifecycle = _tools_by_id()["superpowers"].skill_lifecycle
+    assert lifecycle is not None
+    pairs = dict(lifecycle.install.by_harness)
+    claude = pairs["claude"]
+    official = claude.index("/plugin install superpowers@claude-plugins-official")
+    add = claude.index("/plugin marketplace add obra/superpowers-marketplace")
+    assert claude[official + 1] == "or, instead, from the obra marketplace:"
+    assert add == official + 2
+    codex = pairs["codex"]
+    assert len(codex) == 1
+    assert "/plugins" in codex[0]
+    assert "superpowers" in codex[0]
+
+
 def test_install_state_probes_match_gsd_core() -> None:
     for tool in load_tools(REGISTRY):
         lifecycle = tool.skill_lifecycle

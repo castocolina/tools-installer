@@ -195,6 +195,7 @@ _NO_HOST_HEADER = (
     "No supported agent host was detected on this machine; "
     "instructions for every supported host follow."
 )
+_HOST_HEADER = "Run each block inside the named host."
 
 
 # Env-var-unset defaults of opengsd's per-runtime config dirs. claude is the
@@ -249,10 +250,11 @@ def _filtered_install_lines(
         if harness in present and harness in supported_set
     ]
     pairs = dict(operation.by_harness)
-    if chosen:
-        return tuple(line for harness in chosen for line in pairs[harness])
-    lines = [_NO_HOST_HEADER]
-    lines.extend(line for _harness, commands in operation.by_harness for line in commands)
+    hosts = chosen or [harness for harness, _commands in operation.by_harness]
+    lines = [_HOST_HEADER] if chosen else [_NO_HOST_HEADER]
+    for harness in hosts:
+        lines.append(f"{SKILL_HARNESS_LABELS.get(harness, harness)}:")
+        lines.extend(pairs[harness])
     return tuple(lines)
 
 

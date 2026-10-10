@@ -260,7 +260,89 @@ def test_superpowers_install_with_no_host_lists_every_upstream_command(tmp_path:
         "muse plugins install ./superpowers",
     ):
         assert fragment in text
-    assert "superpowers" in outcome.instructions
+    assert (
+        "/plugins (opens the plugin browser; search for superpowers and install it)"
+        in outcome.instructions
+    )
+
+
+_HOST_HEADER = "Run each block inside the named host."
+
+
+def test_superpowers_install_on_claude_only_host_is_framed_and_labeled(tmp_path: Path) -> None:
+    outcome = perform_action(
+        _tools()["superpowers"],
+        "install",
+        lambda _argv: None,
+        home=tmp_path,
+        which=lambda command: "/usr/bin/claude" if command == "claude" else None,
+    )
+
+    assert outcome.instructions[0] == _HOST_HEADER
+    assert outcome.instructions[1] == "Claude Code:"
+    assert outcome.instructions[2:6] == (
+        "/plugin install superpowers@claude-plugins-official",
+        "or, instead, from the obra marketplace:",
+        "/plugin marketplace add obra/superpowers-marketplace",
+        "/plugin install superpowers@superpowers-marketplace",
+    )
+    assert "pi install" not in "\n".join(outcome.instructions)
+
+
+def test_superpowers_install_on_codex_only_host_is_one_labeled_line(tmp_path: Path) -> None:
+    outcome = perform_action(
+        _tools()["superpowers"],
+        "install",
+        lambda _argv: None,
+        home=tmp_path,
+        which=lambda command: "/usr/bin/codex" if command == "codex" else None,
+    )
+
+    assert outcome.instructions == (
+        _HOST_HEADER,
+        "Codex:",
+        "/plugins (opens the plugin browser; search for superpowers and install it)",
+    )
+    assert "superpowers" not in outcome.instructions
+
+
+def test_superpowers_install_on_claude_and_codex_labels_both_in_harness_order(
+    tmp_path: Path,
+) -> None:
+    outcome = perform_action(
+        _tools()["superpowers"],
+        "install",
+        lambda _argv: None,
+        home=tmp_path,
+        which=lambda command: f"/usr/bin/{command}" if command in {"claude", "codex"} else None,
+    )
+
+    assert outcome.instructions[0] == _HOST_HEADER
+    claude_at = outcome.instructions.index("Claude Code:")
+    codex_at = outcome.instructions.index("Codex:")
+    assert claude_at < codex_at
+    assert outcome.instructions[claude_at + 1].startswith("/plugin install")
+    assert outcome.instructions[codex_at + 1].startswith("/plugins")
+
+
+def test_superpowers_install_with_no_host_labels_every_block(tmp_path: Path) -> None:
+    outcome = perform_action(
+        _tools()["superpowers"],
+        "install",
+        lambda _argv: None,
+        home=tmp_path,
+        which=lambda _command: None,
+    )
+    lifecycle = _tools()["superpowers"].skill_lifecycle
+    assert lifecycle is not None
+    assert outcome.instructions[0] == (
+        "No supported agent host was detected on this machine; "
+        "instructions for every supported host follow."
+    )
+    for harness, commands in lifecycle.install.by_harness:
+        label = f"{SKILL_HARNESS_LABELS.get(harness, harness)}:"
+        index = outcome.instructions.index(label)
+        assert outcome.instructions[index + 1 : index + 1 + len(commands)] == commands
 
 
 def test_cursor_is_present_from_disk_when_path_misses(tmp_path: Path) -> None:
