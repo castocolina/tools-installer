@@ -770,3 +770,28 @@ Not covered: execution of either plan (traces were by hand; no test was run), an
 ## Cycle Verdict (cycle 3)
 - **current_high = 0**
 - **current_actionable = 0** (round 1 raised 1 HIGH and 4 MEDIUM, all fixed; round 2 raised 2 actionable LOWs, fixed; 2 convergence rounds of the 3 allowed)
+
+## Cycle 4 (plan 16-19, gap closure for 16-REVIEW-2.md NR-01..NR-04)
+
+Reviewer: `opencode-glm-5.2` (read-only plan agent), two rounds.
+
+### Round 1
+| Concern | Severity | Plan | How addressed | Status |
+|---|---|---|---|---|
+| NR-02 fix alone re-enrolls `export PATH=... FOO=1` as a strip candidate (`plain_only` stays True) and keeps a false `_REFUSE_REPLACE` reason | MEDIUM | 16-19 Task 1 | `suffixed` flag makes the line non-simple: `_REFUSE_COMPOUND`, never a strip candidate; RED test asserts both; T-16-50 widened | resolved |
+| must_have claimed quoted `export PATH="..." FOO=1` is reported; it is not (quote-blind colon split, pre-existing) | MEDIUM | 16-19 NR-02 truth + Task 1 | scoped to unquoted; second test pins the quoted limit | resolved |
+| Task 3 (b) expected string imprecise (ends with restart + backup sentence) | LOW | Task 3 | full string spelled out | resolved |
+| `-k` expression matched no test name | LOW | Task 1 | test names pinned, `-k extra_assignments` | resolved |
+| `@CLAUDE.md` does not exist | LOW | context | `@AGENTS.md` | resolved |
+| codegraph restate vs no `.codegraph/` index | LOW | objective | conditional wording | resolved |
+| SAFE_FIX literal vacuous in guidance.py; wizard_app.py:~549 body text | LOW | Task 2 | clarified, line left untouched | resolved |
+| test-local `_RESTART_GUARD` could become dead code | LOW | Task 3 | keep only as compose source or delete | resolved |
+
+### Round 2
+Full re-trace (suffixed flag vs every existing IN-02/export test, `then export`, test names, NR-01/NR-04 strings): no new or unresolved findings.
+
+## Cycle Verdict (cycle 4)
+- **current_high = 0**
+- **current_actionable = 0** (round 1: 2 MEDIUM + 6 LOW fixed; round 2 clean; 2 of 3 allowed rounds used)
+
+Not covered: execution of the plan (traces by hand, no test run); single reviewer identity.

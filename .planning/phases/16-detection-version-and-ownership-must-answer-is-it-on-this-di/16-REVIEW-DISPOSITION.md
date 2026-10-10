@@ -91,10 +91,26 @@ findings:
     severity: info
     disposition: fixed
     title: "Duplicate-harness `status_probes` pass validation and collapse last-wins"
-open: 1
+  - id: NR-01
+    severity: info
+    disposition: open
+    title: "Post-apply doctor text is garbled after the IN-12 hint removal"
+  - id: NR-02
+    severity: info
+    disposition: open
+    title: "`export PATH=... FOO=1` is no longer reported as a persistent PATH writer"
+  - id: NR-03
+    severity: info
+    disposition: skipped
+    title: "Two heredocs on one rc line: only the first is tracked (documented shortcut)"
+  - id: NR-04
+    severity: info
+    disposition: open
+    title: "Enter-action hint strings duplicated between guidance.py and wizard_app.py"
+open: 4
 fixed: 14
-skipped: 7
-total: 22
+skipped: 8
+total: 26
 recorded: 2026-10-10T17:37:50.355Z
 ---
 
@@ -117,13 +133,17 @@ recorded: 2026-10-10T17:37:50.355Z
 | WR-04 | warning | fixed | second lane (opencode-go/glm-5.2); planned: 16-18; fixed in 6ae95a3, re-verified in 16-REVIEW-2.md |
 | IN-10 | info | fixed | second lane (opencode-go/glm-5.2); planned: 16-18; fixed in 0cc67cc, re-verified in 16-REVIEW-2.md |
 | IN-11 | info | fixed | second lane (opencode-go/glm-5.2); planned: 16-17; fixed in 2c92291, re-verified in 16-REVIEW-2.md |
-| IN-12 | info | open | second lane (opencode-go/glm-5.2); planned: 16-18; hint removed after apply (41f99a8) but replacement text is garbled, see 16-REVIEW-2.md NR-01 |
+| IN-12 | info | open | second lane (opencode-go/glm-5.2); planned: 16-18; hint removed after apply (41f99a8) but replacement text garbled (NR-01); closes with 16-19 Task 3 |
 | IN-13 | info | skipped | accepted: fails safe (reported and refused, edit by hand); fix needs per-clause one-line parsing (16-17 ledger) |
 | IN-14 | info | fixed | second lane (opencode-go/glm-5.2); planned: 16-17; fixed in 1316295, re-verified in 16-REVIEW-2.md |
 | IN-15 | info | fixed | second lane (opencode-go/glm-5.2); planned: 16-18; fixed in ed990dd, re-verified in 16-REVIEW-2.md |
 | IN-16 | info | fixed | second lane (opencode-go/glm-5.2); planned: 16-18; fixed in 71dd4ae, re-verified in 16-REVIEW-2.md |
 | IN-17 | info | fixed | second lane (opencode-go/glm-5.2); planned: 16-18; fixed in 8bb1f9d, re-verified in 16-REVIEW-2.md |
 | IN-18 | info | fixed | second lane (opencode-go/glm-5.2); planned: 16-18; fixed in 8bb1f9d, re-verified in 16-REVIEW-2.md |
+| NR-01 | info | open | fresh review 16-REVIEW-2.md; planned: 16-19 Task 3 (closes IN-12) |
+| NR-02 | info | open | fresh review 16-REVIEW-2.md; planned: 16-19 Task 1 (regression of the IN-02 fix) |
+| NR-03 | info | skipped | accepted: documented `shortcut:` (first heredoc per line only); two heredocs on one rc line are vanishingly rare, diagnostic false positive only (16-19 ledger) |
+| NR-04 | info | open | fresh review 16-REVIEW-2.md; planned: 16-19 Task 2 |
 
 Dispositions: `open` (recorded, not yet triaged), `fixed`, `skipped`, `deferred`. Triage on 2026-10-10 (gap plans 16-17, 16-18): "accepted" is recorded as `skipped` with the reason in the Source cell; `open` rows with `planned: 16-NN` become `fixed` when that plan lands.
 Set `deferred` by hand and put the reason in the Source cell; both are preserved. A `|` in the reason is kept as prose and escaped on the next run.
