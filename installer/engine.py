@@ -101,6 +101,7 @@ def install_tool(
     checksum_policy: ChecksumPolicy = "fail",
     tools: Mapping[str, Tool] | None = None,
     confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    repair: bool = False,
 ) -> InstallOutcome:
     """Try each applicable method in ladder order; stop at the first success.
 
@@ -123,8 +124,12 @@ def install_tool(
     unattended case and skips them. The ALREADY_INSTALLED short-circuit never
     dispatches postinstall or post_install at all (D-01's single-direction
     trigger).
+
+    `repair` exists for D-18's broken state. It takes the identical ladder a
+    fresh install takes, and is only ever set for a tool the user explicitly
+    selected while it read broken.
     """
-    if is_installed(tool):
+    if is_installed(tool) and not repair:
         return InstallOutcome(tool.id, InstallStatus.ALREADY_INSTALLED)
 
     methods = resolve_methods(tool, platform)

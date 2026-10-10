@@ -696,3 +696,54 @@ def test_raising_confirm_degrades_to_named_warning_not_a_crash(
     assert outcome.post_install_handoff == ()
     assert outcome.postinstall_warning is not None
     assert "confirm exploded" in outcome.postinstall_warning
+
+
+def test_repair_walks_the_ladder_past_already_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_installed(tool: Tool) -> bool:
+        return True
+
+    monkeypatch.setattr(engine, "is_installed", fake_installed)
+    calls: list[list[str]] = []
+    outcome = install_tool(
+        _tool(Method(kind="dnf", params={"package": "ripgrep"})),
+        _platform(),
+        runner=lambda cmd: calls.append(cmd),
+        repair=True,
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    assert calls == [["sudo", "dnf", "install", "-y", "ripgrep"]]
+
+
+def test_repair_dispatches_post_install_like_a_fresh_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/chsh" if cmd == "chsh" else None
+
+    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
+
+    def fake_installed(tool: Tool) -> bool:
+        return True
+
+    monkeypatch.setattr(engine, "is_installed", fake_installed)
+    asked: list[tuple[str, str]] = []
+
+    def confirm(tool_id: str, action: str) -> bool:
+        asked.append((tool_id, action))
+        return True
+
+    outcome = install_tool(
+        _tool(
+            Method(kind="dnf", params={"package": "ripgrep"}),
+            post_install=("set_login_shell",),
+            tool_id="oh-my-zsh",
+        ),
+        _platform(),
+        runner=lambda cmd: None,
+        confirm_sensitive_action=confirm,
+        repair=True,
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.post_install_handoff
+    assert any("chsh -s" in line for line in outcome.post_install_handoff)
+    assert asked == [("oh-my-zsh", "set_login_shell")]
