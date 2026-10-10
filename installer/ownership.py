@@ -70,7 +70,7 @@ from installer.platform import Platform
 from installer.pnpm_globals import pnpm_global_packages
 from installer.resolve import resolve_methods
 from installer.run import CommandError, run_query
-from installer.status import is_installed
+from installer.status import dangling_shim, is_installed
 from installer.uninstall import manager_name
 from installer.versions import meets_minimum
 
@@ -309,6 +309,7 @@ class ManagerOwnership:
     active_path: Path | None
     unknown_reason: str | None
     off_policy: bool = False
+    broken: bool = False
 
 
 def parse_brew_list_versions(raw: str) -> dict[str, str] | None:
@@ -590,21 +591,30 @@ def resolve_ownership(
     dirs = owner_dirs(inventory=inventory, managed_bin_dir=managed_bin_dir, platform=platform)
     for owner, prefixes in _location_dirs(tool, methods).items():
         dirs[owner] = dirs.get(owner, ()) + prefixes
+    broken = dangling_shim(
+        tool,
+        active_path=active_path,
+        pnpm_dirs=dirs.get("pnpm", ()),
+        pnpm_globals=inventory.pnpm_globals,
+    )
     attributed = attribute_path(active_path, dirs)
     matching = [candidate for candidate in candidates if candidate.owner in attributed]
     active_candidate: Owner | None = matching[0].owner if len(matching) == 1 else None
 
     if active_candidate is not None:
         winner = next(candidate for candidate in candidates if candidate.owner == active_candidate)
-        return _owned(
-            tool,
-            winner,
-            confidence="direct",
-            shadowed=len(candidates) > 1,
-            candidates=candidates,
-            active_candidate=active_candidate,
-            active_path=active_path,
-            off_policy=undeclared_brew and declared_policy and winner.owner == "brew",
+        return replace(
+            _owned(
+                tool,
+                winner,
+                confidence="direct",
+                shadowed=len(candidates) > 1,
+                candidates=candidates,
+                active_candidate=active_candidate,
+                active_path=active_path,
+                off_policy=undeclared_brew and declared_policy and winner.owner == "brew",
+            ),
+            broken=broken,
         )
     # D-05: consult the native-package-manager adapter HERE -- immediately
     # after the tracked-candidate active-path branch above and immediately
@@ -622,8 +632,10 @@ def resolve_ownership(
     native = _native_owner(tool, native_probe, gated, unreadable, active_path, platform)
     if native is not None:
         if shadow_brew is None:
-            return native
-        return replace(native, candidates=(*native.candidates, shadow_brew), shadowed=True)
+            return replace(native, broken=broken)
+        return replace(
+            native, candidates=(*native.candidates, shadow_brew), shadowed=True, broken=broken
+        )
     # 15.4-01/D-01: the same call-site reasoning as `_native_owner` above, one
     # rung lower. This is the plan's resolution of 15.4-RESEARCH.md Open
     # Question 3: a base-image tool's live `/usr/bin/<cmd>` is attributable to
@@ -654,31 +666,42 @@ def resolve_ownership(
     os_package = _os_package_owner(tool, native_probe, gated, unreadable, active_path, platform)
     if os_package is not None:
         if shadow_brew is None:
-            return os_package
-        return replace(os_package, candidates=(*os_package.candidates, shadow_brew), shadowed=True)
+            return replace(os_package, broken=broken)
+        return replace(
+            os_package,
+            candidates=(*os_package.candidates, shadow_brew),
+            shadowed=True,
+            broken=broken,
+        )
     if active_path is not None:
-        return _unknown(
-            tool,
-            candidates=candidates,
-            active_candidate=None,
-            active_path=active_path,
-            unknown_reason=_unknown_reason(
-                unreadable=unreadable,
-                active_path=active_path,
+        return replace(
+            _unknown(
+                tool,
                 candidates=candidates,
-                applicable=applicable,
+                active_candidate=None,
+                active_path=active_path,
+                unknown_reason=_unknown_reason(
+                    unreadable=unreadable,
+                    active_path=active_path,
+                    candidates=candidates,
+                    applicable=applicable,
+                ),
             ),
+            broken=broken,
         )
     if len(candidates) == 1 and not unreadable:
-        return _owned(
-            tool,
-            candidates[0],
-            confidence="by-elimination",
-            shadowed=False,
-            candidates=candidates,
-            active_candidate=None,
-            active_path=None,
-            off_policy=undeclared_brew and declared_policy and candidates[0].owner == "brew",
+        return replace(
+            _owned(
+                tool,
+                candidates[0],
+                confidence="by-elimination",
+                shadowed=False,
+                candidates=candidates,
+                active_candidate=None,
+                active_path=None,
+                off_policy=undeclared_brew and declared_policy and candidates[0].owner == "brew",
+            ),
+            broken=broken,
         )
     script_method = next((method for method in applicable if method.kind == "script"), None)
     if not candidates and script_method is not None and is_installed(tool) and not unreadable:
@@ -689,27 +712,33 @@ def resolve_ownership(
             current_version=None,
             evidence="vendor install script with no competing manager claim",
         )
-        return _owned(
-            tool,
-            synthetic,
-            confidence="by-elimination",
-            shadowed=False,
-            candidates=(synthetic,),
-            active_candidate=None,
-            active_path=None,
-            off_policy=False,
+        return replace(
+            _owned(
+                tool,
+                synthetic,
+                confidence="by-elimination",
+                shadowed=False,
+                candidates=(synthetic,),
+                active_candidate=None,
+                active_path=None,
+                off_policy=False,
+            ),
+            broken=broken,
         )
-    return _unknown(
-        tool,
-        candidates=candidates,
-        active_candidate=None,
-        active_path=active_path,
-        unknown_reason=_unknown_reason(
-            unreadable=unreadable,
-            active_path=active_path,
+    return replace(
+        _unknown(
+            tool,
             candidates=candidates,
-            applicable=applicable,
+            active_candidate=None,
+            active_path=active_path,
+            unknown_reason=_unknown_reason(
+                unreadable=unreadable,
+                active_path=active_path,
+                candidates=candidates,
+                applicable=applicable,
+            ),
         ),
+        broken=broken,
     )
 
 

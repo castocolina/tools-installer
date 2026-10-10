@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from installer.model import Method, Tool, load_tools
-from installer.status import is_default_shell, is_installed
+from installer.status import dangling_shim, is_default_shell, is_installed
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -370,3 +370,79 @@ def test_bin_dir_is_expanded_from_a_tilde_spelling(
     (bin_dir / "spring").touch()
     tool = _bin_dir_tool("~/.sdkman/candidates/springboot/current/bin")
     assert is_installed(tool) is True
+
+
+def _mmdc() -> Tool:
+    return Tool(
+        id="mmdc",
+        name="mmdc",
+        category="diagram",
+        cmd="mmdc",
+        methods=(Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
+    )
+
+
+def test_dangling_shim_true_when_pnpm_package_is_gone(tmp_path: Path) -> None:
+    pnpm = tmp_path / "pnpm"
+    shim = pnpm / "mmdc"
+    pnpm.mkdir()
+    shim.touch()
+    assert (
+        dangling_shim(
+            _mmdc(),
+            active_path=shim,
+            pnpm_dirs=(pnpm,),
+            pnpm_globals=frozenset(),
+        )
+        is True
+    )
+
+
+def test_dangling_shim_false_when_package_is_listed(tmp_path: Path) -> None:
+    pnpm = tmp_path / "pnpm"
+    shim = pnpm / "mmdc"
+    pnpm.mkdir()
+    shim.touch()
+    assert (
+        dangling_shim(
+            _mmdc(),
+            active_path=shim,
+            pnpm_dirs=(pnpm,),
+            pnpm_globals=frozenset({"@mermaid-js/mermaid-cli"}),
+        )
+        is False
+    )
+
+
+def test_dangling_shim_false_when_inventory_is_unreadable(tmp_path: Path) -> None:
+    pnpm = tmp_path / "pnpm"
+    shim = pnpm / "mmdc"
+    pnpm.mkdir()
+    shim.touch()
+    assert dangling_shim(_mmdc(), active_path=shim, pnpm_dirs=(pnpm,), pnpm_globals=None) is False
+
+
+def test_dangling_shim_false_when_binary_is_outside_pnpm(tmp_path: Path) -> None:
+    pnpm = tmp_path / "pnpm"
+    pnpm.mkdir()
+    assert (
+        dangling_shim(
+            _mmdc(),
+            active_path=Path("/usr/bin/mmdc"),
+            pnpm_dirs=(pnpm,),
+            pnpm_globals=frozenset(),
+        )
+        is False
+    )
+
+
+def test_dangling_shim_false_when_binary_is_absent(tmp_path: Path) -> None:
+    assert (
+        dangling_shim(
+            _mmdc(),
+            active_path=None,
+            pnpm_dirs=(tmp_path / "pnpm",),
+            pnpm_globals=frozenset(),
+        )
+        is False
+    )

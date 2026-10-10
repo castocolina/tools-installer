@@ -3,7 +3,7 @@ present, or a declared detect_path marker file present."""
 
 import os
 import shutil
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from installer.model import Tool
@@ -86,3 +86,36 @@ def is_default_shell(tool: Tool, *, env: Mapping[str, str] | None = None) -> boo
     if not shell:
         return None
     return Path(shell).name == tool.cmd
+
+
+def _resolved(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
+def dangling_shim(
+    tool: Tool,
+    *,
+    active_path: Path | None,
+    pnpm_dirs: Sequence[Path],
+    pnpm_globals: frozenset[str] | None,
+) -> bool:
+    """True when a pnpm bin shim outlives its package (todo 2026-09-16, D-18)."""
+    if active_path is None or pnpm_globals is None:
+        return False
+    packages = {
+        pkg
+        for method in tool.methods
+        if method.kind == "node" and isinstance(pkg := method.params.get("npm_pkg"), str) and pkg
+    }
+    if not packages:
+        return False
+    resolved = _resolved(active_path)
+    under_pnpm = any(
+        resolved == prefix or prefix in resolved.parents for prefix in map(_resolved, pnpm_dirs)
+    )
+    if not under_pnpm:
+        return False
+    return not (packages & pnpm_globals)

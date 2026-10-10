@@ -2412,3 +2412,100 @@ def test_undeclared_script_only_by_elimination_unchanged(tmp_path: Path) -> None
     assert result.owner == "installer"
     assert result.confidence == "by-elimination"
     assert result.method is None
+
+
+_MMDC_PKG = "@mermaid-js/mermaid-cli"
+
+
+def _mmdc() -> Tool:
+    return Tool(
+        id="mmdc",
+        name="mmdc",
+        category="diagram",
+        cmd="mmdc",
+        methods=(Method(kind="node", params={"npm_pkg": _MMDC_PKG}),),
+    )
+
+
+def _dangling_mmdc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    pnpm_globals: frozenset[str] | None,
+    which: str | None,
+) -> ManagerOwnership:
+    pnpm = tmp_path / "pnpm"
+    shim = pnpm / "mmdc"
+    pnpm.mkdir()
+    shim.touch()
+    monkeypatch.setenv("PNPM_HOME", str(pnpm))
+    return _resolve(_mmdc(), inventory=_readable(pnpm_globals=pnpm_globals), which=which)
+
+
+def test_dangling_pnpm_shim_reads_broken(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pnpm = tmp_path / "pnpm"
+    shim = pnpm / "mmdc"
+    result = _dangling_mmdc(tmp_path, monkeypatch, pnpm_globals=frozenset(), which=str(shim))
+    assert result.broken is True
+    from installer.status import dangling_shim
+
+    assert (
+        dangling_shim(_mmdc(), active_path=shim, pnpm_dirs=(pnpm,), pnpm_globals=frozenset())
+        is True
+    )
+
+
+def test_listed_pnpm_package_is_not_broken(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    shim = tmp_path / "pnpm" / "mmdc"
+    result = _dangling_mmdc(
+        tmp_path,
+        monkeypatch,
+        pnpm_globals=frozenset({_MMDC_PKG}),
+        which=str(shim),
+    )
+    assert result.broken is False
+
+
+def test_unreadable_pnpm_inventory_is_not_broken(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shim = tmp_path / "pnpm" / "mmdc"
+    result = _dangling_mmdc(tmp_path, monkeypatch, pnpm_globals=None, which=str(shim))
+    assert result.broken is False
+
+
+def test_binary_outside_pnpm_dir_is_not_broken(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _dangling_mmdc(tmp_path, monkeypatch, pnpm_globals=frozenset(), which="/usr/bin/mmdc")
+    assert result.broken is False
+
+
+def test_missing_binary_is_not_broken(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    result = _dangling_mmdc(tmp_path, monkeypatch, pnpm_globals=frozenset(), which=None)
+    assert result.broken is False
+
+
+def test_os_package_owner_broken_matches_computed_false() -> None:
+    tool = _git_shaped_tool()
+    calls: list[list[str]] = []
+    inventory = _empty_readable()
+    result = _resolve(
+        tool,
+        inventory=inventory,
+        which="/usr/bin/git",
+        platform=_FEDORA,
+        native_probe=_os_package_probe("git-core", calls),
+    )
+    assert result.owner == "os-package"
+    dirs = owner_dirs(inventory=inventory, managed_bin_dir=_MANAGED, platform=_FEDORA)
+    from installer.status import dangling_shim
+
+    expected = dangling_shim(
+        tool,
+        active_path=result.active_path,
+        pnpm_dirs=dirs.get("pnpm", ()),
+        pnpm_globals=inventory.pnpm_globals,
+    )
+    assert expected is False
+    assert result.broken is expected
