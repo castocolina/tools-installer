@@ -19,6 +19,7 @@ from installer.model import (
 )
 from installer.platform import Platform
 from installer.skill_lifecycle import (
+    SKILL_HARNESS_LABELS,
     inspect_skill_packs,
     inspect_status,
     perform_action,
@@ -791,3 +792,13 @@ def test_inspect_skill_packs_is_idempotent(tmp_path: Path) -> None:
     assert inspect_skill_packs([tool], probe, tmp_path) == inspect_skill_packs(
         [tool], probe, tmp_path
     )
+
+
+def test_skill_harness_labels_cover_every_harness() -> None:
+    assert set(SKILL_HARNESS_LABELS) == set(SKILL_HARNESSES)
+    assert all(label.isascii() and label for label in SKILL_HARNESS_LABELS.values())
+    assert SKILL_HARNESS_LABELS["claude"] == "Claude Code"
+    assert SKILL_HARNESS_LABELS["codex"] == "Codex"
+    assert SKILL_HARNESS_LABELS["pi"] == "Pi"
+    assert SKILL_HARNESS_LABELS["gemini-cli"] == "Gemini CLI"
+    assert SKILL_HARNESS_LABELS["factory-droid"] == "Factory Droid"
