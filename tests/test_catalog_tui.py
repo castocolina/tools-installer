@@ -53,7 +53,7 @@ from installer.ownership import (
     owner_label,
 )
 from installer.platform import Platform
-from installer.resolve import platform_could_support
+from installer.resolve import UnavailableReason, platform_could_support, unavailable_reason
 from installer.run import CommandError
 from installer.selection import select_tools
 from installer.uninstall import SweepResult
@@ -839,6 +839,44 @@ async def test_unavailable_catalog_rows_are_inert_under_select_all() -> None:
         await pilot.press("a")
         assert "container" not in app.catalog.selected
         assert app.catalog.selected == {"rg"}
+
+
+def test_unavailable_reason_renders_in_row_and_detail() -> None:
+    tool = next(item for item in load_tools(REGISTRY) if item.id == "alacritty")
+    reason = unavailable_reason(
+        tool, Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+    )
+    assert isinstance(reason, UnavailableReason)
+    screen = CatalogScreen(
+        [tool],
+        {tool.id: False},
+        _BLURBS,
+        view="user",
+        catalog=[tool],
+        staged=set(),
+        unavailable={tool.id: reason},
+    )
+    desc = screen._row_cells(tool)[8].plain  # pyright: ignore[reportPrivateUsage]
+    assert "(not available: immutable host)" in desc
+    assert reason.detail in screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    assert screen._adapter().selectable(tool) is False  # pyright: ignore[reportPrivateUsage]
+
+
+def test_bare_true_unavailable_keeps_generic_copy() -> None:
+    tool = _tool("x")
+    screen = CatalogScreen(
+        [tool],
+        {"x": False},
+        _BLURBS,
+        view="system",
+        catalog=[tool],
+        staged=set(),
+        unavailable={"x": True},
+    )
+    cells = screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
+    detail = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    assert "(not available on this machine)" in cells[8].plain
+    assert "(not available on this machine)" in detail
 
 
 async def test_unavailable_catalog_row_is_dimmed_with_blank_sel_cell() -> None:

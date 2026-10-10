@@ -67,7 +67,7 @@ from installer.policy import (
 from installer.postinstall import BREW_BIN_DIRS
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
-from installer.resolve import platform_could_support
+from installer.resolve import unavailable_reason
 from installer.run import OutputRunner, Runner, run_captured, run_query
 from installer.selection import Choice
 from installer.settings import (
@@ -781,7 +781,7 @@ def _build_app(
             platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
         )
     installed = {tool.id: is_installed(tool) for tool in tools}
-    unavailable = {tool.id: not platform_could_support(tool, platform) for tool in tools}
+    unavailable = {tool.id: unavailable_reason(tool, platform) or False for tool in tools}
     report, _status, _warning = doctor_data(
         tools,
         platform=platform,

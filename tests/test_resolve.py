@@ -1,6 +1,10 @@
-from installer.model import Method, Tool
+from pathlib import Path
+
+from installer.model import Method, Tool, load_tools
 from installer.platform import Platform
-from installer.resolve import platform_could_support, resolve_methods
+from installer.resolve import platform_could_support, resolve_methods, unavailable_reason
+
+_REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
 
 def _tool(*kinds: str) -> Tool:
@@ -203,6 +207,54 @@ def test_min_os_version_gate_blocks_a_too_old_macos() -> None:
         )
         == []
     )
+
+
+def _registry_tool(tool_id: str) -> Tool:
+    return next(tool for tool in load_tools(_REGISTRY) if tool.id == tool_id)
+
+
+def test_unavailable_reason_alacritty_names_immutable_host() -> None:
+    reason = unavailable_reason(
+        _registry_tool("alacritty"),
+        Platform(os="fedora", arch="amd64", immutable=True, has_brew=True),
+    )
+    assert reason is not None
+    assert reason.short == "immutable host"
+    assert "immutable (ostree) host" in reason.detail
+
+
+def test_unavailable_reason_gnu_bash_names_unsupported_os() -> None:
+    reason = unavailable_reason(
+        _registry_tool("gnu-bash"),
+        Platform(os="fedora", arch="amd64", immutable=True, has_brew=True),
+    )
+    assert reason is not None
+    assert reason.short == "fedora not supported"
+    assert "macos" in reason.detail
+
+
+def test_unavailable_reason_rg_on_immutable_fedora_is_available() -> None:
+    assert (
+        unavailable_reason(
+            _registry_tool("rg"),
+            Platform(os="fedora", arch="amd64", immutable=True, has_brew=True),
+        )
+        is None
+    )
+
+
+def test_unavailable_reason_matches_platform_could_support_for_every_tool() -> None:
+    platforms = (
+        Platform(os="fedora", arch="amd64", immutable=True, has_brew=True),
+        Platform(os="fedora", arch="amd64", immutable=False, has_brew=True),
+        Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
+        Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="15.0"),
+    )
+    for tool in load_tools(_REGISTRY):
+        for platform in platforms:
+            assert (unavailable_reason(tool, platform) is None) == platform_could_support(
+                tool, platform
+            ), tool.id
 
 
 def test_platform_could_support_ignores_missing_brew_but_not_wrong_platform() -> None:

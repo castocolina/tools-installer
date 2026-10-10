@@ -91,7 +91,7 @@ def unstaged_recommends(
     *,
     staged: Container[str],
     installed: Mapping[str, bool],
-    unavailable: Mapping[str, bool] | None = None,
+    unavailable: Mapping[str, object] | None = None,
 ) -> tuple[str, ...]:
     """Complementary tools a freshly-marked tool declares that the user has not
     already staged or installed, so the catalog can offer them.

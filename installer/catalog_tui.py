@@ -21,6 +21,7 @@ from installer.deps import missing_requires
 from installer.enums import Audience, Priority
 from installer.model import Tool
 from installer.ownership import MUTATION_GRADE, OWNER_LABELS, owner_detail, owner_label
+from installer.resolve import UnavailableReason
 from installer.selection import select_tools, unstaged_recommends
 from installer.skill_lifecycle import SKILL_HARNESS_LABELS
 from installer.status import is_default_shell
@@ -315,7 +316,7 @@ class CatalogScreen(AppScreen):
         view: str,
         catalog: list[Tool],
         staged: set[str],
-        unavailable: Mapping[str, bool] | None = None,
+        unavailable: Mapping[str, bool | UnavailableReason] | None = None,
         version_refresh: VersionRefreshService | None = None,
         updates: UpdateService | None = None,
     ) -> None:
@@ -591,8 +592,12 @@ class CatalogScreen(AppScreen):
         installed = self._installed[tool.id]
         desc = tool.desc or tool.name
         ver = self._ver_cell(tool)
-        if self._unavailable.get(tool.id, False):
-            desc = f"{desc} (not available on this machine)"
+        unavailable = self._unavailable.get(tool.id, False)
+        if unavailable:
+            if isinstance(unavailable, UnavailableReason):
+                desc = f"{desc} (not available: {unavailable.short})"
+            else:
+                desc = f"{desc} (not available on this machine)"
             return [
                 Text("", style="dim"),
                 Text(tool.priority, style="dim"),
@@ -641,7 +646,10 @@ class CatalogScreen(AppScreen):
         # list, not the filtered one — the two lists differing is correct.
         if tool.recommends:
             detail += f"  |  pairs well with {', '.join(tool.recommends)}"
-        if self._unavailable.get(tool.id, False):
+        unavailable = self._unavailable.get(tool.id, False)
+        if isinstance(unavailable, UnavailableReason):
+            detail += f"  |  {unavailable.detail}"
+        elif unavailable:
             detail += "  |  (not available on this machine)"
         if bool(self._present(tool)):
             default_shell = is_default_shell(tool)

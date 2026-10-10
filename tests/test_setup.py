@@ -23,6 +23,7 @@ from installer.ownership import ManagerOwnership
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
 from installer.policy import Policy
+from installer.resolve import UnavailableReason
 from installer.session import Summary
 from installer.settings import Settings, SettingsStore, load_settings, save_settings
 from installer.shellrc import ShellrcConsolidation, ShellrcRefusal, write_myshellrc
@@ -1310,7 +1311,9 @@ def test_build_app_hands_unavailable_from_platform_could_support(
     assert setup.main([]) == 0
     unavailable = seen[0]["unavailable"]
     assert isinstance(unavailable, dict)
-    assert unavailable["apt-upgrade"] is True
+    apt_upgrade = cast(object, unavailable["apt-upgrade"])
+    assert isinstance(apt_upgrade, UnavailableReason)
+    assert apt_upgrade.short == "macos not supported"
     assert unavailable["fd"] is False
 
 

@@ -46,6 +46,7 @@ from installer.pnpm_globals import NodeGlobalsReport, reinstall_preview
 from installer.policy import Policy, PolicyResult
 from installer.rcclean import PathWriterLine, group_writer_lines
 from installer.render import guidance_text
+from installer.resolve import UnavailableReason
 from installer.run import CommandError
 from installer.session import Summary
 from installer.shellrc import PathGuardOutcome, guard_path_writers, path_export_guard
@@ -2416,7 +2417,7 @@ class UnifiedApp(App[list[str] | None]):
         node_globals: Callable[[], NodeGlobalsReport] | None = None,
         globals_preview: Callable[[NodeGlobalsReport], str] | None = None,
         reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
-        unavailable: Mapping[str, bool] | None = None,
+        unavailable: Mapping[str, bool | UnavailableReason] | None = None,
         initial_view: str = BASE_VIEW,
         daemon_default: Callable[[], bool] | None = None,
         daemon_default_policy_id: str | None = None,
