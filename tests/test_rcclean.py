@@ -480,6 +480,27 @@ def test_writer_after_block_shape_still_reported(shape: str) -> None:
     assert find_duplicate_path_lines(text, managed, _ENV) == [text.split("\n").index(trailing)]
 
 
+def test_trailing_slash_writer_is_normalized() -> None:
+    text = 'export PATH="$HOME/.local/bin/:$PATH"\n'
+    rc = Path("rc")
+    assert unguarded_path_writers({rc: text}, {_LOCAL_BIN}, _ENV) == {_LOCAL_BIN: (rc,)}
+    assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == [0]
+
+
+def test_double_slash_writer_is_normalized() -> None:
+    text = 'export PATH="$HOME//.local/bin:$PATH"\n'
+    rc = Path("rc")
+    assert unguarded_path_writers({rc: text}, {_LOCAL_BIN}, _ENV) == {_LOCAL_BIN: (rc,)}
+    assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == [0]
+
+
+def test_relative_or_empty_segment_never_matches() -> None:
+    managed = {_LOCAL_BIN, Path("bin")}
+    for text in ('export PATH="bin:$PATH"\n', 'export PATH=":$PATH"\n'):
+        assert unguarded_path_writers({Path("rc"): text}, managed, _ENV) == {}
+        assert find_duplicate_path_lines(text, managed, _ENV) == []
+
+
 @pytest.mark.parametrize("loop_header", ["for d in a b; do", "while read -r d; do"])
 def test_writer_nested_loop_inside_guarded_if_not_reported(loop_header: str) -> None:
     text = (

@@ -205,6 +205,18 @@ def _managed_line_indices(lines: list[str]) -> set[int]:
     return blocked
 
 
+def _directory_for(expanded: str, targets: Mapping[Path, Path]) -> Path | None:
+    """Return the managed dir Path(expanded) names, or None if it is not absolute.
+
+    Matches installer/doctor.py::audit_path, which counts Path(entry) and so
+    treats a trailing slash and a doubled slash as the same directory. An empty
+    or relative segment is never a managed dir.
+    """
+    if not expanded or not Path(expanded).is_absolute():
+        return None
+    return targets.get(Path(expanded))
+
+
 def find_duplicate_path_lines(
     rc_text: str, managed_dirs: set[Path], env: Mapping[str, str]
 ) -> list[int]:
@@ -217,7 +229,7 @@ def find_duplicate_path_lines(
     present — so there is nothing safe (or necessary) to strip.
     """
     lines = rc_text.split("\n")
-    targets = {str(directory) for directory in managed_dirs}
+    targets = {Path(directory): directory for directory in managed_dirs}
     flagged: list[int] = []
     for record in _path_line_targets(lines, env):
         # An indented line is never one bun/fnm/this installer appended (always
@@ -228,7 +240,7 @@ def find_duplicate_path_lines(
             record.simple
             and not record.indented
             and not record.presence_guarded
-            and any(segment in targets for segment in record.targets)
+            and any(_directory_for(segment, targets) is not None for segment in record.targets)
         ):
             flagged.append(record.index)
     return flagged
@@ -278,13 +290,13 @@ def unguarded_path_writers(
     Flagging one would point the user at a correct line.
     """
     writers: dict[Path, list[Path]] = {}
-    targets = {str(directory): directory for directory in managed_dirs}
+    targets = {Path(directory): directory for directory in managed_dirs}
     for rc_path, rc_text in rc_texts.items():
         for record in _path_line_targets(rc_text.split("\n"), env):
             if record.presence_guarded:
                 continue
             for segment in record.targets:
-                directory = targets.get(segment)
+                directory = _directory_for(segment, targets)
                 if directory is not None and rc_path not in writers.setdefault(directory, []):
                     writers[directory].append(rc_path)
     return {directory: tuple(files) for directory, files in writers.items()}
