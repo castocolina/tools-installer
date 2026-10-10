@@ -488,6 +488,7 @@ class VersionRefreshService:
         self._ownership: dict[str, tuple[int, ManagerOwnership]] = {}
         self._skills: dict[str, SkillHostStatus] = {}
         self._skills_probed = False
+        self._skills_pass_lock = threading.Lock()
         self._epoch = 0
 
     @property
@@ -541,29 +542,38 @@ class VersionRefreshService:
             self._skills = seeded
 
     def refresh_skills(self, tools: Sequence[Tool]) -> dict[str, SkillHostStatus]:
-        """Probe every skill pack once per launch. BLOCKING — worker thread only."""
+        """Probe every skill pack once per launch. BLOCKING — worker thread only.
+
+        A second caller waits on `_skills_pass_lock` for the in-flight pass,
+        then returns that pass's map. `invalidate` must not take this lock:
+        a probe may call it, and the pass lock is held across the probe.
+        """
         packs = [tool for tool in tools if tool.skill_lifecycle is not None]
         probe = self._skill_probe
-        if probe is None or not packs or self._skills_probed:
+        if probe is None or not packs:
             return dict(self._skills)
-        started_epoch = self.epoch
-        probed = inspect_skill_packs(packs, probe, self._skill_home)
-        fresh = {
-            tool_id: SkillHostStatus(hosts=dict(hosts), stale=False)
-            for tool_id, hosts in probed.items()
-        }
-        with self._lock:
-            if self._epoch != started_epoch:
-                return dict(self._skills)
-            merged = {**self._skills, **fresh}
-            save_version_cache(
-                self._cache_path,
-                load_version_cache(self._cache_path),
-                skills={tool_id: dict(status.hosts) for tool_id, status in merged.items()},
-            )
-            self._skills = merged
-            self._skills_probed = True
-            return dict(merged)
+        with self._skills_pass_lock:
+            with self._lock:
+                if self._skills_probed:
+                    return dict(self._skills)
+                started_epoch = self._epoch
+            probed = inspect_skill_packs(packs, probe, self._skill_home)
+            fresh = {
+                tool_id: SkillHostStatus(hosts=dict(hosts), stale=False)
+                for tool_id, hosts in probed.items()
+            }
+            with self._lock:
+                if self._epoch != started_epoch:
+                    return dict(self._skills)
+                merged = {**self._skills, **fresh}
+                save_version_cache(
+                    self._cache_path,
+                    load_version_cache(self._cache_path),
+                    skills={tool_id: dict(status.hosts) for tool_id, status in merged.items()},
+                )
+                self._skills = merged
+                self._skills_probed = True
+                return dict(merged)
 
     def invalidate(self, *, reason: str) -> int:
         """Bump the epoch and drop the manager snapshot under the merge lock."""

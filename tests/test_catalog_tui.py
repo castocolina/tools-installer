@@ -25,6 +25,7 @@ from installer.catalog_tui import (
     AUDIENCE_LABEL,
     CatalogScreen,
     OwnershipRefreshed,
+    SkillStatusRefreshed,
     VersionStatusRefreshed,
     group_tools,
     sort_for_table,
@@ -3254,3 +3255,152 @@ def test_skill_rendering_leaves_a_non_pack_row_unchanged(tmp_path: Path) -> None
     assert signature(plain) == signature(wired)
     assert "installed in:" not in plain._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert "installed in:" not in wired._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+
+
+def _counting_skill_probe(calls: list[list[str]]) -> Callable[[list[str]], str]:
+    def skill_probe(argv: list[str]) -> str:
+        calls.append(list(argv))
+        if argv == ["claude", "plugin", "list"]:
+            return "superpowers@claude-plugins-official\n"
+        return ""
+
+    return skill_probe
+
+
+async def test_skill_probe_runs_once_across_three_catalog_entries(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: None,
+        skill_probe=_counting_skill_probe(calls),
+        skill_home=tmp_path,
+    )
+    app = _unified_app([pack], {"superpowers": False}, _BLURBS, version_refresh=service)
+    async with app.run_test(size=(140, 30)) as pilot:
+        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        await pilot.pause()
+        app.catalog.enter_view()
+        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        await pilot.pause()
+        app.catalog.enter_view()
+        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        await pilot.pause()
+    assert calls.count(["claude", "plugin", "list"]) == 1
+
+
+async def test_skill_probe_runs_again_after_invalidate(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: None,
+        skill_probe=_counting_skill_probe(calls),
+        skill_home=tmp_path,
+    )
+    app = _unified_app([pack], {"superpowers": False}, _BLURBS, version_refresh=service)
+    async with app.run_test(size=(140, 30)) as pilot:
+        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        await pilot.pause()
+        assert calls.count(["claude", "plugin", "list"]) == 1
+        service.invalidate(reason="x")
+        app.catalog.enter_view()
+        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        await pilot.pause()
+    assert calls.count(["claude", "plugin", "list"]) == 2
+
+
+async def test_skill_probe_failure_paints_unknown_and_keeps_the_app_running(tmp_path: Path) -> None:
+    def skill_probe(_argv: list[str]) -> str:
+        raise RuntimeError("harness down")
+
+    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: None,
+        skill_probe=skill_probe,
+        skill_home=tmp_path,
+    )
+    app = _unified_app([pack], {"superpowers": False}, _BLURBS, version_refresh=service)
+    async with app.run_test(size=(140, 30)) as pilot:
+        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        await pilot.pause()
+        cell = app.catalog.query_one(DataTable[Any]).get_cell("superpowers", "inst")
+        assert cell.plain == "?"
+        assert "dim" in str(cell.style)
+    status = service.skill_status_of("superpowers")
+    assert status is not None
+    assert status.hosts == {"claude": "unknown"}
+
+
+def test_skill_status_refreshed_discards_a_superseded_epoch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: None,
+    )
+    screen = _screen([pack], {"superpowers": False}, version_refresh=service)
+    screen._version_refresh_generation = 1  # pyright: ignore[reportPrivateUsage]
+    service.invalidate(reason="x")
+    reloads = {"n": 0}
+
+    def counting(_adapter: object) -> None:
+        reloads["n"] += 1
+
+    monkeypatch.setattr(screen._browser, "reload", counting)  # pyright: ignore[reportPrivateUsage]
+    screen.on_skill_status_refreshed(SkillStatusRefreshed(generation=1, epoch=0))
+    assert reloads["n"] == 0
+
+
+async def test_skill_probe_covers_packs_when_system_view_mounts_first(tmp_path: Path) -> None:
+    import json
+
+    from installer.version_cache import save_version_cache
+
+    calls: list[list[str]] = []
+    system = _tool("rg", tier="system")
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers"),),
+        tier="ai",
+    )
+    path = tmp_path / "versions.json"
+    save_version_cache(path, {}, skills={"superpowers": {"claude": "present"}})
+    service = _offline_service(
+        path,
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: None,
+        skill_probe=_counting_skill_probe(calls),
+        skill_home=tmp_path,
+    )
+    service.seed_skills_from_cache()
+    app = _unified_app(
+        [system, pack],
+        {"rg": False, "superpowers": False},
+        _BLURBS,
+        version_refresh=service,
+    )
+    async with app.run_test(size=(140, 30)) as pilot:
+        assert app.current_view == "system"
+        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        await pilot.pause()
+        assert ["claude", "plugin", "list"] in calls
+        status = service.skill_status_of("superpowers")
+        assert status is not None
+        assert status.stale is False
+        raw = json.loads(path.read_text())
+        assert raw["skills"]["superpowers"]
+        before = len(calls)
+        await pilot.press("3")
+        await _wait_until(pilot, lambda: not app.catalog_for("ai").skill_refreshing)
+        await pilot.pause()
+        cell = app.catalog_for("ai").query_one(DataTable[Any]).get_cell("superpowers", "inst")
+        assert cell.plain == "✓"
+        assert "~" not in cell.plain
+        assert len(calls) == before

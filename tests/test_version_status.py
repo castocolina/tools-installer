@@ -1742,3 +1742,141 @@ def test_refresh_skills_persists_once_and_skips_the_second_call(tmp_path: Path) 
     calls.clear()
     service.refresh_skills([pack])
     assert calls == []
+
+
+def _claude_pack() -> Tool:
+    return _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+
+
+def _skill_service(
+    path: Path, probe: Callable[[list[str]], str], home: Path
+) -> VersionRefreshService:
+    return VersionRefreshService(
+        platform=Platform(os="linux", arch="amd64", immutable=True, has_brew=False),
+        cache_path=path,
+        skill_probe=probe,
+        skill_home=home,
+        which=lambda _cmd: None,
+        query=lambda *_args, **_kwargs: "",
+        pnpm_packages=lambda: (),
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+    )
+
+
+def test_skill_refresh_from_two_threads_probes_once(tmp_path: Path) -> None:
+    calls = {"n": 0}
+    release = threading.Event()
+    started = threading.Event()
+
+    def skill_probe(_argv: list[str]) -> str:
+        calls["n"] += 1
+        started.set()
+        assert release.wait(timeout=5)
+        return "superpowers@claude-plugins-official\n"
+
+    service = _skill_service(tmp_path / "versions.json", skill_probe, tmp_path)
+    pack = _claude_pack()
+    results: list[dict[str, SkillHostStatus]] = []
+
+    def caller() -> None:
+        results.append(service.refresh_skills([pack]))
+
+    first = threading.Thread(target=caller)
+    second = threading.Thread(target=caller)
+    first.start()
+    assert started.wait(timeout=5)
+    second.start()
+    second.join(timeout=0.2)
+    assert second.is_alive()
+    release.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+    assert calls["n"] == 1
+    assert len(results) == 2
+    assert all(result["superpowers"].stale is False for result in results)
+
+
+def test_skill_pass_superseded_by_invalidate_stores_nothing(tmp_path: Path) -> None:
+    calls = {"n": 0}
+    service = _skill_service(tmp_path / "versions.json", lambda _argv: "", tmp_path)
+
+    def skill_probe(_argv: list[str]) -> str:
+        calls["n"] += 1
+        service.invalidate(reason="x")
+        return "superpowers@claude-plugins-official\n"
+
+    service._skill_probe = skill_probe  # pyright: ignore[reportPrivateUsage]
+    pack = _claude_pack()
+    service.refresh_skills([pack])
+    assert service.skill_status_of("superpowers") is None
+    assert service._skills_probed is False  # pyright: ignore[reportPrivateUsage]
+    service.refresh_skills([pack])
+    assert calls["n"] == 2
+    assert service.skill_status_of("superpowers") is None
+
+
+def test_skill_invalidate_marks_every_held_entry_stale(tmp_path: Path) -> None:
+    def skill_probe(_argv: list[str]) -> str:
+        return "superpowers@claude-plugins-official\n"
+
+    service = _skill_service(tmp_path / "versions.json", skill_probe, tmp_path)
+    service.refresh_skills([_claude_pack()])
+    landed = service.skill_status_of("superpowers")
+    assert landed is not None
+    assert landed.stale is False
+    service.invalidate(reason="x")
+    held = service.skill_status_of("superpowers")
+    assert held is not None
+    assert held.stale is True
+
+
+def test_refresh_skills_without_packs_keeps_seeded_answers(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+    path = tmp_path / "versions.json"
+    save_version_cache(path, {}, skills={"superpowers": {"claude": "present"}})
+    service = _skill_service(path, lambda argv: calls.append(list(argv)) or "", tmp_path)
+    service.seed_skills_from_cache()
+    before = path.read_text()
+    landed = service.refresh_skills([_tool("rg")])
+    assert calls == []
+    assert landed["superpowers"].stale is True
+    held = service.skill_status_of("superpowers")
+    assert held is not None
+    assert held.stale is True
+    assert service._skills_probed is False  # pyright: ignore[reportPrivateUsage]
+    assert path.read_text() == before
+
+
+def test_second_skill_caller_waits_for_in_flight_pass(tmp_path: Path) -> None:
+    calls = {"n": 0}
+    started = threading.Event()
+    release = threading.Event()
+
+    def skill_probe(_argv: list[str]) -> str:
+        calls["n"] += 1
+        started.set()
+        assert release.wait(timeout=5)
+        return "superpowers@claude-plugins-official\n"
+
+    service = _skill_service(tmp_path / "versions.json", skill_probe, tmp_path)
+    pack = _claude_pack()
+    results: list[dict[str, SkillHostStatus]] = []
+
+    def caller() -> None:
+        results.append(service.refresh_skills([pack]))
+
+    first = threading.Thread(target=caller)
+    second = threading.Thread(target=caller)
+    first.start()
+    assert started.wait(timeout=5)
+    second.start()
+    second.join(timeout=0.2)
+    assert second.is_alive()
+    assert calls["n"] == 1
+    release.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+    assert calls["n"] == 1
+    assert len(results) == 2
+    assert all(item["superpowers"].stale is False for item in results)
