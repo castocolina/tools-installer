@@ -1067,7 +1067,7 @@ def test_owner_detail_os_package_names_the_package() -> None:
         ("github_release", "GitHub release"),
         ("tarball", "tarball download"),
         ("app", "downloaded app"),
-        ("script", "install script"),
+        ("script", "own installer"),
     ],
 )
 def test_owner_detail_installer_names_the_placement_mechanism(kind: str, mechanism: str) -> None:
@@ -1945,6 +1945,78 @@ def test_sdkman_absent_bin_dir_file_is_unknown(tmp_path: Path) -> None:
     bin_dir = str(tmp_path / "sdk" / "candidates" / "groovy" / "current" / "bin")
     result = _resolve(_sdkman_tool(bin_dir), inventory=_empty_readable(), which=None)
     assert result.owner == "unknown"
+
+
+def _bun(bin_dir: str) -> Tool:
+    return Tool(
+        id="bun",
+        name="bun",
+        category="runtime",
+        cmd="bun",
+        methods=(
+            Method(kind="script", params={"bin_dir": bin_dir}),
+            Method(kind="brew", params={"formula": "bun"}),
+        ),
+    )
+
+
+def test_own_installer_location_proof_resolves_bun_when_brew_does_not_list_it(
+    tmp_path: Path,
+) -> None:
+    bin_dir = tmp_path / ".bun" / "bin"
+    binary = _touch_executable(bin_dir, "bun")
+    result = _resolve(_bun(str(bin_dir)), inventory=_readable(brew_formulae={}), which=str(binary))
+    assert result.owner == "installer"
+    assert result.confidence == "direct"
+    assert owner_label(result) == "own installer"
+
+
+def test_own_installer_location_candidate_loses_to_a_live_brew_path(tmp_path: Path) -> None:
+    bin_dir = tmp_path / ".bun" / "bin"
+    _touch_executable(bin_dir, "bun")
+    result = _resolve(
+        _bun(str(bin_dir)),
+        inventory=_readable(brew_formulae={"bun": "1.1.0"}),
+        which=str(_BREW_PREFIX / "bin" / "bun"),
+    )
+    assert result.owner == "brew"
+    assert result.shadowed is True
+    assert any(candidate.owner == "installer" for candidate in result.candidates)
+    assert result.active_candidate == "brew"
+
+
+def test_script_and_uv_attributing_the_same_live_path_stay_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shared = tmp_path / "bin"
+    binary = _touch_executable(shared, "ruff")
+    monkeypatch.setenv("UV_TOOL_BIN_DIR", str(shared))
+    tool = Tool(
+        id="ruff",
+        name="ruff",
+        category="lint",
+        cmd="ruff",
+        methods=(
+            Method(kind="script", params={"bin_dir": str(shared)}),
+            Method(kind="uv-tool", params={"pypi_pkg": "ruff"}),
+        ),
+    )
+    result = _resolve(tool, inventory=_readable(uv_tools={"ruff": "0.6.0"}), which=str(binary))
+    assert result.owner == "unknown"
+    assert result.active_path is not None
+    assert result.unknown_reason is not None
+    assert "not attributable to any candidate" in result.unknown_reason
+    assert "more than one manager" not in result.unknown_reason
+
+
+def test_resolve_ownership_is_idempotent_for_identical_inputs(tmp_path: Path) -> None:
+    bin_dir = tmp_path / ".bun" / "bin"
+    binary = _touch_executable(bin_dir, "bun")
+    tool = _bun(str(bin_dir))
+    inventory = _empty_readable()
+    first = _resolve(tool, inventory=inventory, which=str(binary))
+    second = _resolve(tool, inventory=inventory, which=str(binary))
+    assert first == second
 
 
 def test_sdkman_removal_hint_degrades_without_a_package() -> None:

@@ -1035,7 +1035,7 @@ OWNER_LABELS: dict[Owner, str] = {
     "rpm-ostree": "rpm-ostree",
     "os-package": "OS package",
     # Fallback only: `owner_label` below prefers a resolved method's own kind
-    # label (github release / tarball / app / install script) for an
+    # label (github release / tarball / app / own installer) for an
     # installer-owned record, and reaches this entry only when no method is
     # resolved.
     "installer": "installer artifact",
@@ -1048,7 +1048,7 @@ _INSTALLER_KIND_LABELS: dict[str, str] = {
     "github_release": "GitHub release",
     "tarball": "tarball download",
     "app": "downloaded app",
-    "script": "install script",
+    "script": "own installer",
 }
 
 

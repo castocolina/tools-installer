@@ -2100,7 +2100,7 @@ def test_version_detail_reads_the_prose_register_for_every_simple_owner_value(
         ("github_release", "GitHub release"),
         ("tarball", "tarball download"),
         ("app", "downloaded app"),
-        ("script", "install script"),
+        ("script", "own installer"),
     ],
 )
 def test_version_detail_names_every_installer_placement_mechanism(
