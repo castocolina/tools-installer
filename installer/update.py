@@ -90,6 +90,8 @@ from installer.ownership import (
     OS_PACKAGE_OWNER,
     UNMANAGEABLE_OWNERS,
     ManagerOwnership,
+    declared_manager_label,
+    owner_label,
 )
 from installer.platform import Platform
 from installer.pnpm_globals import PnpmUnavailable
@@ -279,11 +281,21 @@ def _perform(
         )
     owner = ownership.owner
     cleanup_warnings: tuple[str, ...] = ()
+    detail = ""
     if owner in ("brew", "cask", "uv"):
         argv = resolve_update_argv(target)
         if argv is None:
             raise UpdateError(f"missing argv for {owner} update")
         runner(argv)
+        if ownership.off_policy:
+            declared = declared_manager_label(target.tool, platform)
+            real = owner_label(ownership)
+            if declared is not None and real is not None and declared != real:
+                detail = (
+                    f"{real} owns this copy; the catalog installs {target.tool.id} via "
+                    f"{declared} — moving it there is not available yet, so it was "
+                    f"updated through {real}"
+                )
     elif owner == "pnpm":
         if method is None:
             raise UpdateError("pnpm-owned update requires a resolved node method")
@@ -299,6 +311,7 @@ def _perform(
         tool_id=target.tool.id,
         status="updated",
         owner=owner,
+        detail=detail,
         postinstall_warning=warning,
         cleanup_warnings=cleanup_warnings,
     )

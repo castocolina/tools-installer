@@ -1,5 +1,6 @@
 import typing
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -992,3 +993,58 @@ def test_update_service_terminal_follow_up_runs_before_invalidate(
     )
     service.run(_target(tool, "brew", method=brew, package="ripgrep"))
     assert order == ["terminal_follow_up", "invalidate"]
+
+
+def test_off_policy_brew_update_names_the_declared_manager() -> None:
+    method = Method(kind="sdkman", params={"candidate": "groovy"})
+    tool = _tool("groovy", method)
+    ownership = replace(
+        _ownership(tool, "brew", method=method, package="groovy"),
+        method=None,
+        off_policy=True,
+    )
+    calls: list[list[str]] = []
+    outcome = _perform(UpdateTarget(tool=tool, ownership=ownership), calls.append)
+    assert outcome.status == "updated"
+    assert calls == [["brew", "upgrade", "groovy"]]
+    assert outcome.detail == (
+        "Homebrew owns this copy; the catalog installs groovy via SDKMAN "
+        "— moving it there is not available yet, so it was updated through Homebrew"
+    )
+
+
+def test_on_policy_brew_update_keeps_empty_detail() -> None:
+    brew = Method(kind="brew", params={"formula": "ripgrep"})
+    tool = _tool("rg", brew)
+    calls: list[list[str]] = []
+    outcome = _perform(_target(tool, "brew", method=brew, package="ripgrep"), calls.append)
+    assert outcome.status == "updated"
+    assert outcome.detail == ""
+    assert calls == [["brew", "upgrade", "ripgrep"]]
+
+
+def test_update_service_fresh_unknown_overrides_cached_off_policy_brew() -> None:
+    method = Method(kind="sdkman", params={"candidate": "groovy"})
+    tool = _tool("groovy", method)
+    cached = UpdateTarget(
+        tool=tool,
+        ownership=replace(
+            _ownership(tool, "brew", method=method, package="groovy"),
+            method=None,
+            off_policy=True,
+        ),
+    )
+    calls: list[list[str]] = []
+
+    def reresolve(_ignored: Tool) -> ManagerOwnership:
+        return _ownership(
+            tool,
+            "unknown",
+            confidence="none",
+            unknown_reason="no manager claimed the tool",
+        )
+
+    service = _service(reresolve=reresolve, runner=calls.append)
+    outcome = service.run(cached)
+    assert outcome.status == "unknown-owner"
+    assert calls == []
