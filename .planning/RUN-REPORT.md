@@ -386,3 +386,69 @@ all 12 phases (0 total_items, 0 parse_gap_files).
 
 _Run completed: 2026-09-07_
 _Orchestrator: Claude (gsd-autonomous --to 12 --converge)_
+
+---
+
+## Phase 16 — Catalog truth: detection, version and ownership from the filesystem
+
+**Branch:** `gsd/phase-16-detection-version-and-ownership-must-answer-is-it-on-this-di` (created from the
+then-current HEAD; not pushed). **Verdict:** `human_needed`, 7/7 truths verified, 0 gaps
+(`16-VERIFICATION.md`, commit `d5f38d6`, covered digest
+`v3:sha256:27a1eb6f0c9378a0935327a398b30e429aafc4b71762d974cc60d0a8701b3d82`). `16-UAT.md` (status
+`testing`) holds the 4 remaining human items.
+
+### Execution
+
+| Plans | Executor | Fallbacks |
+|---|---|---|
+| 16-01..16-18 (16-17 and 16-18 are review gap plans) | opencode `xai/grok-4.7`, cross-AI per Rule 12 | none |
+| 16-19 (review gap plan) | `cursor-agent` `composer-2.5` (user instruction: "Next run use cursor-agent with composer-2.5") | none |
+
+Every plan carries `cross_ai: true`; every plan was independently re-verified after its wave.
+
+### Gates on the final tree
+
+```
+make validate   →  exit 0 (ruff, format, pyright, bandit, vulture, shellcheck)
+make test       →  3458 passed, 5 skipped; total coverage 95.88% (required 90.0%)
+```
+
+### Review lanes
+
+- Lane 1: internal inline review (`16-REVIEW.md`, `16-REVIEW-2.md`).
+- Lane 2: `opencode-go/glm-5.2`, because the codex login is expired (401 `token_expired`), so the
+  Rule 15 codex-sol-high lane was unavailable. Its claims were each re-checked against source.
+- Findings: 26 total, 18 fixed, 8 accepted with rationale, 0 open (`16-REVIEW-DISPOSITION.md`).
+  The fresh re-review of 16-17/16-18 raised NR-01..NR-04, closed by 16-19 (NR-03 accepted).
+
+### UI and host-safety evidence
+
+- tmux structural check of the walkthrough rows 1-4, 6, 7 on the real TUI, navigation-only: all PASS
+  (`16-UI-CHECK.md`). Row 5 (enter on the execute screen) was not run on the host; the pilot test
+  `test_current_only_selection_says_already_current_not_install_zero` covers its preflight.
+- Real rc files protected by sha256 snapshot before and after the read-only host proof (plan 16-16)
+  and before and after the tmux check; identical, apart from the installer's own prune-daemon log.
+- No Tier-3 container run was needed; all `--fix`/guard behaviour was exercised with `HOME=tmp_path`.
+
+### Remaining human handoff items
+
+1. Alacritty row dim SGR styling (code-only; cannot be asserted in plain-text capture).
+2. Enter on the execute screen on a real host (live `configure_path` path unobserved).
+3. A real-machine day-to-day pass, including the live puppeteer dangling-shim row.
+4. Review of the 11 judgment-tier plan prohibitions in `16-VERIFICATION.md`.
+
+### Open questions for the user
+
+- Commit `cee9581` has a trailer reading "Claude Opus 5.5" (left unamended).
+- Some docs commits lack the standard trailers (for example `35d6326`, left unamended).
+- `opencode --auto` auto-approves every action, so the sandbox and no-sudo rules were prompt-enforced
+  only; the only machine-checked proof is the rc-file checksum comparison around plan 16-16.
+- The phase branch was created from the current HEAD, not the origin default branch (origin is about
+  520 commits behind).
+- Code review ran inline at `standard` depth although the config says `deep`.
+- The codex login is expired; a re-login is needed before the Rule 15 codex lane can run again.
+- `mmdc` is no longer a dangling shim on this host, so D-18 is proven by fixtures only (puppeteer is
+  the live positive).
+- The next cross-AI run is set to use `cursor-agent` with `composer-2.5`, but
+  `workflow.cross_ai_command` in `.planning/config.json` still names opencode. Confirm whether to
+  switch the config.
