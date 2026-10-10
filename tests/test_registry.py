@@ -2,6 +2,8 @@ from collections import Counter
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from installer.deps import requires_integrity_errors, resolve_dependencies
 from installer.model import Tool, load_categories, load_tools
 from installer.platform import Platform
@@ -1401,9 +1403,36 @@ def test_kitty_has_no_linux_download_fallback() -> None:
     fedora = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
     bazzite = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0")
-    assert [m.kind for m in resolve_methods(kitty, fedora)] == ["dnf"]
-    assert resolve_methods(kitty, bazzite) == []
+    assert [m.kind for m in resolve_methods(kitty, fedora)] == ["script", "dnf"]
+    assert [m.kind for m in resolve_methods(kitty, bazzite)] == ["script"]
     assert [m.kind for m in resolve_methods(kitty, macos)] == ["cask"]
+    assert all(method.kind != "github_release" for method in kitty.methods)
+
+
+def test_kitty_linux_script_declares_vendor_bin_dir() -> None:
+    kitty = _tools_by_id()["kitty"]
+    script = next(method for method in kitty.methods if method.kind == "script")
+    assert script.os == ("debian", "arch", "fedora")
+    assert script.params["url"] == "https://sw.kovidgoyal.net/kitty/installer.sh"
+    assert script.params["args"] == ["launch=n"]
+    assert script.params["bin_dir"] == "~/.local/kitty.app/bin"
+    assert script.params["shell"] == "sh"
+
+
+def test_kitty_declared_location_counts_as_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import installer.status as status
+
+    def _which_none(_cmd: str) -> str | None:
+        return None
+
+    monkeypatch.setattr(status.shutil, "which", _which_none)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "kitty.app" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "kitty").touch()
+    assert status.is_installed(_tools_by_id()["kitty"]) is True
 
 
 def test_kitty_cask_blocks_a_too_old_macos_version() -> None:

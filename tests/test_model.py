@@ -599,6 +599,25 @@ bin_dir = "~/.sdkman/candidates/java/current/bin"
     assert method.params["candidate"] == "java"
 
 
+def test_script_args_reject_shell_metacharacters(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "kitty"
+category = "terminal"
+cmd = "kitty"
+tier = "user"
+[[tool.method]]
+kind = "script"
+url = "https://sw.kovidgoyal.net/kitty/installer.sh"
+args = ["launch=n; rm -rf ~"]
+""",
+    )
+    with pytest.raises(ValueError, match="tool 'kitty': script 'args'"):
+        load_tools(manifest)
+
+
 def test_sdkman_method_without_candidate_is_a_config_error(tmp_path: Path) -> None:
     manifest = _write(
         tmp_path,

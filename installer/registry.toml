@@ -2491,23 +2491,22 @@ smoke = "puppeteer-browser"
 # every cask-kind method on any non-macOS platform regardless of what Homebrew
 # ships upstream — a generic, tool-agnostic project policy, not an absence of
 # upstream Linux packaging.
-# Accepted Bazzite gap: kitty's GitHub release Linux assets
+# kitty's GitHub release Linux assets
 # (kitty-{ver}-{arch}.txz, confirmed via
 # api.github.com/repos/kovidgoyal/kitty/releases/latest this session) are
 # XZ-compressed (.txz), but installer/download.py's extraction
 # (_install_unverified/_place_verified, lines 146 and 207) hardcodes
 # `tar -xzf` (gzip-only) — a github_release method for kitty on Linux would
-# fail at extraction time. No native manager runs on immutable Bazzite by
-# design (installer/resolve.py::_applies's existing immutable-Linux skip), so
-# kitty genuinely has NO applicable method on immutable Bazzite. No
-# resolver-applicable Linux fallback: the formula is absent (404, confirmed
-# above), and project policy excludes casks on Linux (_applies's cask branch,
-# confirmed above) — two independent facts, neither implying the other.
-# REQ-linux-bazzite-shell-parity names only zsh/oh-my-zsh, so this gap
-# violates no locked requirement; fixing download.py's archive extraction
-# (e.g. `tar -xzf` -> `tar -xf`, which auto-detects compression) is out of
-# this registry-only phase's scope — flag for a future phase if ever
-# revisited, do not silently attempt it here.
+# fail at extraction time, which is why the method is the vendor script
+# below and not github_release. The script method is kitty's immutable-Linux
+# path.
+# Verified 2026-10-10: https://sw.kovidgoyal.net/kitty/binary/ documents
+# https://sw.kovidgoyal.net/kitty/installer.sh, launch=n (do not open a GUI),
+# and the Linux install root ~/.local/kitty.app. Live host: ~/.local/bin/kitty
+# is a symlink into that root's bin directory (the script method's bin_dir).
+# resolve.py _RANK places
+# official script ahead of native packages on mutable distros; that ranking
+# is a deliberate consequence of the install-ladder doctrine.
 # Dual-lane code review (codex-sol-high) found the cask method missing a
 # macOS-version floor: formulae.brew.sh/api/cask/kitty.json declares
 # depends_on.macos >= 12. min_os_version = "12" below closes it, reusing
@@ -2522,6 +2521,13 @@ audience = "human"
 tier = "user"
 desc = "GPU-accelerated terminal emulator"
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
+[[tool.method]]
+kind = "script"
+os = ["debian", "arch", "fedora"]
+url = "https://sw.kovidgoyal.net/kitty/installer.sh"
+shell = "sh"
+args = ["launch=n"]
+bin_dir = "~/.local/kitty.app/bin"
 [[tool.method]]
 kind = "dnf"
 package = "kitty"

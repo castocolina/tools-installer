@@ -132,6 +132,7 @@ SKILL_TARGET_SCOPES = ("global", "harness", "project")
 SKILL_OPERATION_MODES = ("manual-required",)
 SKILL_STATUS_SOURCES = ("plugin-cli", "skills-lock", "install-state")
 _SKILL_MATCH_RE = re.compile(r"^[A-Za-z0-9@/._-]+$")
+_SCRIPT_ARG_RE = re.compile(r"^[A-Za-z0-9=._:/+-]+$")
 SkillStatusVia = Literal["plugin-cli", "skills-lock", "install-state"]
 
 EnumValue = TypeVar("EnumValue", Audience, Category, Priority, Tier)
@@ -721,6 +722,21 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
                 if not isinstance(candidate, str) or not candidate:
                     raise ValueError(
                         f"tool '{row['id']}': method 'sdkman' requires a non-empty 'candidate'"
+                    )
+            if kind == "script" and "args" in params:
+                args = params["args"]
+                if not isinstance(args, list):
+                    raise ValueError(
+                        f"tool '{row['id']}': script 'args' must be a list of strings "
+                        "matching ^[A-Za-z0-9=._:/+-]+$"
+                    )
+                items = cast(list[object], args)
+                if not all(isinstance(item, str) for item in items) or any(
+                    _SCRIPT_ARG_RE.fullmatch(item) is None for item in cast(list[str], items)
+                ):
+                    raise ValueError(
+                        f"tool '{row['id']}': script 'args' must be a list of strings "
+                        "matching ^[A-Za-z0-9=._:/+-]+$"
                     )
             if kind == "host_setup":
                 setup_id = params.get("setup_id")

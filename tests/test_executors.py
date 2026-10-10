@@ -144,6 +144,33 @@ def test_script_without_env_is_unchanged() -> None:
     assert _script_of(calls) == "curl -fsSL -- https://example.test/i.sh | sh"
 
 
+def test_script_executor_passes_args_after_sh_s() -> None:
+    calls, runner = _record()
+    execute(
+        Method(
+            kind="script",
+            params={
+                "url": "https://sw.kovidgoyal.net/kitty/installer.sh",
+                "shell": "sh",
+                "args": ["launch=n"],
+            },
+        ),
+        runner,
+    )
+    pipeline = _script_of(calls)
+    assert "curl -fsSL -- https://sw.kovidgoyal.net/kitty/installer.sh" in pipeline
+    assert pipeline.endswith("| sh -s -- launch=n")
+
+
+def test_uv_script_without_args_is_byte_identical() -> None:
+    calls, runner = _record()
+    execute(
+        Method(kind="script", params={"url": "https://astral.sh/uv/install.sh", "shell": "sh"}),
+        runner,
+    )
+    assert _script_of(calls) == "curl -fsSL -- https://astral.sh/uv/install.sh | sh"
+
+
 @pytest.mark.parametrize(
     ("method", "shell"),
     [

@@ -357,6 +357,12 @@ def _script(method: Method, runner: Runner) -> None:
     shell = shell if isinstance(shell, str) and shell else "sh"
     prefix = _env_prefix(method)
     invoke = f"{prefix} {shlex.quote(shell)}" if prefix else shlex.quote(shell)
+    raw_args = method.params.get("args")
+    if isinstance(raw_args, list) and raw_args:
+        parts: list[str] = []
+        for item in cast(list[object], raw_args):
+            parts.append(shlex.quote(item if isinstance(item, str) else str(item)))
+        invoke = f"{invoke} -s -- {' '.join(parts)}"
     pipeline = f"{_path_prefix()}curl -fsSL -- {shlex.quote(url)} | {invoke}"
     runner(["sh", "-c", pipeline])
 
