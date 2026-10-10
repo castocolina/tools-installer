@@ -13,6 +13,14 @@ from pathlib import Path
 
 _MANAGED_BEGINS = ("# >>> tools-installer path >>>", "# >>> tools-installer source >>>")
 _MANAGED_ENDS = ("# <<< tools-installer path <<<", "# <<< tools-installer source <<<")
+_FOREIGN_BEGIN = re.compile(r"^\s*# >>> (.+?) >>>\s*$")
+_FOREIGN_END = re.compile(r"^\s*# <<< (.+?) <<<\s*$")
+_REFUSE_MULTI = "adds more than one directory; edit it by hand"
+_REFUSE_APPEND = "appends to PATH; guarding would change its order"
+_REFUSE_COMPOUND = "shares its line with other commands or a comment; edit it by hand"
+_REFUSE_ZSH_ARRAY = "zsh path array; edit it by hand"
+_REFUSE_UNRESOLVED = "uses a variable this scan cannot resolve"
+_OWN_MARKER_PREFIX = "tools-installer"
 _ASSIGN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.+?)\s*$")
 _PATH_EXPORT = re.compile(r"^\s*(?:export\s+)?PATH=(.+?)\s*$")
 _ZSH_PATH_ARRAY = re.compile(r"^\s*(?:export\s+|typeset\s+-U\s+)?path=\((.*)\)\s*$")
@@ -76,6 +84,7 @@ class _PathLine:
     simple: bool
     indented: bool
     presence_guarded: bool
+    unresolved: bool = False
 
 
 def _expanded_segments(value: str, env: Mapping[str, str]) -> tuple[str, ...]:
@@ -261,6 +270,16 @@ def _remember_assign(body: str, local: dict[str, str]) -> None:
         local[assign.group(1)] = expanded
 
 
+def _value_has_unresolved(value: str, env: Mapping[str, str]) -> bool:
+    """True when a non-PATH segment of an assignment cannot be expanded."""
+    for segment in _unquote(value).split(":"):
+        if segment in ("$PATH", "${PATH}"):
+            continue
+        if _expand(segment, env) is None:
+            return True
+    return False
+
+
 def _judge_line(
     index: int,
     line: str,
@@ -273,6 +292,7 @@ def _judge_line(
     targets: list[str] = []
     matched_plain = False
     matched_any = False
+    unresolved = False
     for separator, segment in segments:
         if separator in ("", ";"):
             chain_has_presence = False
@@ -284,6 +304,8 @@ def _judge_line(
             matched_any = True
             if path is not None:
                 matched_plain = True
+                if _value_has_unresolved(path.group(1), local):
+                    unresolved = True
             if not chain_guarded:
                 if zsh is not None:
                     targets.extend(_zsh_array_targets(zsh.group(1), local))
@@ -308,6 +330,7 @@ def _judge_line(
         simple=plain_only,
         indented=line[:1] in (" ", "\t"),
         presence_guarded=presence_guarded,
+        unresolved=unresolved,
     )
 
 
@@ -410,27 +433,58 @@ class PathWriterLine:
     block_owner: str | None
 
 
+def _foreign_block_owners(lines: list[str]) -> dict[int, str]:
+    """Map each index inside a non-project marker block to that block's name.
+
+    A name starting with tools-installer is this project's own (path, source,
+    consolidated shellrc, shellrc stub) and is excluded. An unterminated block
+    runs to EOF. A mismatched end name closes nothing. A stack keeps a nested
+    foreign block attributed to the innermost open name.
+    """
+    owners: dict[int, str] = {}
+    stack: list[str] = []
+    for index, line in enumerate(lines):
+        begin = _FOREIGN_BEGIN.match(line)
+        if begin is not None:
+            name = begin.group(1)
+            if not name.startswith(_OWN_MARKER_PREFIX):
+                stack.append(name)
+            if stack:
+                owners[index] = stack[-1]
+            continue
+        end = _FOREIGN_END.match(line)
+        if end is not None and stack and stack[-1] == end.group(1):
+            owners[index] = stack[-1]
+            stack.pop()
+            continue
+        if stack:
+            owners[index] = stack[-1]
+    return owners
+
+
 def _guard_refusal(line: _PathLine) -> str | None:
     """None when the line is a single-directory prepend we can rewrite.
 
     A zsh array is simple==False, so it has to be recognized before the
     compound check or every array line would be reported as compound.
+    Unresolved is checked before the colon split: an unknown variable makes
+    the split look like several directories.
     """
     if _ZSH_PATH_ARRAY.match(line.text.strip()):
-        return "edit it by hand"
+        return _REFUSE_ZSH_ARRAY
     if not line.simple:
-        return "edit it by hand"
+        return _REFUSE_COMPOUND
+    if line.unresolved:
+        return _REFUSE_UNRESOLVED
     match = _PATH_EXPORT.match(line.text)
     if match is None:
-        return "edit it by hand"
+        return _REFUSE_COMPOUND
     segments = _unquote(match.group(1)).split(":")
-    if (
-        len(segments) == 2
-        and segments[1] in ("$PATH", "${PATH}")
-        and segments[0] not in ("$PATH", "${PATH}")
-    ):
+    if segments and segments[0] in ("$PATH", "${PATH}"):
+        return _REFUSE_APPEND
+    if len(segments) == 2 and segments[1] in ("$PATH", "${PATH}"):
         return None
-    return "edit it by hand"
+    return _REFUSE_MULTI
 
 
 def path_writer_lines(
@@ -440,10 +494,20 @@ def path_writer_lines(
     records: list[PathWriterLine] = []
     targets = {Path(directory): directory for directory in managed_dirs}
     for rc_path, rc_text in rc_texts.items():
-        for record in _path_line_targets(rc_text.split("\n"), env):
+        lines = rc_text.split("\n")
+        owners = _foreign_block_owners(lines)
+        for record in _path_line_targets(lines, env):
             if record.presence_guarded:
                 continue
-            refusal = _guard_refusal(record)
+            owner = owners.get(record.index)
+            if owner is not None:
+                refusal: str | None = (
+                    f"inside the '{owner}' block another tool manages; fix it in that tool"
+                )
+                guardable = False
+            else:
+                refusal = _guard_refusal(record)
+                guardable = refusal is None
             for segment in record.targets:
                 directory = _directory_for(segment, targets)
                 if directory is None:
@@ -454,9 +518,9 @@ def path_writer_lines(
                         index=record.index,
                         text=record.text,
                         directory=directory,
-                        guardable=refusal is None,
+                        guardable=guardable,
                         refusal=refusal,
-                        block_owner=None,
+                        block_owner=owner,
                     )
                 )
     return records

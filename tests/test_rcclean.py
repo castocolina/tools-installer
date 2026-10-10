@@ -2,7 +2,9 @@ from pathlib import Path
 
 import pytest
 
+from installer import rcclean
 from installer.rcclean import (
+    PathWriterLine,
     find_duplicate_path_lines,
     path_writer_lines,
     scan_rc_path_writers,
@@ -633,3 +635,113 @@ def test_path_writer_lines_zsh_array_is_not_guardable() -> None:
     assert len(records) == 1
     assert records[0].guardable is False
     assert records[0].refusal is not None
+
+
+def _records(text: str, managed: set[Path] | None = None) -> list[PathWriterLine]:
+    return path_writer_lines({Path("rc"): text}, managed or {_LOCAL_BIN}, _ENV)
+
+
+def test_marker_block_kitty_names_the_owner() -> None:
+    text = (
+        '# >>> my-kitty PATH >>>\nexport PATH="$HOME/.local/bin:$PATH"\n# <<< my-kitty PATH <<<\n'
+    )
+    records = _records(text)
+    assert len(records) == 1
+    assert records[0].block_owner == "my-kitty PATH"
+    assert records[0].guardable is False
+    assert records[0].refusal == (
+        "inside the 'my-kitty PATH' block another tool manages; fix it in that tool"
+    )
+
+
+def test_marker_block_unterminated_conda_owns_every_following_line() -> None:
+    text = '# >>> conda initialize >>>\nexport PATH="$HOME/.local/bin:$PATH"\n'
+    records = _records(text)
+    assert len(records) == 1
+    assert records[0].block_owner == "conda initialize"
+    assert records[0].guardable is False
+
+
+def test_marker_block_tools_installer_path_is_skipped() -> None:
+    text = (
+        "# >>> tools-installer path >>>\n"
+        'export PATH="$HOME/.local/bin:$PATH"\n'
+        "# <<< tools-installer path <<<\n"
+    )
+    assert _records(text) == []
+
+
+def test_consolidated_shellrc_block_is_not_foreign(tmp_path: Path) -> None:
+    text = (
+        "# >>> tools-installer consolidated shellrc >>>\n"
+        'export PATH="$HOME/.local/bin:$PATH"\n'
+        "# <<< tools-installer consolidated shellrc <<<\n"
+    )
+    rc = tmp_path / ".myshellrc"
+    records = path_writer_lines({rc: text}, {_LOCAL_BIN}, _ENV)
+    assert len(records) == 1
+    assert records[0].block_owner is None
+    assert records[0].guardable is True
+
+
+def test_marker_block_mismatched_end_closes_nothing() -> None:
+    text = '# >>> conda initialize >>>\nexport PATH="$HOME/.local/bin:$PATH"\n# <<< other >>>\n'
+    records = _records(text)
+    assert len(records) == 1
+    assert records[0].block_owner == "conda initialize"
+
+
+def test_refuse_multi_directory() -> None:
+    text = 'export PATH="$HOME/.local/bin:$HOME/bin:$PATH"\n'
+    records = _records(text)
+    assert len(records) == 1
+    assert records[0].guardable is False
+    assert records[0].refusal == rcclean._REFUSE_MULTI  # pyright: ignore[reportPrivateUsage]
+
+
+def test_refuse_append_form() -> None:
+    text = 'export PATH="$PATH:$HOME/.local/bin"\n'
+    records = _records(text)
+    assert len(records) == 1
+    assert records[0].guardable is False
+    assert records[0].refusal == rcclean._REFUSE_APPEND  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'export PATH="$HOME/.local/bin:$PATH"; export X=1',
+        'export PATH="$HOME/.local/bin:$PATH"  # added by uv',
+        '[ -d "$HOME/.local/bin" ] && export PATH="$HOME/.local/bin:$PATH"',
+    ],
+)
+def test_refuse_compound_line(line: str) -> None:
+    records = _records(line + "\n")
+    assert len(records) == 1
+    assert records[0].guardable is False
+    assert records[0].refusal == rcclean._REFUSE_COMPOUND  # pyright: ignore[reportPrivateUsage]
+
+
+def test_refuse_zsh_array() -> None:
+    records = _records('path=("$HOME/.local/bin" $path)\n')
+    assert len(records) == 1
+    assert records[0].guardable is False
+    assert records[0].refusal == rcclean._REFUSE_ZSH_ARRAY  # pyright: ignore[reportPrivateUsage]
+
+
+def test_refuse_unresolved_variable() -> None:
+    text = 'export PATH="$FOO/bin:$HOME/.local/bin:$PATH"\n'
+    records = _records(text)
+    assert len(records) == 1
+    assert records[0].guardable is False
+    assert records[0].refusal == rcclean._REFUSE_UNRESOLVED  # pyright: ignore[reportPrivateUsage]
+    assert _records('export PATH="$FOO/bin:$PATH"\n') == []
+
+
+def test_indented_if_body_is_guardable() -> None:
+    text = 'if [ -d "$HOME/.local/bin" ]; then\n  export PATH="$HOME/.local/bin:$PATH"\nfi\n'
+    records = _records(text)
+    assert len(records) == 1
+    assert records[0].index == 1
+    assert records[0].guardable is True
+    assert records[0].block_owner is None
