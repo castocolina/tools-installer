@@ -2641,4 +2641,3 @@ def test_script_location_without_active_path_stays_by_elimination(tmp_path: Path
     assert result.owner == "installer"
     assert result.confidence == "by-elimination"
     assert result.shadowed is False
-

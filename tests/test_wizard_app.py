@@ -775,7 +775,8 @@ async def test_doctor_drops_inert_enter_hint_after_apply(tmp_path: Path) -> None
         doctor = await _ready_doctor(app, pilot)
         assert doctor.applied is True
         after = "\n".join(
-            item.next_step for item in doctor._tui_guidance()  # pyright: ignore[reportPrivateUsage]
+            item.next_step
+            for item in doctor._tui_guidance()  # pyright: ignore[reportPrivateUsage]
         )
         assert "Press enter (apply)" not in after
         assert "Press enter to apply" not in after

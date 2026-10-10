@@ -997,4 +997,3 @@ def test_shipped_status_probes_do_not_repeat_a_harness() -> None:
             continue
         harnesses = [probe.harness for probe in lifecycle.status_probes]
         assert len(harnesses) == len(set(harnesses)), tool.id
-
