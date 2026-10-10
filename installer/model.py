@@ -70,12 +70,17 @@ SKILL_HARNESSES = (
     "codex",
     "copilot",
     "cursor",
+    "devin",
     "factory-droid",
     "gemini-cli",
+    "grok",
+    "hermes",
     "kilo",
     "kimi",
+    "muse",
     "opencode",
     "pi",
+    "qwen",
     "windsurf",
 )
 SKILL_REVISION_POLICIES = (
@@ -215,6 +220,8 @@ class SkillStatusProbe:
 class SkillOperation:
     mode: Literal["manual-required"]
     instructions: tuple[str, ...] = ()
+    # Ordered by SKILL_HARNESSES so a registry's TOML key order cannot reshuffle the handoff.
+    by_harness: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -398,11 +405,50 @@ def _parse_status_probes(
     return tuple(probes)
 
 
-def _parse_skill_operation(raw: object, *, tool_id: object, operation: str) -> SkillOperation:
+def _parse_by_harness(
+    raw: object, *, tool_id: object, supported_harnesses: tuple[str, ...]
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    if not isinstance(raw, dict):
+        raise ValueError(f"tool '{tool_id}': skill_lifecycle 'install.by_harness' must be a table")
+    row = cast(dict[str, object], raw)
+    supported = set(supported_harnesses)
+    for key in row:
+        if key not in supported:
+            raise ValueError(
+                f"tool '{tool_id}': skill_lifecycle install.by_harness harness '{key}' "
+                "is not in supported_harnesses"
+            )
+    pairs: list[tuple[str, tuple[str, ...]]] = []
+    for harness in SKILL_HARNESSES:
+        if harness not in row:
+            continue
+        pairs.append(
+            (
+                harness,
+                _skill_string_tuple(
+                    row[harness],
+                    tool_id=tool_id,
+                    field=f"install.by_harness.{harness}",
+                ),
+            )
+        )
+    if not pairs:
+        raise ValueError(
+            f"tool '{tool_id}': skill_lifecycle 'install.by_harness' must be non-empty"
+        )
+    return tuple(pairs)
+
+
+def _parse_skill_operation(
+    raw: object, *, tool_id: object, operation: str, supported_harnesses: tuple[str, ...]
+) -> SkillOperation:
     if not isinstance(raw, dict):
         raise ValueError(f"tool '{tool_id}': skill_lifecycle '{operation}' must be declared")
     row = cast(dict[str, object], raw)
-    if unknown := set(row).difference({"mode", "instructions"}):
+    allowed = {"mode", "instructions"}
+    if operation == "install":
+        allowed.add("by_harness")
+    if unknown := set(row).difference(allowed):
         raise ValueError(f"tool '{tool_id}': unknown {operation} field '{sorted(unknown)[0]}'")
     mode = row.get("mode")
     if mode == "command":
@@ -428,7 +474,14 @@ def _parse_skill_operation(raw: object, *, tool_id: object, operation: str) -> S
         raise ValueError(
             f"tool '{tool_id}': skill_lifecycle '{operation}.instructions' must be non-empty"
         )
-    return SkillOperation(mode="manual-required", instructions=instructions)
+    by_harness = ()
+    if operation == "install" and "by_harness" in row:
+        by_harness = _parse_by_harness(
+            row.get("by_harness"),
+            tool_id=tool_id,
+            supported_harnesses=supported_harnesses,
+        )
+    return SkillOperation(mode="manual-required", instructions=instructions, by_harness=by_harness)
 
 
 def _parse_skill_lifecycle(raw: object, *, tool_id: object) -> SkillLifecycle:
@@ -505,10 +558,30 @@ def _parse_skill_lifecycle(raw: object, *, tool_id: object) -> SkillLifecycle:
         supported_harnesses=supported_harnesses,
         revision_policy=revision_policy,
         targets=tuple(targets),
-        install=_parse_skill_operation(row.get("install"), tool_id=tool_id, operation="install"),
-        status=_parse_skill_operation(row.get("status"), tool_id=tool_id, operation="status"),
-        update=_parse_skill_operation(row.get("update"), tool_id=tool_id, operation="update"),
-        removal=_parse_skill_operation(row.get("removal"), tool_id=tool_id, operation="removal"),
+        install=_parse_skill_operation(
+            row.get("install"),
+            tool_id=tool_id,
+            operation="install",
+            supported_harnesses=supported_harnesses,
+        ),
+        status=_parse_skill_operation(
+            row.get("status"),
+            tool_id=tool_id,
+            operation="status",
+            supported_harnesses=supported_harnesses,
+        ),
+        update=_parse_skill_operation(
+            row.get("update"),
+            tool_id=tool_id,
+            operation="update",
+            supported_harnesses=supported_harnesses,
+        ),
+        removal=_parse_skill_operation(
+            row.get("removal"),
+            tool_id=tool_id,
+            operation="removal",
+            supported_harnesses=supported_harnesses,
+        ),
         approval_disclosures=approval_disclosures,
         status_probes=_parse_status_probes(
             row.get("status_probes", []),

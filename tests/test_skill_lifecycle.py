@@ -18,7 +18,12 @@ from installer.model import (
     load_tools,
 )
 from installer.platform import Platform
-from installer.skill_lifecycle import inspect_skill_packs, inspect_status, perform_action
+from installer.skill_lifecycle import (
+    inspect_skill_packs,
+    inspect_status,
+    perform_action,
+    present_harnesses,
+)
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -168,6 +173,99 @@ contains = "anything"
 
     with pytest.raises(ValueError, match="unknown status field 'argv'"):
         load_tools(_write(tmp_path, manifest))
+
+
+def test_by_harness_key_outside_supported_harnesses_names_the_tool(tmp_path: Path) -> None:
+    manifest = _minimal_lifecycle().replace(
+        """
+[tool.skill_lifecycle.install]
+mode = "manual-required"
+instructions = ["Review and run the official install flow."]
+""",
+        """
+[tool.skill_lifecycle.install]
+mode = "manual-required"
+instructions = ["Review and run the official install flow."]
+
+[tool.skill_lifecycle.install.by_harness]
+pi = ["pi install demo"]
+""",
+    )
+
+    with pytest.raises(ValueError, match="demo-skills"):
+        load_tools(_write(tmp_path, manifest))
+
+
+def test_superpowers_catalog_is_multi_host_without_a_forced_pi_dependency() -> None:
+    tool = _tools()["superpowers"]
+    lifecycle = tool.skill_lifecycle
+
+    assert tool.requires == ()
+    assert lifecycle is not None
+    assert {
+        "claude",
+        "codex",
+        "pi",
+        "cursor",
+        "factory-droid",
+        "gemini-cli",
+    } <= set(lifecycle.supported_harnesses)
+
+
+def test_superpowers_install_on_a_claude_only_host_omits_pi(tmp_path: Path) -> None:
+    (tmp_path / ".claude").mkdir()
+    outcome = perform_action(
+        _tools()["superpowers"],
+        "install",
+        lambda _argv: None,
+        home=tmp_path,
+        which=lambda _command: None,
+    )
+
+    text = "\n".join(outcome.instructions)
+    assert outcome.status == "manual-required"
+    assert "/plugin install superpowers@claude-plugins-official" in text
+    assert "pi install" not in text
+
+
+def test_superpowers_install_with_no_host_lists_every_upstream_command(tmp_path: Path) -> None:
+    outcome = perform_action(
+        _tools()["superpowers"],
+        "install",
+        lambda _argv: None,
+        home=tmp_path,
+        which=lambda _command: None,
+    )
+    text = "\n".join(outcome.instructions)
+
+    assert outcome.instructions[0] == (
+        "No supported agent host was detected on this machine; "
+        "instructions for every supported host follow."
+    )
+    for fragment in (
+        "/plugin install superpowers@claude-plugins-official",
+        "agy plugin install https://github.com/obra/superpowers",
+        "/add-plugin superpowers",
+        "devin plugins install obra/superpowers",
+        "droid plugin install superpowers@superpowers",
+        "gemini extensions install https://github.com/obra/superpowers",
+        "copilot plugin install superpowers@superpowers-marketplace",
+        "grok plugin install superpowers@xai-official --trust",
+        "/plugins install https://github.com/obra/superpowers",
+        "Fetch and follow instructions from https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/.opencode/INSTALL.md",
+        "pi install git:github.com/obra/superpowers",
+        "qwen extensions install obra/superpowers",
+        "hermes plugins install obra/superpowers --enable",
+        "muse plugins install ./superpowers",
+    ):
+        assert fragment in text
+    assert "superpowers" in outcome.instructions
+
+
+def test_cursor_is_present_from_disk_when_path_misses(tmp_path: Path) -> None:
+    (tmp_path / ".cursor").mkdir()
+
+    assert "cursor" in present_harnesses(tmp_path, lambda _command: None)
 
 
 def test_skill_pack_admission_accepts_status_probes(tmp_path: Path) -> None:
@@ -324,8 +422,9 @@ def test_shipped_status_probes_select_closed_sources() -> None:
     assert ponytail is not None
     assert superpowers is not None
 
-    assert ponytail.status_probes == (SkillStatusProbe("codex", "plugin-cli", "ponytail"),)
-    assert superpowers.status_probes == (SkillStatusProbe("pi", "plugin-cli", "obra/superpowers"),)
+    assert SkillStatusProbe("codex", "plugin-cli", "ponytail") in ponytail.status_probes
+    assert SkillStatusProbe("pi", "plugin-cli", "obra/superpowers") in superpowers.status_probes
+    assert SkillStatusProbe("claude", "plugin-cli", "superpowers") in superpowers.status_probes
     assert ponytail.status.mode == "manual-required"
     assert superpowers.status.mode == "manual-required"
     assert not hasattr(ponytail.status, "argv")
@@ -451,12 +550,12 @@ def test_shipped_packs_report_per_host_status(tmp_path: Path) -> None:
             return "git:github.com/obra/superpowers\n"
         if argv == ["codex", "plugin", "list"]:
             return "ponytail@ponytail  installed, enabled  5.1.0\n"
-        raise AssertionError(argv)
+        return ""
 
-    assert inspect_skill_packs([superpowers, ponytail], probe, tmp_path) == {
-        "superpowers": {"pi": "present"},
-        "ponytail": {"codex": "present"},
-    }
+    result = inspect_skill_packs([superpowers, ponytail], probe, tmp_path)
+
+    assert result["superpowers"]["pi"] == "present"
+    assert result["ponytail"]["codex"] == "present"
 
 
 def test_codex_not_installed_row_is_absent(tmp_path: Path) -> None:

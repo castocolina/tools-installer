@@ -2,6 +2,7 @@
 
 import json
 import re
+import shutil
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -71,6 +72,40 @@ HARNESS_CLI_STATUS: dict[str, HarnessCli] = {
 # Only claude is verified on this host. Other harness dirs stay out until checked.
 SKILL_LOCK_HARNESS_DIRS: dict[str, str] = {"claude": ".claude/skills"}
 
+# Command names verified on this host 2026-10-09, plus binaries named in
+# https://github.com/obra/superpowers/blob/main/README.md (agy, devin, grok,
+# qwen, hermes, muse). factory-droid `.factory` and gemini-cli `.gemini` are
+# the global roots in https://github.com/vercel-labs/skills/blob/main/README.md
+# (Droid ~/.factory/skills, Gemini CLI ~/.gemini/skills). antigravity, windsurf,
+# kilo, and kimi dirs are the opengsd resolver defaults in
+# .claude/gsd-core/references/gsd-run-resolver.md. Devin/Grok/Qwen/Hermes/Muse
+# docs disagree on a config dir, so those disk tuples stay empty.
+HARNESS_PRESENCE: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "antigravity": (("agy",), (".gemini/antigravity",)),
+    "claude": (("claude",), (".claude",)),
+    "codex": (("codex",), (".codex",)),
+    "copilot": (("copilot",), (".copilot",)),
+    "cursor": (("cursor-agent", "cursor"), (".cursor", ".local/share/cursor-agent")),
+    "devin": (("devin",), ()),
+    "factory-droid": (("droid",), (".factory",)),
+    "gemini-cli": (("gemini",), (".gemini",)),
+    "grok": (("grok",), ()),
+    "hermes": (("hermes",), ()),
+    "kilo": ((), (".config/kilo",)),
+    "kimi": ((), (".kimi-code",)),
+    "muse": (("muse",), ()),
+    "opencode": (("opencode",), (".config/opencode", ".opencode")),
+    "pi": (("pi",), (".pi",)),
+    "qwen": (("qwen",), ()),
+    "windsurf": ((), (".codeium/windsurf",)),
+}
+
+_NO_HOST_HEADER = (
+    "No supported agent host was detected on this machine; "
+    "instructions for every supported host follow."
+)
+
+
 # Env-var-unset defaults of opengsd's per-runtime config dirs. claude is the
 # global ~/.claude, not a project .claude. kimi is KIMI_CODE_HOME (~/.kimi-code),
 # not KIMI_CONFIG_DIR (~/.config/agents). Env overrides are not read.
@@ -102,9 +137,54 @@ def _operation(lifecycle: SkillLifecycle, action: LifecycleAction) -> SkillOpera
     return lifecycle.removal
 
 
-def perform_action(tool: Tool, action: LifecycleAction, runner: Runner) -> LifecycleOutcome:
+def present_harnesses(home: Path, which: Callable[[str], str | None]) -> frozenset[str]:
+    """Hosts detectable from PATH or a closed home-relative marker."""
+    found: set[str] = set()
+    for harness, (commands, markers) in HARNESS_PRESENCE.items():
+        if any(which(command) for command in commands) or any(
+            (home / marker).exists() for marker in markers
+        ):
+            found.add(harness)
+    return frozenset(found)
+
+
+def _filtered_install_lines(
+    operation: SkillOperation, present: frozenset[str], supported: tuple[str, ...]
+) -> tuple[str, ...]:
+    supported_set = set(supported)
+    chosen = [
+        harness
+        for harness, _commands in operation.by_harness
+        if harness in present and harness in supported_set
+    ]
+    pairs = dict(operation.by_harness)
+    if chosen:
+        return tuple(line for harness in chosen for line in pairs[harness])
+    lines = [_NO_HOST_HEADER]
+    lines.extend(line for _harness, commands in operation.by_harness for line in commands)
+    return tuple(lines)
+
+
+def perform_action(
+    tool: Tool,
+    action: LifecycleAction,
+    runner: Runner,
+    *,
+    home: Path | None = None,
+    which: Callable[[str], str | None] = shutil.which,
+) -> LifecycleOutcome:
     """Execute one closed lifecycle operation or return its reviewed handoff."""
-    operation = _operation(_lifecycle(tool), action)
+    lifecycle = _lifecycle(tool)
+    operation = _operation(lifecycle, action)
+    if action == "install" and operation.by_harness:
+        return LifecycleOutcome(
+            "manual-required",
+            _filtered_install_lines(
+                operation,
+                present_harnesses(Path.home() if home is None else home, which),
+                lifecycle.supported_harnesses,
+            ),
+        )
     if operation.mode == "manual-required":
         return LifecycleOutcome("manual-required", operation.instructions)
     raise ValueError(f"no reviewed executable lifecycle operation for '{action}'")

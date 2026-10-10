@@ -2886,24 +2886,81 @@ category = "ai"
 cmd = "superpowers"
 priority = "P3"
 audience = "human"
-desc = "Harness-native workflow plugin installed through Pi; uninstall through Pi's package manager."
+desc = "Workflow plugin for Claude Code, Codex, Cursor, Pi, and the other hosts its README names; install per host."
 tier = "ai"
-requires = ["pi"]
 [[tool.method]]
 kind = "skill_pack"
+# Verified 2026-10-10: https://github.com/obra/superpowers/blob/main/README.md
+# Hosts: Claude Code, Antigravity, Codex App/CLI (one id), Cursor, Devin CLI,
+# Factory Droid, Gemini CLI, Copilot CLI, Grok Build, Kimi Code, OpenCode, Pi,
+# Qwen Code, Hermes Agent, Muse. Codex App is GUI-only (Plugins sidebar); the
+# CLI commands are the by_harness lines. No requires: a multi-host pack must
+# not force-install one host. Probes only for claude/codex/pi plugin-cli.
 [tool.skill_lifecycle]
 source = "https://github.com/obra/superpowers"
 owner = "obra"
-supported_harnesses = ["pi"]
+supported_harnesses = [
+  "antigravity",
+  "claude",
+  "codex",
+  "copilot",
+  "cursor",
+  "devin",
+  "factory-droid",
+  "gemini-cli",
+  "grok",
+  "hermes",
+  "kimi",
+  "muse",
+  "opencode",
+  "pi",
+  "qwen",
+]
 revision_policy = "upstream-default-branch"
-targets = [{ scope = "harness", path = "<pi-package-dir>/superpowers" }]
-status_probes = [{ harness = "pi", via = "plugin-cli", match = "obra/superpowers" }]
+targets = [{ scope = "harness", path = "<host-plugin-dir>/superpowers" }]
+status_probes = [
+  { harness = "claude", via = "plugin-cli", match = "superpowers" },
+  { harness = "codex", via = "plugin-cli", match = "superpowers" },
+  { harness = "pi", via = "plugin-cli", match = "obra/superpowers" },
+]
 [tool.skill_lifecycle.install]
 mode = "manual-required"
 instructions = [
-  "After leaving the installer, run the official Pi package command in a console:",
+  "After leaving the installer, run the official command for a host this machine has.",
   "pi install git:github.com/obra/superpowers",
 ]
+[tool.skill_lifecycle.install.by_harness]
+antigravity = ["agy plugin install https://github.com/obra/superpowers"]
+claude = [
+  "/plugin install superpowers@claude-plugins-official",
+  "/plugin marketplace add obra/superpowers-marketplace",
+  "/plugin install superpowers@superpowers-marketplace",
+]
+codex = ["/plugins", "superpowers"]
+copilot = [
+  "copilot plugin marketplace add obra/superpowers-marketplace",
+  "copilot plugin install superpowers@superpowers-marketplace",
+]
+cursor = ["/add-plugin superpowers"]
+devin = ["devin plugins install obra/superpowers"]
+factory-droid = [
+  "droid plugin marketplace add https://github.com/obra/superpowers",
+  "droid plugin install superpowers@superpowers",
+]
+gemini-cli = ["gemini extensions install https://github.com/obra/superpowers"]
+grok = ["grok plugin install superpowers@xai-official --trust"]
+hermes = ["hermes plugins install obra/superpowers --enable"]
+kimi = ["/plugins install https://github.com/obra/superpowers"]
+muse = [
+  "git clone https://github.com/obra/superpowers.git",
+  "muse plugins install ./superpowers",
+  "muse plugins approve superpowers",
+]
+opencode = [
+  "Fetch and follow instructions from https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/.opencode/INSTALL.md",
+]
+pi = ["pi install git:github.com/obra/superpowers"]
+qwen = ["qwen extensions install obra/superpowers"]
 [tool.skill_lifecycle.status]
 mode = "manual-required"
 instructions = [
