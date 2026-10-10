@@ -2912,6 +2912,178 @@ def test_guard_in_place_rewrites_one_foreign_bashrc_line(tmp_path: Path) -> None
     assert backup.read_bytes() == original
 
 
+def _seed_guard_rc(tmp_path: Path) -> tuple[Path, Path, dict[str, str], str]:
+    home = tmp_path / "home"
+    directory = home / ".local" / "bin"
+    env = {"HOME": str(home)}
+    text = "alias ll='ls -l'\nexport PATH=\"$HOME/.local/bin:$PATH\"\necho end\n"
+    rc = tmp_path / ".bashrc"
+    rc.write_text(text)
+    return rc, directory, env, text
+
+
+def test_guard_refuses_when_the_file_changed_since_the_scan(tmp_path: Path) -> None:
+    rc, directory, env, text = _seed_guard_rc(tmp_path)
+    records = path_writer_lines({rc: text}, {directory}, env)
+    edited = b"# edited after the scan\n"
+    rc.write_bytes(edited)
+
+    outcome = guard_path_writers(rc, records)
+
+    assert outcome.status == "refused"
+    assert outcome.reason is not None and "changed since Doctor scanned it" in outcome.reason
+    assert rc.read_bytes() == edited
+    assert not staged_sibling(rc, OLD_SUFFIX).exists()
+
+
+def test_guard_refuses_when_the_file_changes_while_it_is_being_guarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rc, directory, env, text = _seed_guard_rc(tmp_path)
+    original = rc.read_bytes()
+    records = path_writer_lines({rc: text}, {directory}, env)
+
+    def _changed(_path: Path, _snapshot: object) -> bool:
+        return False
+
+    monkeypatch.setattr("installer.shellrc._snapshot_matches", _changed)
+
+    outcome = guard_path_writers(rc, records)
+
+    assert outcome.status == "refused"
+    assert outcome.reason is not None and "changed while it was being guarded" in outcome.reason
+    assert rc.read_bytes() == original
+    assert not staged_sibling(rc, OLD_SUFFIX).exists()
+
+
+def test_guard_refuses_a_preexisting_backup_with_different_bytes(tmp_path: Path) -> None:
+    rc, directory, env, text = _seed_guard_rc(tmp_path)
+    original = rc.read_bytes()
+    records = path_writer_lines({rc: text}, {directory}, env)
+    backup = staged_sibling(rc, OLD_SUFFIX)
+    backup.write_bytes(b"other original\n")
+    os.chmod(backup, stat.S_IMODE(rc.stat().st_mode))
+
+    outcome = guard_path_writers(rc, records)
+
+    assert outcome.status == "refused"
+    assert rc.read_bytes() == original
+    assert backup.read_bytes() == b"other original\n"
+
+
+def test_guard_accepts_a_preexisting_backup_with_identical_bytes_and_mode(tmp_path: Path) -> None:
+    rc, directory, env, text = _seed_guard_rc(tmp_path)
+    original = rc.read_bytes()
+    records = path_writer_lines({rc: text}, {directory}, env)
+    backup = staged_sibling(rc, OLD_SUFFIX)
+    backup.write_bytes(original)
+    os.chmod(backup, stat.S_IMODE(rc.stat().st_mode))
+
+    outcome = guard_path_writers(rc, records)
+
+    assert outcome.status == "guarded"
+    assert rc.read_bytes() != original
+    assert backup.read_bytes() == original
+
+
+def test_guard_refuses_a_symlinked_bashrc(tmp_path: Path) -> None:
+    _rc, directory, env, text = _seed_guard_rc(tmp_path)
+    target = tmp_path / "real.bashrc"
+    target.write_text(text)
+    link = tmp_path / ".bashrc-link"
+    link.symlink_to(target)
+    before = target.read_bytes()
+    records = path_writer_lines({link: text}, {directory}, env)
+
+    outcome = guard_path_writers(link, records)
+
+    assert outcome.status == "refused"
+    assert outcome.reason is not None and "symlink" in outcome.reason
+    assert link.is_symlink()
+    assert link.resolve() == target
+    assert target.read_bytes() == before
+    assert not staged_sibling(link, OLD_SUFFIX).exists()
+    assert not staged_sibling(target, OLD_SUFFIX).exists()
+
+
+def test_guard_in_place_keeps_crlf(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    directory = home / ".local" / "bin"
+    env = {"HOME": str(home)}
+    text = "alias ll='ls -l'\r\nexport PATH=\"$HOME/.local/bin:$PATH\"\r\necho end\r\n"
+    rc = tmp_path / ".bashrc"
+    rc.write_bytes(text.encode())
+    records = path_writer_lines({rc: text}, {directory}, env)
+    assert len(records) == 1
+    assert records[0].text.endswith("\r")
+
+    outcome = guard_path_writers(rc, records)
+
+    assert outcome.status == "guarded"
+    raw = rc.read_bytes()
+    parts = raw.split(b"\n")
+    assert parts[0] == b"alias ll='ls -l'\r"
+    assert parts[1] == (path_export_guard(directory) + "\r").encode()
+    assert parts[2] == b"echo end\r"
+    assert parts[3] == b""
+
+
+def test_guard_refuses_a_non_utf8_file(tmp_path: Path) -> None:
+    rc, directory, env, _text = _seed_guard_rc(tmp_path)
+    raw = b'caf\xe9\nexport PATH="$HOME/.local/bin:$PATH"\n'
+    rc.write_bytes(raw)
+    records = path_writer_lines({rc: 'export PATH="$HOME/.local/bin:$PATH"\n'}, {directory}, env)
+
+    outcome = guard_path_writers(rc, records)
+
+    assert outcome.status == "refused"
+    assert rc.read_bytes() == raw
+    assert not staged_sibling(rc, OLD_SUFFIX).exists()
+
+
+def test_guard_in_place_rewrites_an_indented_if_body(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    directory = home / ".local" / "bin"
+    env = {"HOME": str(home)}
+    text = 'if [ -d "$HOME/.local/bin" ]; then\n  export PATH="$HOME/.local/bin:$PATH"\nfi\n'
+    rc = tmp_path / ".bashrc"
+    rc.write_text(text)
+    records = path_writer_lines({rc: text}, {directory}, env)
+    assert len(records) == 1
+    assert records[0].guardable is True
+
+    outcome = guard_path_writers(rc, records)
+
+    assert outcome.status == "guarded"
+    lines = rc.read_text().split("\n")
+    assert lines[1] == "  " + path_export_guard(directory)
+    assert _bash_n(rc, home).returncode == 0
+    zsh = shutil.which("zsh")
+    if zsh is None:
+        return
+    parsed = subprocess.run(
+        [zsh, "-n", str(rc)],
+        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert parsed.returncode == 0
+
+
+def test_guard_preserves_mode_0600_on_the_file_and_the_backup(tmp_path: Path) -> None:
+    rc, directory, env, text = _seed_guard_rc(tmp_path)
+    os.chmod(rc, 0o600)
+    records = path_writer_lines({rc: text}, {directory}, env)
+
+    outcome = guard_path_writers(rc, records)
+
+    assert outcome.status == "guarded"
+    backup = staged_sibling(rc, OLD_SUFFIX)
+    assert stat.S_IMODE(rc.stat().st_mode) == 0o600
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+
+
 def test_consolidation_refuses_when_shellrc_sources_an_rc_this_run_will_wire(
     tmp_path: Path,
 ) -> None:
