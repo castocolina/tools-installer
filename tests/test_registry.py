@@ -1911,3 +1911,25 @@ def test_native_package_manager_rows_declare_their_owner_probes() -> None:
         tool.id for tool in load_tools(REGISTRY) if set(tool.owner_probes) & native_probe_names
     }
     assert native == set(expected)
+
+
+def test_every_skill_pack_records_a_verified_comment() -> None:
+    lines = REGISTRY.read_text(encoding="utf-8").splitlines()
+    headers = [
+        index for index, line in enumerate(lines) if line.strip() == "[tool.skill_lifecycle]"
+    ]
+
+    assert len(headers) == 7
+    for index in headers:
+        window = lines[max(0, index - 15) : index]
+        assert any(line.startswith("# Verified ") for line in window), window
+
+
+def test_install_state_probes_match_gsd_core() -> None:
+    for tool in load_tools(REGISTRY):
+        lifecycle = tool.skill_lifecycle
+        if lifecycle is None:
+            continue
+        for probe in lifecycle.status_probes:
+            if probe.via == "install-state":
+                assert probe.match == "gsd-core", tool.id

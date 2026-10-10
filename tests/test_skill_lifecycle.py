@@ -397,18 +397,22 @@ def test_every_shipped_skill_pack_update_and_removal_have_executable_behavior(
 
 
 @pytest.mark.parametrize("tool_id", SKILL_PACK_IDS)
-def test_every_shipped_skill_pack_status_is_probed_or_explicitly_manual(tool_id: str) -> None:
+def test_every_shipped_skill_pack_status_is_probed_or_explicitly_manual(
+    tool_id: str, tmp_path: Path
+) -> None:
     calls: list[list[str]] = []
 
     def probe(argv: list[str]) -> str:
         calls.append(argv)
         return "ponytail@ponytail  installed, enabled  5.1.0\ngit:github.com/obra/superpowers\n"
 
-    outcome = inspect_status(_tools()[tool_id], probe)
+    outcome = inspect_status(_tools()[tool_id], probe, home=tmp_path)
 
     if tool_id in {"ponytail", "superpowers"}:
         assert outcome.status == "present"
         assert calls
+    elif tool_id in {"softaworks-agent-toolkit", "matt-pocock-skills", "opengsd"}:
+        assert outcome.status == "absent"
     else:
         assert outcome.status == "manual-required"
         assert outcome.instructions
@@ -683,17 +687,17 @@ def test_skills_lock_ignores_traversal_skill_names(tmp_path: Path) -> None:
 
 def test_skills_lock_unknown_harness_is_unknown(tmp_path: Path) -> None:
     tool = _pack(
-        "softaworks", (SkillStatusProbe("codex", "skills-lock", "softaworks/agent-toolkit"),)
+        "softaworks", (SkillStatusProbe("muse", "skills-lock", "softaworks/agent-toolkit"),)
     )
     _write_lock(
         tmp_path,
         {"skills": {"c4-architecture": {"source": "softaworks/agent-toolkit"}}},
     )
-    (tmp_path / ".codex" / "skills" / "c4-architecture").mkdir(parents=True)
+    (tmp_path / ".muse" / "skills" / "c4-architecture").mkdir(parents=True)
 
     result = inspect_skill_packs([tool], lambda _argv: "", tmp_path)
 
-    assert result["softaworks"]["codex"] == "unknown"
+    assert result["softaworks"]["muse"] == "unknown"
 
 
 def test_install_state_file_is_present_and_missing_is_absent(tmp_path: Path) -> None:

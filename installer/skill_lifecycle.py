@@ -69,8 +69,40 @@ HARNESS_CLI_STATUS: dict[str, HarnessCli] = {
     "pi": HarnessCli(("pi", "list"), _pi_matches),
 }
 
-# Only claude is verified on this host. Other harness dirs stay out until checked.
-SKILL_LOCK_HARNESS_DIRS: dict[str, str] = {"claude": ".claude/skills"}
+# Global skill dirs from the vercel-labs/skills Supported Agents table
+# (https://github.com/vercel-labs/skills/blob/main/README.md, 2026-10-10).
+# Shared ~/.agents/skills rows stay shared. Dirs the README does not name stay out.
+SKILL_LOCK_HARNESS_DIRS: dict[str, str] = {
+    "adal": ".adal/skills",
+    "amp": ".config/agents/skills",
+    "antigravity": ".gemini/antigravity/skills",
+    "bob": ".bob/skills",
+    "claude": ".claude/skills",
+    "cline": ".agents/skills",
+    "codebuddy": ".codebuddy/skills",
+    "codex": ".agents/skills",
+    "continue": ".continue/skills",
+    "copilot": ".copilot/skills",
+    "crush": ".config/crush/skills",
+    "cursor": ".cursor/skills",
+    "devin": ".config/devin/skills",
+    "factory-droid": ".factory/skills",
+    "gemini-cli": ".gemini/skills",
+    "goose": ".config/goose/skills",
+    "grok": ".grok/skills",
+    "hermes": ".hermes/skills",
+    "junie": ".junie/skills",
+    "kilo": ".kilo/skills",
+    "kimi": ".agents/skills",
+    "kiro": ".kiro/skills",
+    "openclaw": ".openclaw/skills",
+    "opencode": ".config/opencode/skills",
+    "pi": ".agents/skills",
+    "qoder": ".qoder/skills",
+    "qwen": ".qwen/skills",
+    "windsurf": ".codeium/windsurf/skills",
+    "zed": ".agents/skills",
+}
 
 # Command names verified on this host 2026-10-09, plus binaries named in
 # https://github.com/obra/superpowers/blob/main/README.md (agy, devin, grok,

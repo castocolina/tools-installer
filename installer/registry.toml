@@ -2781,10 +2781,43 @@ desc = "Codex plugin whose lifecycle hooks require review; uninstall through Cod
 tier = "ai"
 [[tool.method]]
 kind = "skill_pack"
+# Verified 2026-10-10: https://github.com/DietrichGebert/ponytail/blob/main/INSTALL.md
+# README names Claude Code and Codex. INSTALL.md names the other hosts below.
+# The "copy AGENTS.md if not listed" catch-all is not expanded. Probes are
+# plugin-cli for claude and codex only; other hosts have no closed list source.
 [tool.skill_lifecycle]
 source = "https://github.com/DietrichGebert/ponytail"
 owner = "DietrichGebert"
-supported_harnesses = ["claude", "codex", "pi", "opencode", "antigravity"]
+supported_harnesses = [
+  "aider",
+  "amp",
+  "antigravity",
+  "claude",
+  "cline",
+  "codebuddy",
+  "codewhale",
+  "codex",
+  "copilot",
+  "cursor",
+  "devin",
+  "gemini-cli",
+  "goose",
+  "grok",
+  "hermes",
+  "jules",
+  "junie",
+  "kilo",
+  "kimi",
+  "kiro",
+  "oh-my-pi",
+  "openclaw",
+  "opencode",
+  "pi",
+  "qoder",
+  "qwen",
+  "windsurf",
+  "zed",
+]
 revision_policy = "host-marketplace-current"
 targets = [
   { scope = "harness", path = "<codex-plugin-dir>/ponytail" },
@@ -2795,7 +2828,10 @@ approval_disclosures = [
   "Codex installs Ponytail skills and two Node.js lifecycle hooks; open /hooks and review both hooks before trusting them.",
   "Ponytail documents no telemetry; its optional mode state remains under ~/.config/ponytail after host removal unless cleaned first.",
 ]
-status_probes = [{ harness = "codex", via = "plugin-cli", match = "ponytail" }]
+status_probes = [
+  { harness = "claude", via = "plugin-cli", match = "ponytail" },
+  { harness = "codex", via = "plugin-cli", match = "ponytail" },
+]
 [tool.skill_lifecycle.install]
 mode = "manual-required"
 instructions = [
@@ -2804,6 +2840,53 @@ instructions = [
   "codex plugin add ponytail@ponytail",
   "Run codex, open /hooks, review and trust both lifecycle hooks, then start a new thread.",
 ]
+[tool.skill_lifecycle.install.by_harness]
+aider = ["Copy AGENTS.md into the project."]
+amp = ["Copy AGENTS.md to the project or to ~/.config/amp/AGENTS.md."]
+antigravity = ["agy plugin install https://github.com/DietrichGebert/ponytail"]
+claude = [
+  "/plugin marketplace add DietrichGebert/ponytail",
+  "/plugin install ponytail@ponytail",
+]
+cline = ["Copy .clinerules/ from the ponytail repo into the project."]
+codebuddy = [
+  "/plugin marketplace add DietrichGebert/ponytail",
+  "/plugin install ponytail@ponytail",
+]
+codewhale = ["Copy AGENTS.md into the project, or run codewhale from a ponytail checkout."]
+codex = [
+  "codex plugin marketplace add DietrichGebert/ponytail",
+  "codex plugin add ponytail@ponytail",
+]
+copilot = [
+  "copilot plugin marketplace add DietrichGebert/ponytail",
+  "copilot plugin install ponytail@ponytail",
+]
+cursor = [
+  "git clone https://github.com/DietrichGebert/ponytail",
+  "node ponytail/scripts/cursor-hooks.js install",
+]
+devin = ["devin plugins install DietrichGebert/ponytail"]
+gemini-cli = ["gemini extensions install https://github.com/DietrichGebert/ponytail"]
+goose = ["goose plugin install https://github.com/DietrichGebert/ponytail.git"]
+grok = ["grok plugin install DietrichGebert/ponytail --trust"]
+hermes = ["hermes plugins install DietrichGebert/ponytail --enable"]
+jules = ["Copy AGENTS.md to the repository root."]
+junie = ["Point Junie Guidelines Path at AGENTS.md."]
+kilo = ['Add { "plugin": ["@dietrichgebert/ponytail"] } to kilo.jsonc or ~/.config/kilo/kilo.jsonc.']
+kimi = ["/plugins install https://github.com/DietrichGebert/ponytail"]
+kiro = ["Copy .kiro/steering/ponytail.md to ~/.kiro/steering/ or the project .kiro/steering/."]
+oh-my-pi = [
+  "omp plugin marketplace add DietrichGebert/ponytail",
+  "omp plugin install ponytail@ponytail",
+]
+openclaw = ["clawhub install ponytail"]
+opencode = ["opencode plugin add @dietrichgebert/ponytail"]
+pi = ["pi install git:github.com/DietrichGebert/ponytail"]
+qoder = ["qodercli plugins install <path-to-ponytail>"]
+qwen = ["qwen extensions install DietrichGebert/ponytail:ponytail"]
+windsurf = ["Copy .windsurf/rules/ from the ponytail repo into the project."]
+zed = ["Copy AGENTS.md into the project."]
 [tool.skill_lifecycle.status]
 mode = "manual-required"
 instructions = [
@@ -2836,10 +2919,54 @@ tier = "ai"
 requires = ["pnpm"]
 [[tool.method]]
 kind = "skill_pack"
+# Verified 2026-10-10: https://github.com/Fission-AI/OpenSpec/blob/main/docs/supported-tools.md
+# Hosts are that page's tool table, mapped onto SKILL_HARNESSES ids. The shared
+# `.agents` target is not a host. windsurf is an alias of devin there, so it is
+# not listed separately. Global detection cannot prove project initialization.
 [tool.skill_lifecycle]
 source = "https://github.com/Fission-AI/OpenSpec"
 owner = "Fission-AI"
-supported_harnesses = ["claude", "codex", "opencode", "antigravity", "cursor"]
+supported_harnesses = [
+  "amazon-q",
+  "antigravity",
+  "auggie",
+  "bob",
+  "claude",
+  "cline",
+  "codeartsagent",
+  "codeassistant",
+  "codebuddy",
+  "codex",
+  "command-code",
+  "continue",
+  "copilot",
+  "costrict",
+  "crush",
+  "cursor",
+  "devin",
+  "factory-droid",
+  "forgecode",
+  "gemini-cli",
+  "hermes",
+  "iflow",
+  "junie",
+  "kilo",
+  "kimi",
+  "kiro",
+  "lingma",
+  "minimax-code",
+  "oh-my-pi",
+  "opencode",
+  "pi",
+  "qoder",
+  "qwen",
+  "roocode",
+  "rovodev",
+  "trae",
+  "vibe",
+  "zcode",
+  "zed",
+]
 revision_policy = "package-manager-latest"
 targets = [
   { scope = "global", path = "<pnpm-global-dir>/@fission-ai/openspec" },
@@ -2991,10 +3118,18 @@ desc = "Selected host-aware agent skills installed by the official skills CLI; u
 tier = "ai"
 [[tool.method]]
 kind = "skill_pack"
+# Verified 2026-10-10: https://github.com/softaworks/agent-toolkit/blob/main/README.md
+# Named hosts: Claude Code, Codex, Cursor, AdaL. The README's "etc." is not expanded.
 [tool.skill_lifecycle]
 source = "https://github.com/softaworks/agent-toolkit"
 owner = "softaworks"
-supported_harnesses = ["claude", "codex", "cursor"]
+supported_harnesses = ["adal", "claude", "codex", "cursor"]
+status_probes = [
+  { harness = "adal", via = "skills-lock", match = "softaworks/agent-toolkit" },
+  { harness = "claude", via = "skills-lock", match = "softaworks/agent-toolkit" },
+  { harness = "codex", via = "skills-lock", match = "softaworks/agent-toolkit" },
+  { harness = "cursor", via = "skills-lock", match = "softaworks/agent-toolkit" },
+]
 revision_policy = "upstream-latest"
 targets = [
   { scope = "global", path = "~/.agents/skills/<selected-skill>" },
@@ -3037,10 +3172,35 @@ desc = "Interactive host-aware skills collection installed by skills; uninstall 
 tier = "ai"
 [[tool.method]]
 kind = "skill_pack"
+# Verified 2026-10-10: https://github.com/mattpocock/skills/blob/main/README.md
+# Named hosts: Claude Code, Codex, Copilot, Gemini CLI, plus skills-CLI agents
+# cursor, opencode, devin, windsurf, amp, pi. Copilot and Gemini CLI have no
+# closed probe, so they read unknown. "omit -a to choose" is not expanded.
 [tool.skill_lifecycle]
 source = "https://github.com/mattpocock/skills"
 owner = "mattpocock"
-supported_harnesses = ["claude", "codex", "cursor"]
+supported_harnesses = [
+  "amp",
+  "claude",
+  "codex",
+  "copilot",
+  "cursor",
+  "devin",
+  "gemini-cli",
+  "opencode",
+  "pi",
+  "windsurf",
+]
+status_probes = [
+  { harness = "amp", via = "skills-lock", match = "mattpocock/skills" },
+  { harness = "claude", via = "plugin-cli", match = "mattpocock-skills" },
+  { harness = "codex", via = "plugin-cli", match = "mattpocock-skills" },
+  { harness = "cursor", via = "skills-lock", match = "mattpocock/skills" },
+  { harness = "devin", via = "skills-lock", match = "mattpocock/skills" },
+  { harness = "opencode", via = "skills-lock", match = "mattpocock/skills" },
+  { harness = "pi", via = "skills-lock", match = "mattpocock/skills" },
+  { harness = "windsurf", via = "skills-lock", match = "mattpocock/skills" },
+]
 revision_policy = "upstream-latest"
 targets = [
   { scope = "global", path = "~/.agents/skills/<selected-skill>" },
@@ -3053,6 +3213,26 @@ instructions = [
   "npx skills@latest add mattpocock/skills",
   "Run /setup-matt-pocock-skills in the selected agent and answer its project questions.",
 ]
+[tool.skill_lifecycle.install.by_harness]
+amp = ["npx skills@latest add mattpocock/skills -a amp"]
+claude = ["claude plugin install mattpocock-skills@claude-plugins-official"]
+codex = [
+  "codex plugin marketplace add mattpocock/skills",
+  "codex plugin add mattpocock-skills@mattpocock",
+]
+copilot = [
+  "copilot plugin marketplace add mattpocock/skills",
+  "copilot plugin install mattpocock-skills@mattpocock",
+]
+cursor = ["npx skills@latest add mattpocock/skills -a cursor"]
+devin = ["npx skills@latest add mattpocock/skills -a devin"]
+gemini-cli = [
+  "gemini skills install https://github.com/mattpocock/skills.git --path skills/engineering",
+  "gemini skills install https://github.com/mattpocock/skills.git --path skills/productivity",
+]
+opencode = ["npx skills@latest add mattpocock/skills -a opencode"]
+pi = ["npx skills@latest add mattpocock/skills -a pi"]
+windsurf = ["npx skills@latest add mattpocock/skills -a windsurf"]
 [tool.skill_lifecycle.status]
 mode = "manual-required"
 instructions = [
@@ -3084,10 +3264,33 @@ desc = "Guided cross-runtime workflow installer; uninstall with its runtime, sco
 tier = "ai"
 [[tool.method]]
 kind = "skill_pack"
+# Verified 2026-10-10: https://github.com/open-gsd/gsd-core/blob/main/README.md
+# Named hosts only. "and more" is not expanded. install-state match is gsd-core.
 [tool.skill_lifecycle]
 source = "https://github.com/open-gsd/gsd-core"
 owner = "open-gsd"
-supported_harnesses = ["claude", "codex", "opencode", "antigravity", "cursor", "windsurf", "copilot", "kimi", "kilo"]
+supported_harnesses = [
+  "antigravity",
+  "claude",
+  "codex",
+  "copilot",
+  "cursor",
+  "kilo",
+  "kimi",
+  "opencode",
+  "windsurf",
+]
+status_probes = [
+  { harness = "antigravity", via = "install-state", match = "gsd-core" },
+  { harness = "claude", via = "install-state", match = "gsd-core" },
+  { harness = "codex", via = "install-state", match = "gsd-core" },
+  { harness = "copilot", via = "install-state", match = "gsd-core" },
+  { harness = "cursor", via = "install-state", match = "gsd-core" },
+  { harness = "kilo", via = "install-state", match = "gsd-core" },
+  { harness = "kimi", via = "install-state", match = "gsd-core" },
+  { harness = "opencode", via = "install-state", match = "gsd-core" },
+  { harness = "windsurf", via = "install-state", match = "gsd-core" },
+]
 revision_policy = "package-manager-latest"
 targets = [
   { scope = "global", path = "<selected-runtime-global-dir>" },
@@ -3132,10 +3335,57 @@ tier = "ai"
 requires = ["uv"]
 [[tool.method]]
 kind = "skill_pack"
+# Verified 2026-10-10: https://github.com/github/spec-kit/blob/main/docs/reference/integrations.md
+# Hosts are that page's integration table except generic, mapped onto
+# SKILL_HARNESSES ids (agy->antigravity, droid->factory-droid, mcode->minimax-code,
+# omp->oh-my-pi, qodercli->qoder, kiro-cli->kiro). Global detection cannot
+# prove project initialization.
 [tool.skill_lifecycle]
 source = "https://github.com/github/spec-kit"
 owner = "github"
-supported_harnesses = ["claude", "codex", "opencode", "antigravity", "cursor"]
+supported_harnesses = [
+  "alquimia",
+  "amp",
+  "antigravity",
+  "auggie",
+  "bob",
+  "claude",
+  "cline",
+  "codebuddy",
+  "codex",
+  "command-code",
+  "copilot",
+  "cursor",
+  "devin",
+  "docker-agent",
+  "dsh",
+  "factory-droid",
+  "firebender",
+  "forge",
+  "gemini-cli",
+  "goose",
+  "grok",
+  "hermes",
+  "junie",
+  "kilo",
+  "kimi",
+  "kiro",
+  "lingma",
+  "minimax-code",
+  "muse",
+  "oh-my-pi",
+  "opencode",
+  "pi",
+  "qoder",
+  "qwen",
+  "rovodev",
+  "shai",
+  "tabnine",
+  "trae",
+  "vibe",
+  "zcode",
+  "zed",
+]
 revision_policy = "package-manager-latest"
 targets = [
   { scope = "global", path = "<uv-tool-dir>/specify-cli" },
