@@ -6,9 +6,17 @@ import pytest
 
 import installer.engine as engine
 from installer.engine import install_tool
-from installer.model import CodexPluginStatusArgs, PiPackageStatusArgs, Tool, load_tools
+from installer.model import (
+    Method,
+    SkillLifecycle,
+    SkillOperation,
+    SkillStatusProbe,
+    SkillTarget,
+    Tool,
+    load_tools,
+)
 from installer.platform import Platform
-from installer.skill_lifecycle import inspect_status, perform_action
+from installer.skill_lifecycle import inspect_skill_packs, inspect_status, perform_action
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -160,43 +168,22 @@ contains = "anything"
         load_tools(_write(tmp_path, manifest))
 
 
-def test_skill_pack_admission_accepts_closed_status_operation_with_typed_args(
-    tmp_path: Path,
-) -> None:
+def test_skill_pack_admission_accepts_status_probes(tmp_path: Path) -> None:
     manifest = _minimal_lifecycle().replace(
-        """
-[tool.skill_lifecycle.status]
-mode = "manual-required"
-instructions = ["Review and run the official status flow."]
-""",
-        """
-[tool.skill_lifecycle.status]
-mode = "command"
-operation_id = "codex_plugin_status"
-args = { plugin = "demo" }
-""",
+        'supported_harnesses = ["codex"]',
+        'supported_harnesses = ["codex"]\n'
+        'status_probes = [{ harness = "codex", via = "plugin-cli", match = "demo" }]',
     )
 
     lifecycle = load_tools(_write(tmp_path, manifest))[0].skill_lifecycle
 
     assert lifecycle is not None
-    assert lifecycle.status.operation_id == "codex_plugin_status"
-    assert lifecycle.status.args == CodexPluginStatusArgs(plugin="demo")
+    assert lifecycle.status_probes == (SkillStatusProbe("codex", "plugin-cli", "demo"),)
+    assert lifecycle.status.mode == "manual-required"
 
 
-@pytest.mark.parametrize(
-    ("operation_id", "args", "error"),
-    (
-        ("shell", '{ plugin = "demo" }', "unknown operation_id"),
-        ("codex_plugin_status", '{ package = "demo" }', "unknown argument"),
-        ("pi_package_status", "{ package = 42 }", "must be a non-empty string"),
-    ),
-)
-def test_skill_pack_admission_rejects_unknown_operations_and_invalid_typed_args(
+def test_skill_pack_admission_rejects_command_status_in_favor_of_status_probes(
     tmp_path: Path,
-    operation_id: str,
-    args: str,
-    error: str,
 ) -> None:
     manifest = _minimal_lifecycle().replace(
         """
@@ -204,12 +191,47 @@ def test_skill_pack_admission_rejects_unknown_operations_and_invalid_typed_args(
 mode = "manual-required"
 instructions = ["Review and run the official status flow."]
 """,
-        f"""
+        """
 [tool.skill_lifecycle.status]
 mode = "command"
-operation_id = "{operation_id}"
-args = {args}
+instructions = ["unused"]
 """,
+    )
+
+    with pytest.raises(ValueError, match="status_probes"):
+        load_tools(_write(tmp_path, manifest))
+
+
+@pytest.mark.parametrize(
+    ("snippet", "error"),
+    (
+        (
+            'status_probes = [{ harness = "pi", via = "plugin-cli", match = "demo" }]',
+            "supported_harnesses",
+        ),
+        (
+            'status_probes = [{ harness = "codex", via = "shell", match = "demo" }]',
+            "unknown via",
+        ),
+        (
+            'status_probes = [{ harness = "codex", via = "plugin-cli", match = "demo;rm" }]',
+            "match",
+        ),
+        (
+            (
+                'status_probes = [{ harness = "codex", via = "plugin-cli", '
+                'match = "demo", argv = ["sh"] }]'
+            ),
+            "unknown status_probes field",
+        ),
+    ),
+)
+def test_skill_pack_admission_rejects_invalid_status_probes(
+    tmp_path: Path, snippet: str, error: str
+) -> None:
+    manifest = _minimal_lifecycle().replace(
+        'supported_harnesses = ["codex"]',
+        f'supported_harnesses = ["codex"]\n{snippet}',
     )
 
     with pytest.raises(ValueError, match=error):
@@ -280,7 +302,7 @@ def test_every_shipped_skill_pack_status_is_probed_or_explicitly_manual(tool_id:
 
     def probe(argv: list[str]) -> str:
         calls.append(argv)
-        return "ponytail\nobra/superpowers\n"
+        return "ponytail@ponytail  installed, enabled  5.1.0\ngit:github.com/obra/superpowers\n"
 
     outcome = inspect_status(_tools()[tool_id], probe)
 
@@ -293,19 +315,17 @@ def test_every_shipped_skill_pack_status_is_probed_or_explicitly_manual(tool_id:
         assert calls == []
 
 
-def test_shipped_status_probes_use_closed_operation_ids_and_typed_args() -> None:
+def test_shipped_status_probes_select_closed_sources() -> None:
     tools = _tools()
     ponytail = tools["ponytail"].skill_lifecycle
     superpowers = tools["superpowers"].skill_lifecycle
     assert ponytail is not None
     assert superpowers is not None
 
-    assert ponytail.status.operation_id == "codex_plugin_status"
-    assert isinstance(ponytail.status.args, CodexPluginStatusArgs)
-    assert ponytail.status.args.plugin == "ponytail"
-    assert superpowers.status.operation_id == "pi_package_status"
-    assert isinstance(superpowers.status.args, PiPackageStatusArgs)
-    assert superpowers.status.args.package == "obra/superpowers"
+    assert ponytail.status_probes == (SkillStatusProbe("codex", "plugin-cli", "ponytail"),)
+    assert superpowers.status_probes == (SkillStatusProbe("pi", "plugin-cli", "obra/superpowers"),)
+    assert ponytail.status.mode == "manual-required"
+    assert superpowers.status.mode == "manual-required"
     assert not hasattr(ponytail.status, "argv")
 
 
@@ -391,3 +411,109 @@ def test_shipped_skill_pack_contracts_use_only_documented_upstream_commands() ->
         assert any(install_fragment in line for line in lifecycle.install.instructions)
         assert any(update_fragment in line for line in lifecycle.update.instructions)
         assert any(removal_fragment in line for line in lifecycle.removal.instructions)
+
+
+def _pack(tool_id: str, probes: tuple[SkillStatusProbe, ...]) -> Tool:
+    manual = SkillOperation(
+        mode="manual-required", instructions=("Review and run the official flow.",)
+    )
+    harnesses = tuple(dict.fromkeys(probe.harness for probe in probes)) or ("codex",)
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="ai",
+        cmd=tool_id,
+        methods=(Method(kind="skill_pack"),),
+        skill_lifecycle=SkillLifecycle(
+            source="https://github.com/example/skills",
+            owner="example",
+            supported_harnesses=harnesses,
+            revision_policy="upstream-latest",
+            targets=(SkillTarget("harness", "<codex-plugin-dir>/demo"),),
+            install=manual,
+            status=manual,
+            update=manual,
+            removal=manual,
+            status_probes=probes,
+        ),
+    )
+
+
+def test_shipped_packs_report_per_host_status(tmp_path: Path) -> None:
+    tools = _tools()
+    superpowers = tools["superpowers"]
+    ponytail = tools["ponytail"]
+
+    def probe(argv: list[str]) -> str:
+        if argv == ["pi", "list"]:
+            return "git:github.com/obra/superpowers\n"
+        if argv == ["codex", "plugin", "list"]:
+            return "ponytail@ponytail  installed, enabled  5.1.0\n"
+        raise AssertionError(argv)
+
+    assert inspect_skill_packs([superpowers, ponytail], probe, tmp_path) == {
+        "superpowers": {"pi": "present"},
+        "ponytail": {"codex": "present"},
+    }
+
+
+def test_codex_not_installed_row_is_absent(tmp_path: Path) -> None:
+    tool = _pack("superpowers", (SkillStatusProbe("codex", "plugin-cli", "superpowers"),))
+
+    def probe(argv: list[str]) -> str:
+        assert argv == ["codex", "plugin", "list"]
+        return "superpowers@openai-curated  not installed\n"
+
+    assert inspect_skill_packs([tool], probe, tmp_path) == {"superpowers": {"codex": "absent"}}
+
+
+def test_codex_probe_failure_is_unknown_for_every_pack(tmp_path: Path) -> None:
+    packs = [
+        _pack("ponytail", (SkillStatusProbe("codex", "plugin-cli", "ponytail"),)),
+        _pack("other", (SkillStatusProbe("codex", "plugin-cli", "other"),)),
+    ]
+
+    def probe(_argv: list[str]) -> str:
+        raise RuntimeError("codex down")
+
+    assert inspect_skill_packs(packs, probe, tmp_path) == {
+        "ponytail": {"codex": "unknown"},
+        "other": {"codex": "unknown"},
+    }
+
+
+def test_plugin_cli_without_closed_row_is_unknown_and_unprobed(tmp_path: Path) -> None:
+    tool = _pack("demo", (SkillStatusProbe("opencode", "plugin-cli", "x"),))
+    calls: list[list[str]] = []
+
+    def probe(argv: list[str]) -> str:
+        calls.append(argv)
+        return "x"
+
+    assert inspect_skill_packs([tool], probe, tmp_path) == {"demo": {"opencode": "unknown"}}
+    assert calls == []
+
+
+def test_claude_plugin_list_marker_row_is_present(tmp_path: Path) -> None:
+    tool = _pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+
+    def probe(argv: list[str]) -> str:
+        assert argv == ["claude", "plugin", "list"]
+        return "❯ superpowers@claude-plugins-official\n"
+
+    assert inspect_skill_packs([tool], probe, tmp_path)["superpowers"]["claude"] == "present"
+
+
+def test_claude_match_stops_at_name_boundary(tmp_path: Path) -> None:
+    tool = _pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+
+    def probe(_argv: list[str]) -> str:
+        return "❯ superpowers-lab@x\n"
+
+    assert inspect_skill_packs([tool], probe, tmp_path)["superpowers"]["claude"] == "absent"
+
+
+def test_empty_cli_output_is_absent(tmp_path: Path) -> None:
+    tool = _pack("ponytail", (SkillStatusProbe("codex", "plugin-cli", "ponytail"),))
+
+    assert inspect_skill_packs([tool], lambda _argv: "", tmp_path)["ponytail"]["codex"] == "absent"

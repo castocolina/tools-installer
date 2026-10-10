@@ -1,5 +1,6 @@
 """Declarative tool catalog: Tool/Method model, category blurbs, and tomllib loaders."""
 
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -69,6 +70,8 @@ SKILL_HARNESSES = (
     "codex",
     "copilot",
     "cursor",
+    "factory-droid",
+    "gemini-cli",
     "kilo",
     "kimi",
     "opencode",
@@ -82,8 +85,10 @@ SKILL_REVISION_POLICIES = (
     "upstream-latest",
 )
 SKILL_TARGET_SCOPES = ("global", "harness", "project")
-SKILL_OPERATION_MODES = ("command", "manual-required")
-SKILL_OPERATION_IDS = ("codex_plugin_status", "pi_package_status")
+SKILL_OPERATION_MODES = ("manual-required",)
+SKILL_STATUS_SOURCES = ("plugin-cli", "skills-lock", "install-state")
+_SKILL_MATCH_RE = re.compile(r"^[A-Za-z0-9@/._-]+$")
+SkillStatusVia = Literal["plugin-cli", "skills-lock", "install-state"]
 
 EnumValue = TypeVar("EnumValue", Audience, Category, Priority, Tier)
 
@@ -200,23 +205,15 @@ class SkillTarget:
 
 
 @dataclass(frozen=True)
-class CodexPluginStatusArgs:
-    plugin: str
-
-
-@dataclass(frozen=True)
-class PiPackageStatusArgs:
-    package: str
-
-
-SkillOperationArgs = CodexPluginStatusArgs | PiPackageStatusArgs
+class SkillStatusProbe:
+    harness: str
+    via: SkillStatusVia
+    match: str
 
 
 @dataclass(frozen=True)
 class SkillOperation:
-    mode: Literal["command", "manual-required"]
-    operation_id: Literal["codex_plugin_status", "pi_package_status"] | None = None
-    args: SkillOperationArgs | None = None
+    mode: Literal["manual-required"]
     instructions: tuple[str, ...] = ()
 
 
@@ -237,6 +234,7 @@ class SkillLifecycle:
     update: SkillOperation
     removal: SkillOperation
     approval_disclosures: tuple[str, ...] = ()
+    status_probes: tuple[SkillStatusProbe, ...] = ()
 
 
 @dataclass(frozen=True, init=False)
@@ -343,48 +341,75 @@ def _skill_string_tuple(raw: object, *, tool_id: object, field: str) -> tuple[st
     return tuple(cast(list[str], values))
 
 
-def _skill_operation_arg(
-    raw: dict[str, object], field: str, *, tool_id: object, operation: str
-) -> str:
-    if unknown := set(raw).difference({field}):
-        raise ValueError(
-            f"tool '{tool_id}': skill_lifecycle '{operation}' has unknown argument "
-            f"'{sorted(unknown)[0]}'"
-        )
-    value = raw.get(field)
-    if not isinstance(value, str) or not value:
-        raise ValueError(
-            f"tool '{tool_id}': skill_lifecycle '{operation}.{field}' must be a non-empty string"
-        )
-    return value
+def _parse_status_via(value: object, *, tool_id: object) -> SkillStatusVia:
+    if value == "plugin-cli":
+        return "plugin-cli"
+    if value == "skills-lock":
+        return "skills-lock"
+    if value == "install-state":
+        return "install-state"
+    raise ValueError(f"tool '{tool_id}': skill_lifecycle status_probes has unknown via '{value}'")
 
 
-def _parse_skill_operation_args(
-    raw: object, *, tool_id: object, operation: str, operation_id: object
-) -> SkillOperationArgs:
-    if not isinstance(raw, dict):
-        raise ValueError(f"tool '{tool_id}': skill_lifecycle '{operation}.args' must be a table")
-    args = cast(dict[str, object], raw)
-    if operation_id == "codex_plugin_status":
-        return CodexPluginStatusArgs(
-            plugin=_skill_operation_arg(args, "plugin", tool_id=tool_id, operation=operation)
+def _parse_status_probes(
+    raw: object, *, tool_id: object, supported_harnesses: tuple[str, ...]
+) -> tuple[SkillStatusProbe, ...]:
+    if not isinstance(raw, list):
+        raise ValueError(f"tool '{tool_id}': skill_lifecycle 'status_probes' must be a list")
+    probes: list[SkillStatusProbe] = []
+    for item in cast(list[object], raw):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"tool '{tool_id}': skill_lifecycle status_probes entry must be a table"
+            )
+        row = cast(dict[str, object], item)
+        expected = {"harness", "via", "match"}
+        if unknown := set(row).difference(expected):
+            raise ValueError(
+                f"tool '{tool_id}': unknown status_probes field '{sorted(unknown)[0]}'"
+            )
+        if missing := expected.difference(row):
+            raise ValueError(
+                f"tool '{tool_id}': skill_lifecycle status_probes missing '{sorted(missing)[0]}'"
+            )
+        harness = row.get("harness")
+        match = row.get("match")
+        if not isinstance(harness, str) or harness not in SKILL_HARNESSES:
+            raise ValueError(
+                f"tool '{tool_id}': skill_lifecycle status_probes has unknown harness '{harness}'"
+            )
+        if harness not in supported_harnesses:
+            raise ValueError(
+                f"tool '{tool_id}': skill_lifecycle status_probes harness '{harness}' "
+                "is not in supported_harnesses"
+            )
+        if not isinstance(match, str) or _SKILL_MATCH_RE.fullmatch(match) is None:
+            raise ValueError(
+                f"tool '{tool_id}': skill_lifecycle status_probes match '{match}' "
+                "must fullmatch the closed token pattern"
+            )
+        probes.append(
+            SkillStatusProbe(
+                harness=harness,
+                via=_parse_status_via(row.get("via"), tool_id=tool_id),
+                match=match,
+            )
         )
-    if operation_id == "pi_package_status":
-        return PiPackageStatusArgs(
-            package=_skill_operation_arg(args, "package", tool_id=tool_id, operation=operation)
-        )
-    raise ValueError(
-        f"tool '{tool_id}': skill_lifecycle '{operation}' has unknown operation_id '{operation_id}'"
-    )
+    return tuple(probes)
 
 
 def _parse_skill_operation(raw: object, *, tool_id: object, operation: str) -> SkillOperation:
     if not isinstance(raw, dict):
         raise ValueError(f"tool '{tool_id}': skill_lifecycle '{operation}' must be declared")
     row = cast(dict[str, object], raw)
-    if unknown := set(row).difference({"mode", "operation_id", "args", "instructions"}):
+    if unknown := set(row).difference({"mode", "instructions"}):
         raise ValueError(f"tool '{tool_id}': unknown {operation} field '{sorted(unknown)[0]}'")
     mode = row.get("mode")
+    if mode == "command":
+        raise ValueError(
+            f"tool '{tool_id}': skill_lifecycle '{operation}' cannot use mode 'command'; "
+            "declare status_probes"
+        )
     if mode not in SKILL_OPERATION_MODES:
         raise ValueError(
             f"tool '{tool_id}': skill_lifecycle '{operation}' has unknown mode '{mode}'"
@@ -399,44 +424,11 @@ def _parse_skill_operation(raw: object, *, tool_id: object, operation: str) -> S
         if instructions_raw
         else ()
     )
-    operation_id = row.get("operation_id")
-    args_raw = row.get("args")
-    if mode == "manual-required":
-        if operation_id is not None or args_raw is not None:
-            raise ValueError(
-                f"tool '{tool_id}': manual skill_lifecycle '{operation}' "
-                "cannot declare an executable operation"
-            )
-        if not instructions:
-            raise ValueError(
-                f"tool '{tool_id}': skill_lifecycle '{operation}.instructions' must be non-empty"
-            )
-        return SkillOperation(mode="manual-required", instructions=instructions)
-    if instructions:
+    if not instructions:
         raise ValueError(
-            f"tool '{tool_id}': command skill_lifecycle '{operation}' "
-            "cannot declare manual instructions"
+            f"tool '{tool_id}': skill_lifecycle '{operation}.instructions' must be non-empty"
         )
-    if operation != "status":
-        raise ValueError(
-            f"tool '{tool_id}': no reviewed command operation is available for '{operation}'"
-        )
-    if operation_id not in SKILL_OPERATION_IDS:
-        raise ValueError(
-            f"tool '{tool_id}': skill_lifecycle '{operation}' has unknown operation_id "
-            f"'{operation_id}'"
-        )
-    args = _parse_skill_operation_args(
-        args_raw,
-        tool_id=tool_id,
-        operation=operation,
-        operation_id=operation_id,
-    )
-    return SkillOperation(
-        mode="command",
-        operation_id=operation_id,
-        args=args,
-    )
+    return SkillOperation(mode="manual-required", instructions=instructions)
 
 
 def _parse_skill_lifecycle(raw: object, *, tool_id: object) -> SkillLifecycle:
@@ -454,6 +446,7 @@ def _parse_skill_lifecycle(raw: object, *, tool_id: object) -> SkillLifecycle:
         "update",
         "removal",
         "approval_disclosures",
+        "status_probes",
     }
     if unknown := set(row).difference(allowed_fields):
         raise ValueError(f"tool '{tool_id}': unknown skill_lifecycle field '{sorted(unknown)[0]}'")
@@ -517,6 +510,11 @@ def _parse_skill_lifecycle(raw: object, *, tool_id: object) -> SkillLifecycle:
         update=_parse_skill_operation(row.get("update"), tool_id=tool_id, operation="update"),
         removal=_parse_skill_operation(row.get("removal"), tool_id=tool_id, operation="removal"),
         approval_disclosures=approval_disclosures,
+        status_probes=_parse_status_probes(
+            row.get("status_probes", []),
+            tool_id=tool_id,
+            supported_harnesses=supported_harnesses,
+        ),
     )
 
 

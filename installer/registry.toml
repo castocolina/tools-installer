@@ -2795,6 +2795,7 @@ approval_disclosures = [
   "Codex installs Ponytail skills and two Node.js lifecycle hooks; open /hooks and review both hooks before trusting them.",
   "Ponytail documents no telemetry; its optional mode state remains under ~/.config/ponytail after host removal unless cleaned first.",
 ]
+status_probes = [{ harness = "codex", via = "plugin-cli", match = "ponytail" }]
 [tool.skill_lifecycle.install]
 mode = "manual-required"
 instructions = [
@@ -2804,9 +2805,10 @@ instructions = [
   "Run codex, open /hooks, review and trust both lifecycle hooks, then start a new thread.",
 ]
 [tool.skill_lifecycle.status]
-mode = "command"
-operation_id = "codex_plugin_status"
-args = { plugin = "ponytail" }
+mode = "manual-required"
+instructions = [
+  "Run `codex plugin list` and look for ponytail@ponytail marked installed.",
+]
 [tool.skill_lifecycle.update]
 mode = "manual-required"
 instructions = [
@@ -2895,6 +2897,7 @@ owner = "obra"
 supported_harnesses = ["pi"]
 revision_policy = "upstream-default-branch"
 targets = [{ scope = "harness", path = "<pi-package-dir>/superpowers" }]
+status_probes = [{ harness = "pi", via = "plugin-cli", match = "obra/superpowers" }]
 [tool.skill_lifecycle.install]
 mode = "manual-required"
 instructions = [
@@ -2902,9 +2905,10 @@ instructions = [
   "pi install git:github.com/obra/superpowers",
 ]
 [tool.skill_lifecycle.status]
-mode = "command"
-operation_id = "pi_package_status"
-args = { package = "obra/superpowers" }
+mode = "manual-required"
+instructions = [
+  "Run `pi list` and look for obra/superpowers.",
+]
 [tool.skill_lifecycle.update]
 mode = "manual-required"
 instructions = [

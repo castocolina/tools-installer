@@ -3,13 +3,26 @@ from pathlib import Path
 import pytest
 
 from installer.enums import Audience, Priority, Tier
-from installer.model import POSTINSTALL_HOOK_NAMES, Method, Tool, load_categories, load_tools
+from installer.model import (
+    POSTINSTALL_HOOK_NAMES,
+    SKILL_HARNESSES,
+    Method,
+    Tool,
+    load_categories,
+    load_tools,
+)
 
 
 def _write(tmp_path: Path, content: str) -> Path:
     p = tmp_path / "registry.toml"
     p.write_text(content)
     return p
+
+
+def test_skill_harnesses_include_factory_droid_and_gemini_cli() -> None:
+    assert "factory-droid" in SKILL_HARNESSES
+    assert "gemini-cli" in SKILL_HARNESSES
+    assert list(SKILL_HARNESSES) == sorted(SKILL_HARNESSES)
 
 
 def test_tool_requires_defaults_empty_and_parses(tmp_path: Path) -> None:
