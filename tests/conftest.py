@@ -65,8 +65,10 @@ def real_home_untouched() -> "object":
 # Public name on purpose: pytest collects it by reference, so a private
 # (underscore-prefixed) name reads as dead code to pyright.
 @pytest.fixture(autouse=True)
-def no_zdotdir(monkeypatch: pytest.MonkeyPatch) -> None:
+def no_shell_location_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear `$ZDOTDIR` and `$ZSH` so tests never follow the developer's shell location."""
     monkeypatch.delenv("ZDOTDIR", raising=False)
+    monkeypatch.delenv("ZSH", raising=False)  # omz_root falls back to $ZSH
 
 
 @pytest.fixture(scope="session")
