@@ -780,14 +780,13 @@ async def test_doctor_drops_inert_enter_hint_after_apply(tmp_path: Path) -> None
         doctor = await _ready_doctor(app, pilot)
         assert doctor.applied is True
         after_steps = [
-            item.next_step for item in doctor._tui_guidance()  # pyright: ignore[reportPrivateUsage]
+            item.next_step
+            for item in doctor._tui_guidance()  # pyright: ignore[reportPrivateUsage]
         ]
         after = "\n".join(after_steps)
         assert "Press enter" not in after
         assert ".." not in after
-        assert (
-            f"{_GUARD_AFTER_APPLY}{_GUARD_BACKUP_TAIL}" in after_steps
-        )
+        assert f"{_GUARD_AFTER_APPLY}{_GUARD_BACKUP_TAIL}" in after_steps
         assert block_guard_before.replace(GUARD_ENTER_HINT, _GUARD_AFTER_APPLY) in after_steps
         assert (
             "The safe fix was applied; open a new terminal (or `source ~/.myshellrc`)."

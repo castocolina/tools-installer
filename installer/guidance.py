@@ -88,8 +88,7 @@ def _writer_next_step(
         )
     if any(record.guardable for record in records):
         fragments.append(
-            f"{GUARD_ENTER_HINT}. A backup of the original is "
-            "saved as .tools-installer.old first"
+            f"{GUARD_ENTER_HINT}. A backup of the original is saved as .tools-installer.old first"
         )
     reasons: list[str] = []
     for record in records:

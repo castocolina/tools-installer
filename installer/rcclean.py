@@ -382,11 +382,7 @@ def _judge_line(
         body = _command_text(segment)
         zsh = _ZSH_PATH_ARRAY.match(body)
         path = None if zsh else _PATH_EXPORT.match(body)
-        if (
-            path is not None
-            and _has_command_suffix(path.group(1))
-            and not _EXPORT_WORD.match(body)
-        ):
+        if path is not None and _has_command_suffix(path.group(1)) and not _EXPORT_WORD.match(body):
             continue
         if zsh is not None or path is not None:
             matched_any = True
