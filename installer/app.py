@@ -33,7 +33,13 @@ from installer.platform import Platform
 from installer.pnpm_globals import audit_node_globals, pnpm_global_packages
 from installer.policy import Policy, omz_removal_detail
 from installer.prompt import Prompter
-from installer.rcclean import find_duplicate_path_lines, scan_rc_path_writers, strip_lines
+from installer.rcclean import (
+    PathWriterLine,
+    find_duplicate_path_lines,
+    group_writer_lines,
+    scan_rc_path_writer_lines,
+    strip_lines,
+)
 from installer.render import (
     render_audit,
     render_competing_mechanisms,
@@ -305,13 +311,13 @@ def guard_state(
     return status, warning
 
 
-def duplicate_path_writers(
+def path_writer_lines_for(
     report: DoctorReport,
     *,
     rc_paths: Iterable[Path] | None = None,
     env: Mapping[str, str] | None = None,
-) -> dict[Path, tuple[Path, ...]]:
-    """Which rc files add each DUPLICATED directory unconditionally.
+) -> list[PathWriterLine]:
+    """Writer records for each DUPLICATED directory. Empty when nothing is duplicated.
 
     Scoped to `report.duplicated` rather than every managed dir: a writer only
     changes the advice for a directory that is actually reported twice, and
@@ -319,10 +325,22 @@ def duplicate_path_writers(
     asked. Read-only, and total over unreadable files.
     """
     if not report.duplicated:
-        return {}
+        return []
     paths = path_scan_rc_paths() if rc_paths is None else rc_paths
     environ = os.environ if env is None else env
-    return scan_rc_path_writers(paths, set(report.duplicated), environ)
+    return scan_rc_path_writer_lines(paths, set(report.duplicated), environ)
+
+
+def duplicate_path_writers(
+    report: DoctorReport,
+    *,
+    rc_paths: Iterable[Path] | None = None,
+    env: Mapping[str, str] | None = None,
+) -> dict[Path, tuple[Path, ...]]:
+    """Which rc files add each DUPLICATED directory unconditionally."""
+    if not report.duplicated:
+        return {}
+    return group_writer_lines(path_writer_lines_for(report, rc_paths=rc_paths, env=env))
 
 
 def doctor_data(

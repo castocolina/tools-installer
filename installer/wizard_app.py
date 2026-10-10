@@ -27,7 +27,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
 from installer import daemon, env_redirect
-from installer.app import UninstallDecision, duplicate_path_writers
+from installer.app import UninstallDecision, path_writer_lines_for
 from installer.catalog_tui import CatalogScreen, OwnershipRefreshed
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
@@ -44,9 +44,11 @@ from installer.guidance import (
 from installer.model import Tool
 from installer.pnpm_globals import NodeGlobalsReport, reinstall_preview
 from installer.policy import Policy, PolicyResult
+from installer.rcclean import PathWriterLine, group_writer_lines
 from installer.render import guidance_text
 from installer.run import CommandError
 from installer.session import Summary
+from installer.shellrc import PathGuardOutcome, guard_path_writers, path_export_guard
 from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit
 from installer.terminal_shell import terminal_sync_warning
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
@@ -300,6 +302,9 @@ class DoctorScreen(AppScreen):
         disk_pressure: DiskPressureProbe | None = None,
         competing: CompetingProbe | None = None,
         duplicate_writers: Mapping[Path, tuple[Path, ...]] | None = None,
+        writer_lines: Sequence[PathWriterLine] = (),
+        rescan_writer_lines: Callable[[], Sequence[PathWriterLine]] | None = None,
+        guard_file: Callable[[Path, Sequence[PathWriterLine]], PathGuardOutcome] | None = None,
     ) -> None:
         super().__init__(view="doctor")
         self._report = report
@@ -307,7 +312,12 @@ class DoctorScreen(AppScreen):
         # held as data. _refresh_guidance is IO-free by construction and runs
         # on every navigation, so it must never be the thing that reads rc
         # files off disk.
+        self._writer_lines = list(writer_lines)
         self._duplicate_writers = duplicate_writers or {}
+        self._rescan_writer_lines = rescan_writer_lines
+        self._guard_file = guard_file
+        self.guard_results: list[str] = []
+        self._pending_guards: list[tuple[Path, tuple[PathWriterLine, ...]]] = []
         # A predicate, not its result, for the guard_state reason: the
         # Policies view can enable the background cleanup one navigation step
         # away, so every entry re-reads it. WR-02: the daemon half of the
@@ -526,6 +536,8 @@ class DoctorScreen(AppScreen):
         else:
             text.append("Press enter to wire the managed PATH into your shells.", style="yellow")
             text.append("\nViewing this screen did not change your shell files.")
+        for line in self.guard_results:
+            text.append(f"\n{line}")
         report = self._globals_report
         text.append("\n\npnpm-managed globals\n", style="bold")
         # Both counts come from pnpm's own global list, never from the catalog:
@@ -610,6 +622,74 @@ class DoctorScreen(AppScreen):
         # moved the guard state by the time we get here. Recompute the
         # guidance list before rendering it, exactly like the three sibling
         # events (on_mount, enter_view, on_globals_audited) already do.
+        self._refresh_guidance()
+        self._refresh_body()
+        # Guarding a foreign line is independent of the managed-block fix. The
+        # fix error still renders first; the fresh re-scan below reads whatever
+        # the fix left on disk, so a grown managed block cannot shift a foreign
+        # line out from under its record.
+        if self._guard_file is None:
+            return
+        rescan = self._rescan_writer_lines
+        self._adopt_writer_lines(rescan() if rescan is not None else self._writer_lines)
+        self._pending_guards = self._guardable_files()
+        if not self._pending_guards:
+            return
+        self._guard_next()
+
+    def _adopt_writer_lines(self, lines: Sequence[PathWriterLine]) -> None:
+        self._writer_lines = list(lines)
+        self._duplicate_writers = group_writer_lines(self._writer_lines)
+
+    def _guardable_files(self) -> list[tuple[Path, tuple[PathWriterLine, ...]]]:
+        grouped: dict[Path, list[PathWriterLine]] = {}
+        for record in self._writer_lines:
+            grouped.setdefault(record.rc_path, []).append(record)
+        return [
+            (path, tuple(record for record in records if record.guardable))
+            for path, records in grouped.items()
+            if any(record.guardable for record in records)
+        ]
+
+    def _guard_next(self) -> None:
+        if not self._pending_guards:
+            self._finish_guard_chain()
+            return
+        path, records = self._pending_guards.pop(0)
+        self.app.push_screen(
+            ConfirmGuardFile(path, records),
+            lambda confirmed, path=path, records=records: self._guard_answered(
+                path, records, confirmed
+            ),
+        )
+
+    def _guard_answered(
+        self, path: Path, records: Sequence[PathWriterLine], confirmed: bool | None
+    ) -> None:
+        if confirmed:
+            self._record_guard(path, records)
+        else:
+            self.guard_results.append(f"skipped {path}")
+        self._guard_next()
+
+    def _record_guard(self, path: Path, records: Sequence[PathWriterLine]) -> None:
+        guard = self._guard_file
+        if guard is None:
+            return
+        outcome, error = run_live(lambda: guard(path, records))
+        if error is not None:
+            self.guard_results.append(f"refused {path}: {error}")
+            return
+        if outcome is not None and outcome.status == "guarded":
+            self.guard_results.append(f"guarded {path}")
+            return
+        reason = outcome.reason if outcome is not None and outcome.reason else "nothing to guard"
+        self.guard_results.append(f"refused {path}: {reason}")
+
+    def _finish_guard_chain(self) -> None:
+        rescan = self._rescan_writer_lines
+        if rescan is not None:
+            self._adopt_writer_lines(rescan())
         self._refresh_guidance()
         self._refresh_body()
 
@@ -2084,6 +2164,47 @@ class PoliciesScreen(AppScreen):
         self._refresh_link_mode_line()
 
 
+class ConfirmGuardFile(ModalScreen[bool]):
+    """Confirm one foreign rc file before rewriting its PATH lines in place.
+
+    enter/y guard this file; escape/n skip it and leave the file untouched.
+    One file per modal: declining one never edits it and never cancels the rest.
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("enter", "guard", "guard", show=True, priority=True),
+        Binding("y", "guard", "guard", show=False),
+        Binding("escape", "skip", "skip", show=True),
+        Binding("n", "skip", "skip", show=False),
+    ]
+    DEFAULT_CSS = """
+    ConfirmGuardFile { align: center middle; }
+    ConfirmGuardFile > Static { width: 76; height: auto; border: round yellow; padding: 1 2; }
+    """
+
+    def __init__(self, path: Path, records: Sequence[PathWriterLine]) -> None:
+        super().__init__()
+        lines = [f"Guard PATH lines in {path}?"]
+        for index, record in enumerate(records):
+            after = path_export_guard(record.directory)
+            lines.append(f"  {index + 1}: {record.text}  ->  {after}")
+        lines.append(
+            f"A backup of the original is saved as {path}.tools-installer.old first. "
+            "Nothing is deleted."
+        )
+        self.summary = "\n".join(lines)
+
+    def compose(self) -> ComposeResult:
+        # File text is untrusted; Text() does not parse markup.
+        yield Static(Text(self.summary))
+
+    def action_guard(self) -> None:
+        self.dismiss(True)
+
+    def action_skip(self) -> None:
+        self.dismiss(False)
+
+
 class ConfirmUninstall(ModalScreen[bool]):
     """Confirm the one destructive, hard-to-reverse commit: deleting installed
     artifacts. enter/y confirm; escape/n cancel. Reversible actions (policies)
@@ -2377,6 +2498,7 @@ class UnifiedApp(App[list[str] | None]):
 
         read_preview = globals_preview if globals_preview is not None else _default_preview
         run_reinstall = reinstall_globals if reinstall_globals is not None else _no_reinstall
+        writer_lines = path_writer_lines_for(report)
         self._views.update(
             {
                 "doctor": DoctorScreen(
@@ -2384,7 +2506,10 @@ class UnifiedApp(App[list[str] | None]):
                     guard_state,
                     fix_preview,
                     fix,
-                    duplicate_writers=duplicate_path_writers(report),
+                    duplicate_writers=group_writer_lines(writer_lines),
+                    writer_lines=writer_lines,
+                    rescan_writer_lines=lambda: path_writer_lines_for(report),
+                    guard_file=guard_path_writers,
                     node_globals=read_node_globals,
                     globals_preview=read_preview,
                     reinstall_globals=run_reinstall,

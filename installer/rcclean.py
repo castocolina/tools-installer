@@ -526,6 +526,16 @@ def path_writer_lines(
     return records
 
 
+def group_writer_lines(lines: Iterable[PathWriterLine]) -> dict[Path, tuple[Path, ...]]:
+    """Map each managed directory to the rc files that write it, in first-seen order."""
+    writers: dict[Path, list[Path]] = {}
+    for record in lines:
+        files = writers.setdefault(record.directory, [])
+        if record.rc_path not in files:
+            files.append(record.rc_path)
+    return {directory: tuple(files) for directory, files in writers.items()}
+
+
 def unguarded_path_writers(
     rc_texts: Mapping[Path, str], managed_dirs: set[Path], env: Mapping[str, str]
 ) -> dict[Path, tuple[Path, ...]]:
@@ -562,12 +572,30 @@ def unguarded_path_writers(
     Our own case-guarded emitter and pnpm's idiom are the same kind of guard.
     Flagging one would point the user at a correct line.
     """
-    writers: dict[Path, list[Path]] = {}
-    for record in path_writer_lines(rc_texts, managed_dirs, env):
-        files = writers.setdefault(record.directory, [])
-        if record.rc_path not in files:
-            files.append(record.rc_path)
-    return {directory: tuple(files) for directory, files in writers.items()}
+    return group_writer_lines(path_writer_lines(rc_texts, managed_dirs, env))
+
+
+def _read_rc_texts(rc_paths: Iterable[Path]) -> dict[Path, str]:
+    """Read each rc file as UTF-8. Unreadable files are skipped, not raised.
+
+    A file that cannot be read yields no writers rather than raising: this
+    feeds a diagnostic, and a Doctor that crashes on an unreadable rc file is
+    worse than one that reports a cause it could not determine.
+    """
+    texts: dict[Path, str] = {}
+    for rc_path in rc_paths:
+        try:
+            texts[rc_path] = rc_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+    return texts
+
+
+def scan_rc_path_writer_lines(
+    rc_paths: Iterable[Path], managed_dirs: set[Path], env: Mapping[str, str]
+) -> list[PathWriterLine]:
+    """`path_writer_lines` over files on disk; unreadable files are skipped."""
+    return path_writer_lines(_read_rc_texts(rc_paths), managed_dirs, env)
 
 
 def scan_rc_path_writers(
@@ -581,10 +609,4 @@ def scan_rc_path_writers(
     an unreadable rc file is worse than one that reports a cause it could not
     determine.
     """
-    texts: dict[Path, str] = {}
-    for rc_path in rc_paths:
-        try:
-            texts[rc_path] = rc_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-    return unguarded_path_writers(texts, managed_dirs, env)
+    return unguarded_path_writers(_read_rc_texts(rc_paths), managed_dirs, env)

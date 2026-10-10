@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, TypeVar, cast
 
 import pytest
+from textual.app import App
 from textual.pilot import Pilot
 from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
@@ -47,9 +48,10 @@ from installer.policy import (
     omz_plugins_policy,
 )
 from installer.post_install import ConfirmSensitiveAction
+from installer.rcclean import PathWriterLine
 from installer.run import CommandError, Runner
 from installer.session import SensitiveInstall, Summary
-from installer.shellrc import ShellrcRefusal
+from installer.shellrc import PathGuardOutcome, ShellrcRefusal
 from installer.systemd_daemon import CompetingUnit, TimerStateCache
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, ToolRow, classify_tools
@@ -391,10 +393,20 @@ async def test_doctor_screen_renders_guidance() -> None:
 async def test_doctor_tui_route_uses_duplicate_path_writers_seam(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake(_report: DoctorReport) -> dict[Path, tuple[Path, ...]]:
-        return {Path("/x/bin"): (Path("/tmp/fake/.bashrc"),)}
+    def fake(_report: DoctorReport) -> list[PathWriterLine]:
+        return [
+            PathWriterLine(
+                rc_path=Path("/tmp/fake/.bashrc"),
+                index=0,
+                text='export PATH="/x/bin:$PATH"',
+                directory=Path("/x/bin"),
+                guardable=True,
+                refusal=None,
+                block_owner=None,
+            )
+        ]
 
-    monkeypatch.setattr("installer.wizard_app.duplicate_path_writers", fake)
+    monkeypatch.setattr("installer.wizard_app.path_writer_lines_for", fake)
     app = _app(report=DoctorReport(missing=(), broken=(), duplicated=(Path("/x/bin"),)))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("4")
@@ -402,6 +414,228 @@ async def test_doctor_tui_route_uses_duplicate_path_writers_seam(
         assert isinstance(screen, DoctorScreen)
         text = "".join(item.title + item.meaning + item.next_step for item in screen.guidance)
         assert "/tmp/fake/.bashrc" in text
+
+
+def _writer_line(
+    rc_path: Path,
+    *,
+    index: int = 0,
+    text: str = 'export PATH="/opt/tools/bin:$PATH"',
+    guardable: bool = True,
+    refusal: str | None = None,
+    block_owner: str | None = None,
+) -> PathWriterLine:
+    return PathWriterLine(
+        rc_path=rc_path,
+        index=index,
+        text=text,
+        directory=Path("/opt/tools/bin"),
+        guardable=guardable,
+        refusal=refusal,
+        block_owner=block_owner,
+    )
+
+
+def _guard_doctor(
+    *,
+    fix: Callable[[], None] | None = None,
+    writer_lines: Sequence[PathWriterLine] = (),
+    rescan: Callable[[], Sequence[PathWriterLine]] | None = None,
+    guard_file: Callable[[Path, Sequence[PathWriterLine]], PathGuardOutcome] | None = None,
+) -> DoctorScreen:
+    return DoctorScreen(
+        DoctorReport(missing=(), broken=(), duplicated=()),
+        lambda: ({"pip": False, "npm": False}, None),
+        "preview",
+        fix or (lambda: None),
+        node_globals=lambda: NodeGlobalsReport(entries=(), missing=(), managed=()),
+        globals_preview=lambda _report: "",
+        reinstall_globals=lambda _packages: (),
+        writer_lines=writer_lines,
+        rescan_writer_lines=rescan,
+        guard_file=guard_file,
+    )
+
+
+class _DoctorHost(App[None]):
+    def __init__(self, screen: DoctorScreen) -> None:
+        super().__init__()
+        self._doctor = screen
+
+    def on_mount(self) -> None:
+        self.push_screen(self._doctor)
+
+
+async def _ready_doctor(app: App[None], pilot: Pilot[None]) -> DoctorScreen:
+    for _ in range(400):
+        screen = app.screen
+        if (
+            isinstance(screen, DoctorScreen)
+            and not screen.globals_auditing
+            and not screen.disk_probing
+        ):
+            break
+        await pilot.pause()
+    await pilot.pause()
+    assert isinstance(app.screen, DoctorScreen)
+    return app.screen
+
+
+def _guard_modal_text(screen: object) -> str:
+    from installer.wizard_app import ConfirmGuardFile
+
+    assert isinstance(screen, ConfirmGuardFile)
+    rendered = str(screen.query_one(Static).render())
+    return f"{screen.summary}\n{rendered}"
+
+
+async def test_doctor_guard_yes_edits_one_file_and_reports_it() -> None:
+    rc = Path("tmp/.bashrc")
+    record = _writer_line(rc, text='export PATH="/opt/tools/bin:$PATH"')
+    scans = iter([[record], []])
+    calls: list[tuple[Path, list[PathWriterLine]]] = []
+    events: list[str] = []
+
+    def fix() -> None:
+        events.append("fix")
+
+    def guard_file(path: Path, lines: Sequence[PathWriterLine]) -> PathGuardOutcome:
+        calls.append((path, list(lines)))
+        return PathGuardOutcome("guarded")
+
+    screen = _guard_doctor(
+        fix=fix,
+        writer_lines=[record],
+        rescan=lambda: next(scans),
+        guard_file=guard_file,
+    )
+    app = _DoctorHost(screen)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _ready_doctor(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert events == ["fix"]
+        shown = _guard_modal_text(app.screen)
+        assert "tmp/.bashrc" in shown
+        assert record.text in shown
+        assert ".bashrc.tools-installer.old" in shown
+        await pilot.press("y")
+        await pilot.pause()
+        doctor = await _ready_doctor(app, pilot)
+        body = str(doctor.query_one("#doctor-body", Static).render())
+        assert calls == [(rc, [record])]
+        assert f"guarded {rc}" in body
+
+
+async def test_doctor_guard_no_skips_without_calling_guard_file() -> None:
+    rc = Path("tmp/.bashrc")
+    record = _writer_line(rc)
+    calls: list[Path] = []
+
+    def guard_file(path: Path, _lines: Sequence[PathWriterLine]) -> PathGuardOutcome:
+        calls.append(path)
+        return PathGuardOutcome("guarded")
+
+    screen = _guard_doctor(
+        writer_lines=[record],
+        rescan=lambda: [record],
+        guard_file=guard_file,
+    )
+    app = _DoctorHost(screen)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _ready_doctor(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "tmp/.bashrc" in _guard_modal_text(app.screen)
+        await pilot.press("n")
+        await pilot.pause()
+        doctor = await _ready_doctor(app, pilot)
+        body = str(doctor.query_one("#doctor-body", Static).render())
+        assert calls == []
+        assert f"skipped {rc}" in body
+
+
+async def test_doctor_guard_with_no_lines_pushes_no_modal() -> None:
+    calls: list[Path] = []
+
+    def guard_file(path: Path, _lines: Sequence[PathWriterLine]) -> PathGuardOutcome:
+        calls.append(path)
+        return PathGuardOutcome("guarded")
+
+    screen = _guard_doctor(writer_lines=[], rescan=lambda: [], guard_file=guard_file)
+    app = _DoctorHost(screen)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _ready_doctor(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, DoctorScreen)
+        body = str(app.screen.query_one("#doctor-body", Static).render())
+        assert calls == []
+        assert "skipped" not in body
+        assert "guarded" not in body
+
+
+async def test_doctor_guard_queue_uses_post_fix_rescan() -> None:
+    rc = Path("tmp/.bashrc")
+    stale = _writer_line(rc, index=3)
+    fresh = _writer_line(rc, index=7)
+    scans = iter([[fresh], []])
+    calls: list[list[PathWriterLine]] = []
+
+    def guard_file(_path: Path, lines: Sequence[PathWriterLine]) -> PathGuardOutcome:
+        calls.append(list(lines))
+        return PathGuardOutcome("guarded")
+
+    screen = _guard_doctor(
+        writer_lines=[stale],
+        rescan=lambda: next(scans),
+        guard_file=guard_file,
+    )
+    app = _DoctorHost(screen)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _ready_doctor(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        assert len(calls) == 1
+        assert calls[0][0].index == 7
+        assert calls[0][0] is not stale
+
+
+async def test_doctor_guard_queue_falls_back_to_writer_lines_without_rescan() -> None:
+    rc = Path("tmp/.bashrc")
+    record = _writer_line(rc, index=3)
+    calls: list[list[PathWriterLine]] = []
+
+    def guard_file(_path: Path, lines: Sequence[PathWriterLine]) -> PathGuardOutcome:
+        calls.append(list(lines))
+        return PathGuardOutcome("guarded")
+
+    screen = _guard_doctor(writer_lines=[record], guard_file=guard_file)
+    app = _DoctorHost(screen)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _ready_doctor(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        assert calls == [[record]]
+
+
+async def test_doctor_composition_scans_writer_lines_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[bool] = []
+
+    def counting(_report: DoctorReport, **_kwargs: object) -> list[PathWriterLine]:
+        calls.append(True)
+        return []
+
+    monkeypatch.setattr("installer.wizard_app.path_writer_lines_for", counting)
+    app = _app(report=DoctorReport(missing=(), broken=(), duplicated=(Path("/x/bin"),)))
+    async with app.run_test(size=(100, 30)):
+        assert calls == [True]
 
 
 async def test_doctor_screen_adapts_missing_path_guidance_for_tui() -> None:

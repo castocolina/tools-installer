@@ -354,7 +354,7 @@ def test_writer_scan_skipped_when_nothing_is_duplicated(
         calls.append(True)
         return {}
 
-    monkeypatch.setattr("installer.app.scan_rc_path_writers", counting)
+    monkeypatch.setattr("installer.app.path_writer_lines_for", counting)
     report = DoctorReport(missing=(), broken=(), duplicated=())
     assert duplicate_path_writers(report) == {}
     assert calls == []
