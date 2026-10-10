@@ -36,6 +36,7 @@ from installer.ownership import (
 from installer.platform import Platform
 from installer.resolve import resolve_methods
 from installer.run import CommandError
+from installer.update import UpdateTarget, perform_update
 
 _MAC = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
 _BREW_PREFIX = Path("/opt/homebrew")
@@ -2023,3 +2024,219 @@ def test_sdkman_removal_hint_degrades_without_a_package() -> None:
     without_package = removal_hint(_record("sdkman"), "groovy")
     assert without_package is not None
     assert chr(96) not in without_package
+
+
+def _cellar_binary(prefix: Path, formula: str, version: str, cmd: str) -> Path:
+    return _touch_executable(prefix / "Cellar" / formula / version / "bin", cmd)
+
+
+def _link_cellar(prefix: Path, formula: str, version: str, cmd: str) -> tuple[Path, Path]:
+    binary = _cellar_binary(prefix, formula, version, cmd)
+    bin_dir = prefix / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    link = bin_dir / cmd
+    link.symlink_to(binary)
+    return binary, link
+
+
+def _absent_sdkman(cmd: str, candidate: str | None = None) -> Tool:
+    return _sdkman_tool("/no/such/sdkman/bin", cmd=cmd, candidate=candidate or cmd)
+
+
+def test_undeclared_brew_cellar_groovy(tmp_path: Path) -> None:
+    prefix = tmp_path / "brew"
+    _binary, link = _link_cellar(prefix, "groovy", "4.0.24", "groovy")
+    tool = _absent_sdkman("groovy")
+    result = _resolve(
+        tool,
+        inventory=_readable(brew_formulae={"groovy": "4.0.24"}, brew_prefix=prefix),
+        which=str(link),
+    )
+    assert result.owner == "brew"
+    assert result.package == "groovy"
+    assert result.confidence == "direct"
+    assert result.current_version == "4.0.24"
+    assert result.off_policy is True
+    calls: list[list[str]] = []
+    outcome = perform_update(
+        UpdateTarget(tool=tool, ownership=result),
+        platform=_MAC,
+        runner=calls.append,
+        resolve_tag=lambda _repo: "v1.0.0",
+        tools={},
+    )
+    assert outcome.status == "updated"
+    assert calls == [["brew", "upgrade", "groovy"]]
+
+
+def test_undeclared_brew_cellar_java_formula_not_tool_id(tmp_path: Path) -> None:
+    prefix = tmp_path / "brew"
+    _binary, link = _link_cellar(prefix, "openjdk", "21.0.4", "java")
+    result = _resolve(
+        _absent_sdkman("java"),
+        inventory=_readable(brew_formulae={"openjdk": "21.0.4"}, brew_prefix=prefix),
+        which=str(link),
+    )
+    assert result.owner == "brew"
+    assert result.package == "openjdk"
+    assert result.confidence == "direct"
+    assert result.off_policy is True
+
+
+def test_undeclared_brew_cellar_left_behind_not_listed(tmp_path: Path) -> None:
+    prefix = tmp_path / "brew"
+    _binary, link = _link_cellar(prefix, "groovy", "4.0.24", "groovy")
+    result = _resolve(
+        _absent_sdkman("groovy"),
+        inventory=_readable(brew_formulae={}, brew_prefix=prefix),
+        which=str(link),
+    )
+    assert result.owner == "unknown"
+    assert all(candidate.owner != "brew" for candidate in result.candidates)
+
+
+def test_undeclared_brew_unreadable_inventory_is_unknown(tmp_path: Path) -> None:
+    prefix = tmp_path / "brew"
+    _binary, link = _link_cellar(prefix, "groovy", "4.0.24", "groovy")
+    result = _resolve(
+        _absent_sdkman("groovy"),
+        inventory=ManagerInventory(
+            brew_formulae=None,
+            brew_casks={},
+            pnpm_globals=frozenset(),
+            uv_tools={},
+            brew_prefix=prefix,
+        ),
+        which=str(link),
+    )
+    assert result.owner == "unknown"
+    assert all(candidate.owner != "brew" for candidate in result.candidates)
+
+
+def test_undeclared_brew_bad_cellar_name(tmp_path: Path) -> None:
+    prefix = tmp_path / "brew"
+    name = "bad;name"
+    _binary, link = _link_cellar(prefix, name, "1.0", "groovy")
+    result = _resolve(
+        _absent_sdkman("groovy"),
+        inventory=_readable(brew_formulae={name: "1.0"}, brew_prefix=prefix),
+        which=str(link),
+    )
+    assert result.owner == "unknown"
+    assert all(candidate.owner != "brew" for candidate in result.candidates)
+
+
+def test_undeclared_brew_shadowed_by_sdkman(tmp_path: Path) -> None:
+    prefix = tmp_path / "brew"
+    _cellar_binary(prefix, "openjdk", "21.0.4", "java")
+    bin_dir = prefix / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "java").symlink_to(prefix / "Cellar" / "openjdk" / "21.0.4" / "bin" / "java")
+    sdk_bin = tmp_path / "sdk" / "candidates" / "java" / "current" / "bin"
+    sdk_java = _touch_executable(sdk_bin, "java")
+    result = _resolve(
+        _sdkman_tool(str(sdk_bin), cmd="java", candidate="java"),
+        inventory=_readable(brew_formulae={"openjdk": "21.0.4"}, brew_prefix=prefix),
+        which=str(sdk_java),
+    )
+    assert result.owner == "sdkman"
+    assert result.confidence == "direct"
+    assert result.shadowed is True
+    assert result.off_policy is False
+    assert any(
+        candidate.owner == "brew" and candidate.package == "openjdk"
+        for candidate in result.candidates
+    )
+
+
+def test_undeclared_brew_shadowed_by_os_package(tmp_path: Path) -> None:
+    prefix = tmp_path / "brew"
+    _cellar_binary(prefix, "openjdk", "21.0.4", "java")
+    bin_dir = prefix / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "java").symlink_to(prefix / "Cellar" / "openjdk" / "21.0.4" / "bin" / "java")
+    calls: list[list[str]] = []
+    platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+    result = _resolve(
+        _absent_sdkman("java"),
+        inventory=_readable(brew_formulae={"openjdk": "21.0.4"}, brew_prefix=prefix),
+        which="/usr/bin/java",
+        platform=platform,
+        native_probe=_os_package_probe("java-21-openjdk-headless", calls),
+    )
+    assert result.owner == "os-package"
+    assert result.package == "java-21-openjdk-headless"
+    assert result.confidence == "direct"
+    assert result.off_policy is False
+    assert result.shadowed is True
+    assert result.candidates[0].owner == "os-package"
+    assert any(
+        candidate.owner == "brew" and candidate.package == "openjdk"
+        for candidate in result.candidates
+    )
+    assert calls
+
+
+def test_undeclared_brew_keg_only_shadowed_by_sdkman(tmp_path: Path) -> None:
+    prefix = tmp_path / "brew"
+    _cellar_binary(prefix, "openjdk", "21.0.4", "java")
+    opt = prefix / "opt" / "openjdk"
+    opt.parent.mkdir(parents=True)
+    opt.symlink_to(prefix / "Cellar" / "openjdk" / "21.0.4")
+    sdk_bin = tmp_path / "sdk" / "candidates" / "java" / "current" / "bin"
+    sdk_java = _touch_executable(sdk_bin, "java")
+    result = _resolve(
+        _sdkman_tool(str(sdk_bin), cmd="java", candidate="java"),
+        inventory=_readable(brew_formulae={"openjdk": "21.0.4"}, brew_prefix=prefix),
+        which=str(sdk_java),
+    )
+    assert result.owner == "sdkman"
+    assert result.shadowed is True
+    assert result.off_policy is False
+    assert any(
+        candidate.owner == "brew" and candidate.package == "openjdk"
+        for candidate in result.candidates
+    )
+
+
+def test_undeclared_brew_off_path_groovy(tmp_path: Path) -> None:
+    prefix = tmp_path / "brew"
+    _link_cellar(prefix, "groovy", "4.0.24", "groovy")
+    result = _resolve(
+        _absent_sdkman("groovy"),
+        inventory=_readable(brew_formulae={"groovy": "4.0.24"}, brew_prefix=prefix),
+        which=None,
+    )
+    assert result.owner == "brew"
+    assert result.package == "groovy"
+    assert result.confidence == "by-elimination"
+    assert result.off_policy is True
+
+
+def test_undeclared_brew_dangling_link(tmp_path: Path) -> None:
+    prefix = tmp_path / "brew"
+    bin_dir = prefix / "bin"
+    bin_dir.mkdir(parents=True)
+    link = bin_dir / "groovy"
+    link.symlink_to(prefix / "Cellar" / "groovy" / "4.0.24" / "bin" / "groovy")
+    result = _resolve(
+        _absent_sdkman("groovy"),
+        inventory=_readable(brew_formulae={"groovy": "4.0.24"}, brew_prefix=prefix),
+        which=str(link),
+    )
+    assert result.owner == "unknown"
+    assert all(candidate.owner != "brew" for candidate in result.candidates)
+
+
+def test_undeclared_script_only_by_elimination_unchanged(tmp_path: Path) -> None:
+    tool = Tool(
+        id="bun",
+        name="bun",
+        category="runtime",
+        cmd="bun",
+        methods=(Method(kind="script", params={"url": "https://example.invalid/install.sh"}),),
+    )
+    result = _resolve(tool, inventory=_empty_readable(), artifacts=[tmp_path / "bun"], which=None)
+    assert result.owner == "installer"
+    assert result.confidence == "by-elimination"
+    assert result.method is None

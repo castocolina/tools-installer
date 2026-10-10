@@ -52,7 +52,7 @@ import os
 import re
 import shutil
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -308,6 +308,7 @@ class ManagerOwnership:
     active_candidate: Owner | None
     active_path: Path | None
     unknown_reason: str | None
+    off_policy: bool = False
 
 
 def parse_brew_list_versions(raw: str) -> dict[str, str] | None:
@@ -492,6 +493,70 @@ def competing_owners(tool: Tool, platform: Platform) -> frozenset[Owner]:
     return frozenset(owners)
 
 
+def _brew_cellar_formula(active_path: Path | None, inventory: ManagerInventory) -> str | None:
+    """Formula named by a path that resolves under `<prefix>/Cellar/<formula>/`.
+
+    A claim needs the live file (dangling links are not proof), a Cellar
+    segment that fullmatches `_BREW_NAME_RE`, and that formula in the inventory
+    already read from `brew list`. The name is never taken from the tool id.
+    """
+    if active_path is None or inventory.brew_prefix is None or inventory.brew_formulae is None:
+        return None
+    try:
+        resolved = active_path.resolve()
+        cellar = (inventory.brew_prefix / "Cellar").resolve()
+    except OSError:
+        return None
+    if cellar not in resolved.parents:
+        return None
+    name = resolved.relative_to(cellar).parts[0]
+    if not _BREW_NAME_RE.fullmatch(name) or name not in inventory.brew_formulae:
+        return None
+    if not active_path.is_file():
+        return None
+    return name
+
+
+def _undeclared_brew_candidate(
+    tool: Tool,
+    inventory: ManagerInventory,
+    active_path: Path | None,
+) -> tuple[OwnershipCandidate, bool] | None:
+    """First Cellar proof among the active path, brew's bin link, and keg-only opt links.
+
+    The bool is True when the winning path was not the active binary, so a
+    shadowed brew copy can stay out of the native/os-package gate (D-06).
+    """
+    prefix = inventory.brew_prefix
+    formulae = inventory.brew_formulae
+    proofs: list[tuple[Path, str | None, bool]] = []
+    if active_path is not None:
+        proofs.append((active_path, None, False))
+    if prefix is not None and formulae is not None:
+        proofs.append((prefix / "bin" / tool.cmd, None, True))
+        # shortcut: opt/<formula>/bin/<cmd> is stat'ed for every listed formula; build a
+        # cmd->formula index once per inventory if this shows up in a profile.
+        for formula in sorted(formulae):
+            proofs.append((prefix / "opt" / formula / "bin" / tool.cmd, formula, True))
+    for proof_path, required, via_link in proofs:
+        name = _brew_cellar_formula(proof_path, inventory)
+        if name is None or formulae is None or name not in formulae:
+            continue
+        if required is not None and name != required:
+            continue
+        return (
+            OwnershipCandidate(
+                owner="brew",
+                method=None,
+                package=name,
+                current_version=formulae[name],
+                evidence=f"Homebrew formula {name} owns {proof_path}",
+            ),
+            via_link,
+        )
+    return None
+
+
 def resolve_ownership(
     tool: Tool,
     *,
@@ -504,9 +569,23 @@ def resolve_ownership(
 ) -> ManagerOwnership:
     applicable = resolve_methods(tool, platform)
     methods = (*applicable, *_ownership_only_methods(tool, platform))
-    candidates = _collect_candidates(tool, methods, inventory, artifacts)
-    unreadable = _unreadable(tool, platform, inventory)
     active_path = _resolve_active_path(which(tool.cmd))
+    candidates = _collect_candidates(tool, methods, inventory, artifacts)
+    undeclared_brew = False
+    shadow_brew: OwnershipCandidate | None = None
+    if not any(candidate.owner == "brew" for candidate in candidates):
+        proof = _undeclared_brew_candidate(tool, inventory, active_path)
+        if proof is not None:
+            brew_candidate, via_link = proof
+            undeclared_brew = True
+            order = {owner: index for index, owner in enumerate(_CANDIDATE_ORDER)}
+            candidates = tuple(
+                sorted((*candidates, brew_candidate), key=lambda item: order[item.owner])
+            )
+            # D-06: link-proven brew is not the live binary, so it must not block native/os-package.
+            if via_link and active_path is not None:
+                shadow_brew = brew_candidate
+    unreadable = _unreadable(tool, platform, inventory)
     dirs = owner_dirs(inventory=inventory, managed_bin_dir=managed_bin_dir, platform=platform)
     for owner, prefixes in _location_dirs(tool, methods).items():
         dirs[owner] = dirs.get(owner, ()) + prefixes
@@ -524,6 +603,7 @@ def resolve_ownership(
             candidates=candidates,
             active_candidate=active_candidate,
             active_path=active_path,
+            off_policy=undeclared_brew and winner.owner == "brew",
         )
     # D-05: consult the native-package-manager adapter HERE -- immediately
     # after the tracked-candidate active-path branch above and immediately
@@ -535,9 +615,14 @@ def resolve_ownership(
     # below and a fallback placed at the end would never execute. This one
     # call site covers both unknown branches, both by-elimination branches,
     # and the real-machine case.
-    native = _native_owner(tool, native_probe, candidates, unreadable, active_path, platform)
+    gated = candidates
+    if shadow_brew is not None:
+        gated = tuple(candidate for candidate in candidates if candidate is not shadow_brew)
+    native = _native_owner(tool, native_probe, gated, unreadable, active_path, platform)
     if native is not None:
-        return native
+        if shadow_brew is None:
+            return native
+        return replace(native, candidates=(*native.candidates, shadow_brew), shadowed=True)
     # 15.4-01/D-01: the same call-site reasoning as `_native_owner` above, one
     # rung lower. This is the plan's resolution of 15.4-RESEARCH.md Open
     # Question 3: a base-image tool's live `/usr/bin/<cmd>` is attributable to
@@ -565,11 +650,11 @@ def resolve_ownership(
     # (tests/test_ownership.py) is the parametrized immutable/mutable pair
     # that pins this -- a reader tempted to add the gate should find that test
     # failing before writing it.
-    os_package = _os_package_owner(
-        tool, native_probe, candidates, unreadable, active_path, platform
-    )
+    os_package = _os_package_owner(tool, native_probe, gated, unreadable, active_path, platform)
     if os_package is not None:
-        return os_package
+        if shadow_brew is None:
+            return os_package
+        return replace(os_package, candidates=(*os_package.candidates, shadow_brew), shadowed=True)
     if active_path is not None:
         return _unknown(
             tool,
@@ -592,6 +677,7 @@ def resolve_ownership(
             candidates=candidates,
             active_candidate=None,
             active_path=None,
+            off_policy=undeclared_brew and candidates[0].owner == "brew",
         )
     script_method = next((method for method in applicable if method.kind == "script"), None)
     if not candidates and script_method is not None and is_installed(tool) and not unreadable:
@@ -610,6 +696,7 @@ def resolve_ownership(
             candidates=(synthetic,),
             active_candidate=None,
             active_path=None,
+            off_policy=False,
         )
     return _unknown(
         tool,
@@ -720,6 +807,7 @@ def _native_owner(
         candidates=(synthetic,),
         active_candidate=None,
         active_path=active_path,
+        off_policy=False,
     )
 
 
@@ -771,6 +859,7 @@ def _os_package_owner(
         candidates=(synthetic,),
         active_candidate=None,
         active_path=active_path,
+        off_policy=False,
     )
 
 
@@ -921,6 +1010,7 @@ def _owned(
     candidates: tuple[OwnershipCandidate, ...],
     active_candidate: Owner | None,
     active_path: Path | None,
+    off_policy: bool = False,
 ) -> ManagerOwnership:
     if confidence not in MUTATION_GRADE:
         raise RuntimeError(f"owned result must use MUTATION_GRADE, not {confidence}")
@@ -936,6 +1026,7 @@ def _owned(
         active_candidate=active_candidate,
         active_path=active_path,
         unknown_reason=None,
+        off_policy=off_policy,
     )
 
 
