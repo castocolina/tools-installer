@@ -6,6 +6,7 @@ nyquist_compliant: true
 wave_0_complete: true
 created: "2026-10-09"
 backfilled: "2026-10-10"
+audited: "2026-10-10"
 ---
 
 # Phase 16 — Validation Strategy
@@ -53,6 +54,39 @@ backfilled: "2026-10-10"
 | 16-08-02 | 16-08 | 2 | D-22 | — | Foreign marker block never touched | unit | `uv run pytest tests/test_rcclean.py -k marker_block -x` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+
+### Decision coverage audit (2026-10-10)
+
+All 10 map commands above re-run green. Every decision is mapped to existing automated tests; no tests were added.
+
+| Decision | Status | Representative automated tests |
+|----------|--------|-------------------------------|
+| D-01 | COVERED | `test_ownership.py::test_undeclared_brew_cellar_groovy`, `::test_sdkman_location_proof_resolves_direct_when_which_matches`, `test_version_status.py::test_sdkman_version_through_real_resolve_ownership` |
+| D-02 | COVERED | `test_catalog_tui.py::test_off_policy_owner_cell_and_detail_name_the_declared_manager` |
+| D-03 | PARTIAL (by design) | The "offer" is text only: `test_update.py::test_off_policy_brew_update_names_the_declared_manager` ("moving it there is not available yet"). No migrate action exists, per D-04. |
+| D-04 | DEFERRED | Migration flow is out of Phase 16 scope; nothing to test. |
+| D-05 | COVERED | `test_update.py::test_sdkman_owned_update_refuses_with_real_command`, `::test_off_policy_brew_update_names_the_declared_manager` |
+| D-06 | COVERED | `test_ownership.py::test_also_installed_note_*`, `test_catalog_tui.py::test_detail_names_also_installed_via_the_shadowed_manager` |
+| D-07 | COVERED | `test_ownership.py::test_own_installer_location_proof_resolves_bun_when_brew_does_not_list_it`, `test_registry.py::test_kitty_linux_script_declares_vendor_bin_dir` |
+| D-08 | COVERED | `test_catalog_tui.py::test_unknown_detail_names_the_active_binary`, `test_ownership.py::test_active_path_note_*` |
+| D-09 | COVERED | `test_model.py::test_skill_harnesses_include_factory_droid_and_gemini_cli`, `test_skill_lifecycle.py::test_superpowers_catalog_is_multi_host_without_a_forced_pi_dependency` |
+| D-10 | COVERED | `test_skill_lifecycle.py::test_shipped_packs_report_per_host_status`, `::test_one_cli_call_per_harness_across_packs` |
+| D-11 | COVERED | `test_skill_lifecycle.py::test_cursor_is_present_from_disk_when_path_misses`, `::test_skills_lock_*`, `::test_install_state_file_*` |
+| D-12 | COVERED | `test_catalog_tui.py::test_skill_inst_cell_shows_persisted_answer_with_stale_mark`, `::test_skill_inst_cell_drops_stale_mark_after_the_probe_lands` |
+| D-13 | COVERED | `test_catalog_tui.py::test_skill_owner_cell_lists_hosts_and_truncates_when_wider_than_the_column` |
+| D-14 | COVERED | `test_catalog_tui.py::test_skill_probe_covers_packs_when_system_view_mounts_first`, `test_version_status.py::test_refresh_skills_persists_once_and_skips_the_second_call` |
+| D-15 | COVERED | `test_skill_lifecycle.py::test_superpowers_install_on_a_claude_only_host_omits_pi`, `::test_cursor_is_present_from_disk_when_path_misses` |
+| D-16 | COVERED | `test_resolve.py::test_unavailable_reason_alacritty_names_immutable_host`, `test_catalog_tui.py::test_unavailable_reason_renders_in_row_and_detail` |
+| D-17 | COVERED | `test_execute_screen.py::test_current_only_selection_says_already_current_not_install_zero`, `::test_outdated_selected_tool_stays_an_update_target` |
+| D-18 | COVERED | `test_ownership.py::test_dangling_pnpm_shim_reads_broken`, `test_catalog_tui.py::test_broken_row_marks_inst_red_and_explains_repair`, `test_execute_screen.py::test_broken_selection_is_installed_with_repair` |
+| D-19 | COVERED | `test_registry.py::test_every_script_method_declares_a_location_or_explains_no_bin_dir`, `::test_kitty_declared_location_counts_as_installed` |
+| D-20 | COVERED | `test_execute_screen.py::test_explicit_current_selection_reapplies_post_install_once`, `::test_installed_drag_in_is_not_reapplied`, `test_engine.py::test_reapply_post_install_*` |
+| D-21 | COVERED | `test_shellrc.py::test_guard_in_place_rewrites_one_foreign_bashrc_line`, `test_rcclean.py::test_path_writer_lines_prepend_is_guardable` |
+| D-22 | COVERED | `test_rcclean.py::test_marker_block_kitty_names_the_owner`, `test_guidance.py::test_foreign_block_writer_is_named_and_not_offered` |
+| D-23 | COVERED | `test_shellrc.py::test_guard_refuses_a_preexisting_backup_with_different_bytes`, `::test_guard_preserves_mode_0600_on_the_file_and_the_backup`, `test_wizard_app.py` (`.bashrc.tools-installer.old`) |
+| D-24 | COVERED | `test_wizard_app.py::test_doctor_guard_chain_confirms_files_in_record_order`, `::test_doctor_guard_no_skips_without_calling_guard_file` |
+
+Open (not Phase 16 test gaps): code-review WR-01 (`installer/shellrc.py:1184`) and IN-01 (`installer/rcclean.py:283`) have no regression tests yet; they are unfixed findings.
 
 ---
 
