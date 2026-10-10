@@ -243,6 +243,47 @@ def test_unavailable_reason_rg_on_immutable_fedora_is_available() -> None:
     )
 
 
+def test_unavailable_reason_container_names_its_macos_floor() -> None:
+    reason = unavailable_reason(
+        _registry_tool("container"),
+        Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="14.0"),
+    )
+    assert reason is not None
+    assert reason.short == "needs macOS 26+"
+
+
+def test_unavailable_reason_mixed_lists_shorts_in_declaration_order() -> None:
+    tool = Tool(
+        id="split",
+        name="split",
+        category="c",
+        cmd="split",
+        methods=(
+            Method(kind="script", params={"url": "https://example.test/m"}, os=("macos",)),
+            Method(
+                kind="script",
+                params={"url": "https://example.test/l"},
+                os=("fedora",),
+                arch=("arm64",),
+            ),
+        ),
+    )
+    reason = unavailable_reason(
+        tool, Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+    )
+    assert reason is not None
+    assert reason.detail == "no method applies here: fedora not supported; not built for amd64"
+
+
+def test_unavailable_reason_empty_methods() -> None:
+    tool = Tool(id="empty", name="empty", category="c", cmd="empty", methods=())
+    reason = unavailable_reason(
+        tool, Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
+    )
+    assert reason is not None
+    assert reason.short == "no install method"
+
+
 def test_unavailable_reason_matches_platform_could_support_for_every_tool() -> None:
     platforms = (
         Platform(os="fedora", arch="amd64", immutable=True, has_brew=True),
