@@ -20,6 +20,7 @@ from installer.model import (
 from installer.platform import Platform
 from installer.skill_lifecycle import (
     SKILL_HARNESS_LABELS,
+    _install_state_status,  # pyright: ignore[reportPrivateUsage]
     inspect_skill_packs,
     inspect_status,
     perform_action,
@@ -793,6 +794,23 @@ def test_install_state_file_is_present_and_missing_is_absent(tmp_path: Path) -> 
 
     assert absent["opengsd"]["claude"] == "absent"
     assert present["opengsd"]["claude"] == "present"
+
+
+def test_install_state_probe_honors_match(tmp_path: Path) -> None:
+    state = tmp_path / ".claude" / "gsd-install-state.json"
+    state.parent.mkdir()
+    state.write_text("{}", encoding="utf-8")
+
+    assert (
+        _install_state_status(SkillStatusProbe("claude", "install-state", "gsd-core"), tmp_path)
+        == "present"
+    )
+    assert (
+        _install_state_status(
+            SkillStatusProbe("claude", "install-state", "something-else"), tmp_path
+        )
+        == "unknown"
+    )
 
 
 def test_install_state_unknown_harness_is_unknown(tmp_path: Path) -> None:

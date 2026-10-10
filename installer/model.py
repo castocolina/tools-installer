@@ -404,6 +404,7 @@ def _parse_status_probes(
     if not isinstance(raw, list):
         raise ValueError(f"tool '{tool_id}': skill_lifecycle 'status_probes' must be a list")
     probes: list[SkillStatusProbe] = []
+    seen_harnesses: set[str] = set()
     for item in cast(list[object], raw):
         if not isinstance(item, dict):
             raise ValueError(
@@ -430,6 +431,12 @@ def _parse_status_probes(
                 f"tool '{tool_id}': skill_lifecycle status_probes harness '{harness}' "
                 "is not in supported_harnesses"
             )
+        if harness in seen_harnesses:
+            raise ValueError(
+                f"tool '{tool_id}': skill_lifecycle status_probes repeats harness "
+                f"'{harness}' (duplicate)"
+            )
+        seen_harnesses.add(harness)
         if not isinstance(match, str) or _SKILL_MATCH_RE.fullmatch(match) is None:
             raise ValueError(
                 f"tool '{tool_id}': skill_lifecycle status_probes match '{match}' "

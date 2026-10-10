@@ -938,3 +938,63 @@ def test_postinstall_hook_names_matches_the_real_dispatch_table() -> None:
     from installer.postinstall import POSTINSTALL_HOOKS
 
     assert frozenset(POSTINSTALL_HOOKS) == POSTINSTALL_HOOK_NAMES
+
+
+def test_duplicate_status_probe_harness_fails_at_load(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo-skills"
+category = "ai"
+tier = "user"
+[[tool.method]]
+kind = "skill_pack"
+
+[tool.skill_lifecycle]
+source = "https://github.com/example/skills"
+owner = "example"
+supported_harnesses = ["claude"]
+revision_policy = "upstream-latest"
+targets = [{ scope = "harness", path = "<codex-plugin-dir>/demo" }]
+status_probes = [
+  { harness = "claude", via = "plugin-cli", match = "demo" },
+  { harness = "claude", via = "plugin-cli", match = "other" },
+]
+
+[tool.skill_lifecycle.install]
+mode = "manual-required"
+instructions = ["Review and run the official install flow."]
+
+[tool.skill_lifecycle.status]
+mode = "manual-required"
+instructions = ["Review and run the official status flow."]
+
+[tool.skill_lifecycle.update]
+mode = "manual-required"
+instructions = ["Review and run the official update flow."]
+
+[tool.skill_lifecycle.removal]
+mode = "manual-required"
+instructions = ["Review and run the official removal flow."]
+""",
+    )
+
+    with pytest.raises(ValueError, match="demo-skills") as exc:
+        load_tools(manifest)
+    message = str(exc.value)
+    assert "claude" in message
+    assert "duplicate" in message
+
+
+def test_shipped_status_probes_do_not_repeat_a_harness() -> None:
+    registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+    tools = load_tools(registry)
+    assert tools
+    for tool in tools:
+        lifecycle = tool.skill_lifecycle
+        if lifecycle is None:
+            continue
+        harnesses = [probe.harness for probe in lifecycle.status_probes]
+        assert len(harnesses) == len(set(harnesses)), tool.id
+

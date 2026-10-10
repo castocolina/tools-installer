@@ -201,6 +201,8 @@ _HOST_HEADER = "Run each block inside the named host."
 # Env-var-unset defaults of opengsd's per-runtime config dirs. claude is the
 # global ~/.claude, not a project .claude. kimi is KIMI_CODE_HOME (~/.kimi-code),
 # not KIMI_CONFIG_DIR (~/.config/agents). Env overrides are not read.
+INSTALL_STATE_FILES: dict[str, str] = {"gsd-core": "gsd-install-state.json"}
+
 INSTALL_STATE_HARNESS_DIRS: dict[str, str] = {
     "antigravity": ".gemini/antigravity",
     "claude": ".claude",
@@ -360,10 +362,11 @@ def _skills_lock_status(
 
 
 def _install_state_status(status_probe: SkillStatusProbe, home: Path) -> HarnessStatus:
+    filename = INSTALL_STATE_FILES.get(status_probe.match)
     rel = INSTALL_STATE_HARNESS_DIRS.get(status_probe.harness)
-    if rel is None:
+    if filename is None or rel is None:
         return "unknown"
-    return "present" if (home / rel / "gsd-install-state.json").is_file() else "absent"
+    return "present" if (home / rel / filename).is_file() else "absent"
 
 
 def _harness_status(
