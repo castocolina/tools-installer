@@ -68,7 +68,7 @@ from installer.postinstall import BREW_BIN_DIRS
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.resolve import platform_could_support
-from installer.run import OutputRunner, Runner, run_captured
+from installer.run import OutputRunner, Runner, run_captured, run_query
 from installer.selection import Choice
 from installer.settings import (
     SettingsStore,
@@ -894,7 +894,9 @@ def _build_app(
         probe_output=probe_version_output,
         managed_bin_dir=_DEFAULT_BIN_DIR,
         native_probe=run_probe,
+        skill_probe=lambda argv: run_query(argv),
     )
+    version_refresh.seed_skills_from_cache()
 
     def _do_uninstall(decision: UninstallDecision) -> SweepResult:
         # Runs live inside the UninstallScreen. rc_paths is the standard set so the

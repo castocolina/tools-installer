@@ -22,11 +22,12 @@ from installer.enums import Audience, Priority
 from installer.model import Tool
 from installer.ownership import MUTATION_GRADE, owner_detail, owner_label
 from installer.selection import select_tools, unstaged_recommends
+from installer.skill_lifecycle import SKILL_HARNESS_LABELS
 from installer.status import is_default_shell
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import AppScreen, StatusLine, mark, run_live
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
-from installer.version_status import VersionRefreshService, VersionStatus
+from installer.version_status import SkillHostStatus, VersionRefreshService, VersionStatus
 
 TableSortKey = Literal["id", "category", "priority", "audience", "installed"]
 
@@ -125,6 +126,15 @@ class VersionStatusRefreshed(Message):
     def __init__(self, statuses: dict[str, VersionStatus], generation: int, epoch: int) -> None:
         super().__init__()
         self.statuses = statuses
+        self.generation = generation
+        self.epoch = epoch
+
+
+class SkillStatusRefreshed(Message):
+    """A skill-pack probe finished. `epoch` discards a pass a mutation superseded."""
+
+    def __init__(self, generation: int, epoch: int) -> None:
+        super().__init__()
         self.generation = generation
         self.epoch = epoch
 
@@ -323,6 +333,7 @@ class CatalogScreen(AppScreen):
         self._version_statuses: dict[str, VersionStatus] = {}
         self._version_refresh_generation = 0
         self.version_refreshing = False
+        self.skill_refreshing = False
         self._browser: ToolBrowser[Tool] = ToolBrowser(self._adapter(), selected=staged)
         self.recommends_line = StatusLine()
         self._pending_recommends: tuple[str, ...] = ()
@@ -379,6 +390,7 @@ class CatalogScreen(AppScreen):
             return
         self._version_refresh_generation += 1
         self.version_refreshing = True
+        self.skill_refreshing = True
         # Repaint through the same path the completion handler already uses
         # so the checking marker is something a user can actually see, not
         # only a value _ver_cell returns to a direct caller. Without this,
@@ -388,7 +400,9 @@ class CatalogScreen(AppScreen):
         # because self.tools is unchanged between the two adapters; the
         # on_mount call site stays safe because reload guards on is_mounted.
         self._browser.reload(self._adapter())
-        self._refresh_versions_worker(self._version_refresh_generation)
+        generation = self._version_refresh_generation
+        self._refresh_versions_worker(generation)
+        self._refresh_skills_worker(generation)
 
     @work(thread=True, exclusive=True, group="version-refresh", exit_on_error=False)
     def _refresh_versions_worker(self, generation: int) -> None:
@@ -404,6 +418,26 @@ class CatalogScreen(AppScreen):
         finally:
             self.post_message(VersionStatusRefreshed(statuses, generation, epoch))
 
+    @work(thread=True, exclusive=True, group="skill-refresh", exit_on_error=False)
+    def _refresh_skills_worker(self, generation: int) -> None:
+        epoch = 0
+        service = self._version_refresh
+        try:
+            if service is not None:
+                epoch = service.epoch
+                run_live(lambda: service.refresh_skills(self._catalog))
+        finally:
+            self.post_message(SkillStatusRefreshed(generation, epoch))
+
+    def on_skill_status_refreshed(self, message: "SkillStatusRefreshed") -> None:
+        if message.generation != self._version_refresh_generation:
+            return
+        self.skill_refreshing = False
+        service = self._version_refresh
+        if service is None or message.epoch != service.epoch:
+            return
+        self._browser.reload(self._adapter())
+
     def on_version_status_refreshed(self, message: "VersionStatusRefreshed") -> None:
         if message.generation != self._version_refresh_generation:
             return
@@ -417,6 +451,20 @@ class CatalogScreen(AppScreen):
         # superseded generation and a raced epoch, so this is the ONE point
         # where the shared ownership map is known to hold a current pass.
         self.post_message(OwnershipRefreshed())
+
+    def _skill_status(self, tool: Tool) -> SkillHostStatus | None:
+        if tool.skill_lifecycle is None:
+            return None
+        service = self._version_refresh
+        if service is None:
+            return None
+        return service.skill_status_of(tool.id)
+
+    def _inst_cell(self, tool: Tool, installed: bool) -> Text:
+        status = self._skill_status(tool)
+        if status is not None and any(value == "present" for value in status.hosts.values()):
+            return Text("✓", style="green")
+        return Text("✓", style="green") if installed else Text("○", style="yellow")
 
     def _ver_cell(self, tool: Tool) -> Text:
         if not self._installed.get(tool.id, False):
@@ -469,6 +517,12 @@ class CatalogScreen(AppScreen):
 
     # -- catalog data wiring for the browser adapter -----------------------
     def _owner_cell(self, tool: Tool) -> Text:
+        status = self._skill_status(tool)
+        if status is not None:
+            for harness, value in status.hosts.items():
+                if value == "present":
+                    return Text(SKILL_HARNESS_LABELS.get(harness, harness))
+            return Text("")
         # D-02: blank means exactly "genuinely don't know" -- no service
         # wired, no ownership record produced for this tool yet, or the
         # record itself resolved to `unknown` (owner_label returns `None`
@@ -517,7 +571,7 @@ class CatalogScreen(AppScreen):
             Text(tool.id, style="bold"),
             Text(tool.category),
             Text(AUDIENCE_LABEL[tool.audience], style=_AUDIENCE_STYLE[tool.audience]),
-            Text("✓", style="green") if installed else Text("○", style="yellow"),
+            self._inst_cell(tool, installed),
             ver,
             self._owner_cell(tool),
             Text(desc, style="dim"),

@@ -16,6 +16,7 @@ from installer.version_cache import (
     encode_manager_snapshot,
     is_manager_stale,
     is_stale,
+    load_skill_statuses,
     load_version_cache,
     save_version_cache,
     should_fetch,
@@ -247,3 +248,41 @@ def test_managers_and_tools_keys_survive_each_other(tmp_path: Path) -> None:
     raw = json.loads(path.read_text())
     assert "rg" in raw["tools"]
     assert raw["managers"]["inventory"]["brew_formulae"]["ripgrep"] == "14.1.0"
+
+
+def test_skill_statuses_round_trip_preserve_and_drop_malformed(tmp_path: Path) -> None:
+    path = tmp_path / "versions.json"
+    save_version_cache(path, {}, skills={"superpowers": {"claude": "present"}})
+    assert load_skill_statuses(path) == {"superpowers": {"claude": "present"}}
+    assert json.loads(path.read_text())["skills"]["superpowers"]["claude"] == "present"
+
+    save_version_cache(
+        path,
+        {
+            "codegraph": VersionCacheEntry(
+                latest_version="v1.6.0",
+                checked_at="2026-09-01T00:00:00+00:00",
+                failed_at=None,
+            )
+        },
+    )
+    assert load_skill_statuses(path) == {"superpowers": {"claude": "present"}}
+
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tools": {},
+                "managers": {},
+                "skills": {
+                    "bad-type": "present",
+                    "bad-status": {"claude": "installed"},
+                    "ok": {"pi": "absent"},
+                },
+            }
+        )
+    )
+    loaded = load_skill_statuses(path)
+    assert loaded["bad-type"] == {}
+    assert loaded["bad-status"] == {}
+    assert loaded["ok"] == {"pi": "absent"}

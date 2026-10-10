@@ -20,6 +20,9 @@ queries and the five inventory queries always run together in one pass, so a
 per-manager window would add state without removing a single child process
 in the common case; and ownership resolution needs the whole inventory at
 once, so a partially-refreshed snapshot has no consumer.
+
+Skill-pack per-host answers live under the same envelope's `skills` key.
+A save that omits `skills` preserves that key, the same way `managers=None` does.
 """
 
 from __future__ import annotations
@@ -123,15 +126,51 @@ def _tools_mapping(raw: object) -> dict[str, object] | None:
     return mapping
 
 
-def _existing_managers(path: Path) -> dict[str, object]:
+def _envelope(path: Path) -> dict[str, object] | None:
     try:
         raw: object = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
-        return {}
+        return None
     mapping = _as_object(raw)
     if mapping is None or "tools" not in mapping:
+        return None
+    return mapping
+
+
+def _existing_managers(path: Path) -> dict[str, object]:
+    mapping = _envelope(path)
+    if mapping is None:
         return {}
     return _as_object(mapping.get("managers", {})) or {}
+
+
+_SKILL_STATUSES = frozenset({"present", "absent", "unknown"})
+
+
+def _existing_skills(path: Path) -> dict[str, object]:
+    mapping = _envelope(path)
+    if mapping is None:
+        return {}
+    return _as_object(mapping.get("skills", {})) or {}
+
+
+def load_skill_statuses(path: Path) -> dict[str, dict[str, str]]:
+    """Per-host skill answers. A non-dict or out-of-vocabulary tool entry is {}."""
+    out: dict[str, dict[str, str]] = {}
+    for tool_id, raw in _existing_skills(path).items():
+        hosts = _as_object(raw)
+        if hosts is None:
+            out[tool_id] = {}
+            continue
+        decoded: dict[str, str] = {}
+        valid = True
+        for harness, status in hosts.items():
+            if not isinstance(status, str) or status not in _SKILL_STATUSES:
+                valid = False
+                break
+            decoded[harness] = status
+        out[tool_id] = decoded if valid else {}
+    return out
 
 
 def load_version_cache(path: Path) -> dict[str, VersionCacheEntry]:
@@ -156,9 +195,15 @@ def save_version_cache(
     cache: Mapping[str, VersionCacheEntry],
     *,
     managers: Mapping[str, object] | None = None,
+    skills: Mapping[str, Mapping[str, str]] | None = None,
 ) -> None:
-    """Write the versioned envelope. managers=None preserves the existing key."""
+    """Write the versioned envelope. managers=None and skills=None preserve keys."""
     managers_out = dict(managers) if managers is not None else _existing_managers(path)
+    skills_out: dict[str, object] = (
+        {tool_id: dict(hosts) for tool_id, hosts in skills.items()}
+        if skills is not None
+        else _existing_skills(path)
+    )
     payload = {
         "version": 1,
         "tools": {
@@ -170,6 +215,7 @@ def save_version_cache(
             for tool_id, entry in cache.items()
         },
         "managers": managers_out,
+        "skills": skills_out,
     }
     ensure_dir(path.parent)
     atomic_write_text(path, json.dumps(payload, indent=2) + "\n")

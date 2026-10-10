@@ -10,7 +10,14 @@ from typing import cast
 import pytest
 
 from installer.manager_versions import ManagerVersion, OutdatedReport
-from installer.model import Method, Tool
+from installer.model import (
+    Method,
+    SkillLifecycle,
+    SkillOperation,
+    SkillStatusProbe,
+    SkillTarget,
+    Tool,
+)
 from installer.ownership import (
     ManagerInventory,
     ManagerOwnership,
@@ -26,12 +33,14 @@ from installer.version_cache import (
     VersionCacheEntry,
     encode_manager_snapshot,
     load_manager_snapshot,
+    load_skill_statuses,
     load_version_cache,
     save_version_cache,
     should_fetch_managers,
 )
 from installer.version_status import (
     MAX_FETCHES_PER_REFRESH,
+    SkillHostStatus,
     VersionRefreshService,
     VersionStatus,
     resolve_github_release_status,
@@ -1672,3 +1681,64 @@ def test_github_release_probes_at_the_active_path() -> None:
         platform=_platform(),
     )
     assert calls == [["/opt/x/bin/codegraph", "--version"]]
+
+
+def _skill_pack(tool_id: str, probes: tuple[SkillStatusProbe, ...]) -> Tool:
+    manual = SkillOperation(
+        mode="manual-required", instructions=("Review and run the official flow.",)
+    )
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="ai",
+        cmd=tool_id,
+        methods=(Method(kind="skill_pack"),),
+        tier="ai",
+        skill_lifecycle=SkillLifecycle(
+            source="https://github.com/example/skills",
+            owner="example",
+            supported_harnesses=tuple(dict.fromkeys(probe.harness for probe in probes)),
+            revision_policy="upstream-latest",
+            targets=(SkillTarget("harness", "<codex-plugin-dir>/demo"),),
+            install=manual,
+            status=manual,
+            update=manual,
+            removal=manual,
+            status_probes=probes,
+        ),
+    )
+
+
+def test_refresh_skills_persists_once_and_skips_the_second_call(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def skill_probe(argv: list[str]) -> str:
+        calls.append(list(argv))
+        if argv == ["claude", "plugin", "list"]:
+            return "superpowers@claude-plugins-official\n"
+        return ""
+
+    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    path = tmp_path / "versions.json"
+    service = VersionRefreshService(
+        platform=Platform(os="linux", arch="amd64", immutable=True, has_brew=False),
+        cache_path=path,
+        skill_probe=skill_probe,
+        skill_home=tmp_path,
+        which=lambda _cmd: None,
+        query=lambda *_args, **_kwargs: "",
+        pnpm_packages=lambda: (),
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+    )
+    landed = service.refresh_skills([pack])
+    status = service.skill_status_of("superpowers")
+    assert isinstance(status, SkillHostStatus)
+    assert status.hosts == {"claude": "present"}
+    assert status.stale is False
+    assert landed["superpowers"].stale is False
+    assert load_skill_statuses(path) == {"superpowers": {"claude": "present"}}
+
+    calls.clear()
+    service.refresh_skills([pack])
+    assert calls == []

@@ -33,7 +33,16 @@ from installer.deps import resolve_dependencies
 from installer.doctor import DoctorReport
 from installer.enums import Audience
 from installer.manager_versions import OutdatedReport
-from installer.model import Method, Tool, load_categories, load_tools
+from installer.model import (
+    Method,
+    SkillLifecycle,
+    SkillOperation,
+    SkillStatusProbe,
+    SkillTarget,
+    Tool,
+    load_categories,
+    load_tools,
+)
 from installer.ownership import (
     ManagerInventory,
     ManagerOwnership,
@@ -1121,6 +1130,8 @@ def _offline_service(
     which: Callable[[str], str | None] | None = None,
     native_probe: Callable[[list[str]], str] | None = None,
     artifacts_for: Callable[[Tool], list[Path]] | None = None,
+    skill_probe: Callable[[list[str]], str] | None = None,
+    skill_home: Path | None = None,
 ) -> VersionRefreshService:
     return VersionRefreshService(
         platform=platform or Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
@@ -1136,6 +1147,8 @@ def _offline_service(
         pnpm_packages=lambda: (),
         query=lambda *_a, **_k: "",
         native_probe=native_probe,
+        skill_probe=skill_probe,
+        skill_home=skill_home,
     )
 
 
@@ -3042,3 +3055,60 @@ async def test_second_update_press_shows_already_in_flight(tmp_path: Path) -> No
         # post_message do not leak past the end of the test.
         release.set()
         await _wait_until(pilot, lambda: "updated rg" in app.catalog.status_text)
+
+
+def _skill_pack(
+    tool_id: str, probes: tuple[SkillStatusProbe, ...], *, tier: str = "system"
+) -> Tool:
+    manual = SkillOperation(
+        mode="manual-required", instructions=("Review and run the official flow.",)
+    )
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="search",
+        cmd=tool_id,
+        methods=(Method(kind="skill_pack"),),
+        tier=tier,
+        skill_lifecycle=SkillLifecycle(
+            source="https://github.com/example/skills",
+            owner="example",
+            supported_harnesses=tuple(dict.fromkeys(probe.harness for probe in probes)),
+            revision_policy="upstream-latest",
+            targets=(SkillTarget("harness", "<codex-plugin-dir>/demo"),),
+            install=manual,
+            status=manual,
+            update=manual,
+            removal=manual,
+            status_probes=probes,
+        ),
+    )
+
+
+async def test_skill_worker_paints_superpowers_installed_with_claude_code_owner(
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+
+    def skill_probe(argv: list[str]) -> str:
+        calls.append(list(argv))
+        if argv == ["claude", "plugin", "list"]:
+            return "superpowers@claude-plugins-official\n"
+        return ""
+
+    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: None,
+        skill_probe=skill_probe,
+        skill_home=tmp_path,
+    )
+    app = _unified_app([pack], {"superpowers": False}, _BLURBS, version_refresh=service)
+    async with app.run_test(size=(140, 30)) as pilot:
+        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        await pilot.pause()
+        table = app.catalog.query_one(DataTable[Any])
+        assert table.get_cell("superpowers", "inst").plain == "✓"
+        assert table.get_cell("superpowers", "owner").plain == "Claude Code"
+    assert calls

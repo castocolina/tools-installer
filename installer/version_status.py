@@ -46,7 +46,7 @@ import os
 import shutil
 import threading
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
@@ -65,6 +65,7 @@ from installer.platform import Platform
 from installer.pnpm_globals import pnpm_global_packages
 from installer.resolve import resolve_methods
 from installer.run import CommandError, run_query
+from installer.skill_lifecycle import inspect_skill_packs
 from installer.uninstall import plan_uninstall
 from installer.version_cache import (
     ManagerSnapshot,
@@ -72,6 +73,7 @@ from installer.version_cache import (
     encode_manager_snapshot,
     is_stale,
     load_manager_snapshot,
+    load_skill_statuses,
     load_version_cache,
     save_version_cache,
     should_fetch,
@@ -412,6 +414,12 @@ def resolve_status(
     )
 
 
+@dataclass(frozen=True)
+class SkillHostStatus:
+    hosts: dict[str, str]
+    stale: bool
+
+
 class VersionRefreshService:
     """Blocking refresh of version status, shared by three screens."""
 
@@ -432,6 +440,8 @@ class VersionRefreshService:
         read_inventory_fn: Callable[..., ManagerInventory] | None = None,
         read_outdated_fn: Callable[..., OutdatedReport] | None = None,
         native_probe: ProbeRunner | None = None,
+        skill_probe: Callable[[list[str]], str] | None = None,
+        skill_home: Path | None = None,
     ) -> None:
         self._platform = platform
         self._cache_path = cache_path
@@ -458,6 +468,8 @@ class VersionRefreshService:
         # forbids ("tests must be deterministic and offline"). Production
         # (setup.py) supplies the real runner explicitly.
         self._native_probe = native_probe
+        self._skill_probe = skill_probe
+        self._skill_home = skill_home if skill_home is not None else Path.home()
         self._lock = threading.Lock()
         self._statuses: dict[str, VersionStatus] = {}
         # ONE map of epoch-tagged records, deliberately never a second
@@ -474,6 +486,8 @@ class VersionRefreshService:
         # `save_version_cache` write, and `ownership_of` must never block
         # the UI thread on that.
         self._ownership: dict[str, tuple[int, ManagerOwnership]] = {}
+        self._skills: dict[str, SkillHostStatus] = {}
+        self._skills_probed = False
         self._epoch = 0
 
     @property
@@ -513,6 +527,44 @@ class VersionRefreshService:
             return None
         return ownership
 
+    def skill_status_of(self, tool_id: str) -> SkillHostStatus | None:
+        return self._skills.get(tool_id)
+
+    def seed_skills_from_cache(self) -> None:
+        """Load persisted skill answers as stale. Composition root only, never paint."""
+        loaded = load_skill_statuses(self._cache_path)
+        seeded = {
+            tool_id: SkillHostStatus(hosts=dict(hosts), stale=True)
+            for tool_id, hosts in loaded.items()
+        }
+        with self._lock:
+            self._skills = seeded
+
+    def refresh_skills(self, tools: Sequence[Tool]) -> dict[str, SkillHostStatus]:
+        """Probe every skill pack once per launch. BLOCKING — worker thread only."""
+        packs = [tool for tool in tools if tool.skill_lifecycle is not None]
+        probe = self._skill_probe
+        if probe is None or not packs or self._skills_probed:
+            return dict(self._skills)
+        started_epoch = self.epoch
+        probed = inspect_skill_packs(packs, probe, self._skill_home)
+        fresh = {
+            tool_id: SkillHostStatus(hosts=dict(hosts), stale=False)
+            for tool_id, hosts in probed.items()
+        }
+        with self._lock:
+            if self._epoch != started_epoch:
+                return dict(self._skills)
+            merged = {**self._skills, **fresh}
+            save_version_cache(
+                self._cache_path,
+                load_version_cache(self._cache_path),
+                skills={tool_id: dict(status.hosts) for tool_id, status in merged.items()},
+            )
+            self._skills = merged
+            self._skills_probed = True
+            return dict(merged)
+
     def invalidate(self, *, reason: str) -> int:
         """Bump the epoch and drop the manager snapshot under the merge lock."""
         del reason
@@ -520,6 +572,10 @@ class VersionRefreshService:
             self._epoch += 1
             tools = load_version_cache(self._cache_path)
             save_version_cache(self._cache_path, tools, managers={})
+            self._skills_probed = False
+            self._skills = {
+                tool_id: replace(entry, stale=True) for tool_id, entry in self._skills.items()
+            }
             return self._epoch
 
     def _artifacts(self, tool: Tool) -> Sequence[Path]:
