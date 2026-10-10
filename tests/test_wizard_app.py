@@ -5230,8 +5230,7 @@ async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreada
     presence = {"newly-installed": False, "stays-installed": True}
 
     def probe_output(argv: list[str]) -> str | None:
-        cmd = argv[0]
-        if cmd == "newly-installed" and presence["newly-installed"]:
+        if Path(argv[0]).name == "newly-installed" and presence["newly-installed"]:
             return "1.0.0"
         return None
 
