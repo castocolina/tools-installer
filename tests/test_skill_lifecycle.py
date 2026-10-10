@@ -8,6 +8,7 @@ import pytest
 import installer.engine as engine
 from installer.engine import install_tool
 from installer.model import (
+    SKILL_HARNESSES,
     Method,
     SkillLifecycle,
     SkillOperation,
@@ -638,3 +639,52 @@ def test_skills_lock_is_read_once_per_call(tmp_path: Path, monkeypatch: pytest.M
     inspect_skill_packs(packs, lambda _argv: "", tmp_path)
 
     assert reads == 1
+
+
+def test_one_cli_call_per_harness_across_packs(tmp_path: Path) -> None:
+    packs = [
+        _pack(f"pack-{index}", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+        for index in range(3)
+    ]
+    calls: list[list[str]] = []
+
+    def probe(argv: list[str]) -> str:
+        calls.append(argv)
+        return "❯ superpowers@claude-plugins-official\n"
+
+    inspect_skill_packs(packs, probe, tmp_path)
+
+    assert calls == [["claude", "plugin", "list"]]
+
+
+def test_host_order_follows_skill_harnesses_not_declaration_order(tmp_path: Path) -> None:
+    tool = _pack(
+        "demo",
+        (
+            SkillStatusProbe("pi", "plugin-cli", "obra/superpowers"),
+            SkillStatusProbe("claude", "plugin-cli", "superpowers"),
+            SkillStatusProbe("codex", "plugin-cli", "ponytail"),
+        ),
+    )
+
+    result = inspect_skill_packs([tool], lambda _argv: "", tmp_path)["demo"]
+
+    assert list(result) == [harness for harness in SKILL_HARNESSES if harness in result]
+    assert list(result) == ["claude", "codex", "pi"]
+
+
+def test_empty_status_probes_map_to_empty_dict(tmp_path: Path) -> None:
+    tool = _pack("demo", ())
+
+    assert inspect_skill_packs([tool], lambda _argv: "nope", tmp_path) == {"demo": {}}
+
+
+def test_inspect_skill_packs_is_idempotent(tmp_path: Path) -> None:
+    tool = _pack("demo", (SkillStatusProbe("pi", "plugin-cli", "obra/superpowers"),))
+
+    def probe(_argv: list[str]) -> str:
+        return "obra/superpowers\n"
+
+    assert inspect_skill_packs([tool], probe, tmp_path) == inspect_skill_packs(
+        [tool], probe, tmp_path
+    )
