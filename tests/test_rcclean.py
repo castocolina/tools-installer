@@ -898,3 +898,74 @@ def test_plain_heredoc_requires_an_exact_delimiter_line() -> None:
     text = f"cat <<EOF\n{body}\n EOF\n{body}\nEOF\n{body}\n"
     assert [record.index for record in _records(text)] == [5]
     assert find_duplicate_path_lines(text, {_LOCAL_BIN}, _ENV) == [5]
+
+
+_M_BIN = Path("/m/bin")
+_HOME_M_BIN = Path("/home/u/m/bin")
+
+
+@pytest.mark.parametrize(
+    ("text", "managed"),
+    [
+        ("PATH=/m/bin:$PATH somecmd --flag\n", {_M_BIN}),
+        ("PATH=$HOME/m/bin:$PATH env FOO=1 cmd\n", {_HOME_M_BIN}),
+    ],
+)
+def test_one_shot_path_prefix_is_not_a_writer(text: str, managed: set[Path]) -> None:
+    assert path_writer_lines({Path("rc"): text}, managed, _ENV) == []
+
+
+def test_quoted_one_shot_path_prefix_is_not_a_writer() -> None:
+    text = 'PATH="$HOME/m/bin:$PATH" env FOO=1 cmd\n'
+    assert path_writer_lines({Path("rc"): text}, {_HOME_M_BIN}, _ENV) == []
+
+
+def test_one_shot_prefix_does_not_guard_a_later_writer() -> None:
+    text = "cmd && PATH=/m/bin:$PATH cmd2 && export PATH=/m/bin:$PATH\n"
+    records = path_writer_lines({Path("rc"): text}, {_M_BIN}, _ENV)
+    assert len(records) == 1
+    assert records[0].text.endswith("export PATH=/m/bin:$PATH")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "export PATH=/m/bin:$PATH\n",
+        "PATH=/m/bin:$PATH\n",
+        'PATH="$HOME/m/bin:$PATH"   \n',
+    ],
+)
+def test_plain_path_assignment_is_still_a_writer(text: str) -> None:
+    managed = {_HOME_M_BIN} if "HOME" in text else {_M_BIN}
+    records = path_writer_lines({Path("rc"): text}, managed, _ENV)
+    assert len(records) == 1
+
+
+def test_quoted_space_in_path_value_is_not_a_command_prefix() -> None:
+    directory = Path("/m/bin dir")
+    text = 'PATH="/m/bin dir:$PATH"\n'
+    records = path_writer_lines({Path("rc"): text}, {directory}, _ENV)
+    assert len(records) == 1
+    assert records[0].directory == directory
+
+
+@pytest.mark.parametrize("text", ["PATH=/m/bin\n", "PATH=/a:/m/bin\n"])
+def test_path_replacement_has_its_own_refusal(text: str) -> None:
+    records = path_writer_lines({Path("rc"): text}, {_M_BIN}, _ENV)
+    assert len(records) == 1
+    assert records[0].guardable is False
+    assert records[0].refusal == rcclean._REFUSE_REPLACE  # pyright: ignore[reportPrivateUsage]
+
+
+def test_multi_directory_prepend_keeps_the_multi_refusal() -> None:
+    text = "PATH=/a:/m/bin:$PATH\n"
+    records = path_writer_lines({Path("rc"): text}, {_M_BIN}, _ENV)
+    assert len(records) == 1
+    assert records[0].refusal == rcclean._REFUSE_MULTI  # pyright: ignore[reportPrivateUsage]
+
+
+def test_single_directory_prepend_stays_guardable() -> None:
+    records = path_writer_lines({Path("rc"): "PATH=/m/bin:$PATH\n"}, {_M_BIN}, _ENV)
+    assert len(records) == 1
+    assert records[0].guardable is True
+    assert records[0].refusal is None

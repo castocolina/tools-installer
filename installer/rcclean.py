@@ -20,6 +20,7 @@ _REFUSE_APPEND = "appends to PATH; guarding would change its order"
 _REFUSE_COMPOUND = "shares its line with other commands or a comment; edit it by hand"
 _REFUSE_ZSH_ARRAY = "zsh path array; edit it by hand"
 _REFUSE_UNRESOLVED = "uses a variable this scan cannot resolve"
+_REFUSE_REPLACE = "replaces PATH entirely; edit it by hand"
 _OWN_MARKER_PREFIX = "tools-installer"
 _ASSIGN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.+?)\s*$")
 _PATH_EXPORT = re.compile(r"^\s*(?:export\s+)?PATH=(.+?)\s*$")
@@ -314,6 +315,41 @@ def _remember_assign(body: str, local: dict[str, str]) -> None:
         local[assign.group(1)] = expanded
 
 
+def _has_command_suffix(value: str) -> bool:
+    """True when unquoted whitespace in an assignment value is followed by a command."""
+    in_single = False
+    in_double = False
+    index = 0
+    length = len(value)
+    while index < length:
+        char = value[index]
+        if in_single:
+            if char == "'":
+                in_single = False
+            index += 1
+            continue
+        if in_double:
+            if char == "\\" and index + 1 < length:
+                index += 2
+                continue
+            if char == '"':
+                in_double = False
+            index += 1
+            continue
+        if char == "\\" and index + 1 < length:
+            index += 2
+            continue
+        if char in "'\"":
+            in_single = char == "'"
+            in_double = char == '"'
+            index += 1
+            continue
+        if char in " \t" and value[index + 1 :].strip():
+            return True
+        index += 1
+    return False
+
+
 def _value_has_unresolved(value: str, env: Mapping[str, str]) -> bool:
     """True when a non-PATH segment of an assignment cannot be expanded."""
     for segment in _unquote(value).split(":"):
@@ -344,6 +380,8 @@ def _judge_line(
         body = _command_text(segment)
         zsh = _ZSH_PATH_ARRAY.match(body)
         path = None if zsh else _PATH_EXPORT.match(body)
+        if path is not None and _has_command_suffix(path.group(1)):
+            continue
         if zsh is not None or path is not None:
             matched_any = True
             if path is not None:
@@ -546,6 +584,8 @@ def _guard_refusal(line: _PathLine) -> str | None:
     if match is None:
         return _REFUSE_COMPOUND
     segments = _unquote(match.group(1)).split(":")
+    if not any(segment in ("$PATH", "${PATH}") for segment in segments):
+        return _REFUSE_REPLACE
     if segments and segments[0] in ("$PATH", "${PATH}"):
         return _REFUSE_APPEND
     if len(segments) == 2 and segments[1] in ("$PATH", "${PATH}"):
