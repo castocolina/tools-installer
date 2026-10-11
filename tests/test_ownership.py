@@ -1779,6 +1779,22 @@ def test_removal_hint_is_none_for_unknown_and_installer() -> None:
     assert removal_hint(_record("installer"), "demo") is None
 
 
+def test_script_kind_installer_record_names_its_own_installer_not_a_package_manager() -> None:
+    """A vendor-script install (kitty's `installer.sh`) is `installer`-owned yet
+    unplannable by the Uninstall screen; it must say so rather than blame a
+    package manager."""
+    script = Method(kind="script", params={"url": "https://example.invalid/installer.sh"})
+    record = _record("installer", method=script)
+    hint = removal_hint(record, "demo")
+    assert hint is not None
+    assert "own installer" in hint
+    assert "package manager" not in hint
+    assert removal_label(record) == owner_label(record)
+    other = _record("installer", method=Method(kind="github_release", params={"repo": "a/b"}))
+    assert removal_hint(other, "demo") is None
+    assert removal_label(other) is None
+
+
 def test_removal_label_answers_for_exactly_the_records_removal_hint_answers_for() -> None:
     """CR-03 (15.4-REVIEW.md): the two registers are a PAIR -- the cell label
     and the detail sentence -- so a caller must never have to ask which of

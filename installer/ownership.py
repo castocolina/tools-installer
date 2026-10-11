@@ -1433,12 +1433,24 @@ _NO_REMOVAL_HINT: frozenset[Owner] = frozenset({"unknown", "installer"})
 _LABEL_AGREEMENT_EXEMPT: frozenset[Owner] = frozenset({"cask"})
 
 
+def _own_script_install(ownership: ManagerOwnership) -> bool:
+    """A vendor-script install: `installer`-owned, yet nothing the Uninstall
+    screen can plan to delete (`plan_uninstall` covers only download and app
+    kinds), so it must not fall through to the generic "package manager" text."""
+    return (
+        ownership.owner == "installer"
+        and ownership.method is not None
+        and ownership.method.kind == "script"
+    )
+
+
 def removal_hint(ownership: ManagerOwnership, fallback_name: str) -> str | None:
     """The Uninstall screen's per-owner removal phrase, built over the shared
     `owner_label` result plus the per-owner tables declared above.
 
     `None` for `unknown` (nothing to say) and `installer` (the removable-here
-    path already covers it) -- `_NO_REMOVAL_HINT`. Otherwise: when the record
+    path already covers it) -- `_NO_REMOVAL_HINT` -- except a vendor-script
+    install, which the Uninstall screen cannot plan and which says so. Otherwise: when the record
     carries a resolved `package` name AND this owner has a removal command
     template, the phrase carries a backticked command built from that real
     package name. When it does not -- `package` is `None`, or this owner's
@@ -1450,6 +1462,8 @@ def removal_hint(ownership: ManagerOwnership, fallback_name: str) -> str | None:
     exactly the wrong string for a split package (Round-3 review HIGH).
     """
     owner = ownership.owner
+    if _own_script_install(ownership):
+        return "installed by its own installer — remove it with that installer's own uninstaller"
     if owner in _NO_REMOVAL_HINT:
         return None
     label = owner_label(ownership)
@@ -1494,6 +1508,6 @@ def removal_label(ownership: ManagerOwnership) -> str | None:
     this cell name a manager with the identical string rather than with two
     vocabularies that can drift.
     """
-    if ownership.owner in _NO_REMOVAL_HINT:
+    if ownership.owner in _NO_REMOVAL_HINT and not _own_script_install(ownership):
         return None
     return owner_label(ownership)

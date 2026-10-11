@@ -5702,6 +5702,69 @@ async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreada
         assert table.get_cell("stays-installed", "inst").plain == "✓"
 
 
+async def test_returning_from_another_view_rederives_the_installed_map(tmp_path: Path) -> None:
+    """A tool removed while the user was on Uninstall must not keep its ✓ when
+    they come back: `show_view` re-reads presence on every catalog entry."""
+    tool = _gh_tool("removable", tier="system")
+    presence = {"removable": True}
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    execute = ExecuteInputs(
+        catalog=[tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda t: presence[t.id],
+        install=_tracking_install(lambda installed_tool: None),
+    )
+    app = _version_app([tool], {"removable": True}, service, execute=execute)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        await pilot.press("5")
+        assert app.current_view == "uninstall"
+        presence["removable"] = False
+        await pilot.press("1")
+        await _settle_versions(app, pilot)
+        table = app.catalog.query_one(DataTable[Any])
+        assert table.get_cell("removable", "inst").plain == "○"
+
+
+async def test_returning_to_the_base_tier_re_resolves_ownership_an_install_dropped(
+    tmp_path: Path,
+) -> None:
+    """An install invalidates every tier's ownership records (one global epoch),
+    so the base tier must re-resolve when shown again -- it is never pushed, so
+    `show_view` has to call its `enter_view` itself."""
+    system_tool = _gh_tool("sys-tool", tier="system")
+    user_tool = _gh_tool("usr-tool", tier="user")
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    execute = ExecuteInputs(
+        catalog=[system_tool, user_tool],
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=lambda t: True,
+        install=_tracking_install(lambda installed_tool: None),
+    )
+    app = _version_app(
+        [system_tool, user_tool], {"sys-tool": True, "usr-tool": True}, service, execute=execute
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        await pilot.press("2")
+        user_screen = app._catalogs["user"]  # pyright: ignore[reportPrivateUsage]
+        await _settle_versions(app, pilot, user_screen)
+        user_screen.selected.add("usr-tool")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        await pilot.press("escape")
+        await _settle_versions(app, pilot, user_screen)
+        assert service.ownership_of("sys-tool") is None
+        await pilot.press("1")
+        await _settle_versions(app, pilot)
+        assert service.ownership_of("sys-tool") is not None
+
+
 async def test_install_closed_marks_a_detect_path_tool_that_answers_no_version(
     tmp_path: Path,
 ) -> None:

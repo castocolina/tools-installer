@@ -2687,9 +2687,17 @@ class UnifiedApp(App[list[str] | None]):
         leaving = self._catalogs.get(self.current_view)
         if leaving is not None:
             leaving.clear_transient()
+        # A view (Uninstall) may have changed the machine; no catalog shows a stale ✓.
+        if name in self._catalogs:
+            recheck_error = self._rederive_installed()
+            if recheck_error is not None:
+                self._pending_warnings.append(recheck_error)
         if self.current_view != BASE_VIEW:
             await self.pop_screen()
-        if name != BASE_VIEW:
+        if name == BASE_VIEW:
+            # The base catalog is never pushed, so it re-derives here or never.
+            self._catalogs[BASE_VIEW].enter_view()
+        else:
             entering = self._views[name]
             # The single navigation path is also the single refresh point: a
             # view holding state another view can change live re-derives it
@@ -2828,16 +2836,9 @@ class UnifiedApp(App[list[str] | None]):
         # the previous map in place and reports itself, exactly as the
         # invalidate failure folded in below does.
         warnings: list[str] = []
-        if self._execute is not None:
-            installed = self._execute.installed
-            fresh, error = run_live(
-                lambda: {tool.id: installed(tool) for tool in self._catalog_tools}
-            )
-            if fresh is not None:
-                for screen in self._catalogs.values():
-                    screen.set_installed(fresh)
-            elif error is not None:
-                warnings.append(f"installed-state re-check failed: {error}")
+        recheck_error = self._rederive_installed()
+        if recheck_error is not None:
+            warnings.append(recheck_error)
         # D-01/15.6-06 Task 1: the shared terminal synchronizer runs after a
         # close event that actually changed installed-tool state -- never
         # only a selected tool id (WR-07: merely opening and dismissing the
@@ -2898,6 +2899,23 @@ class UnifiedApp(App[list[str] | None]):
             return
         pending, self._pending_warnings = self._pending_warnings, []
         visible.status.set(" · ".join(pending + warnings), "warn")
+
+    def _rederive_installed(self) -> str | None:
+        """Re-read every catalog's installed map from the live presence predicate.
+
+        One body for every moment the machine may have changed under the catalogs
+        (an install run closing, a catalog view being shown after an uninstall).
+        Returns a warning line on failure, None otherwise.
+        """
+        if self._execute is None:
+            return None
+        installed = self._execute.installed
+        fresh, error = run_live(lambda: {tool.id: installed(tool) for tool in self._catalog_tools})
+        if fresh is not None:
+            for screen in self._catalogs.values():
+                screen.set_installed(fresh)
+            return None
+        return f"installed-state re-check failed: {error}" if error is not None else None
 
     def _visible_app_screen(self) -> AppScreen | None:
         screen = self.screen
