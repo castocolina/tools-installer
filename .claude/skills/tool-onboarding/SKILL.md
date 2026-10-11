@@ -1,145 +1,182 @@
 ---
 name: tool-onboarding
-description: Use when adding a new tool to installer/registry.toml — deciding its tier, dependency declarations, or whether it needs a postinstall hook, skill_pack, or host_setup mechanism for tools-installer's catalog — or when reviewing an existing registry.toml entry against those same conventions.
+description: Use when adding a new tool to installer/registry.toml, or reviewing an existing entry — researching what the tool is (OS tool, user app, LLM plugin/skill/agent pack), how and for which OS/arch it ships, which install method fits (brew, vendor script, package manager, per-platform artifact, marketplace vs symlink), its tier, dependencies, and whether it needs a postinstall hook or user-chosen customizations (terminal keybindings, shell integration, companion plugins).
 ---
 
 # Tool onboarding
 
 ## Overview
 
-Walks a `registry.toml` addition through the same tier/dependency/postinstall
-checklist `.claude/architecture.md`'s "Tool onboarding: tier, dependencies,
-and postinstall classification" subsection documents, plus a platform-coverage
-check, so a new entry's tier, dependency edges, postinstall wiring, and OS/arch
-coverage all get decided deliberately instead of guessed. This is the
-checklist that would have caught `rtk`/`graphify`'s postinstall gap
-(researched in Phase 8, never wired until Phase 12.4) and the
-`vscode`/`jetbrains-toolbox`/`sublime` Linux-blind gap, both before they sat
-unnoticed for phases.
-
-This is a PROCESS aid, not a code generator: it does not write
-`installer/*.py` changes itself. If step 4 below routes the tool to a
-`postinstall` hook, implementing that hook still follows the existing
+A PROCESS aid for adding or reviewing one `[[tool]]` block. It does not write
+`installer/*.py`; if the answer is a `postinstall` hook, follow the existing
 `installer/postinstall.py` `POSTINSTALL_HOOKS` / `installer/model.py`
-`POSTINSTALL_HOOK_NAMES` wiring pattern — `codegraph`, `rtk`, and `graphify`
-are the worked examples.
+`POSTINSTALL_HOOK_NAMES` wiring.
+
+Tool names below are **examples of a shape**, never instructions. Past misses
+that motivate each step: a tool authored from macOS only and Linux-blind for
+phases; a postinstall gap nobody noticed; a vendor installer script treated as
+"the package manager did it". Decide from evidence about THIS tool, not from
+the examples.
+
+**The skill cannot promise what the platform does not do.** Every decision
+below must land on a mechanism that exists in code today (a method kind, a
+param, a hook name, a classifier). Name the file that implements it. If the
+right answer needs a capability the registry, model or installer lacks — per-
+OS/arch artifacts a method kind cannot express, a removal path for a script
+install, a customization with no hook — do not approximate it in the entry.
+Record it as a platform gap in the GSD backlog and say so in `# Verified`. A
+checklist that "covers" a case the platform silently mishandles is worse than
+no checklist.
+
+Judgment calls with no lint enforcement go in a dated `# Verified {date}: ...`
+comment above the `[[tool]]` block. It is the only audit trail.
 
 ## When to Use
 
-- Adding any new `[[tool]]` block to `installer/registry.toml`.
-- Deciding whether an existing tool needs a postinstall follow-up you're
-  only now noticing (the exact situation `rtk`/`graphify` were in).
-- Reviewing someone else's new registry entry and checking it against this
-  project's own conventions.
-
-Steps 3 and 4 below are judgment calls with no lint enforcement — when a
-tool doesn't cleanly fit, say so explicitly in the `# Verified` comment
-rather than picking silently. That comment is this checklist's only audit
-trail; a future reviewer (human or agent) has nothing else to go on.
+- Adding any `[[tool]]` block; reviewing one against these conventions.
+- Noticing an existing tool lacks a postinstall, a platform, or a removal path.
 
 ## Steps
 
-### 1. Research the tool
+### 1. Research first — never write from memory
 
-Confirm, per OS/arch the entry will declare: does it need a
-checksum-verifiable release asset, or does it install via a
-script/package manager? Same bar as `.claude/architecture.md`'s "Per-tool,
-per-OS verification checklist".
+When ANY of the following is uncertain, do online research (vendor docs,
+release page, README, package-manager listings) BEFORE choosing anything, and
+cite what you found in the `# Verified` comment: what the tool is, supported
+OSes/arches, how the vendor says to install and uninstall it, whether a
+marketplace/registry listing exists. If research is thin or contradictory, say
+so rather than guessing. Spawn a research agent when the question is open-ended.
 
-### 2. Check every platform the vendor supports
+### 2. Classify what kind of thing it is
 
-Before writing any method, check the vendor's own docs for EVERY platform it
-officially ships for — macOS, and Linux per-distro/per-arch (amd64 and arm64
-separately) — not only the platform you're currently working from. `vscode`,
-`jetbrains-toolbox`, and `sublime` shipped Linux-blind for a while because
-their entries were authored and verified from a macOS session and nobody
-checked whether a Linux path existed — it did, for all three (official
-tarball/apt/rpm distributions). Declare a method for each platform that's
-genuinely feasible to support; if one is knowingly left out (no confirmed
-vendor URL, no stable arm64 build, etc.), say so in the `# Verified` comment
-rather than silently omitting it.
+Answer all of these; they drive every later step.
 
-### 3. Decide tier
+| Question | Why it matters |
+|---|---|
+| OS/CLI tool, user-facing app, or LLM tooling? | tier + audience (step 5) |
+| LLM tooling: plugin, skill, agent pack, MCP server, or harness CLI? | selects `skill_pack`/`skill_lifecycle`, `host_setup`, or a plain binary install |
+| Does it have a marketplace/registry entry? | prefer the marketplace route when the host supports it; use symlinks into the host's skills dir only when no marketplace exists or the registry needs a pinned, auditable copy. State the choice and reason. |
+| Does it need other tools at install time or at runtime? | `requires` / `recommends` |
 
-Apply `.claude/architecture.md`'s "Tier is a browsing label" definitions:
+### 3. Check every supported platform AND architecture
 
-- **`system`** — a prerequisite other tools may depend on regardless of
-  personal preference (uv/pnpm/brew/sdkman/zsh/podman-shaped).
-- **`user`** — a tool the human runs and drives directly: a personal-choice
-  dev tool (terminal emulators, CLI utilities, editors) **or an AI agent
-  harness/CLI** (claude, codex, opencode, cursor-agent, antigravity, pi,
-  aichat). Being AI-branded does not by itself make something `ai`-tier —
-  what matters is whether the human is the one typing into it.
-- **`ai`** — tooling that operates underneath or is consumed BY an agent
-  session, never launched directly by the human as their own interface: MCP
-  servers, token-reduction proxies, knowledge-graph builders, agent-oriented
-  CLI utilities (rg, fd, sd, bat, eza), or an agent-ecosystem skill pack.
+Per the vendor's own docs: macOS, each Linux family the registry models
+(debian/apt, fedora/dnf, arch/pacman), amd64 and arm64 separately. Declare a
+method for each genuinely feasible combination; if one is knowingly omitted
+(no vendor URL, no arm64 build), record why in `# Verified`.
 
-`Tool.audience` (`human`/`ai`/`both`) is a separate, independent field for
-who *benefits* from a tool — it doesn't drive tier and tier doesn't drive it.
+**One tool can have different artifacts per OS/arch.** Do not assume one
+install shape fits all. Typical splits: a `.dmg`/cask on macOS vs a vendor
+script or tarball on Linux; distinct tarballs per arch; a package-manager
+package on one distro and a release asset on another. Model each as its own
+`[[tool.method]]` with `os`/`arch` params. If the registry schema cannot
+express the split you found (for example a per-OS/arch artifact that is
+neither a script nor an asset pattern), STOP and record the gap in the
+backlog instead of bending an unrelated method kind to fit.
 
-### 4. Decide dependencies and postinstall mechanism
+### 4. Choose the install method per platform
+
+Prefer, in order, the option that is checksum-verifiable, reproducible, and
+removable by this installer:
+
+1. Package manager the user already trusts (brew, cask, apt/dnf/pacman) when
+   the package is current enough. One package name may differ per distro —
+   declare one method per manager.
+2. Release asset or tarball with a checksum (`github_release`, `tarball`).
+3. Language-ecosystem install (`node`, `uv-tool`, `sdkman`) with the manager in `requires`.
+4. Vendor `script` (curl|bash style) ONLY when the vendor offers nothing
+   better. A script install is **not** package-manager-owned and the Uninstall
+   screen cannot plan its removal: record what it creates (install dir,
+   symlinks, desktop files) in `# Verified` and file a removal-manifest
+   backlog item rather than pretending a package manager owns it.
+
+Never invent the exact method kind or param name — read the kinds and params
+actually present in `installer/model.py` and existing entries.
+
+### 5. Decide tier and audience
+
+Apply `.claude/architecture.md`'s "Tier is a browsing label":
+
+- **`system`** — a prerequisite other tools may depend on regardless of taste.
+- **`user`** — a tool the human drives directly (terminals, editors, CLIs,
+  and agent harness CLIs the human types into). AI branding alone does not
+  make it `ai`.
+- **`ai`** — consumed BY an agent session (MCP servers, token proxies,
+  agent-oriented CLIs, skill packs).
+
+`audience` (`human`/`ai`/`both`) is independent of tier.
+
+### 6. Dependencies and postinstall mechanism
 
 **REQUIRED READING:** `.claude/architecture.md`'s "Tool onboarding: tier,
-dependencies, and postinstall classification" subsection has the full,
-canonical decision tree — read it now rather than reconstructing it here,
-so there is exactly one copy and this skill can't silently drift from it.
+dependencies, and postinstall classification" — the canonical decision tree;
+read it rather than reconstructing it. A manager-installed tool names that
+manager in `requires`; a runtime-only expectation the catalog cannot
+guarantee also needs an edge, or a `# Verified` note when unsure. Walk the tree:
+`postinstall` hook / `skill_pack` + `skill_lifecycle` / `host_setup` / none. If
+it straddles two branches, name the ambiguity.
 
-In short: if the tool installs via a manager (`pnpm add -g`, `uv tool
-install`, an SDKMAN candidate), its `requires` must name that manager tool
-so `installer/deps.py::resolve_dependencies` drags it in automatically. A
-dependency doesn't have to be a manager to count — a tool that merely
-expects another binary on `PATH` at runtime (not at install time) still
-needs a `requires` edge if the catalog can't otherwise guarantee that binary
-is present; when genuinely unsure whether a soft runtime expectation rises
-to a `requires` edge, say so in the `# Verified` comment rather than
-guessing either way. Then walk the three-mechanism postinstall tree in that
-architecture.md subsection — `Tool.postinstall` hook / `skill_pack` +
-`skill_lifecycle` / `host_setup` / none — to decide what, if anything, the
-entry needs beyond a plain binary install. If a tool's needs straddle two
-branches of that tree, don't force a single answer — name the ambiguity in
-the `# Verified` comment and flag it for review.
+A hook is selected by NAME from the closed `POSTINSTALL_HOOKS` table, never a
+command string, and must detect and merge, never blind-overwrite existing
+host config (gate on `present_agent_hosts()`).
 
-If the answer is a `postinstall` hook: the registry can only select a hook
-**name** from `installer/postinstall.py`'s closed `POSTINSTALL_HOOKS` table
-— never a literal command string — and the hook must detect and configure,
-never blind-overwrite, existing host configuration (gate on
-`present_agent_hosts()`, verify merge-safety against pre-existing config
-before shipping, exactly as `rtk`/`graphify`'s Phase 12.4 wiring did).
+### 7. Postinstall and customizations — ask the user, do not assume
 
-### 5. Write the registry.toml entry
+Ask whether the tool has well-known friction or nice-to-haves that a
+postinstall or companion config should cover, then **ask the user which of
+those they want** before building any. Do not enable them silently. Prompts to
+walk through (examples of the shape, not an exhaustive list):
 
-A `[[tool]]` block with `id`, `name`, `category`, `cmd`, `priority`,
-`audience`, `tier`, `desc`, `requires`, and optionally `postinstall`, plus
-one or more `[[tool.method]]` blocks matching the tool's real install
-path(s) confirmed in steps 1-2. Add a dated `# Verified {date}: ...` comment
-directly above the `[[tool]]` block recording what was checked — the
-existing, mandatory recording mechanism `.claude/architecture.md`'s
-verification checklist already requires for every new entry.
+- Terminal emulators: word navigation with alt/option+arrows is often broken
+  per OS (macOS vs Linux, per terminal); a "clear screen + scrollback" binding
+  differs per OS (Cmd+K on macOS, Ctrl+Shift+K on Linux). Also which shell the
+  terminal should launch (see `installer/terminal_shell.py`).
+- Multiplexers/agent workspaces: companion scripts or a plugin from another
+  repo (status icons, separators between agents).
+- Shells/prompts/editors: plugin managers, themes, shell-integration lines.
+- LLM tools: which hosts to wire (only the ones actually present).
+
+Each accepted customization is its own idempotent, reversible step with a
+sandboxed test; each declined one is recorded in `# Verified`.
+
+### 8. Check the registry's existing classifiers (deep research)
+
+Before writing the block, read how the classifiers disagree in this codebase —
+three independent ones decide what the user sees:
+
+- `installer/status.py` `is_installed` — the catalog's installed mark.
+- `installer/ownership.py` `resolve_ownership` — the Owner column.
+- `installer/uninstall.py` `plan_uninstall` — what the Uninstall screen can
+  remove (download and app kinds only).
+
+For the new entry, confirm all three give a truthful answer: presence is
+detectable (`cmd`, `detect_path`, `bin_dir`), ownership resolves to something
+sensible, and removal is either plannable or honestly "its own installer".
+Also scan existing entries sharing its category/kind for the conventions to
+copy (`rg` the registry, do not rely on memory).
+
+### 9. Write the entry
+
+`id`, `name`, `category`, `cmd`, `priority`, `audience`, `tier`, `desc`,
+`requires`, optional `postinstall`, one `[[tool.method]]` per real
+platform/arch path from steps 3-4, and the dated `# Verified` comment (what
+was checked, what was knowingly left out, which customizations were offered
+and the user's answers). Then validate with the repo's gates and add tests for
+any new hook; sandbox every real install.
 
 ## Common Mistakes
 
-- **Only declaring methods for the platform you're working from.** Checking
-  install docs from a macOS session and never checking Linux (or vice versa)
-  is how `vscode`/`jetbrains-toolbox`/`sublime` ended up greyed-out on Linux
-  despite all three vendors shipping official Linux builds. Check every
-  platform the vendor supports (step 2), every time.
-- **Classifying an AI agent CLI as `ai`-tier just because it's AI-branded.**
-  `claude`, `codex`, `opencode`, `cursor-agent`, `antigravity`, `pi`, and
-  `aichat` are `user`-tier: the human launches and drives them directly, the
-  same relationship as any other personal-choice tool. `ai`-tier is for
-  tooling consumed BY an agent session, not tooling that IS an agent host.
-- **Guessing a tier instead of applying the three definitions.** If it's
-  genuinely ambiguous, say so in the `# Verified` comment rather than
-  picking silently.
-- **Skipping a dependency edge because "the user probably has it already."**
-  An undeclared real dependency silently relies on the user having installed
-  the prerequisite through some other path — always name it in `requires`.
-- **Shipping a postinstall hook that writes to every host presence
-  unconditionally, or that passes an "auto"-style flag.** Both are the exact
-  failure mode Phase 9's `codegraph` research found and this project's
-  `present_agent_hosts()` gate exists to prevent.
-- **Re-deriving the postinstall decision tree from scratch instead of
-  reading `.claude/architecture.md`'s canonical copy.** This skill
-  deliberately doesn't repeat the full tree inline — read the source of
-  truth.
+- **Authoring from one OS.** Check every OS and arch the vendor ships for.
+- **One install shape for all platforms.** Artifacts legitimately differ per
+  OS/arch; model each, or file the schema gap.
+- **Treating a vendor script as package-manager-owned.** It is not; record
+  what it creates and its removal story.
+- **Writing from memory when in doubt.** Research online first and cite it.
+- **Skipping the marketplace question for LLM tooling.**
+- **Shipping customizations nobody asked for, or skipping the question
+  entirely.** Offer, ask, record.
+- **Classifying an agent harness CLI as `ai` tier because it is AI-branded.**
+- **Skipping a dependency edge because "the user probably has it".**
+- **A postinstall hook that writes to every host unconditionally or passes an
+  "auto"-style flag.**
+- **Re-deriving the postinstall tree instead of reading architecture.md.**
