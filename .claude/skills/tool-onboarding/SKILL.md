@@ -1,6 +1,6 @@
 ---
 name: tool-onboarding
-description: Use when adding a new tool to installer/registry.toml, or reviewing an existing entry — researching what the tool is (OS tool, user app, LLM plugin/skill/agent pack), how and for which OS/arch it ships, which install method fits (brew, vendor script, package manager, per-platform artifact, marketplace vs symlink), its tier, dependencies, and whether it needs a postinstall hook or user-chosen customizations (terminal keybindings, shell integration, companion plugins).
+description: Use when adding a new tool to installer/registry.toml, or reviewing an existing entry — researching what the tool is (OS tool, user app, LLM plugin/skill/agent pack), how and for which OS/arch it ships, which install method fits (brew, vendor script, package manager, per-platform artifact, marketplace vs symlink), how it is uninstalled per platform (vendor uninstaller, files it wrote, keep-config vs delete-all policy), its tier, dependencies, and whether it needs a postinstall hook or user-chosen customizations (terminal keybindings, shell integration, companion plugins).
 ---
 
 # Tool onboarding
@@ -92,6 +92,35 @@ removable by this installer:
 
 Never invent the exact method kind or param name — read the kinds and params
 actually present in `installer/model.py` and existing entries.
+
+### 4b. Decide how it is removed, per platform — before writing the entry
+
+Installing a tool you cannot cleanly remove is half an onboarding. Removal
+belongs to each METHOD (a method is already scoped by `os`/`arch`), never to
+one tool-wide recipe or separate per-OS knobs. For each method from step 4:
+
+| Method kind | What you write | What you still verify |
+|---|---|---|
+| `brew`, `cask`, `apt`, `dnf`, `pacman`, `uv-tool`, `node`, `sdkman` | nothing — removal derives from the manager | the package/candidate name the manager removes is the one installed |
+| `github_release`, `tarball`, `app` | nothing — removal is exactly the path the install computed | install and removal use the same path; nothing else shares that path |
+| `script`, `host_setup` | an explicit recipe: the vendor uninstaller, the exact files/symlinks/desktop entries it writes, or a verifying removal script | run the vendor installer in a disposable container and list what it wrote |
+
+Per tool, shared by all its methods, research and record:
+- **Config and data paths** (per-OS variant only when they differ) and the
+  **default config policy**: `keep` (default for user-edited config),
+  `delete`, or `ask` the user (keep config / delete all). State why.
+- **Shared artifacts:** another catalog entry using the same binary or path
+  (e.g. two entries pointing at one `drawio`) — removal must refuse or remove
+  both by explicit choice. A file with the right name is never proof we wrote it.
+- **Foreign owner:** if a manager the installer did not use owns the tool,
+  removal delegates to that manager; it never runs another method's recipe.
+
+Then check the platform can express it (see the principle above). Today
+`Tool.uninstall` is a single free-text hint and `installer/uninstall.py`
+`plan_uninstall` treats download/app kinds generically — per-method removal,
+config policy and the removal prompt do not exist yet (backlog 999.8, design
+recorded there). Until they do, record the researched recipe in `# Verified`,
+set the `uninstall` hint, and do NOT claim the tool is removable.
 
 ### 5. Decide tier and audience
 
