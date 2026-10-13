@@ -114,6 +114,7 @@ missing `installer/tweaks.py`'s `ManagedExecutable` artifacts (e.g.
 | v0.50.0 is built from a ponytail-ultra target architecture, not from per-phase fixes | v0.49.0 audit: seven to ten places answered "installed / owner / removable" differently | — Pending |
 | Native package installs are handed off as a command, never run with sudo (O1) | Zero-sudo invariant; the TUI child has no usable tty | — Pending |
 | Receipts are the only removal proof; nothing unproven is deleted, in CLI or TUI | Uninstall deleted files it could not prove it wrote (F1, AR-01) | — Pending |
+| Alacritty on Bazzite: cargo build in a throwaway Distrobox, native binary on the host, container and image deleted (O5) | Measured 2026-10-13: 35 s build, 12 MB permanent vs 2.4 GB for a persistent Distrobox; runs natively, no shell-inside-container issue | — Pending |
 | Ponytail joins GSD `agent_skills` as `global:ponytail:ponytail` (Claude only) | Plugin skills load only in Claude; no vendored copy to keep in sync | — Pending |
 | `tier` gets three top-level catalog views, not an in-screen filter | Matches the user's actual bootstrap mental model (system -> user -> ai); resolved 2026-09-04 | — Pending |
 | `tier` is strictly orthogonal to `Category`; `requires` remains the sole install-order mechanism | Avoids a second ordering mechanism drifting out of sync with the registry's actual `requires` data | — Pending |
