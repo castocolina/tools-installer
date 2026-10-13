@@ -16,6 +16,23 @@ A developer can go from a bare machine to a working, correctly-ordered install
 catalog, with dependency drag-in resolving automatically and no manual ordering
 knowledge required.
 
+## Current Milestone: v0.50.0 Truthful lifecycle
+
+**Goal:** Every screen tells the truth about each tool on this host (present, healthy, whose, which version, removable with proof), and install, update, removal and configuration follow one per-method contract with install receipts as removal proof.
+
+**Target features:**
+- Stop the bleeding: the seven host hazards (H1–H7), CI green on both OSes, PR check required
+- Registry truth and drift guard (`make verify-registry`, unknown-key rejection, checksums, smoke test)
+- One `ToolState` with a closed `Health` set and install receipts
+- Install plan with dispositions (install / update / repair / reconfigure / reinstall `r` / skip / blocked), one engine for TUI and headless
+- One screen family; Uninstall, Policies and Doctor as projections of the same state
+- Per-method lifecycle contract (script `paths`/`remove`/`update`, native installs handed off, `config_paths`)
+- Configuration as a lifecycle step (reversible agent-host hooks, shell init, terminal `SHELL`)
+- herdr and Alacritty onboarded through the tool-onboarding skill; container e2e with leftover checks
+- Lean-up (~2,000 lines deleted)
+
+**Design source:** `.planning/research/2026-10-13-target-architecture.md` (decisions D-A..D-J, open decisions O1–O14) and `.planning/research/audit-2026-10-13/SYNTHESIS-AND-PLAN.md`.
+
 ## Requirements
 
 ### Validated
@@ -35,20 +52,23 @@ knowledge required.
 
 ### Active
 
-<!-- Next milestone (v0.50.0) is being defined from .planning/research/audit-2026-10-13/SYNTHESIS-AND-PLAN.md, a ponytail-ultra architecture pass, the GSD backlog 999.1–999.11 and pending todos. -->
+<!-- v0.50.0 scope; full list with REQ-IDs in .planning/REQUIREMENTS.md. -->
 
 - [ ] One truthful tool state per host (installed / health / owner / version / removability) shared by every screen
 - [ ] Install review that states each selection's disposition (install / update / repair / reconfigure / reinstall / skip)
 - [ ] Per-method lifecycle contract (install, detect, version, owner, update, remove, configure, service, privileges) with install receipts as removal proof
 - [ ] Configuration as a lifecycle step (shell init, agent-host hooks re-synced and reversible, terminal drift), with user-chosen customizations
 - [ ] Registry kept true: drift detection, checksums, smoke tests; CI green on both OSes
+- [ ] No host hazard left: no unproven deletion, no link to a directory, no writes into the CWD, no false success
 
 ### Out of Scope
 
 - New resolver/ordering logic keyed on `tier` — `requires` already handles ordering, cycle detection, and availability skipping (PRD Design Decisions)
 - External/custom (non-bundled) Oh-My-Zsh plugins requiring their own `git clone` step — deferred per the source PRD's Open Questions
 - `rpm-ostree` layering on immutable hosts — needs a reboot; Bazzite recommends Flatpak, Homebrew, Distrobox first
-- Any sudo/pkexec/doas performed by this project itself — zero-sudo invariant
+- Any sudo/pkexec/doas performed by this project itself — zero-sudo invariant; native dnf/apt/pacman installs are handed off as the exact command (O1, 2026-10-13)
+- New method kinds for dmg / `app {ver}`, a `service` start/stop step, a keep/delete/ask config enum, git-config/completion writers — v0.50.0 ultra cut (target architecture §9.1)
+- REQ-manager-drift-alerting — dropped 2026-10-13: the off-policy owner note already says another manager owns the tool
 
 ## Context
 
@@ -91,6 +111,10 @@ missing `installer/tweaks.py`'s `ManagedExecutable` artifacts (e.g.
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
+| v0.50.0 is built from a ponytail-ultra target architecture, not from per-phase fixes | v0.49.0 audit: seven to ten places answered "installed / owner / removable" differently | — Pending |
+| Native package installs are handed off as a command, never run with sudo (O1) | Zero-sudo invariant; the TUI child has no usable tty | — Pending |
+| Receipts are the only removal proof; nothing unproven is deleted, in CLI or TUI | Uninstall deleted files it could not prove it wrote (F1, AR-01) | — Pending |
+| Ponytail joins GSD `agent_skills` as `global:ponytail:ponytail` (Claude only) | Plugin skills load only in Claude; no vendored copy to keep in sync | — Pending |
 | `tier` gets three top-level catalog views, not an in-screen filter | Matches the user's actual bootstrap mental model (system -> user -> ai); resolved 2026-09-04 | — Pending |
 | `tier` is strictly orthogonal to `Category`; `requires` remains the sole install-order mechanism | Avoids a second ordering mechanism drifting out of sync with the registry's actual `requires` data | — Pending |
 | `recommends` is a deliberately separate, smaller mechanism from `requires` — never auto-installs | Preserves the requires/recommends distinction the feature exists to draw, in code and in the UI | — Pending |
@@ -124,5 +148,22 @@ missing `installer/tweaks.py`'s `ManagedExecutable` artifacts (e.g.
 | D-04: full-catalog audit against the new checklist covered all 89 `registry.toml` entries (89/89, confirmed by direct count) — zero new postinstall-mechanism gaps found, one pre-existing dead-code finding (`Tool.post_install` plural) logged as a pending todo rather than fixed in-phase, one pre-existing open research question (graphify output-location) closed by direct investigation with no code change warranted. | 12.4-RESEARCH.md's own grep-scan for a third gap was a cheap keyword search, not the structured per-entry audit D-04 actually required; this plan ran the real audit so any gap gets a name and an owner instead of staying invisible the way rtk/graphify's did. See 12.4-AUDIT.md, 12.4-04-SUMMARY.md. | Phase 12.4 (12.4-04) |
 | D-01..D-04: every managed PATH line this installer writes uses the case-guarded self-deduping idiom (`path_export_guard`) instead of a plain unconditional `export PATH=...`, applied to every writer in the repo (shell rc files and `scripts/container-e2e-verify.sh`); a generic `~/.shellrc` is consolidated into one canonical `~/.myshellrc` plus a marked stub, foreign content copied forward byte-exact. | A plain export re-prepends the same directory every time a nested/child shell re-sources the rc file, accumulating duplicates with every nesting level — confirmed live (5 copies of `~/.local/bin` in one real session) before this phase. Re-verified end to end in a disposable container after the dev host's own verification stalled on `human_needed` (no real hand-authored `~/.shellrc`, no pure-POSIX shell available here): `make fix` against a real hand-written `~/.shellrc`, `dash`, and the real wired `~/.bashrc`→`~/.myshellrc` route all confirmed the managed directory never exceeds 1 after 5 sources, while the user's own pre-existing plain exports (carried forward, out of scope) duplicate as documented. See 15.8-VERIFICATION.md, 15.8-SECURITY.md, 15.8-VALIDATION.md. | Phase 15.8 |
 
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd-complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
 ---
-*Last updated: 2026-10-13 after v0.49.0 milestone (override closeout, audit-2026-10-13)*
+*Last updated: 2026-10-13 after starting milestone v0.50.0 Truthful lifecycle*

@@ -1,20 +1,16 @@
 ---
 gsd_state_version: "1.0"
-milestone: v0.49.0
-milestone_name: Tiered Catalog
-status: Awaiting next milestone
-stopped_at: Phase 16 complete — all phases complete
-last_updated: "2026-10-13T13:41:37.209Z"
+milestone: v0.50.0
+milestone_name: Truthful lifecycle
+status: planning
+last_updated: "2026-10-13T14:24:40.429Z"
 last_activity: 2026-10-13
-last_activity_desc: Milestone v0.49.0 completed and archived
-state_head: 9ce6eb41aebf13e67b09459668feda6004757b16
 progress:
-  total_phases: 28
-  completed_phases: 17
-  total_plans: 110
-  completed_plans: 110
-  percent: 61
-current_phase: 16
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 Total Phases: 21
@@ -30,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-10-13)
 
 ## Current Position
 
-Phase: Milestone v0.49.0 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-10-13 — Milestone v0.49.0 completed and archived
+Status: Defining requirements
+Last activity: 2026-10-13 — Milestone v0.50.0 started
 
 ## Performance Metrics
 

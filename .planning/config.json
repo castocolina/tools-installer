@@ -76,17 +76,52 @@
   "project_code": null,
   "phase_naming": "sequential",
   "agent_skills": {
-    "gsd-plan-checker": ["global:jev-fast-decision"],
-    "gsd-verifier": ["global:jev-fast-decision"],
-    "gsd-code-reviewer": ["global:jev-fast-decision"],
-    "gsd-security-auditor": ["global:jev-fast-decision"],
-    "gsd-ui-checker": ["global:jev-fast-decision"],
-    "gsd-ui-auditor": ["global:jev-fast-decision"],
-    "gsd-eval-auditor": ["global:jev-fast-decision"],
-    "gsd-integration-checker": ["global:jev-fast-decision"],
-    "gsd-doc-verifier": ["global:jev-fast-decision"],
-    "gsd-nyquist-auditor": ["global:jev-fast-decision"],
-    "gsd-dom-verifier": ["global:jev-fast-decision"]
+    "gsd-plan-checker": [
+      "global:jev-fast-decision"
+    ],
+    "gsd-verifier": [
+      "global:jev-fast-decision"
+    ],
+    "gsd-code-reviewer": [
+      "global:jev-fast-decision",
+      "global:ponytail:ponytail-review"
+    ],
+    "gsd-security-auditor": [
+      "global:jev-fast-decision"
+    ],
+    "gsd-ui-checker": [
+      "global:jev-fast-decision"
+    ],
+    "gsd-ui-auditor": [
+      "global:jev-fast-decision"
+    ],
+    "gsd-eval-auditor": [
+      "global:jev-fast-decision"
+    ],
+    "gsd-integration-checker": [
+      "global:jev-fast-decision"
+    ],
+    "gsd-doc-verifier": [
+      "global:jev-fast-decision"
+    ],
+    "gsd-nyquist-auditor": [
+      "global:jev-fast-decision"
+    ],
+    "gsd-dom-verifier": [
+      "global:jev-fast-decision"
+    ],
+    "gsd-planner": [
+      "global:ponytail:ponytail"
+    ],
+    "gsd-executor": [
+      "global:ponytail:ponytail"
+    ],
+    "gsd-code-fixer": [
+      "global:ponytail:ponytail"
+    ],
+    "gsd-roadmapper": [
+      "global:ponytail:ponytail"
+    ]
   },
   "claude_md_path": "./CLAUDE.md",
   "plan_review": {
