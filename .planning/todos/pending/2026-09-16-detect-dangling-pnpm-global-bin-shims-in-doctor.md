@@ -3,6 +3,7 @@ created: 2026-09-16T12:10:00.000Z
 title: Detect dangling pnpm global bin shims in Doctor
 area: doctor
 severity: minor
+resolves_phase: 21
 files:
   - installer/version_status.py
   - installer/versions.py
