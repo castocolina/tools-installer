@@ -136,7 +136,7 @@
 
 **Goal**: Configuration is applied, checked and reversed with its tool: agent-host hooks follow hosts in and out, shell init is offered and removed, and terminals stay on zsh.
 **Depends on**: Phase 20, Phase 22
-**Requirements**: CONF-01, CONF-02, CONF-03, CONF-04, CONF-05, CONF-06, CONF-07, CONF-08, CONF-09, CONF-10, CONF-11
+**Requirements**: CONF-01, CONF-02, CONF-03, CONF-04, CONF-05, CONF-06, CONF-07, CONF-08, CONF-09, CONF-10, CONF-11, CONF-12
 **Success Criteria** (what must be TRUE):
 
   1. Installing codex with rtk present runs `rtk init` for codex once and adds codex to `receipt.hooks`; removing rtk runs `rtk init -g --uninstall` for the recorded hosts; the codegraph, rtk, graphify and herdr hooks all read one agent-host list.
@@ -144,6 +144,7 @@
   3. Installing starship with "yes" turns its shell-init bundle ON, declining leaves no health state, and removing the tool removes the bundle (same for direnv, zoxide, fzf, fnm and volta).
   4. tealdeer fetches its cache after install and update, Oh-My-Zsh plugin writes honor `$ZSH`, and selecting a current zsh no longer promises a step that never runs.
   5. Choosing auto-approval and no-attribution at install writes the documented keys into Claude, Codex, opencode and cursor-agent settings (scratch HOME, comments and unrelated keys preserved), turning them off reverts exactly those keys, the four alias bundles are gone from Policies with an enabled alias migrated, and the chosen prompt (Oh-My-Zsh theme or starship) is the only one active.
+  6. VS Code lean mode writes only absent keys into a JSONC `settings.json` with comments and the user's own keys intact, opt-out removes exactly those keys, and the integrated terminal opens zsh (scratch HOME).
 
 **Plans**: TBD
 
@@ -167,12 +168,12 @@
 
 **Goal**: Neovim (`nvim`) is in the catalog with a researched install and removal for every OS/arch, including a no-reboot path on immutable Bazzite, using the lifecycle contract and the updated onboarding skill.
 **Depends on**: Phase 24 (the onboarding skill is updated and skill-judged there; contract from Phase 22, configuration from Phase 23)
-**Requirements**: ONB-08, ONB-09
+**Requirements**: ONB-08, ONB-09, ONB-10
 **Success Criteria** (what must be TRUE):
 
   1. The onboarding skill's research for Neovim is recorded (release assets per OS/arch, brew, distro packages, removal paths), and the registry entry carries `# Verified` and passes `make verify-registry`.
   2. On Bazzite, Neovim installs to the user's home without a reboot, writes a receipt, shows `✓` on its tier, and Uninstall removes exactly the receipt paths and keeps `~/.config/nvim` unless "delete config too" is chosen (scratch HOME and container).
-  3. The asked customization (Neovim as `EDITOR`/`VISUAL`) is applied only on "yes" and reverted on removal.
+  3. The asked customizations (Neovim as `EDITOR`/`VISUAL`; kickstart.nvim starter config) are applied only on "yes"; kickstart is never cloned over an existing `~/.config/nvim`, and `EDITOR` is reverted on removal.
 
 **Plans**: TBD
 

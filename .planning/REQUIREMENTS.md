@@ -94,6 +94,7 @@
 - [ ] **CONF-09**: Agent commit/PR attribution can be turned off at install (asked): Claude `attribution.commit = false` and `attribution.pr = false`, cursor-agent `attribution.attributeCommitsToAgent = false` and `attributePRsToAgent = false` (the Cursor CLI ignores the commit opt-out as of 2026-10-04, so the UI states it), and Codex, opencode and pi are listed as having no documented key [user request 2026-10-13]
 - [ ] **CONF-10**: The alias tweak bundles `claude-skip`, `codex-skip`, `opencode-auto` and the cursor-agent model wrapper leave Policies; a host that had one enabled gets the alias removed and the equivalent config key applied (cursor-agent default model via `cli-config.json`) [user request 2026-10-13]
 - [ ] **CONF-11**: The Oh-My-Zsh writer that sets `plugins=(…)` also writes a default `ZSH_THEME="robbyrussell"` before `source $ZSH/oh-my-zsh.sh`, but only when the file has no `ZSH_THEME` line. A theme the user set by hand or with `omz theme set` is never overwritten. Choosing starship (CONF-04) instead writes `ZSH_THEME=""`, so only one prompt is active. The install summary names `omz theme use <name>` (try it in the current session) and `omz theme set <name>` (keep it) [host evidence 2026-10-13: `ZSH_THEME` unset, prompt `%m%# `]
+- [ ] **CONF-12**: Installing VS Code offers a "lean mode" (asked) that writes only keys absent from `~/.config/Code/User/settings.json` (JSONC, comments preserved) and reverts exactly those keys on removal or opt-out: `telemetry.telemetryLevel: "off"`, `update.mode: "none"` (the package manager updates it), `workbench.enableExperiments: false`, `workbench.settings.enableNaturalLanguageSearch: false`, `extensions.ignoreRecommendations: true`, `window.restoreWindows: "one"`, `workbench.startupEditor: "none"`, `editor.minimap.enabled: false`, `files.watcherExclude` for `node_modules`, `.venv`, `.git/objects`, `dist`, `build` and `.cache`, `search.followSymlinks: false`, `npm.autoDetect: "off"`, `task.autoDetect: "off"`, `typescript.disableAutomaticTypeAcquisition: true`, `git.autoRepositoryDetection: "openEditors"`, and `terminal.integrated.defaultProfile.linux` set to zsh. Turning off built-in AI (`chat.disableAIFeatures: true`) is a separate question. Every key was verified to exist in VS Code 1.138 [user request 2026-10-13; host evidence: 1.37 GB PSS across 5 windows, 928 MB of it in renderers; integrated terminals run bash]
 
 ### Onboarding and end-to-end
 
@@ -103,6 +104,7 @@
 - [ ] **ONB-07**: Alacritty gets the terminal shell sync (zsh, `SHELL`) and the keybinding customizations (word navigation, clear scrollback) [999.11]
 - [ ] **ONB-08**: Neovim (`nvim`) is onboarded through the tool-onboarding skill with a researched install and removal for every OS/arch (release tarballs, brew), a no-reboot path on immutable Bazzite, a receipt, and `~/.config/nvim` as `config_paths` [user request 2026-10-13]
 - [ ] **ONB-09**: Installing Neovim asks whether to make it the default `EDITOR`/`VISUAL`; "yes" writes a managed shell line that is removed with the tool [user request 2026-10-13]
+- [ ] **ONB-10**: Installing Neovim offers kickstart.nvim as a starter config (asked), cloned into `~/.config/nvim` only when that directory is absent or empty, never over an existing config; it uses Neovim 0.12's built-in `vim.pack`, and the summary names `:checkhealth`, `:lsp` and `vim.lsp.enable` to keep only the needed language servers [user decision 2026-10-13; measured: 26 MB PSS, 19 plugins, 36 ms startup vs 10 MB bare nvim]
 - [ ] **ONB-03**: The tool-onboarding skill covers the new lifecycle params and is scored with skill-judge [999.5]
 - [ ] **ONB-04**: The container end-to-end runs install all → rerun all (all skipped) → uninstall all on Fedora, Debian and Arch, with leftovers limited to documented config paths [A #3]
 - [ ] **ONB-05**: A human UAT on the real host confirms Owner on every tier after install and the cleared mark after Uninstall [999.7]
@@ -207,6 +209,7 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | CONF-09 | Phase 23 | Pending |
 | CONF-10 | Phase 23 | Pending |
 | CONF-11 | Phase 23 | Pending |
+| CONF-12 | Phase 23 | Pending |
 | ONB-01 | Phase 24 | Pending |
 | ONB-02 | Phase 24 | Pending |
 | ONB-03 | Phase 24 | Pending |
@@ -216,6 +219,7 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | ONB-07 | Phase 24 | Pending |
 | ONB-08 | Phase 24.1 | Pending |
 | ONB-09 | Phase 24.1 | Pending |
+| ONB-10 | Phase 24.1 | Pending |
 | LEAN-01 | Phase 25 | Pending |
 | LEAN-02 | Phase 25 | Pending |
 | LEAN-03 | Phase 25 | Pending |
@@ -223,8 +227,8 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 
 **Coverage:**
 
-- v1 requirements: 78 total
-- Mapped to phases: 78 (Phase 17: 12, Phase 18: 10, Phase 19: 7, Phase 20: 8, Phase 21: 7, Phase 22: 10, Phase 23: 11, Phase 24: 7, Phase 24.1: 2, Phase 25: 4)
+- v1 requirements: 80 total
+- Mapped to phases: 80 (Phase 17: 12, Phase 18: 10, Phase 19: 7, Phase 20: 8, Phase 21: 7, Phase 22: 10, Phase 23: 12, Phase 24: 7, Phase 24.1: 3, Phase 25: 4)
 - Unmapped: 0
 - Mapping note: UI-04 sits in Phase 22, not Phase 21 (TA §8 P5), because it needs `config_paths` (LIFE-04)
 
