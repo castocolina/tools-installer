@@ -840,3 +840,25 @@ Plans:
 
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.11: Onboard herdr and re-onboard Alacritty through the tool-onboarding skill (install AND removal per OS/arch, no-reboot path on Bazzite, user customizations) (BACKLOG)
+
+**Goal:** [Captured for future planning]
+**Source:** user request 2026-10-13. Neither tool had a phase: herdr is absent from the registry; Alacritty entered outside any phase (commit 102c83e, 2026-10-09) before the skill gained steps 4b (removal) and 7 (customizations).
+**herdr (research 2026-10-13):**
+- Official: github.com/herdrdev/herdr, docs herdr.dev/docs/install. Latest v0.9.3 (2026-09-29). Release assets are raw binaries per OS/arch: `herdr-linux-x86_64`, `herdr-linux-aarch64`, `herdr-macos-x86_64`, `herdr-macos-aarch64` (+ Windows zip). NO checksum file is published (50 registry `github_release` methods already ship without one; record it in `# Verified`).
+- Other routes: Homebrew formula `herdr` (bottled 0.9.3, linuxbrew too), vendor `curl -fsSL https://herdr.dev/install.sh | sh`, mise, Nix. Self-updates with `herdr update` (an installer-owned binary would drift from the catalog's version check — decide who owns updates).
+- This host: `~/.local/bin/herdr` 0.9.3, installed by hand/vendor script (no receipt). The docs give NO uninstall instructions: removal recipe must be researched (binary, `~/.config/herdr/`, session server state, linked plugins).
+- Candidate methods: `github_release` raw per os/arch into `~/.local/bin` (immutable-host friendly, no reboot) and `brew` formula; tier `user` (the human drives it), category terminal/multiplexer.
+- **User customization (step 7, ask before applying):** the user's own repo `castocolina/herdr-setup` ("Herdr config and focused-space/pane markers plugin", MIT). `make install` → `tools/install.sh`: backs up and replaces `~/.config/herdr/config.toml`, `herdr plugin unlink` old ids, `herdr plugin link plugins/workspace-here` (plugin id `herdr-setup.markers`, `mark.py`), `herdr server reload-config`, then sort mode via `make sort-native|sort-local`. Adds the `◀` current-space marker, workspace rules and the separator between agents beside the native shading. Platform fit: a postinstall can only select a NAMED hook from `POSTINSTALL_HOOKS`, never run a repo's Makefile; decide between a dedicated hook (clone/pin the repo, link the plugin, merge-not-overwrite config) or leaving it as a documented manual step. Its removal: `herdr plugin unlink herdr-setup.markers` + restore the config backup.
+**Alacritty — no-reboot path on Bazzite (research in `docs/research/2026-10-09-alacritty.md`, re-checked 2026-10-13):**
+- Upstream ships NO Linux binary, AppImage, .deb or .rpm; no Homebrew formula (the macOS cask is disabled since 2026-09-01, Gatekeeper); `flatpak search alacritty` empty. `rpm-ostree` layering is the only native route and needs a reboot — rejected by the user.
+- No-reboot options: (a) Fedora Distrobox matching the host (`dnf install alacritty` 0.17.0) + `distrobox-export --app alacritty`, with the terminal shell pointed at the host via `distrobox-host-exec` and terminfo exported; (b) build with cargo inside that Distrobox and place the binary in `~/.local/bin` (host runtime libs suffice; desktop entry, terminfo and man pages are extra post-build steps into `~/.local/share`); (c) wait for an upstream Linux AppImage/tarball with checksum and copy WezTerm's method.
+- Platform gap: the installer has NO `distrobox` method kind and `cargo` builds are out of scope, so today the row correctly says "not available: immutable host". Choosing (a) or (b) means a new method kind (install + detect + version + owner + removal: `distrobox-export --app alacritty --delete`, container removal policy) — design it with 999.3/999.8, not as a special case.
+- Customizations to offer (step 7): alt/option+arrow word navigation and Cmd+K / Ctrl+Shift+K clear-scrollback bindings, shell = discovered zsh (as 15.6 does for kitty/WezTerm; Alacritty is not covered by `installer/terminal_shell.py` today).
+**Before planning:** run `.claude/skills/tool-onboarding` end to end for each tool and then skill-judge (999.5). Depends on 999.8 (removal spec) and, for Alacritty, on a decision about a Distrobox method kind.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
