@@ -3,6 +3,7 @@
 ## Milestones
 
 - ✅ **v0.49.0 Tiered Catalog** — Phases 1–16 incl. 12.1–12.4 and 15.1–15.8 (shipped 2026-10-13, override closeout; see [archive](milestones/v0.49.0-ROADMAP.md) and [audit](research/audit-2026-10-13/SYNTHESIS-AND-PLAN.md))
+- 🚧 **v0.50.0 Truthful lifecycle** — Phases 17–25 (in progress)
 
 ## Phases
 
@@ -12,6 +13,184 @@
 28 phases, 110 plans, 244 tasks. Tier-scoped catalog, dependency drag-in, postinstall hooks, background maintenance daemon, version-aware status and updates, live in-TUI install execution, ownership attribution and the Owner column, terminal default shell on immutable hosts, self-deduping PATH, filesystem-based detection. Full phase details: [milestones/v0.49.0-ROADMAP.md](milestones/v0.49.0-ROADMAP.md); phase directories: `milestones/v0.49.0-phases/`.
 
 </details>
+
+## 🚧 v0.50.0 Truthful lifecycle
+
+**Milestone Goal:** Every screen tells the truth about each tool on this host (present, healthy, whose, which version, removable with proof), and install, update, removal and configuration follow one per-method contract with install receipts as removal proof.
+
+**Design source:** `.planning/research/2026-10-13-target-architecture.md` (TA). Phase 17–25 = TA §8 rows P1–P9; hazards H1–H7 are TA §10; backlog mapping is TA §8.1. Every refresh or lifecycle promise gets a per-view, per-direction test.
+
+**Phase Numbering:**
+
+- Integer phases (17–25): Planned milestone work
+- Decimal phases (e.g. 17.1): Urgent insertions (marked with INSERTED)
+
+- [ ] **Phase 17: Stop the bleeding** - Fix host hazards H1–H7 and the false-success, crash and dead-route bugs; CI green on both OSes with the PR check required
+- [ ] **Phase 18: Registry truth and drift guard** - Apply every audit data fix, reject unknown keys, require `# Verified`, add `make verify-registry`, digest checksums and install-time smoke
+- [ ] **Phase 19: One tool state with health plus receipts** - One `ToolState` per tool with a closed `Health` set, published in one swap, plus an atomic receipt for every install
+- [ ] **Phase 20: Install plan with dispositions** - The review states each selection's disposition; TUI and headless run one plan and one engine with outcome-based exit codes
+- [ ] **Phase 21: One screen family** - Every view reflects every mutation; Uninstall, Policies and Doctor become projections of the shared state
+- [ ] **Phase 22: Method lifecycle contract** - Per-method update and removal with receipts as proof, native installs handed off, `config_paths`, a leftover-checking e2e harness
+- [ ] **Phase 23: Configuration as a lifecycle step** - Reversible agent-host hooks that follow hosts, shell init offered at install, terminals kept on zsh with `SHELL`
+- [ ] **Phase 24: Onboarding through the skill and e2e** - herdr and Alacritty onboarded through the skill; three-distro container e2e with leftover checks; real-host UAT
+- [ ] **Phase 25: Lean** - Delete ~2,000 lines of dead code and put app composition under pyright and the coverage gate
+
+## Phase Details
+
+### Phase 17: Stop the bleeding
+
+**Goal**: No known host hazard can fire on the user's machine, every failed or crashed run says so, and nothing merges to main without a green check on both OSes.
+**Depends on**: Nothing (first phase of v0.50.0; builds on shipped v0.49.0)
+**Requirements**: SAFE-01, SAFE-02, SAFE-03, SAFE-04, SAFE-05, SAFE-06, SAFE-07, SAFE-08, SAFE-09, CI-01, CI-02, CI-03
+**Success Criteria** (what must be TRUE):
+
+  1. In a scratch HOME, a download/app method whose member is a directory fails with an error and links nothing, and a reinstall over an existing link-to-directory leaves the inner file untouched; installing or updating graphify leaves an empty working directory empty (HOME-sandbox probe).
+  2. Neither `make uninstall --yes` nor the TUI deletes the uv-tool ruff symlink, a pip `yq` file or the shared drawio file; each is listed as "remove it yourself". An injected rc write failure leaves the original file intact, and `clean_rc_duplicates` refuses a file that changed between preview and confirm.
+  3. A worker exception mid-run shows a red "Failed" status and exits 1, and a failed update exits 1; a fake vendor script that opens `/dev/tty` fails fast instead of hanging; a non-UTF-8 `settings.json` does not crash launch; Enter in a catalog executes the selection on every route (`make doctor`, `fix`, `uninstall`, `guard`).
+  4. With a ban and a tweak active, changing the shell link mode (centralized → split) removes their blocks from the old mode's rc and writes them where the new mode sources.
+  5. CI is green on ubuntu and macOS, merges to main require the PR check (branch protection, user action), and plans 16-17..19 carry secure and validate re-audit records.
+
+**Plans**: TBD
+
+### Phase 18: Registry truth and drift guard
+
+**Goal**: The registry matches upstream releases and this host, and drift is caught by a check before a user hits it.
+**Depends on**: Phase 17 (may run in parallel with Phase 19)
+**Requirements**: REG-01, REG-02, REG-03, REG-04, REG-05, REG-06, REG-07, REG-08, REG-09, REG-10
+**Success Criteria** (what must be TRUE):
+
+  1. Loading a registry fixture with an unknown method key fails, draw.io's `cli_name` is honored, and a test fails when any `[[tool]]` lacks a `# Verified YYYY-MM-DD` line.
+  2. `make verify-registry` flags the pre-fix difftastic asset template (fixture) for renamed assets, missing archive members and checksum drift, and runs as a weekly non-blocking scheduled CI job, never in the PR gate.
+  3. Unverified `github_release` methods drop from 50 to 0 wherever GitHub exposes a sha256 digest, and a freshly installed binary that fails its smoke run (a fake binary exiting 127) falls through to the next method.
+  4. Launched without the dev venv on PATH, ruff resolves its real owner under `make setup` (container); `/usr/bin/java` alone never counts as installed; `parse_version('-1') is None`, and quoted or `version=` output never yields a fabricated version.
+  5. Every C/D/E/F audit data fix is applied, the `managed-download` owner probe is gone, and `drawio-cli` is removed with `drawio-desktop` serving both audiences.
+
+**Plans**: TBD
+
+### Phase 19: One tool state with health plus receipts
+
+**Goal**: Every catalog view reads one truthful state per tool (present, health, owner, version, removability), and every install leaves a receipt proving what it wrote.
+**Depends on**: Phase 17 (may run in parallel with Phase 18)
+**Requirements**: STATE-01, STATE-02, STATE-03, STATE-04, STATE-05, STATE-06, STATE-07
+**Success Criteria** (what must be TRUE):
+
+  1. A parametrized `tool_health` table maps every evidence combination to one Health with the stated precedence and reasons, and a refresh pass overtaken by a newer one publishes nothing (deterministic barrier test).
+  2. Each health mark (`✓ ok · ↑ update · ≈ config · ! broken · ○ missing`, dim unavailable, `…` checking) appears on every catalog tier (system, user, ai), the legend fits the 78×3 budget, and the focused row shows its health reasons and missing configuration steps.
+  3. Install, update and repair write an atomic receipt for download, app, script and manager kinds, and a receipt whose link target no longer matches makes the tool not removable.
+  4. graphify (uv) resolves owner uv, and Volta, redirect shims, the implicit `~/.local/bin`, `host_setup` tools and native packages resolve their real owner with the native probe run once per pass; installing brew in-session makes colima installable without restarting the app.
+  5. Skill packs show partial or duplicate installs per harness.
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 20: Install plan with dispositions
+
+**Goal**: Before anything runs, the user sees what will happen to each selected and dragged tool, and the TUI and headless runs execute that same plan with honest outcomes.
+**Depends on**: Phase 19
+**Requirements**: PLAN-01, PLAN-02, PLAN-03, PLAN-04, PLAN-05, PLAN-06, PLAN-07, PLAN-08
+**Success Criteria** (what must be TRUE):
+
+  1. On every tier, including system, the review says: missing → "will install"; current → "skipped — already current (r: reinstall)", and after `r` → "will be reinstalled"; broken → "will repair"; outdated brew → "will update"; outdated dnf → "skipped — managed by dnf"; a dragged present dependency → "already present" under its dependent (G probe cases A–I as tests).
+  2. `a` on an all-installed tier runs nothing, and the summary counts outcomes with the same words as the review.
+  3. After a run, failed, blocked and not-attempted selections stay selected while done and skipped ones clear; `esc` before start keeps the selection; while state is refreshing, rows show "checking…" and Enter waits for the refresh.
+  4. Headless `--all --yes` uses the same plan and engine: on a host with an outdated tool it updates it and exits 0, and a failed row exits 1.
+  5. No screen promises an off-policy migration ("moving it there") that does not exist.
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 21: One screen family
+
+**Goal**: Every screen shows the current truth after any mutation, and Uninstall, Policies and Doctor are projections of the shared state on one lifecycle.
+**Depends on**: Phase 20
+**Requirements**: UI-01, UI-02, UI-03, UI-05, UI-06, UI-07, UI-08
+**Success Criteria** (what must be TRUE):
+
+  1. A matrix test of source mutation {install close, `u` on each tier, Uninstall removal, Policies toggle, Doctor `r`} × target view {system, user, ai, Uninstall, Policies, Doctor} shows the new state on the target's next entry, and immediately when it is visible.
+  2. Every view keeps a status written during its first entry and clears its transient status on leave.
+  3. Uninstall groups tools as removable (with proof), managed elsewhere (with the owner's hint) and nothing to do, from the shared state; it never names a manager for an unknown owner, and a BROKEN row says "reinstall it from the catalog to repair".
+  4. A removal runs on a worker with visible progress; afterwards the tool moves to "nothing to do", its selection is pruned, every tier shows `○`, and Policies shows a removed ban OFF on entry.
+  5. Policies and Doctor read live state on entry: installing `watch` unblocks the docker tweak, Doctor's hidden `a` key is inert, and a dangling pnpm global shim shows as broken.
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 22: Method lifecycle contract
+
+**Goal**: Update and removal follow one per-method contract: nothing is removed without proof, no executor runs sudo, and config stays unless the user asks.
+**Depends on**: Phase 19, Phase 21
+**Requirements**: LIFE-01, LIFE-02, LIFE-03, LIFE-04, LIFE-05, LIFE-06, LIFE-07, LIFE-08, LIFE-09, UI-04
+**Note**: UI-04 ("delete config too") is planned here rather than in Phase 21 (TA §8 lists it under P5) because it needs `config_paths` (LIFE-04) and `RemovalPlan.config`, which land in this phase.
+**Success Criteria** (what must be TRUE):
+
+  1. For every kind, in both directions (scratch HOME): install writes a receipt, Uninstall shows the tool removable, and removal leaves none of the receipt's paths; a foreign file at a declared script path is never deleted.
+  2. `opencode` removal runs `opencode uninstall --keep-config --keep-data` (fake runner); brew, uv and pnpm uninstall runs only when a receipt proves the installer put the package there, otherwise a hint is shown; removing a pnpm co-install member warns about its group.
+  3. `u` on Oh-My-Zsh runs `$ZSH/tools/upgrade.sh` and on SDKMAN `sdk selfupdate`; `u` on a pinned `app` tool with no version source is refused with the reason.
+  4. A brew bootstrap with an unwritable prefix becomes a manual handoff, native dnf/apt/pacman installs are handed off as the exact command, and a grep test finds zero `sudo` argv in any executor.
+  5. Uninstall offers "delete config too" only for tools with `config_paths` (default keep; CLI `--yes` never deletes config), a `config_paths` entry under `~/.claude`, `~/.cursor`, `~/.gemini` or `~/.codex` is rejected at load, and the container e2e harness compares file listings before and after uninstall, not only exit codes.
+
+**Plans**: TBD
+
+### Phase 23: Configuration as a lifecycle step
+
+**Goal**: Configuration is applied, checked and reversed with its tool: agent-host hooks follow hosts in and out, shell init is offered and removed, and terminals stay on zsh.
+**Depends on**: Phase 20, Phase 22
+**Requirements**: CONF-01, CONF-02, CONF-03, CONF-04, CONF-05, CONF-06, CONF-07
+**Success Criteria** (what must be TRUE):
+
+  1. Installing codex with rtk present runs `rtk init` for codex once and adds codex to `receipt.hooks`; removing rtk runs `rtk init -g --uninstall` for the recorded hosts; the codegraph, rtk, graphify and herdr hooks all read one agent-host list.
+  2. A kitty or WezTerm config without the owned region shows `≈`, and RECONFIGURE writes zsh and `SHELL` into it (scratch HOME).
+  3. Installing starship with "yes" turns its shell-init bundle ON, declining leaves no health state, and removing the tool removes the bundle (same for direnv, zoxide, fzf, fnm and volta).
+  4. tealdeer fetches its cache after install and update, Oh-My-Zsh plugin writes honor `$ZSH`, and selecting a current zsh no longer promises a step that never runs.
+
+**Plans**: TBD
+
+### Phase 24: Onboarding through the skill and e2e
+
+**Goal**: herdr and Alacritty prove the new contract end to end through the onboarding skill, and a three-distro container run plus a real-host UAT show the full lifecycle leaves only documented config behind.
+**Depends on**: Phase 22, Phase 23
+**Requirements**: ONB-01, ONB-02, ONB-03, ONB-04, ONB-05, ONB-06, ONB-07
+**Note**: Alacritty's cargo build in a throwaway Distrobox is user decision O5 (2026-10-13), overriding the TA's O5 recommendation and its §9.1 "no new method kind" cut; it rides on Phase 22's lifecycle contract (receipt, removal, update). ONB-04 runs the leftover-checking harness built in Phase 22 (LIFE-09).
+**Success Criteria** (what must be TRUE):
+
+  1. In a container, herdr installs, its integrations register for the present agent hosts, and uninstall leaves `herdr integration status` clean; its skill pack is a separate, optional selection.
+  2. On immutable Bazzite, Alacritty installs without a reboot: cargo builds it in a throwaway Distrobox, the native binary lands in `~/.local/bin` with its desktop entry, icon and terminfo under `~/.local/share`, all recorded in the receipt, and the container and image are gone afterwards; uninstall removes every recorded path.
+  3. A newer Alacritty GitHub release shows as an update, and selecting it rebuilds while leaving `~/.config/alacritty` untouched; Alacritty gets the zsh/`SHELL` sync and the asked keybindings (word navigation, clear scrollback).
+  4. The tool-onboarding skill covers the new lifecycle params, and its skill-judge score is recorded.
+  5. The container e2e runs install all → rerun all (all skipped) → uninstall all on Fedora, Debian and Arch with leftovers limited to documented `config_paths`, and a human UAT on the real host confirms Owner on every tier after install and the cleared mark after Uninstall (manual).
+
+**Plans**: TBD
+
+### Phase 25: Lean
+
+**Goal**: About 2,000 production lines are gone with behavior unchanged, and app composition is under the type checker and the coverage gate.
+**Depends on**: Phase 18, Phase 24 (runs last, so deletions do not fight the rewrites)
+**Requirements**: LEAN-01, LEAN-02, LEAN-03, LEAN-04
+**Success Criteria** (what must be TRUE):
+
+  1. The agent policy modules, the questionary chooser, `audit.py`, dead fields and dead Message classes are deleted while the race epochs stay, and the full suite plus `make validate` are green.
+  2. App composition lives in `installer/compose.py`, checked by pyright and counted in the coverage gate.
+  3. `wizard_app.py` is split and its review-history comments are gone, with the CLI `--all`/`--categories` tests unchanged.
+  4. The run log is bounded.
+
+**Plans**: TBD
+
+## Progress
+
+**Execution Order:**
+17 → (18 ∥ 19) → 20 → 21 → 22 → 23 → 24 → 25. Phases 18 and 19 both need only 17 and may run in parallel; 22 needs 19 and 21; 23 needs 20 and 22; 24 needs 22 and 23; 25 runs last.
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 17. Stop the bleeding | 0/TBD | Not started | - |
+| 18. Registry truth and drift guard | 0/TBD | Not started | - |
+| 19. One tool state with health plus receipts | 0/TBD | Not started | - |
+| 20. Install plan with dispositions | 0/TBD | Not started | - |
+| 21. One screen family | 0/TBD | Not started | - |
+| 22. Method lifecycle contract | 0/TBD | Not started | - |
+| 23. Configuration as a lifecycle step | 0/TBD | Not started | - |
+| 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
+| 25. Lean | 0/TBD | Not started | - |
 
 ## Backlog
 
@@ -29,6 +208,8 @@
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
+**Absorbed by:** Phases 20 and 21 (v0.50.0)
+
 ### Phase 999.2: Installer receipts as direct-artifact ownership proof: record what this installer wrote (artifact path + checksum/receipt) so ownership of a script/download-installed tool is proven by a receipt instead of inferred "by elimination" (BACKLOG)
 
 **Goal:** [Captured for future planning]
@@ -41,6 +222,8 @@ Plans:
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
+**Absorbed by:** Phases 19 and 22 (v0.50.0)
+
 ### Phase 999.3: Registry can express a different artifact per OS and per arch: a `.dmg`/cask on macOS vs a vendor script or tarball on Linux, distinct per-arch assets, without bending an unrelated method kind (BACKLOG)
 
 **Goal:** [Captured for future planning]
@@ -51,6 +234,8 @@ Plans:
 
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
+
+**Absorbed by:** Phase 18 (v0.50.0)
 
 ### Phase 999.4: Terminal shell sync follow-ups: export `SHELL` to the configured zsh inside kitty/WezTerm, and re-run the terminal sync when an install run reports the terminal as "already" present (BACKLOG)
 
@@ -63,6 +248,8 @@ Plans:
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
+**Absorbed by:** Phases 20 and 23 (v0.50.0)
+
 ### Phase 999.5: Finish the tool-onboarding skill revision with skill-judge: score `.claude/skills/tool-onboarding/SKILL.md` and apply its findings so the skill is well defined (BACKLOG)
 
 **Goal:** [Captured for future planning]
@@ -73,6 +260,8 @@ Plans:
 
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
+
+**Absorbed by:** Phase 24 (v0.50.0)
 
 ### Phase 999.6: One row-state model instead of three disagreeing classifiers, plus the earlier-phase promises the 2026-10-10 audit found unmet (BACKLOG)
 
@@ -94,6 +283,8 @@ Plans:
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
+**Absorbed by:** Phases 19 and 21 (v0.50.0)
+
 ### Phase 999.7: Phase 16 verification debt left open at close (BACKLOG)
 
 **Goal:** [Captured for future planning]
@@ -108,6 +299,8 @@ Plans:
 
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
+
+**Absorbed by:** Phases 17 and 24 (v0.50.0)
 
 ### Phase 999.8: Per-method uninstall spec: each install method declares how it is removed on its OS/arch (manager remove, vendor uninstaller/script, or the exact paths it wrote), what config/data it leaves, and the removal policy (keep config by default, delete all, or ask), replacing today's generic Uninstall (BACKLOG)
 
@@ -128,6 +321,8 @@ Tool-level, shared by all its methods: config/data paths (an optional per-OS var
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
+**Absorbed by:** Phase 22 (v0.50.0)
+
 ### Phase 999.9: Correctness and data-safety fixes from the 2026-10-11 ponytail audit not covered by another item (BACKLOG)
 
 **Goal:** [Captured for future planning]
@@ -146,6 +341,8 @@ Plans:
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
+**Absorbed by:** Phases 17 and 21 (v0.50.0)
+
 ### Phase 999.10: Screen component architecture and lean-up: one RowsScreen family for Catalog/Uninstall/Policies, dead code out, wiring under the type checker (BACKLOG)
 
 **Goal:** [Captured for future planning]
@@ -160,6 +357,8 @@ Plans:
 
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
+
+**Absorbed by:** Phases 21 and 25 (v0.50.0)
 
 ### Phase 999.11: Onboard herdr and re-onboard Alacritty through the tool-onboarding skill (install AND removal per OS/arch, no-reboot path on Bazzite, user customizations) (BACKLOG)
 
@@ -195,3 +394,5 @@ Plans:
 
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
+
+**Absorbed by:** Phases 23 and 24 (v0.50.0)

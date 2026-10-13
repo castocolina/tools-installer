@@ -132,11 +132,90 @@
 
 ## Traceability
 
-Filled by the roadmap.
+Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| SAFE-01 | Phase 17 | Pending |
+| SAFE-02 | Phase 17 | Pending |
+| SAFE-03 | Phase 17 | Pending |
+| SAFE-04 | Phase 17 | Pending |
+| SAFE-05 | Phase 17 | Pending |
+| SAFE-06 | Phase 17 | Pending |
+| SAFE-07 | Phase 17 | Pending |
+| SAFE-08 | Phase 17 | Pending |
+| SAFE-09 | Phase 17 | Pending |
+| CI-01 | Phase 17 | Pending |
+| CI-02 | Phase 17 | Pending |
+| CI-03 | Phase 17 | Pending |
+| REG-01 | Phase 18 | Pending |
+| REG-02 | Phase 18 | Pending |
+| REG-03 | Phase 18 | Pending |
+| REG-04 | Phase 18 | Pending |
+| REG-05 | Phase 18 | Pending |
+| REG-06 | Phase 18 | Pending |
+| REG-07 | Phase 18 | Pending |
+| REG-08 | Phase 18 | Pending |
+| REG-09 | Phase 18 | Pending |
+| REG-10 | Phase 18 | Pending |
+| STATE-01 | Phase 19 | Pending |
+| STATE-02 | Phase 19 | Pending |
+| STATE-03 | Phase 19 | Pending |
+| STATE-04 | Phase 19 | Pending |
+| STATE-05 | Phase 19 | Pending |
+| STATE-06 | Phase 19 | Pending |
+| STATE-07 | Phase 19 | Pending |
+| PLAN-01 | Phase 20 | Pending |
+| PLAN-02 | Phase 20 | Pending |
+| PLAN-03 | Phase 20 | Pending |
+| PLAN-04 | Phase 20 | Pending |
+| PLAN-05 | Phase 20 | Pending |
+| PLAN-06 | Phase 20 | Pending |
+| PLAN-07 | Phase 20 | Pending |
+| PLAN-08 | Phase 20 | Pending |
+| UI-01 | Phase 21 | Pending |
+| UI-02 | Phase 21 | Pending |
+| UI-03 | Phase 21 | Pending |
+| UI-04 | Phase 22 | Pending |
+| UI-05 | Phase 21 | Pending |
+| UI-06 | Phase 21 | Pending |
+| UI-07 | Phase 21 | Pending |
+| UI-08 | Phase 21 | Pending |
+| LIFE-01 | Phase 22 | Pending |
+| LIFE-02 | Phase 22 | Pending |
+| LIFE-03 | Phase 22 | Pending |
+| LIFE-04 | Phase 22 | Pending |
+| LIFE-05 | Phase 22 | Pending |
+| LIFE-06 | Phase 22 | Pending |
+| LIFE-07 | Phase 22 | Pending |
+| LIFE-08 | Phase 22 | Pending |
+| LIFE-09 | Phase 22 | Pending |
+| CONF-01 | Phase 23 | Pending |
+| CONF-02 | Phase 23 | Pending |
+| CONF-03 | Phase 23 | Pending |
+| CONF-04 | Phase 23 | Pending |
+| CONF-05 | Phase 23 | Pending |
+| CONF-06 | Phase 23 | Pending |
+| CONF-07 | Phase 23 | Pending |
+| ONB-01 | Phase 24 | Pending |
+| ONB-02 | Phase 24 | Pending |
+| ONB-03 | Phase 24 | Pending |
+| ONB-04 | Phase 24 | Pending |
+| ONB-05 | Phase 24 | Pending |
+| ONB-06 | Phase 24 | Pending |
+| ONB-07 | Phase 24 | Pending |
+| LEAN-01 | Phase 25 | Pending |
+| LEAN-02 | Phase 25 | Pending |
+| LEAN-03 | Phase 25 | Pending |
+| LEAN-04 | Phase 25 | Pending |
+
+**Coverage:**
+
+- v1 requirements: 72 total
+- Mapped to phases: 72 (Phase 17: 12, Phase 18: 10, Phase 19: 7, Phase 20: 8, Phase 21: 7, Phase 22: 10, Phase 23: 7, Phase 24: 7, Phase 25: 4)
+- Unmapped: 0
+- Mapping note: UI-04 sits in Phase 22, not Phase 21 (TA §8 P5), because it needs `config_paths` (LIFE-04)
 
 ---
 *Requirements defined: 2026-10-13*
-*Last updated: 2026-10-13 after initial definition*
+*Last updated: 2026-10-13 after roadmap creation (traceability filled)*
