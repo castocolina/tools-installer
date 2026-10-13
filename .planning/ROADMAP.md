@@ -135,13 +135,14 @@
 
 **Goal**: Configuration is applied, checked and reversed with its tool: agent-host hooks follow hosts in and out, shell init is offered and removed, and terminals stay on zsh.
 **Depends on**: Phase 20, Phase 22
-**Requirements**: CONF-01, CONF-02, CONF-03, CONF-04, CONF-05, CONF-06, CONF-07
+**Requirements**: CONF-01, CONF-02, CONF-03, CONF-04, CONF-05, CONF-06, CONF-07, CONF-08, CONF-09, CONF-10, CONF-11
 **Success Criteria** (what must be TRUE):
 
   1. Installing codex with rtk present runs `rtk init` for codex once and adds codex to `receipt.hooks`; removing rtk runs `rtk init -g --uninstall` for the recorded hosts; the codegraph, rtk, graphify and herdr hooks all read one agent-host list.
-  2. A kitty or WezTerm config without the owned region shows `≈`, and RECONFIGURE writes zsh and `SHELL` into it (scratch HOME).
+  2. A zsh started from any terminal has `SHELL` set to the real zsh (managed `~/.zshenv`), a kitty/WezTerm/Konsole config without the owned region shows `≈`, and RECONFIGURE writes it (scratch HOME).
   3. Installing starship with "yes" turns its shell-init bundle ON, declining leaves no health state, and removing the tool removes the bundle (same for direnv, zoxide, fzf, fnm and volta).
   4. tealdeer fetches its cache after install and update, Oh-My-Zsh plugin writes honor `$ZSH`, and selecting a current zsh no longer promises a step that never runs.
+  5. Choosing auto-approval and no-attribution at install writes the documented keys into Claude, Codex, opencode and cursor-agent settings (scratch HOME, comments and unrelated keys preserved), turning them off reverts exactly those keys, the four alias bundles are gone from Policies with an enabled alias migrated, and the chosen prompt (Oh-My-Zsh theme or starship) is the only one active.
 
 **Plans**: TBD
 

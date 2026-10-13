@@ -87,9 +87,13 @@
 - [ ] **CONF-02**: Installing a new agent host re-runs the hooks of already-installed hook tools for that host only [A Ph9 D-01]
 - [ ] **CONF-03**: One agent-host list is used everywhere [TA §6]
 - [ ] **CONF-04**: Shell init for starship, direnv, zoxide, fzf, fnm and volta is offered at install through the existing confirm (default off) and removed with the tool [C G6, O11]
-- [ ] **CONF-05**: kitty and WezTerm configs point at zsh and export `SHELL`; drift shows as misconfigured and reconfigure fixes it [999.4, O4]
+- [ ] **CONF-05**: Every zsh session exports `SHELL` as the real zsh path through a managed `~/.zshenv` line, so herdr, tmux, editors and agents opened from kitty, WezTerm, Konsole or any other terminal start zsh, not the passwd login shell (bash). kitty, WezTerm and Konsole configs keep pointing at zsh, and drift shows as misconfigured. Exporting `SHELL` through `environment.d`, for apps started from the desktop menu, is optional and asked [999.4, O4; host evidence 2026-10-13: all terminal shells are zsh with `SHELL=/bin/bash`]
 - [ ] **CONF-06**: tealdeer fetches its cache after install and update [D]
 - [ ] **CONF-07**: Oh-My-Zsh plugin writes honor `$ZSH` [B 15.6 CR-01]
+- [ ] **CONF-08**: Agent auto-approval is configured in each agent's own settings at install (asked, default off) instead of shell aliases: Claude `permissions.defaultMode: "bypassPermissions"` + `skipDangerousModePermissionPrompt: true` (user scope; project/local scope is ignored since 2.1.257), Codex `approval_policy = "never"` + `sandbox_mode = "danger-full-access"`, opencode `"permission": "allow"`, cursor-agent `approvalMode: "unrestricted"`; each key is reverted when the choice is turned off or the tool is removed [user request 2026-10-13]
+- [ ] **CONF-09**: Agent commit/PR attribution can be turned off at install (asked): Claude `attribution.commit = false` and `attribution.pr = false`, cursor-agent `attribution.attributeCommitsToAgent = false` and `attributePRsToAgent = false` (the Cursor CLI ignores the commit opt-out as of 2026-10-04, so the UI states it), and Codex/opencode are listed as having no documented key [user request 2026-10-13]
+- [ ] **CONF-10**: The alias tweak bundles `claude-skip`, `codex-skip`, `opencode-auto` and the cursor-agent model wrapper leave Policies; a host that had one enabled gets the alias removed and the equivalent config key applied (cursor-agent default model via `cli-config.json`) [user request 2026-10-13]
+- [ ] **CONF-11**: The zsh prompt is chosen at install: an Oh-My-Zsh theme (default `robbyrussell`) written into the managed `.zshrc` before `source $ZSH/oh-my-zsh.sh`, or starship init (CONF-04); only one is active [host evidence 2026-10-13: `ZSH_THEME` unset, prompt `%m%# `]
 
 ### Onboarding and end-to-end
 
@@ -197,6 +201,10 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | CONF-05 | Phase 23 | Pending |
 | CONF-06 | Phase 23 | Pending |
 | CONF-07 | Phase 23 | Pending |
+| CONF-08 | Phase 23 | Pending |
+| CONF-09 | Phase 23 | Pending |
+| CONF-10 | Phase 23 | Pending |
+| CONF-11 | Phase 23 | Pending |
 | ONB-01 | Phase 24 | Pending |
 | ONB-02 | Phase 24 | Pending |
 | ONB-03 | Phase 24 | Pending |
@@ -211,8 +219,8 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 
 **Coverage:**
 
-- v1 requirements: 72 total
-- Mapped to phases: 72 (Phase 17: 12, Phase 18: 10, Phase 19: 7, Phase 20: 8, Phase 21: 7, Phase 22: 10, Phase 23: 7, Phase 24: 7, Phase 25: 4)
+- v1 requirements: 76 total
+- Mapped to phases: 76 (Phase 17: 12, Phase 18: 10, Phase 19: 7, Phase 20: 8, Phase 21: 7, Phase 22: 10, Phase 23: 11, Phase 24: 7, Phase 25: 4)
 - Unmapped: 0
 - Mapping note: UI-04 sits in Phase 22, not Phase 21 (TA §8 P5), because it needs `config_paths` (LIFE-04)
 
