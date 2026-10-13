@@ -80,6 +80,7 @@
 - [ ] **LIFE-07**: A bootstrap that needs an unwritable prefix becomes a handoff after a preflight [C G2]
 - [ ] **LIFE-08**: Removing a pnpm package that is part of a co-install group warns about the group [A #6, T-05-22]
 - [ ] **LIFE-09**: The container end-to-end check compares file listings before and after uninstall, not only exit codes [A #3]
+- [ ] **LIFE-10**: On macOS, casks that update themselves (`auto_updates: true`, e.g. VS Code) report and apply updates through `brew outdated --greedy` / `brew upgrade --cask --greedy <cask>`; otherwise they show as current while outdated, and turning off their own updater would leave them stale [found 2026-10-13: Homebrew API reports `visual-studio-code` auto_updates=true; no `greedy` anywhere in installer/]
 
 ### Configuration
 
@@ -94,7 +95,7 @@
 - [ ] **CONF-09**: Agent commit/PR attribution can be turned off at install (asked): Claude `attribution.commit = false` and `attribution.pr = false`, cursor-agent `attribution.attributeCommitsToAgent = false` and `attributePRsToAgent = false` (the Cursor CLI ignores the commit opt-out as of 2026-10-04, so the UI states it), and Codex, opencode and pi are listed as having no documented key [user request 2026-10-13]
 - [ ] **CONF-10**: The alias tweak bundles `claude-skip`, `codex-skip`, `opencode-auto` and the cursor-agent model wrapper leave Policies; a host that had one enabled gets the alias removed and the equivalent config key applied (cursor-agent default model via `cli-config.json`) [user request 2026-10-13]
 - [ ] **CONF-11**: The Oh-My-Zsh writer that sets `plugins=(…)` also writes a default `ZSH_THEME="robbyrussell"` before `source $ZSH/oh-my-zsh.sh`, but only when the file has no `ZSH_THEME` line. A theme the user set by hand or with `omz theme set` is never overwritten. Choosing starship (CONF-04) instead writes `ZSH_THEME=""`, so only one prompt is active. The install summary names `omz theme use <name>` (try it in the current session) and `omz theme set <name>` (keep it) [host evidence 2026-10-13: `ZSH_THEME` unset, prompt `%m%# `]
-- [ ] **CONF-12**: Installing VS Code offers a "lean mode" (asked) that writes only keys absent from `~/.config/Code/User/settings.json` (JSONC, comments preserved) and reverts exactly those keys on removal or opt-out: `telemetry.telemetryLevel: "off"`, `update.mode: "none"` (the package manager updates it), `workbench.enableExperiments: false`, `workbench.settings.enableNaturalLanguageSearch: false`, `extensions.ignoreRecommendations: true`, `window.restoreWindows: "one"`, `workbench.startupEditor: "none"`, `editor.minimap.enabled: false`, `files.watcherExclude` for `node_modules`, `.venv`, `.git/objects`, `dist`, `build` and `.cache`, `search.followSymlinks: false`, `npm.autoDetect: "off"`, `task.autoDetect: "off"`, `typescript.disableAutomaticTypeAcquisition: true`, `git.autoRepositoryDetection: "openEditors"`, and `terminal.integrated.defaultProfile.linux` set to zsh. Turning off built-in AI (`chat.disableAIFeatures: true`) is a separate question. Every key was verified to exist in VS Code 1.138 [user request 2026-10-13; host evidence: 1.37 GB PSS across 5 windows, 928 MB of it in renderers; integrated terminals run bash]
+- [ ] **CONF-12**: Installing VS Code offers a "lean mode" (asked) that writes only keys absent from `~/.config/Code/User/settings.json` (JSONC, comments preserved) and reverts exactly those keys on removal or opt-out: `telemetry.telemetryLevel: "off"`, `update.mode: "none"` (Linux: the package manager updates it; macOS: only together with LIFE-10, because the cask self-updates and `brew upgrade` skips it), `workbench.enableExperiments: false`, `workbench.settings.enableNaturalLanguageSearch: false`, `extensions.ignoreRecommendations: true`, `window.restoreWindows: "one"`, `workbench.startupEditor: "none"`, `editor.minimap.enabled: false`, `files.watcherExclude` for `node_modules`, `.venv`, `.git/objects`, `dist`, `build` and `.cache`, `search.followSymlinks: false`, `npm.autoDetect: "off"`, `task.autoDetect: "off"`, `typescript.disableAutomaticTypeAcquisition: true`, `git.autoRepositoryDetection: "openEditors"`, and `terminal.integrated.defaultProfile.linux` set to zsh. Turning off built-in AI (`chat.disableAIFeatures: true`) and extension auto-update (`extensions.autoUpdate: false`, `extensions.autoCheckUpdates: false`; security fixes then arrive only on demand) are separate questions. The install summary recommends no resident type-checker extension (Pylance uses the pyright engine, measured 358 MB resident on this repo) and running the project's pre-commit as an on-demand task. Every key was verified to exist in VS Code 1.138 [user request 2026-10-13; host evidence: 1.37 GB PSS across 5 windows, 928 MB of it in renderers; integrated terminals run bash]
 
 ### Onboarding and end-to-end
 
@@ -104,7 +105,7 @@
 - [ ] **ONB-07**: Alacritty gets the terminal shell sync (zsh, `SHELL`) and the keybinding customizations (word navigation, clear scrollback) [999.11]
 - [ ] **ONB-08**: Neovim (`nvim`) is onboarded through the tool-onboarding skill with a researched install and removal for every OS/arch (release tarballs, brew), a no-reboot path on immutable Bazzite, a receipt, and `~/.config/nvim` as `config_paths` [user request 2026-10-13]
 - [ ] **ONB-09**: Installing Neovim asks whether to make it the default `EDITOR`/`VISUAL`; "yes" writes a managed shell line that is removed with the tool [user request 2026-10-13]
-- [ ] **ONB-10**: Installing Neovim offers kickstart.nvim as a starter config (asked), cloned into `~/.config/nvim` only when that directory is absent or empty, never over an existing config; it uses Neovim 0.12's built-in `vim.pack`, and the summary names `:checkhealth`, `:lsp` and `vim.lsp.enable` to keep only the needed language servers [user decision 2026-10-13; measured: 26 MB PSS, 19 plugins, 36 ms startup vs 10 MB bare nvim]
+- [ ] **ONB-10**: Installing Neovim offers kickstart.nvim as a starter config (asked), cloned into `~/.config/nvim` only when that directory is absent or empty, never over an existing config, and set up with **no language server**: opening Python, Lua, TypeScript, Go or Java files starts zero LSP processes, and Mason installs no servers. Linting and type checks run on demand through the project's pre-commit (`:!pre-commit run --files %`, named in the install summary together with `:lsp enable <name>` for a one-off session) [user decision 2026-10-13: "sin LSP en nvim"; measured: kickstart 26 MB PSS vs basedpyright +358 MB resident on this repo, 343 MB for 0.74 s on demand]
 - [ ] **ONB-03**: The tool-onboarding skill covers the new lifecycle params and is scored with skill-judge [999.5]
 - [ ] **ONB-04**: The container end-to-end runs install all → rerun all (all skipped) → uninstall all on Fedora, Debian and Arch, with leftovers limited to documented config paths [A #3]
 - [ ] **ONB-05**: A human UAT on the real host confirms Owner on every tier after install and the cleared mark after Uninstall [999.7]
@@ -198,6 +199,7 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | LIFE-07 | Phase 22 | Pending |
 | LIFE-08 | Phase 22 | Pending |
 | LIFE-09 | Phase 22 | Pending |
+| LIFE-10 | Phase 22 | Pending |
 | CONF-01 | Phase 23 | Pending |
 | CONF-02 | Phase 23 | Pending |
 | CONF-03 | Phase 23 | Pending |
@@ -227,8 +229,8 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 
 **Coverage:**
 
-- v1 requirements: 80 total
-- Mapped to phases: 80 (Phase 17: 12, Phase 18: 10, Phase 19: 7, Phase 20: 8, Phase 21: 7, Phase 22: 10, Phase 23: 12, Phase 24: 7, Phase 24.1: 3, Phase 25: 4)
+- v1 requirements: 81 total
+- Mapped to phases: 81 (Phase 17: 12, Phase 18: 10, Phase 19: 7, Phase 20: 8, Phase 21: 7, Phase 22: 11, Phase 23: 12, Phase 24: 7, Phase 24.1: 3, Phase 25: 4)
 - Unmapped: 0
 - Mapping note: UI-04 sits in Phase 22, not Phase 21 (TA §8 P5), because it needs `config_paths` (LIFE-04)
 

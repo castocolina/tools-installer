@@ -120,7 +120,7 @@
 
 **Goal**: Update and removal follow one per-method contract: nothing is removed without proof, no executor runs sudo, and config stays unless the user asks.
 **Depends on**: Phase 19, Phase 21
-**Requirements**: LIFE-01, LIFE-02, LIFE-03, LIFE-04, LIFE-05, LIFE-06, LIFE-07, LIFE-08, LIFE-09, UI-04
+**Requirements**: LIFE-01, LIFE-02, LIFE-03, LIFE-04, LIFE-05, LIFE-06, LIFE-07, LIFE-08, LIFE-09, LIFE-10, UI-04
 **Note**: UI-04 ("delete config too") is planned here rather than in Phase 21 (TA §8 lists it under P5) because it needs `config_paths` (LIFE-04) and `RemovalPlan.config`, which land in this phase.
 **Success Criteria** (what must be TRUE):
 
@@ -173,7 +173,7 @@
 
   1. The onboarding skill's research for Neovim is recorded (release assets per OS/arch, brew, distro packages, removal paths), and the registry entry carries `# Verified` and passes `make verify-registry`.
   2. On Bazzite, Neovim installs to the user's home without a reboot, writes a receipt, shows `✓` on its tier, and Uninstall removes exactly the receipt paths and keeps `~/.config/nvim` unless "delete config too" is chosen (scratch HOME and container).
-  3. The asked customizations (Neovim as `EDITOR`/`VISUAL`; kickstart.nvim starter config) are applied only on "yes"; kickstart is never cloned over an existing `~/.config/nvim`, and `EDITOR` is reverted on removal.
+  3. The asked customizations (Neovim as `EDITOR`/`VISUAL`; kickstart.nvim starter config) are applied only on "yes"; kickstart is never cloned over an existing `~/.config/nvim` and starts zero LSP processes for Python, Lua, TypeScript, Go and Java files, and `EDITOR` is reverted on removal.
 
 **Plans**: TBD
 
