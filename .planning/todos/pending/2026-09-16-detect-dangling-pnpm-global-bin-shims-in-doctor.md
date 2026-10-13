@@ -8,6 +8,9 @@ files:
   - installer/versions.py
   - installer/wizard_app.py (DoctorScreen)
   - installer/registry.toml
+audit_acknowledged:
+  milestone: v0.49.0
+  at: 2026-10-13
 ---
 
 ## Problem

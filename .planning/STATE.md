@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.49.0
-current_phase: 16
-current_plan: Not started
-status: completed
+milestone_name: Tiered Catalog
+status: Awaiting next milestone
 stopped_at: Phase 16 complete — all phases complete
-last_updated: "2026-10-11T00:39:00.018Z"
-last_activity: 2026-10-10
-last_activity_desc: Phase 16 complete
-state_head: 41d642cdba697e6e8c9a93f93e4db4b19865831d
+last_updated: "2026-10-13T13:41:37.209Z"
+last_activity: 2026-10-13
+last_activity_desc: Milestone v0.49.0 completed and archived
+state_head: 9ce6eb41aebf13e67b09459668feda6004757b16
 progress:
   total_phases: 28
   completed_phases: 17
   total_plans: 110
   completed_plans: 110
-  percent: 100
+  percent: 61
+current_phase: 16
 ---
 
 Total Phases: 21
@@ -30,13 +30,10 @@ See: .planning/PROJECT.md (updated 2026-10-09)
 
 ## Current Position
 
-Phase: 16
-Current Plan: Not started
-Total Plans in Phase: 19
-Status: All phases complete
-Last activity: 2026-10-10 — Phase 16 complete
-
-Progress: [██████████] 100%
+Phase: Milestone v0.49.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-10-13 — Milestone v0.49.0 completed and archived
 
 ## Performance Metrics
 
@@ -245,3 +242,7 @@ Resume file: None
 | Phase | State | Resume |
 |-------|-------|--------|
 | 16 | verification_deferred_human | /gsd-verify-work 16 |
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone

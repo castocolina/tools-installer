@@ -29,29 +29,31 @@ knowledge required.
 - ✓ Registry-driven uninstall for userspace (download/app) artifacts, with "managed by Homebrew" vs. "removable here" classification — shipped pre-GSD
 - ✓ Policies tab: pip/npm ban (shims + aliases) and curated cross-shell tweak bundles (docker shortcuts, countdown helper, claude skip-permissions, apt selective upgrade) written into `~/.myshellrc` — shipped pre-GSD
 - ✓ One view registry / one navigation path / one apply workflow UI architecture (`installer/ui_common.py`, `.claude/architecture.md`) — shipped pre-GSD
+- ✓ Catalog tiers (system/user/ai) with tier-scoped views, `recommends`, failure propagation, tweak-executable uninstall sweep, Oh-My-Zsh bundled plugins — v0.49.0
+- ✓ Package-manager redirect policy, catalog expansion (system/user/AI tiers), `uv-tool` executor, postinstall hooks, agent CLI ergonomics, background maintenance daemon (macOS launchd, Linux systemd user timer) — v0.49.0
+- ✓ Version-aware status and owner-routed updates, live in-TUI install execution, persistent wizard settings, Owner column and Uninstall manager attribution, terminal default shell on immutable hosts, self-deduping PATH, filesystem-based detection — v0.49.0 (partially: see the 2026-10-13 audit; 14 partial and 53 deferred promises carried forward)
 
 ### Active
 
-<!-- Current scope: the catalog-tiers-and-dependency-chain PRD (1st of 7 in the 2026-09-04 planning batch). -->
+<!-- Next milestone (v0.50.0) is being defined from .planning/research/audit-2026-10-13/SYNTHESIS-AND-PLAN.md, a ponytail-ultra architecture pass, the GSD backlog 999.1–999.11 and pending todos. -->
 
-- [ ] **REQ-catalog-tier-field**: Every registry tool declares a `tier` (system/user/ai) on the `Tool` model and registry schema, validated like `Priority`/`Audience`; `uv`/`pnpm`/`brew`/`sdkman` migrate to `tier="system"`
-- [ ] **REQ-dependency-chain-requires**: Cross-tier `requires` chains resolve via the existing resolver with zero new resolver logic
-- [ ] **REQ-catalog-tier-views**: The catalog splits into three tier-scoped top-level views (System/User/AI) reachable from the top nav
-- [ ] **REQ-recommends-soft-dependency**: `Tool.recommends`, a soft-dependency field distinct from `requires`, surfaces (never auto-installs) complementary tools
-- [ ] **REQ-install-failure-propagation**: A tool whose `requires` dependency failed earlier in the same run is skipped with a clear "dependency failed" outcome
-- [ ] **REQ-uninstall-sweep-tweak-executables**: A full uninstall also removes tweak-managed executables, not only `Tool`-shaped artifacts
-- [ ] **REQ-oh-my-zsh-plugin-config**: Oh-My-Zsh's bundled `git`/`docker` plugins are enabled via a config-array edit to `.zshrc`, reusing the existing rc-editing tweak mechanism
+- [ ] One truthful tool state per host (installed / health / owner / version / removability) shared by every screen
+- [ ] Install review that states each selection's disposition (install / update / repair / reconfigure / reinstall / skip)
+- [ ] Per-method lifecycle contract (install, detect, version, owner, update, remove, configure, service, privileges) with install receipts as removal proof
+- [ ] Configuration as a lifecycle step (shell init, agent-host hooks re-synced and reversible, terminal drift), with user-chosen customizations
+- [ ] Registry kept true: drift detection, checksums, smoke tests; CI green on both OSes
 
 ### Out of Scope
 
-- New resolver/ordering logic keyed on `tier` — `requires` already handles ordering, cycle detection, and availability skipping; a second mechanism would drift out of sync (PRD Design Decisions)
-- A tier-keyed "gate" blocking ai-tier selection until its system-tier `requires` resolves — redundant with the existing `requires` drag-in
-- The actual new tool catalog additions (`oh-my-zsh`, `volta`, `ruby`, `kitty`, `wezterm`, `cursor-agent`, `antigravity`, `codegraph`, etc.) — covered by the companion catalog-expansion PRD, not yet ingested
-- Postinstall actions (MCP registration, non-bundled shell plugin wiring) — covered by the companion postinstall-hooks PRD, not yet ingested
-- External/custom (non-bundled) Oh-My-Zsh plugins requiring their own `git clone` step — explicitly deferred per the source PRD's Open Questions
-- Package-manager policy, live package management, background maintenance daemon, and agent CLI ergonomics — the four remaining companion PRDs from this batch, deferred to their own future ingest passes
+- New resolver/ordering logic keyed on `tier` — `requires` already handles ordering, cycle detection, and availability skipping (PRD Design Decisions)
+- External/custom (non-bundled) Oh-My-Zsh plugins requiring their own `git clone` step — deferred per the source PRD's Open Questions
+- `rpm-ostree` layering on immutable hosts — needs a reboot; Bazzite recommends Flatpak, Homebrew, Distrobox first
+- Any sudo/pkexec/doas performed by this project itself — zero-sudo invariant
 
 ## Context
+
+**Current state (2026-10-13):** v0.49.0 "Tiered Catalog" shipped (28 phases, 110 plans) and was closed with an override closeout after a seven-part audit (`.planning/research/audit-2026-10-13/`) found the catalog installs binaries well but lacks one shared tool state, a health model, an install-disposition plan, a per-method removal/configuration contract and registry drift detection; 6 registry blockers (java, ruff, difftastic, sublime, jetbrains-toolbox, graphify) and red CI carry into v0.50.0.
+
 
 This is the first of seven PRDs from a 2026-09-04 planning batch being ingested one
 at a time, in a deliberate dependency order — catalog-tiers-and-dependency-chain
@@ -123,4 +125,4 @@ missing `installer/tweaks.py`'s `ManagedExecutable` artifacts (e.g.
 | D-01..D-04: every managed PATH line this installer writes uses the case-guarded self-deduping idiom (`path_export_guard`) instead of a plain unconditional `export PATH=...`, applied to every writer in the repo (shell rc files and `scripts/container-e2e-verify.sh`); a generic `~/.shellrc` is consolidated into one canonical `~/.myshellrc` plus a marked stub, foreign content copied forward byte-exact. | A plain export re-prepends the same directory every time a nested/child shell re-sources the rc file, accumulating duplicates with every nesting level — confirmed live (5 copies of `~/.local/bin` in one real session) before this phase. Re-verified end to end in a disposable container after the dev host's own verification stalled on `human_needed` (no real hand-authored `~/.shellrc`, no pure-POSIX shell available here): `make fix` against a real hand-written `~/.shellrc`, `dash`, and the real wired `~/.bashrc`→`~/.myshellrc` route all confirmed the managed directory never exceeds 1 after 5 sources, while the user's own pre-existing plain exports (carried forward, out of scope) duplicate as documented. See 15.8-VERIFICATION.md, 15.8-SECURITY.md, 15.8-VALIDATION.md. | Phase 15.8 |
 
 ---
-*Last updated: 2026-10-09 after Phase 15.8 closed self-deduping PATH emission and `~/.shellrc` consolidation (D-01..D-04)*
+*Last updated: 2026-10-13 after v0.49.0 milestone (override closeout, audit-2026-10-13)*
