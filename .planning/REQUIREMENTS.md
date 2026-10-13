@@ -90,8 +90,8 @@
 - [ ] **CONF-05**: Every zsh session exports `SHELL` as the real zsh path through a managed `~/.zshenv` line, so herdr, tmux, editors and agents opened from kitty, WezTerm, Konsole or any other terminal start zsh, not the passwd login shell (bash). kitty, WezTerm and Konsole configs keep pointing at zsh, and drift shows as misconfigured. Exporting `SHELL` through `environment.d`, for apps started from the desktop menu, is optional and asked [999.4, O4; host evidence 2026-10-13: all terminal shells are zsh with `SHELL=/bin/bash`]
 - [ ] **CONF-06**: tealdeer fetches its cache after install and update [D]
 - [ ] **CONF-07**: Oh-My-Zsh plugin writes honor `$ZSH` [B 15.6 CR-01]
-- [ ] **CONF-08**: Agent auto-approval is configured in each agent's own settings at install (asked, default off) instead of shell aliases: Claude `permissions.defaultMode: "bypassPermissions"` + `skipDangerousModePermissionPrompt: true` (user scope; project/local scope is ignored since 2.1.257), Codex `approval_policy = "never"` + `sandbox_mode = "danger-full-access"`, opencode `"permission": "allow"`, cursor-agent `approvalMode: "unrestricted"`; each key is reverted when the choice is turned off or the tool is removed [user request 2026-10-13]
-- [ ] **CONF-09**: Agent commit/PR attribution can be turned off at install (asked): Claude `attribution.commit = false` and `attribution.pr = false`, cursor-agent `attribution.attributeCommitsToAgent = false` and `attributePRsToAgent = false` (the Cursor CLI ignores the commit opt-out as of 2026-10-04, so the UI states it), and Codex/opencode are listed as having no documented key [user request 2026-10-13]
+- [ ] **CONF-08**: Agent auto-approval is configured in each agent's own settings at install (asked, default off) instead of shell aliases: Claude `permissions.defaultMode: "bypassPermissions"` + `skipDangerousModePermissionPrompt: true` (user scope; project/local scope is ignored since 2.1.257), Codex `approval_policy = "never"` + `sandbox_mode = "danger-full-access"`, opencode `"permission": "allow"`, cursor-agent `approvalMode: "unrestricted"`; pi has no approval prompts in its core (they come only from extensions such as `pi-permission-system`), so the installer writes nothing for pi and its state notes when a permission extension is installed; each key is reverted when the choice is turned off or the tool is removed [user request 2026-10-13]
+- [ ] **CONF-09**: Agent commit/PR attribution can be turned off at install (asked): Claude `attribution.commit = false` and `attribution.pr = false`, cursor-agent `attribution.attributeCommitsToAgent = false` and `attributePRsToAgent = false` (the Cursor CLI ignores the commit opt-out as of 2026-10-04, so the UI states it), and Codex, opencode and pi are listed as having no documented key [user request 2026-10-13]
 - [ ] **CONF-10**: The alias tweak bundles `claude-skip`, `codex-skip`, `opencode-auto` and the cursor-agent model wrapper leave Policies; a host that had one enabled gets the alias removed and the equivalent config key applied (cursor-agent default model via `cli-config.json`) [user request 2026-10-13]
 - [ ] **CONF-11**: The Oh-My-Zsh writer that sets `plugins=(…)` also writes a default `ZSH_THEME="robbyrussell"` before `source $ZSH/oh-my-zsh.sh`, but only when the file has no `ZSH_THEME` line. A theme the user set by hand or with `omz theme set` is never overwritten. Choosing starship (CONF-04) instead writes `ZSH_THEME=""`, so only one prompt is active. The install summary names `omz theme use <name>` (try it in the current session) and `omz theme set <name>` (keep it) [host evidence 2026-10-13: `ZSH_THEME` unset, prompt `%m%# `]
 
@@ -101,6 +101,8 @@
 - [ ] **ONB-02**: On immutable Bazzite, Alacritty installs without a reboot by building it with cargo inside a throwaway Distrobox and placing the native binary in `~/.local/bin`; the container and image are deleted afterwards. A newer GitHub release shows as an update, and selecting it rebuilds while leaving `~/.config/alacritty` untouched [999.11, O5: measured 2026-10-13: 35 s build, 12 MB binary, host libs resolve]
 - [ ] **ONB-06**: The Alacritty build also installs its desktop entry, icon and terminfo under `~/.local/share`, so it appears in the system menu and search; all of these are recorded in the receipt and removed on uninstall [O5]
 - [ ] **ONB-07**: Alacritty gets the terminal shell sync (zsh, `SHELL`) and the keybinding customizations (word navigation, clear scrollback) [999.11]
+- [ ] **ONB-08**: Neovim (`nvim`) is onboarded through the tool-onboarding skill with a researched install and removal for every OS/arch (release tarballs, brew), a no-reboot path on immutable Bazzite, a receipt, and `~/.config/nvim` as `config_paths` [user request 2026-10-13]
+- [ ] **ONB-09**: Installing Neovim asks whether to make it the default `EDITOR`/`VISUAL`; "yes" writes a managed shell line that is removed with the tool [user request 2026-10-13]
 - [ ] **ONB-03**: The tool-onboarding skill covers the new lifecycle params and is scored with skill-judge [999.5]
 - [ ] **ONB-04**: The container end-to-end runs install all → rerun all (all skipped) → uninstall all on Fedora, Debian and Arch, with leftovers limited to documented config paths [A #3]
 - [ ] **ONB-05**: A human UAT on the real host confirms Owner on every tier after install and the cleared mark after Uninstall [999.7]
@@ -212,6 +214,8 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | ONB-05 | Phase 24 | Pending |
 | ONB-06 | Phase 24 | Pending |
 | ONB-07 | Phase 24 | Pending |
+| ONB-08 | Phase 24.1 | Pending |
+| ONB-09 | Phase 24.1 | Pending |
 | LEAN-01 | Phase 25 | Pending |
 | LEAN-02 | Phase 25 | Pending |
 | LEAN-03 | Phase 25 | Pending |
@@ -219,8 +223,8 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 
 **Coverage:**
 
-- v1 requirements: 76 total
-- Mapped to phases: 76 (Phase 17: 12, Phase 18: 10, Phase 19: 7, Phase 20: 8, Phase 21: 7, Phase 22: 10, Phase 23: 11, Phase 24: 7, Phase 25: 4)
+- v1 requirements: 78 total
+- Mapped to phases: 78 (Phase 17: 12, Phase 18: 10, Phase 19: 7, Phase 20: 8, Phase 21: 7, Phase 22: 10, Phase 23: 11, Phase 24: 7, Phase 24.1: 2, Phase 25: 4)
 - Unmapped: 0
 - Mapping note: UI-04 sits in Phase 22, not Phase 21 (TA §8 P5), because it needs `config_paths` (LIFE-04)
 

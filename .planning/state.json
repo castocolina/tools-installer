@@ -1,12 +1,58 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v0.50.0",
-  "phases": [],
+  "milestone": "v0.50.0 — Truthful lifecycle",
+  "phases": [
+    {
+      "number": "17",
+      "name": "Stop the bleeding",
+      "status": "pending"
+    },
+    {
+      "number": "18",
+      "name": "Registry truth and drift guard",
+      "status": "pending"
+    },
+    {
+      "number": "19",
+      "name": "One tool state with health plus receipts",
+      "status": "pending"
+    },
+    {
+      "number": "20",
+      "name": "Install plan with dispositions",
+      "status": "pending"
+    },
+    {
+      "number": "21",
+      "name": "One screen family",
+      "status": "pending"
+    },
+    {
+      "number": "22",
+      "name": "Method lifecycle contract",
+      "status": "pending"
+    },
+    {
+      "number": "23",
+      "name": "Configuration as a lifecycle step",
+      "status": "pending"
+    },
+    {
+      "number": "24",
+      "name": "Onboarding through the skill and e2e",
+      "status": "pending"
+    },
+    {
+      "number": "25",
+      "name": "Lean",
+      "status": "pending"
+    }
+  ],
   "next": {
-    "command": "/gsd:discuss-phase",
-    "label": "Discuss the first phase",
-    "reason": "Project initialized — plan your first phase"
+    "command": "/gsd:progress --next",
+    "label": "Advance to the next step (plan phase 17)",
+    "reason": "Phase 17 of 9 — needs a plan"
   },
-  "updated_at": "2026-10-13T14:24:40.431Z"
+  "updated_at": "2026-10-13T17:19:45.589Z"
 }

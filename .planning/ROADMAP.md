@@ -33,6 +33,7 @@
 - [ ] **Phase 22: Method lifecycle contract** - Per-method update and removal with receipts as proof, native installs handed off, `config_paths`, a leftover-checking e2e harness
 - [ ] **Phase 23: Configuration as a lifecycle step** - Reversible agent-host hooks that follow hosts, shell init offered at install, terminals kept on zsh with `SHELL`
 - [ ] **Phase 24: Onboarding through the skill and e2e** - herdr and Alacritty onboarded through the skill; three-distro container e2e with leftover checks; real-host UAT
+- [ ] **Phase 24.1: Onboard Neovim through the tool-onboarding skill** (INSERTED) - nvim in the catalog, no-reboot path on Bazzite
 - [ ] **Phase 25: Lean** - Delete ~2,000 lines of dead code and put app composition under pyright and the coverage gate
 
 ## Phase Details
@@ -162,10 +163,23 @@
 
 **Plans**: TBD
 
+### Phase 24.1: Onboard Neovim through the tool-onboarding skill (INSERTED)
+
+**Goal**: Neovim (`nvim`) is in the catalog with a researched install and removal for every OS/arch, including a no-reboot path on immutable Bazzite, using the lifecycle contract and the updated onboarding skill.
+**Depends on**: Phase 24 (the onboarding skill is updated and skill-judged there; contract from Phase 22, configuration from Phase 23)
+**Requirements**: ONB-08, ONB-09
+**Success Criteria** (what must be TRUE):
+
+  1. The onboarding skill's research for Neovim is recorded (release assets per OS/arch, brew, distro packages, removal paths), and the registry entry carries `# Verified` and passes `make verify-registry`.
+  2. On Bazzite, Neovim installs to the user's home without a reboot, writes a receipt, shows `✓` on its tier, and Uninstall removes exactly the receipt paths and keeps `~/.config/nvim` unless "delete config too" is chosen (scratch HOME and container).
+  3. The asked customization (Neovim as `EDITOR`/`VISUAL`) is applied only on "yes" and reverted on removal.
+
+**Plans**: TBD
+
 ### Phase 25: Lean
 
 **Goal**: About 2,000 production lines are gone with behavior unchanged, and app composition is under the type checker and the coverage gate.
-**Depends on**: Phase 18, Phase 24 (runs last, so deletions do not fight the rewrites)
+**Depends on**: Phase 18, Phase 24.1 (runs last, so deletions do not fight the rewrites)
 **Requirements**: LEAN-01, LEAN-02, LEAN-03, LEAN-04
 **Success Criteria** (what must be TRUE):
 
@@ -191,6 +205,7 @@
 | 22. Method lifecycle contract | 0/TBD | Not started | - |
 | 23. Configuration as a lifecycle step | 0/TBD | Not started | - |
 | 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
+| 24.1 Onboard Neovim through the tool-onboarding skill | 0/TBD | Not started | - |
 | 25. Lean | 0/TBD | Not started | - |
 
 ## Backlog
@@ -274,6 +289,7 @@ Plans:
 - 15.4 goal: "both screens re-derive on entry so an install, update or removal is never hidden" — only install→Uninstall was built and verified; removal→catalog ✓ and the base (system) tier's `enter_view` were missing since Phase 2's `show_view`. Fixed in 9050446; the 15.4 VERIFICATION passed it anyway.
 - 15.4 D-04/D-05 and 16 goal ("names whichever manager owns it; when it cannot be uninstalled the row says why"): script installs had no truthful Uninstall answer. Wording fixed in 9050446; removal still impossible (999.2).
 - 15.6 goal (kitty/WezTerm open into zsh): works, but `$SHELL` stays `/bin/bash` and "already" outcomes never re-sync (999.4).
+
 **Process gap to fix with it:** verifiers checked each screen's claim, not each direction of a refresh contract, so a half-built "re-derive on entry" passed twice. Require a per-view, per-direction test (install, update, uninstall; every tier including the base) for any refresh promise.
 **Deepened by the ponytail audit (`.planning/research/2026-10-11-ponytail-audit.md`):** F6 — SEVEN places answer "is it here / who owns it / can we act" and disagree (a skill pack is ✓ in the catalog and "not installed" in Uninstall). F9 — one global ownership epoch, tier-scoped passes, THREE refresh owners and duplicate manager queries. F10 — the three tier screens are already one class (`CatalogScreen`), but `UnifiedApp` treats the base tier differently in 5 places (`show_view`, `_navigable`, `get_default_screen`, `_pending_status` stash, …); target: every view pushed the same way from an empty root. Order: one `ToolState` (F6) first, then one refresh owner (F9), then one `RowsScreen` (999.10) — otherwise a base class just moves the classifiers into one file.
 **Cross-review (GPT-6.1-sol, `.planning/research/2026-10-11-architecture-review-gpt-6.1-sol.md`):** AR-03 agrees with F6/F8 and deepens it: the shared state must hold multiple observed installations (shadowed copies) and per-harness skill presence, not one owner + one boolean; `installer/platform.py` treats mutable facts (manager availability) as platform constants frozen at startup (NEW). AR-04 (verified at `installer/version_status.py:751`): a refresh pass superseded by an invalidate still merges its obsolete `statuses` into `_statuses` — only ownership is discarded (NEW); also separate in-memory invalidation from cache persistence success. Disagrees with ponytail F15: worker cancellation cannot replace generation/epoch checks (cancellation and host-state supersession are different events).
@@ -295,6 +311,7 @@ Plans:
 - **`main` is RED (do first).** CI (`.github/workflows`, push to `main` only) never ran on the 599 branch commits; the first run, 38099159090 on 9a1c663, failed on both OSes. None of the failures touch 9050446's files. ubuntu: `tests/test_shellrc.py::test_reserved_word_prefixed_source_forms_execute_and_are_refused[time-shells0]` (`time .` under the runner's `/usr/bin/sh`). macOS: `tests/test_prune_tmp_linux_sh.py` x6 (bash 3.2 has no `mapfile`; the Linux-only script runs on macOS), `tests/test_app.py` x2 (long tmp paths wrapped in the console output), `tests/test_setup.py::test_interactive_wizard_shares_one_cache_with_the_daemon_policy` (StopIteration), `tests/test_version_status.py::test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_record` (timing-dependent race test). Correction (GPT-6.1-sol AR-05, verified): `.github/workflows/ci.yml` triggers on push to `main` AND on `pull_request`; CI never ran because Phase 16 merged locally without a PR, and branch pushes have no trigger. Prevention: require the PR check (branch protection) or add a branch-push trigger, and make tests deterministic per platform (bash 3.2, console width, `/usr/bin/sh`, no timing races).
 - macOS never run locally.
 - A real-host re-check that the reported symptoms are gone (Owner on every tier after an install, ✓ cleared after Uninstall) has not been done.
+
 **Requirements:** TBD
 **Plans:** 0 plans
 
@@ -312,6 +329,7 @@ Plans:
 1. **Derived from the method kind — nothing written:** `brew`, `cask`, `apt`, `dnf`, `pacman`, `uv-tool`, `node` (manager remove), `sdkman` (`sdk uninstall <candidate>`). The skill only verifies the derivation is right for the tool.
 2. **Derived from the method's own params — nothing written, but it needs one shared path formula and proof:** `github_release`, `tarball`, `app` remove exactly the path the install computed (`bin_dir` + `bin_name` / `app`). Today install and uninstall use different formulas (ponytail F7) and a name match counts as proof (F1); fix both, with a 999.2 receipt as the proof.
 3. **Explicit recipe on the method — only where the kind cannot know:** `script` (vendor installers write paths we do not choose; kitty `installer.sh` → `~/.local/kitty.app`, `~/.local/bin/kitty`/`kitten`, desktop files) and `host_setup`. The recipe is the vendor uninstaller, the exact path list, or a verifying removal script.
+
 Tool-level, shared by all its methods: config/data paths (an optional per-OS variant when they differ, e.g. `~/Library/...` on macOS) and the default config policy (`keep` default for user-edited config / `delete` / `ask`). `skill_pack` keeps its own `skill_lifecycle` removal.
 **At removal time the method that ACTUALLY installed the tool decides,** not the registry's preferred one: the ownership resolver (+ 999.2 receipt) picks it. If the real owner is a manager the installer did not use (registry says `script`, user installed with brew), delegate to that manager or show its hint; never run another method's recipe.
 **Registry scan (2026-10-11):** 76 of 90 tools have at least one non-manager method (github_release 89 methods, script 16, app 7, tarball 5, sdkman 5, skill_pack 7, host_setup 1) — level 3 needs explicit recipes only for the 16 `script` methods + 1 `host_setup`. 13 tools carry >2 method kinds (rg, jq, git, zsh, watch, docker, podman, opencode, vscode, sublime, kitty, wezterm, alacritty) — each method needs its removal checked. Shared-artifact case that breaks one-tool-one-path: `drawio-desktop` and `drawio-cli` share cmd/bin `drawio`; removal must refuse (or remove both, by explicit user choice) while the other is installed. Only `pi`, `drawio-desktop`, `drawio-cli` set today's free-text `uninstall` hint.
@@ -335,6 +353,7 @@ Plans:
 - **F16 — nice to have:** Uninstall deletes files on the event loop; a VS Code or Sublime tree freezes the UI. Move removal to a worker.
 - **F17 — nice to have:** a hidden `a` binding in Doctor rewrites shell files, while `a` means "select all" on neighbouring screens. Drop or make explicit.
 - **Cross-review (GPT-6.1-sol):** AR-01 rates filename-based deletion authority CRITICAL (same as F1, lives in 999.8). AR-02 agrees with F5: shell mutation has no enforced safe-write boundary; add a preview-revision check (refuse to apply a deletion computed from an older read). AR-06 agrees with F2 and adds: installed-state re-derivation is also disabled on routes without Execute; moving `_build_app` alone is not enough if it keeps optional capability defaults.
+
 **Fix order (auditor's verdict):** F1+F5 (data loss; F1 lives in 999.8) → F2, F4 (999.1), F3 → F7 (999.8), F8 → make `main` CI green (999.7) before merging any of them.
 **Requirements:** TBD
 **Plans:** 0 plans
@@ -384,11 +403,13 @@ Plans:
   2. **Agent integrations → a `postinstall` hook of herdr (e.g. `herdr-integrations`), NOT separate registry entries.** `herdr integration install|uninstall|status <agent>` is herdr's own idempotent, versioned installer: agents report state through hooks (instead of screen detection) and sessions survive a herdr server restart. Supported names (herdr 0.9.3): pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, letta (experimental), cursor, mastracode, antigravity-cli, grok. Each writes one file per agent, e.g. `~/.claude/hooks/herdr-agent-state.sh`, `~/.config/opencode/plugins/herdr-agent-state.js`, `~/.cursor/herdr-agent-state.sh`, `~/.pi/agent/extensions/herdr-agent-state.ts`. Same shape as `codegraph-mcp-register`/`rtk-register`: gate on `present_agent_hosts()`, install only for hosts present, detect with `herdr integration status`, remove with `herdr integration uninstall <agent>` (this IS the removal recipe 999.8 needs). Not verified yet: whether an integration also edits the agent's main config (e.g. registering the hook in `~/.claude/settings.json`) — check before shipping (merge-safety rule). Gap: a hook runs only when herdr installs; an agent installed later (pi) would need the integration step re-run from the post-mutation plan (999.1/999.4 family).
   3. **The `herdr` skill (teaches an agent to split panes, run commands without stealing focus, read other agents' output, wait/coordinate, query agent states) → its own `skill_pack` registry entry, tier `ai`, `requires = ["herdr"]`,** like ponytail/matt-pocock-skills: source `skills/herdr/SKILL.md` in herdrdev/herdr, install `npx skills add herdrdev/herdr --skill herdr -g`, status via skills-lock probes; `herdr --skill` prints the version-matched copy. It is optional per user and per harness, so it must not be bundled into herdr's install.
 - **This host today (`herdr integration status`, 2026-10-13):** claude current (v10), opencode current (v13), cursor current (v1); **pi not installed** although pi is in use — a direct gain from layer 2.
+
 **Alacritty — no-reboot path on Bazzite (research in `docs/research/2026-10-09-alacritty.md`, re-checked 2026-10-13):**
 - Upstream ships NO Linux binary, AppImage, .deb or .rpm; no Homebrew formula (the macOS cask is disabled since 2026-09-01, Gatekeeper); `flatpak search alacritty` empty. `rpm-ostree` layering is the only native route and needs a reboot — rejected by the user.
 - No-reboot options: (a) Fedora Distrobox matching the host (`dnf install alacritty` 0.17.0) + `distrobox-export --app alacritty`, with the terminal shell pointed at the host via `distrobox-host-exec` and terminfo exported; (b) build with cargo inside that Distrobox and place the binary in `~/.local/bin` (host runtime libs suffice; desktop entry, terminfo and man pages are extra post-build steps into `~/.local/share`); (c) wait for an upstream Linux AppImage/tarball with checksum and copy WezTerm's method.
 - Platform gap: the installer has NO `distrobox` method kind and `cargo` builds are out of scope, so today the row correctly says "not available: immutable host". Choosing (a) or (b) means a new method kind (install + detect + version + owner + removal: `distrobox-export --app alacritty --delete`, container removal policy) — design it with 999.3/999.8, not as a special case.
 - Customizations to offer (step 7): alt/option+arrow word navigation and Cmd+K / Ctrl+Shift+K clear-scrollback bindings, shell = discovered zsh (as 15.6 does for kitty/WezTerm; Alacritty is not covered by `installer/terminal_shell.py` today).
+
 **Before planning:** run `.claude/skills/tool-onboarding` end to end for each tool and then skill-judge (999.5). Depends on 999.8 (removal spec) and, for Alacritty, on a decision about a Distrobox method kind.
 **Requirements:** TBD
 **Plans:** 0 plans
