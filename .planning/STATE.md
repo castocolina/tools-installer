@@ -23,10 +23,10 @@ Total Phases: 21
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-09)
+See: .planning/PROJECT.md (updated 2026-10-13)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 16 — Catalog truth
+**Current focus:** Planning next milestone (v0.50.0 Truthful lifecycle)
 
 ## Current Position
 
@@ -229,7 +229,10 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 | Category | Item | Status | Deferred At | Milestone |
 |----------|------|--------|-------------|-----------|
-| *(none)* | | | | |
+| verification | 15 stale phase verifications (override closeout) | acknowledged | 2026-10-13 | v0.49.0 |
+| uat | 15.1-UAT.md open items | acknowledged | 2026-10-13 | v0.49.0 |
+| todo | detect dangling pnpm global bin shims in doctor | carried to v0.50.0 | 2026-10-13 | v0.49.0 |
+| requirement | REQ-manager-drift-alerting | carried to v0.50.0 | 2026-10-13 | v0.49.0 |
 
 ## Session Continuity
 
@@ -241,7 +244,7 @@ Resume file: None
 
 | Phase | State | Resume |
 |-------|-------|--------|
-| 16 | verification_deferred_human | /gsd-verify-work 16 |
+| *(none; phase 16 UAT closed 2026-10-13)* | | |
 
 ## Operator Next Steps
 
