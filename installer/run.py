@@ -238,6 +238,13 @@ class StreamingRunner:
                 text=True,
                 bufsize=1,
                 env=env,
+                # D-10: the child gets its own session, so it has no
+                # controlling terminal. A vendor installer that prompts on
+                # /dev/tty fails fast instead of blocking on input nobody
+                # can deliver while Textual owns the terminal. Note: the
+                # child no longer receives the terminal's SIGINT/SIGHUP
+                # (accepted — Textual holds the terminal in raw mode).
+                start_new_session=True,
             )
 
         try:

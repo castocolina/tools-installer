@@ -29,7 +29,7 @@ class _PopenKwargs(TypedDict):
     and forward them to the real class, instead of the untyped `**kwargs` that
     a bare `# type: ignore` used to paper over -- the hidden typing gap
     `.claude/python-tooling.md` names in its own "Avoid" example. Every field is
-    required because production passes all six on every launch, so a double
+    required because production passes all seven on every launch, so a double
     that drops one stops compiling rather than silently diverging.
     """
 
@@ -39,6 +39,7 @@ class _PopenKwargs(TypedDict):
     text: bool
     bufsize: int
     env: Mapping[str, str]
+    start_new_session: bool
 
 
 def test_run_command_success(monkeypatch: pytest.MonkeyPatch):
@@ -241,6 +242,30 @@ def test_streaming_runner_nonzero_exit_raises_command_error_after_emitting() -> 
     assert seen == [("rg", "line1"), ("rg", "line2")]
 
 
+def test_streaming_runner_child_runs_in_its_own_session() -> None:
+    # A vendor script that prompts on /dev/tty must not hang the TUI: the
+    # child gets its own session, so it has no controlling terminal to read
+    # from (D-10). getsid(0) == getpid() only when the child is its own
+    # session leader.
+    runner = StreamingRunner(lambda _tool_id, _line: None)
+    runner.set_tool("rg")
+    runner(
+        [sys.executable, "-c", "import os, sys; sys.exit(0 if os.getsid(0) == os.getpid() else 3)"]
+    )
+
+
+def test_streaming_runner_tty_reader_fails_fast() -> None:
+    # The alarm is a hang guard only: in its own session the child fails at
+    # once (no controlling terminal); a regression that blocks on a real
+    # terminal would be killed after 5 s and still fail the elapsed check.
+    runner = StreamingRunner(lambda _tool_id, _line: None)
+    runner.set_tool("rg")
+    start = time.monotonic()
+    with pytest.raises(CommandError):
+        runner([sys.executable, "-c", "import signal; signal.alarm(5); open('/dev/tty').read(1)"])
+    assert time.monotonic() - start < 5
+
+
 def test_streaming_runner_missing_binary_is_127(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_popen(_argv: list[str], **_kwargs: Unpack[_PopenKwargs]) -> subprocess.Popen[str]:
         raise FileNotFoundError("nope")
@@ -291,6 +316,7 @@ def test_streaming_runner_reaps_child_when_emit_raises(
         text: bool = False,
         bufsize: int = 0,
         env: Mapping[str, str] | None = None,
+        start_new_session: bool = False,
     ) -> subprocess.Popen[str]:
         proc = original_popen(
             args,
@@ -300,6 +326,7 @@ def test_streaming_runner_reaps_child_when_emit_raises(
             text=text,
             bufsize=bufsize,
             env=env,
+            start_new_session=start_new_session,
         )
         captured["proc"] = proc
         return proc
