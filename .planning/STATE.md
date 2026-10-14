@@ -5,11 +5,11 @@ milestone_name: Truthful lifecycle
 current_phase: 17
 current_phase_name: milestone v0.50.0, phases 17–25
 status: planning
-stopped_at: Phase 24.1 context gathered (assumptions mode)
-last_updated: "2026-10-14T11:38:30.119Z"
+stopped_at: Phase 25 context gathered (assumptions mode); phases 17-25 all have CONTEXT
+last_updated: "2026-10-14T11:55:49.125Z"
 last_activity: 2026-10-13
 last_activity_desc: Roadmap for v0.50.0 created (9 phases, 72/72 requirements mapped)
-state_head: 4ecdc1c7a45ee20da0ce3d802c079b1569d44b7d
+state_head: 45f4cba8d24507df597dd8d0274c2b06616ad85a
 progress:
   total_phases: 10
   completed_phases: 0
@@ -93,9 +93,9 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-14T11:38:30.105Z
-Stopped at: Phase 24.1 context gathered (assumptions mode)
-Resume file: .planning/phases/24.1-onboard-neovim-through-the-tool-onboarding-skill/24.1-CONTEXT.md
+Last session: 2026-10-14T11:55:49.111Z
+Stopped at: Phase 25 context gathered (assumptions mode); phases 17-25 all have CONTEXT
+Resume file: .planning/phases/25-lean/25-CONTEXT.md
 
 ## Deferred Verification
 
