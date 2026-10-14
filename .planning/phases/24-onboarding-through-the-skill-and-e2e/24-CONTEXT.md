@@ -75,7 +75,7 @@ None of these has landed as of 2026-10-14.
   - Unregister is `herdr integration uninstall <agent>`, for the receipt hosts only.
   - The researcher must check whether an integration also edits an agent's main config (merge safety).
 - **D-11:** The herdr skill is its own `skill_pack` `[[tool]]` with `requires = ["herdr"]`, tier `ai` (the ponytail precedent, `registry.toml:2807-2868`). With it unselected, no skill files are written.
-- **D-12 (SPEC R1 text, not optional):** The **separator and current-indicator** reuse from herdr-setup is **in scope**. SPEC R1 names them, and the Boundaries exclude only features *beyond* them.
+- **D-12 (SPEC R1 text, user-confirmed 2026-10-14):** The **separator and current-indicator** reuse from herdr-setup is **in scope**. Only these two: no accent or theme styling (user: "agregar el separador y el indicador más que el accent"). SPEC R1 names them, and the Boundaries exclude only features *beyond* them.
   - It ships as a named hook: place the plugin from a pinned source, `herdr plugin link`, write the `rows` arrays and `row_gap` through the 23 D-06/D-07 writer **only when absent**, `herdr server reload-config`, and record the writes in the ledger (23 D-08).
   - When the user already defines those arrays, nothing is written and a reason names the tokens to add by hand.
   - Removal: `herdr plugin unlink`, then revert only the keys that were written.

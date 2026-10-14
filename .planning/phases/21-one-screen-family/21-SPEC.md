@@ -66,7 +66,7 @@ Scouted 2026-10-13 (`installer/wizard_app.py` unless noted):
    - Target:
      - The user may navigate away while it runs.
      - The tools being removed show `…` on every tier.
-     - A second removal is refused with a status until the first one finishes.
+     - A second removal is refused with a status until the first one finishes. So is every other action that changes the system: install runs, `u`, Doctor fixes, Policies toggles. Only navigation stays available (amended 2026-10-14, user decision).
      - Quitting waits for the worker to finish.
      - Afterwards the tool moves to "nothing to do" and every tier shows `○`.
      - A removed policy ban reads OFF in Policies on its next entry.

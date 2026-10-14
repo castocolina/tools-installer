@@ -76,7 +76,7 @@ Out of scope:
   - The newest log line always stays last. 6,000 writes leave exactly 5,000 log lines plus the notice; 5,000 writes show no notice.
   - Why: Textual trims silently, with no eviction hook (`_rich_log.py:264-267`), and only appends. Keeping a notice *inside* the log would mean rewriting the whole buffer on every write, or making the notice the last line, which breaks "newest line last".
   - jev: Laya header_label 0.64 (needs fallback); TypeSafe in_log_rewrite 0.61 (needs fallback). In-log rewrite can't keep the newest line last without an O(n) rewrite on every write.
-  - **Deferred confirm:** the SPEC says "the log shows one line". I read the label above the log, inside the panel, as satisfying that.
+  - **User-confirmed 2026-10-14:** the label above the log satisfies "the log shows one line".
 
 ### Gate (R5)
 - **D-09:** The full suite plus `make validate` run, with CI green on ubuntu and macOS.

@@ -66,9 +66,11 @@ None of these has landed as of 2026-10-14.
   - An unknown owner never shows a manager name or argv.
   - `classify_tools`/`ToolRow`/the owner hints (`uninstall.py:100-339`), the `setup.py:807-868` closures, `_resync` (`:1238-1352`) and `ownership._own_script_install` (`:1436-1444`, callers `:1465,1511`) are deleted.
 - **D-08:** Removal runs on `@work(thread=True, exclusive=True, group="uninstall-removal", exit_on_error=False)` and shows "Removing…".
-  - A `_removal_in_flight` guard refuses a second removal with a status, the same idiom as `toggle_in_flight` (`:1645`) and `daemon_default_in_flight` (`:2570`).
+  - **One app-level mutation lock** (user, 2026-10-14). While a removal runs, the user can **only navigate**.
+    - Every other mutation is refused with a status ("a removal is running"): a second removal, an install run (Enter/`a`), `u`, Doctor `r`/fix, and Policies toggles.
+    - The lock lives on `UnifiedApp` (`mutation_in_flight`), not as per-screen flags, so no screen can forget to check it. The existing `toggle_in_flight`/`daemon_default_in_flight` guards fold into it.
   - The worker posts `RemovalFinished` in `finally:`. Its handler clears the guard, renders the summary and calls `request_refresh()`.
-  - Navigation is allowed while it runs (SPEC R5).
+  - Navigation is allowed while it runs (SPEC R5). Actions are not (see the lock above).
 - **D-09 (user):** Only the tools being removed show `…`. This is signalled without a second renderer input:
   - When removal starts, the refresh service gets `mark_pending(ids)`. That publishes a derived map with those ids dropped, in the same generation, so `state_of(id)` returns `None` for exactly those ids and every tier renders `…`. Other rows keep their state.
   - The full pass after `RemovalFinished` republishes everything.
@@ -76,7 +78,7 @@ None of these has landed as of 2026-10-14.
   - `health_cell` reads only `state_of`; there is no app-level in-flight set for renderers to consult.
   - jev: Laya and TypeSafe both leaned toward bumping the whole generation, with low confidence (0.65 and 0.56). The user chose per-tool precision.
 - **D-10 (best, not easy):** Quitting during a removal waits for the worker.
-  - `action_abort`/`action_hard_abort` (`:3002-3011`) become `async`. When `_removal_in_flight` is set, they show "waiting for removal to finish…" and `await self.workers.wait_for_complete([removal_worker])`, then exit.
+  - `action_abort`/`action_hard_abort` (`:3002-3011`) become `async`. When the mutation lock is held by a removal, they show "waiting for removal to finish…" and `await self.workers.wait_for_complete([removal_worker])`, then exit.
   - Textual's `_shutdown` does not wait for thread workers (`textual/app.py:3737-3752`). Refusing the quit was rejected because the SPEC says "waits". jev: TypeSafe 0.99.
 - **D-11:** Removal outcomes extend 20 D-08's `RowOutcome`/`WORDS` with `removed` and `remove_failed`, so there is one vocabulary and the parity test covers them.
   - The environment-lever text (`_applied_summary`, `:1552-1597`) stays as it is.
@@ -158,7 +160,7 @@ None of these has landed as of 2026-10-14.
 <deferred>
 ## Deferred Ideas
 
-- **Block navigation while a removal runs** (user, 2026-10-14: "si estoy removiendo esperaría que la pantalla se mantenga y no me deje ir a otras vistas, aunque no es un requisito por ahora"). SPEC R5 currently allows navigation. Revisit as a SPEC change if wanted.
+- ~~Block navigation while a removal runs~~ was resolved 2026-10-14: the user chose "navigation yes, actions no" (D-08 mutation lock).
 
 ### Reviewed Todos (not folded)
 - GSD per-repo installs (0.6), Playwright Flatpak Chrome (0.6), pi repair/sync (0.6): outside this phase.
