@@ -5,11 +5,11 @@ milestone_name: Truthful lifecycle
 current_phase: 17
 current_phase_name: milestone v0.50.0, phases 17–25
 status: planning
-stopped_at: Phase 17 context gathered (assumptions mode)
-last_updated: "2026-10-14T02:42:29.568Z"
+stopped_at: Phase 18 context gathered (assumptions mode)
+last_updated: "2026-10-14T02:56:12.271Z"
 last_activity: 2026-10-13
 last_activity_desc: Roadmap for v0.50.0 created (9 phases, 72/72 requirements mapped)
-state_head: 68707487410ed457851d8564dbb96fbf8b3cfc70
+state_head: f6de4f2746b833a6216ecca2e5d04ca5ef722c28
 progress:
   total_phases: 10
   completed_phases: 0
@@ -93,9 +93,9 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-14T02:42:29.555Z
-Stopped at: Phase 17 context gathered (assumptions mode)
-Resume file: .planning/phases/17-stop-the-bleeding/17-CONTEXT.md
+Last session: 2026-10-14T02:56:12.257Z
+Stopped at: Phase 18 context gathered (assumptions mode)
+Resume file: .planning/phases/18-registry-truth-and-drift-guard/18-CONTEXT.md
 
 ## Deferred Verification
 
