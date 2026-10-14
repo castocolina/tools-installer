@@ -32,7 +32,7 @@ Scouted 2026-10-13:
      - Removal then deletes only the declared paths that the receipt recorded at install time and that still match their recorded type and link target.
      - Any other existing declared path is listed as "remove it yourself".
      - If `remove` exits non-zero, the row ends failed with the vendor's error, nothing more is deleted, and the tool stays installed.
-     - All 16 script tools get their data (TA: the 14 script tools plus pi), each with `# Verified`.
+     - All 16 script tools get their data (TA: the 14 script tools plus pi), each with a `verified` date key.
    - Acceptance:
      - With a fake runner, `opencode` removal runs `opencode uninstall --keep-config --keep-data`.
      - A foreign file at a declared path that is not in the receipt survives removal.

@@ -21,7 +21,7 @@ Out of scope: receipts and removal plans (19/22), registry data fixes other than
 ### Link safety and removal proof (R1–R3)
 - **D-01:** Each of the three linking sites (`installer/download.py:189-190` `_install_unverified`, `:403-404` `_place_verified`, and `installer/apps.py:100`) checks `is_file()` on the member before linking. A non-file member raises `ExecutorError` and links nothing.
   - The shelled `chmod +x` and `ln -sf` are replaced with `os.chmod` and `installer/atomic.py:117` `replace_symlink`, which is the atomic sibling-temp + `os.replace` helper the update paths already use.
-- **D-02:** Sublime's registry `member` (`installer/registry.toml:2270,2278`) is corrected to the binary inside the archive dir (`sublime_text/sublime_text`), and gets a `# Verified` line.
+- **D-02:** Sublime's registry `member` (`installer/registry.toml:2270,2278`) is corrected to the binary inside the archive dir (`sublime_text/sublime_text`), and gets a `verified` date (as a `# Verified` comment until Phase 18 introduces the `verified` key; Phase 18 converts it).
 - **D-03:** graphify (R2) is decided empirically during execution.
   - An isolated-HOME probe runs in a disposable podman container (scratch HOME and scratch cwd).
   - If the cwd stays empty, the hook uses the global per-host form and also pins `cwd=` to a scratch dir as a second safeguard.

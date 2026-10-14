@@ -11,7 +11,7 @@ Every registry entry matches its upstream release and this host. Pinned versions
 ## Background
 
 Scouted 2026-10-13:
-- `installer/registry.toml` has 90 `[[tool]]` entries. Only 34 carry `# Verified`.
+- `installer/registry.toml` has 90 `[[tool]]` entries. Only 34 carry a `# Verified` comment.
 - There are 89 `github_release` methods but only 39 checksum lines.
 - `model.py:668` keeps every non-structural key as an opaque param, so unknown keys such as draw.io's `cli_name` are accepted and ignored.
 - The `managed-download` owner probe still exists: `install_ownership.py:83`, `model.py:57`, and the registry at lines 2721 and 2770.
@@ -28,10 +28,10 @@ Scouted 2026-10-13:
    - Target: Each kind has a closed key set (`METHOD_PARAMS`), and `load_tools` raises on any other key. `cli_name` is used when linking draw.io's CLI.
    - Acceptance: A fixture with `formula` on a `github_release` method fails to load with the tool id and key in the message. A method with only `kind` loads when the kind allows it. On macOS, draw.io's CLI link is named by its `cli_name`.
 
-2. **Dated verification (REG-02)**: Every `[[tool]]` carries a `# Verified YYYY-MM-DD` line inside its own block, written when `make verify-registry` passes for that entry.
-   - Current: 34 of 90 entries are dated.
-   - Target: All entries are dated. A test enforces presence, a valid date and placement inside the block.
-   - Acceptance: The test fails for a missing line, a future or malformed date, or a line placed between two blocks, and it passes on the shipped registry.
+2. **Dated verification (REG-02)**: Every `[[tool]]` carries a structured `verified = YYYY-MM-DD` key (a TOML date), written when `make verify-registry` passes for that entry. Free-text research notes stay as comments. (Changed from a `# Verified` comment on 2026-10-13, discuss-phase 18: a comment is invisible to the parser and would need placement heuristics and regex rewrites.)
+   - Current: 34 of 90 entries carry a `# Verified` comment; none has a key.
+   - Target: All entries have the key. `load_tools` rejects a missing key, a non-date value or a future date, with the tool id in the message. `verify-registry` rewrites the key as data. The 34 existing comment dates seed the keys.
+   - Acceptance: Loader fixtures fail for a missing key, a string or malformed value and a future date, and the shipped registry loads.
 
 3. **Drift check (REG-03)**: `make verify-registry` checks each pinned `github_release`, `tarball` and `app` entry: the asset URL resolves, the archive member exists, the checksum matches, and a newer stable release is reported.
    - Current: Does not exist.
@@ -73,16 +73,16 @@ Scouted 2026-10-13:
     - Target: One row. A stale `drawio-cli` id in settings is ignored without error.
     - Acceptance: The registry has no `drawio-cli`. Loading settings that name it raises nothing, and the existing install shows under drawio-desktop.
 
-11. **Pins bumped and verified (new, user decision)**: Every pinned version is bumped to the latest stable release with a matching checksum and a fresh `# Verified` date.
+11. **Pins bumped and verified (new, user decision)**: Every pinned version is bumped to the latest stable release with a matching checksum and a fresh `verified` date. Pinned `app`/`tarball` methods carry an explicit `version = "X"` key and template their URL with `{ver}` (one source of truth; the loader requires `version` when the URL contains `{ver}` on a pinned kind).
     - Current: Several pins lag upstream (e.g. draw.io 31 vs 32).
     - Target: A version is bumped only when verify-registry passes on the new one. If an asset was renamed or removed, the old pin stays and is reported. Entries without a pin are unchanged.
-    - Acceptance: verify-registry reports no "newer stable" for any entry it could check, and each bumped entry carries that day's `# Verified` date.
+    - Acceptance: verify-registry reports no "newer stable" for any entry it could check, and each bumped entry carries that day's `verified` date, and no pinned URL contains a literal version.
 
 ## Boundaries
 
 **In scope:**
 - The closed key sets and load-time rejection; `cli_name` honored
-- The `# Verified` rule and its test; `make verify-registry`; the weekly job with GitHub issue reporting
+- The `verified` key, its loader validation; `make verify-registry`; the weekly job with GitHub issue reporting
 - Checksum → digest → "unverified" verification order, with mismatch failing the install
 - The install-time smoke run with fall-through
 - `--no-dev` launch
@@ -108,7 +108,7 @@ Scouted 2026-10-13:
 
 - [ ] Unknown method key → load error naming the tool and key; a kind-only method loads when allowed
 - [ ] draw.io's CLI link uses `cli_name` (macOS fixture)
-- [ ] The `# Verified` test fails on missing, future, malformed or misplaced lines and passes on the shipped registry
+- [ ] `load_tools` rejects a missing, malformed or future `verified` key and loads the shipped registry
 - [ ] verify-registry flags the pre-fix difftastic fixture; a repeat drift updates the open issue; a network failure is "inconclusive" with no issue
 - [ ] Unverifiable kinds are listed as "not checkable"
 - [ ] Digest match installs; digest mismatch fails with nothing linked; no digest installs and shows "unverified"
@@ -129,9 +129,9 @@ Scouted 2026-10-13:
 | adjacency | R1 | ✅ covered | A key valid for another kind is rejected (AC 1) |
 | empty | R1 | ✅ covered | A kind-only method loads when allowed (AC 1) |
 | ordering | R1 | ⛔ dismissed | TOML key order has no meaning |
-| adjacency | R2 | ✅ covered | A line between blocks does not count (AC 3) |
+| adjacency | R2 | ✅ covered | A key is per `[[tool]]` table, so placement ambiguity cannot arise; a `verified` key on a method table is rejected by the closed key set (AC 3) |
 | empty | R2 | ✅ covered | Future or malformed dates fail (AC 3) |
-| ordering | R2 | ⛔ dismissed | Placement is covered by adjacency |
+| ordering | R2 | ⛔ dismissed | TOML key order has no meaning |
 | adjacency | R3 | ✅ covered | script/brew/native entries listed as not checkable (AC 5) |
 | empty | R3 | ✅ covered | No network → inconclusive, no issue (AC 4) |
 | ordering | R3 | ✅ covered | An existing open issue is updated, not duplicated (AC 4) |
@@ -159,7 +159,7 @@ Scouted 2026-10-13:
 | MUST NOT install a binary whose checksum or digest mismatches | R4 | resolved | test: the mismatch fixture fails with nothing linked |
 | MUST NOT let verify-registry or the weekly job modify `registry.toml` or push commits | R3 | resolved | test: the job runs with read-only contents permission; the command leaves the working tree unchanged |
 | MUST NOT run verify-registry in the PR gate | R3 | resolved | test: the workflow test asserts it runs only on `schedule`/`workflow_dispatch` |
-| MUST NOT write `# Verified` for an entry verify-registry did not pass | R2, R11 | resolved | test: dates written by the tool match only passing entries |
+| MUST NOT write `verified` for an entry verify-registry did not pass | R2, R11 | resolved | test: dates written by the tool match only passing entries |
 
 Canon referral: keeping the `gh` token out of logs and issue bodies is canon secret handling, owned by `/gsd-secure-phase` and not minted here.
 

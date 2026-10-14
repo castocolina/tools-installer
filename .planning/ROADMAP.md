@@ -26,7 +26,7 @@
 - Decimal phases (e.g. 17.1): Urgent insertions (marked with INSERTED)
 
 - [ ] **Phase 17: Stop the bleeding** - Fix host hazards H1–H7 and the false-success, crash and dead-route bugs; CI green on both OSes with the PR check required
-- [ ] **Phase 18: Registry truth and drift guard** - Apply every audit data fix, reject unknown keys, require `# Verified`, add `make verify-registry`, digest checksums and install-time smoke
+- [ ] **Phase 18: Registry truth and drift guard** - Apply every audit data fix, reject unknown keys, require a `verified` date key, add `make verify-registry`, digest checksums and install-time smoke
 - [ ] **Phase 19: One tool state with health plus receipts** - One `ToolState` per tool with a closed `Health` set, published in one swap, plus an atomic receipt for every install
 - [ ] **Phase 20: Install plan with dispositions** - The review states each selection's disposition; TUI and headless run one plan and one engine with outcome-based exit codes
 - [ ] **Phase 21: One screen family** - Every view reflects every mutation; Uninstall, Policies and Doctor become projections of the shared state
@@ -60,7 +60,7 @@
 **Requirements**: REG-01, REG-02, REG-03, REG-04, REG-05, REG-06, REG-07, REG-08, REG-09, REG-10
 **Success Criteria** (what must be TRUE):
 
-  1. Loading a registry fixture with an unknown method key fails, draw.io's `cli_name` is honored, and a test fails when any `[[tool]]` lacks a `# Verified YYYY-MM-DD` line.
+  1. Loading a registry fixture with an unknown method key fails, draw.io's `cli_name` is honored, and a test fails when any `[[tool]]` lacks a valid `verified = YYYY-MM-DD` key.
   2. `make verify-registry` flags the pre-fix difftastic asset template (fixture) for renamed assets, missing archive members and checksum drift, and runs as a weekly non-blocking scheduled CI job, never in the PR gate.
   3. Unverified `github_release` methods drop from 50 to 0 wherever GitHub exposes a sha256 digest, and a freshly installed binary that fails its smoke run (a fake binary exiting 127) falls through to the next method.
   4. Launched without the dev venv on PATH, ruff resolves its real owner under `make setup` (container); `/usr/bin/java` alone never counts as installed; `parse_version('-1') is None`, and quoted or `version=` output never yields a fabricated version.
@@ -171,7 +171,7 @@
 **Requirements**: ONB-08, ONB-09, ONB-10
 **Success Criteria** (what must be TRUE):
 
-  1. The onboarding skill's research for Neovim is recorded (release assets per OS/arch, brew, distro packages, removal paths), and the registry entry carries `# Verified` and passes `make verify-registry`.
+  1. The onboarding skill's research for Neovim is recorded (release assets per OS/arch, brew, distro packages, removal paths), and the registry entry carries a `verified` key and passes `make verify-registry`.
   2. On Bazzite, Neovim installs to the user's home without a reboot, writes a receipt, shows `✓` on its tier, and Uninstall removes exactly the receipt paths and keeps `~/.config/nvim` unless "delete config too" is chosen (scratch HOME and container).
   3. The asked customizations (Neovim as `EDITOR`/`VISUAL`; kickstart.nvim starter config) are applied only on "yes"; kickstart is never cloned over an existing `~/.config/nvim` and starts zero LSP processes for Python, Lua, TypeScript, Go and Java files, and `EDITOR` is reverted on removal.
 
@@ -386,7 +386,7 @@ Plans:
 **Goal:** [Captured for future planning]
 **Source:** user request 2026-10-13. Neither tool had a phase: herdr is absent from the registry; Alacritty entered outside any phase (commit 102c83e, 2026-10-09) before the skill gained steps 4b (removal) and 7 (customizations).
 **herdr (research 2026-10-13):**
-- Official: github.com/herdrdev/herdr, docs herdr.dev/docs/install. Latest v0.9.3 (2026-09-29). Release assets are raw binaries per OS/arch: `herdr-linux-x86_64`, `herdr-linux-aarch64`, `herdr-macos-x86_64`, `herdr-macos-aarch64` (+ Windows zip). NO checksum file is published (50 registry `github_release` methods already ship without one; record it in `# Verified`).
+- Official: github.com/herdrdev/herdr, docs herdr.dev/docs/install. Latest v0.9.3 (2026-09-29). Release assets are raw binaries per OS/arch: `herdr-linux-x86_64`, `herdr-linux-aarch64`, `herdr-macos-x86_64`, `herdr-macos-aarch64` (+ Windows zip). NO checksum file is published (50 registry `github_release` methods already ship without one; record it in the entry's comment and `verified` key).
 - Other routes: Homebrew formula `herdr` (bottled 0.9.3, linuxbrew too), vendor `curl -fsSL https://herdr.dev/install.sh | sh`, mise, Nix. Self-updates with `herdr update` (an installer-owned binary would drift from the catalog's version check — decide who owns updates).
 - This host: `~/.local/bin/herdr` 0.9.3, installed by hand/vendor script (no receipt). The docs give NO uninstall instructions: removal recipe must be researched (binary, `~/.config/herdr/`, session server state, linked plugins).
 - Candidate methods: `github_release` raw per os/arch into `~/.local/bin` (immutable-host friendly, no reboot) and `brew` formula; tier `user` (the human drives it), category terminal/multiplexer.

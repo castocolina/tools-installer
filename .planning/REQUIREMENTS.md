@@ -27,7 +27,7 @@
 ### Registry truth
 
 - [ ] **REG-01**: Loading the registry rejects unknown method keys per kind [TA §4.2, A T-07-14, D C10]
-- [ ] **REG-02**: Every `[[tool]]` carries a `# Verified YYYY-MM-DD` line, enforced by a test [A Ph6]
+- [ ] **REG-02**: Every `[[tool]]` carries a `verified = YYYY-MM-DD` key, validated by the loader [A Ph6]
 - [ ] **REG-03**: `make verify-registry` reports renamed assets, missing archive members and checksum drift against the latest release; it runs weekly as a non-blocking scheduled job, never in the PR gate [D C5, O12]
 - [ ] **REG-04**: GitHub release downloads without a pinned checksum are verified against the GitHub API sha256 digest [F X5, C5]
 - [ ] **REG-05**: A freshly installed binary that fails a smoke run (`--version`, loader errors) falls through to the next method [D C6]
