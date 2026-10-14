@@ -73,3 +73,14 @@ The analyzer was `gsd-assumptions-analyzer` (sonnet) with the jev-fast-decision 
 ## Reviewed Todos
 
 - Dangling pnpm shims in Doctor (score 0.9): not folded; it belongs to Phase 21 (UI-07).
+
+## Best-over-easy audit (second pass, 2026-10-13)
+
+The user asked: "Quiero estar seguro las decisiones fueron las mejores y no las mas faciles". All 18 decisions were re-checked against the current code (codegraph: `_build_app`, `ExecuteInputs`, `Summary`), and the two suspect ones were screened with jev.
+
+| Decision | Verdict | Evidence / jev |
+|---|---|---|
+| D-01..D-07, D-09, D-13..D-18 | Kept as best | Reuse the existing primitives; one predicate; boundary-level except; the SPEC locks D-04/D-06/D-09 semantics |
+| D-08 `Summary` fields | **Refined**: id tuples (`not_attempted`, `update_failed`) plus `crash_error`, instead of booleans | Laya boolean_flags p=0.50 (needs fallback); TypeSafe outcome_id_tuples p=0.98; user confirmed |
+| D-10 codex env | **Verified** | `codex/install.sh` lines 6 and 100: `CODEX_NON_INTERACTIVE` accepts 1/true/yes (the script was downloaded to scratch and deleted) |
+| D-12 execute wiring | **Changed**: `_build_app` builds `ExecuteInputs`; the optional parameter is removed | It was the easy fix (pass at 4 sites). Laya factory_builds_it p=0.42 (needs fallback); TypeSafe factory_builds_it p=0.99; TA §7 says the same; user confirmed |

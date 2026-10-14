@@ -1,6 +1,6 @@
 # Phase 17: Stop the bleeding - Context
 
-**Gathered:** 2026-10-13 (assumptions mode, with `--analyze --batch --all`)
+**Gathered:** 2026-10-13 (assumptions mode, with `--analyze --batch --all`). **Audited** the same day: every decision was re-checked for best-over-easy against the code, using codegraph and jev.
 **Status:** Ready for planning
 
 <domain>
@@ -40,10 +40,15 @@ Out of scope: receipts and removal plans (19/22), registry data fixes other than
 - **D-06:** `installer/app.py` `clean_rc_duplicates` (:418-448) keeps the previewed bytes. At confirm it re-reads the file and refuses, unchanged, if the bytes differ (a trailing newline counts). If they match, it applies the indices computed from the previewed bytes and writes atomically.
 - **D-07:** The worker in `installer/execute_screen.py` `_execute_worker` (:593-656) gets an `except Exception` ahead of its `finally`.
   - Rows already done stay done, the rest become "not attempted", and the run is marked crashed.
-- **D-08 (user):** Failure reaches the exit code through new fields on `installer/session.py` `Summary` (:105-113): `crashed: bool` and `update_errors`.
-  - `wizard_app.py` `on_install_run_finished` (:2924-2974) folds `error`, `not_attempted` and `update_errors` into them.
-  - `setup.py:1275` and `:1509` both check them. The headless path gets the same check for symmetry.
-  - An all-skipped run exits 0. Phase 20 later replaces this with plan outcomes.
+- **D-08 (user; shape refined in the best-over-easy audit, 2026-10-13):** Failure reaches the exit code through new fields on `installer/session.py` `Summary` (:106-113). The fields keep the shape of the existing outcome fields (tuples of tool ids):
+  - `not_attempted: tuple[str, ...]`
+  - `update_failed: tuple[str, ...]`
+  - `crash_error: str | None`
+  - `wizard_app.py` `on_install_run_finished` (:2924-2974) folds the worker's `error`, `not_attempted` and `update_errors` into them.
+  - `setup.py:1275` and `:1509` exit 1 when `failed`, `mismatched`, `dependency_failed`, `not_attempted` or `update_failed` is non-empty, or when `crash_error` is set. The headless path uses the same check.
+  - An all-skipped run exits 0.
+  - Phase 20 maps these tuples directly onto plan outcomes.
+  - Rejected: `crashed: bool` with opaque `update_errors`, because it loses which tools failed and does not match the existing fields.
 
 ### Runtime safety (R6–R9)
 - **D-09 (user):** A new `move_link_mode(policies, new_mode, set_link_mode)` lives in `installer/policy.py`.
@@ -53,6 +58,7 @@ Out of scope: receipts and removal plans (19/22), registry data fixes other than
   - With no active policies, it only saves the mode.
 - **D-10:** `installer/run.py` `StreamingRunner.popen_with_env` (:232-240) adds `start_new_session=True`. `stdin=DEVNULL` is already there.
   - codex's registry method gets `env = { CODEX_NON_INTERACTIVE = "1" }`, using the existing `_env_prefix` mechanism.
+  - Verified 2026-10-13: `https://chatgpt.com/codex/install.sh` reads `NON_INTERACTIVE="${CODEX_NON_INTERACTIVE:-false}"` (line 6) and documents "Set to 1, true, or yes to skip prompts" (line 100). Without it, its `prompt_yes_no` reads `/dev/tty` (lines 842-858).
   - Acceptance: a fake `/dev/tty` reader exits non-zero within 5 s.
 - **D-11 (user, "best over easiest"):** `load_settings` reads and parses once and returns the settings plus an optional warning, as a typed result (for example `LoadedSettings(settings, warning)`).
   - It catches `UnicodeDecodeError` and `json.JSONDecodeError`.
@@ -60,9 +66,13 @@ Out of scope: receipts and removal plans (19/22), registry data fixes other than
   - All 7 callers in `setup.py` (:1283,1292,1321,1349,1439,1450,1469) and the tests in `tests/test_settings.py` are updated.
   - The first screen shows the warning in its status.
   - Rejected option: a separate `settings_warning(path)` probe, which would re-read and re-parse the file and duplicate the decode logic.
-- **D-12:** Every route passes `execute=_execute_inputs(...)` (`setup.py:1166-1211`) to `_build_app`, exactly like `_run_interactive_wizard` (:1234-1239).
-  - The routes are `_run_doctor` (:1289), `_run_fix` (:1315), `_run_uninstall` (:1346) and `_run_guard` (:1386).
+- **D-12 (user; changed in the best-over-easy audit, 2026-10-13):** `_build_app` (`setup.py:755`) builds `ExecuteInputs` itself through `_execute_inputs` (:1166-1211), from its own `tools`, `platform`, `link_mode` and disk-pressure probe, plus a new `unattended: bool` keyword.
+  - The optional `execute: ExecuteInputs | None = None` parameter is **removed**, so no current or future route can build an app that cannot execute. This is the "execute required on every route" rule in TA §7.
+  - `_run_interactive_wizard` (:1234-1239) stops building it.
+  - The ~20 tests that call `_build_app([], platform)` keep working unchanged.
+  - Tests that injected a fake `execute` now inject at the `_execute_inputs` seam.
   - `test_accepting_the_catalog_without_execute_still_exits_with_ids` is deleted.
+  - Rejected: passing `execute=` at the four routes that forgot it (`_run_doctor` :1289, `_run_fix` :1315, `_run_uninstall` :1346, `_run_guard` :1386). It is the smaller diff, but the parameter stays optional and the bug class stays open.
   - Enter with nothing selected shows a message and runs nothing.
 
 ### Doctor, CI and governance (R10–R13)
