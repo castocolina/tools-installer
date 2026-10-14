@@ -240,7 +240,13 @@ None - no external service configuration required.
 
 ## CI oracle (wave 1)
 
-pending: orchestrator
+Attempt 1 (red, routed to gap plan 17-14):
+run 38653233506 https://github.com/castocolina/tools-installer/actions/runs/38653233506
+oracle sha: 2378dd9a2125c91054d9b139c16285b5b839a1c6
+validate & test on ubuntu-latest: success
+validate & test on macos-latest: failure (make validate green; 2 test failures: test_refuses_a_dotdot_spelling_of_the_root_directory, test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_record)
+
+pending: orchestrator (re-run after 17-14)
 
 ---
 *Phase: 17-stop-the-bleeding*
