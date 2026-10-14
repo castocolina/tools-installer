@@ -98,11 +98,14 @@ printf '  target:   %s\n' "$TMP_ROOT"
 root_escaped="$(_prune_common_escape_dots "$TMP_ROOT")"
 pattern="${root_escaped}/\.[0-9a-f]{16}-[0-9]{8}\.(so|node)"
 
-mapfile -t files < <(_prune_common_find_matches "$TMP_ROOT" "$MINUTES" "" regex "$pattern")
+files=()
+while IFS= read -r line; do
+  files+=("$line")
+done < <(_prune_common_find_matches "$TMP_ROOT" "$MINUTES" "" regex "$pattern")
 
 if [[ "$APPLY" -eq 0 ]]; then
   printf '\n  matches: %s\n' "${#files[@]}"
-  for f in "${files[@]}"; do
+  for f in ${files[@]+"${files[@]}"}; do
     printf '  would delete: %s\n' "$f"
   done
   printf '\n--- dry-run complete ---\n'
@@ -112,7 +115,7 @@ if [[ "$APPLY" -eq 0 ]]; then
 fi
 
 deleted=0
-for f in "${files[@]}"; do
+for f in ${files[@]+"${files[@]}"}; do
   if rm -f -- "$f"; then
     deleted=$((deleted + 1))
     [[ "$VERBOSE" -eq 1 ]] && printf '  deleted: %s\n' "$f"

@@ -138,8 +138,9 @@ _prune_common_validate_positive_int() {
 
 # _prune_common_escape_dots VALUE
 # Prints VALUE with every "." backslash-escaped, for embedding a real
-# filesystem path inside a POSIX ERE (find -regextype posix-extended) as a
-# literal path rather than "any character" wildcards.
+# filesystem path inside a POSIX ERE (the regex filter of
+# _prune_common_find_matches) as a literal path rather than "any character"
+# wildcards.
 _prune_common_escape_dots() {
   printf '%s' "${1//./\\.}"
 }
@@ -188,10 +189,9 @@ _prune_common_emit_deleted() {
 # means "never use fd for this call", which is how the Linux wrapper keeps
 # its original find-only behavior regardless of what happens to be on PATH.
 #
-# Safe for fast counts (pipe to `wc -l`) and for consumers -- like
-# scripts/prune-tmp-linux.sh's own `mapfile -t` -- that only ever see
-# filenames without embedded newlines. Use _prune_common_find_matches0 for
-# an actual deletion stream instead.
+# Safe for fast counts (pipe to `wc -l`) and for consumers that only ever
+# see filenames without embedded newlines. Use _prune_common_find_matches0
+# for an actual deletion stream instead.
 _prune_common_find_matches() {
   local root="$1" minutes="$2" ftype="$3" mode="$4" pattern="$5" fd_pattern="${6:-}"
   local -a find_type=()
@@ -200,40 +200,39 @@ _prune_common_find_matches() {
   if [[ -n "$fd_pattern" ]] && command -v fd >/dev/null 2>&1; then
     local -a fd_type=()
     [[ -n "$ftype" ]] && fd_type=(-t "$ftype")
-    fd -u -d 1 --changed-before "${minutes}min" "${fd_type[@]}" "$fd_pattern" "$root" 2>/dev/null || true
+    fd -u -d 1 --changed-before "${minutes}min" ${fd_type[@]+"${fd_type[@]}"} "$fd_pattern" "$root" 2>/dev/null || true
     return 0
   fi
 
   if [[ "$mode" == "regex" ]]; then
-    find "$root" -mindepth 1 -maxdepth 1 -regextype posix-extended -regex "$pattern" \
-      -mmin +"$minutes" "${find_type[@]}" 2>/dev/null || true
+    # find's regex-type predicate is GNU-only. Match names with grep instead
+    # so BSD and busybox find work; the caller's pattern is a full-path ERE.
+    find "$root" -mindepth 1 -maxdepth 1 -mmin +"$minutes" ${find_type[@]+"${find_type[@]}"} \
+      2>/dev/null | grep -E "^${pattern}$" || true
   else
-    find "$root" -mindepth 1 -maxdepth 1 -mmin +"$minutes" "${find_type[@]}" \
+    find "$root" -mindepth 1 -maxdepth 1 -mmin +"$minutes" ${find_type[@]+"${find_type[@]}"} \
       -name "$pattern" 2>/dev/null || true
   fi
 }
 
 # _prune_common_find_matches0 ROOT MINUTES FTYPE MODE PATTERN [FD_PATTERN]
-# Same matching as _prune_common_find_matches, NUL-delimited on stdout --
+# NUL-delimited matches on stdout, depth 1 under ROOT, older than MINUTES,
 # for a deletion stream that must not break on a path containing a newline
 # (scripts/prune-user-tmpdir.sh's original `delete_stream` convention).
+# Matches with find -name only: PATTERN is a basename glob. MODE is ignored;
+# every caller passes "name".
 _prune_common_find_matches0() {
-  local root="$1" minutes="$2" ftype="$3" mode="$4" pattern="$5" fd_pattern="${6:-}"
+  local root="$1" minutes="$2" ftype="$3" pattern="$5" fd_pattern="${6:-}"
   local -a find_type=()
   [[ -n "$ftype" ]] && find_type=(-type "$ftype")
 
   if [[ -n "$fd_pattern" ]] && command -v fd >/dev/null 2>&1; then
     local -a fd_type=()
     [[ -n "$ftype" ]] && fd_type=(-t "$ftype")
-    fd -u -0 -d 1 --changed-before "${minutes}min" "${fd_type[@]}" "$fd_pattern" "$root" 2>/dev/null || true
+    fd -u -0 -d 1 --changed-before "${minutes}min" ${fd_type[@]+"${fd_type[@]}"} "$fd_pattern" "$root" 2>/dev/null || true
     return 0
   fi
 
-  if [[ "$mode" == "regex" ]]; then
-    find "$root" -mindepth 1 -maxdepth 1 -regextype posix-extended -regex "$pattern" \
-      -mmin +"$minutes" "${find_type[@]}" -print0 2>/dev/null || true
-  else
-    find "$root" -mindepth 1 -maxdepth 1 -mmin +"$minutes" "${find_type[@]}" \
-      -name "$pattern" -print0 2>/dev/null || true
-  fi
+  find "$root" -mindepth 1 -maxdepth 1 -mmin +"$minutes" ${find_type[@]+"${find_type[@]}"} \
+    -name "$pattern" -print0 2>/dev/null || true
 }
