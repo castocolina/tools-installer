@@ -88,6 +88,7 @@ None of these has landed as of 2026-10-14.
 - **D-11:** One `TweakBundle` per shell-init tool (starship, direnv, zoxide, fzf, fnm, volta), with `requires=(cmd,)`, a body guarded by `command -v X >/dev/null &&`, and **a bundle id equal to the tool id**.
   - It is dispatched through a new `source_shell_init` entry in `POST_INSTALL_HOOKS` (`post_install.py:66-69`; the action is declared at `model.py:49` but never dispatched today).
   - `source_shell_init` is added to `SENSITIVE_POST_INSTALL_ACTIONS` (`model.py:55`), so it is asked through the existing confirm. `confirm is None` (headless) means it never runs (`post_install.py:62`).
+  - `SensitiveActionScreen`'s prompt is hardcoded to the login-shell text (`execute_screen.py:161-165`), so it becomes keyed by action name. This was added 2026-10-14 by 24.1 D-06, because 24.1's EDITOR and kickstart questions need their own text.
   - Removing the tool disables **only that bundle**: `active_policies((bundle,), …)` + `sweep_policies` (`uninstall.py:401-446`). It never uses the whole-installer `sweep_tweaks`.
 - **D-12:** CONF-07 fix: `write_plugins` (`omz.py:432`) calls `ensure_zshrc_template(zshrc_path)` **without** `root`, so it falls back to the default.
   - It must resolve `omz_root(home, environ)` and pass it through.
