@@ -86,6 +86,9 @@ Out of scope:
   - A literal grep test guards it.
 - **D-16:** `render_plan` puts dragged rows behind a short indent. The 78-column checks reuse the existing `Console(width=80)` capture (`execute_screen.py:1051-1057`) and the `len(plain) <= 78` assertion style.
 
+### Added by later phases
+- **D-17 (from Phase 22 D-12, 2026-10-14):** `Disposition.MANUAL` ("you run: `<exact command>`") applies to a native dnf/apt/pacman install method, or a script method whose `writable_prefix` is not writable. It is decided by the shared `needs_manual` predicate. `RowOutcome` gains the result `manual`, which keeps the row selected and doesn't change the exit code. BLOCKED keeps the meaning "nothing the installer can do".
+
 ### Claude's Discretion
 - Plan and wave order. Suggested:
   1. `Disposition`/`PlanRow`/`build_plan` plus the G cases A–I.

@@ -88,7 +88,7 @@ Scouted 2026-10-13:
 
 8. **Vendor update commands (LIFE-06)**: When a script method declares `update`, `u` runs that argv. Otherwise it re-runs the vendor script.
    - Current: OMZ exits 1, and SDKMAN does nothing.
-   - Acceptance: With a fake runner, `u` on OMZ runs `$ZSH/tools/upgrade.sh`, and `u` on SDKMAN runs `sdk selfupdate`.
+   - Acceptance: With a fake runner, `u` on OMZ runs `<omz root>/tools/upgrade.sh`, and `u` on SDKMAN runs `sdk selfupdate`. The OMZ root is `$ZSH` when set, otherwise `~/.oh-my-zsh`, resolved in Python by the existing `$ZSH`-aware resolver with no shell (clarified 2026-10-14).
 
 9. **Writable-prefix preflight (LIFE-07)**: A script method with `writable_prefix` is checked before it runs.
    - Current: The brew bootstrap aborts on `sudo -n`.
