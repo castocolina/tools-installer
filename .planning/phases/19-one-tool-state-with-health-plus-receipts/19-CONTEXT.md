@@ -103,6 +103,7 @@ Out of scope:
   - Project-scope copies, other marketplaces, other versions and disabled entries do not make the pack present. Each becomes a "duplicate" or "disabled" reason that names the marketplace, scope and version.
   - The live evidence is superpowers installed 4 times (2 marketplaces × 2 scopes, versions 6.4.1 and 6.2.0; F-registry-ai.md:40,138).
 - **D-19:** A pnpm co-install group that is incomplete produces `≈`, from the pnpm inventory the pass already caches.
+- **D-20 (added by Phase 20 D-06, 2026-10-14):** `ToolState.unconfigured` is a tuple of typed `ConfigStep`s rather than plain strings. Each step has the text shown to the user and a fix: skill install for a harness (D-17/D-18), terminal sync (D-16), or install of the missing pnpm group members (D-19). Phase 20's RECONFIGURE runs exactly those steps.
 
 ### Claude's Discretion
 - Plan and wave order. Suggested:

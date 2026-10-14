@@ -35,7 +35,7 @@ Scouted 2026-10-13:
 
 3. **Repair and reconfigure (PLAN-03)**: Health maps to a disposition. A present tool that is broken becomes "will repair". One that is misconfigured becomes "will reconfigure". One that is outdated becomes "will update" when the installer or a user-level manager (brew, uv, pnpm) owns it, and "skipped — managed by <owner>" otherwise.
    - Current: Broken and misconfigured tools are not planned.
-   - Target: The mapping also applies to dragged dependencies. A broken tool that the installer cannot act on (for example, it is owned by dnf and that would need sudo) becomes "blocked" with the reason.
+   - Target: For dragged dependencies, missing becomes "will install" and broken becomes "will repair". A dragged dependency that is outdated or misconfigured still satisfies its dependent, so it is "skipped — already present" with its health reason shown; only a direct selection updates or reconfigures it (amended 2026-10-14, user decision). A broken tool that the installer cannot act on (for example, it is owned by dnf and that would need sudo) becomes "blocked" with the reason.
    - Acceptance: There is a test for each health and owner pair. A broken dragged dependency appears under its dependent as "will repair".
 
 4. **Summary in the review's words (PLAN-04, 999.1)**: The summary counts outcomes per disposition using the same words as the review, for example "2 installed, 1 updated, 3 skipped, 1 failed".
