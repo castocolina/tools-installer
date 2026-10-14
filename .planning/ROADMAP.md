@@ -51,7 +51,31 @@
   4. With a ban and a tweak active, changing the shell link mode (centralized → split) removes their blocks from the old mode's rc and writes them where the new mode sources.
   5. CI is green on ubuntu and macOS, merges to main require the PR check (branch protection, user action), and plans 16-17..19 carry secure and validate re-audit records.
 
-**Plans**: TBD
+**Plans**: 13 plans
+
+Plans:
+**Wave 1**
+- [ ] 17-01-PLAN.md — CI green: bash 3.2 prune, macOS pyright guard, width-independent and flake-free tests (CI-01)
+- [ ] 17-02-PLAN.md — `link_executable` refuses a directory member before linking (SAFE-01)
+- [ ] 17-03-PLAN.md — install/update children run in a new session with stdin closed (SAFE-07)
+- [ ] 17-04-PLAN.md — Doctor reports broken `~/.local/bin` links with copy-paste repair text (SAFE-01)
+- [ ] 17-05-PLAN.md — registry hazards: graphify postinstall removed, Sublime member, codex non-interactive (SAFE-02, SAFE-01, SAFE-07)
+- [ ] 17-12-PLAN.md — security and validation re-audit of plans 16-17..16-19 (CI-03)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 17-06-PLAN.md — atomic, symlink-safe rc and shim writes; `clean_rc_duplicates` recheck (SAFE-04)
+- [ ] 17-07-PLAN.md — failed update or crashed worker shows "Failed" and exits 1 (SAFE-05)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 17-08-PLAN.md — link-mode change moves ban/tweak blocks with rollback (SAFE-06)
+- [ ] 17-09-PLAN.md — uninstall deletes only proven-owned files; the rest is "remove it yourself" (SAFE-03)
+- [ ] 17-10-PLAN.md — `_build_app` always builds execute; Enter runs the selection on every route (SAFE-09)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 17-11-PLAN.md — invalid settings.json launches with a warning and stays untouched (SAFE-08)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 17-13-PLAN.md — final gates, CI green on both OSes, branch protection on user confirmation (CI-01, CI-02)
 
 ### Phase 18: Registry truth and drift guard
 

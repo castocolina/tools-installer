@@ -44,6 +44,11 @@
       "status": "pending"
     },
     {
+      "number": "24.1",
+      "name": "Onboard Neovim through the tool-onboarding skill",
+      "status": "pending"
+    },
+    {
       "number": "25",
       "name": "Lean",
       "status": "pending"
@@ -51,8 +56,8 @@
   ],
   "next": {
     "command": "/gsd:progress --next",
-    "label": "Advance to the next step (plan phase 17)",
-    "reason": "Phase 17 of 9 — needs a plan"
+    "label": "Advance to the next step",
+    "reason": "Phase 17 of 10 · 0% · executing"
   },
-  "updated_at": "2026-10-13T17:19:45.589Z"
+  "updated_at": "2026-10-14T20:16:16.820Z"
 }

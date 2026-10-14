@@ -316,17 +316,19 @@ All four top-level keys are required (null allowed); `checks` is preferred over 
 | A5 | The `second.join(timeout=0.2)` checks are the only timing-based candidates for the SPEC's `test_version_status` race | Pitfall 6 | a different flaky test stays unfixed |
 | A6 | `Policy.link_mode_aware` (appended field) is acceptable as the "active policy" filter | Pattern 4 | user may want literally every active policy moved (Open Question 2) |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **graphify: remove the hook, or keep it for the clean hosts?**
+All four are resolved in `.planning/RUN-LEDGER.md` (phase 17 rows Q1–Q4), which the plans cite.
+
+1. **graphify: remove the hook, or keep it for the clean hosts?** — RESOLVED (ledger Q1): remove `postinstall` and the dead hook code.
    - Known: the probe above; literal D-03 says remove; per-project form is never allowed (SPEC R2).
    - Unclear: D-03 is binary, the result is mixed (claude/codex clean via `graphify install --platform <host>`, opencode/cursor drop `.opencode`/`.cursor` into the cwd; cursor's form installs nothing globally).
    - Recommendation: follow D-03 literally (remove `postinstall`, delete the dead hook code); confirm with the user, because the user loses automatic claude/codex skill registration. The re-run of the probe in the plan must still be recorded in the summary.
-2. **Which policies does a link-mode change move?**
+2. **Which policies does a link-mode change move?** — RESOLVED (ledger Q2, TypeSafe 0.94): only `Policy.link_mode_aware` policies.
    - Known: only ban, tweaks and the macOS cache redirect are mode-dependent; moving the daemon/omz policies has side effects.
    - Recommendation: appended `Policy.link_mode_aware` flag (Pattern 4). Confirm with the user as a refinement of D-09's "every active policy".
-3. **Identity of the SPEC's "timing-dependent race test"** (Pitfall 6): not reproduced; plan a first task that checks CI history before editing.
-4. **Doctor repair text for a dangling link with no opt dir** (wording is Claude's discretion; the Pattern 7 split is a recommendation).
+3. **Identity of the SPEC's "timing-dependent race test"** (Pitfall 6) — RESOLVED (ledger Q3): stress-run, fix only if reproduced; `test_owner_cell…` is the confirmed flake: not reproduced; plan a first task that checks CI history before editing.
+4. **Doctor repair text for a dangling link with no opt dir** — RESOLVED (ledger Q4): planner discretion (wording is Claude's discretion; the Pattern 7 split is a recommendation).
 
 ## Environment Availability
 
