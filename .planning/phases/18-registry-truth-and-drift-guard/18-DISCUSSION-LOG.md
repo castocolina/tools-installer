@@ -43,3 +43,17 @@ Three analyzer "Likely" picks were the easier option. I re-screened them with je
 
 ## Reviewed Todos
 - Dangling pnpm shims in Doctor (score 0.6): not folded; it belongs to Phase 21.
+
+## Best-over-easy audit (second pass, 2026-10-14)
+
+I re-checked all 15 decisions against the current code (codegraph plus rg: `resolve_github_tag`, `_resolve_target`, `Settings`, the `registry.toml` table layout). Three were the easy option or were under-specified. I screened them with jev, one Laya call per item; Laya's confidence was below 0.11 on all three, so I re-asked TypeSafe direct.
+
+| Decision | Verdict | Evidence / jev |
+|---|---|---|
+| D-01..D-04, D-06, D-08, D-10..D-12, D-14, D-15 | Kept as best | Closed-set and loader conventions; D-02, D-03, D-06 and D-10 are user-confirmed |
+| D-05 digest source | **Changed**: one `/releases/latest` fetch returns a `Release` (tag plus asset digests); `resolve_github_tag` becomes a projection of it | `versions.py:315` already fetches that JSON and throws the digests away. A second digest call duplicates a rate-limited read and races "latest". Laya release_record p=0.37 (needs fallback); TypeSafe release_record p=0.98 |
+| D-07 check method | **Specified**: compare digests and HEAD every run; download and open an archive only when its digest changed or no digest exists | Laya p=0.45 (needs fallback); TypeSafe digest_plus_download_on_change p=0.98 |
+| D-09 registry writes | **Specified**: a scoped line rewrite plus a whole-document `tomllib` semantic guard; no tomlkit | All tables use headers (90 `[[tool]]`, 230 `[[tool.method]]`). Laya p=0.38 and TypeSafe scoped_line_rewrite p=0.58 were both below the floor, so I reasoned it through: tomlkit would still need the same guard, and it would add a dependency |
+| D-13 settings | **Resolved**: `Settings` persists only `link_mode`; drawio-cli exists only in `tests/test_registry.py` | rg / codegraph |
+
+jev received summaries only: no source code and no keys.

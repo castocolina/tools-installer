@@ -39,8 +39,11 @@ Out of scope: receipts and health (19); script `paths`/`remove`/`update`/`writab
   - This fixes the macOS bug where `which("drawio")` never finds the link named `draw.io`.
 
 ### Verification pipeline (R4, R5)
-- **D-05:** Add a digest fallback to `installer/checksums.py`, e.g. `expected_sha256_from_api(...)`.
-  - It is tried only when the pinned checksum is absent; the order is checksum file → API digest → "unverified" with a reason.
+- **D-05 (audited 2026-10-14):** The tag and the asset digests come from **one** `/releases/latest` fetch.
+  - `installer/versions.py` gains `resolve_github_release(repo, fetch) -> Release`. `Release` is a frozen dataclass holding `tag` and `digests: Mapping[str, str]` (asset name → sha256 hex, taken from each asset's `digest` field after stripping the `sha256:` prefix).
+  - `resolve_github_tag` becomes `resolve_github_release(repo, fetch).tag`. The 12 tag-only `TagResolver` callers do not change.
+  - The download context gets a `resolve_release` resolver. `download._resolve_target` takes `github_release` methods through it, so the URL tag and the expected digest come from the same snapshot. A separate digest call would add a second rate-limited read, and "latest" can move between the two reads.
+  - Order: pinned checksum → `release.digests[asset]` → "unverified" with a reason. Pinned `app`/`tarball` methods carry a pinned checksum (D-09 writes it), so they never need a digest lookup.
   - A digest mismatch raises the existing `ChecksumMismatch`, so `engine.py`'s fail-fast branch (:146-151) covers it with no new engine logic.
   - Evidence that the API exposes a digest: `audit-2026-10-13/D-registry-user-part1.md:199` (live 2026-10-13).
 - **D-06 (user):** The smoke run is one shared function (e.g. `smoke(path, argv)`) built on `run_output`/`CommandError`.
@@ -54,11 +57,17 @@ Out of scope: receipts and health (19); script `paths`/`remove`/`update`/`writab
 ### verify-registry and the weekly job (R3, R11)
 - **D-07:** A new `installer/verify_registry.py` reuses `download._resolve_target` and `assets.render_asset`/`arch_tokens` for each declared `os`/`arch`.
   - This keeps one URL, member and checksum resolver, so a passing check means the real install works.
-  - Newer-release detection reuses `versions.resolve_github_tag`.
+  - Newer-release detection and digests reuse `versions.resolve_github_release` (D-05).
+  - **Check method (audited 2026-10-14):** every run compares API digests and probes each URL with HEAD. It downloads and opens an archive (the `member` check) only when the asset's digest differs from the last verified one or no digest exists. Downloading every asset for every OS/arch each week is wasted bandwidth and gives no extra signal. Checking API metadata alone would miss a renamed member.
   - The issue upsert shells out to `gh` through the existing `run.py` `Runner`: find the one open drift issue by label, then edit it or create it.
   - Exit "inconclusive" on a network error or rate limit, with no issue call.
 - **D-08:** `make verify-registry` is read-only. `.github/workflows/verify-registry.yml` runs on `schedule` plus `workflow_dispatch` only, with `permissions: contents: read, issues: write`. It is never in the PR gate.
 - **D-09:** The pin bump (R11) runs `verify-registry` on the candidate version and changes `version` and `verified` only when it passes. A renamed or removed asset keeps the old pin and is reported.
+  - **Registry writes (audited 2026-10-14):** a scoped line rewrite, with no new dependency.
+    - Every table in `registry.toml` uses a header (`[[tool]]` ×90, `[[tool.method]]` ×230), and the target keys are one-line scalars.
+    - The writer finds the `[[tool]]` block by `id`, plus the method block where one is targeted, and replaces only the `verified =`, `version =` or checksum line inside it.
+    - It then re-parses the whole file with `tomllib` and asserts that the result equals the old document plus exactly the intended edits. Any other difference aborts the write. Comments and layout are untouched by construction.
+    - tomlkit was rejected because its output would still need the same semantic guard, and it would add a dependency for one writer. jev: TypeSafe chose the line rewrite at p=0.58, below the confidence floor, so this decision was reasoned through in full rather than taken from jev.
 
 ### Data, detection and launch fixes (R6–R10)
 - **D-10 (user):** The macOS stub rule is a closed table in `installer/status.py`, consulted by `is_installed` (:18-66).
@@ -72,8 +81,8 @@ Out of scope: receipts and health (19); script `paths`/`remove`/`update`/`writab
   - Acceptance: `rg managed-download installer/` returns nothing.
 - **D-13:** `drawio-cli` is removed and `drawio-desktop` becomes `audience = "both"`.
   - A stale `drawio-cli` id is ignored: lookups are registry-driven (`version_cache.py:176-190`).
-  - The planner must also grep `settings.py` for any id-validated selection state, and add an explicit drop-unknown branch there if one exists.
-  - A regression test pins this behaviour either way.
+  - Resolved 2026-10-14: `settings.Settings` persists only `link_mode` and no tool ids, so no settings branch is needed. The only other references are the tests at `tests/test_registry.py:1118-1120, 1135-1142, 1168-1173, 1966`; update them in the same change.
+  - A regression test pins the stale-id behaviour in `version_cache`.
 - **D-14:** `versions.py` `parse_version` (:54) returns `None` for `-1`-like output. It parses lazygit's `version=0.44.1, …` and unquotes procs' output. These are covered by a parametrized test over the audit fixtures.
 - **D-15:** The 35 data fixes are applied as written in audits C/D/E/F, "Registry fixes (data only)". Sublime's `member` is skipped because Phase 17 did it. Each fix maps to a test or to a `verify-registry` pass.
 
@@ -110,7 +119,7 @@ None.
 - `installer/assets.py` `arch_tokens`/`render_asset`; `installer/download.py:85-127` `_resolve_target`
 - `installer/checksums.py` `expected_sha256`/`sha256_file`/`ChecksumMismatch`
 - `installer/run.py` `run_output`/`CommandError` (normalizes OSError and non-zero exit)
-- `installer/versions.py` `resolve_github_tag`, `Fetch`/`urlopen_fetch`
+- `installer/versions.py` `resolve_github_tag` (:315; already fetches `/releases/latest`, so D-05 extends that same read), `Fetch`/`urlopen_fetch`
 - `installer/model.py` closed-set conventions (`_parse_closed_string_list`, `OWNER_PROBES`, `POSTINSTALL_HOOK_NAMES`)
 - `installer/atomic.py` `replace_symlink` (Phase 17) for the swap after a passing smoke run
 
