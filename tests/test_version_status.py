@@ -1223,12 +1223,21 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
     epoch map can serve the PREVIOUS pass's record under the current epoch in
     the window between its two writes, and that is what this catches.
 
-    It is a probabilistic detector, deliberately: the window is two adjacent
-    dict writes, so a passing run is not proof. It can never fail spuriously
-    (every branch is guarded on information the reader established itself),
-    and the DETERMINISTIC proof of the same invariant is the structural gate
-    at the top of this section -- not this loop. Bounded by iteration count,
-    never by wall-clock (.claude/testing.md)."""
+    It is a probabilistic detector, deliberately: a passing run is not proof
+    the identity held under every conceivable interleaving. It can never fail
+    spuriously (every branch is guarded on information the reader established
+    itself), and the DETERMINISTIC proof of the same invariant is the
+    structural gate at the top of this section -- not this loop.
+
+    Overlap is by construction, not luck: the writer WAITS for the reader at
+    the two points that matter, via a shared iteration counter -- after its
+    commit (inside the committed window) and after its invalidate (inside the
+    invalidated gap) -- so the reader is guaranteed to complete at least two
+    whole loop iterations, and therefore at least one whole `ownership_of`
+    call, inside each window. The reads themselves stay unsynchronized (no
+    handshake on the read), which is exactly the race this test exists to
+    catch. Bounded by iteration counts, never by wall-clock
+    (.claude/testing.md)."""
     now = datetime(2026, 9, 7, tzinfo=UTC)
     tool = _gh_tool("alpha")
     service = _installer_owned_service(
@@ -1244,7 +1253,22 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
     checked = 0
     stop = threading.Event()
     reader_ready = threading.Event()
-    _MAX_PASSES = 20_000
+    _MAX_PASSES = 200
+    reads = 0
+    _READER_SPIN_CAP = 200_000
+
+    def _let_reader_run() -> None:
+        # Wait until the reader has completed at least two more loop
+        # iterations (so at least one whole `ownership_of` call starts and
+        # ends inside whichever window the writer is in), capping the spin.
+        # A GIL-yield spin, never a wall-clock sleep: on macOS `time.sleep(0)`
+        # alone hands the GIL back to the same thread, so no pass count can
+        # get the reader scheduled inside a window -- only waiting for it can.
+        target = reads + 2
+        for _ in range(_READER_SPIN_CAP):
+            if reads >= target:
+                break
+            time.sleep(0)
 
     def writer() -> None:
         try:
@@ -1261,14 +1285,15 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
                 record = service.ownership_of(tool.id)
                 if record is not None:
                     committed_at[service.epoch] = record
-                # A GIL yield, never a wall-clock sleep: without it the
-                # writer runs commit->invalidate as one uninterrupted
-                # bytecode stretch and the reader is never scheduled inside
-                # the committed window at all, which would make this loop as
-                # blind as the handshake it removes.
-                time.sleep(0)
+                # Wait for the reader INSIDE the committed window: the few
+                # bytecodes between refresh() returning and invalidate() are
+                # the only place a read can observe the record, and only a
+                # writer-side wait guarantees the reader is scheduled there.
+                _let_reader_run()
                 service.invalidate(reason="loop")
-                time.sleep(0)
+                # Same inside the invalidated gap, so a None observation is
+                # guaranteed too.
+                _let_reader_run()
                 if seen_record and seen_none and checked > 0:
                     break
         except BaseException as exc:  # noqa: BLE001 -- collected for the join
@@ -1277,24 +1302,29 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
             stop.set()
 
     def reader() -> None:
-        nonlocal seen_record, seen_none, checked
+        nonlocal seen_record, seen_none, checked, reads
         try:
             reader_ready.set()
             while not stop.is_set():
-                before = service.epoch
-                observed = service.ownership_of(tool.id)
-                after = service.epoch
-                if observed is None:
-                    seen_none = True
-                    continue
-                seen_record = True
-                if before != after:
-                    continue  # the epoch moved across the call: nothing to assert
-                expected = committed_at.get(before)
-                if expected is None:
-                    continue  # that pass's commit has not been recorded yet
-                assert observed is expected, (before, observed, expected)
-                checked += 1
+                try:
+                    before = service.epoch
+                    observed = service.ownership_of(tool.id)
+                    after = service.epoch
+                    if observed is None:
+                        seen_none = True
+                        continue
+                    seen_record = True
+                    if before != after:
+                        continue  # the epoch moved across the call: nothing to assert
+                    expected = committed_at.get(before)
+                    if expected is None:
+                        continue  # that pass's commit has not been recorded yet
+                    assert observed is expected, (before, observed, expected)
+                    checked += 1
+                finally:
+                    # Count every completed iteration, `continue` paths
+                    # included: the writer's `_let_reader_run` waits on this.
+                    reads += 1
         except BaseException as exc:  # noqa: BLE001 -- collected for the join
             errors.append(exc)
 
