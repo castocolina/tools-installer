@@ -1171,6 +1171,7 @@ def _offline_service(
     artifacts_for: Callable[[Tool], list[Path]] | None = None,
     skill_probe: Callable[[list[str]], str] | None = None,
     skill_home: Path | None = None,
+    read_inventory_fn: Callable[..., ManagerInventory] = _empty_inventory,
 ) -> VersionRefreshService:
     return VersionRefreshService(
         platform=platform or Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
@@ -1181,7 +1182,7 @@ def _offline_service(
         managed_bin_dir=_MANAGED,
         which=which or (lambda cmd: str(_MANAGED / cmd)),
         artifacts_for=artifacts_for or (lambda tool: [_MANAGED / tool.cmd]),
-        read_inventory_fn=_empty_inventory,
+        read_inventory_fn=read_inventory_fn,
         read_outdated_fn=_empty_outdated,
         pnpm_packages=lambda: (),
         query=lambda *_a, **_k: "",
@@ -2017,21 +2018,37 @@ async def test_owner_cell_semantic_value_reaches_the_mounted_table(tmp_path: Pat
     at all. Answers "did this screen tell the table the owner" and nothing
     else."""
     tool = _tool("rg")
-    ownership = _ownership(tool, owner="brew")
+
+    def brew_owns_rg(**_kwargs: object) -> ManagerInventory:
+        return ManagerInventory(
+            brew_formulae={"rg": "1.0"},
+            brew_casks={},
+            pnpm_globals=frozenset(),
+            uv_tools={},
+            brew_prefix=tmp_path / "brew",
+        )
+
     service = _offline_service(
         tmp_path / "versions.json",
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
+        artifacts_for=lambda _t: [],
+        read_inventory_fn=brew_owns_rg,
+        which=lambda cmd: str(tmp_path / "brew" / "bin" / cmd),
     )
-    service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
-    expected = owner_label(ownership)
-    assert expected
     app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service)
-    async with app.run_test(size=(100, 30)):
+    async with app.run_test(size=(100, 30)) as pilot:
+        # textual types Worker without a type parameter, so this method's
+        # type is partially unknown under strict pyright. The call is real.
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        resolved = service.ownership_of("rg")
+        assert resolved is not None
+        assert resolved.owner == "brew"
         row_cells = app.catalog._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
-        assert row_cells[7].plain == expected
+        assert row_cells[7].plain == "Homebrew"
         table = app.catalog.query_one(DataTable[Any])
-        assert table.get_cell("rg", "owner").plain == expected
+        assert table.get_cell("rg", "owner").plain == "Homebrew"
 
 
 async def test_nine_column_table_mounts_and_renders_at_the_minimum_size() -> None:

@@ -756,7 +756,8 @@ def test_an_rc_with_an_unresolvable_source_command_still_gets_our_block_and_a_di
     rc_path = tmp_path / ".bashrc"
     shellrc_path.write_text("export FOREIGN_CONTENT=present\n")
     rc_path.write_text('eval "$(brew shellenv)"\n. "$ZDOTDIR/extra"\n')
-    console, buffer = _console()
+    buffer = io.StringIO()
+    console = Console(file=buffer, width=1000, no_color=True)
     assert shellrc.sources_file(rc_path.read_text(), shellrc_path) == "unprovable"
 
     configure_path(
@@ -887,7 +888,8 @@ def test_configure_path_reports_a_consolidation_refusal(tmp_path: Path) -> None:
     shellrc_path.write_text("export FOREIGN_CONTENT=present\n")
     myshellrc.write_text(f'source "{shellrc_path}"\n')
     before = shellrc_path.read_bytes()
-    console, buffer = _console()
+    buffer = io.StringIO()
+    console = Console(file=buffer, width=1000, no_color=True)
 
     outcome = configure_path(
         [],

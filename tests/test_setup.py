@@ -2766,6 +2766,11 @@ def test_interactive_wizard_shares_one_cache_with_the_daemon_policy(
 ) -> None:
     _sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(setup, "detect", _linux_platform)
+
+    def systemd_present(*, which: object) -> bool:
+        return True
+
+    monkeypatch.setattr(setup.systemd_daemon, "systemd_available", systemd_present)
     from installer.enums import DaemonState
     from installer.systemd_daemon import TimerStateCache
 
