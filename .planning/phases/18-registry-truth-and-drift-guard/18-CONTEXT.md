@@ -45,6 +45,7 @@ Out of scope: receipts and health (19); script `paths`/`remove`/`update`/`writab
   - The download context gets a `resolve_release` resolver. `download._resolve_target` takes `github_release` methods through it, so the URL tag and the expected digest come from the same snapshot. A separate digest call would add a second rate-limited read, and "latest" can move between the two reads.
   - Order: pinned checksum → `release.digests[asset]` → "unverified" with a reason. Pinned `app`/`tarball` methods carry a pinned checksum (D-09 writes it), so they never need a digest lookup.
   - A digest mismatch raises the existing `ChecksumMismatch`, so `engine.py`'s fail-fast branch (:146-151) covers it with no new engine logic.
+  - The version refresh stores `Release.digests` in the version cache next to `latest_version`. Phase 19 D-09 adopts pre-receipt raw binaries against these digests, with no new network call.
   - Evidence that the API exposes a digest: `audit-2026-10-13/D-registry-user-part1.md:199` (live 2026-10-13).
 - **D-06 (user):** The smoke run is one shared function (e.g. `smoke(path, argv)`) built on `run_output`/`CommandError`.
   - It fails on exit 126/127, an OSError, or a `GLIBC_`/loader error in stderr.

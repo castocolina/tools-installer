@@ -53,7 +53,7 @@ Scouted 2026-10-13:
      - A corrupt receipt does not crash anything and is treated as unproven.
      - An injected failure between the method and the receipt write leaves the tool present but unproven.
 
-5. **Adoption by checksum (new, user decision)**: A tool present before receipts existed is adopted automatically when the sha256 of its installed file equals the registry's pinned checksum. Otherwise it is adopted only by reinstalling with `r`.
+5. **Adoption by checksum (new, user decision; amended 2026-10-14)**: A raw-binary tool present before receipts existed is adopted automatically when the sha256 of its installed file equals the release digest of its asset, cached by the existing latest-release fetch (no new network call). Archive kinds are adopted by the Phase 17 layout proof instead, because an archive's checksum never matches the extracted binary. Otherwise a tool is adopted only by reinstalling with `r`.
    - Current: Not possible.
    - Target: Adoption writes a receipt during the refresh pass and states it in the reasons.
    - Acceptance: A matching file is adopted and becomes removable. A non-matching file is not adopted and shows the hint "reinstall with r to adopt".
@@ -168,7 +168,7 @@ Scouted 2026-10-13:
 
 | Prohibition (must-NOT statement) | Requirement | Status | Verification / Reason |
 |----------------------------------|-------------|--------|------------------------|
-| MUST NOT adopt a file whose sha256 differs from the pinned checksum | R5 | resolved | test: the non-matching fixture writes no receipt |
+| MUST NOT adopt a file whose sha256 differs from the cached release digest of its asset | R5 | resolved | test: the non-matching fixture writes no receipt |
 | MUST NOT show `✓` while a refresh for the current generation is pending | R1, R3 | resolved | test: the row renders `…` until the pass publishes |
 | MUST NOT treat a corrupt or unreadable receipt as proof | R4, R6 | resolved | test: a corrupt receipt → not removable |
 
