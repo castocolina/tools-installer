@@ -1,8 +1,9 @@
 from pathlib import Path
+from typing import Literal
 
 from installer.diskusage import DiskPressure
-from installer.doctor import DoctorReport
-from installer.enums import DaemonState
+from installer.doctor import BrokenLink, DoctorReport
+from installer.enums import DaemonState, Severity
 from installer.guidance import (
     Guidance,
     competing_mechanism_guidance,
@@ -658,3 +659,69 @@ def test_duplicate_path_guidance_wording_is_unchanged() -> None:
     assert item.severity == "warn"
     assert item.next_step
     assert "new shell" in item.next_step.lower() or "reload" in item.next_step.lower()
+
+
+# --- D-13: broken-link guidance (plan 17-04) ----------------------------------
+
+
+def _link(
+    tmp_path: Path, *, kind: Literal["dangling", "directory"], opt_dir: Path | None
+) -> BrokenLink:
+    bin_dir = tmp_path / ".local" / "bin"
+    name = "subl" if kind == "directory" else "shim"
+    return BrokenLink(
+        path=bin_dir / name,
+        target=str(tmp_path / ".local" / "opt" / "subl" / "sublime_text"),
+        kind=kind,
+        opt_dir=opt_dir,
+    )
+
+
+def _broken_report(link: BrokenLink) -> DoctorReport:
+    return DoctorReport(missing=(), broken=(), duplicated=(), broken_links=(link,))
+
+
+def test_broken_link_guidance_names_the_opt_dir_repair(tmp_path: Path):
+    from installer.locations import opt_dir
+
+    items = doctor_guidance(
+        _broken_report(_link(tmp_path, kind="directory", opt_dir=opt_dir("subl")))
+    )
+    assert len(items) == 1
+    assert items[0].severity == Severity.ERROR
+    assert items[0].title == f"{tmp_path / '.local' / 'bin' / 'subl'} is a broken link"
+    step = items[0].next_step
+    assert str(opt_dir("subl")) in step
+    assert "reinstall subl" in step
+
+
+def test_dangling_link_without_opt_dir_guidance_removes_the_link(tmp_path: Path):
+    link = _link(tmp_path, kind="dangling", opt_dir=None)
+    items = doctor_guidance(_broken_report(link))
+    step = items[0].next_step
+    assert ".local/opt" not in step
+    assert str(link.path) in step or "reinstall the tool that owns it" in step
+    assert items[0].meaning.endswith("nothing.")
+
+
+def test_broken_link_guidance_never_escalates(tmp_path: Path):
+    from installer.locations import opt_dir
+
+    for link in (
+        _link(tmp_path, kind="directory", opt_dir=opt_dir("subl")),
+        _link(tmp_path, kind="dangling", opt_dir=None),
+    ):
+        for item in doctor_guidance(_broken_report(link)):
+            text = f"{item.title} {item.meaning} {item.next_step}"
+            assert "sudo" not in text and "pkexec" not in text and "doas" not in text
+            assert not item.next_step.startswith("Run `make fix`")
+            assert not item.next_step.startswith("Run `make setup`")
+
+
+def test_only_broken_links_is_a_problem(tmp_path: Path):
+    from installer.doctor import has_problems
+
+    report = _broken_report(_link(tmp_path, kind="dangling", opt_dir=None))
+    assert has_problems(report) is True
+    items = doctor_guidance(report)
+    assert not any("healthy" in item.title.lower() for item in items)

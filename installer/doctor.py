@@ -44,7 +44,7 @@ def scan_bin_links(bin_dir: Path) -> tuple[BrokenLink, ...]:
             target = os.readlink(entry)
             resolved = Path(os.path.normpath(os.path.join(entry.parent, target)))
             if resolved.is_dir():
-                kind = "directory"
+                kind: Literal["dangling", "directory"] = "directory"
             elif not resolved.exists():
                 kind = "dangling"
             else:

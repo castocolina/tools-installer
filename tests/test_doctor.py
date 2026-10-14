@@ -126,3 +126,21 @@ def test_run_doctor_reports_broken_links_and_changes_nothing(
     out = " ".join(buf.getvalue().split())  # console wrapping must not hide the words
     assert "opt/subl" in out
     assert "reinstall subl" in out
+
+
+def test_scan_reports_a_dangling_link(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from installer.doctor import scan_bin_links
+    from installer.locations import opt_dir
+
+    _patch_home(monkeypatch, tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "ghost").symlink_to(str(opt_dir("ghost") / "ghost"))
+    (bin_dir / "shim").symlink_to("/elsewhere/x")  # absolute, missing, not in any opt dir
+
+    found = {link.path.name: link for link in scan_bin_links(bin_dir)}
+    assert set(found) == {"ghost", "shim"}
+    assert found["ghost"].kind == "dangling"
+    assert found["ghost"].opt_dir == opt_dir("ghost")
+    assert found["shim"].kind == "dangling"
+    assert found["shim"].opt_dir is None
