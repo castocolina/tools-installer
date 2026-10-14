@@ -121,6 +121,12 @@
     ],
     "gsd-roadmapper": [
       "global:ponytail:ponytail"
+    ],
+    "gsd-advisor-researcher": [
+      "global:jev-fast-decision"
+    ],
+    "gsd-assumptions-analyzer": [
+      "global:jev-fast-decision"
     ]
   },
   "claude_md_path": "./CLAUDE.md",
