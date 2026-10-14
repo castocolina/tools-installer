@@ -121,15 +121,49 @@ def test_run_output_unbounded_by_default(monkeypatch: pytest.MonkeyPatch) -> Non
         capture_output: bool,
         text: bool,
         timeout: float | None,
+        stdin: int,
+        start_new_session: bool,
     ) -> subprocess.CompletedProcess[str]:
         seen.update(
-            {"check": check, "capture_output": capture_output, "text": text, "timeout": timeout}
+            {
+                "check": check,
+                "capture_output": capture_output,
+                "text": text,
+                "timeout": timeout,
+                "stdin": stdin,
+                "start_new_session": start_new_session,
+            }
         )
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     run_output(["anything"])
     assert seen["timeout"] is None
+    # RESEARCH Pitfall 4 closes the update gap in D-10: updates run through
+    # run_captured -> run_output, so update children get closed stdin and a
+    # new session too (SPEC R7 names install AND update children).
+    assert seen["stdin"] is subprocess.DEVNULL
+    assert seen["start_new_session"] is True
+
+
+def test_run_captured_child_runs_in_its_own_session() -> None:
+    # Update children must not be able to grab the terminal either: no
+    # controlling terminal means a prompting child fails fast (D-10, R7).
+    run_captured(
+        [sys.executable, "-c", "import os, sys; sys.exit(0 if os.getsid(0) == os.getpid() else 3)"]
+    )
+
+
+def test_run_captured_tty_reader_fails_fast() -> None:
+    # The alarm is a hang guard only: in its own session the child fails at
+    # once; a regression that blocks on a real terminal would be killed
+    # after 5 s and still fail the elapsed check.
+    start = time.monotonic()
+    with pytest.raises(CommandError):
+        run_captured(
+            [sys.executable, "-c", "import signal; signal.alarm(5); open('/dev/tty').read(1)"]
+        )
+    assert time.monotonic() - start < 5
 
 
 def test_run_output_timeout_fails_fast_instead_of_hanging() -> None:

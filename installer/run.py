@@ -85,7 +85,20 @@ def run_output(cmd: list[str], *, timeout: float | None = None) -> str:
     minutes, and killing it half-way is worse than waiting.
     """
     try:
-        completed = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout)
+        # DEVNULL + a new session close both input paths the child could
+        # block on while a TUI owns the terminal (D-10, RESEARCH Pitfall 4,
+        # SPEC R7: install AND update children). Note: the child no longer
+        # receives the terminal's SIGINT/SIGHUP (accepted — Textual holds
+        # the terminal in raw mode).
+        completed = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
     except subprocess.TimeoutExpired as exc:
         raise CommandError(cmd, TIMEOUT_CODE, detail=f"timed out after {exc.timeout:g}s") from exc
     except subprocess.CalledProcessError as exc:
