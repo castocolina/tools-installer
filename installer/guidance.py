@@ -5,6 +5,7 @@ consume the same Guidance list, so each finding's wording lives in exactly one
 place. `severity` drives color-coding downstream.
 """
 
+import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,6 +120,31 @@ def doctor_guidance(
     if not has_problems(report):
         return [_HEALTHY]
     items: list[Guidance] = []
+    for link in report.broken_links:
+        if link.kind == "directory":
+            points_at = "a directory, not the tool binary itself."
+        else:
+            points_at = "nothing."
+        meaning = f"{link.path} points to {link.target}, which is {points_at}"
+        if link.opt_dir is not None:
+            name = link.opt_dir.name
+            next_step = (
+                f"Remove {link.opt_dir} (rm -rf {shlex.quote(str(link.opt_dir))}), "
+                f"then reinstall {name} from the catalog (make setup)."
+            )
+        else:
+            next_step = (
+                f"Remove the link (rm {shlex.quote(str(link.path))}), "
+                "or reinstall the tool that owns it."
+            )
+        items.append(
+            Guidance(
+                title=f"{link.path} is a broken link",
+                meaning=meaning,
+                next_step=next_step,
+                severity=Severity.ERROR,
+            )
+        )
     for directory in report.broken:
         items.append(
             Guidance(

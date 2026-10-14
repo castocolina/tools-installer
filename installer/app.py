@@ -1,6 +1,7 @@
 """The interactive wizard flow: select -> audit -> confirm -> install -> summarize."""
 
 import contextlib
+import dataclasses
 import os
 import shutil
 from collections.abc import Callable, Iterable, Mapping
@@ -14,7 +15,7 @@ from installer.audit import audit
 from installer.cli import Options
 from installer.deps import resolve_dependencies
 from installer.diskusage import DiskPressure
-from installer.doctor import DoctorReport, audit_path
+from installer.doctor import DoctorReport, audit_path, scan_bin_links
 from installer.engine import install_tool
 from installer.guards import (
     guard_path_warning,
@@ -356,6 +357,7 @@ def doctor_data(
     the PATH audit, the pip/npm-ban status, and the PATH-order warning."""
     bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir, exists)
     report = audit_path(bin_dirs, path_value, exists)
+    report = dataclasses.replace(report, broken_links=scan_bin_links(default_bin_dir))
     status, warning = guard_state(default_bin_dir, path_value, which)
     return report, status, warning
 
