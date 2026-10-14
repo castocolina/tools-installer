@@ -157,10 +157,10 @@
   "effort": {
     "default": "medium",
     "agent_overrides": {
-      "gsd-planner": "high",
-      "gsd-plan-checker": "high",
-      "gsd-code-reviewer": "high",
-      "gsd-ui-auditor": "high"
+      "gsd-planner": "xhigh",
+      "gsd-plan-checker": "xhigh",
+      "gsd-code-reviewer": "xhigh",
+      "gsd-ui-auditor": "xhigh"
     }
   }
 }
