@@ -1,7 +1,9 @@
 """Resolve the latest release tag of a GitHub repository."""
 
 import json
+import os
 import re
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 
@@ -307,8 +309,17 @@ probe_version_output: Callable[[list[str]], str | None] = _default_probe_version
 
 
 def urlopen_fetch(url: str) -> bytes:
-    """Fetch raw bytes from a URL using urllib. Default Fetch implementation."""
-    with urllib.request.urlopen(url, timeout=10) as resp:
+    """Fetch raw bytes from a URL using urllib. Default Fetch implementation.
+
+    A `GITHUB_TOKEN`/`GH_TOKEN` is sent to api.github.com only (never another
+    host): the anonymous limit is 60 requests/hour, which one full-catalog run
+    plus a retry exhausts.
+    """
+    req = urllib.request.Request(url)
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token and urllib.parse.urlsplit(url).hostname == "api.github.com":
+        req.add_header("Authorization", f"Bearer {token}")
+    with urllib.request.urlopen(req, timeout=10) as resp:
         return resp.read()
 
 

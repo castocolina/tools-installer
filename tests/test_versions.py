@@ -1,4 +1,5 @@
 import json
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -73,6 +74,67 @@ def test_urlopen_fetch_reads_body(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(versions.urllib.request, "urlopen", fake_urlopen)
     assert versions.urlopen_fetch("https://example.com") == b'{"tag_name": "v9.9.9"}'
+
+
+def _capture_urlopen(monkeypatch: pytest.MonkeyPatch) -> list[urllib.request.Request]:
+    import installer.versions as versions
+
+    seen: list[urllib.request.Request] = []
+
+    class FakeResp:
+        def __enter__(self) -> "FakeResp":
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def read(self) -> bytes:
+            return b"{}"
+
+    def fake_urlopen(req: urllib.request.Request, timeout: int) -> FakeResp:
+        seen.append(req)
+        return FakeResp()
+
+    monkeypatch.setattr(versions.urllib.request, "urlopen", fake_urlopen)
+    return seen
+
+
+@pytest.mark.parametrize("var", ["GITHUB_TOKEN", "GH_TOKEN"])
+def test_urlopen_fetch_sends_github_token_to_the_github_api(
+    monkeypatch: pytest.MonkeyPatch, var: str
+) -> None:
+    import installer.versions as versions
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv(var, "tok123")
+    seen = _capture_urlopen(monkeypatch)
+    versions.urlopen_fetch("https://api.github.com/repos/a/b/releases/latest")
+    assert seen[0].get_header("Authorization") == "Bearer tok123"
+
+
+def test_urlopen_fetch_never_sends_the_token_to_another_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import installer.versions as versions
+
+    monkeypatch.setenv("GITHUB_TOKEN", "tok123")
+    seen = _capture_urlopen(monkeypatch)
+    versions.urlopen_fetch("https://api.github.com.evil.example/x")
+    versions.urlopen_fetch("https://example.com/api.github.com")
+    assert [r.get_header("Authorization") for r in seen] == [None, None]
+
+
+def test_urlopen_fetch_without_a_token_sends_no_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import installer.versions as versions
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    seen = _capture_urlopen(monkeypatch)
+    versions.urlopen_fetch("https://api.github.com/repos/a/b/releases/latest")
+    assert seen[0].get_header("Authorization") is None
 
 
 def test_parse_version_strips_v_and_zero_fills() -> None:

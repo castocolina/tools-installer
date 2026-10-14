@@ -215,6 +215,7 @@ cmd_bootstrap() {
   record_fedora_release
   install_root_prereqs
   create_tester
+  install_github_token
   copy_workspace
   bootstrap_homebrew_and_uv
   sync_workspace
@@ -255,9 +256,20 @@ run_setup_as_tester() {
 eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"
 export PATH=\"\$HOME/.local/bin:\$PATH\"
 export COLUMNS=2000
+if [[ -r \"\$HOME/.github-token\" ]]; then export GITHUB_TOKEN=\"\$(cat \"\$HOME/.github-token\")\"; fi
 cd /home/tester/workspace
 uv run setup.py ${args}
 "
+}
+
+# Optional: the host's GitHub token lifts the 60 requests/hour anonymous API
+# limit that one full-catalog pass plus a retry exhausts. Streamed over stdin
+# into a 0600 file so it never appears in argv or a transcript.
+install_github_token() {
+  local token="${GITHUB_TOKEN:-}"
+  [[ -n "$token" ]] || token="$(gh auth token 2>/dev/null || true)"
+  [[ -n "$token" ]] || return 0
+  printf '%s' "$token" | ct exec -i "$CONTAINER_NAME" su - tester -c 'umask 077; cat > ~/.github-token'
 }
 
 accumulate_summaries() {
