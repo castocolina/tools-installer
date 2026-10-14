@@ -4950,21 +4950,38 @@ async def test_manual_toggle_of_the_daemon_is_refused_while_the_worker_is_in_fli
 ) -> None:
     fake_run = _FakeDaemonRun()
     policy = _daemon_policy(tmp_path, run=fake_run)
+    release = threading.Event()
+
+    def gated_daemon_default() -> bool:
+        assert release.wait(timeout=30)
+        return ensure_daemon_default(policy)
+
     app = _daemon_app(
         tmp_path,
         policy=policy,
-        daemon_default=lambda: ensure_daemon_default(policy),
+        daemon_default=gated_daemon_default,
     )
-    async with app.run_test(size=(100, 30)) as pilot:
-        assert app.daemon_default_in_flight is True
-        await pilot.press("space")
-        screen = app.screen
-        assert isinstance(screen, PoliciesScreen)
-        assert "wait a moment" in screen.status.text.lower()
-        await _settle_daemon(app, pilot)
-        assert screen.active_state["daemon:prune-tmpdir"] is True
-        bootstrap_calls = [c for c in fake_run.calls if c[:2] == ["launchctl", "bootstrap"]]
-        assert len(bootstrap_calls) == 1
+    try:
+        async with app.run_test(size=(100, 30)) as pilot:
+            # Hold the on-by-default worker open until the test has proven the
+            # refusal; on a slow runner it could otherwise finish before the
+            # first assertion and "in flight" becomes a race (CI run 38656028040).
+            for _ in range(400):
+                if app.daemon_default_in_flight:
+                    break
+                await pilot.pause()
+            assert app.daemon_default_in_flight is True
+            await pilot.press("space")
+            screen = app.screen
+            assert isinstance(screen, PoliciesScreen)
+            assert "wait a moment" in screen.status.text.lower()
+            release.set()
+            await _settle_daemon(app, pilot)
+            assert screen.active_state["daemon:prune-tmpdir"] is True
+            bootstrap_calls = [c for c in fake_run.calls if c[:2] == ["launchctl", "bootstrap"]]
+            assert len(bootstrap_calls) == 1
+    finally:
+        release.set()
 
 
 async def _settle_toggle(screen: PoliciesScreen, pilot: Pilot[list[str] | None]) -> None:
