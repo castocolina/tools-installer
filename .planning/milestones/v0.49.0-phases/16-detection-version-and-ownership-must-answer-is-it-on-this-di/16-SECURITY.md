@@ -78,10 +78,20 @@ created: "2026-10-10"
 | T-16-46 | Tampering | guarding heredoc data as a statement (16-17, IN-01) | medium | mitigate | `installer/rcclean.py::_path_line_targets` skips heredoc bodies (opener validated on code text via `_code_text`); `tests/test_rcclean.py::test_heredoc_body_is_not_a_path_writer` | closed |
 | T-16-47 | Information Disclosure | refusal text naming paths (16-17, WR-01/IN-14) | low | accept | See Accepted Risks Log | closed |
 | T-16-48 | Denial of Service | unreadable rc.d entry aborting the scan (16-17, IN-06) | low | mitigate | `installer/locations.py::path_scan_rc_paths` treats an `OSError` from `is_file()` as "not a file" and skips the entry; `tests/test_locations.py::test_path_scan_skips_an_unreadable_bashrc_d_entry` | closed |
-| T-16-SC (x17) | Tampering | npm/pip/cargo installs (plans 16-01..16-17) | high | accept | See Accepted Risks Log | closed |
+| T-16-SC (x19) | Tampering | npm/pip/cargo installs (plans 16-01..16-19) | high | accept | See Accepted Risks Log | closed |
+| T-16-49 (16-18) | Spoofing | handoff lines read as one sequence (WR-04) | medium | mitigate | `installer/skill_lifecycle.py::_filtered_install_lines` emits a framing header and a `SKILL_HARNESS_LABELS` label per host block; `tests/test_skill_lifecycle.py::test_superpowers_install_on_claude_only_host_is_framed_and_labeled` | closed |
+| T-16-50 (16-18) | Spoofing | wrong or `unknown` owner label on two-copy hosts (IN-10) | low | mitigate | `installer/ownership.py::resolve_ownership` treats a non-active location-proven candidate as a shadow, so native/OS attribution still resolves; `tests/test_ownership.py::test_non_active_script_location_shadows_instead_of_blocking_os_package` | closed |
+| T-16-51 (16-18) | Tampering | probe declaration silently ignored or collapsed (IN-17, IN-18) | low | mitigate | `installer/skill_lifecycle.py::_install_state_status` answers `unknown` for an unknown `match` (`INSTALL_STATE_FILES` closed table) and `installer/model.py::_parse_status_probes` raises on a repeated harness; `tests/test_skill_lifecycle.py::test_install_state_probe_honors_match`, `tests/test_model.py::test_duplicate_status_probe_harness_fails_at_load` | closed |
+| T-16-52 | Repudiation | status text claims certainty on stale data (IN-15) | low | mitigate | `installer/catalog_tui.py::action_update_tool` qualifies stale-current rows with "current as of the last check"; `tests/test_catalog_tui.py::test_update_on_stale_current_qualifies_the_last_check` | closed |
+| T-16-53 | Elevation of Privilege | none introduced (16-18) | low | accept | See Accepted Risks Log | closed |
+| T-16-49 (16-19) | Tampering / Repudiation | `_judge_line` skip hiding a persistent writer (NR-02) | medium | mitigate | `installer/rcclean.py::_judge_line` keeps an `export PATH=...` line with a command suffix as a writer (`_EXPORT_WORD`); `tests/test_rcclean.py::test_export_path_with_extra_assignments_is_a_persistent_writer` | closed |
+| T-16-50 (16-19) | Tampering | guarding or stripping an `export PATH=... EXTRA=1` line (NR-02) | medium | mitigate | Same record is non-`simple`, so `_guard_refusal` answers the compound text and `find_duplicate_path_lines` skips it; `tests/test_rcclean.py::test_export_path_with_extra_assignments_is_a_persistent_writer` | closed |
+| T-16-51 (16-19) | Spoofing (misleading UI) | post-apply Doctor text (NR-01) | low | mitigate | `installer/wizard_app.py::_tui_guidance` applies the ordered `_POST_APPLY_REWRITES` built from `installer/guidance.py::GUARD_ENTER_HINT`/`SAFE_FIX_ENTER_HINT`; `tests/test_wizard_app.py::test_doctor_drops_inert_enter_hint_after_apply` | closed |
+
+16-18 and 16-19 both numbered T-16-49..T-16-51; the plan in parentheses tells them apart.
 
 *Status: open · closed · open — below high threshold (non-blocking)*
-*Total register rows: 65 (T-16-01..T-16-48 = 48, plus one T-16-SC per plan = 17).*
+*Total register rows: 75 (T-16-01..T-16-53 with the 16-19 qualifiers = 56, plus one T-16-SC per plan = 19).*
 
 ---
 
@@ -96,8 +106,9 @@ created: "2026-10-10"
 | AR-16-05 | T-16-29 | kitty vendor script has the same trust model as uv, bun, volta, claude (official HTTPS channel) | plan 16-10 | 2026-10-10 |
 | AR-16-06 | T-16-36 | Cache holds host names and pack ids in the user's own cache dir | plan 16-12 | 2026-10-10 |
 | AR-16-07 | T-16-41 | Reason text comes from trusted registry/code constants, rendered via `Text` | plan 16-14 | 2026-10-10 |
-| AR-16-08 | T-16-SC | No plan installs a package; verified `git diff` shows no change to `pyproject.toml`/lock files | plans 16-01..16-17 | 2026-10-10 |
+| AR-16-08 | T-16-SC | No plan installs a package; verified `git diff` shows no change to `pyproject.toml`/lock files | plans 16-01..16-19 | 2026-10-14 |
 | AR-16-09 | T-16-47 | Guard and refusal texts name only the rc path and its `.tools-installer.old` sibling the user already owns; no file content is echoed | plan 16-17 | 2026-10-14 |
+| AR-16-10 | T-16-53 | No sudo, no new executors, no shell strings; the by_harness handoff lines remain display-only and execute nothing | plan 16-18 | 2026-10-14 |
 
 Residual note (not a threat, not counted): review finding IN-01 (`installer/rcclean.py:283`) can treat a heredoc body line that looks like a plain PATH prepend as guardable. The rewrite still goes through the per-file confirm modal, the exact-text recheck, the exclusive backup and the no-delete rule, and the replacement is the managed `path_export_guard`, so the impact is a changed line inside a generated file the user confirmed, with a recoverable backup. Below the `high` block threshold. Recommend fixing with WR-01.
 
@@ -109,6 +120,7 @@ Residual note (not a threat, not counted): review finding IN-01 (`installer/rccl
 |------------|---------------|--------|------|--------|
 | 2026-10-10 | 60 | 60 | 0 | Claude Code (secure-phase, inline) |
 | 2026-10-14 | 65 | 65 | 0 | pi (17-12 re-audit, gap plan 16-17) |
+| 2026-10-14 | 75 | 75 | 0 | pi (17-12 re-audit, gap plans 16-18 and 16-19) |
 
 ---
 

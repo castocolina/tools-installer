@@ -58,6 +58,18 @@ audited: "2026-10-14"
 | 16-17-04 | 16-17 | 8 | D-24 | T-16-47 | A second guard of the same rc file refuses with guard wording and leaves both files unchanged | unit | `uv run pytest tests/test_shellrc.py -q` | ✅ | ✅ green |
 | 16-17-05 | 16-17 | 8 | D-24 | T-16-48 | An unreadable ~/.bashrc.d entry is skipped; the rest of the PATH scan is returned | unit | `uv run pytest tests/test_locations.py -q` | ✅ | ✅ green |
 | 16-17-06 | 16-17 | 8 | D-21/D-22/D-23/D-24 | — | Gate run: whole suite with coverage | suite | `make test` | ✅ | ✅ green |
+| 16-18-01 | 16-18 | 9 | D-02 | — | A skill pack with no status_probes takes presence from the PATH answer (Inst, group, Ver agree) | unit | `uv run pytest tests/test_catalog_tui.py -q` | ✅ | ✅ green |
+| 16-18-02 | 16-18 | 9 | D-14 | T-16-49 (16-18) | by_harness install handoff is framed, host-labeled, and marks the Claude alternative | unit | `uv run pytest tests/test_skill_lifecycle.py tests/test_registry.py tests/test_model.py tests/test_engine.py -q` | ✅ | ✅ green |
+| 16-18-03 | 16-18 | 9 | D-15 | T-16-51 (16-18) | An unknown install-state match is unknown; a duplicated status_probes harness fails at load | unit | `uv run pytest tests/test_skill_lifecycle.py tests/test_model.py tests/test_registry.py -q` | ✅ | ✅ green |
+| 16-18-04 | 16-18 | 9 | D-06 | T-16-50 (16-18) | A non-active script or sdkman location copy shadows instead of blocking OS-package ownership | unit | `uv run pytest tests/test_ownership.py tests/test_catalog_tui.py tests/test_version_status.py tests/test_status.py -q` | ✅ | ✅ green |
+| 16-18-05 | 16-18 | 9 | D-16 | — | After apply, Doctor drops the inert enter hint, including a mid-string block-owner record | unit | `uv run pytest tests/test_wizard_app.py tests/test_guidance.py -q` | ✅ | ✅ green |
+| 16-18-06 | 16-18 | 9 | D-17 | T-16-52 | `u` on a stale current row says current as of the last check; a fresh current row is unchanged | unit | `uv run pytest tests/test_catalog_tui.py -q` | ✅ | ✅ green |
+| 16-18-07 | 16-18 | 9 | D-19 | — | Comment-only registry edit (alacritty comment); verified by the registry load tests | unit | `uv run pytest tests/test_registry.py tests/test_model.py -q` | ✅ | ✅ green |
+| 16-18-08 | 16-18 | 9 | D-02/D-05/D-06/D-14/D-15/D-16/D-17/D-19 | — | Gate run: whole suite with coverage | suite | `make test` | ✅ | ✅ green |
+| 16-19-01 | 16-19 | 10 | D-21 | T-16-49 (16-19) | An `export PATH=... EXTRA=1` line is a persistent writer again, not guardable, never a strip candidate | unit | `uv run pytest tests/test_rcclean.py tests/test_guidance.py -q` | ✅ | ✅ green |
+| 16-19-02 | 16-19 | 10 | D-24 | T-16-51 (16-19) | Enter-hint literals live once in guidance.py; CLI and pre-apply TUI bytes unchanged | unit | `uv run pytest tests/test_guidance.py tests/test_wizard_app.py -q` | ✅ | ✅ green |
+| 16-19-03 | 16-19 | 10 | D-22 | T-16-50 (16-19) | Post-apply Doctor next_step strings are clean for guard, block-owner, and make-fix items | unit | `uv run pytest tests/test_wizard_app.py tests/test_guidance.py -q` | ✅ | ✅ green |
+| 16-19-04 | 16-19 | 10 | D-21/D-22/D-23/D-24 | — | Gate run: whole suite with coverage | suite | `make test` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -93,6 +105,8 @@ All 10 map commands above re-run green. Every decision is mapped to existing aut
 | D-24 | COVERED | `test_wizard_app.py::test_doctor_guard_chain_confirms_files_in_record_order`, `::test_doctor_guard_no_skips_without_calling_guard_file` |
 
 Open (not Phase 16 test gaps): code-review WR-01 (`installer/shellrc.py:1184`) and IN-01 (`installer/rcclean.py:283`) have no regression tests yet; they are unfixed findings.
+
+Re-audit (2026-10-14): plans 16-17 (6 tasks), 16-18 (8 tasks) and 16-19 (4 tasks) were appended to this map and every row's command was re-run green on the current tree — 16 narrow `uv run pytest` commands and 3 `make test` gate runs, all passing (3467 passed, 4 skipped; coverage 95.87%).
 
 ---
 
