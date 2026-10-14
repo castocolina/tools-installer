@@ -1243,11 +1243,17 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
     seen_none = False
     checked = 0
     stop = threading.Event()
-    _PASSES = 40
+    reader_ready = threading.Event()
+    _MAX_PASSES = 20_000
 
     def writer() -> None:
         try:
-            for _ in range(_PASSES):
+            # Do not start before the reader is looping: on a slow runner a
+            # head start would let every pass finish before the reader is
+            # scheduled once, and the overlap this test exists to create
+            # would never happen. Bounded by the event timeout, not by luck.
+            assert reader_ready.wait(timeout=30)
+            for _ in range(_MAX_PASSES):
                 service.refresh([tool])
                 # Published by `refresh` itself; this only records WHICH
                 # object landed, so the reader can name the expectation.
@@ -1263,6 +1269,8 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
                 time.sleep(0)
                 service.invalidate(reason="loop")
                 time.sleep(0)
+                if seen_record and seen_none and checked > 0:
+                    break
         except BaseException as exc:  # noqa: BLE001 -- collected for the join
             errors.append(exc)
         finally:
@@ -1271,6 +1279,7 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
     def reader() -> None:
         nonlocal seen_record, seen_none, checked
         try:
+            reader_ready.set()
             while not stop.is_set():
                 before = service.epoch
                 observed = service.ownership_of(tool.id)
@@ -1291,8 +1300,8 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
 
     reader_thread = threading.Thread(target=reader)
     writer_thread = threading.Thread(target=writer)
-    writer_thread.start()
     reader_thread.start()
+    writer_thread.start()
     writer_thread.join(timeout=30)
     reader_thread.join(timeout=30)
 
