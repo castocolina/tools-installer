@@ -17,7 +17,7 @@ from installer.atomic import (
     staged_sibling,
 )
 from installer.checksums import ChecksumMismatch, expected_sha256, sha256_file
-from installer.executors import ExecutorError, require_str
+from installer.executors import ExecutorError, link_executable, require_str
 from installer.locations import bin_dir, ensure_dir, opt_dir
 from installer.model import Method
 from installer.platform import Platform
@@ -186,8 +186,7 @@ def _install_unverified(
             f" --strip-components={strip}"
         )
     ctx.runner(["sh", "-c", extract])
-    ctx.runner(["chmod", "+x", str(binary)])
-    ctx.runner(["ln", "-sf", str(binary), str(link)])
+    link_executable(binary, link, target.member)
 
 
 def _install_verified(

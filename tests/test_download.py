@@ -39,8 +39,9 @@ def test_github_release_archive_extracts_to_opt_and_symlinks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    calls, runner = _record()
     bin_dir = tmp_path / "bin"
+    member = tmp_path / ".local" / "opt" / "rg" / "rg"
+    calls, runner = fixture_runner(None, {}, member=member)
     method = Method(
         kind="github_release",
         params={
@@ -53,7 +54,6 @@ def test_github_release_archive_extracts_to_opt_and_symlinks(
     )
     install_download(method, _ctx(runner, tmp_version="15.1.0"))
     opt = tmp_path / ".local" / "opt" / "rg"
-    binary = opt / "rg"
     link = bin_dir / "rg"
     url = (
         "https://github.com/BurntSushi/ripgrep/releases/download/"
@@ -64,11 +64,9 @@ def test_github_release_archive_extracts_to_opt_and_symlinks(
         f' && curl -fsSL -o "$tmp" -- {shlex.quote(url)}'
         f' && tar -xzf "$tmp" -C {shlex.quote(str(opt))} --strip-components=1'
     )
-    assert calls == [
-        ["sh", "-c", extract],
-        ["chmod", "+x", str(binary)],
-        ["ln", "-sf", str(binary), str(link)],
-    ]
+    assert calls == [["sh", "-c", extract]]
+    assert link.is_symlink()
+    assert os.readlink(link) == str(member)
     assert opt.is_dir()
 
 
@@ -76,8 +74,9 @@ def test_archive_nested_member_uses_basename_for_link_and_opt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    calls, runner = _record()
     bin_dir = tmp_path / "bin"
+    member = tmp_path / ".local" / "opt" / "gh" / "bin" / "gh"
+    calls, runner = fixture_runner(None, {}, member=member)
     method = Method(
         kind="github_release",
         params={
@@ -89,26 +88,25 @@ def test_archive_nested_member_uses_basename_for_link_and_opt(
         },
     )
     install_download(method, _ctx(runner, tmp_version="v2.93.0"))
-    opt = tmp_path / ".local" / "opt" / "gh"
-    binary = opt / "bin" / "gh"
     link = bin_dir / "gh"
-    assert ["chmod", "+x", str(binary)] in calls
-    assert ["ln", "-sf", str(binary), str(link)] in calls
+    assert link.is_symlink()
+    assert os.readlink(link) == str(member)
+    assert not any(cmd and cmd[0] in {"ln", "chmod"} for cmd in calls)
 
 
 def test_tarball_uses_url_verbatim_and_strip_defaults_to_zero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    calls, runner = _record()
     bin_dir = tmp_path / "bin"
+    member = tmp_path / ".local" / "opt" / "eza" / "eza"
+    calls, runner = fixture_runner(None, {}, member=member)
     method = Method(
         kind="tarball",
         params={"url": "https://x/eza.tar.gz", "member": "eza", "bin_dir": str(bin_dir)},
     )
     install_download(method, _ctx(runner))
     opt = tmp_path / ".local" / "opt" / "eza"
-    binary = opt / "eza"
     link = bin_dir / "eza"
     # The tarball URL is used verbatim (no resolution), and strip defaults to 0.
     extract = (
@@ -116,11 +114,9 @@ def test_tarball_uses_url_verbatim_and_strip_defaults_to_zero(
         f' && curl -fsSL -o "$tmp" -- {shlex.quote("https://x/eza.tar.gz")}'
         f' && tar -xzf "$tmp" -C {shlex.quote(str(opt))} --strip-components=0'
     )
-    assert calls == [
-        ["sh", "-c", extract],
-        ["chmod", "+x", str(binary)],
-        ["ln", "-sf", str(binary), str(link)],
-    ]
+    assert calls == [["sh", "-c", extract]]
+    assert link.is_symlink()
+    assert os.readlink(link) == str(member)
 
 
 def test_tar_flag_covers_gzip_default_and_xz_for_all_three_extract_sites() -> None:
@@ -142,8 +138,9 @@ def test_tarball_archive_xz_uses_tar_capital_j_flag(
     only ship `.tar.xz`, not `.tar.gz` -- `archive = "xz"` must extract with
     `tar -xJf`, not the gzip-only `-xzf` every other tarball entry uses."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    calls, runner = _record()
     bin_dir = tmp_path / "bin"
+    member = tmp_path / ".local" / "opt" / "sublime_text" / "sublime_text"
+    calls, runner = fixture_runner(None, {}, member=member)
     method = Method(
         kind="tarball",
         params={
@@ -155,50 +152,129 @@ def test_tarball_archive_xz_uses_tar_capital_j_flag(
     )
     install_download(method, _ctx(runner))
     opt = tmp_path / ".local" / "opt" / "sublime_text"
-    binary = opt / "sublime_text"
     link = bin_dir / "sublime_text"
     extract = (
         "tmp=$(mktemp) && trap 'rm -f \"$tmp\"' EXIT"
         f' && curl -fsSL -o "$tmp" -- {shlex.quote("https://x/sublime_text.tar.xz")}'
         f' && tar -xJf "$tmp" -C {shlex.quote(str(opt))} --strip-components=0'
     )
-    assert calls == [
-        ["sh", "-c", extract],
-        ["chmod", "+x", str(binary)],
-        ["ln", "-sf", str(binary), str(link)],
-    ]
+    assert calls == [["sh", "-c", extract]]
+    assert link.is_symlink()
+    assert os.readlink(link) == str(member)
 
 
-def test_tarball_bin_name_overrides_the_symlink_name(
+def test_unverified_archive_with_a_directory_member_links_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    """Regression: Sublime Text's Linux tarball ships only a `sublime_text`
-    binary, no `subl` alongside it -- `bin_name` must let the registry expose
-    it on PATH under the name `tool.cmd` ("subl") actually expects."""
+) -> None:
+    """A directory extracted as the member is not a binary: link nothing."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    calls, runner = _record()
+    member = tmp_path / ".local" / "opt" / "tool" / "tool"
+    calls, runner = fixture_runner(None, {}, member=member)
     bin_dir = tmp_path / "bin"
     method = Method(
         kind="tarball",
+        params={"url": "https://x/tool.tar.gz", "member": "tool", "bin_dir": str(bin_dir)},
+    )
+
+    def plant_directory(cmd: list[str]) -> None:
+        runner(cmd)
+        if _is_extraction(cmd):
+            member.unlink()
+            member.mkdir()
+
+    with pytest.raises(ExecutorError, match="tool"):
+        install_download(method, _ctx(plant_directory))
+    assert member.is_dir()
+    assert not (bin_dir / "tool").exists()
+    assert not (bin_dir / "tool").is_symlink()
+    assert not any(cmd and cmd[0] in {"ln", "chmod"} for cmd in calls)
+
+
+def test_unverified_archive_links_the_member_file_atomically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A regular-file member becomes one symlink, chmod'd in process, never via ln."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    member = tmp_path / ".local" / "opt" / "eza" / "eza"
+    calls, runner = fixture_runner(None, {}, member=member)
+    bin_dir = tmp_path / "bin"
+    method = Method(
+        kind="tarball",
+        params={"url": "https://x/eza.tar.gz", "member": "eza", "bin_dir": str(bin_dir)},
+    )
+    install_download(method, _ctx(runner))
+    link = bin_dir / "eza"
+    assert link.is_symlink()
+    assert os.readlink(link) == str(member)
+    assert member.stat().st_mode & 0o777 == 0o755
+    assert not any(cmd and cmd[0] in {"ln", "chmod"} for cmd in calls)
+
+
+def test_reinstall_over_a_link_to_a_directory_leaves_its_files_byte_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Replacing a link-to-directory must replace the link, never write inside it."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt = tmp_path / ".local" / "opt" / "subl"
+    planted = opt / "sublime_text"
+    inner = planted / "inner"
+    inner.parent.mkdir(parents=True)
+    inner.write_bytes(b"keep-me")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    os.symlink(str(planted), bin_dir / "subl")
+    member = opt / "sublime_text" / "sublime_text"
+    calls, runner = fixture_runner(None, {}, member=member)
+    method = Method(
+        kind="tarball",
         params={
-            "url": "https://download.sublimetext.com/sublime_text_build_4200_x64.tar.xz",
-            "member": "sublime_text",
+            "url": "https://x/sublime_text.tar.xz",
+            "member": "sublime_text/sublime_text",
             "bin_name": "subl",
             "archive": "xz",
             "bin_dir": str(bin_dir),
         },
     )
     install_download(method, _ctx(runner))
-    opt = tmp_path / ".local" / "opt" / "subl"
-    binary = opt / "sublime_text"
+    assert inner.read_bytes() == b"keep-me"
+    assert sorted(path.name for path in planted.iterdir()) == ["inner", "sublime_text"]
     link = bin_dir / "subl"
-    assert calls[-1] == ["ln", "-sf", str(binary), str(link)]
-    assert link.name == "subl"
+    assert link.is_symlink()
+    assert os.readlink(link) == str(member)
+    assert not any(cmd and cmd[0] in {"ln", "chmod"} for cmd in calls)
+
+
+def test_tarball_bin_name_overrides_the_symlink_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression: Sublime Text's Linux tarball ships the executable nested as
+    `sublime_text/sublime_text`, with no `subl` alongside it -- `bin_name` must
+    expose that file on PATH as `tool.cmd` ("subl")."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    member = tmp_path / ".local" / "opt" / "subl" / "sublime_text" / "sublime_text"
+    calls, runner = fixture_runner(None, {}, member=member)
+    bin_dir = tmp_path / "bin"
+    method = Method(
+        kind="tarball",
+        params={
+            "url": "https://download.sublimetext.com/sublime_text_build_4200_x64.tar.xz",
+            "member": "sublime_text/sublime_text",
+            "bin_name": "subl",
+            "archive": "xz",
+            "bin_dir": str(bin_dir),
+        },
+    )
+    install_download(method, _ctx(runner))
+    link = bin_dir / "subl"
+    assert link.is_symlink()
+    assert os.readlink(link) == str(member)
+    assert not any(cmd and cmd[0] in {"ln", "chmod"} for cmd in calls)
 
 
 def test_github_release_bare_tag_no_v_in_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    calls, runner = _record()
+    member = tmp_path / ".local" / "opt" / "rg" / "rg"
+    calls, runner = fixture_runner(None, {}, member=member)
     bin_dir = tmp_path / "bin"
     method = Method(
         kind="github_release",
@@ -338,8 +414,9 @@ def test_member_is_rendered_with_ver_and_arch_tokens(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    calls, runner = _record()
     bin_dir = tmp_path / "bin"
+    member = tmp_path / ".local" / "opt" / "bun" / "bun-linux-amd64" / "bun"
+    calls, runner = fixture_runner(None, {}, member=member)
     method = Method(
         kind="github_release",
         params={
@@ -351,19 +428,19 @@ def test_member_is_rendered_with_ver_and_arch_tokens(
         },
     )
     install_download(method, _ctx(runner, tmp_version="bun-v1.1.38"))
-    opt = tmp_path / ".local" / "opt" / "bun"  # link/opt key is the basename
-    binary = opt / "bun-linux-amd64" / "bun"  # {arch.deb} rendered
     link = bin_dir / "bun"
-    assert ["chmod", "+x", str(binary)] in calls
-    assert ["ln", "-sf", str(binary), str(link)] in calls
+    assert link.is_symlink()
+    assert os.readlink(link) == str(member)  # {arch.deb} rendered
+    assert not any(cmd and cmd[0] in {"ln", "chmod"} for cmd in calls)
 
 
 def test_github_release_zip_uses_unzip_and_ignores_strip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    calls, runner = _record()
     bin_dir = tmp_path / "bin"
+    member = tmp_path / ".local" / "opt" / "deno" / "deno"
+    calls, runner = fixture_runner(None, {}, member=member)
     method = Method(
         kind="github_release",
         params={
@@ -377,7 +454,6 @@ def test_github_release_zip_uses_unzip_and_ignores_strip(
     )
     install_download(method, _ctx(runner, tmp_version="v2.1.4"))
     opt = tmp_path / ".local" / "opt" / "deno"
-    binary = opt / "deno"
     link = bin_dir / "deno"
     url = (
         "https://github.com/denoland/deno/releases/download/"
@@ -388,17 +464,17 @@ def test_github_release_zip_uses_unzip_and_ignores_strip(
         f' && curl -fsSL -o "$tmp" -- {shlex.quote(url)}'
         f' && unzip -q -o "$tmp" {shlex.quote("deno")} -d {shlex.quote(str(opt))}'
     )
-    assert calls == [
-        ["sh", "-c", extract],
-        ["chmod", "+x", str(binary)],
-        ["ln", "-sf", str(binary), str(link)],
-    ]
+    assert calls == [["sh", "-c", extract]]
+    assert link.is_symlink()
+    assert os.readlink(link) == str(member)
 
 
 def test_zip_extracts_only_the_nested_member(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    calls, runner = _record()
     bin_dir = tmp_path / "bin"
+    member_rel = "x86_64-unknown-linux-gnu/broot"  # {arch.machine} rendered for amd64
+    binary = tmp_path / ".local" / "opt" / "broot" / member_rel
+    calls, runner = fixture_runner(None, {}, member=binary)
     method = Method(
         kind="github_release",
         params={
@@ -411,24 +487,24 @@ def test_zip_extracts_only_the_nested_member(tmp_path: Path, monkeypatch: pytest
     )
     install_download(method, _ctx(runner, tmp_version="v1.57.0"))
     opt = tmp_path / ".local" / "opt" / "broot"
-    member = "x86_64-unknown-linux-gnu/broot"  # {arch.machine} rendered for amd64
-    binary = opt / member
     url = "https://github.com/Canop/broot/releases/download/v1.57.0/broot_1.57.0.zip"
     extract = (
         "tmp=$(mktemp) && trap 'rm -f \"$tmp\"' EXIT"
         f' && curl -fsSL -o "$tmp" -- {shlex.quote(url)}'
-        f' && unzip -q -o "$tmp" {shlex.quote(member)} -d {shlex.quote(str(opt))}'
+        f' && unzip -q -o "$tmp" {shlex.quote(member_rel)} -d {shlex.quote(str(opt))}'
     )
-    assert calls[0] == ["sh", "-c", extract]
-    assert ["chmod", "+x", str(binary)] in calls
-    assert ["ln", "-sf", str(binary), str(bin_dir / "broot")] in calls
+    assert calls == [["sh", "-c", extract]]
+    link = bin_dir / "broot"
+    assert link.is_symlink()
+    assert os.readlink(link) == str(binary)
 
 
 def test_install_download_returns_false_when_unverified(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    _, runner = _record()
+    member = tmp_path / ".local" / "opt" / "eza" / "eza"
+    _, runner = fixture_runner(None, {}, member=member)
     method = Method(
         kind="tarball",
         params={"url": "https://x/eza.tar.gz", "member": "eza", "bin_dir": str(tmp_path / "bin")},
@@ -477,15 +553,33 @@ def _workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return workdir
 
 
-def _fixture_runner(workdir: Path, files: dict[str, bytes]) -> tuple[list[list[str]], Runner]:
-    """Record argv; when the fetch command runs, drop the given files into workdir."""
+def _is_extraction(cmd: list[str]) -> bool:
+    """True when this recorded call is the archive extraction step."""
+    if not cmd:
+        return False
+    if cmd[0] in {"tar", "unzip"}:
+        return True
+    if cmd[0] != "sh" or len(cmd) < 3:
+        return False
+    script = cmd[2]
+    return " tar " in script or "unzip " in script or "ditto " in script
+
+
+def fixture_runner(
+    workdir: Path | None, files: dict[str, bytes], *, member: Path | None = None
+) -> tuple[list[list[str]], Runner]:
+    """Record argv. A curl fetch drops `files` into `workdir`; an extraction
+    materializes `member` as a regular file when one is given."""
     calls: list[list[str]] = []
 
     def runner(cmd: list[str]) -> None:
         calls.append(cmd)
-        if cmd[0] == "sh" and "curl" in cmd[2]:
+        if workdir is not None and cmd[0] == "sh" and len(cmd) >= 3 and "curl" in cmd[2]:
             for name, content in files.items():
                 (workdir / name).write_bytes(content)
+        if member is not None and _is_extraction(cmd):
+            member.parent.mkdir(parents=True, exist_ok=True)
+            member.write_bytes(b"member-bytes")
 
     return calls, runner
 
@@ -528,7 +622,7 @@ def test_verified_archive_fetches_verifies_and_extracts(
     workdir = _workdir(tmp_path, monkeypatch)
     payload = b"archive-bytes"
     sums = f"{hashlib.sha256(payload).hexdigest()}  {RG_ASSET}\n".encode()
-    calls, runner = _fixture_runner(workdir, {RG_ASSET: payload, f"{RG_ASSET}.sha256": sums})
+    calls, runner = fixture_runner(workdir, {RG_ASSET: payload, f"{RG_ASSET}.sha256": sums})
     bindir = tmp_path / "bin"
     assert install_download(_rg_method(bindir), _ctx(runner, tmp_version="15.1.0")) is True
     opt = tmp_path / ".local" / "opt" / "rg"
@@ -551,7 +645,7 @@ def test_verified_mismatch_raises_and_cleans_up(tmp_path: Path, monkeypatch: pyt
     workdir = _workdir(tmp_path, monkeypatch)
     sums = f"{'0' * 64}  {RG_ASSET}\n".encode()  # wrong digest
     files = {RG_ASSET: b"archive-bytes", f"{RG_ASSET}.sha256": sums}
-    calls, runner = _fixture_runner(workdir, files)
+    calls, runner = fixture_runner(workdir, files)
     with pytest.raises(ChecksumMismatch) as excinfo:
         install_download(_rg_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
     assert excinfo.value.asset == RG_ASSET
@@ -566,7 +660,7 @@ def test_verified_missing_entry_is_ordinary_executor_error(
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     workdir = _workdir(tmp_path, monkeypatch)
     sums = f"{'0' * 64}  some-other-asset.tar.gz\n".encode()
-    _, runner = _fixture_runner(workdir, {RG_ASSET: b"x", f"{RG_ASSET}.sha256": sums})
+    _, runner = fixture_runner(workdir, {RG_ASSET: b"x", f"{RG_ASSET}.sha256": sums})
     with pytest.raises(ExecutorError, match="no sha256 entry"):
         install_download(_rg_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
     assert not workdir.exists()
@@ -577,7 +671,7 @@ def test_verified_unreadable_checksum_file_is_executor_error(
 ):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     workdir = _workdir(tmp_path, monkeypatch)
-    _, runner = _fixture_runner(workdir, {RG_ASSET: b"x"})  # checksum file never written
+    _, runner = fixture_runner(workdir, {RG_ASSET: b"x"})  # checksum file never written
     with pytest.raises(ExecutorError, match="cannot read checksum file"):
         install_download(_rg_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
 
@@ -588,7 +682,7 @@ def test_verified_missing_asset_file_is_executor_error(
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     workdir = _workdir(tmp_path, monkeypatch)
     sums = f"{'0' * 64}  {RG_ASSET}\n".encode()
-    _, runner = _fixture_runner(workdir, {f"{RG_ASSET}.sha256": sums})  # asset never written
+    _, runner = fixture_runner(workdir, {f"{RG_ASSET}.sha256": sums})  # asset never written
     with pytest.raises(ExecutorError, match="cannot hash downloaded asset"):
         install_download(_rg_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
 
@@ -599,7 +693,7 @@ def test_verified_raw_copies_from_temp_into_bin(tmp_path: Path, monkeypatch: pyt
     asset = "yq_linux_amd64"
     payload = b"raw-binary"
     sums = f"{hashlib.sha256(payload).hexdigest()}  {asset}\n".encode()
-    calls, runner = _fixture_runner(workdir, {asset: payload, "checksums.txt": sums})
+    calls, runner = fixture_runner(workdir, {asset: payload, "checksums.txt": sums})
     bindir = tmp_path / "bin"
     method = Method(
         kind="github_release",
@@ -625,7 +719,7 @@ def test_verified_zip_extracts_member_from_temp(tmp_path: Path, monkeypatch: pyt
     asset = "deno-x86_64-unknown-linux-gnu.zip"
     payload = b"zip-bytes"
     sums = f"{hashlib.sha256(payload).hexdigest()}  {asset}\n".encode()
-    calls, runner = _fixture_runner(workdir, {asset: payload, f"{asset}.sha256sum": sums})
+    calls, runner = fixture_runner(workdir, {asset: payload, f"{asset}.sha256sum": sums})
     bindir = tmp_path / "bin"
     method = Method(
         kind="github_release",
@@ -658,7 +752,7 @@ def test_verified_opt_dir_creation_failure_raises_executor_error(
     blocker.write_text("not a directory")
     payload = b"archive-bytes"
     sums = f"{hashlib.sha256(payload).hexdigest()}  {RG_ASSET}\n".encode()
-    _, runner = _fixture_runner(workdir, {RG_ASSET: payload, f"{RG_ASSET}.sha256": sums})
+    _, runner = fixture_runner(workdir, {RG_ASSET: payload, f"{RG_ASSET}.sha256": sums})
     with pytest.raises(ExecutorError, match="opt dir"):
         install_download(_rg_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
 

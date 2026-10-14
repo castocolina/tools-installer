@@ -11,6 +11,7 @@ from pathlib import Path
 from shutil import which
 from typing import cast
 
+from installer.atomic import replace_symlink
 from installer.guards import real_pnpm, shell_path
 from installer.host_setup import HOST_SETUPS
 from installer.locations import applications_dir
@@ -43,6 +44,24 @@ def require_str(method: Method, key: str) -> str:
     if not isinstance(value, str) or not value:
         raise ExecutorError(f"method '{method.kind}' is missing or empty required param '{key}'")
     return value
+
+
+def link_executable(binary: Path, link: Path, member: str, *, chmod: bool = True) -> None:
+    """Point `link` at a regular file `binary`, replacing any existing link.
+
+    A directory member (or anything else that is not a regular file) raises
+    before any mode change or link write, so a later install cannot follow a
+    link-to-directory into the opt dir. `chmod` stays off for a bundle CLI,
+    whose mode the archive already set.
+    """
+    if not binary.is_file():
+        raise ExecutorError(f"archive member '{member}' is not a regular file: {binary}")
+    try:
+        if chmod:
+            binary.chmod(0o755)
+        replace_symlink(link, str(binary))
+    except OSError as exc:
+        raise ExecutorError(f"cannot link '{member}': {exc}") from exc
 
 
 def _opt_pkg_list(method: Method, key: str) -> tuple[str, ...]:
