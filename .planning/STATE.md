@@ -5,11 +5,11 @@ milestone_name: Truthful lifecycle
 current_phase: 17
 current_phase_name: milestone v0.50.0, phases 17–25
 status: planning
-stopped_at: Phase 22 context gathered (assumptions mode)
-last_updated: "2026-10-14T11:08:27.797Z"
+stopped_at: Phase 23 context gathered (assumptions mode)
+last_updated: "2026-10-14T11:18:31.400Z"
 last_activity: 2026-10-13
 last_activity_desc: Roadmap for v0.50.0 created (9 phases, 72/72 requirements mapped)
-state_head: bd1e54a076d0919a5c76b3b07eb31c0b46d582ff
+state_head: d60a5d68fef4d61beda1f8f0626972cec4873c6e
 progress:
   total_phases: 10
   completed_phases: 0
@@ -93,9 +93,9 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-14T11:08:27.782Z
-Stopped at: Phase 22 context gathered (assumptions mode)
-Resume file: .planning/phases/22-method-lifecycle-contract/22-CONTEXT.md
+Last session: 2026-10-14T11:18:31.386Z
+Stopped at: Phase 23 context gathered (assumptions mode)
+Resume file: .planning/phases/23-configuration-as-a-lifecycle-step/23-CONTEXT.md
 
 ## Deferred Verification
 
