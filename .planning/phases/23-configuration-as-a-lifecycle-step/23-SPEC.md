@@ -90,7 +90,7 @@ Scouted 2026-10-13:
    - Conflicts and reverts:
      - A key the user already set to another value is left untouched and reported as "set by you".
      - Opting out, or removing the tool, removes only the keys the installer wrote that still hold its value.
-     - The keys written are recorded in the receipt.
+     - The keys written are recorded in the installer's per-agent config-write ledger (written by `receipts.py`, separate from install receipts so an agent the installer did not install never gains a removal-proof receipt; amended 2026-10-14).
    - Acceptance (scratch HOME):
      - Opting in writes the keys, and comments and unrelated keys are preserved.
      - A pre-existing `defaultMode: "acceptEdits"` stays and shows "set by you".
