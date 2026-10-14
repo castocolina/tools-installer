@@ -190,14 +190,14 @@ Scouted 2026-10-13 (`installer/wizard_app.py` unless noted):
 
 ## Interview Log
 
-`--auto`: the initial ambiguity of 0.17 was under the gate, so the interview was skipped. Open decisions were screened with jev-fast-decision against local Laya (`system-one` on 127.0.0.1:8010, `laya-rl-agent`), one call per question. Zen was unavailable: `http_401` with both the opencode and Pi keys. Every Laya answer is advisory, and the final decision is recorded below.
+`--auto`: the initial ambiguity of 0.17 was under the gate, so the interview was skipped. Open decisions were screened with jev-fast-decision. Each one first went to local Laya (`system-one` on 127.0.0.1:8010, one call per question). Questions where Laya's confidence was low were then re-asked through TypeSafe direct (`jev-latest`, which answers as `jev-1.13.0`). Zen was unavailable: 401 with the old keys, and 429 "Policy budget exceeded" with the new key, including on `jev-1.13-free`. Every answer is advisory, and the final decision is recorded below.
 
-| Round | Perspective     | Question summary | Laya (advisory) | Decision locked |
-|-------|-----------------|------------------|-----------------|-----------------|
-| auto | Researcher      | What does a refresh after a mutation cover? | full_catalog p=0.47 (needs fallback) | Full catalog, as in TA §2's one app-level worker and Phase 19's one swap |
-| auto | Failure Analyst | Can the user navigate during a removal? | allow_navigation p=0.56 (needs fallback) | Allowed; affected rows show `…`; a second removal is refused; quit waits |
-| auto | Boundary Keeper | Include the link-pick re-render (WR-04) and macOS prune truth (A #7)? | defer p=0.72 | **Overridden: include.** TA §8.1 maps both only to this phase, so deferring them would orphan them |
-| auto | Failure Analyst | Edge table and prohibitions | – | All resolved as covered or backstop; none dismissed |
+| Round | Perspective     | Question summary | Laya (advisory) | TypeSafe (advisory) | Decision locked |
+|-------|-----------------|------------------|-----------------|---------------------|-----------------|
+| auto | Researcher      | What does a refresh after a mutation cover? | full_catalog p=0.47 (needs fallback) | mutated_first_then_full p=0.63 (needs fallback) | Full catalog. A partial pass would bring back the merged-map race that Phase 19 removes with its one swap |
+| auto | Failure Analyst | Can the user navigate during a removal? | allow_navigation p=0.56 (needs fallback) | allow_navigation p=0.84 | Allowed; affected rows show `…`; a second removal is refused; quit waits |
+| auto | Boundary Keeper | Include the link-pick re-render (WR-04) and macOS prune truth (A #7)? | defer p=0.72 | include p=1.00 | **Include.** TA §8.1 maps both only to this phase, so deferring them would orphan them |
+| auto | Failure Analyst | Edge table and prohibitions | – | – | All resolved as covered or backstop; none dismissed |
 
 ---
 
