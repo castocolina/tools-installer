@@ -14,6 +14,7 @@ from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError
 from installer.versions import VersionError
+from tests.test_download import fixture_runner
 
 
 def _platform() -> Platform:
@@ -166,8 +167,9 @@ def test_github_release_routes_to_download(monkeypatch: pytest.MonkeyPatch, tmp_
         return False
 
     monkeypatch.setattr(engine, "is_installed", fake_not_installed)
-    calls: list[list[str]] = []
     bin_dir = tmp_path / "bin"
+    member = tmp_path / ".local" / "opt" / "rg" / "rg"
+    calls, runner = fixture_runner(None, {}, member=member)
     method = Method(
         kind="github_release",
         params={
@@ -181,21 +183,67 @@ def test_github_release_routes_to_download(monkeypatch: pytest.MonkeyPatch, tmp_
     def resolve_tag(repo: str) -> str:
         return "14.1.0"
 
-    def runner(cmd: list[str]) -> None:
-        calls.append(cmd)
-
     outcome = install_tool(
         _tool(method),
         Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
         runner=runner,
         resolve_tag=resolve_tag,
     )
-    opt = tmp_path / ".local" / "opt" / "rg"
     assert outcome.status == "installed"
     assert outcome.method_kind == "github_release"
     assert calls[0][0] == "sh" and "rg-14.1.0-x86_64.tar.gz" in calls[0][2]
-    assert calls[1] == ["chmod", "+x", str(opt / "rg")]
-    assert calls[2] == ["ln", "-sf", str(opt / "rg"), str(bin_dir / "rg")]
+    link = bin_dir / "rg"
+    assert link.is_symlink()
+    assert os.readlink(link) == str(member)
+    shelled = {"l" + "n", "ch" + "mod"}
+    assert not any(cmd and cmd[0] in shelled for cmd in calls)
+
+
+def test_github_release_directory_member_falls_through_the_ladder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A directory member is an executor error, so the ladder tries the next method."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+    bin_dir = tmp_path / "bin"
+    member = tmp_path / ".local" / "opt" / "rg" / "rg"
+    calls, runner = fixture_runner(None, {}, member=member)
+    download = Method(
+        kind="github_release",
+        params={
+            "repo": "BurntSushi/ripgrep",
+            "asset": "rg-{ver}-{arch.machine}.tar.gz",
+            "member": "rg",
+            "bin_dir": str(bin_dir),
+        },
+    )
+    brew = Method(kind="brew", params={"formula": "ripgrep"})
+
+    def resolve_tag(repo: str) -> str:
+        return "14.1.0"
+
+    def plant_directory(cmd: list[str]) -> None:
+        runner(cmd)
+        if cmd and cmd[0] == "sh" and " tar " in cmd[-1] and member.exists():
+            member.unlink()
+            member.mkdir()
+
+    outcome = install_tool(
+        _tool(download, brew),
+        Platform(os="fedora", arch="amd64", immutable=False, has_brew=True),
+        runner=plant_directory,
+        resolve_tag=resolve_tag,
+    )
+    assert outcome.status == "installed"
+    assert outcome.method_kind == "brew"
+    link = bin_dir / "rg"
+    assert not link.exists()
+    assert not link.is_symlink()
+    assert any(cmd and cmd[0] == "brew" for cmd in calls)
 
 
 def test_download_failure_is_caught_as_failed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

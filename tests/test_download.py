@@ -622,7 +622,10 @@ def test_verified_archive_fetches_verifies_and_extracts(
     workdir = _workdir(tmp_path, monkeypatch)
     payload = b"archive-bytes"
     sums = f"{hashlib.sha256(payload).hexdigest()}  {RG_ASSET}\n".encode()
-    calls, runner = fixture_runner(workdir, {RG_ASSET: payload, f"{RG_ASSET}.sha256": sums})
+    member = tmp_path / ".local" / "opt" / "rg" / "rg"
+    calls, runner = fixture_runner(
+        workdir, {RG_ASSET: payload, f"{RG_ASSET}.sha256": sums}, member=member
+    )
     bindir = tmp_path / "bin"
     assert install_download(_rg_method(bindir), _ctx(runner, tmp_version="15.1.0")) is True
     opt = tmp_path / ".local" / "opt" / "rg"
@@ -634,10 +637,58 @@ def test_verified_archive_fetches_verifies_and_extracts(
     assert calls == [
         ["sh", "-c", fetch],
         ["tar", "-xzf", str(workdir / RG_ASSET), "-C", str(opt), "--strip-components=1"],
-        ["chmod", "+x", str(opt / "rg")],
-        ["ln", "-sf", str(opt / "rg"), str(bindir / "rg")],
     ]
+    assert (bindir / "rg").is_symlink()
+    assert os.readlink(bindir / "rg") == str(member)
     assert not workdir.exists()  # temp dir removed after success
+
+
+def test_verified_archive_with_a_directory_member_links_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A verified archive whose member extracts as a directory links nothing."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    workdir = _workdir(tmp_path, monkeypatch)
+    payload = b"archive-bytes"
+    sums = f"{hashlib.sha256(payload).hexdigest()}  {RG_ASSET}\n".encode()
+    member = tmp_path / ".local" / "opt" / "rg" / "rg"
+    _, runner = fixture_runner(
+        workdir, {RG_ASSET: payload, f"{RG_ASSET}.sha256": sums}, member=member
+    )
+    bindir = tmp_path / "bin"
+
+    def plant_directory(cmd: list[str]) -> None:
+        runner(cmd)
+        if _is_extraction(cmd):
+            member.unlink()
+            member.mkdir()
+
+    with pytest.raises(ExecutorError, match="rg"):
+        install_download(_rg_method(bindir), _ctx(plant_directory, tmp_version="15.1.0"))
+    assert member.is_dir()
+    assert not (bindir / "rg").exists()
+    assert not (bindir / "rg").is_symlink()
+
+
+def test_verified_archive_links_the_member_file_atomically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The verified path links the member file without shelling chmod or ln."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    workdir = _workdir(tmp_path, monkeypatch)
+    payload = b"archive-bytes"
+    sums = f"{hashlib.sha256(payload).hexdigest()}  {RG_ASSET}\n".encode()
+    member = tmp_path / ".local" / "opt" / "rg" / "rg"
+    calls, runner = fixture_runner(
+        workdir, {RG_ASSET: payload, f"{RG_ASSET}.sha256": sums}, member=member
+    )
+    bindir = tmp_path / "bin"
+    install_download(_rg_method(bindir), _ctx(runner, tmp_version="15.1.0"))
+    link = bindir / "rg"
+    assert link.is_symlink()
+    assert os.readlink(link) == str(member)
+    assert member.stat().st_mode & 0o777 == 0o755
+    assert not any(cmd and cmd[0] in {"ln", "chmod"} for cmd in calls)
 
 
 def test_verified_mismatch_raises_and_cleans_up(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -719,7 +770,10 @@ def test_verified_zip_extracts_member_from_temp(tmp_path: Path, monkeypatch: pyt
     asset = "deno-x86_64-unknown-linux-gnu.zip"
     payload = b"zip-bytes"
     sums = f"{hashlib.sha256(payload).hexdigest()}  {asset}\n".encode()
-    calls, runner = fixture_runner(workdir, {asset: payload, f"{asset}.sha256sum": sums})
+    member = tmp_path / ".local" / "opt" / "deno" / "deno"
+    calls, runner = fixture_runner(
+        workdir, {asset: payload, f"{asset}.sha256sum": sums}, member=member
+    )
     bindir = tmp_path / "bin"
     method = Method(
         kind="github_release",
@@ -736,9 +790,9 @@ def test_verified_zip_extracts_member_from_temp(tmp_path: Path, monkeypatch: pyt
     opt = tmp_path / ".local" / "opt" / "deno"
     assert calls[1:] == [
         ["unzip", "-q", "-o", str(workdir / asset), "deno", "-d", str(opt)],
-        ["chmod", "+x", str(opt / "deno")],
-        ["ln", "-sf", str(opt / "deno"), str(bindir / "deno")],
     ]
+    assert (bindir / "deno").is_symlink()
+    assert os.readlink(bindir / "deno") == str(member)
 
 
 def test_verified_opt_dir_creation_failure_raises_executor_error(

@@ -11,6 +11,7 @@ from installer.apps import APP_KINDS, install_app, update_app
 from installer.executors import ExecutorError
 from installer.model import Method
 from installer.run import Runner
+from tests.test_download import fixture_runner
 
 
 def _record() -> tuple[list[list[str]], Runner]:
@@ -49,17 +50,45 @@ def test_install_app_builds_curl_ditto_mv_pipeline(tmp_path: Path, monkeypatch: 
 
 def test_install_app_symlinks_declared_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    calls, runner = _record()
-    install_app(_method(cli="Contents/SharedSupport/bin/demo"), runner)
-    assert len(calls) == 2
-    bundle = tmp_path / "Applications" / "Demo App.app"
-    assert calls[1] == [
-        "ln",
-        "-sf",
-        str(bundle / "Contents/SharedSupport/bin/demo"),
-        str(tmp_path / ".local" / "bin" / "demo"),
-    ]
+    cli = "Contents/SharedSupport/bin/demo"
+    member = tmp_path / "Applications" / "Demo App.app" / cli
+    member.parent.mkdir(parents=True)
+    member.write_bytes(b"bundle-cli")
+    member.chmod(0o644)
+    calls, runner = fixture_runner(None, {}, member=member)
+    install_app(_method(cli=cli), runner)
+    link = tmp_path / ".local" / "bin" / "demo"
+    assert link.is_symlink()
+    assert os.readlink(link) == str(member)
+    assert member.stat().st_mode & 0o777 == 0o644  # a bundle CLI keeps its own mode
+    shelled = {"l" + "n", "ch" + "mod"}
+    assert not any(cmd and cmd[0] in shelled for cmd in calls)
     assert (tmp_path / ".local" / "bin").is_dir()
+
+
+def test_install_app_cli_that_is_a_directory_links_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bundle CLI path that is a directory is not linked."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    cli = "Contents/SharedSupport/bin/demo"
+    member = tmp_path / "Applications" / "Demo App.app" / cli
+    calls, runner = fixture_runner(None, {}, member=member)
+
+    def plant_directory(cmd: list[str]) -> None:
+        runner(cmd)
+        if cmd and cmd[0] == "sh" and "ditto " in cmd[-1]:
+            member.unlink()
+            member.mkdir()
+
+    with pytest.raises(ExecutorError, match="demo"):
+        install_app(_method(cli=cli), plant_directory)
+    assert member.is_dir()
+    link = tmp_path / ".local" / "bin" / "demo"
+    assert not link.exists()
+    assert not link.is_symlink()
+    shelled = {"l" + "n", "ch" + "mod"}
+    assert not any(cmd and cmd[0] in shelled for cmd in calls)
 
 
 def test_install_app_without_cli_runs_only_the_pipeline(

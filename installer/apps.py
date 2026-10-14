@@ -24,7 +24,7 @@ from installer.atomic import (
     replace_symlink,
     staged_sibling,
 )
-from installer.executors import ExecutorError, require_str
+from installer.executors import ExecutorError, link_executable, require_str
 from installer.locations import applications_dir, bin_dir, ensure_dir
 from installer.model import Method
 from installer.run import Runner
@@ -97,7 +97,7 @@ def install_app(method: Method, runner: Runner) -> None:
         dest = ensure_dir(bin_dir(None))
     except OSError as exc:
         raise ExecutorError(f"cannot create bin dir: {exc}") from exc
-    runner(["ln", "-sf", str(apps / app / cli), str(dest / name)])
+    link_executable(apps / app / cli, dest / name, cli, chmod=False)
 
 
 def update_app(method: Method, runner: Runner) -> UpdateExecResult:

@@ -399,5 +399,4 @@ def _place_verified(
                 f"--strip-components={strip}",
             ]
         )
-    ctx.runner(["chmod", "+x", str(binary)])
-    ctx.runner(["ln", "-sf", str(binary), str(link)])
+    link_executable(binary, link, target.member)
