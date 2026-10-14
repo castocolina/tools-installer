@@ -2212,12 +2212,14 @@ app = "JetBrains Toolbox.app"
 # amd64 only -- Toolbox App 2.3+ ships a native arm64 Linux build too, but no
 # stable arm64-specific URL for this endpoint could be confirmed, so it's
 # left undeclared rather than guessed. Extracted to ~/.local/opt (userspace).
+# Verified 2026-10-14: Toolbox 3.8 nests the launcher under bin/
+# (jetbrains-toolbox-3.8.1.88030/bin/jetbrains-toolbox; strip 1 drops the top dir).
 [[tool.method]]
 kind = "tarball"
 os = ["debian", "arch", "fedora"]
 arch = ["amd64"]
 url = "https://data.services.jetbrains.com/products/download?platform=linux&code=TBA"
-member = "jetbrains-toolbox"
+member = "bin/jetbrains-toolbox"
 strip = 1
 # Verified 2026-09-16 (15.4-RESEARCH.md, independently re-confirmed live
 # against this host's own `brew list --cask` this session): on linuxbrew,
