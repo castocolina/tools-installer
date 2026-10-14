@@ -33,7 +33,7 @@ Usage: container-e2e-verify.sh <command> [options]
                           TRACER_CLEAN_INSTALL_OK on a clean (or explained)
                           pass. --categories NAME[,NAME...] chunks instead of
                           --all (same CLI flag the production entrypoint owns).
-  resync                  Re-copy /repo (read-only host mount) onto
+  resync                  Re-stream the host working tree onto
                           /home/tester/workspace. Required after any host-side
                           installer fix before re-running pass1.
   pass2                   D-04's rerun pass against the SAME container pass1
@@ -102,9 +102,7 @@ start_container() {
       return 0
     fi
   fi
-  ct run -d --name "$CONTAINER_NAME" \
-    -v "$REPO_ROOT":/repo:ro,Z \
-    "$IMAGE" sleep infinity >/dev/null
+  ct run -d --name "$CONTAINER_NAME" "$IMAGE" sleep infinity >/dev/null
 }
 
 record_fedora_release() {
@@ -133,14 +131,23 @@ create_tester() {
   exec_root chown -R tester:tester /home/linuxbrew
 }
 
+# Stream the working tree git sees (tracked + untracked, never ignored) into
+# the workspace. Ignored caches (graphify-out/, .codegraph/, .venv/) hold
+# owner-only files tester cannot read, and they are not the product anyway.
+stream_worktree() {
+  git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard \
+    | while IFS= read -r -d '' f; do [[ -e "$REPO_ROOT/$f" ]] && printf '%s\0' "$f"; done \
+    | tar -C "$REPO_ROOT" --null -T - -cf - \
+    | ct exec -i "$CONTAINER_NAME" su - tester -c 'mkdir -p /home/tester/workspace && tar -C /home/tester/workspace -xf -'
+}
+
 copy_workspace() {
-  exec_tester 'rm -rf /home/tester/workspace && cp -r /repo /home/tester/workspace && rm -rf /home/tester/workspace/.venv'
+  exec_tester 'rm -rf /home/tester/workspace'
+  stream_worktree
 }
 
 resync_workspace() {
-  # -f: git objects are written read-only (mode 444); a plain overlay cp
-  # cannot overwrite them even though tester owns them.
-  exec_tester 'cp -rf /repo/. /home/tester/workspace/'
+  stream_worktree
 }
 
 write_tester_path() {
