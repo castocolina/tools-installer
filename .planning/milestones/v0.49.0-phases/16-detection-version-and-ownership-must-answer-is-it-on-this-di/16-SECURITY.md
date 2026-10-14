@@ -74,10 +74,14 @@ created: "2026-10-10"
 | T-16-42 | Tampering | markup in active_path text | low | mitigate | `rich.markup.escape` on path-bearing segments (`installer/catalog_tui.py:739`, `:743`, `:747`, `:751`); cells use `Text` | closed |
 | T-16-43 | Repudiation | `u` silently doing nothing | low | mitigate | Every `u` branch sets a status line (plan 16-15 tests) | closed |
 | T-16-44 | Tampering | accidental mutation during proof | high | mitigate | 16-16 used read-only probes only; host rc checksums identical before/after (`host-before.sha` vs `host-after.sha`; only the installer's own prune log changed) | closed |
-| T-16-SC (x16) | Tampering | npm/pip/cargo installs (plans 16-01..16-16) | high | accept | See Accepted Risks Log | closed |
+| T-16-45 | Tampering | `strip_lines` on a `then`/`do` line (16-17, WR-02) | high | mitigate | `installer/rcclean.py::_judge_line` marks a then/do-prefixed segment non-`simple` (`_LEADING_THEN_DO`), so `find_duplicate_path_lines` skips it and the guard refusal agrees; `tests/test_rcclean.py::test_then_prefixed_path_line_is_not_a_strip_candidate` | closed |
+| T-16-46 | Tampering | guarding heredoc data as a statement (16-17, IN-01) | medium | mitigate | `installer/rcclean.py::_path_line_targets` skips heredoc bodies (opener validated on code text via `_code_text`); `tests/test_rcclean.py::test_heredoc_body_is_not_a_path_writer` | closed |
+| T-16-47 | Information Disclosure | refusal text naming paths (16-17, WR-01/IN-14) | low | accept | See Accepted Risks Log | closed |
+| T-16-48 | Denial of Service | unreadable rc.d entry aborting the scan (16-17, IN-06) | low | mitigate | `installer/locations.py::path_scan_rc_paths` treats an `OSError` from `is_file()` as "not a file" and skips the entry; `tests/test_locations.py::test_path_scan_skips_an_unreadable_bashrc_d_entry` | closed |
+| T-16-SC (x17) | Tampering | npm/pip/cargo installs (plans 16-01..16-17) | high | accept | See Accepted Risks Log | closed |
 
 *Status: open · closed · open — below high threshold (non-blocking)*
-*Total register rows: 60 (T-16-01..T-16-44 = 44, plus one T-16-SC per plan = 16).*
+*Total register rows: 65 (T-16-01..T-16-48 = 48, plus one T-16-SC per plan = 17).*
 
 ---
 
@@ -92,7 +96,8 @@ created: "2026-10-10"
 | AR-16-05 | T-16-29 | kitty vendor script has the same trust model as uv, bun, volta, claude (official HTTPS channel) | plan 16-10 | 2026-10-10 |
 | AR-16-06 | T-16-36 | Cache holds host names and pack ids in the user's own cache dir | plan 16-12 | 2026-10-10 |
 | AR-16-07 | T-16-41 | Reason text comes from trusted registry/code constants, rendered via `Text` | plan 16-14 | 2026-10-10 |
-| AR-16-08 | T-16-SC | No plan installs a package; verified `git diff` shows no change to `pyproject.toml`/lock files | plans 16-01..16-16 | 2026-10-10 |
+| AR-16-08 | T-16-SC | No plan installs a package; verified `git diff` shows no change to `pyproject.toml`/lock files | plans 16-01..16-17 | 2026-10-10 |
+| AR-16-09 | T-16-47 | Guard and refusal texts name only the rc path and its `.tools-installer.old` sibling the user already owns; no file content is echoed | plan 16-17 | 2026-10-14 |
 
 Residual note (not a threat, not counted): review finding IN-01 (`installer/rcclean.py:283`) can treat a heredoc body line that looks like a plain PATH prepend as guardable. The rewrite still goes through the per-file confirm modal, the exact-text recheck, the exclusive backup and the no-delete rule, and the replacement is the managed `path_export_guard`, so the impact is a changed line inside a generated file the user confirmed, with a recoverable backup. Below the `high` block threshold. Recommend fixing with WR-01.
 
@@ -103,6 +108,7 @@ Residual note (not a threat, not counted): review finding IN-01 (`installer/rccl
 | Audit Date | Threats Total | Closed | Open | Run By |
 |------------|---------------|--------|------|--------|
 | 2026-10-10 | 60 | 60 | 0 | Claude Code (secure-phase, inline) |
+| 2026-10-14 | 65 | 65 | 0 | pi (17-12 re-audit, gap plan 16-17) |
 
 ---
 

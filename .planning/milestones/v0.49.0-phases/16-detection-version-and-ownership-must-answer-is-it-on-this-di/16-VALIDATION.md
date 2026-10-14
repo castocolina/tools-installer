@@ -6,7 +6,7 @@ nyquist_compliant: true
 wave_0_complete: true
 created: "2026-10-09"
 backfilled: "2026-10-10"
-audited: "2026-10-10"
+audited: "2026-10-14"
 ---
 
 # Phase 16 — Validation Strategy
@@ -52,6 +52,12 @@ audited: "2026-10-10"
 | 16-09-01 | 16-09 | 3 | D-18 | — | Dangling pnpm shim reads as distinct "broken" state | unit | `uv run pytest tests/test_status.py tests/test_catalog_tui.py -k "broken or dangling" -x` | ✅ | ✅ green |
 | 16-08-01 | 16-08 | 2 | D-21/D-23/D-24 | T-15.8 precedent (byte-exact refusal, case-guard emission reused) | Guard-in-place rewrite, backed up, per-file opt-in | unit | `uv run pytest tests/test_shellrc.py tests/test_rcclean.py -k "guard_in_place or path_writer_lines" -x` | ✅ | ✅ green |
 | 16-08-02 | 16-08 | 2 | D-22 | — | Foreign marker block never touched | unit | `uv run pytest tests/test_rcclean.py -k marker_block -x` | ✅ | ✅ green |
+| 16-17-01 | 16-17 | 8 | D-21 | T-16-45 | A then/do-prefixed PATH line is never a strip candidate and is still reported as not guardable | unit | `uv run pytest tests/test_rcclean.py -k "then_prefixed or do_prefixed" -q` | ✅ | ✅ green |
+| 16-17-02 | 16-17 | 8 | D-22 | T-16-46 | Comment/quote closers keep the presence guard; heredoc bodies are not PATH writers | unit | `uv run pytest tests/test_rcclean.py -k "heredoc or closer" -q` | ✅ | ✅ green |
+| 16-17-03 | 16-17 | 8 | D-23 | T-16-47 | A one-shot PATH prefix is not a writer; a PATH replacement has its own refusal | unit | `uv run pytest tests/test_rcclean.py -k "one_shot or replaces" tests/test_guidance.py -q` | ✅ | ✅ green |
+| 16-17-04 | 16-17 | 8 | D-24 | T-16-47 | A second guard of the same rc file refuses with guard wording and leaves both files unchanged | unit | `uv run pytest tests/test_shellrc.py -q` | ✅ | ✅ green |
+| 16-17-05 | 16-17 | 8 | D-24 | T-16-48 | An unreadable ~/.bashrc.d entry is skipped; the rest of the PATH scan is returned | unit | `uv run pytest tests/test_locations.py -q` | ✅ | ✅ green |
+| 16-17-06 | 16-17 | 8 | D-21/D-22/D-23/D-24 | — | Gate run: whole suite with coverage | suite | `make test` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
