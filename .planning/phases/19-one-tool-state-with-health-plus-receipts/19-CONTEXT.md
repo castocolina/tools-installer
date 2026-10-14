@@ -112,6 +112,20 @@ Out of scope:
     - **Host state:** cleaned by hand on 2026-10-14, leaving the official user scope at 6.4.1, enabled. The fixture for this step reproduces the 4-install state from `installed_plugins.json` and `claude plugin list` text, not from the live host.
 - **D-19:** A pnpm co-install group that is incomplete produces `≈`, from the pnpm inventory the pass already caches.
 - **D-20 (added by Phase 20 D-06, 2026-10-14):** `ToolState.unconfigured` is a tuple of typed `ConfigStep`s rather than plain strings. Each step has the text shown to the user and a fix: skill install for a harness (D-17/D-18), plugin dedupe/enable for a harness (D-18 fix step), terminal sync (D-16), or install of the missing pnpm group members (D-19). Phase 20's RECONFIGURE runs exactly those steps.
+- **D-21 (user rule 2026-10-14; folds todo `2026-10-13-gsd-per-repo-local-installs`):** Every `skill_pack` has a closed `scope` param: `"user"` or `"project"`.
+  - `"user"` is the default and covers small, targeted packs: superpowers, ponytail and the like.
+  - `"project"` is for framework packs whose machinery (hooks, agents, commands, skills) must never be installed into a harness's global dir. That means `opengsd`.
+  - The package or CLI itself may still be global; this rule covers only the files a pack writes into harnesses.
+  - **Detection for `project` packs:**
+    - Global machinery in a harness home (`~/.claude/gsd-core`, `gsd-*` in `~/.claude/{skills,agents,commands,hooks}`, GSD hooks in `~/.claude/settings.json`, and the same set for `~/.config/opencode`, `~/.codex`, …) gives `≈` with the reason "installed globally; this pack is project-local". Its D-20 fix step is the pack's own global uninstall (`pnpm dlx @opengsd/gsd-core@<pin> --<runtime> --global --uninstall`). The installer never deletes those files itself.
+    - Presence means "installed in N repos". The repos are found by walking known roots for `.planning/config.json`.
+    - A repo counts as installed per runtime only when `<repo>/<runtime dir>/gsd-core/VERSION` (or the manifest) exists **and** the runtime's skills or commands dir is non-empty.
+    - **Real failure case, 2026-10-14:** `.opencode/gsd-install-state.json` existed while `.opencode/{skills,commands,agents}` were empty. The current probe only checks `$HOME/<runtime>/gsd-install-state.json`, so it reported a false "present".
+  - **Install and update for `project` packs:** an explicit per-repo action that runs the official installer (`--<runtime> --local --relative-includes`, pinned version) in each listed repo where `.planning/` exists. It never copies files, and it never runs `--global`.
+  - **Host state on 2026-10-14:**
+    - Global Claude GSD was removed by the ai-kit session's migration.
+    - This repo has local GSD for claude and opencode (opencode reinstalled locally by hand: 72 skills, 72 commands, 64 agents).
+    - The fixtures reproduce both the empty-dirs false positive and the global-leftover case.
 
 ### Claude's Discretion
 - Plan and wave order. Suggested:

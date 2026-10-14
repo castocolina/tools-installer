@@ -38,3 +38,6 @@ Full plan, rollback and risks: report 12 §3–§4.
 5. Add an "update all local installs" loop over the official installer (never copy files).
 
 ai-kit's side (resolving the project-local `gsd-tools.cjs` first) is tracked in ai-kit.
+
+## Resolution (2026-10-14)
+Folded into Phase 19 D-21 (`skill_pack.scope = "project"`: global-leftover detection with a fix step, repo enumeration, and a probe that requires a non-empty skills or commands dir) and 20 D-06. Global Claude GSD was removed by the ai-kit session the same day. This repo now has local GSD for claude and opencode.
