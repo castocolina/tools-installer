@@ -33,7 +33,7 @@ Every workflow has a target so humans and CI run the same thing:
 | `make doctor`    | audit & fix `PATH` (`uv run setup.py --doctor`)                 |
 | `make uninstall` | remove installed artifacts / symlinks                          |
 | `make validate`  | run pre-commit hooks: `ruff check`, `ruff format --check`, `pyright`, `bandit`, `vulture`, `shellcheck` |
-| `make test`      | `uv run pytest` with coverage (`--cov`, `--cov-fail-under`)     |
+| `make test`      | `uv run pytest -n auto` (parallel, xdist) with coverage (`--cov`, `--cov-fail-under`) |
 
 - Keep targets thin: a target wraps a uv/tool command, it does not reimplement logic.
 - `make validate` and `make test` must be runnable locally and in CI identically.

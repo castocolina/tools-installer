@@ -21,6 +21,15 @@ Tests run with `pytest` and coverage via `make test`. Configuration lives in
 - New logic ships with tests. Coverage must not drop because of your change.
 - Coverage is a floor, not a goal: don't write assertion-free tests just to touch lines.
 
+### Parallel by default
+- `make test` runs `pytest -n auto` (pytest-xdist). On a 24-core host that is ≈50 s instead of ≈5.5 min serial. Never drop `-n auto` to make a run pass.
+- Every test must be xdist-safe. That means:
+  - no fixed shared path (use `tmp_path`; an artifact dir needs a per-test file name and `mkdir(exist_ok=True)`);
+  - no process-global state left behind (use `monkeypatch` for env, cwd and HOME);
+  - no fixed port or socket name;
+  - no reliance on another test's order or side effects.
+- A test that passes serially but fails under `-n auto` is a bug in the test. Fix its isolation. Use `@pytest.mark.xdist_group` (with `--dist loadgroup`) only for a genuinely exclusive resource, with a one-line reason.
+
 ### What to test
 - The decision logic, not the third-party tools: parsing of `registry.toml`, the
   install **priority ladder** resolution, OS/immutable detection (mock the platform

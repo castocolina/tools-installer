@@ -47,5 +47,5 @@ validate:  ## Lint, format-check, type-check, security, dead-code
 	# call graph instead of reporting an unfollowable SC1091.
 	uv run shellcheck -x install.sh scripts/lib/prune-tmp-common.sh scripts/prune-tmp-linux.sh scripts/prune-user-tmpdir.sh
 
-test:  ## Run tests with coverage
-	uv run pytest --cov
+test:  ## Run tests with coverage, in parallel (pytest-xdist)
+	uv run pytest -n auto --cov
