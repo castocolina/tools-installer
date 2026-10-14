@@ -97,7 +97,7 @@ linux_pick() {
 
 macos_pick() {
   # Expected tool: colima + docker. Starting a stopped colima is normal
-  # Tier-3 operation (ONESHOT-RULES Rule 14), not a D-03 failure.
+  # Tier-3 operation (Tier-3 container verification), not a D-03 failure.
   if command -v colima >/dev/null 2>&1 && command -v docker >/dev/null 2>&1; then
     if ! colima status >/dev/null 2>&1; then
       colima start >/dev/null 2>&1 || true

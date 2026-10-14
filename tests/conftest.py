@@ -18,6 +18,17 @@ _REAL_HOME = Path(os.path.expanduser("~"))  # noqa: PTH111 -- must not follow a 
 _GUARDED_DOTFILES = (".myshellrc", ".shellrc", ".bashrc", ".zshrc", ".profile")
 
 
+def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:
+    """`-n auto` uses at most ~40% of the usable CPUs (24 -> 10), so the host is never starved.
+
+    `PYTEST_XDIST_AUTO_NUM_WORKERS` still overrides this, per xdist.
+    """
+    usable = (
+        len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    )
+    return max(1, round(usable * 0.4))
+
+
 def _real_home_fingerprint() -> dict[str, tuple[int, float] | None]:
     """(size, mtime) for each guarded file in the real home, None when absent.
 

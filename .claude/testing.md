@@ -22,7 +22,8 @@ Tests run with `pytest` and coverage via `make test`. Configuration lives in
 - Coverage is a floor, not a goal: don't write assertion-free tests just to touch lines.
 
 ### Parallel by default
-- `make test` runs `pytest -n auto` (pytest-xdist). On a 24-core host that is ≈50 s instead of ≈5.5 min serial. Never drop `-n auto` to make a run pass.
+- `make test` runs `pytest -n auto` (pytest-xdist). Never drop `-n auto` to make a run pass.
+- **Thread budget:** the suite uses at most ~40% of the usable threads, because this project runs on other people's machines and must not starve them. `pytest_xdist_auto_num_workers` in `tests/conftest.py` computes `max(1, round(threads * 0.4))`: 24 → 10, 8 → 3, 3 → 1. Never pass a fixed or higher `-n`. `PYTEST_XDIST_AUTO_NUM_WORKERS` may lower it for one run.
 - Every test must be xdist-safe. That means:
   - no fixed shared path (use `tmp_path`; an artifact dir needs a per-test file name and `mkdir(exist_ok=True)`);
   - no process-global state left behind (use `monkeypatch` for env, cwd and HOME);
