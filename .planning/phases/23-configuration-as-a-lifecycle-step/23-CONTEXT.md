@@ -58,7 +58,7 @@ None of these has landed as of 2026-10-14.
   - It writes **only absent keys**.
   - A key with another value is left alone and reported as "set by you".
   - It refuses an invalid file: `≈` with the reason, and nothing is written.
-  - `agent_policy._write_json` (`agent_policy.py:85-122`) is not reused. It re-serializes the whole file, isn't atomic and has no provenance. `apply_agent_permissions` keeps its read-only audit role.
+  - `agent_policy._write_json` (`agent_policy.py:85-122`) is not reused. It re-serializes the whole file, isn't atomic and has no provenance. Agent config **paths** come from one table: `agent_env.AgentAdapter`/`adapters()` (`agent_env.py:21-63`) is reused and extended with cursor-agent and VS Code, not duplicated as new constants. Nothing in 23 wires `apply_agent_permissions`/`audit_agent_policy`/`agent_guidance`; Phase 25's reachability check decides their fate. (Corrected 2026-10-14: an earlier line claimed the audit "keeps its role", but no caller exists.)
 - **D-07 (best, not easy):** Guarded splice for every format, the same pattern as 18 D-09.
   - Insert the key line at a computed position: top-level TOML keys go before the first table header; JSON/JSONC goes inside the root object, respecting commas.
   - Then re-parse (`tomllib`, or `json` after stripping comments and trailing commas) and assert that exactly the intended keys changed. Otherwise refuse.
