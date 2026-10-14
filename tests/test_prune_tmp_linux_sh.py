@@ -211,12 +211,15 @@ def test_refuses_a_relative_tmpdir(tmp_path: Path, relative: str) -> None:
 
 
 def test_refuses_a_dotdot_spelling_of_the_root_directory(tmp_path: Path) -> None:
-    """`/tmp/..` canonicalizes to `/`, which the refusal list names."""
+    """`/usr/..` canonicalizes to `/` on Linux and macOS alike, and `/` is
+    on the refusal list. (`/tmp/..` would be macOS-blind: there `/tmp` is a
+    symlink to `/private/tmp`, so `/tmp/..` canonicalizes to `/private`,
+    which the list does not name, and the refusal never fires.)"""
     home = tmp_path / "home"
     home.mkdir()
-    result = _run("--tmpdir", "/tmp/..", "--apply", home=home)
+    result = _run("--tmpdir", "/usr/..", "--apply", home=home)
     assert result.returncode != 0
-    assert "refusing broad path /tmp/.." in result.stderr
+    assert "refusing broad path /usr/.." in result.stderr
     assert "deleted" not in result.stdout
 
 
