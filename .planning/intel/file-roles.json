@@ -1,0 +1,328 @@
+{
+  "_meta": {
+    "updated_at": "2026-10-14T17:22:32.298Z",
+    "version": 2
+  },
+  "entries": {
+    "setup.py": {
+      "exports": [
+        "main"
+      ],
+      "type": "entry-point",
+      "note": "composition root; real IO; imports installer.app, installer.cli"
+    },
+    "install.sh": {
+      "exports": [],
+      "type": "script"
+    },
+    "installer/registry.toml": {
+      "exports": [],
+      "type": "data",
+      "note": "tool catalog consumed by model.load_tools"
+    },
+    "installer/model.py": {
+      "exports": [
+        "Method",
+        "Tool",
+        "SkillLifecycle",
+        "SkillOperation",
+        "SkillStatusProbe",
+        "SkillTarget",
+        "load_tools",
+        "load_categories"
+      ],
+      "type": "module"
+    },
+    "installer/resolve.py": {
+      "exports": [
+        "resolve_methods",
+        "UnavailableReason",
+        "unavailable_reason",
+        "platform_could_support"
+      ],
+      "type": "module"
+    },
+    "installer/deps.py": {
+      "exports": [
+        "resolve_dependencies",
+        "Resolution",
+        "DependencyCycleError",
+        "missing_requires",
+        "requires_integrity_errors"
+      ],
+      "type": "module"
+    },
+    "installer/executors.py": {
+      "exports": [
+        "execute",
+        "ExecutorError",
+        "run_smoke_check",
+        "host_setup_handoff",
+        "host_setup_approval_disclosures",
+        "require_str"
+      ],
+      "type": "module"
+    },
+    "installer/engine.py": {
+      "exports": [
+        "install_tool",
+        "InstallOutcome",
+        "reapply_post_install"
+      ],
+      "type": "module"
+    },
+    "installer/session.py": {
+      "exports": [
+        "run_installs",
+        "order_for_install",
+        "summarize",
+        "Summary",
+        "Install",
+        "SensitiveInstall",
+        "with_sensitive_confirm"
+      ],
+      "type": "module"
+    },
+    "installer/status.py": {
+      "exports": [
+        "is_installed",
+        "is_default_shell",
+        "dangling_shim"
+      ],
+      "type": "module"
+    },
+    "installer/version_status.py": {
+      "exports": [
+        "VersionStatus",
+        "resolve_status",
+        "resolve_github_release_status",
+        "github_repo",
+        "SkillHostStatus",
+        "VersionRefreshService"
+      ],
+      "type": "module"
+    },
+    "installer/install_ownership.py": {
+      "exports": [
+        "Ownership",
+        "detect_owner",
+        "run_probe",
+        "package_owns_path",
+        "path_owner_package"
+      ],
+      "type": "module"
+    },
+    "installer/ownership.py": {
+      "exports": [
+        "ManagerOwnership",
+        "ManagerInventory",
+        "resolve_ownership",
+        "attribute_path",
+        "competing_owners",
+        "read_inventory",
+        "owner_label",
+        "owner_detail"
+      ],
+      "type": "module"
+    },
+    "installer/update.py": {
+      "exports": [
+        "UpdateService",
+        "perform_update",
+        "resolve_update_argv",
+        "UpdateTarget",
+        "UpdateOutcome",
+        "UpdateError"
+      ],
+      "type": "module"
+    },
+    "installer/uninstall.py": {
+      "exports": [
+        "plan_uninstall",
+        "classify_tools",
+        "remove_paths",
+        "reverse_dependencies",
+        "sweep_policies",
+        "sweep_tweaks",
+        "SweepResult"
+      ],
+      "type": "module"
+    },
+    "installer/download.py": {
+      "exports": [
+        "install_download",
+        "update_download",
+        "DownloadTarget",
+        "ExecContext"
+      ],
+      "type": "module"
+    },
+    "installer/apps.py": {
+      "exports": [
+        "install_app",
+        "update_app",
+        "cli_spec"
+      ],
+      "type": "module"
+    },
+    "installer/checksums.py": {
+      "exports": [
+        "expected_sha256",
+        "sha256_file",
+        "ChecksumMismatch"
+      ],
+      "type": "module"
+    },
+    "installer/atomic.py": {
+      "exports": [
+        "atomic_write_text",
+        "atomic_write_bytes",
+        "replace_symlink",
+        "recover_update_remnants",
+        "staged_sibling"
+      ],
+      "type": "module"
+    },
+    "installer/run.py": {
+      "exports": [
+        "run_command",
+        "run_output",
+        "run_captured",
+        "run_interactive_command",
+        "run_query",
+        "StreamingRunner",
+        "MethodAwareRunner",
+        "CommandError"
+      ],
+      "type": "module"
+    },
+    "installer/policy.py": {
+      "exports": [
+        "Policy",
+        "PolicyLayer",
+        "PolicyResult",
+        "agent_environment_policy",
+        "ban_policy",
+        "tweak_policy",
+        "cache_redirect_policy",
+        "daemon_policy",
+        "linux_daemon_policy",
+        "omz_plugins_policy"
+      ],
+      "type": "module"
+    },
+    "installer/skill_lifecycle.py": {
+      "exports": [
+        "perform_action",
+        "inspect_status",
+        "inspect_skill_packs",
+        "present_harnesses",
+        "LifecycleOutcome"
+      ],
+      "type": "module"
+    },
+    "installer/app.py": {
+      "exports": [
+        "run_wizard",
+        "run_doctor",
+        "run_uninstall",
+        "run_guard",
+        "configure_path",
+        "doctor_data",
+        "clean_rc_duplicates",
+        "UninstallDecision"
+      ],
+      "type": "module"
+    },
+    "installer/cli.py": {
+      "exports": [
+        "Options",
+        "parse_args"
+      ],
+      "type": "module"
+    },
+    "installer/selection.py": {
+      "exports": [
+        "select_tools",
+        "categories",
+        "tools_in",
+        "category_choices",
+        "tool_choices"
+      ],
+      "type": "module"
+    },
+    "installer/settings.py": {
+      "exports": [
+        "Settings",
+        "SettingsStore",
+        "load_settings",
+        "save_settings",
+        "resolve_link_mode"
+      ],
+      "type": "module"
+    },
+    "installer/doctor.py": {
+      "exports": [
+        "DoctorReport",
+        "audit_path",
+        "has_problems"
+      ],
+      "type": "module"
+    },
+    "installer/catalog_tui.py": {
+      "exports": [
+        "CatalogScreen",
+        "group_tools",
+        "sort_for_table"
+      ],
+      "type": "module"
+    },
+    "installer/tool_browser.py": {
+      "exports": [
+        "ToolBrowser",
+        "BrowserAdapter"
+      ],
+      "type": "module"
+    },
+    "installer/execute_screen.py": {
+      "exports": [
+        "ExecuteScreen",
+        "ExecuteInputs",
+        "attributed_install",
+        "ChecksumMismatchScreen",
+        "SensitiveActionScreen"
+      ],
+      "type": "module"
+    },
+    "installer/wizard_app.py": {
+      "exports": [
+        "catalog_for",
+        "DoctorScreen",
+        "UninstallScreen",
+        "PoliciesScreen"
+      ],
+      "type": "module"
+    },
+    "scripts/container-e2e-verify.sh": {
+      "exports": [],
+      "type": "script"
+    },
+    "scripts/detect-container-runtime.sh": {
+      "exports": [],
+      "type": "script"
+    },
+    "tests/conftest.py": {
+      "exports": [],
+      "type": "test",
+      "note": "scratch HOME fixtures; 76 test_*.py files mirror installer modules"
+    },
+    "Makefile": {
+      "exports": [],
+      "type": "config"
+    },
+    "pyproject.toml": {
+      "exports": [],
+      "type": "config"
+    }
+  }
+}

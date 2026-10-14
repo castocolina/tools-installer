@@ -1,0 +1,11 @@
+{
+  "hashes": {
+    "file-roles.json": "198244a4cb4e4425a82134180490e467b8d9641832cf6b9c72780340f28c43c0",
+    "api-map.json": "8c6977d1e8b9800546a750574b61c27454be7e2bde2586f0fc478e31200a71e7",
+    "dependency-graph.json": "65b82d18906c9a1f46723949ab59619a8f3d8bb1d432ff3fbd877257fc512516",
+    "arch-decisions.json": "31d583dfce11f7fbc1859dbfd7fe621895cd2327c804eddece4f2bc98dcc3c36",
+    "stack.json": "d5c614beb7f0c57471828fe52b0356f0fd8193ffa23f8a753f65be62acc1b640"
+  },
+  "timestamp": "2026-10-14T17:22:32.675Z",
+  "version": 1
+}

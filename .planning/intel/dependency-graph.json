@@ -1,0 +1,123 @@
+{
+  "_meta": {
+    "updated_at": "2026-10-14T17:22:32.424Z",
+    "version": 2
+  },
+  "entries": {
+    "rich": {
+      "version": ">=13",
+      "type": "production",
+      "invocation": "require",
+      "used_by": [
+        "setup.py",
+        "installer/"
+      ]
+    },
+    "questionary": {
+      "version": ">=2",
+      "type": "production",
+      "invocation": "require",
+      "used_by": [
+        "setup.py"
+      ]
+    },
+    "textual": {
+      "version": ">=8",
+      "type": "production",
+      "invocation": "require",
+      "used_by": [
+        "installer/catalog_tui.py",
+        "installer/wizard_app.py",
+        "installer/execute_screen.py"
+      ]
+    },
+    "pytest": {
+      "version": ">=8",
+      "type": "development",
+      "invocation": "make test",
+      "used_by": [
+        "make test"
+      ]
+    },
+    "pytest-cov": {
+      "version": ">=5",
+      "type": "development",
+      "invocation": "make test",
+      "used_by": [
+        "make test"
+      ]
+    },
+    "pytest-xdist": {
+      "version": ">=3.8.0",
+      "type": "development",
+      "invocation": "make test",
+      "used_by": [
+        "make test"
+      ]
+    },
+    "pytest-asyncio": {
+      "version": ">=1.4.0",
+      "type": "development",
+      "invocation": "make test",
+      "used_by": [
+        "make test"
+      ]
+    },
+    "ruff": {
+      "version": ">=0.6",
+      "type": "development",
+      "invocation": "make validate",
+      "used_by": [
+        "make validate"
+      ]
+    },
+    "pyright": {
+      "version": ">=1.1.380",
+      "type": "development",
+      "invocation": "make validate",
+      "used_by": [
+        "make validate"
+      ]
+    },
+    "bandit": {
+      "version": ">=1.7",
+      "type": "development",
+      "invocation": "make validate",
+      "used_by": [
+        "make validate"
+      ]
+    },
+    "vulture": {
+      "version": ">=2.11",
+      "type": "development",
+      "invocation": "make validate",
+      "used_by": [
+        "make validate"
+      ]
+    },
+    "pre-commit": {
+      "version": ">=3.8",
+      "type": "development",
+      "invocation": "make validate",
+      "used_by": [
+        "make validate"
+      ]
+    },
+    "shellcheck-py": {
+      "version": ">=0.11.0.1",
+      "type": "development",
+      "invocation": "make validate",
+      "used_by": [
+        "make validate"
+      ]
+    },
+    "pyyaml": {
+      "version": ">=6.0.3",
+      "type": "development",
+      "invocation": "make test",
+      "used_by": [
+        "make test"
+      ]
+    }
+  }
+}

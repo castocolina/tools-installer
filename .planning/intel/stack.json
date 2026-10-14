@@ -1,0 +1,40 @@
+{
+  "_meta": {
+    "updated_at": "2026-10-14T17:22:32.228Z",
+    "version": 2
+  },
+  "languages": [
+    "Python 3.11+",
+    "Bash"
+  ],
+  "frameworks": [
+    "Textual (TUI)",
+    "Rich",
+    "questionary/prompt_toolkit"
+  ],
+  "tools": [
+    "uv",
+    "ruff",
+    "pyright (strict)",
+    "bandit",
+    "vulture",
+    "pre-commit",
+    "shellcheck",
+    "pytest-xdist",
+    "pytest-cov (fail_under=90)",
+    "Podman/Docker for e2e"
+  ],
+  "build_system": "Makefile + hatchling (uv build)",
+  "test_framework": "pytest (-n auto capped ~40% host threads, asyncio_mode=auto)",
+  "package_manager": "uv",
+  "content_formats": [
+    "TOML (installer/registry.toml tool catalog)",
+    "Markdown (docs/, .claude/ rules, AGENTS.md)",
+    "Shell scripts (scripts/, install.sh)"
+  ],
+  "quality_gates": {
+    "make validate": "pre-commit: ruff lint+format, pyright, bandit, vulture, shellcheck",
+    "make test": "pytest -n auto (~40% threads) with coverage >=90",
+    "make e2e": "scripts/container-e2e-verify.sh all (disposable container)"
+  }
+}

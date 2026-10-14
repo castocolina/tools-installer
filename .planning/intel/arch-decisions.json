@@ -1,0 +1,56 @@
+{
+  "_meta": {
+    "updated_at": "2026-10-14T17:22:32.491Z",
+    "version": 2
+  },
+  "entries": {
+    "overview": {
+      "pattern": "wiring-only composition root + pure strictly-typed core",
+      "description": "setup.py does real IO; installer/ package is pure, pyright strict, >=90% covered (.claude/architecture.md)"
+    },
+    "data-flow": {
+      "flow": "registry.toml -> model.load_tools -> resolve.resolve_methods/deps.resolve_dependencies -> catalog_tui selection -> session.run_installs -> engine.install_tool -> executors.execute (download/apps/run) -> status/version_status/ownership refresh",
+      "description": "one view registry, one nav path, one apply workflow"
+    },
+    "component:Registry": {
+      "path": "installer/registry.toml, installer/model.py",
+      "responsibility": "declarative tool catalog: methods, requires, skills lifecycle"
+    },
+    "component:Resolver": {
+      "path": "installer/resolve.py, installer/deps.py",
+      "responsibility": "pick install method per platform; dependency order/cycles"
+    },
+    "component:Executor": {
+      "path": "installer/executors.py, installer/engine.py, installer/session.py, installer/download.py, installer/apps.py",
+      "responsibility": "run installs; checksum-verified downloads; host_setup handoff (no sudo)"
+    },
+    "component:Status": {
+      "path": "installer/status.py, installer/version_status.py, installer/version_cache.py",
+      "responsibility": "installed/version truth shown in catalog"
+    },
+    "component:Ownership/receipts": {
+      "path": "installer/install_ownership.py, installer/ownership.py, installer/uninstall.py",
+      "responsibility": "which manager owns a path; drives update/uninstall safety"
+    },
+    "component:Lifecycle": {
+      "path": "installer/update.py, installer/uninstall.py, installer/skill_lifecycle.py",
+      "responsibility": "update and remove tools/skill packs"
+    },
+    "component:Policies": {
+      "path": "installer/policy.py, agent_policy.py, env_redirect.py, daemon.py, systemd_daemon.py, tweaks.py, omz.py, guards.py",
+      "responsibility": "opt-in host policies, swept on uninstall"
+    },
+    "component:TUI": {
+      "path": "installer/wizard_app.py, catalog_tui.py, tool_browser.py, execute_screen.py",
+      "responsibility": "Textual screens"
+    },
+    "security": {
+      "rules": "zero sudo/pkexec/doas; atomic writes (installer/atomic.py); sha256 checks (installer/checksums.py); never mutate dev host; e2e only in containers"
+    },
+    "conventions": {
+      "naming": "snake_case modules mirrored by tests/test_<module>.py",
+      "imports": "installer.* absolute",
+      "gates": "make validate && make test before commit"
+    }
+  }
+}
