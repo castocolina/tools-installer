@@ -54,17 +54,24 @@
       "opencode-plan-review": {
         "cli": "opencode",
         "model": "router-env/my-plan-review"
+      },
+      "opencode-gpt-sol": {
+        "cli": "opencode",
+        "model": "openai/gpt-6.1-sol#xhigh"
+      },
+      "opencode-glm": {
+        "cli": "opencode",
+        "model": "zai-coding-plan/glm-5.3#high"
       }
     },
     "default_reviewers": [
       "opencode-plan-review"
     ],
     "timeouts": {
-      "opencode": 2400,
-      "codex": 4500
+      "opencode": 2400
     },
     "effort": {
-      "opencode": "medium"
+      "opencode": "inherit"
     }
   },
   "ship": {
