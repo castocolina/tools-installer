@@ -3,9 +3,14 @@ from pathlib import Path
 
 import pytest
 
+import installer.engine as engine_mod
 import installer.postinstall as pi
-from installer.model import Method, Tool
+from installer.engine import install_tool
+from installer.model import Method, Tool, load_tools
+from installer.platform import Platform
 from installer.run import CommandError, Runner
+
+_REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
 _ALL_HOSTS = ("claude", "codex", "opencode", "cursor-agent")
 _ALL_SUBSETS: list[tuple[str, ...]] = [
@@ -518,114 +523,38 @@ def test_rtk_hook_continues_past_a_command_error_and_captures_partial_warning(
     assert "claude" not in warning.split(";")[0]
 
 
-def test_graphify_hook_noops_when_no_host_present(monkeypatch: pytest.MonkeyPatch) -> None:
-    def none_installed(tool: Tool) -> bool:
+def test_installing_graphify_runs_no_host_registration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Phase 17 SAFE-02/D-03: installing graphify runs exactly
+    `uv tool install graphifyy` and nothing else -- the registry entry declares
+    no postinstall hook, so even with all four agent hosts present no
+    `graphify <host> install` call is issued and the working directory stays
+    empty (SPEC R2 acceptance)."""
+    tools = {t.id: t for t in load_tools(_REGISTRY)}
+    graphify = tools["graphify"]
+
+    def none_installed(_tool: Tool) -> bool:
         return False
 
-    monkeypatch.setattr(pi, "is_installed", none_installed)
+    def all_installed(_tool: Tool) -> bool:
+        return True
+
+    monkeypatch.setattr(engine_mod, "is_installed", none_installed)
+    monkeypatch.setattr(pi, "is_installed", all_installed)
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(cwd)
     calls: list[list[str]] = []
-    method = Method(kind="uv-tool", params={})
-    warning = pi.run_postinstall(
-        "graphify-register", method, lambda cmd: calls.append(cmd), _tools()
+    outcome = install_tool(
+        graphify,
+        Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        runner=calls.append,
+        tools=tools,
     )
-    assert warning is None
-    assert calls == []
-
-
-def test_graphify_hook_invokes_the_resolved_absolute_binary_path(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(pi, "is_installed", _only_claude_installed)
-    calls: list[list[str]] = []
-    method = Method(kind="uv-tool", params={})
-    pi.run_postinstall("graphify-register", method, lambda cmd: calls.append(cmd), _tools())
-    expected_bin = str(Path.home() / ".local" / "bin" / "graphify")
-    assert calls == [[expected_bin, "claude", "install"]]
-
-    calls.clear()
-    custom_method = Method(kind="uv-tool", params={"bin_dir": "/custom/dir"})
-    pi.run_postinstall("graphify-register", custom_method, lambda cmd: calls.append(cmd), _tools())
-    assert calls[0][0] == "/custom/dir/graphify"
-
-
-def test_graphify_hook_maps_cursor_agent_to_cursor_subcommand(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def only_cursor_agent(tool: Tool) -> bool:
-        return tool.id == "cursor-agent"
-
-    monkeypatch.setattr(pi, "is_installed", only_cursor_agent)
-    calls: list[list[str]] = []
-    method = Method(kind="uv-tool", params={})
-    pi.run_postinstall("graphify-register", method, lambda cmd: calls.append(cmd), _tools())
-    expected_bin = str(Path.home() / ".local" / "bin" / "graphify")
-    assert calls == [[expected_bin, "cursor", "install"]]
-
-
-def test_graphify_hook_returns_warning_string_on_command_error_not_raise(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(pi, "is_installed", _only_claude_installed)
-
-    def failing_runner(cmd: list[str]) -> None:
-        raise CommandError(cmd, 1)
-
-    method = Method(kind="uv-tool", params={})
-    warning = pi.run_postinstall("graphify-register", method, failing_runner, _tools())
-    assert warning is not None
-    assert "claude" in warning
-
-
-def test_graphify_hook_continues_past_a_command_error_and_captures_partial_warning(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(pi, "is_installed", _all_installed)
-
-    def failing_on_codex(cmd: list[str]) -> None:
-        if "codex" in cmd:
-            raise CommandError(cmd, 1)
-
-    method = Method(kind="uv-tool", params={})
-    warning = pi.run_postinstall("graphify-register", method, failing_on_codex, _tools())
-    assert warning is not None
-    assert "codex" in warning
-
-
-def test_graphify_hook_never_invokes_the_same_host_twice(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pi, "is_installed", _all_installed)
-    calls: list[list[str]] = []
-    method = Method(kind="uv-tool", params={})
-    pi.run_postinstall("graphify-register", method, lambda cmd: calls.append(cmd), _tools())
-    assert len(calls) == len({tuple(c) for c in calls})
-
-
-@pytest.mark.parametrize("present_subset", _ALL_SUBSETS, ids=lambda s: ",".join(s) or "none")
-def test_graphify_hook_never_composes_a_multi_host_csv_call(
-    monkeypatch: pytest.MonkeyPatch, present_subset: tuple[str, ...]
-) -> None:
-    """Pitfall 4: never a CSV, one `graphify <host> install` invocation per
-    present host -- a copy-paste from codegraph's single-CSV-call shape would
-    be wrong here."""
-    present = set(present_subset)
-
-    def fake_is_installed(tool: Tool) -> bool:
-        return tool.id in present
-
-    monkeypatch.setattr(pi, "is_installed", fake_is_installed)
-    calls: list[list[str]] = []
-    method = Method(kind="uv-tool", params={})
-    warning = pi.run_postinstall(
-        "graphify-register", method, lambda cmd: calls.append(cmd), _tools()
-    )
-    assert warning is None
-    expected_bin = str(Path.home() / ".local" / "bin" / "graphify")
-    declared_order = ("claude", "opencode", "codex", "cursor-agent")
-    expected_calls = [
-        [expected_bin, _EXPECTED_TARGET_FOR[host_id], "install"]
-        for host_id in declared_order
-        if host_id in present
-    ]
-    assert calls == expected_calls
-    for cmd in calls:
-        assert len(cmd) == 3
-        assert "," not in cmd[1]
+    assert outcome.status == "installed"
+    assert calls == [["uv", "tool", "install", "graphifyy"]]
+    assert list(cwd.iterdir()) == []

@@ -1589,9 +1589,13 @@ audience = "ai"
 tier = "ai"
 requires = ["uv"]
 desc = "Turns a codebase (plus docs, SQL schemas, configs, PDFs) into a queryable local knowledge graph for AI agents."
-postinstall = "graphify-register"
-# Verified 2026-09-11 (graphify 0.9.54): all four agent hosts' `graphify
-# <host> install` registration live-tested in a throwaway scratch project
+# Verified 2026-10-14: postinstall removed (Phase 17, SAFE-02). Every graphify
+# host-registration form tested in a disposable container writes into the
+# working directory for at least one host (.opencode, .cursor; the per-host
+# form also writes CLAUDE.md/AGENTS.md/.claude), so the installer runs none;
+# users register hosts from their project.
+# Verified 2026-09-11 (graphify 0.9.54): the four agent hosts' `graphify
+# <host> install` registration was live-tested in a throwaway scratch project
 # (never this repo or the real $HOME), closing 12.4-RESEARCH.md's
 # Assumption A2 -- merge-safety was previously only proven for `claude`.
 # opencode+codex share AGENTS.md: seeded with unrelated pre-existing content,

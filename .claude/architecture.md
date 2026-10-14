@@ -589,7 +589,7 @@ computation of which of the four canonical agent-host catalog ids
 `postinstall` hook that needs host-presence detection calls it rather than
 re-deriving its own loop over `installer.status.is_installed`. It was
 extracted from `_codegraph_mcp_register`'s original inline loop (Phase 9)
-with zero observable behavior change, and is now shared by three hooks in
+with zero observable behavior change, and is now shared by two hooks in
 `POSTINSTALL_HOOKS`:
 
 1. `codegraph-mcp-register` (Phase 9) — composes one `--target` CSV call.
@@ -600,9 +600,11 @@ with zero observable behavior change, and is now shared by three hooks in
    Code's `RTK.md`/`settings.json` as a side effect — writing unrequested
    Claude Code scaffolding on a Cursor-only machine would violate D-01a's
    detect-and-configure-never-blind-overwrite principle below.
-3. `graphify-register` (Phase 12.4) — one `graphify <host> install`
-   invocation per present host (never a composed CSV — graphify has no
-   multi-target flag, unlike codegraph).
+3. `graphify-register` (Phase 12.4, removed in Phase 17) — its
+   `graphify <host> install` invocations write into the working directory
+   for at least one host on every registration form (SAFE-02/D-03), so the
+   installer must never run one: the registry key was removed and the hook
+   deleted.
 
 **Detect and configure, never blind-overwrite (D-01a).** A postinstall hook
 must never pass a flag that overwrites existing host configuration

@@ -1048,3 +1048,44 @@ def test_update_service_fresh_unknown_overrides_cached_off_policy_brew() -> None
     outcome = service.run(cached)
     assert outcome.status == "unknown-owner"
     assert calls == []
+
+
+def test_updating_graphify_runs_no_host_registration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Phase 17 SAFE-02/D-03: the update path (update.py's _run_postinstall)
+    runs no graphify host-registration hook either, because the registry key
+    is gone -- the runner sees exactly `uv tool upgrade graphifyy` and the
+    working directory stays empty (SPEC R2 acceptance)."""
+    import installer.postinstall as pi
+    from installer.model import load_tools
+
+    registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+    tools = {t.id: t for t in load_tools(registry)}
+    graphify = tools["graphify"]
+
+    def all_installed(_tool: Tool) -> bool:
+        return True
+
+    def fake_resolve_tag(*_argv: str, **_kwargs: str) -> str:
+        return "v0"
+
+    monkeypatch.setattr(pi, "is_installed", all_installed)
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(cwd)
+    calls: list[list[str]] = []
+    outcome = perform_update(
+        _target(graphify, "uv", method=graphify.methods[0], package="graphifyy"),
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        runner=calls.append,
+        resolve_tag=fake_resolve_tag,
+        tools=tools,
+    )
+    assert outcome.status == "updated"
+    assert outcome.postinstall_warning is None
+    assert calls == [["uv", "tool", "upgrade", "graphifyy"]]
+    assert list(cwd.iterdir()) == []
