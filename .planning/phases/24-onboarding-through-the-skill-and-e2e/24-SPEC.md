@@ -83,6 +83,10 @@ Scouted 2026-10-13:
      - In a scratch HOME, the region holds the shell and the bindings, and user keys outside the region survive.
      - Turning it off in Policies removes exactly the region.
      - Removing the region by hand shows `≈`.
+   - **herdr (amended 2026-10-14, user request):** herdr also joins `sync_terminal_shells`. When zsh is available, new herdr panes start zsh instead of the login shell (bash on this host), so oh-my-zsh plugins load inside herdr as they do in Konsole, kitty and WezTerm.
+     - Measured on herdr 0.9.3: `[terminal] default_shell` is empty by default, which means `$SHELL`, then `/bin/sh`. Here that is `/bin/bash`, and it is the root cause of omz plugins not loading in herdr.
+     - Target: `default_shell = <absolute zsh path>` is written only when the key is absent. A user-set value is left alone and shows `≈` with a reason. Policies off reverts only the key the installer wrote. After a write, `herdr server reload-config` runs; already-open panes keep their shell.
+     - Acceptance: in a scratch HOME with a fake herdr and zsh on the lookup, the key is written and user keys survive. Without zsh, or with a user-set `default_shell`, nothing is written. Policies off removes exactly the key that was written.
 
 7. **Onboarding skill (ONB-03)**: `tool-onboarding` documents and checks the Phase 22 params and the `cargo_distrobox` kind.
    - Current: It predates them.
@@ -139,6 +143,7 @@ Scouted 2026-10-13:
 - [ ] A newer release tag shows `↑`; `u` rebuilds and rewrites the receipt; the `~/.config/alacritty` checksum is unchanged
 - [ ] Precedence fixtures: immutable+distrobox → build; immutable without → unavailable with the reason; mutable without → dnf handoff; mutable+distrobox → build
 - [ ] The Alacritty region holds the zsh shell and the keybindings; user keys survive; Policies off removes the region; drift shows `≈`
+- [ ] herdr `[terminal] default_shell` is set to zsh only when zsh is available and the key is absent; a user value is untouched (`≈`); Policies off reverts only the written key
 - [ ] The tool-onboarding skill names every new param; the skill-judge report is committed with a score ≥ before
 - [ ] Fedora, Debian and Arch e2e pass: rerun all skipped; leftovers ⊆ `config_paths`; a planted leftover fails the run
 - [ ] UAT (manual): Owner on every tier after install, `○` after Uninstall, confirmed by the user

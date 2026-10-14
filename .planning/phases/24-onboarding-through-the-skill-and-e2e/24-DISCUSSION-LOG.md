@@ -55,3 +55,6 @@ None asked. Nothing blocked a later phase.
 - GitHub `digest` on the herdr and Alacritty releases.
 - Alacritty build packages per distro; the `tic` source path.
 - `distrobox create/rm` flags for a one-shot box, including a custom `--home`.
+
+## Post-discussion amendment (2026-10-14)
+- User: herdr should start zsh when available, like Konsole/kitty, because omz plugins do not load in herdr. Measured: herdr 0.9.3 `[terminal] default_shell` is empty (meaning `$SHELL`, then `/bin/sh`) and `$SHELL` is `/bin/bash`. Added D-08b (herdr branch of `sync_terminal_shells`, absent-only key write, ledgered revert) and amended SPEC R6.

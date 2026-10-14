@@ -67,6 +67,17 @@ None of these has landed as of 2026-10-14.
   - After writing, re-parse with `tomllib` and roll back on failure.
   - One new Policy row toggles the region. Removing the region by hand shows `≈`.
   - jev: Laya guarded_region 0.82, own confidence 0.32, so I pivoted; TypeSafe 1.00.
+- **D-08b (user request 2026-10-14, SPEC R6 amended):** herdr is another branch of `sync_terminal_shells`, next to Konsole, kitty, WezTerm and Alacritty. It applies only when `herdr` and zsh both resolve through `_safe_executable(lookup(...))`.
+  - **Root cause, measured on this host:** herdr 0.9.3 `[terminal] default_shell` defaults to empty, which means `$SHELL`, then `/bin/sh`. The passwd shell and `$SHELL` here are `/bin/bash`, and zsh is `/home/linuxbrew/.linuxbrew/bin/zsh`. So herdr panes run bash and omz plugins never load.
+  - **Write:** `default_shell = "<abs zsh>"` under `[terminal]`. It goes through the 23 D-06/D-07 guarded splice **only when the key is absent**: it adds the table if missing, or splices the key into an existing `[terminal]`. It is never a second `[terminal]` header (that is invalid TOML).
+    - Re-parse with `tomllib`; roll back on failure.
+    - Record the write in the 23 D-08 ledger.
+    - Then `herdr server reload-config`, best effort. Already-open panes keep their shell, so the UAT opens a new pane.
+  - `shell_mode` is left at `auto`: interactive zsh reads `.zshrc`, which is enough for omz.
+  - **A user-set `default_shell`** (any value) is never overwritten. If it isn't zsh, show `≈` with "partial: you already set terminal.default_shell".
+  - **Revert:** Policies off, or herdr uninstall, removes only the ledgered key, and only if it still holds the written value.
+  - Same Policy row family as the other terminals; no new toggle UI.
+  - It is independent of D-12: the separator and indicators touch other keys, and both share the one writer and ledger.
 
 ### herdr (R1)
 - **D-09:** herdr gets `github_release` methods with `raw = true`, per OS/arch, at tier `user`, `audience = "both"`. There is no checksum file, so 18 D-05 digests apply when the API provides them.
@@ -97,7 +108,7 @@ None of these has landed as of 2026-10-14.
   - Afterwards it asserts that `podman ps -a` and the image list hold nothing new, then deletes the scratch dir. The real HOME is never touched.
   - The three-distro containers have no distrobox/podman, so they exercise the fallback or UNAVAILABLE path deterministically. There is no nested podman.
   - jev: Laya 0.64 (needs fallback); TypeSafe 0.97.
-- **D-17:** The real-host UAT is `24-UAT.md` in the existing UAT format. It is the only manual step, and the user runs it: Owner filled on every tier after install, `○` after Uninstall.
+- **D-17:** The real-host UAT is `24-UAT.md` in the existing UAT format. It is the only manual step, and the user runs it: Owner filled on every tier after install, `○` after Uninstall. It also checks that a **new** herdr pane runs zsh with omz plugins loaded (D-08b).
 
 ### Claude's Discretion
 - Plan and wave order. Suggested:
