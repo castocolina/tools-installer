@@ -252,7 +252,13 @@ oracle sha: 460da3998fe36bd5a7ad153fad8a04f3c934ad09
 validate & test on ubuntu-latest: success
 validate & test on macos-latest: failure (dot-dot test fixed; the unsynchronized-reader race test still never observes a committed record)
 
-pending: orchestrator (re-run after 17-15)
+Attempt 3 (after 17-15; red, routed to gap plan 17-16):
+run 38656028040 https://github.com/castocolina/tools-installer/actions/runs/38656028040
+oracle sha: 1bdc07f94f8a5089eacaf6095caed1c845082daa
+validate & test on ubuntu-latest: success
+validate & test on macos-latest: failure (race test fixed; new timing failure: test_manual_toggle_of_the_daemon_is_refused_while_the_worker_is_in_flight)
+
+pending: orchestrator (re-run after 17-16)
 
 ---
 *Phase: 17-stop-the-bleeding*
