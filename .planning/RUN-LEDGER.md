@@ -35,6 +35,9 @@ Started 2026-10-14. Hourly resume cron: session job (deleted at run end).
 | 17 | Review cycle 1 (opencode-plan-review): 0 HIGH, 7 actionable → replanned (reviews mode) | — | — | All 7 incorporated; 17-07 cancel test asserts `has_failure` True (reviewer suggested False) | Locked D-08: `has_failure` is true whenever `not_attempted` is non-empty; changing that is a user decision, not a plan fix |
 | 17 | Reviews-mode plan-check: 1 WARNING (17-13 `[^\r]` grep class truncates at 'r') + floors in 17-06/17-07 too low | — (verifiable) | — | Orchestrator fixed inline: `grep -a -o 'TRACER_REINSTALL_OK.*'` (verified on the Step-0 transcript), floors 9 and 9 | Measured defects in commands; no design choice |
 | 17 | Review cycle 2: 0 HIGH, 4 actionable (set_link_mode save-order MEDIUM + 3 LOW) → replanned; plan-check PASSED | — | — | save-first reorder lives in 17-08 (wave 3, its rollback depends on it), 17-11 keeps the order; orchestrator also anchored 17-13's pyproject/uv.lock diff to the repo root | 17-11 is wave 4, not wave 2 as the reviewer assumed |
+| 17 | Branching: config `branching_strategy: phase` (gsd/phase-17-…) vs work on main | — (playbook rule) | — | Execute on main | The phase branch forks off origin/main and would drop the 7 unpushed planning commits; the playbook pushes main after verification |
+| 17 | Wave 1 executed cross-AI (pi router-env/my-coding), sequential: 17-01, 17-02, 17-03, 17-04, 17-05, 17-12 | — | — | All 6 SUMMARY present; gate `make validate` rc 0, `make test` 3467 passed / 4 skipped, coverage 95.87% | No fallback to gsd-executor needed |
+| 17 | Foreign commit 71eb54f (todo capture from another session) dropped STATE.md Blockers/Concerns and truncated one todo line | — (verifiable) | — | Orchestrator restored the section after wave 1 | Concurrent session on main; content only, no code |
 
 ## Deferred questions / human verification
 
@@ -47,3 +50,4 @@ Started 2026-10-14. Hourly resume cron: session job (deleted at run end).
 | When | Role | Wait | Outcome |
 |------|------|------|---------|
 | 2026-10-14 ~16:20–16:50 | Claude session (gsd-planner revision, phase 17) | session limit until 16:50 | resumed the same agent via SendMessage after reset; no work lost |
+| 2026-10-14 19:07–19:17 | pi executor 17-02 (router-env → grok-4.7 402 usage balance exhausted) | 10 min | retried with a resume note; task 1 commit kept, partial task-2 edits reviewed and committed by pi |

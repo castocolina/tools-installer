@@ -65,11 +65,20 @@ Recent decisions affecting current work:
 - [Roadmap, 2026-10-13]: Receipts are the only removal proof (Phase 19 format and writer, Phase 22 removal); UI-04 "delete config too" moved from TA P5 to Phase 22, where `config_paths` exists
 
 ### Pending Todos
-- [2026-09-16] [doctor] Detect dangling pnpm global bin shims in Doctor — [todo file](.planning/todos/pending/2026-09-16-detect-dangling-pnpm-global-bin-shims-in-doctor.md)
+
+- [2026-09-16] [doctor] Detect dangling pnpm global bin shims in Doctor — [todo file](.planning/todos/pending/2026-09-16-detect-dangling-pnpm-global-bin-shims-in-doctor.md) — closes with Phase 21 (UI-07)
 - [2026-10-13] [tweaks] Point Playwright MCP at the Flatpak Chrome (shell tweak + Cursor MCP env) — [todo file](.planning/todos/pending/2026-10-13-playwright-mcp-flatpak-chrome.md)
 - [2026-10-13] [pi] Repair pi's install leftovers and ship the pi model/MCP sync — [todo file](.planning/todos/pending/2026-10-13-repair-pi-install-and-sync-models.md)
 - [2026-10-14] [catalog] Add xcode-clt catalog entry as macOS prerequisite — [todo file](.planning/todos/pending/2026-10-14-add-xcode-clt-catalog-entry-as-macos-prerequisite.md)
-- [2026-10-14] [catalog] Port what is useful from ai-kit's shelved "context tools" wizard Step 0 — [todo file](.planning/todos/pending/2026-10-14-port-ai-kit-context-tools-step0.md) — Needs Read the tag from the ai-kit checkout (`git show.
+- [2026-10-14] [catalog] Port what is useful from ai-kit's shelved "context tools" wizard Step 0 — [todo file](.planning/todos/pending/2026-10-14-port-ai-kit-context-tools-step0.md) — source: ai-kit tag `archive/context-tools-plan1`
+
+### Blockers/Concerns
+
+- [Host hazard] Until Phase 17 lands, `make uninstall --yes` can delete foreign `~/.local/bin` files, and reinstalling Sublime further damages `~/.local/opt/subl` — do not run either
+- [Phase 17] CI-02 (branch protection requiring the PR check) is a user action on GitHub
+- [Phase 17] O14: graphify switches to the global form only if the HOME-sandbox probe proves the cwd untouched; otherwise its `postinstall` is removed
+- [Phase 23/24] Not verified yet: whether `herdr integration install` edits an agent's main config (merge-safety check before shipping)
+- [Phase 24] Phase 18 is not in Phase 24's dependency chain; herdr's registry entry must still pass Phase 18's `# Verified` and unknown-key checks, so finish Phase 18 before Phase 24
 
 ## Deferred Items
 
