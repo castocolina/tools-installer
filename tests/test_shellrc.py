@@ -2673,10 +2673,19 @@ def test_reserved_word_prefixed_source_forms_execute_and_are_refused(
             check=False,
             timeout=30,
         )
-        assert "MARKER=1" in executed.stdout, (
-            f"{modifier!r} did not source under {name}; investigate the shell, "
-            f"never delete the detection"
-        )
+        # dash has no `time` keyword, so `time . file` never sources there.
+        # Every other shell in this set (bash, zsh, macOS sh) does.
+        sourced = "MARKER=1" in executed.stdout
+        if Path(shell).resolve().name == "dash":
+            assert not sourced, (
+                f"{modifier!r} sourced under dash; investigate the shell, "
+                f"never delete the detection"
+            )
+        else:
+            assert sourced, (
+                f"{modifier!r} did not source under {name}; investigate the shell, "
+                f"never delete the detection"
+            )
 
     # 2. Prove consolidation refuses that same form, byte for byte.
     shellrc, myshellrc, _managed_bin = _seed_self_sourcing_home(

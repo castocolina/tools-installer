@@ -8,6 +8,7 @@ it by default keeps every test that does not set it explicitly on ~/.zshrc.
 """
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -23,9 +24,10 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:
 
     `PYTEST_XDIST_AUTO_NUM_WORKERS` still overrides this, per xdist.
     """
-    usable = (
-        len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
-    )
+    if sys.platform == "linux":
+        usable = len(os.sched_getaffinity(0))
+    else:
+        usable = os.cpu_count() or 1
     return max(1, round(usable * 0.4))
 
 
