@@ -45,7 +45,7 @@ Out of scope:
   - This also keeps a never-runnable row from staying in the retained selection forever.
 
 ### Execution and outcomes (R4, R5, R6)
-- **D-06 (best, not easy):** RECONFIGURE runs the typed `ConfigStep`s from `ToolState.unconfigured` (19 D-20): skill install for a harness, terminal sync, or installing the missing pnpm group members.
+- **D-06 (best, not easy):** RECONFIGURE runs the typed `ConfigStep`s from `ToolState.unconfigured` (19 D-20): skill install for a harness, plugin dedupe/enable (19 D-18 fix step: enable canonical first, then remove copies), terminal sync, or installing the missing pnpm group members.
   - The review lists the steps.
   - The generic `reapply_post_install` (`engine.py:200-216`) is not used for RECONFIGURE, because it re-runs registry actions and fixes none of 19's signals.
   - Hook re-registration stays in Phase 23. jev: TypeSafe 0.95.

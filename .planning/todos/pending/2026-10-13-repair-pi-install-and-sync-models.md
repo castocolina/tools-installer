@@ -29,9 +29,9 @@ Volta install, and pi cannot see the providers and MCP servers the other hosts a
 
 ## Solution
 
-1. Re-point the 6 symlinks at the installed package (resolve its path, never hardcode it).
-2. Delete `~/.pi/agent/skills` after confirming every entry duplicates `~/.agents/skills`.
-3. Ship `pi-sync/pi_sync.py` (stdlib, dry-run by default, `--write` backs up to `*.bak`,
+1. ~~Re-point the 6 symlinks at the installed package.~~ **Done on the host 2026-10-14** (bun package path; `find ~/.pi/agent -xtype l` is empty).
+2. ~~Delete `~/.pi/agent/skills`.~~ **Done 2026-10-14.** All 33 entries were links into `~/.agents/skills`. The installer never writes this dir (`skill_lifecycle` uses `.agents/skills` for pi), so it was a one-off leftover and needs no code.
+3. Ship (still open; note that the user's rule is that backups get deleted, so drop the `*.bak` or remove it after a successful write) `pi-sync/pi_sync.py` (stdlib, dry-run by default, `--write` backs up to `*.bak`,
    idempotent, never copies key values; self-check `python3 -I test_pi_sync.py`) as a reviewed
    post-setup handoff: opencode Zen/Go models via an `apiKey` reference, opencode MCP servers
    converted to pi's `mcp.json`. router-env stays with llm-env.

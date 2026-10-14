@@ -102,8 +102,16 @@ Out of scope:
   - An enabled user-scope entry means present.
   - Project-scope copies, other marketplaces, other versions and disabled entries do not make the pack present. Each becomes a "duplicate" or "disabled" reason that names the marketplace, scope and version.
   - The live evidence is superpowers installed 4 times (2 marketplaces × 2 scopes, versions 6.4.1 and 6.2.0; F-registry-ai.md:40,138).
+  - **Fix step (added 2026-10-14, user: "agrégalo a las phases"):** the duplicate and disabled reasons each carry a D-20 `ConfigStep`, so 20 D-06 RECONFIGURE repairs them. Detection alone is not enough.
+    - **Order matters (measured on the host on 2026-10-14):** the user-scope copy was `✘ disabled` and only worked through the project copies. Removing the copies first would leave no working plugin.
+    - Step 1: `claude plugin enable -s user <canonical>`, if it is disabled.
+    - Step 2: `claude plugin uninstall -s <scope> <id>` for each non-canonical copy. Project scope runs with `cwd=<projectPath>` from `installed_plugins.json`.
+    - Step 3: `claude plugin marketplace remove <m>` only when nothing else is installed from that marketplace.
+    - Then re-probe. The row is ✓ only if exactly one enabled user-scope entry remains.
+    - If the canonical copy is missing entirely, the step is "install user-scope canonical", and copies are removed only after it succeeds.
+    - **Host state:** cleaned by hand on 2026-10-14, leaving the official user scope at 6.4.1, enabled. The fixture for this step reproduces the 4-install state from `installed_plugins.json` and `claude plugin list` text, not from the live host.
 - **D-19:** A pnpm co-install group that is incomplete produces `≈`, from the pnpm inventory the pass already caches.
-- **D-20 (added by Phase 20 D-06, 2026-10-14):** `ToolState.unconfigured` is a tuple of typed `ConfigStep`s rather than plain strings. Each step has the text shown to the user and a fix: skill install for a harness (D-17/D-18), terminal sync (D-16), or install of the missing pnpm group members (D-19). Phase 20's RECONFIGURE runs exactly those steps.
+- **D-20 (added by Phase 20 D-06, 2026-10-14):** `ToolState.unconfigured` is a tuple of typed `ConfigStep`s rather than plain strings. Each step has the text shown to the user and a fix: skill install for a harness (D-17/D-18), plugin dedupe/enable for a harness (D-18 fix step), terminal sync (D-16), or install of the missing pnpm group members (D-19). Phase 20's RECONFIGURE runs exactly those steps.
 
 ### Claude's Discretion
 - Plan and wave order. Suggested:
