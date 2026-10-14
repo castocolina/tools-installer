@@ -3,7 +3,8 @@
 #
 # Bootstrap one long-lived named container (non-root, sudo-capable, Homebrew
 # + uv) and run Pass 1: a clean install of the full registry.toml catalog
-# through `uv run setup.py --all --yes`. Plan 12.3-03 extends this with Pass 2.
+# through `uv run setup.py --all --yes`, then Pass 2 (rerun, uninstall,
+# reinstall). `make e2e` runs `all`: every step, then removes the container.
 #
 # First line of real logic sources scripts/detect-container-runtime.sh; a
 # non-zero detection exit is propagated immediately. Never fall back to the
@@ -11,14 +12,13 @@
 
 set -euo pipefail
 
-CONTAINER_NAME="tools-installer-e2e-12-3"
+CONTAINER_NAME="tools-installer-e2e"
 IMAGE="fedora:latest"
-PHASE_REL=".planning/phases/12.3-container-e2e-verification-of-the-reconciled-branch-real-end"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PHASE_DIR="$REPO_ROOT/$PHASE_REL"
-TRANSCRIPT="$PHASE_DIR/pass1-transcript.log"
+# Transcripts are run evidence, not source: .e2e-artifacts/ is gitignored.
+PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container"
 
 usage() {
   cat <<'EOF'
@@ -44,6 +44,8 @@ Usage: container-e2e-verify.sh <command> [options]
                           TRACER_REINSTALL_OK per step into
                           pass2-transcript.log (appended, in order). Tears the
                           container down (rm -f) once all three succeed.
+  all                     bootstrap --replace, pass1, pass2, then remove the
+                          container whatever the outcome (what `make e2e` runs).
   -h, --help              Show this help
 
 Never allocates a pseudo-TTY on exec (no -it/-t) so sys.stdin.isatty() is
@@ -457,6 +459,15 @@ cmd_pass2() {
   printf 'TRACER_CONTAINER_TEARDOWN_OK\n' >> "$log"
 }
 
+cmd_all() {
+  # Never leave the container behind, pass or fail (pass2 also removes it on success).
+  trap 'ct rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true' EXIT
+  cmd_bootstrap --replace
+  cmd_pass1 | tee "$PHASE_DIR/pass1-transcript.log"
+  cmd_pass2
+  cat "$PHASE_DIR/pass2-transcript.log"
+}
+
 main() {
   local cmd="${1:-}"
   shift || true
@@ -465,6 +476,7 @@ main() {
     pass1) cmd_pass1 "$@" ;;
     pass2) cmd_pass2 "$@" ;;
     resync) cmd_resync "$@" ;;
+    all) cmd_all "$@" ;;
     -h|--help) usage; exit 0 ;;
     "") usage; exit 2 ;;
     *) printf 'unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;

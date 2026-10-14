@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install build setup run doctor fix uninstall guard unguard validate test
+.PHONY: help install build setup run doctor fix uninstall guard unguard validate test e2e
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -49,3 +49,6 @@ validate:  ## Lint, format-check, type-check, security, dead-code
 
 test:  ## Run tests with coverage, in parallel (pytest-xdist)
 	uv run pytest -n auto --cov
+
+e2e:  ## Real install/uninstall in a disposable Fedora container (podman/docker, never the host)
+	scripts/container-e2e-verify.sh all

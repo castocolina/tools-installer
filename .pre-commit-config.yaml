@@ -1,16 +1,19 @@
 repos:
   - repo: local
     hooks:
+      # Same file set as `make validate` (installer, tests, setup.py); planning research is not product code.
       - id: ruff-check
         name: ruff check
         entry: uv run ruff check
         language: system
         types: [python]
+        files: ^(installer/|tests/|setup\.py$)
       - id: ruff-format
         name: ruff format --check
         entry: uv run ruff format --check
         language: system
         types: [python]
+        files: ^(installer/|tests/|setup\.py$)
       - id: pyright
         name: pyright
         entry: uv run pyright
