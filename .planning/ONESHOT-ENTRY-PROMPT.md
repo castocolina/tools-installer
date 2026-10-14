@@ -1,6 +1,6 @@
 # tools-installer v0.49.0 - Claude Code Autonomous Run Driver
 
-**DRAFT — not yet reviewed or run.** Copy-paste driver for a single long-running
+**Superseded for v0.50.0 by `.planning/goals/2026-10-14-v0.50.0-phases-17-25.md`.** Copy-paste driver for a single long-running
 Claude Code session across the remaining roadmap (expect a multi-hour,
 possibly multi-day run). All operational detail — model routing, per-phase
 checklist, gates, rules — lives in `.planning/ONESHOT-RULES.md`; this file
