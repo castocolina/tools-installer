@@ -1343,11 +1343,15 @@ recommends = ["codegraph", "graphify", "rtk"]
 # Verified 2026-10-10: https://chatgpt.com/codex/install.sh places the binary
 # at ${CODEX_HOME:-$HOME/.codex}/packages/standalone/current/bin/codex. Live
 # host symlink target agrees. ~/.local/bin/codex is only that symlink;
-# CODEX_INSTALL_DIR moves the symlink, not the binary.
+# CODEX_INSTALL_DIR moves the symlink, not the binary. Verified 2026-10-13
+# (Phase 17, SAFE-07/D-10): install.sh line 6 reads CODEX_NON_INTERACTIVE and
+# line 100 documents "Set to 1, true, or yes to skip prompts"; without it its
+# prompt_yes_no reads /dev/tty and hangs, so the script method declares it.
 [[tool.method]]
 kind = "script"
 url = "https://chatgpt.com/codex/install.sh"
 shell = "sh"
+env = { CODEX_NON_INTERACTIVE = "1" }
 bin_dir = "~/.codex/packages/standalone/current/bin"
 [[tool.method]]
 kind = "cask"
@@ -2268,12 +2272,15 @@ cask = "sublime-text"
 # it. The archive's own binary is named sublime_text, with no `subl`
 # alongside it the way the macOS bundle provides -- bin_name renames the
 # symlink to match `cmd` so it's reachable the same way on every platform.
+# Verified 2026-10-14: both Linux archives (x64, arm64) unpack to sublime_text/
+# with the executable at sublime_text/sublime_text (tar -tvJf in a disposable
+# container); member names that file, not the directory.
 [[tool.method]]
 kind = "tarball"
 os = ["debian", "arch", "fedora"]
 arch = ["amd64"]
 url = "https://download.sublimetext.com/sublime_text_build_4200_x64.tar.xz"
-member = "sublime_text"
+member = "sublime_text/sublime_text"
 bin_name = "subl"
 archive = "xz"
 [[tool.method]]
@@ -2281,7 +2288,7 @@ kind = "tarball"
 os = ["debian", "arch", "fedora"]
 arch = ["arm64"]
 url = "https://download.sublimetext.com/sublime_text_build_4200_arm64.tar.xz"
-member = "sublime_text"
+member = "sublime_text/sublime_text"
 bin_name = "subl"
 archive = "xz"
 

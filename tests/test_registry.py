@@ -2013,3 +2013,37 @@ def test_install_state_probes_match_gsd_core() -> None:
         for probe in lifecycle.status_probes:
             if probe.via == "install-state":
                 assert probe.match == "gsd-core", tool.id
+
+
+def test_sublime_linux_tarballs_link_the_binary_inside_the_archive_dir() -> None:
+    """Phase 17 SAFE-01/D-02: both Linux tarball archives unpack to a single
+    top-level sublime_text/ directory holding the executable at
+    sublime_text/sublime_text -- member must name that file, not the
+    directory (a directory member made the symlink point at a directory)."""
+    sublime = next(t for t in load_tools(REGISTRY) if t.id == "sublime")
+    tarballs = [m for m in sublime.methods if m.kind == "tarball"]
+    assert len(tarballs) == 2
+    for method in tarballs:
+        assert method.params["member"] == "sublime_text/sublime_text"
+        assert method.params["bin_name"] == "subl"
+        assert method.params["archive"] == "xz"
+        assert "strip" not in method.params  # default 0
+    text = REGISTRY.read_text()
+    block = text[text.index('id = "sublime"') :]
+    assert "Verified 2026-10-14" in block
+
+
+def test_codex_script_runs_non_interactive() -> None:
+    """Phase 17 SAFE-07/D-10: codex's install.sh prompts on /dev/tty unless
+    CODEX_NON_INTERACTIVE is set (install.sh line 6 reads it, line 100
+    documents it) -- the script method declares it through the env table, and
+    _env_prefix turns it into a shell prefix on the recorded command."""
+    import installer.executors as executors
+
+    codex = next(t for t in load_tools(REGISTRY) if t.id == "codex")
+    script = next(m for m in codex.methods if m.kind == "script")
+    assert script.params["env"] == {"CODEX_NON_INTERACTIVE": "1"}
+    calls: list[list[str]] = []
+    executors.execute(script, calls.append)
+    assert len(calls) == 1
+    assert "CODEX_NON_INTERACTIVE=1" in calls[0][-1]
