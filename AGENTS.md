@@ -27,6 +27,13 @@ Python, managed with **uv**. See [PRD](docs/prds/ai-dev-tools-installer-v1.0-prd
   so each commit is one self-contained, valid change. See [Git Workflow](.claude/git-workflow.md).
 - **Validate before you commit.** `make validate && make test` must pass on the exact
   tree you are about to commit.
+- **Never mutate the developer's host.** Do not run `make setup`, `make fix` or
+  `make uninstall`, or mutating `systemctl --user` commands, on the real machine, and
+  never edit the real shell rc or agent settings. Tests use a scratch `HOME`; real
+  installs and removals run only in disposable containers
+  (`scripts/detect-container-runtime.sh`), which are removed afterwards.
+- **Zero sudo.** No code path runs `sudo`, `pkexec` or `doas`; anything that needs
+  root is handed off as the exact command for the user to run.
 
 ## Detailed rules
 
