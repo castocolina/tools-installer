@@ -1,3 +1,4 @@
+import dataclasses
 import functools
 import hashlib
 import json
@@ -29,15 +30,14 @@ def _ctx(
     *,
     resolve_release: ReleaseResolver | None = None,
 ) -> ExecContext:
-    def resolve_tag(repo: str) -> str:
-        return tmp_version
+    def default_release(_repo: str) -> Release:
+        return Release(tmp_version, {})
 
     platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
     return ExecContext(
         runner=runner,
         platform=platform,
-        resolve_tag=resolve_tag,
-        resolve_release=resolve_release,
+        resolve_release=resolve_release if resolve_release is not None else default_release,
     )
 
 
@@ -52,6 +52,14 @@ def _record() -> tuple[list[list[str]], Runner]:
 
 def test_download_kinds_constant():
     assert set(DOWNLOAD_KINDS) == {"github_release", "tarball"}
+
+
+def test_exec_context_requires_a_release_resolver():
+    fields = dataclasses.fields(ExecContext)
+    assert {f.name for f in fields} == {"runner", "platform", "resolve_release"}
+    for field in fields:
+        assert field.default is dataclasses.MISSING
+        assert field.default_factory is dataclasses.MISSING
 
 
 def test_github_release_archive_extracts_to_opt_and_symlinks(
@@ -579,13 +587,10 @@ def test_github_release_bad_asset_template_raises_executor_error(tmp_path: Path)
 def test_github_release_unsupported_arch_raises_executor_error(tmp_path: Path):
     calls, runner = _record()
 
-    def resolve_tag(repo: str) -> str:
-        return "1.0.0"
-
     ctx = ExecContext(
         runner=runner,
         platform=Platform(os="fedora", arch="riscv64", immutable=False, has_brew=False),
-        resolve_tag=resolve_tag,
+        resolve_release=lambda _repo: Release("1.0.0", {}),
     )
     method = Method(
         kind="github_release",

@@ -332,7 +332,6 @@ def _update_installer_owned(
             ExecContext(
                 runner=runner,
                 platform=platform,
-                resolve_tag=resolve_tag,
                 resolve_release=release_resolver(resolve_tag),
             ),
         )

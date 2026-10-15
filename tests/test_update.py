@@ -533,7 +533,6 @@ def test_installer_owned_update_passes_the_release_resolver(
     tool = _tool("rg", method, cmd="rg")
 
     def fake_update(method: Method, ctx: ExecContext) -> DownloadUpdateExecResult:
-        assert ctx.resolve_release is not None
         return DownloadUpdateExecResult(verified=True)
 
     monkeypatch.setattr(update.download, "update_download", fake_update)

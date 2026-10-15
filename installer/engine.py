@@ -188,7 +188,6 @@ def install_tool(
     ctx = ExecContext(
         runner=runner,
         platform=platform,
-        resolve_tag=resolve_tag,
         resolve_release=release_resolver(resolve_tag),
     )
     errors: list[Exception] = []
@@ -214,16 +213,14 @@ def install_tool(
             except executors.ExecutorError as exc:
                 os.environ["PATH"] = path_before
                 removal = method_removal_command(method, tool.cmd)
-                if removal is None:
-                    leftover = (
-                        f"{method.kind} left {tool.cmd} installed after its smoke run failed; "
-                        "remove it with that installer's own uninstaller"
-                    )
-                else:
-                    leftover = (
-                        f"{method.kind} left {tool.cmd} installed after its smoke run failed; "
-                        f"remove it with `{removal}`"
-                    )
+                tail = (
+                    "remove it with that installer's own uninstaller"
+                    if removal is None
+                    else f"remove it with `{removal}`"
+                )
+                leftover = (
+                    f"{method.kind} left {tool.cmd} installed after its smoke run failed; {tail}"
+                )
                 leftovers.append(leftover)
                 raise executors.ExecutorError(f"{exc}; {leftover}") from exc
         except ChecksumMismatch as exc:

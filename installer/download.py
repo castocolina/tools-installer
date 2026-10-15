@@ -28,9 +28,11 @@ from installer.locations import bin_dir, ensure_dir, opt_dir
 from installer.model import Method
 from installer.platform import Platform
 from installer.run import Runner
-from installer.versions import Release, ReleaseResolver, TagResolver
+from installer.versions import ReleaseResolver
 
 DOWNLOAD_KINDS = ("github_release", "tarball")
+
+UNPINNED_REASON = "unpinned url; no sha256 to verify against"
 
 
 @dataclass(frozen=True)
@@ -50,8 +52,7 @@ class UpdateExecResult:
 class ExecContext:
     runner: Runner
     platform: Platform
-    resolve_tag: TagResolver
-    resolve_release: ReleaseResolver | None = None
+    resolve_release: ReleaseResolver
 
 
 def _opt_str(method: Method, key: str) -> str | None:
@@ -90,6 +91,10 @@ class DownloadTarget:
     sha256: str | None = None
     unverified_reason: str | None = None
 
+    @property
+    def verified(self) -> bool:
+        return self.checksum is not None or self.sha256 is not None
+
 
 def resolve_target(method: Method, ctx: ExecContext) -> DownloadTarget:
     """Resolve the download URL, member path, and optional checksum source.
@@ -109,10 +114,7 @@ def resolve_target(method: Method, ctx: ExecContext) -> DownloadTarget:
     if method.kind == "github_release":
         repo = require_str(method, "repo")
         template = require_str(method, "asset")
-        if ctx.resolve_release is not None:
-            release = ctx.resolve_release(repo)
-        else:
-            release = Release(ctx.resolve_tag(repo), {})
+        release = ctx.resolve_release(repo)
         tag = release.tag
         ver = tag.removeprefix("v")  # asset/member use the bare number; the path uses the tag
         try:
@@ -150,18 +152,12 @@ def resolve_target(method: Method, ctx: ExecContext) -> DownloadTarget:
         url = pinned_url(method)
         sha256_pin = _opt_str(method, "sha256")
         asset = PurePosixPath(url).name
-        if sha256_pin is not None:
-            return DownloadTarget(
-                url=url,
-                member=raw_member,
-                asset=asset,
-                sha256=sha256_pin,
-            )
         return DownloadTarget(
             url=url,
             member=raw_member,
             asset=asset,
-            unverified_reason="unpinned url; no sha256 to verify against",
+            sha256=sha256_pin,
+            unverified_reason=None if sha256_pin else UNPINNED_REASON,
         )
     raise ExecutorError(f"no download executor for kind '{method.kind}'")
 
@@ -242,17 +238,16 @@ def install_download(method: Method, ctx: ExecContext) -> str | None:
         if method.params.get("raw") is True:
             _replace_raw(link, asset_path, smoke_argv=method_smoke_argv(method))
         else:
-            verified = target.checksum is not None or target.sha256 is not None
             _replace_archive(
                 method,
                 ctx,
                 target,
                 link,
                 asset_path,
-                verified=verified,
+                verified=target.verified,
                 smoke_argv=method_smoke_argv(method),
             )
-        if target.checksum is not None or target.sha256 is not None:
+        if target.verified:
             return None
         return target.unverified_reason
     finally:
@@ -280,11 +275,10 @@ def update_download(method: Method, ctx: ExecContext) -> UpdateExecResult:
     staging = Path(tempfile.mkdtemp(prefix="tools-installer-update-"))
     try:
         asset_path = _fetch_verified(method, ctx, target, staging)
-        verified = target.checksum is not None or target.sha256 is not None
         if method.params.get("raw") is True:
             _replace_raw(link, asset_path)
-            return UpdateExecResult(verified=verified)
-        return _replace_archive(method, ctx, target, link, asset_path, verified=verified)
+            return UpdateExecResult(verified=target.verified)
+        return _replace_archive(method, ctx, target, link, asset_path, verified=target.verified)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 

@@ -379,7 +379,6 @@ def _collect_targets(
                             ctx = ExecContext(
                                 runner=_runner_never_called,
                                 platform=platform,
-                                resolve_tag=lambda repo: release(repo).tag,
                                 resolve_release=release,
                             )
                             target = resolve_target(method, ctx)
