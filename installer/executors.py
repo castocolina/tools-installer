@@ -76,6 +76,17 @@ def staged_member(root: Path, member: str) -> Path:
     return path
 
 
+def _smoke_reason(detail: str) -> str:
+    for line in detail.splitlines():
+        stripped = line.strip()
+        if stripped and _LOADER_ERROR.search(stripped):
+            return stripped
+    non_empty = [line.strip() for line in detail.splitlines() if line.strip()]
+    if non_empty:
+        return " | ".join(non_empty[-5:])
+    return "no output"
+
+
 def smoke_binary(
     path: Path,
     argv: Sequence[str] = ("--version",),
@@ -98,15 +109,14 @@ def smoke_binary(
     except CommandError as exc:
         detail = exc.detail or ""
         if exc.returncode in (126, 127) or _LOADER_ERROR.search(detail):
-            raise ExecutorError(f"smoke run failed for {path}: {exc}") from exc
+            raise ExecutorError(
+                f"smoke run failed for {path} (exit {exc.returncode}): {_smoke_reason(detail)}"
+            ) from exc
         return
     if _LOADER_ERROR.search(stderr):
         for line in stderr.splitlines():
             if _LOADER_ERROR.search(line):
                 raise ExecutorError(f"smoke run failed for {path}: loader error on exit 0: {line}")
-        raise ExecutorError(
-            f"smoke run failed for {path}: loader error on exit 0: {stderr.strip()}"
-        )
 
 
 def _opt_pkg_list(method: Method, key: str) -> tuple[str, ...]:

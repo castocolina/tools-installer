@@ -100,6 +100,11 @@ def render_failure_details(outcomes: list[InstallOutcome], console: Console) -> 
             continue
         detail = str(outcome.errors[-1]) if outcome.errors else "no method succeeded"
         console.print(f"[red]✗ {outcome.tool_id} failed: {escape(sanitize_log_line(detail))}[/]")
+        for err in outcome.errors[:-1]:
+            first_line = str(err).splitlines()[0]
+            console.print(
+                f"  [dim]earlier method failed: {escape(sanitize_log_line(first_line))}[/]"
+            )
 
 
 def render_skipped(outcomes: list[InstallOutcome], console: Console) -> None:

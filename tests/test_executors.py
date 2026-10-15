@@ -1081,6 +1081,31 @@ def test_smoke_binary_passes_on_timeout(tmp_path: Path) -> None:
     executors.smoke_binary(script, timeout=0.2)
 
 
+@pytest.mark.parametrize(
+    ("setup", "reason"),
+    [
+        ("#!/nonexistent/interpreter\n", "No such file or directory"),
+        (None, "Exec format error"),
+    ],
+    ids=["missing_interpreter", "wrong_arch_elf"],
+)
+def test_smoke_binary_names_the_os_launch_error(
+    tmp_path: Path, setup: str | None, reason: str
+) -> None:
+    path = tmp_path / "bin"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if setup is None:
+        path.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    else:
+        path.write_text(setup, encoding="utf-8")
+    path.chmod(0o755)
+    with pytest.raises(ExecutorError) as exc_info:
+        executors.smoke_binary(path)
+    message = str(exc_info.value)
+    assert message.startswith("smoke run failed for")
+    assert reason in message
+
+
 def test_smoke_binary_hides_the_display(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     marker = tmp_path / "display.txt"
     script = _script(

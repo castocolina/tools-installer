@@ -99,7 +99,7 @@ def run_output_with_stderr(
     except subprocess.CalledProcessError as exc:
         raise CommandError(cmd, exc.returncode, detail=(exc.stderr or "").strip()) from exc
     except OSError as exc:
-        raise CommandError(cmd, 127) from exc
+        raise CommandError(cmd, 127, detail=str(exc)) from exc
     return completed.stdout, completed.stderr
 
 

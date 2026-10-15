@@ -5,9 +5,11 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
+import installer.executors as executors
 from installer.audit import ToolStatus
 from installer.checksums import ChecksumMismatch
 from installer.engine import InstallOutcome
+from installer.executors import ExecutorError
 from installer.model import Method, Tool
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.render import (
@@ -26,6 +28,7 @@ from installer.render import (
     render_uninstall,
     render_verification,
 )
+from installer.run import CommandError
 from installer.session import Summary
 
 
@@ -130,6 +133,37 @@ def test_render_failure_details_falls_back_without_a_captured_error() -> None:
     console, buf = _console()
     render_failure_details([InstallOutcome("puppeteer", "failed")], console)
     assert "puppeteer failed: no method succeeded" in buf.getvalue()
+
+
+def test_failure_report_keeps_an_earlier_smoke_reason(tmp_path: Path) -> None:
+    elf = tmp_path / "bin"
+    elf.parent.mkdir(parents=True, exist_ok=True)
+    elf.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    elf.chmod(0o755)
+    try:
+        executors.smoke_binary(elf)
+    except ExecutorError as exc:
+        smoke_error = exc
+    else:
+        raise AssertionError("expected smoke_binary to fail on invalid ELF")
+    console, buf = _console()
+    render_failure_details(
+        [
+            InstallOutcome(
+                "demo",
+                "failed",
+                errors=(
+                    smoke_error,
+                    CommandError(["brew", "install", "demo"], 1),
+                ),
+            )
+        ],
+        console,
+    )
+    out = buf.getvalue().replace("\n", "")
+    assert "Exec format error" in out
+    assert "brew install demo" in out
+    assert "demo failed:" in out
 
 
 def test_render_failure_details_escapes_bracketed_error_text() -> None:
