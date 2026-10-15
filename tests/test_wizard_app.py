@@ -291,6 +291,7 @@ def _app(
     execute: ExecuteInputs | None = None,
     prompt_link_mode: bool = False,
     terminal_sync: Callable[[], str | None] | None = None,
+    startup_warning: str | None = None,
 ) -> UnifiedApp:
     tools = [_tool("rg"), _tool("fd")]
     installed: Mapping[str, bool] = {"rg": True, "fd": False}
@@ -314,6 +315,7 @@ def _app(
         execute=execute,
         prompt_link_mode=prompt_link_mode,
         terminal_sync=terminal_sync,
+        startup_warning=startup_warning,
     )
 
 
@@ -3005,6 +3007,33 @@ async def test_dismissed_first_run_picker_persists_nothing(tmp_path: Path) -> No
         assert isinstance(app.screen, LinkModeScreen)
         await pilot.press("escape")
     assert not path.exists() or load_settings(path).settings.link_mode is None
+
+
+async def test_startup_warning_lands_on_a_non_base_initial_view() -> None:
+    """D-11: doctor/fix/uninstall/guard open on a non-base view; show_view
+    already flushes the queue there, so the warning is on that screen."""
+    app = _app(initial_view="doctor", startup_warning="w")
+    async with app.run_test(size=(100, 30)):
+        assert app.current_view == "doctor"
+        screen = app.screen
+        assert isinstance(screen, DoctorScreen)
+        assert screen.status.text == "w"
+        assert screen.status.severity is Severity.WARN
+
+
+async def test_dismissed_first_run_picker_keeps_the_startup_warning() -> None:
+    """D-11: dismissing the one first-run question must not erase the only
+    notice that the settings file was ignored."""
+    app = _app(
+        policies=_policy_inputs(link_mode=lambda: "centralized", set_link_mode=lambda _mode: None),
+        prompt_link_mode=True,
+        startup_warning="w",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, LinkModeScreen)
+        await pilot.press("escape")
+        assert app.catalog.status.text.startswith("w · ")
+        assert "Link mode unchanged" in app.catalog.status.text
 
 
 async def test_first_run_setter_oserror_surfaces_on_the_visible_screen() -> None:

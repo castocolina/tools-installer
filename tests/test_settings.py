@@ -70,6 +70,7 @@ def test_load_literal_null_fixture_is_never_chosen(tmp_path: Path) -> None:
     loaded = load_settings(path)
     assert loaded.settings == Settings()
     assert loaded.settings.link_mode is None
+    assert loaded.warning is None
 
 
 def test_save_settings_creates_missing_parent(tmp_path: Path) -> None:
@@ -80,7 +81,9 @@ def test_save_settings_creates_missing_parent(tmp_path: Path) -> None:
 
 
 def test_missing_file_returns_never_chosen(tmp_path: Path) -> None:
-    assert load_settings(tmp_path / "missing.json").settings == Settings()
+    loaded = load_settings(tmp_path / "missing.json")
+    assert loaded.settings == Settings()
+    assert loaded.warning is None
 
 
 def test_load_settings_invalid_utf8_returns_defaults_and_a_warning(
@@ -159,6 +162,34 @@ def test_link_mode_needs_choice_only_when_both_absent() -> None:
     assert link_mode_needs_choice(flag="split", stored=None) is False
     assert link_mode_needs_choice(flag=None, stored="single") is False
     assert link_mode_needs_choice(flag="split", stored="single") is False
+
+
+def test_settings_store_keeps_the_warning_until_a_successful_set_link_mode(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path, link_mode="centralized", warning="w")
+    assert store.warning == "w"
+    assert not path.exists()
+    store.set_link_mode("split")
+    assert store.warning is None
+    assert load_settings(path).settings.link_mode == "split"
+
+
+def test_a_failed_set_link_mode_keeps_the_warning_and_the_live_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path, link_mode="centralized", warning="w")
+
+    def boom(_path: Path, _settings: Settings) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("installer.settings.save_settings", boom)
+    with pytest.raises(OSError):
+        store.set_link_mode("split")
+    assert store.warning == "w"
+    assert store.link_mode == "centralized"
 
 
 def test_settings_store_construction_writes_nothing(tmp_path: Path) -> None:

@@ -2822,11 +2822,16 @@ class UnifiedApp(App[list[str] | None]):
         if value is None:
             mode = self._read_link_mode() if self._read_link_mode is not None else "centralized"
             policies_key = str(VIEW_ORDER.index("policies") + 1)
-            target.status.set(
+            unchanged = (
                 f"Link mode unchanged; this run uses {mode}. "
-                f"Press {policies_key} then m to change it later.",
-                "warn",
+                f"Press {policies_key} then m to change it later."
             )
+            # D-11: dismissing the one first-run question must not erase the
+            # only notice that the settings file was ignored. Same separator
+            # _flush_pending_warnings uses.
+            if self._startup_warning is not None:
+                unchanged = f"{self._startup_warning} · {unchanged}"
+            target.status.set(unchanged, "warn")
             return
         setter = self._set_link_mode
         if setter is None:

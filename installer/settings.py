@@ -150,3 +150,7 @@ class SettingsStore:
         # new mode while the disk still records the old one.
         save_settings(self._path, Settings(value))
         self._link_mode = value
+        # Cleared LAST, after the save: a failed save keeps both the flag and
+        # the old live mode, so the ban/tweak closures keep reading the mode
+        # the disk still records (review cycle 2 MEDIUM).
+        self._warning = None
