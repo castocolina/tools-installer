@@ -1374,3 +1374,105 @@ def test_verified_raw_install_replaces_a_link_instead_of_writing_through_it(
     assert link.read_bytes() == payload
     assert (foreign / "keep").read_text() == "important"
     assert not any(cmd and cmd[0] in {"chmod", "cp"} for cmd in calls)
+
+
+def test_pinned_url_renders_the_version() -> None:
+    digest = "a" * 64
+    method = Method(
+        kind="tarball",
+        params={
+            "url": "https://x/build_{ver}_x64.tar.xz",
+            "version": "4215",
+            "sha256": digest,
+            "member": "x",
+        },
+    )
+    assert download.pinned_url(method) == "https://x/build_4215_x64.tar.xz"
+    verbatim = Method(
+        kind="tarball",
+        params={"url": "https://x/latest.tar.xz", "member": "x"},
+    )
+    assert download.pinned_url(verbatim) == "https://x/latest.tar.xz"
+    missing = Method(
+        kind="tarball",
+        params={"url": "https://x/build_{ver}_x64.tar.xz", "member": "x"},
+    )
+    with pytest.raises(ExecutorError):
+        download.pinned_url(missing)
+
+
+def test_pinned_tarball_is_verified_against_its_sha256(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    workdir = _workdir(tmp_path, monkeypatch)
+    payload = b"pinned-bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+    url = "https://x/build_4215_x64.tar.xz"
+    asset = "build_4215_x64.tar.xz"
+    member = tmp_path / ".local" / "opt" / "x" / "x"
+    calls, runner = fixture_runner(workdir, {asset: payload}, member=member)
+    bindir = tmp_path / "bin"
+    method = Method(
+        kind="tarball",
+        params={
+            "url": "https://x/build_{ver}_x64.tar.xz",
+            "version": "4215",
+            "sha256": digest,
+            "member": "x",
+            "bin_dir": str(bindir),
+        },
+    )
+    assert install_download(method, _ctx(runner)) is None
+    assert calls[0] == ["curl", "-fsSL", "-o", str(workdir / asset), "--", url]
+    assert (bindir / "x").is_symlink()
+    assert not workdir.exists()
+
+    bad = Method(
+        kind="tarball",
+        params={
+            "url": "https://x/build_{ver}_x64.tar.xz",
+            "version": "4215",
+            "sha256": "b" * 64,
+            "member": "x",
+            "bin_dir": str(tmp_path / "bin2"),
+        },
+    )
+    _, runner2 = fixture_runner(workdir, {asset: payload}, member=member)
+    with pytest.raises(ChecksumMismatch):
+        install_download(bad, _ctx(runner2))
+    assert not (tmp_path / "bin2" / "x").exists()
+
+
+def test_supplied_sha256_is_never_discarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    workdir = _workdir(tmp_path, monkeypatch)
+    payload = b" tarball-bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+    asset = "latest.tar.xz"
+    url = "https://x/latest.tar.xz"
+    member = tmp_path / ".local" / "opt" / "x" / "x"
+    bindir = tmp_path / "bin"
+    bad = Method(
+        kind="tarball",
+        params={
+            "url": url,
+            "member": "x",
+            "sha256": "c" * 64,
+            "bin_dir": str(bindir),
+        },
+    )
+    _, runner = fixture_runner(workdir, {asset: payload}, member=member)
+    with pytest.raises(ChecksumMismatch):
+        install_download(bad, _ctx(runner))
+    assert not (bindir / "x").exists()
+
+    good = Method(
+        kind="tarball",
+        params={"url": url, "member": "x", "sha256": digest, "bin_dir": str(bindir)},
+    )
+    _, runner2 = fixture_runner(workdir, {asset: payload}, member=member)
+    assert install_download(good, _ctx(runner2)) is None
+    assert (bindir / "x").is_symlink()

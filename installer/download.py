@@ -139,14 +139,34 @@ def resolve_target(method: Method, ctx: ExecContext) -> DownloadTarget:
     if method.kind == "tarball":
         if checksum_template is not None:
             raise ExecutorError("checksum verification is only supported for github_release")
-        url = require_str(method, "url")
+        url = pinned_url(method)
+        sha256_pin = _opt_str(method, "sha256")
+        asset = PurePosixPath(url).name
+        if sha256_pin is not None:
+            return DownloadTarget(
+                url=url,
+                member=raw_member,
+                asset=asset,
+                sha256=sha256_pin,
+            )
         return DownloadTarget(
             url=url,
             member=raw_member,
-            asset=PurePosixPath(url).name,
+            asset=asset,
             unverified_reason="unpinned url; no sha256 to verify against",
         )
     raise ExecutorError(f"no download executor for kind '{method.kind}'")
+
+
+def pinned_url(method: Method) -> str:
+    """Render a tarball download URL, substituting `{ver}` from `version` when present."""
+    url = require_str(method, "url")
+    if "{ver}" not in url:
+        return url
+    version = method.params.get("version")
+    if not isinstance(version, str) or not version:
+        raise ExecutorError("pinned tarball url contains {ver} but version is missing or empty")
+    return url.replace("{ver}", version)
 
 
 def link_name(method: Method, member: str) -> str:
