@@ -5,6 +5,7 @@ import pytest
 
 from installer.model import Method, Tool, load_tools
 from installer.status import (
+    MACOS_STUBS,
     dangling_shim,
     is_default_shell,
     is_installed,
@@ -520,3 +521,88 @@ def test_stub_falls_through_to_a_declared_bin_dir(
     (bin_dir / "java").touch()
     tool = _java_tool(bin_dir=str(bin_dir))
     assert is_installed(tool, darwin=True, probe=probe_fail) is True
+
+
+def _git_tool() -> Tool:
+    return Tool(
+        id="git",
+        name="git",
+        category="system",
+        cmd="git",
+        methods=(Method(kind="brew", params={"formula": "git"}),),
+    )
+
+
+def test_git_stub_without_clt_is_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.status as status
+
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/git" if cmd == "git" else None
+
+    monkeypatch.setattr(status.shutil, "which", fake_which)
+    received: list[tuple[str, ...]] = []
+
+    def probe_fail(argv: Sequence[str]) -> bool:
+        received.append(tuple(argv))
+        return False
+
+    tool = _git_tool()
+    assert is_installed(tool, darwin=True, probe=probe_fail) is False
+    received.clear()
+    reason = macos_stub_reason(tool, darwin=True, probe=probe_fail)
+    assert reason is not None
+    assert "/usr/bin/xcode-select -p" in reason.replace("  ", " ")
+    assert received == [("/usr/bin/xcode-select", "-p")]
+
+
+def test_every_stub_probe_is_an_absolute_path() -> None:
+    for argv in MACOS_STUBS.values():
+        assert argv[0].startswith("/")
+
+
+def test_git_stub_with_clt_is_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.status as status
+
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/git" if cmd == "git" else None
+
+    monkeypatch.setattr(status.shutil, "which", fake_which)
+
+    def probe_ok(argv: Sequence[str]) -> bool:
+        return True
+
+    assert is_installed(_git_tool(), darwin=True, probe=probe_ok) is True
+
+
+def test_stub_table_is_ignored_off_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.status as status
+
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/git" if cmd == "git" else None
+
+    monkeypatch.setattr(status.shutil, "which", fake_which)
+    calls: list[tuple[str, ...]] = []
+
+    def recording_probe(argv: Sequence[str]) -> bool:
+        calls.append(tuple(argv))
+        return False
+
+    assert is_installed(_git_tool(), darwin=False, probe=recording_probe) is True
+    assert calls == []
+
+
+def test_non_stub_path_on_macos_runs_no_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.status as status
+
+    def fake_which(cmd: str) -> str | None:
+        return "/opt/homebrew/bin/git" if cmd == "git" else None
+
+    monkeypatch.setattr(status.shutil, "which", fake_which)
+    calls: list[tuple[str, ...]] = []
+
+    def recording_probe(argv: Sequence[str]) -> bool:
+        calls.append(tuple(argv))
+        return False
+
+    assert is_installed(_git_tool(), darwin=True, probe=recording_probe) is True
+    assert calls == []
