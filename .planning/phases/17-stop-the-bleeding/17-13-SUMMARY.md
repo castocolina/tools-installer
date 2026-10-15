@@ -42,20 +42,23 @@ The final Phase 17 tree (`91952dd`, after gap plans 17-17..17-20) passes every l
 
 validate & test on ubuntu-latest=success
 validate & test on macos-latest=success
-oracle sha: 91952ddb5f5c602cbe9d7c3c5faabc3ff30490ee
-run id: 38698283448
-run url: https://github.com/castocolina/tools-installer/actions/runs/38698283448
-draft PR: #3 (closed unmerged; branch ci/phase-17-final deleted, `git ls-remote --exit-code --heads origin ci/phase-17-final` exits 2)
-make validate (run 1): rc 0
-make test (run 1): rc 0, 3572 passed, 4 skipped
-make validate (run 2): rc 0
-make test (run 2): rc 0, 3572 passed, 4 skipped
-pre-commit run --all-files: rc 0
+oracle sha: a34fa30885997a4e89f2de4a5aaab64ea3063ee4
+run id: 38708267552
+run url: https://github.com/castocolina/tools-installer/actions/runs/38708267552
+draft PR: #4 (closed unmerged; branch ci/phase-17-final deleted, `git ls-remote --exit-code --heads origin ci/phase-17-final` exits 2)
+make validate (run 1, 91952dd): rc 0
+make test (run 1, 91952dd): rc 0, 3572 passed, 4 skipped
+make validate (run 2, a34fa30): rc 0
+make test (run 2, a34fa30): rc 0, 3572 passed, 4 skipped
+pre-commit run --all-files (a34fa30): rc 0
 pyproject.toml / uv.lock diff vs 72c9047: rc 0 (no dependency change)
 16-VALIDATION commands (16-17-0x, 16-18-0x, 16-19-0x): n=15, 0 failed
-make e2e: rc 0 (try 2); PASS1_COUNTS installed=73 already=1 failed=0 manual_required=8; TRACER_CLEAN_INSTALL_OK, TRACER_RERUN_OK, TRACER_UNINSTALL_OK, TRACER_REINSTALL_OK, TRACER_CONTAINER_TEARDOWN_OK; no tools-installer container left
+make e2e (91952dd): rc 0 (try 2); PASS1_COUNTS installed=73 already=1 failed=0 manual_required=8; TRACER_CLEAN_INSTALL_OK, TRACER_RERUN_OK, TRACER_UNINSTALL_OK, TRACER_REINSTALL_OK, TRACER_CONTAINER_TEARDOWN_OK; no tools-installer container left
+a34fa30 differs from 91952dd outside .planning only in tests/test_app.py (gap plan 17-21: typed `_uninstall_kwargs`, six arg-type ignores removed); no product code changed, so the e2e on 91952dd covers the product tree.
 
-### Earlier oracle attempt (superseded)
+### Earlier oracle attempts (superseded)
+
+Attempt 2 on 91952dd (PR #3, run 38698283448): both jobs success; superseded by the verification gap fix 17-21 (test-only).
 
 Attempt 1 on 0e9406c (PR #2, run 38678549836): ubuntu-latest=success, macos-latest=failure. `tests/test_app.py::test_run_uninstall_deletes_only_proven_artifacts` and `::test_run_uninstall_with_only_unproven_matches_still_lists_them` failed because Rich word-wrapped the long macOS pytest tmp path in `render_uninstall` / `render_remove_yourself`. Gap plan 17-17 (`73067f2`) prints those path lines with `soft_wrap=True, markup=False`. The three-lane code review then produced gap plans 17-18..17-20, and 17-20 fixed the same wrap defect in the headless settings warning (`3d62faf`). The oracle above was re-run on the tree that includes all of them.
 
