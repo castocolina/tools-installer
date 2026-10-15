@@ -81,6 +81,7 @@ Started 2026-10-14. Hourly resume cron: session job (deleted at run end).
 | 18 | Wave 5 executed cross-AI (pi), 18-12 → 18-19, each on try 1 (15:07–15:26) | — (verifiable) | — | 7 commits; gate: validate rc 0, test 3784 passed / 4 skipped, coverage 95.33%; 0 new suppressions; new scripts/verify_registry module ~79% covered (watch at code review) | Suite gate 90% holds |
 | 18 | Wave 6 executed cross-AI (pi), 18-11 → 18-17, each on try 1 (15:28–15:46) | — (verifiable) | — | 5 commits (18-17 landed its 3 intertwined tasks in one commit, recorded); gate: validate rc 0, test 3831 passed / 4 skipped, coverage 95.60%; 0 new suppressions | Coherent-commit rule allows one self-contained change |
 | 18 | Wave 7 executed cross-AI (pi), 18-13 on try 1 (15:47–15:54) | — (verifiable) | — | 3 commits; gate: validate rc 0, test 3846 passed / 4 skipped, coverage 95.30%; 0 new suppressions | Fixed test dates (2026-10-15) stay valid as the host clock moves forward |
+| 18 | Wave 8 executed cross-AI (pi), 18-14 on try 1 (15:56–16:14) | — (verifiable) | — | 4 commits; verify-registry.yml (schedule Mon check + Thu cache refresh, workflow_dispatch, contents: read / issues: write); gate: validate rc 0, test 3863 passed / 4 skipped, coverage 95.30%; 0 new suppressions; one more full-file truncation (tests/test_verify_registry.py) recovered via git checkout + patch | Workflow first real run is a post-push backstop |
 
 ## Deferred questions / human verification
 
