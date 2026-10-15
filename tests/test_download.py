@@ -382,6 +382,88 @@ def test_is_still_proven_accepts_an_explicit_root(
     assert is_still_proven(regular, root) is False
 
 
+def test_failed_raw_copy_leaves_no_staged_sibling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import errno
+
+    import installer.download as download_mod
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _calls, runner = fixture_runner(None, {"a": b"payload"}, member=None)
+    method = Method(
+        kind="tarball",
+        params={"url": "https://x/a", "member": "tool", "raw": True, "bin_dir": str(bin_dir)},
+    )
+
+    def partial_copy2(
+        src: str | os.PathLike[str],
+        dst: str | os.PathLike[str],
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        Path(dst).write_bytes(b"partial")
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(download_mod.shutil, "copy2", partial_copy2)
+    with pytest.raises(OSError):
+        install_download(method, _ctx(runner))
+    assert not staged_sibling(bin_dir / "tool", NEW_SUFFIX).exists()
+
+
+def test_rollback_failure_names_both_errors_and_the_old_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import installer.download as download_mod
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt = tmp_path / ".local" / "opt" / "rg"
+    binary = opt / "rg"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"old")
+    binary.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    os.symlink(str(binary), bin_dir / "rg")
+    member = opt / "rg"
+    _, runner = fixture_runner(None, {}, member=member)
+    method = Method(
+        kind="tarball",
+        params={"url": "https://x/rg.tar.gz", "member": "rg", "bin_dir": str(bin_dir)},
+    )
+    old_path = staged_sibling(opt, OLD_SUFFIX)
+    real_replace = os.replace
+
+    def fail_swap(src: str | os.PathLike[str], dst: str | os.PathLike[str]) -> None:
+        src_p = Path(src)
+        dst_p = Path(dst)
+        if dst_p == opt and NEW_SUFFIX in src_p.name:
+            raise OSError("swap failed")
+        if dst_p == opt and src_p == old_path:
+            raise OSError("rollback failed")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(download_mod.os, "replace", fail_swap)
+    with pytest.raises(ExecutorError) as excinfo:
+        install_download(method, _ctx(runner))
+    msg = str(excinfo.value)
+    assert "swap failed" in msg
+    assert "rollback failed" in msg
+    assert str(old_path) in msg
+
+
+def test_undecodable_checksum_file_is_an_ordinary_method_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    workdir = _workdir(tmp_path, monkeypatch)
+    _, runner = fixture_runner(workdir, {RG_ASSET: b"x", f"{RG_ASSET}.sha256": b"\xff\xfe\x00bad"})
+    with pytest.raises(ExecutorError, match="no sha256 entry"):
+        install_download(_rg_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
+
+
 def test_tarball_bin_name_overrides_the_symlink_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

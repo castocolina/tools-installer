@@ -113,8 +113,8 @@ def _perform(
 
     Returns ``(verified, unverified_reason, handoff)``. `verified` is True when
     the download was sha256-verified (non-download methods are never marked
-    verified — their package managers do their own checks; app zips have no
-    published checksums to verify). A non-empty `handoff` means the reviewed
+    verified — their package managers do their own checks; pinned or declared
+    app zips are sha256-verified). A non-empty `handoff` means the reviewed
     setup must run in a console after the installer releases the terminal (a
     host_setup or skill_pack method never performs its own install here).
     """
@@ -232,7 +232,7 @@ def install_tool(
                     tool.id, InstallStatus.CHECKSUM_MISMATCH, method_kind=method.kind, errors=(exc,)
                 )
             errors.append(exc)
-        except (CommandError, executors.ExecutorError, VersionError) as exc:
+        except (CommandError, executors.ExecutorError, VersionError, OSError) as exc:
             errors.append(exc)
         else:
             warning = None

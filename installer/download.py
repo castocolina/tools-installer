@@ -301,7 +301,7 @@ def _fetch_verified(
         sum_path = staging / checksum_name
         ctx.runner(["curl", "-fsSL", "-o", str(sum_path), "--", checksum_url])
         try:
-            text = sum_path.read_text()
+            text = sum_path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             raise ExecutorError(f"cannot read checksum file '{checksum_name}': {exc}") from exc
         expected = expected_sha256(text, target.asset)
@@ -323,15 +323,15 @@ def _fetch_verified(
 
 def _replace_raw(link: Path, asset_path: Path, *, smoke_argv: Sequence[str] | None = None) -> None:
     new = staged_sibling(link, NEW_SUFFIX)
-    shutil.copy2(asset_path, new)
-    new.chmod(0o755)
-    if smoke_argv is not None:
-        try:
+    try:
+        shutil.copy2(asset_path, new)
+        new.chmod(0o755)
+        if smoke_argv is not None:
             smoke_binary(new, smoke_argv)
-        except Exception:
-            new.unlink(missing_ok=True)
-            raise
-    os.replace(new, link)
+        os.replace(new, link)
+    except Exception:
+        new.unlink(missing_ok=True)
+        raise
 
 
 def _replace_archive(
@@ -370,8 +370,14 @@ def _replace_archive(
     try:
         os.replace(new, opt)
     except OSError as extra:
-        if old.exists():
-            os.replace(old, opt)
+        try:
+            if old.exists():
+                os.replace(old, opt)
+        except OSError as rollback_extra:
+            raise ExecutorError(
+                f"swap failed ({extra}); rollback failed ({rollback_extra}); "
+                f"prior installation is at {old}"
+            ) from extra
         raise ExecutorError(f"swap failed; prior installation restored: {extra}") from extra
     live_binary = opt / target.member
     try:
@@ -379,7 +385,13 @@ def _replace_archive(
         if not live_binary.is_file() or not os.access(live_binary, os.X_OK):
             raise ExecutorError(f"updated binary at {live_binary} is missing or not executable")
     except (OSError, ExecutorError) as extra:
-        _undo_archive_swap(opt, new, old, link, original_target)
+        try:
+            _undo_archive_swap(opt, new, old, link, original_target)
+        except OSError as rollback_extra:
+            raise ExecutorError(
+                f"update failed after swap ({extra}); rollback failed "
+                f"({rollback_extra}); prior installation is at {old}"
+            ) from extra
         raise ExecutorError(
             f"update failed after swap; prior installation restored: {extra}"
         ) from extra

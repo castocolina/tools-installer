@@ -311,6 +311,86 @@ def test_smoke_failure_falls_through_to_the_next_method(
     assert "rg2" in os.readlink(link)
     assert calls
 
+    rg_link = bin_dir / "rg"
+    assert not rg_link.exists() and not rg_link.is_symlink()
+    assert not (tmp_path / ".local" / "opt" / "rg").exists()
+
+
+def test_an_oserror_in_one_method_falls_through_to_the_next(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import errno
+
+    import installer.download as download_mod
+
+    _patch_not_installed(monkeypatch)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / "bin"
+    first = Method(
+        kind="tarball",
+        params={"url": "https://x/a", "member": "rg", "raw": True, "bin_dir": str(bin_dir)},
+    )
+    second = Method(
+        kind="tarball",
+        params={"url": "https://x/b", "member": "rg", "bin_dir": str(bin_dir)},
+    )
+    member = tmp_path / ".local" / "opt" / "rg" / "rg"
+    _calls, inner = fixture_runner(None, {"a": b"raw-bytes", "b": b"archive"}, member=member)
+    real_copy2 = download_mod.shutil.copy2
+
+    def boom_copy2(
+        src: str | os.PathLike[str],
+        dst: str | os.PathLike[str],
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        if str(dst).endswith(".tools-installer.new"):
+            raise OSError(errno.ENOSPC, "No space left on device")
+        real_copy2(src, dst, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(download_mod.shutil, "copy2", boom_copy2)
+
+    def runner(cmd: list[str]) -> None:
+        inner(cmd)
+
+    outcome = install_tool(_tool(first, second), _platform(), runner=runner)
+    assert outcome.status == InstallStatus.INSTALLED
+    assert (bin_dir / "rg").is_symlink()
+
+
+def test_an_oserror_in_the_only_method_is_a_failed_outcome(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import errno
+
+    import installer.download as download_mod
+
+    _patch_not_installed(monkeypatch)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / "bin"
+    first = Method(
+        kind="tarball",
+        params={"url": "https://x/a", "member": "rg", "raw": True, "bin_dir": str(bin_dir)},
+    )
+    _calls, inner = fixture_runner(None, {"a": b"raw-bytes"}, member=None)
+
+    def boom_copy2(
+        src: str | os.PathLike[str],
+        dst: str | os.PathLike[str],
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(download_mod.shutil, "copy2", boom_copy2)
+
+    def runner(cmd: list[str]) -> None:
+        inner(cmd)
+
+    outcome = install_tool(_tool(first), _platform(), runner=runner)
+    assert outcome.status == InstallStatus.FAILED
+    assert isinstance(outcome.errors[-1], OSError)
+
 
 def test_single_failing_method_leaves_no_link(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
