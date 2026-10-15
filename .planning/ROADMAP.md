@@ -98,24 +98,28 @@ Plans:
   4. Launched without the dev venv on PATH, ruff resolves its real owner under `make setup` (container); `/usr/bin/java` alone never counts as installed; `parse_version('-1') is None`, and quoted or `version=` output never yields a fabricated version.
   5. Every C/D/E/F audit data fix is applied, the `managed-download` owner probe is gone, and `drawio-cli` is removed with `drawio-desktop` serving both audiences.
 
-**Plans:** 15 plans
+**Plans:** 19 plans
 
-Plans:
+Plans (numbered in creation order; W = execution wave):
 - [ ] 18-01-PLAN.md — Closed METHOD_PARAMS keys, required `verified` date (seeded), pinned app/tarball rule (W1)
 - [ ] 18-02-PLAN.md — Version parser fixes: `-1`, `version=`, quoted output (W1)
 - [ ] 18-03-PLAN.md — macOS java/git stubs never count as installed (W1)
 - [ ] 18-04-PLAN.md — `cli_name` honored only through `apps.cli_spec` (W1)
 - [ ] 18-05-PLAN.md — Launchers run `uv run --isolated --no-dev` (Makefile, install.sh, e2e harness) (W1)
 - [ ] 18-06-PLAN.md — Remove drawio-cli and the managed-download probe; audit C/D data fixes (W2)
-- [ ] 18-07-PLAN.md — One release read gives tag + digests; staged verified fetch; pinned tarball; unverified reason (W2)
+- [ ] 18-07-PLAN.md — One release read gives tag + digests; digest-verified install; unverified reason on the outcome and screen (W2)
 - [ ] 18-08-PLAN.md — Audit E/F data fixes and the 35-row ledger (W3)
-- [ ] 18-09-PLAN.md — Shared smoke run before swap/link; `smoke_argv`; manager-kind smoke (W3)
+- [ ] 18-16-PLAN.md — One staged plain-argv fetch (shell pipeline deleted); pinned tarball sha256; updates verify digests (W3)
 - [ ] 18-10-PLAN.md — Release digests stored in the version cache (W3)
-- [ ] 18-11-PLAN.md — macOS app zips: pinned sha256, staged swap, smoke (W4)
-- [ ] 18-12-PLAN.md — verify-registry check core: assets, members, digests, newer stable, inconclusive (W4)
-- [ ] 18-13-PLAN.md — verify-registry `--write`/`--candidate`: dated passes and verified pin bumps (W5)
-- [ ] 18-14-PLAN.md — `--issue` upsert, `make verify-registry`, weekly workflow outside the PR gate (W6)
-- [ ] 18-15-PLAN.md — Template pins, live bump + clean rerun, container e2e proof (W7)
+- [ ] 18-09-PLAN.md — Shared smoke run before swap/link; `smoke_argv` key and its docs (W4)
+- [ ] 18-19-PLAN.md — Manager-kind smoke after install, falling through on failure (W5)
+- [ ] 18-12-PLAN.md — verify-registry check core: assets, members, digests, read-only (W5)
+- [ ] 18-11-PLAN.md — macOS app zips: pinned sha256, staged swap, smoke (W6)
+- [ ] 18-17-PLAN.md — verify-registry verdicts: newer stable, not checkable, outage vs flaky host; `Unverified at install`; gh-login token (W6)
+- [ ] 18-13-PLAN.md — verify-registry `--write`/`--candidate`: dated passes and verified pin bumps (W7)
+- [ ] 18-14-PLAN.md — `--issue` upsert, `make verify-registry`, weekly workflow outside the PR gate (W8)
+- [ ] 18-15-PLAN.md — Template pins, live bump + clean rerun, measured SC3 residual set (W9)
+- [ ] 18-18-PLAN.md — Container e2e proof on the final registry; ruff's owner under the launch form (W10)
 
 ### Phase 19: One tool state with health plus receipts
 

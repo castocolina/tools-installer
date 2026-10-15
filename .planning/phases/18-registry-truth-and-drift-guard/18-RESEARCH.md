@@ -696,30 +696,42 @@ Code-edit vs data-migration: all of this is code/data edits in the repo; there i
 | A11 | Storing only the digests for the assets this platform's methods render (not the whole release) is acceptable for the D-05 version-cache requirement | Open Q9 | Phase 19 may need other-arch digests; storing everything costs cache size |
 | A12 | kitty (E8) and wezterm macOS (E9) fixes cannot be applied or verified without macOS evidence | fix table | Skipping leaves two audit items "not applied" |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All ten questions are resolved. Each keeps its original analysis and gains a pointer to the ledger entry or plan that settles it.
 
 1. **`--no-dev` is not enough (REG-06).**
    - What we know: reproduced; `--isolated --no-dev` works, is fast and non-destructive.
    - What's unclear: whether the user accepts adding `--isolated` to the locked D-11 form (or prefers `--exact`, or a startup PATH sanitizer in `installer/locations.py` as audit D C1 itself suggests).
    - Recommendation: use `uv run --no-dev --isolated` everywhere D-11 lists, update the Makefile test to assert both, align the container harness. Confirm with the user; fallback is the literal `--no-dev` plus `uv sync --no-dev` in the harness, accepting that dev-synced developers still see ruff shadowed.
+   - **RESOLVED:** CONTEXT Ledger L-18-01 adopts `uv run --isolated --no-dev` for every launcher. Plan 18-05 implements it (Makefile, install.sh, e2e harness launch over the dev-synced venv). Plan 18-18 proves it in the container.
 
 2. **Seed date for ~62 undated entries** (Assumption A1). Recommendation `2026-10-13`; confirm.
+   - **RESOLVED:** CONTEXT Ledger L-18-03 seeds `2026-10-13`. Plan 18-01 Task 2 implements it.
 
 3. **Where "last verified digest" lives.** Recommendation: `--state PATH` JSON `{url: digest-or-etag}`, `actions/cache` in the workflow, default `~/.cache/tools-installer/verify-registry.json`; first run downloads everything once. For assets with no digest (gron, jless, vscode/jetbrains "latest"), key on `ETag`/`Last-Modified`/`Content-Length` from HEAD.
+   - **RESOLVED:** CONTEXT Ledger L-18-04 picks a JSON state file cached with `actions/cache` and never committed. Plan 18-12 sets the default path to `~/.local/state/tools-installer/verify-registry.json` (next to the version cache, not `~/.cache`), with `--state PATH` to override. Plan 18-14 restores the file with `actions/cache/restore` and saves it with `actions/cache/save` under `if: always()`.
 
 4. **Exit codes and workflow behavior for INCONCLUSIVE** (A3). Recommendation: 0 ok, 1 drift (opens/updates the issue only with `--issue`), 2 inconclusive (no issue call).
+   - **RESOLVED:** Plan 18-17 Task 1 sets the exit codes: 0 ok, 1 drift, 2 inconclusive. A rate-limited GitHub API, or a run where no release read succeeded, blocks the whole run (exit 2, no issue). One failing download host, or one failed API read among successful ones, makes only its own finding inconclusive, so drift elsewhere still exits 1. Plan 18-14 upserts the issue on exit 1 and lists the inconclusive findings in its body.
 
 5. **Optional sub-bullets of the audit fixes** (C7, D1/D2/D7 musl, E8, E9, F6). Recommendation per the table; every skipped optional is recorded in a fix ledger with its reason so "all 35 applied" is auditable.
+   - **RESOLVED:** Plans 18-06 and 18-08 record each fix in the 35-row ledger. C7, the D1/D2 musl sub-bullets and E9 are not applied, each with a reason. D7 is applied when its read-only listing matches the gnu layout. E8 is applied when installer.sh's macOS branch confirms `/Applications/kitty.app`. F6 follows the discretion recorded in 18-08. Every applied conditional fix has a named test.
 
 6. **`parse_version('a-1')`.** Audit B lists it as fabricated but it has the same shape as legitimate `jq-1.8.1`. Decide the expected value in the fixture table (recommend: keep parsing names that start with a letter; `-1`, `--2`, `-v1.2.3` become `None`).
+   - **RESOLVED:** Plan 18-02 returns `None` for `a-1`. A glued name must start with a letter and be at least two characters long, so `jq-1.8.1` keeps parsing.
 
 7. **Smoke scope for GUI app CLIs, AppImages and manager kinds** (A4, A6). Recommendation: a per-method optional argv key (closed list of strings validated like script `args`; name is discretion, e.g. `smoke_argv`, distinct from the existing `smoke` name key at `model.py:13`), default `--version`; timeout = pass; manager kinds only when `which` resolves.
+   - **RESOLVED:** Plan 18-09 adds `smoke_argv` and the staged smoke for downloads (default `--version`; a timeout passes). Plan 18-19 smokes manager kinds only when `which` resolves. Plan 18-11 smokes the app CLIs.
 
 8. **SC3 literal "50 -> 0".** Impossible for gron/jless (no digest published); the test must assert "every method whose rendered assets expose a digest is verifiable" and list the 4 residual unverified methods by id.
+   - **RESOLVED:** CONTEXT Ledger L-18-02 states the assertion. Plan 18-17 Task 2 adds the report section `Unverified at install`, which lists every method that would install with no checksum, pinned sha256 or digest. Plan 18-15 Task 2 asserts on the live run that its github_release entries name only gron and jless (4 methods).
 
 9. **D-05 "version refresh stores `Release.digests`".** This changes `VersionCacheEntry`/`_entry_from_raw` (tolerate absent or malformed `digests` in old caches) and `version_status.resolve_github_release_status` (currently takes `resolve_tag`). Storing every asset digest for ~49 repos is the largest option; recommendation is to store only the digests for assets the registry renders for the current platform, as a separate, last, independently revertible task of the verification-pipeline plan.
+   - **RESOLVED:** Plan 18-10 stores every digest the release publishes, because D-05 says to store `Release.digests` and Phase 19 may need the digests of other arches. Old or malformed caches decode as empty, and the release is read once.
 
 10. **Bump run mechanics.** The bump (`--write`) is a networked, date-dependent maintainer action executed once by the plan executor (pi) with `gh` auth; record its output in the SUMMARY. Tests must not depend on it. Entries whose asset was renamed keep the old pin and are reported (SPEC R11).
+   - **RESOLVED:** Plan 18-15 Task 2 runs `--write` once on the maintainer's gh login, saves the output under `.e2e-artifacts/verify-registry/` and pastes it in the SUMMARY. Plan 18-13's tests cover a renamed asset keeping the old pin.
 
 ## Suggested plan decomposition (for the planner; adjust freely)
 
