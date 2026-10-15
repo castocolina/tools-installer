@@ -24,15 +24,19 @@ Entry requirements: macOS-only (`os = ["macos"]`), `kind = "cask"` (brew cask
 methods have precedent in the registry), modeled on the alacritty terminal
 entry (registry.toml:2668 — category "terminal", tier "user", audience human).
 
-Two profile tweaks required for parity with the user's alacritty setup:
+Profile tweaks required (1–2 for parity with the user's alacritty setup, 3 a look-and-feel request):
 
 1. Alt/Option+arrows for word navigation — iTerm2 profile option-key-as-Esc+.
 2. New tabs/windows inherit the opener's working directory — Profile >
    General > Working Directory = "Reuse previous session's directory".
+3. Color scheme (added 2026-10-15): dark background with dark-green text,
+   a "Matrix console" look. Requirement only; the how is open (e.g. a
+   built-in dark theme/preset vs explicit color keys in the same Dynamic
+   Profile) — decide at implementation.
 
 ## Solution
 
-Add an `iterm2` tool entry (cask method, os-gated macOS) and apply both tweaks
+Add an `iterm2` tool entry (cask method, os-gated macOS) and apply all three tweaks
 programmatically via an iTerm2 **Dynamic Profile** written by a `post_install`
 action (mechanism precedent: oh-my-zsh's `set_login_shell`): JSON file in
 `~/Library/Application Support/iTerm2/DynamicProfiles/` with required `Guid`
