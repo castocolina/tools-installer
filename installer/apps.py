@@ -30,6 +30,7 @@ from installer.executors import (
     ExecutorError,
     method_smoke_argv,
     require_str,
+    smoke_binary,
     staged_member,
 )
 from installer.locations import applications_dir, bin_dir, ensure_dir
@@ -183,6 +184,8 @@ def _stage_and_swap_app(
             cli_path = staged_member(staged_bundle, cli)
             if not os.access(cli_path, os.X_OK):
                 raise ExecutorError(f"staged CLI at {cli_path} is missing or not executable")
+            if smoke_argv is not None:
+                smoke_binary(cli_path, smoke_argv)
         if new.exists():
             shutil.rmtree(new)
         os.replace(staged_bundle, new)

@@ -600,3 +600,120 @@ def test_fresh_app_install_failure_after_relink_leaves_no_cli_link(
     apps = tmp_path / "Applications"
     bad_suffix = (NEW_SUFFIX, OLD_SUFFIX)
     assert not any(p.name.endswith(bad_suffix) for p in apps.iterdir())
+
+
+def _cli_script_exits_127_unless(argv0: str) -> str:
+    return f'#!/bin/sh\nif [ "$1" = "{argv0}" ]; then exit 0; fi\nexit 127\n'
+
+
+def test_broken_app_cli_fails_and_keeps_the_existing_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _plant_bundle(tmp_path, app="draw.io.app", cli="Contents/MacOS/draw.io")
+    link = tmp_path / ".local" / "bin" / "drawio"
+    if link.exists() or link.is_symlink():
+        link.unlink()
+    os.symlink(str(bundle / "Contents/MacOS/draw.io"), link)
+    original_bytes = (bundle / "marker").read_text()
+    original_target = os.readlink(link)
+    payload = b"reinstall"
+    digest = hashlib.sha256(payload).hexdigest()
+    member = Path("draw.io.app/Contents/MacOS/draw.io")
+    script = "#!/bin/sh\nexit 127\n"
+
+    def broken_runner(cmd: list[str]) -> None:
+        if cmd and cmd[0] == "curl" and "-o" in cmd:
+            dest = Path(cmd[cmd.index("-o") + 1])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(payload)
+        elif cmd and cmd[0] == "ditto":
+            dest = Path(cmd[-1])
+            target = dest / member
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(script, encoding="utf-8")
+            target.chmod(0o755)
+
+    with pytest.raises(ExecutorError, match="smoke run failed"):
+        install_app(_drawio_method(sha256=digest), broken_runner)
+    assert (bundle / "marker").read_text() == original_bytes
+    assert os.readlink(link) == original_target
+    assert not Path(str(bundle) + NEW_SUFFIX).exists()
+
+
+def test_app_smoke_uses_the_declared_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    payload = b"zip"
+    digest = hashlib.sha256(payload).hexdigest()
+    member = Path("draw.io.app/Contents/MacOS/draw.io")
+    script = _cli_script_exits_127_unless("--custom")
+
+    def custom_runner(cmd: list[str]) -> None:
+        if cmd and cmd[0] == "curl" and "-o" in cmd:
+            dest = Path(cmd[cmd.index("-o") + 1])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(payload)
+        elif cmd and cmd[0] == "ditto":
+            dest = Path(cmd[-1])
+            target = dest / member
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(script, encoding="utf-8")
+            target.chmod(0o755)
+
+    reason = install_app(
+        _drawio_method(sha256=digest, smoke_argv=["--custom"]),
+        custom_runner,
+    )
+    assert reason is None
+    assert (tmp_path / "Applications" / "draw.io.app").exists()
+
+
+def test_app_without_cli_is_not_smoked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    payload = b"zip"
+    digest = hashlib.sha256(payload).hexdigest()
+    member = Path("Demo App.app/Contents/PkgInfo")
+    script = _cli_script_exits_127_unless("--version")
+
+    def would_fail_if_smoked(cmd: list[str]) -> None:
+        if cmd and cmd[0] == "curl" and "-o" in cmd:
+            dest = Path(cmd[cmd.index("-o") + 1])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(payload)
+        elif cmd and cmd[0] == "ditto":
+            dest = Path(cmd[-1])
+            target = dest / member
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(script, encoding="utf-8")
+            target.chmod(0o755)
+
+    reason = install_app(_method(sha256=digest), would_fail_if_smoked)
+    assert reason is None
+
+
+def test_update_app_does_not_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _plant_bundle(tmp_path, app="draw.io.app", cli="Contents/MacOS/draw.io")
+    payload = b"update-zip"
+    digest = hashlib.sha256(payload).hexdigest()
+    member = Path("draw.io.app/Contents/MacOS/draw.io")
+    script = _cli_script_exits_127_unless("--version")
+
+    def update_runner(cmd: list[str]) -> None:
+        if cmd and cmd[0] == "curl" and "-o" in cmd:
+            dest = Path(cmd[cmd.index("-o") + 1])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(payload)
+        elif cmd and cmd[0] == "ditto":
+            dest = Path(cmd[-1])
+            app_root = dest / "draw.io.app"
+            app_root.mkdir(parents=True, exist_ok=True)
+            (app_root / "marker").write_text("updated")
+            target = dest / member
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(script, encoding="utf-8")
+            target.chmod(0o755)
+
+    result = update_app(_drawio_method(sha256=digest), update_runner)
+    assert result.warnings == ()
+    assert (bundle / "marker").read_text() == "updated"
