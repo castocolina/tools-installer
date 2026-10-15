@@ -125,7 +125,10 @@ def test_run_doctor_reports_broken_links_and_changes_nothing(
     assert [str(link.path) for link in report.broken_links] == [str(bin_dir / "subl")]
     out = " ".join(buf.getvalue().split())  # console wrapping must not hide the words
     assert "opt/subl" in out
-    assert "reinstall subl" in out
+    # IN-02: conditional wording, no catalog entry named from the link name.
+    assert "If tools-installer installed it" in out
+    assert "reinstall the tool from the catalog" in out
+    assert "reinstall subl" not in out
 
 
 def test_scan_reports_a_dangling_link(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

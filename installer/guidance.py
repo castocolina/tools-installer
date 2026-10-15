@@ -127,10 +127,15 @@ def doctor_guidance(
             points_at = "nothing."
         meaning = f"{link.path} points to {link.target}, which is {points_at}"
         if link.opt_dir is not None:
-            name = link.opt_dir.name
+            # IN-02: the scan never checks the registry (D-13), so this opt
+            # dir cannot be proven ours -- a hand-installed ~/.local/opt/go
+            # must not get a bare rm -rf. The advice is conditional, and the
+            # catalog entry is not named (the link name is not the entry id:
+            # subl is sublime).
             next_step = (
-                f"Remove {link.opt_dir} (rm -rf {shlex.quote(str(link.opt_dir))}), "
-                f"then reinstall {name} from the catalog (make setup)."
+                f"If tools-installer installed it, remove {link.path} and "
+                f"{link.opt_dir} (rm -rf {shlex.quote(str(link.opt_dir))}), "
+                "then reinstall the tool from the catalog (make setup)."
             )
         else:
             next_step = (

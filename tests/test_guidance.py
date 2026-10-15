@@ -692,7 +692,11 @@ def test_broken_link_guidance_names_the_opt_dir_repair(tmp_path: Path):
     assert items[0].title == f"{tmp_path / '.local' / 'bin' / 'subl'} is a broken link"
     step = items[0].next_step
     assert str(opt_dir("subl")) in step
-    assert "reinstall subl" in step
+    # IN-02: the advice is conditional (the scan never proves the tree is
+    # ours, D-13) and does not name the catalog entry from the link name.
+    assert "If tools-installer installed it" in step
+    assert "reinstall the tool from the catalog" in step
+    assert "reinstall subl" not in step
 
 
 def test_dangling_link_without_opt_dir_guidance_removes_the_link(tmp_path: Path):
