@@ -11,6 +11,7 @@ import re
 import tarfile
 import tempfile
 import tomllib
+import unicodedata
 import urllib.request
 import zipfile
 from collections import defaultdict
@@ -59,18 +60,23 @@ __all__ = [
     "UnverifiedMethod",
     "apply_registry_edits",
     "check_registry",
+    "code_span",
     "default_probe",
+    "DRIFT_LABEL",
     "default_state_path",
     "format_report",
     "github_token",
     "main",
     "state_key",
+    "upsert_drift_issue",
 ]
 
 CHECKABLE_KINDS = ("github_release", "tarball", "app")
 ALL_OS = ("debian", "arch", "fedora", "macos")
 ALL_ARCH = ("amd64", "arm64")
 REGISTRY = Path(__file__).with_name("registry.toml")
+
+DRIFT_LABEL = "registry-drift"
 
 FindingStatus = Literal["ok", "drift", "inconclusive"]
 
@@ -1393,10 +1399,28 @@ def _registry_edits_for_write(
     return edits
 
 
+def code_span(value: str) -> str:
+    """Return a CommonMark-safe code span for arbitrary upstream text."""
+    cleaned = "".join(" " if unicodedata.category(ch).startswith("C") else ch for ch in value)
+    max_run = 0
+    run = 0
+    for ch in cleaned:
+        if ch == "`":
+            run += 1
+            max_run = max(max_run, run)
+        else:
+            run = 0
+    fence = "`" * (max_run + 1)
+    inner = cleaned
+    if cleaned.startswith("`") or cleaned.endswith("`"):
+        inner = f" {inner} "
+    return f"{fence}{inner}{fence}"
+
+
 def format_report(report: Report, *, include_passed: bool = True) -> str:
     lines: list[str] = []
     if report.blocked:
-        lines.append(f"blocked: {report.blocked}")
+        lines.append(f"blocked: {code_span(report.blocked)}")
     drift = [f for f in report.findings if f.status == "drift"]
     inconclusive = [f for f in report.findings if f.status == "inconclusive"]
     if report.blocked and drift:
@@ -1404,46 +1428,105 @@ def format_report(report: Report, *, include_passed: bool = True) -> str:
     if drift:
         lines.append("## Drift")
         for f in drift:
-            member = f"`{f.member}` " if f.member else ""
+            member = f"{code_span(f.member)} " if f.member else ""
+            platforms = ", ".join(code_span(p) for p in f.platforms)
             lines.append(
-                f"- `{f.tool_id}` {member}`{f.url}` — {f.reason} ({', '.join(f.platforms)})"
+                f"- {code_span(f.tool_id)} {member}{code_span(f.url)} — "
+                f"{code_span(f.reason)} ({platforms})"
             )
     if inconclusive:
         lines.append("## Inconclusive")
         for f in inconclusive:
-            member = f"`{f.member}` " if f.member else ""
+            member = f"{code_span(f.member)} " if f.member else ""
+            platforms = ", ".join(code_span(p) for p in f.platforms)
             lines.append(
-                f"- `{f.tool_id}` {member}`{f.url}` — {f.reason} ({', '.join(f.platforms)})"
+                f"- {code_span(f.tool_id)} {member}{code_span(f.url)} — "
+                f"{code_span(f.reason)} ({platforms})"
             )
     lines.append("Unverified at install (no checksum file, pinned sha256 or GitHub digest):")
     if report.unverified:
         for entry in sorted(report.unverified, key=lambda u: (u.tool_id, u.method_index)):
-            assets = ", ".join(f"`{name}`" for name in entry.assets)
+            assets = ", ".join(code_span(name) for name in entry.assets)
             lines.append(
-                f"- `{entry.tool_id}` method {entry.method_index} ({entry.kind}): {assets}"
+                f"- {code_span(entry.tool_id)} method {entry.method_index} ({entry.kind}): {assets}"
             )
     else:
         lines.append("- none")
     if report.not_checkable:
         lines.append("## Not checkable")
         for note in report.not_checkable:
-            lines.append(f"- {note}")
+            lines.append(f"- {code_span(note)}")
     if report.notes:
         lines.append("## Notes")
         for note in report.notes:
-            lines.append(f"- {note}")
+            lines.append(f"- {code_span(note)}")
     if include_passed:
         lines.append("## Passed")
         for f in report.findings:
             if f.status != "ok":
                 continue
+            platforms = ", ".join(code_span(p) for p in f.platforms)
             if f.member:
                 lines.append(
-                    f"- `{f.tool_id}` `{f.url}` `{f.member}` (`{'`, `'.join(f.platforms)}`)"
+                    f"- {code_span(f.tool_id)} {code_span(f.url)} {code_span(f.member)} "
+                    f"({platforms})"
                 )
             else:
-                lines.append(f"- `{f.tool_id}` `{f.url}` (`{'`, `'.join(f.platforms)}`)")
+                lines.append(f"- {code_span(f.tool_id)} {code_span(f.url)} ({platforms})")
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+def upsert_drift_issue(body: str, gh: Callable[[list[str]], str]) -> None:
+    gh(
+        [
+            "gh",
+            "label",
+            "create",
+            DRIFT_LABEL,
+            "--force",
+            "--description",
+            "Upstream drift found by make verify-registry",
+        ]
+    )
+    raw = gh(
+        [
+            "gh",
+            "issue",
+            "list",
+            "--label",
+            DRIFT_LABEL,
+            "--state",
+            "open",
+            "--json",
+            "number",
+            "--limit",
+            "1",
+        ]
+    )
+    items = json.loads(raw)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False, suffix=".md") as tmp:
+        tmp.write(body)
+        body_path = tmp.name
+    try:
+        if items:
+            number = items[0]["number"]
+            gh(["gh", "issue", "edit", str(number), "--body-file", body_path])
+        else:
+            gh(
+                [
+                    "gh",
+                    "issue",
+                    "create",
+                    "--title",
+                    "Registry drift detected by verify-registry",
+                    "--label",
+                    DRIFT_LABEL,
+                    "--body-file",
+                    body_path,
+                ]
+            )
+    finally:
+        Path(body_path).unlink(missing_ok=True)
 
 
 def _load_state(path: Path) -> dict[str, str]:
@@ -1530,6 +1613,11 @@ def main(
         metavar="TOOL=VERSION",
         help="Bump a pinned tool to an explicit candidate version (repeatable).",
     )
+    parser.add_argument(
+        "--issue",
+        action="store_true",
+        help=("Upsert one drift issue labelled registry-drift (used by the weekly workflow)."),
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     write_day = today if today is not None else date.today()
     state_path = args.state if args.state is not None else default_state_path()
@@ -1578,9 +1666,16 @@ def main(
     elif explicit:
         print("--candidate requires --write", file=sys.stderr)
         return EXIT_USAGE
+    exit_code = report.exit_code
+    if args.issue and report.exit_code == 1:
+        try:
+            upsert_drift_issue(format_report(report, include_passed=False), gh_runner)
+        except CommandError as exc:
+            print(str(exc), file=sys.stderr)
+            exit_code = 2
     print(format_report(report), end="")
     _save_state(state_path, state)
-    return report.exit_code
+    return exit_code
 
 
 if __name__ == "__main__":

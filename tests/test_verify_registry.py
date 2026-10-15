@@ -20,12 +20,15 @@ from installer.model import load_tools
 from installer.run import CommandError
 from installer.verify_registry import (
     EXIT_USAGE,
+    Finding,
     Probe,
     RegistryEdit,
     RegistryWriteError,
     Release,
+    Report,
     apply_registry_edits,
     check_registry,
+    code_span,
     format_report,
     main,
     state_key,
@@ -2533,3 +2536,275 @@ def test_candidate_for_an_unknown_or_unpinned_tool_is_an_error(
         assert code == EXIT_USAGE
         assert err.strip()
         assert registry.read_bytes() == before
+
+
+class _GhRecorder:
+    """Records ``gh`` argv and captures ``--body-file`` contents (offline)."""
+
+    def __init__(self, *, list_json: str = "[]") -> None:
+        self.calls: list[list[str]] = []
+        self.bodies: list[str] = []
+        self._list_json = list_json
+
+    def __call__(self, cmd: list[str]) -> str:
+        self.calls.append(list(cmd))
+        if "--body-file" in cmd:
+            path = cmd[cmd.index("--body-file") + 1]
+            self.bodies.append(Path(path).read_text(encoding="utf-8"))
+        if cmd[:3] == ["gh", "issue", "list"]:
+            return self._list_json
+        return ""
+
+
+def _drift_registry(tmp_path: Path) -> Path:
+    return _difftastic_registry(tmp_path, prefix_template=True)
+
+
+def test_first_drift_creates_the_issue(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    registry = _drift_registry(tmp_path)
+    assets = _canned_difftastic_assets()
+    release = _release(assets=assets)
+    gh = _GhRecorder()
+    code = main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--issue"],
+        probe=_probe(release, assets),
+        gh=gh,
+    )
+    assert code == 1
+    assert len(gh.bodies) == 1
+    body = gh.bodies[0]
+    assert "`difftastic`" in body
+    assert "## Passed" not in body
+    assert [c[:3] for c in gh.calls] == [
+        ["gh", "label", "create"],
+        ["gh", "issue", "list"],
+        ["gh", "issue", "create"],
+    ]
+    assert "registry-drift" in gh.calls[0]
+    assert capsys.readouterr().out
+
+
+def test_second_drift_edits_the_open_issue(tmp_path: Path) -> None:
+    registry = _drift_registry(tmp_path)
+    assets = _canned_difftastic_assets()
+    release = _release(assets=assets)
+    gh = _GhRecorder(list_json='[{"number": 7}]')
+    code = main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--issue"],
+        probe=_probe(release, assets),
+        gh=gh,
+    )
+    assert code == 1
+    assert gh.calls[-1][:4] == ["gh", "issue", "edit", "7"]
+    assert not any(c[1:3] == ["issue", "create"] for c in gh.calls)
+
+
+def test_drift_beside_an_inconclusive_finding_still_updates_the_issue(
+    tmp_path: Path,
+) -> None:
+    content = """
+[[tool]]
+id = "bad"
+name = "bad"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/good"
+asset = "a-{ver}.tar.gz"
+member = "bin/x"
+strip = 0
+[[tool]]
+id = "good"
+name = "good"
+category = "git"
+cmd = "y"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/bad"
+asset = "b-{ver}.tar.gz"
+member = "bin/y"
+strip = 0
+"""
+    registry = _write_registry(tmp_path, content)
+    good_tar = _gz_tar_bytes({"bin/x": b"x"})
+    good_url = "https://github.com/o/good/releases/download/1.0.0/a-1.0.0.tar.gz"
+    bad_url = "https://github.com/o/bad/releases/download/1.0.0/b-1.0.0.tar.gz"
+    digest = hashlib.sha256(good_tar).hexdigest()
+    release_good = Release(tag="1.0.0", digests={"a-1.0.0.tar.gz": digest})
+
+    def rel(repo: str) -> Release:
+        if repo == "o/good":
+            return release_good
+        return Release(tag="1.0.0", digests={})
+
+    def head(url: str) -> str:
+        if url == good_url:
+            raise _http_error(url, 503)
+        if url == bad_url:
+            raise _http_error(url, 404)
+        return 'etag:"1"'
+
+    probe = Probe(release=rel, head=head, download=lambda _u, _d: None)
+    gh = _GhRecorder()
+    code = main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--issue"],
+        probe=probe,
+        gh=gh,
+    )
+    assert code == 1
+    assert gh.bodies
+    body = gh.bodies[0]
+    assert "## Drift" in body
+    assert "## Inconclusive" in body
+
+
+def test_inconclusive_run_makes_no_gh_call(tmp_path: Path) -> None:
+    registry = _difftastic_registry(tmp_path, prefix_template=False)
+
+    def rel(_repo: str) -> Release:
+        raise _version_error_from_transport(URLError("net"))
+
+    assets = _canned_difftastic_assets()
+    probe = Probe(
+        release=rel,
+        head=_head_for_release(_release(assets=assets), assets),
+        download=_difftastic_download,
+    )
+    gh = _GhRecorder()
+    code = main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--issue"],
+        probe=probe,
+        gh=gh,
+    )
+    assert code == 2
+    assert gh.calls == []
+
+
+def test_blocked_run_with_confirmed_drift_still_updates_the_issue(
+    tmp_path: Path,
+) -> None:
+    vendor_url = "https://vendor.example/pkg-1.0.tar.gz"
+    pin = hashlib.sha256(_gz_tar_bytes({"bin/x": b"x"})).hexdigest()
+    content = f"""
+[[tool]]
+id = "api"
+name = "api"
+category = "git"
+cmd = "a"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "x-{{ver}}.tar.gz"
+member = "bin/x"
+strip = 0
+[[tool]]
+id = "vendor"
+name = "vendor"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://vendor.example/pkg-{{ver}}.tar.gz"
+version = "1.0"
+member = "bin/x"
+strip = 0
+sha256 = "{pin}"
+"""
+    registry = _write_registry(tmp_path, content)
+    api = "https://api.github.com/repos/o/r/releases/latest"
+    rate_headers = {"X-RateLimit-Remaining": "0"}
+
+    def rel(_repo: str) -> Release:
+        raise _version_error_from_http(api, 403, **rate_headers)
+
+    def head(url: str) -> str:
+        if url == vendor_url:
+            raise _http_error(url, 404)
+        return 'etag:"1"'
+
+    probe = Probe(release=rel, head=head, download=lambda _u, _d: None)
+    gh = _GhRecorder()
+    code = main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--issue"],
+        probe=probe,
+        gh=gh,
+    )
+    assert code == 1
+    assert len(gh.calls) >= 3
+    body = gh.bodies[0]
+    lines = body.splitlines()
+    assert lines[0].startswith("blocked:")
+    assert lines[1].startswith("note: the run was otherwise blocked")
+    assert "`vendor`" in body
+
+
+def test_clean_run_makes_no_gh_call(tmp_path: Path) -> None:
+    registry = _difftastic_registry(tmp_path, prefix_template=False)
+    assets = _canned_difftastic_assets()
+    release = _release(assets=assets)
+    gh = _GhRecorder()
+    code = main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--issue"],
+        probe=_probe(release, assets),
+        gh=gh,
+    )
+    assert code == 0
+    assert gh.calls == []
+
+
+def test_issue_body_carries_no_environment_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "secret-value")
+    registry = _drift_registry(tmp_path)
+    assets = _canned_difftastic_assets()
+    release = _release(assets=assets)
+    gh = _GhRecorder()
+    main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--issue"],
+        probe=_probe(release, assets),
+        gh=gh,
+    )
+    blob = " ".join(" ".join(c) for c in gh.calls) + "".join(gh.bodies)
+    assert "secret-value" not in blob
+
+
+def test_issue_code_span_picks_a_safe_delimiter() -> None:
+    assert code_span("a.tar.gz") == "`a.tar.gz`"
+    assert code_span("a`b") == "``a`b``"
+    assert code_span("`x") == "`` `x ``"
+    assert code_span("x\ny\r\tz") == "`x y  z`"
+
+
+def test_issue_body_never_breaks_out_of_a_code_span() -> None:
+    report = Report(
+        findings=(
+            Finding(
+                tool_id="t",
+                url="https://ex`ample.com/x",
+                status="drift",
+                reason="boom\n# injected heading",
+                member=None,
+                platforms=("debian/amd64",),
+            ),
+        ),
+    )
+    body = format_report(report, include_passed=False)
+    assert not any(line.startswith("# injected") for line in body.splitlines())
+    for line in body.splitlines():
+        if not line:
+            continue
+        assert line.startswith(("blocked:", "note:", "## ", "- ", "Unverified")) or line == "- none"
