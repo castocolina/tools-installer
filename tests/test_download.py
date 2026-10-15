@@ -299,7 +299,14 @@ def test_github_release_raw_downloads_binary_directly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    calls, runner = _record()
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        if cmd[0] == "sh":
+            parts = shlex.split(cmd[2])
+            Path(parts[parts.index("-o") + 1]).write_bytes(b"raw-yq")
+
     bin_dir = tmp_path / "bin"
     method = Method(
         kind="github_release",
@@ -314,10 +321,17 @@ def test_github_release_raw_downloads_binary_directly(
     install_download(method, _ctx(runner))
     target = bin_dir / "yq"
     url = "https://github.com/mikefarah/yq/releases/download/v14.1.0/yq_linux_amd64"
+    # WR-04: the asset lands via a sibling temp file + os.replace, never
+    # curl/chmod through the live path itself.
     assert calls == [
-        ["sh", "-c", f"curl -fsSL -o {shlex.quote(str(target))} -- {shlex.quote(url)}"],
-        ["chmod", "+x", str(target)],
+        [
+            "sh",
+            "-c",
+            f"curl -fsSL -o {shlex.quote(str(target) + '.download')} -- {shlex.quote(url)}",
+        ]
     ]
+    assert not target.is_symlink()
+    assert target.stat().st_mode & 0o777 == 0o755
 
 
 def test_unsupported_kind_raises(tmp_path: Path):
@@ -758,10 +772,14 @@ def test_verified_raw_copies_from_temp_into_bin(tmp_path: Path, monkeypatch: pyt
         },
     )
     assert install_download(method, _ctx(runner, tmp_version="v4.44.0")) is True
-    assert calls[1:] == [
-        ["cp", str(workdir / asset), str(bindir / "yq")],
-        ["chmod", "+x", str(bindir / "yq")],
-    ]
+    # WR-04: placed via _replace_raw (sibling temp + os.replace), never a
+    # shelled cp/chmod through the live path.
+    assert not any(cmd and cmd[0] in {"cp", "chmod"} for cmd in calls)
+    placed = bindir / "yq"
+    assert not placed.is_symlink()
+    assert placed.read_bytes() == payload
+    assert placed.stat().st_mode & 0o777 == 0o755
+    assert not Path(str(placed) + ".tools-installer.new").exists()
 
 
 def test_verified_zip_extracts_member_from_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1092,3 +1110,99 @@ def test_checksum_mismatch_during_update_leaves_live_untouched(
         update_download(_rg_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
     assert (opt / "marker").read_text() == "original"
     assert (opt / "rg").read_bytes() == b"old-binary"
+
+
+def test_update_download_directory_member_rolls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WR-03: the live-binary check on update is the same predicate install
+    uses -- a directory member is a failure, and the swap rolls back."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt, _binary, link = _plant_archive_install(tmp_path)
+    original = os.readlink(link)
+    _, plain_runner = _curl_and_extract_runner({}, extracted=b"new-rg")
+
+    def dir_member_runner(cmd: list[str]) -> None:
+        if cmd[0] == "tar":
+            dest = Path(cmd[cmd.index("-C") + 1])
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / "rg").mkdir()  # the archive member is a directory
+        else:
+            plain_runner(cmd)
+
+    with pytest.raises(ExecutorError, match="restored"):
+        update_download(_rg_update_method(tmp_path / "bin"), _ctx(dir_member_runner))
+    assert (opt / "marker").read_text() == "original"
+    assert (opt / "rg").read_bytes() == b"old-binary"
+    assert os.readlink(link) == original
+    assert not Path(str(opt) + ".tools-installer.old").exists()
+
+
+def test_raw_install_replaces_a_link_instead_of_writing_through_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WR-04: a raw install with ~/.local/bin/<name> a symlink to a foreign
+    directory replaces the link itself; the target is untouched and no
+    shelled chmod/cp targets the link."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bindir = tmp_path / "bin"
+    bindir.mkdir(parents=True)
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    (foreign / "keep").write_text("important")
+    link = bindir / "yq"
+    os.symlink(str(foreign), link)
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        if cmd[0] == "sh":
+            parts = shlex.split(cmd[2])
+            dest = Path(parts[parts.index("-o") + 1])
+            dest.write_bytes(b"new-yq")
+
+    install_download(_raw_method(bindir), _ctx(runner))
+    assert not link.is_symlink()
+    assert link.read_bytes() == b"new-yq"
+    assert (foreign / "keep").read_text() == "important"
+    assert not any(cmd and cmd[0] in {"chmod", "cp"} for cmd in calls)
+    parts = shlex.split(calls[0][2])
+    fetch_to = Path(parts[parts.index("-o") + 1])
+    assert fetch_to != link  # curl never targets the live link
+
+
+def test_verified_raw_install_replaces_a_link_instead_of_writing_through_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WR-04, verified raw branch: the asset lands via sibling temp +
+    os.replace, so a link to a foreign directory is replaced, never written
+    through."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    workdir = _workdir(tmp_path, monkeypatch)
+    asset = "yq_linux_amd64"
+    payload = b"raw-binary"
+    sums = f"{hashlib.sha256(payload).hexdigest()}  {asset}\n".encode()
+    calls, runner = fixture_runner(workdir, {asset: payload, "checksums.txt": sums})
+    bindir = tmp_path / "bin"
+    bindir.mkdir(parents=True)
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    (foreign / "keep").write_text("important")
+    link = bindir / "yq"
+    os.symlink(str(foreign), link)
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "mikefarah/yq",
+            "asset": "yq_linux_{arch.deb}",
+            "member": "yq",
+            "raw": True,
+            "checksum": "checksums.txt",
+            "bin_dir": str(bindir),
+        },
+    )
+    assert install_download(method, _ctx(runner, tmp_version="v4.44.0")) is True
+    assert not link.is_symlink()
+    assert link.read_bytes() == payload
+    assert (foreign / "keep").read_text() == "important"
+    assert not any(cmd and cmd[0] in {"chmod", "cp"} for cmd in calls)

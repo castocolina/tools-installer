@@ -190,7 +190,7 @@ def _validate_app(live: Path, spec: tuple[str, str] | None) -> None:
         return
     cli, _name = spec
     path = live / cli
-    if not path.exists() or not os.access(path, os.X_OK):
+    if not path.is_file() or not os.access(path, os.X_OK):
         raise ExecutorError(f"updated CLI at {path} is missing or not executable")
 
 

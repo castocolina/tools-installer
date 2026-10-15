@@ -338,3 +338,32 @@ def test_update_app_cleanup_failure_is_warning(
     result = update_app(_method(cli="Contents/SharedSupport/bin/demo"), runner)
     assert any("cleanup failed" in warning for warning in result.warnings)
     assert (bundle / "marker").read_text() == "updated"
+
+
+def test_update_app_directory_cli_rolls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WR-03: the app-update CLI check is the same predicate install uses --
+    a directory at the cli path is a failure, and the swap rolls back."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _plant_bundle(tmp_path, cli="Contents/SharedSupport/bin/demo")
+    original = os.readlink(tmp_path / ".local" / "bin" / "demo")
+    _, runner = _app_update_runner(tmp_path, extracted=b"new-cli")
+
+    def dir_cli_runner(cmd: list[str]) -> None:
+        if cmd[0] == "ditto":
+            extract_root = Path(cmd[-1])
+            extract_root.mkdir(parents=True, exist_ok=True)
+            staged = extract_root / "Demo App.app"
+            staged.mkdir(parents=True)
+            (staged / "marker").write_text("updated")
+            cli = staged / "Contents" / "SharedSupport" / "bin" / "demo"
+            cli.parent.mkdir(parents=True, exist_ok=True)
+            cli.mkdir()  # the cli path is a directory, not a file
+        else:
+            runner(cmd)
+
+    with pytest.raises(ExecutorError, match="restored"):
+        update_app(_method(cli="Contents/SharedSupport/bin/demo"), dir_cli_runner)
+    assert (bundle / "marker").read_text() == "original"
+    assert os.readlink(tmp_path / ".local" / "bin" / "demo") == original

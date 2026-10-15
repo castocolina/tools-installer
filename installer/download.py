@@ -172,9 +172,17 @@ def _install_unverified(
     """The pre-checksum flow: curl|extract via a shell-side mktemp. Argv unchanged."""
     quoted_url = shlex.quote(target.url)
     if method.params.get("raw") is True:
-        quoted_link = shlex.quote(str(link))
-        ctx.runner(["sh", "-c", f"curl -fsSL -o {quoted_link} -- {quoted_url}"])
-        ctx.runner(["chmod", "+x", str(link)])
+        # WR-04: curl -o would follow an existing symlink at <link> and write
+        # through it. Fetch to a sibling temp path, then land the asset via
+        # _replace_raw (sibling temp + os.replace), which replaces the link
+        # itself and leaves any target untouched.
+        staged = staged_sibling(link, ".download")
+        quoted_staged = shlex.quote(str(staged))
+        try:
+            ctx.runner(["sh", "-c", f"curl -fsSL -o {quoted_staged} -- {quoted_url}"])
+            _replace_raw(link, staged)
+        finally:
+            staged.unlink(missing_ok=True)
         return
     strip = _opt_int(method, "strip", 0)
     try:
@@ -334,7 +342,7 @@ def _replace_archive(
     live_binary = opt / target.member
     try:
         replace_symlink(link, str(live_binary))
-        if not live_binary.exists() or not os.access(live_binary, os.X_OK):
+        if not live_binary.is_file() or not os.access(live_binary, os.X_OK):
             raise ExecutorError(f"updated binary at {live_binary} is missing or not executable")
     except (OSError, ExecutorError) as extra:
         _undo_archive_swap(opt, new, old, link, original_target)
@@ -389,8 +397,7 @@ def _place_verified(
 ) -> None:
     """Install a verified download from its temp path (plain argv, no shell)."""
     if method.params.get("raw") is True:
-        ctx.runner(["cp", str(asset_path), str(link)])
-        ctx.runner(["chmod", "+x", str(link)])
+        _replace_raw(link, asset_path)
         return
     try:
         opt = ensure_dir(opt_dir(link.name))
