@@ -229,7 +229,7 @@ verified external source. Method keys are a closed set per kind
 
 Download and app kinds smoke-run the staged binary once before the installer
 creates or swaps any link, so a broken binary never gets an installer-created
-link. Manager kinds (`brew`, `apt`, `dnf`, `pacman`, and similar) are
+link. An install never moves aside or deletes an existing tree under `~/.local/opt` or bundle under `~/Applications` unless the installer-created link proves it (the same proof the uninstaller uses, `download.is_still_proven`); otherwise that method fails with a remove-it-yourself message and the ladder falls through. Manager kinds (`brew`, `apt`, `dnf`, `pacman`, and similar) are
 smoke-run once after the package manager installed them, only when a runnable
 target exists (an executable `<bin_dir>/<cmd>`, else the command PATH
 resolves), and a smoke failure falls through to the next method while the

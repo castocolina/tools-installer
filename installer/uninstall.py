@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 from installer.apps import APP_KINDS, cli_spec
-from installer.download import DOWNLOAD_KINDS, link_name
+from installer.download import DOWNLOAD_KINDS, is_still_proven, link_name
 from installer.enums import UninstallState
 from installer.executors import ExecutorError
 from installer.locations import applications_dir, opt_dir
@@ -123,24 +123,6 @@ class RemovalPlan:
 
     removable: tuple[Path, ...]
     yourself: tuple[Path, ...]
-
-
-def is_still_proven(path: Path) -> bool:
-    """The per-link form of `plan_removal`'s proof, re-checkable at deletion time.
-
-    A bin link is proven when it is a symlink whose target is a regular file
-    inside this tool's own opt_dir(<link name>) — the same archive-layout
-    proof `plan_removal` makes, evaluated NOW rather than at preview time.
-    Resolution is strict: a dangling or looping link raises (OSError/RuntimeError
-    on 3.11+) and is unproven — never a crash (CR-01)."""
-    if not path.is_symlink():
-        return False
-    try:
-        resolved = path.resolve(strict=True)
-        opt_real = opt_dir(path.name).resolve(strict=True)
-    except (OSError, RuntimeError):  # dangling or looping: never proof
-        return False
-    return resolved.is_file() and resolved.is_relative_to(opt_real)
 
 
 def still_removable(path: Path, bin_dir: Path) -> bool:

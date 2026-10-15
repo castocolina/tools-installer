@@ -96,8 +96,9 @@ def resolve_target(method: Method, ctx: ExecContext) -> DownloadTarget:
 
     github_release templates asset/member/checksum with the resolved tag's
     bare version and the platform arch tokens; `{asset}` in the checksum
-    template expands to the already-rendered asset name. tarball is verbatim
-    and does not support checksums (no registry entry needs it).
+    template expands to the already-rendered asset name. tarball renders `{ver}`
+    from `version` and verifies a pinned `sha256`; only github_release supports
+    a checksum file.
     """
     try:
         tokens = arch_tokens(ctx.platform.arch)
@@ -188,6 +189,25 @@ def link_name(method: Method, member: str) -> str:
     return _opt_str(method, "bin_name") or PurePosixPath(member).name
 
 
+def is_still_proven(path: Path, root: Path | None = None) -> bool:
+    """The per-link form of `plan_removal`'s proof, re-checkable at deletion time.
+
+    A bin link is proven when it is a symlink whose target is a regular file
+    inside this tool's own opt_dir(<link name>) — the same archive-layout
+    proof `plan_removal` makes, evaluated NOW rather than at preview time.
+    When `root` is given, containment is checked against that directory instead
+    (for app bundles). Resolution is strict: a dangling or looping link raises
+    (OSError/RuntimeError on 3.11+) and is unproven — never a crash (CR-01)."""
+    if not path.is_symlink():
+        return False
+    try:
+        resolved = path.resolve(strict=True)
+        containment = (root if root is not None else opt_dir(path.name)).resolve(strict=True)
+    except (OSError, RuntimeError):  # dangling or looping: never proof
+        return False
+    return resolved.is_file() and resolved.is_relative_to(containment)
+
+
 def install_download(method: Method, ctx: ExecContext) -> str | None:
     """Install a release binary into ~/.local/bin (userspace, no sudo).
 
@@ -209,6 +229,13 @@ def install_download(method: Method, ctx: ExecContext) -> str | None:
     except OSError as exc:
         raise ExecutorError(f"cannot create bin dir: {exc}") from exc
     link = dest / binname
+    if method.params.get("raw") is not True:
+        opt = opt_dir(binname)
+        if (opt.exists() or opt.is_symlink()) and not is_still_proven(link):
+            raise ExecutorError(
+                f"{opt} already exists but {link} is not proven to be from this "
+                "installer; move it aside or remove it, then retry"
+            )
     workdir = Path(tempfile.mkdtemp(prefix="tools-installer-"))
     try:
         asset_path = _fetch_verified(method, ctx, target, workdir)

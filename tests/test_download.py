@@ -7,9 +7,15 @@ from pathlib import Path
 import pytest
 
 from installer import atomic, download
-from installer.atomic import NEW_SUFFIX, staged_sibling
+from installer.atomic import NEW_SUFFIX, OLD_SUFFIX, staged_sibling
 from installer.checksums import ChecksumMismatch
-from installer.download import DOWNLOAD_KINDS, ExecContext, install_download, update_download
+from installer.download import (
+    DOWNLOAD_KINDS,
+    ExecContext,
+    install_download,
+    is_still_proven,
+    update_download,
+)
 from installer.executors import ExecutorError
 from installer.model import Method
 from installer.platform import Platform
@@ -273,7 +279,6 @@ def test_reinstall_never_writes_through_a_link_to_a_directory(
     inner.write_bytes(b"keep-me")
     os.symlink(str(legacy), bin_dir / "subl2")
     member2 = opt / "sublime_text" / "sublime_text"
-    _, runner2 = fixture_runner(None, {}, member=member2)
     method2 = Method(
         kind="tarball",
         params={
@@ -284,12 +289,97 @@ def test_reinstall_never_writes_through_a_link_to_a_directory(
             "bin_dir": str(bin_dir),
         },
     )
-    install_download(method2, _ctx(runner2))
+    calls2, runner2 = fixture_runner(None, {}, member=member2)
+    with pytest.raises(ExecutorError):
+        install_download(method2, _ctx(runner2))
+    assert inner.read_bytes() == b"keep-me"
     link2 = bin_dir / "subl2"
-    assert link2.is_symlink()
-    assert os.readlink(link2) == str(member2)
-    assert member2.is_file()
-    assert not legacy.exists()
+    assert os.readlink(link2) == str(legacy)
+    assert calls2 == []
+
+
+def test_install_refuses_an_unproven_opt_tree_and_leaves_it_byte_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Portable VS Code data under ~/.local/opt/code is not replaced without proof."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt = tmp_path / ".local" / "opt" / "code"
+    settings = opt / "data" / "user-data" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_bytes(b"user-settings-bytes")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    member = opt / "bin" / "code"
+    calls, runner = fixture_runner(None, {}, member=member)
+    method = Method(
+        kind="tarball",
+        params={
+            "url": "https://x/code.tar.gz",
+            "member": "bin/code",
+            "strip": 1,
+            "bin_dir": str(bin_dir),
+        },
+    )
+    with pytest.raises(ExecutorError, match="not proven"):
+        install_download(method, _ctx(runner))
+    assert settings.read_bytes() == b"user-settings-bytes"
+    assert not staged_sibling(opt, NEW_SUFFIX).exists()
+    assert not staged_sibling(opt, OLD_SUFFIX).exists()
+    assert calls == []
+
+
+def test_install_replaces_a_proven_opt_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt = tmp_path / ".local" / "opt" / "rg"
+    binary = opt / "rg"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"old-rg")
+    binary.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    os.symlink(str(binary), bin_dir / "rg")
+    member = opt / "rg"
+    calls, runner = fixture_runner(None, {}, member=member)
+    method = Method(
+        kind="tarball",
+        params={"url": "https://x/rg.tar.gz", "member": "rg", "bin_dir": str(bin_dir)},
+    )
+    install_download(method, _ctx(runner))
+    link = bin_dir / "rg"
+    assert link.is_symlink()
+    assert os.readlink(link) == str(member)
+    assert member.read_bytes() == _MEMBER_SCRIPT
+    assert not staged_sibling(opt, OLD_SUFFIX).exists()
+    assert calls  # curl + tar ran
+
+
+def test_is_still_proven_accepts_an_explicit_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    root = tmp_path / "bundle"
+    inside = root / "cli"
+    inside.parent.mkdir(parents=True)
+    inside.write_bytes(b"x")
+    inside.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    link = bin_dir / "tool"
+    os.symlink(str(inside), link)
+    assert is_still_proven(link, root) is True
+    outside = tmp_path / "other" / "cli"
+    outside.parent.mkdir(parents=True)
+    outside.write_bytes(b"y")
+    os.symlink(str(outside), bin_dir / "foreign")
+    assert is_still_proven(bin_dir / "foreign", root) is False
+    dangling = bin_dir / "dangling"
+    os.symlink(str(root / "missing"), dangling)
+    assert is_still_proven(dangling, root) is False
+    regular = bin_dir / "regular"
+    regular.write_bytes(b"z")
+    assert is_still_proven(regular, root) is False
 
 
 def test_tarball_bin_name_overrides_the_symlink_name(
@@ -1507,6 +1597,9 @@ def test_pinned_tarball_is_verified_against_its_sha256(
     assert (bindir / "x").is_symlink()
     assert not workdir.exists()
 
+    bindir2 = tmp_path / "bin2"
+    bindir2.mkdir()
+    os.symlink(str(member), bindir2 / "x")
     bad = Method(
         kind="tarball",
         params={
@@ -1514,13 +1607,13 @@ def test_pinned_tarball_is_verified_against_its_sha256(
             "version": "4215",
             "sha256": "b" * 64,
             "member": "x",
-            "bin_dir": str(tmp_path / "bin2"),
+            "bin_dir": str(bindir2),
         },
     )
     _, runner2 = fixture_runner(workdir, {asset: payload}, member=member)
     with pytest.raises(ChecksumMismatch):
         install_download(bad, _ctx(runner2))
-    assert not (tmp_path / "bin2" / "x").exists()
+    assert os.readlink(bindir2 / "x") == str(member)
 
 
 def test_supplied_sha256_is_never_discarded(
