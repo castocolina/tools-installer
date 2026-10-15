@@ -1214,12 +1214,24 @@ def _first_failed_finding(report: Report) -> tuple[str, str]:
     return "", "candidate check failed"
 
 
+def _pinned_finding_member(method: Method) -> str | None:
+    if method.kind == "app":
+        app = method.params.get("app")
+        if not isinstance(app, str) or not app:
+            return None
+        cli = method.params.get("cli")
+        if isinstance(cli, str) and cli:
+            return f"{app}/{cli}"
+        return app
+    member = method.params.get("member")
+    return member if isinstance(member, str) else None
+
+
 def _finding_for_pinned_method(
     report: Report, tool_id: str, method: Method, candidate: str
 ) -> Finding | None:
     url = pinned_url(_method_at_version(method, candidate))
-    member = method.params.get("member")
-    member_str = member if isinstance(member, str) else None
+    member_str = _pinned_finding_member(method)
     for finding in report.findings:
         if finding.tool_id != tool_id or finding.url != url:
             continue

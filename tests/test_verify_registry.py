@@ -2388,6 +2388,64 @@ def test_write_run_after_a_bump_reports_the_registry_as_written(
     assert "helm" in report.passed_tools()
 
 
+def test_github_app_pin_bump_matches_findings_by_app_cli_member(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from installer import verify_registry as vr
+
+    pin = "a" * 64
+    content = f"""
+[[tool]]
+id = "drawio-desktop"
+name = "draw.io Desktop"
+category = "diagram"
+cmd = "drawio"
+priority = "P2"
+audience = "both"
+tier = "user"
+verified = 2026-10-01
+[[tool.method]]
+kind = "app"
+os = ["macos"]
+arch = ["arm64"]
+url = "https://github.com/o/r/releases/download/v{{ver}}/draw.io-arm64-{{ver}}.zip"
+version = "31.0.2"
+sha256 = "{pin}"
+app = "draw.io.app"
+cli = "Contents/MacOS/draw.io"
+"""
+    registry = _write_registry(tmp_path, content)
+    old_url = "https://github.com/o/r/releases/download/v31.0.2/draw.io-arm64-31.0.2.zip"
+    new_url = "https://github.com/o/r/releases/download/v32.4.1/draw.io-arm64-32.4.1.zip"
+    zip_new = _zip_bytes({"draw.io.app/Contents/MacOS/draw.io": b"new"})
+    new_digest = hashlib.sha256(zip_new).hexdigest()
+    release = Release(tag="v32.4.1", digests={"draw.io-arm64-32.4.1.zip": new_digest})
+
+    def head(url: str) -> str:
+        if url == new_url:
+            return 'etag:"1"'
+        if url == old_url:
+            raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    def download(url: str, dest: Path) -> None:
+        if url == new_url:
+            dest.write_bytes(zip_new)
+            return
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    probe = Probe(release=lambda _r: release, head=head, download=download)
+    code = vr.main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--write"],
+        probe=probe,
+        today=date(2026, 10, 15),
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "bumped drawio-desktop 31.0.2 -> 32.4.1" in out
+    assert f'sha256 = "{new_digest}"' in registry.read_text()
+
+
 def test_bump_replaces_the_findings_of_the_superseded_pin_targets(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
