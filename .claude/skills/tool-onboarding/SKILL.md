@@ -187,8 +187,10 @@ copy (`rg` the registry, do not rely on memory).
 ### 9. Write the entry
 
 `id`, `name`, `category`, `cmd`, `priority`, `audience`, `tier`, `verified =
-YYYY-MM-DD`, `desc`, `requires`, optional `postinstall`, one `[[tool.method]]`
-per real platform/arch path from steps 3-4, and the dated `# Verified` comment
+YYYY-MM-DD`, `desc`, `requires`, optional `postinstall`, optional method
+`smoke_argv` (argument tail only for the post-install smoke run; argv[0] is
+always the installed path), one `[[tool.method]]` per real platform/arch path
+from steps 3-4, and the dated `# Verified` comment
 (what was checked, what was knowingly left out, which customizations were
 offered and the user's answers). Use only keys allowed for each method kind
 (`METHOD_PARAMS` in `installer/model.py`); for `app`/`tarball` urls with
@@ -211,3 +213,6 @@ gates and add tests for any new hook; sandbox every real install.
 - **A postinstall hook that writes to every host unconditionally or passes an
   "auto"-style flag.**
 - **Re-deriving the postinstall tree instead of reading architecture.md.**
+- **Declaring a `smoke_argv` that answers before the binary itself runs (for
+  example an AppImage runtime flag); confirm the binary answers `--version` or
+  declare the smallest argument list that runs it.**

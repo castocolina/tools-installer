@@ -2671,12 +2671,10 @@ smoke = "puppeteer-browser"
 # kitty's GitHub release Linux assets
 # (kitty-{ver}-{arch}.txz, confirmed via
 # api.github.com/repos/kovidgoyal/kitty/releases/latest this session) are
-# XZ-compressed (.txz), but installer/download.py's extraction
-# (_install_unverified/_place_verified, lines 146 and 207) hardcodes
-# `tar -xzf` (gzip-only) — a github_release method for kitty on Linux would
-# fail at extraction time, which is why the method is the vendor script
-# below and not github_release. The script method is kitty's immutable-Linux
-# path.
+# XZ-compressed (.txz). When this method was chosen, installer/download.py's
+# extraction was gzip-only; it now honors archive = "xz". The vendor script
+# stays kitty's method because it is the documented install path. The script
+# method is kitty's immutable-Linux path.
 # Verified 2026-10-10: https://sw.kovidgoyal.net/kitty/binary/ documents
 # https://sw.kovidgoyal.net/kitty/installer.sh, launch=n (do not open a GUI),
 # and the Linux install root ~/.local/kitty.app. Live host: ~/.local/bin/kitty
@@ -2765,9 +2763,8 @@ min_os_version = "12"
 # shape. Unplanned Bazzite bonus: unlike kitty, this AppImage method DOES
 # resolve on immutable Fedora (Bazzite) — installer/resolve.py::_applies's
 # immutable-Linux skip applies only to native package-manager kinds
-# (dnf/apt/pacman), never to github_release, and raw=true means
-# _install_unverified/_place_verified never reach the tar -xzf call that
-# breaks on kitty's .txz assets — wezterm gets a real Linux/Bazzite path as a
+# (dnf/apt/pacman), never to github_release, and a raw AppImage is never
+# extracted — wezterm gets a real Linux/Bazzite path as a
 # side effect of this design choice, though REQ-linux-bazzite-shell-parity
 # does not require it.
 [[tool]]

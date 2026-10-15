@@ -227,6 +227,17 @@ verified external source. Method keys are a closed set per kind
 `app` or `tarball` url templated with `{ver}` must declare `version` and
 `sha256` so a bump edits one value.
 
+Download and app kinds smoke-run the staged binary once before the installer
+creates or swaps any link, so a broken binary never gets an installer-created
+link. Manager kinds (`brew`, `apt`, `dnf`, `pacman`, and similar) are
+smoke-run once after the package manager installed them, only when a runnable
+target exists (an executable `<bin_dir>/<cmd>`, else the command PATH
+resolves), and a smoke failure falls through to the next method while the
+package stays installed and is reported with its removal command. The smoke
+run uses `--version` unless the method declares `smoke_argv`, the argument list
+only (argv[0] is always the installed path; same character set as script
+`args`), distinct from a node method's closed `smoke` check name.
+
 Worked examples already in the registry:
 
 - `codegraph` (`installer/registry.toml:1225-1241`) records what the GitHub
@@ -869,10 +880,5 @@ anything cannot sit there as a blanket allowance. The emitter itself,
 `path_export_guard`, carries no exemption: it assembles its assignment
 through an intermediate local, so the reconstruction yields no hit for
 it, and an entry would therefore cover whatever that function might
-later build. Its runtime guarantee is carried instead by the real-shell
-repeated-source tests, which observe actual PATH contents rather than
-source shape. An AST scan is structurally blind to shell scripts,
-and two live instances of this same defect were found in
-`scripts/container-e2e-verify.sh` writing plain exports into a
 
-[Showing lines 1-871 of 1009 (50.0KB limit). Use offset=872 to continue.]
+[Showing lines 1-871 of 878 (50.0KB limit). Use offset=872 to continue.]

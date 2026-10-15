@@ -1544,18 +1544,26 @@ def test_wezterm_appimage_covers_bazzite_where_kitty_cannot() -> None:
     assert method.arch == ("amd64",)
 
 
-def test_kitty_entry_records_the_txz_extraction_gap() -> None:
+def test_kitty_entry_records_why_it_uses_the_vendor_script() -> None:
     lines = REGISTRY.read_text(encoding="utf-8").splitlines()
     idx = next(i for i, line in enumerate(lines) if line == 'id = "kitty"')
     window = "\n".join(lines[max(0, idx - 40) : idx])
     for fragment in (
         ".txz",
-        "tar -xzf",
         "download.py",
+        'archive = "xz"',
         "x86_64_linux",
         'platform.os == "macos"',
     ):
         assert fragment in window, f'missing {fragment!r} above id = "kitty"'
+    for forbidden in ("_install_unverified", "_place_verified"):
+        assert forbidden not in window, f'stale download reference {forbidden!r} above id = "kitty"'
+
+
+def test_no_registry_comment_names_a_deleted_download_function() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    assert "_install_unverified" not in text
+    assert "_place_verified" not in text
 
 
 def test_alacritty_uses_distro_packages_only() -> None:
