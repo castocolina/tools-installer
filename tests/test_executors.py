@@ -1117,6 +1117,36 @@ def test_smoke_binary_hides_the_display(tmp_path: Path, monkeypatch: pytest.Monk
     assert marker.read_text(encoding="utf-8").strip() == "unset"
 
 
+def test_smoke_reason_is_one_bounded_line_under_noisy_stderr(tmp_path: Path) -> None:
+    body = "#!/bin/sh\n"
+    for n in range(1, 51):
+        body += f'echo "dbus noise {n}" >&2\n'
+    body += 'echo "Missing X server or $DISPLAY" >&2\nexit 127\n'
+    script = _script(tmp_path / "bin", body)
+    with pytest.raises(ExecutorError) as exc_info:
+        executors.smoke_binary(script)
+    message = str(exc_info.value)
+    assert "\n" not in message
+    assert "Missing X server" in message
+    assert "dbus noise 1 " not in message
+
+
+def test_smoke_reason_prefers_the_loader_line(tmp_path: Path) -> None:
+    body = "#!/bin/sh\n"
+    for n in range(1, 51):
+        body += f'echo "dbus noise {n}" >&2\n'
+    body += "echo \"version 'GLIBC_2.39' not found\" >&2\n"
+    for n in range(51, 71):
+        body += f'echo "dbus noise {n}" >&2\n'
+    body += "exit 127\n"
+    script = _script(tmp_path / "bin", body)
+    with pytest.raises(ExecutorError) as exc_info:
+        executors.smoke_binary(script)
+    message = str(exc_info.value)
+    assert "GLIBC_2.39" in message
+    assert "dbus noise 1 " not in message
+
+
 def test_method_smoke_argv_defaults_to_version() -> None:
     assert executors.method_smoke_argv(Method("github_release", {})) == ("--version",)
     assert executors.method_smoke_argv(Method("github_release", {"smoke_argv": ["-V"]})) == ("-V",)

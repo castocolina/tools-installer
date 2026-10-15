@@ -89,6 +89,8 @@ def run_output_with_stderr(
             check=True,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             stdin=subprocess.DEVNULL,
             start_new_session=True,

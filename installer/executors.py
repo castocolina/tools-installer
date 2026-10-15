@@ -97,8 +97,12 @@ def smoke_binary(
 
     Runs only after checksum verification. Exit 126/127, an OSError, or a loader
     error in stderr fails. Other non-zero exits and timeouts mean the binary ran.
-    Loader patterns are checked in stderr even on exit 0. DISPLAY and
-    WAYLAND_DISPLAY are removed so a GUI binary cannot open a window.
+    Loader patterns are checked in stderr even on exit 0. On Linux, DISPLAY and
+    WAYLAND_DISPLAY are removed so a GUI binary cannot open a window; macOS has
+    no equivalent, so a macOS app CLI smoked with ``--version`` (for example
+    draw.io app methods) may still open a window — that behavior is not verified
+    on macOS. The failure reason prefers the first loader-error line in stderr or
+    detail, otherwise the last five non-empty detail lines joined with `` | ``.
     """
     env = {
         key: value for key, value in os.environ.items() if key not in ("DISPLAY", "WAYLAND_DISPLAY")

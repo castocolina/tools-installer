@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from typing import TypedDict, Unpack
 
 import pytest
@@ -121,6 +122,8 @@ def test_run_output_unbounded_by_default(monkeypatch: pytest.MonkeyPatch) -> Non
         check: bool,
         capture_output: bool,
         text: bool,
+        encoding: str,
+        errors: str,
         timeout: float | None,
         stdin: int,
         start_new_session: bool,
@@ -131,6 +134,8 @@ def test_run_output_unbounded_by_default(monkeypatch: pytest.MonkeyPatch) -> Non
                 "check": check,
                 "capture_output": capture_output,
                 "text": text,
+                "encoding": encoding,
+                "errors": errors,
                 "timeout": timeout,
                 "stdin": stdin,
                 "start_new_session": start_new_session,
@@ -143,11 +148,29 @@ def test_run_output_unbounded_by_default(monkeypatch: pytest.MonkeyPatch) -> Non
     run_output(["anything"])
     assert seen["env"] is None
     assert seen["timeout"] is None
+    assert seen["encoding"] == "utf-8"
+    assert seen["errors"] == "replace"
     # RESEARCH Pitfall 4 closes the update gap in D-10: updates run through
     # run_captured -> run_output, so update children get closed stdin and a
     # new session too (SPEC R7 names install AND update children).
     assert seen["stdin"] is subprocess.DEVNULL
     assert seen["start_new_session"] is True
+
+
+def test_undecodable_output_is_replaced_not_raised(tmp_path: Path) -> None:
+    bad_stderr = tmp_path / "bad_stderr.sh"
+    bad_stderr.write_text("#!/bin/sh\nprintf '\\377' >&2\nexit 127\n", encoding="utf-8")
+    bad_stderr.chmod(0o755)
+    with pytest.raises(CommandError) as exc_info:
+        run_output_with_stderr([str(bad_stderr)])
+    assert exc_info.value.returncode == 127
+    assert "\ufffd" in exc_info.value.detail
+
+    bad_stdout = tmp_path / "bad_stdout.sh"
+    bad_stdout.write_text("#!/bin/sh\nprintf '\\377'\n", encoding="utf-8")
+    bad_stdout.chmod(0o755)
+    out, _err = run_output_with_stderr([str(bad_stdout)])
+    assert "\ufffd" in out
 
 
 def test_run_output_with_stderr_returns_both_streams() -> None:
