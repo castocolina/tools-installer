@@ -22,7 +22,7 @@ from installer.locations import bin_dir, ensure_dir, opt_dir
 from installer.model import Method
 from installer.platform import Platform
 from installer.run import Runner
-from installer.versions import TagResolver
+from installer.versions import Release, ReleaseResolver, TagResolver
 
 DOWNLOAD_KINDS = ("github_release", "tarball")
 
@@ -31,8 +31,8 @@ DOWNLOAD_KINDS = ("github_release", "tarball")
 class UpdateExecResult:
     """Result of an update-safe download replacement.
 
-    `verified` matches `install_download`'s return: True when a checksum was
-    checked in staging. `warnings` carries non-fatal cleanup failures (a leftover
+    `verified` matches `install_download`'s return: True when a checksum file or
+    API digest was checked in staging. `warnings` carries non-fatal cleanup failures (a leftover
     `.old` tree that did not fail the update) so the caller has a channel.
     """
 
@@ -45,6 +45,7 @@ class ExecContext:
     runner: Runner
     platform: Platform
     resolve_tag: TagResolver
+    resolve_release: ReleaseResolver | None = None
 
 
 def _opt_str(method: Method, key: str) -> str | None:
@@ -80,9 +81,11 @@ class DownloadTarget:
     member: str
     asset: str  # the download's filename; names the temp file in the verified flow
     checksum: tuple[str, str] | None = None  # (checksum url, checksum filename)
+    sha256: str | None = None
+    unverified_reason: str | None = None
 
 
-def _resolve_target(method: Method, ctx: ExecContext) -> DownloadTarget:
+def resolve_target(method: Method, ctx: ExecContext) -> DownloadTarget:
     """Resolve the download URL, member path, and optional checksum source.
 
     github_release templates asset/member/checksum with the resolved tag's
@@ -99,7 +102,11 @@ def _resolve_target(method: Method, ctx: ExecContext) -> DownloadTarget:
     if method.kind == "github_release":
         repo = require_str(method, "repo")
         template = require_str(method, "asset")
-        tag = ctx.resolve_tag(repo)
+        if ctx.resolve_release is not None:
+            release = ctx.resolve_release(repo)
+        else:
+            release = Release(ctx.resolve_tag(repo), {})
+        tag = release.tag
         ver = tag.removeprefix("v")  # asset/member use the bare number; the path uses the tag
         try:
             asset = render_asset(template, ver, tokens)
@@ -107,8 +114,19 @@ def _resolve_target(method: Method, ctx: ExecContext) -> DownloadTarget:
         except ValueError as exc:
             raise ExecutorError(f"cannot build asset name for '{repo}': {exc}") from exc
         base = f"https://github.com/{repo}/releases/download/{tag}"
+        sha256: str | None = None
+        unverified_reason: str | None = None
         if checksum_template is None:
-            return DownloadTarget(url=f"{base}/{asset}", member=member, asset=asset)
+            sha256 = release.digests.get(asset)
+            if sha256 is None:
+                unverified_reason = f"no checksum file and no GitHub sha256 digest for {asset}"
+            return DownloadTarget(
+                url=f"{base}/{asset}",
+                member=member,
+                asset=asset,
+                sha256=sha256,
+                unverified_reason=unverified_reason,
+            )
         try:
             checksum_name = render_asset(checksum_template.replace("{asset}", asset), ver, tokens)
         except ValueError as exc:
@@ -123,7 +141,12 @@ def _resolve_target(method: Method, ctx: ExecContext) -> DownloadTarget:
         if checksum_template is not None:
             raise ExecutorError("checksum verification is only supported for github_release")
         url = require_str(method, "url")
-        return DownloadTarget(url=url, member=raw_member, asset=PurePosixPath(url).name)
+        return DownloadTarget(
+            url=url,
+            member=raw_member,
+            asset=PurePosixPath(url).name,
+            unverified_reason="unpinned url; no sha256 to verify against",
+        )
     raise ExecutorError(f"no download executor for kind '{method.kind}'")
 
 
@@ -139,31 +162,37 @@ def link_name(method: Method, member: str) -> str:
     return _opt_str(method, "bin_name") or PurePosixPath(member).name
 
 
-def install_download(method: Method, ctx: ExecContext) -> bool:
+def install_download(method: Method, ctx: ExecContext) -> str | None:
     """Install a release binary into ~/.local/bin (userspace, no sudo).
 
-    Returns True when the download was sha256-verified against a published
-    checksum, False otherwise. Raw single-file assets go straight into the
-    bin dir; archives unpack into ~/.local/opt/<binary>/ with the binary
-    symlinked into the bin dir (the PRD's opt+symlink location policy).
+    Returns None when the download was sha256-verified (pinned checksum file or
+    GitHub API digest). Otherwise returns the unverified reason after installing.
+    Raw single-file assets go straight into the bin dir; archives unpack into
+    ~/.local/opt/<binary>/ with the binary symlinked into the bin dir (the PRD's
+    opt+symlink location policy).
 
     The symlink is named after `member`'s basename unless `bin_name` is set --
     needed when the archive's own binary name doesn't match `tool.cmd` (e.g.
     Sublime Text's Linux tarball ships only `sublime_text`, with no `subl`
     alongside it the way its macOS bundle provides one).
     """
-    target = _resolve_target(method, ctx)
+    target = resolve_target(method, ctx)
     binname = link_name(method, target.member)
     try:
         dest = ensure_dir(bin_dir(_opt_str(method, "bin_dir")))
     except OSError as exc:
         raise ExecutorError(f"cannot create bin dir: {exc}") from exc
     link = dest / binname
-    if target.checksum is None:
-        _install_unverified(method, ctx, target, link)
-        return False
-    _install_verified(method, ctx, target, link, target.checksum)
-    return True
+    if target.checksum is not None or target.sha256 is not None:
+        workdir = Path(tempfile.mkdtemp(prefix="tools-installer-"))
+        try:
+            asset_path = _fetch_verified(method, ctx, target, workdir)
+            _place_verified(method, ctx, target, link, asset_path)
+            return None
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+    _install_unverified(method, ctx, target, link)
+    return target.unverified_reason
 
 
 def _install_unverified(
@@ -209,43 +238,6 @@ def _install_unverified(
     link_executable(binary, link, target.member)
 
 
-def _install_verified(
-    method: Method, ctx: ExecContext, target: DownloadTarget, link: Path, checksum: tuple[str, str]
-) -> None:
-    """Fetch asset + checksum file into a temp dir, verify the digest, then install.
-
-    A missing entry for the asset is registry/upstream drift — an ordinary
-    ExecutorError that falls through to the next method. A present-but-wrong
-    digest is the security signal — ChecksumMismatch, which stops the ladder.
-    """
-    checksum_url, checksum_name = checksum
-    workdir = Path(tempfile.mkdtemp(prefix="tools-installer-"))
-    try:
-        asset_path = workdir / target.asset
-        sum_path = workdir / checksum_name
-        fetch = (
-            f"curl -fsSL -o {shlex.quote(str(asset_path))} -- {shlex.quote(target.url)}"
-            f" && curl -fsSL -o {shlex.quote(str(sum_path))} -- {shlex.quote(checksum_url)}"
-        )
-        ctx.runner(["sh", "-c", fetch])
-        try:
-            text = sum_path.read_text()
-        except OSError as exc:
-            raise ExecutorError(f"cannot read checksum file '{checksum_name}': {exc}") from exc
-        expected = expected_sha256(text, target.asset)
-        if expected is None:
-            raise ExecutorError(f"no sha256 entry for '{target.asset}' in '{checksum_name}'")
-        try:
-            actual = sha256_file(asset_path)
-        except OSError as exc:
-            raise ExecutorError(f"cannot hash downloaded asset '{target.asset}': {exc}") from exc
-        if actual != expected:
-            raise ChecksumMismatch(target.asset, expected, actual)
-        _place_verified(method, ctx, target, link, asset_path)
-    finally:
-        shutil.rmtree(workdir, ignore_errors=True)
-
-
 def update_download(method: Method, ctx: ExecContext) -> UpdateExecResult:
     """Stage a new copy, validate it, then atomically replace the live install.
 
@@ -257,7 +249,7 @@ def update_download(method: Method, ctx: ExecContext) -> UpdateExecResult:
     `os.symlink`+`os.replace`, validate, then remove `.old`. A failure at
     any of those steps restores the prior tree AND the captured symlink.
     """
-    target = _resolve_target(method, ctx)
+    target = resolve_target(method, ctx)
     binname = link_name(method, target.member)
     try:
         dest = ensure_dir(bin_dir(_opt_str(method, "bin_dir")))
@@ -266,38 +258,45 @@ def update_download(method: Method, ctx: ExecContext) -> UpdateExecResult:
     link = dest / binname
     staging = Path(tempfile.mkdtemp(prefix="tools-installer-update-"))
     try:
-        asset_path = _fetch_update_asset(method, ctx, target, staging)
+        asset_path = _fetch_verified(method, ctx, target, staging)
+        verified = target.checksum is not None or target.sha256 is not None
         if method.params.get("raw") is True:
             _replace_raw(link, asset_path)
-            return UpdateExecResult(verified=target.checksum is not None)
-        return _replace_archive(method, ctx, target, link, asset_path)
+            return UpdateExecResult(verified=verified)
+        return _replace_archive(method, ctx, target, link, asset_path, verified=verified)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def _fetch_update_asset(
+def _fetch_verified(
     method: Method, ctx: ExecContext, target: DownloadTarget, staging: Path
 ) -> Path:
+    """Fetch the asset with plain curl argv and verify against checksum file or API digest."""
     asset_path = staging / target.asset
     ctx.runner(["curl", "-fsSL", "-o", str(asset_path), "--", target.url])
-    if target.checksum is None:
-        return asset_path
-    checksum_url, checksum_name = target.checksum
-    sum_path = staging / checksum_name
-    ctx.runner(["curl", "-fsSL", "-o", str(sum_path), "--", checksum_url])
-    try:
-        text = sum_path.read_text()
-    except OSError as exc:
-        raise ExecutorError(f"cannot read checksum file '{checksum_name}': {exc}") from exc
-    expected = expected_sha256(text, target.asset)
-    if expected is None:
-        raise ExecutorError(f"no sha256 entry for '{target.asset}' in '{checksum_name}'")
-    try:
-        actual = sha256_file(asset_path)
-    except OSError as extra:
-        raise ExecutorError(f"cannot hash downloaded asset '{target.asset}': {extra}") from extra
-    if actual != expected:
-        raise ChecksumMismatch(target.asset, expected, actual)
+    expected: str | None = None
+    if target.checksum is not None:
+        checksum_url, checksum_name = target.checksum
+        sum_path = staging / checksum_name
+        ctx.runner(["curl", "-fsSL", "-o", str(sum_path), "--", checksum_url])
+        try:
+            text = sum_path.read_text()
+        except OSError as exc:
+            raise ExecutorError(f"cannot read checksum file '{checksum_name}': {exc}") from exc
+        expected = expected_sha256(text, target.asset)
+        if expected is None:
+            raise ExecutorError(f"no sha256 entry for '{target.asset}' in '{checksum_name}'")
+    elif target.sha256 is not None:
+        expected = target.sha256
+    if expected is not None:
+        try:
+            actual = sha256_file(asset_path)
+        except OSError as extra:
+            raise ExecutorError(
+                f"cannot hash downloaded asset '{target.asset}': {extra}"
+            ) from extra
+        if actual != expected:
+            raise ChecksumMismatch(target.asset, expected, actual)
     return asset_path
 
 
@@ -314,6 +313,8 @@ def _replace_archive(
     target: DownloadTarget,
     link: Path,
     asset_path: Path,
+    *,
+    verified: bool,
 ) -> UpdateExecResult:
     opt = opt_dir(link.name)
     new = staged_sibling(opt, NEW_SUFFIX)
@@ -355,7 +356,7 @@ def _replace_archive(
             shutil.rmtree(old)
         except OSError as extra:
             warnings.append(str(extra))
-    return UpdateExecResult(verified=target.checksum is not None, warnings=tuple(warnings))
+    return UpdateExecResult(verified=verified, warnings=tuple(warnings))
 
 
 def _extract_into(

@@ -1,4 +1,7 @@
+import hashlib
+import json
 import os
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -13,7 +16,7 @@ from installer.model import Method, Tool, load_tools
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError
-from installer.versions import VersionError
+from installer.versions import Release, VersionError
 from tests.test_apps import SHELLED_LINKERS
 from tests.test_download import fixture_runner
 
@@ -314,7 +317,7 @@ def test_version_resolution_failure_is_caught_as_failed(
 
 
 def _mismatching_download(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_install_download(method: Method, ctx: ExecContext) -> bool:
+    def fake_install_download(method: Method, ctx: ExecContext) -> str | None:
         raise ChecksumMismatch("a.tar.gz", "0" * 64, "f" * 64)
 
     monkeypatch.setattr(engine.download, "install_download", fake_install_download)
@@ -365,8 +368,8 @@ def test_checksum_policy_continue_falls_through_to_brew(monkeypatch: pytest.Monk
 def test_installed_outcome_carries_verified_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     _not_installed(monkeypatch)
 
-    def fake_install_download(method: Method, ctx: ExecContext) -> bool:
-        return True
+    def fake_install_download(method: Method, ctx: ExecContext) -> str | None:
+        return None
 
     monkeypatch.setattr(engine.download, "install_download", fake_install_download)
     outcome = install_tool(
@@ -843,3 +846,208 @@ def test_reapply_post_install_isolates_a_raising_action(
     assert outcome.status == InstallStatus.ALREADY_INSTALLED
     assert outcome.postinstall_warning is not None
     assert "action exploded" in outcome.postinstall_warning
+
+
+def test_digest_mismatch_fails_with_nothing_linked(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    asset = "rg-14.1.0-x86_64.tar.gz"
+    payload = b"archive-bytes"
+
+    def fake_release_resolver(_resolve_tag: object):
+        def resolve(_repo: str) -> Release:
+            return Release("14.1.0", {asset: "f" * 64})
+
+        return resolve
+
+    monkeypatch.setattr(engine, "release_resolver", fake_release_resolver)
+
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+    workdir = tmp_path / "dl"
+    workdir.mkdir()
+
+    def pin_workdir(prefix: str) -> str:
+        return str(workdir)
+
+    monkeypatch.setattr(engine.download.tempfile, "mkdtemp", pin_workdir)
+    rg_member = tmp_path / ".local" / "opt" / "rg" / "rg"
+    calls, runner = fixture_runner(workdir, {asset: payload}, member=rg_member)
+    bindir = tmp_path / "bin"
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "BurntSushi/ripgrep",
+            "asset": "rg-{ver}-{arch.machine}.tar.gz",
+            "member": "rg",
+            "bin_dir": str(bindir),
+        },
+    )
+    outcome = install_tool(
+        _tool(method),
+        _platform(),
+        runner=runner,
+    )
+    assert outcome.status == InstallStatus.CHECKSUM_MISMATCH
+    assert not (bindir / "rg").exists()
+    assert not (tmp_path / ".local" / "opt" / "rg").exists()
+    assert len(calls) >= 1
+
+
+@pytest.mark.parametrize(
+    ("verified", "unverified_reason"),
+    [
+        (False, "no checksum file and no GitHub sha256 digest for rg-14.1.0-x86_64.tar.gz"),
+        (False, "unpinned url; no sha256 to verify against"),
+        (True, None),
+    ],
+    ids=("no-digest-github", "tarball", "digest-verified"),
+)
+def test_engine_outcome_carries_the_unverified_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    verified: bool,
+    unverified_reason: str | None,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+    bindir = tmp_path / "bin"
+    member = tmp_path / ".local" / "opt" / "rg" / "rg"
+
+    if verified:
+        asset = "rg-14.1.0-x86_64.tar.gz"
+        payload = b"archive-bytes"
+        digest = hashlib.sha256(payload).hexdigest()
+
+        def fake_release_resolver(_resolve_tag: object):
+            def resolve(_repo: str) -> Release:
+                return Release("14.1.0", {asset: digest})
+
+            return resolve
+
+        monkeypatch.setattr(engine, "release_resolver", fake_release_resolver)
+        workdir = tmp_path / "dl"
+        workdir.mkdir()
+
+        def pin_workdir(prefix: str) -> str:
+            return str(workdir)
+
+        monkeypatch.setattr(engine.download.tempfile, "mkdtemp", pin_workdir)
+        _, runner = fixture_runner(workdir, {asset: payload}, member=member)
+        method = Method(
+            kind="github_release",
+            params={
+                "repo": "BurntSushi/ripgrep",
+                "asset": "rg-{ver}-{arch.machine}.tar.gz",
+                "member": "rg",
+                "bin_dir": str(bindir),
+            },
+        )
+    elif unverified_reason is not None and unverified_reason.startswith("unpinned"):
+        _, runner = fixture_runner(None, {}, member=member)
+        method = Method(
+            kind="tarball",
+            params={"url": "https://x/eza.tar.gz", "member": "rg", "bin_dir": str(bindir)},
+        )
+    else:
+
+        def empty_release(_resolve_tag: object):
+            def resolve(_repo: str) -> Release:
+                return Release("14.1.0", {})
+
+            return resolve
+
+        monkeypatch.setattr(engine, "release_resolver", empty_release)
+        _, runner = fixture_runner(None, {}, member=member)
+        method = Method(
+            kind="github_release",
+            params={
+                "repo": "BurntSushi/ripgrep",
+                "asset": "rg-{ver}-{arch.machine}.tar.gz",
+                "member": "rg",
+                "bin_dir": str(bindir),
+            },
+        )
+
+    outcome = install_tool(_tool(method), _platform(), runner=runner)
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.verified is verified
+    assert outcome.unverified_reason == unverified_reason
+
+
+@pytest.mark.parametrize("wrong_digest", [False, True], ids=("matching", "wrong"))
+def test_default_resolver_verifies_against_the_api_digest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    wrong_digest: bool,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = "BurntSushi/ripgrep"
+    asset = "rg-14.1.0-x86_64.tar.gz"
+    payload = b"archive-bytes"
+    good_digest = hashlib.sha256(payload).hexdigest()
+    api_digest = ("f" * 64) if wrong_digest else good_digest
+    requested: list[str] = []
+
+    class FakeResp:
+        def __enter__(self) -> "FakeResp":
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "tag_name": "14.1.0",
+                    "assets": [{"name": asset, "digest": f"sha256:{api_digest}"}],
+                }
+            ).encode()
+
+    def fake_urlopen(req: urllib.request.Request, timeout: int) -> FakeResp:
+        requested.append(req.full_url)
+        return FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+    workdir = tmp_path / "dl"
+    workdir.mkdir()
+
+    def pin_workdir(prefix: str) -> str:
+        return str(workdir)
+
+    monkeypatch.setattr(engine.download.tempfile, "mkdtemp", pin_workdir)
+    member = tmp_path / ".local" / "opt" / "rg" / "rg"
+    _, runner = fixture_runner(workdir, {asset: payload}, member=member)
+    bindir = tmp_path / "bin"
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": repo,
+            "asset": "rg-{ver}-{arch.machine}.tar.gz",
+            "member": "rg",
+            "bin_dir": str(bindir),
+        },
+    )
+    outcome = install_tool(_tool(method), _platform(), runner=runner)
+    api_url = f"https://api.github.com/repos/{repo}/releases/latest"
+    assert requested == [api_url]
+    if wrong_digest:
+        assert outcome.status == InstallStatus.CHECKSUM_MISMATCH
+        assert not (bindir / "rg").exists()
+        assert not (tmp_path / ".local" / "opt" / "rg").exists()
+    else:
+        assert outcome.status == InstallStatus.INSTALLED
+        assert outcome.verified is True
+        assert outcome.unverified_reason is None

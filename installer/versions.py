@@ -5,7 +5,9 @@ import os
 import re
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import cast
 
 from installer.run import CommandError, run_output
 
@@ -16,6 +18,16 @@ TagResolver = Callable[[str], str]
 
 # Fetch raw bytes at a URL. Injected in tests; defaults to urllib.
 Fetch = Callable[[str], bytes]
+
+ReleaseResolver = Callable[[str], "Release"]
+
+_SHA256_DIGEST = re.compile(r"^sha256:([0-9a-fA-F]{64})$")
+
+
+@dataclass(frozen=True)
+class Release:
+    tag: str
+    digests: Mapping[str, str]
 
 
 class VersionError(RuntimeError):
@@ -349,8 +361,28 @@ def urlopen_fetch(url: str) -> bytes:
         return resp.read()
 
 
-def resolve_github_tag(repo: str, fetch: Fetch = urlopen_fetch) -> str:
-    """Return the latest release tag for owner/repo, verbatim (leading 'v' preserved)."""
+def _asset_digests_from_release(data: Mapping[str, object]) -> dict[str, str]:
+    digests: dict[str, str] = {}
+    assets_obj = data.get("assets")
+    if not isinstance(assets_obj, list):
+        return digests
+    for raw_item in cast(list[object], assets_obj):
+        if not isinstance(raw_item, dict):
+            continue
+        asset_entry = cast(dict[str, object], raw_item)
+        name_obj = asset_entry.get("name")
+        digest_obj = asset_entry.get("digest")
+        if not isinstance(name_obj, str) or not isinstance(digest_obj, str):
+            continue
+        match = _SHA256_DIGEST.match(digest_obj)
+        if match is None:
+            continue
+        digests[name_obj] = match.group(1).lower()
+    return digests
+
+
+def resolve_github_release(repo: str, fetch: Fetch = urlopen_fetch) -> Release:
+    """Return the latest release tag and asset digests from one `/releases/latest` read."""
     try:
         raw = fetch(f"https://api.github.com/repos/{repo}/releases/latest")
         data = json.loads(raw)
@@ -359,4 +391,22 @@ def resolve_github_tag(repo: str, fetch: Fetch = urlopen_fetch) -> str:
     tag = str(data.get("tag_name", ""))
     if not tag:
         raise VersionError(f"no release tag for {repo}")
-    return tag
+    return Release(tag=tag, digests=_asset_digests_from_release(data))
+
+
+def resolve_github_tag(repo: str, fetch: Fetch = urlopen_fetch) -> str:
+    """Return the latest release tag for owner/repo, verbatim (leading 'v' preserved)."""
+    return resolve_github_release(repo, fetch).tag
+
+
+def release_resolver(resolve_tag: TagResolver) -> ReleaseResolver:
+    """Select the release reader for production vs test tag resolvers.
+
+    When `resolve_tag` is the production `resolve_github_tag`, digests come from
+    the same GitHub API snapshot as the tag. Any other tag resolver (a test lambda,
+    a cached wrapper) still resolves tags but returns an empty digest map so digest
+    verification is not silently skipped behind a non-identity tag function.
+    """
+    if resolve_tag is resolve_github_tag:
+        return resolve_github_release
+    return lambda repo: Release(resolve_tag(repo), {})

@@ -1,4 +1,6 @@
+import functools
 import hashlib
+import json
 import os
 import shlex
 from pathlib import Path
@@ -12,14 +14,25 @@ from installer.executors import ExecutorError
 from installer.model import Method
 from installer.platform import Platform
 from installer.run import CommandError, Runner
+from installer.versions import Release, ReleaseResolver, resolve_github_release
 
 
-def _ctx(runner: Runner, tmp_version: str = "v14.1.0") -> ExecContext:
+def _ctx(
+    runner: Runner,
+    tmp_version: str = "v14.1.0",
+    *,
+    resolve_release: ReleaseResolver | None = None,
+) -> ExecContext:
     def resolve_tag(repo: str) -> str:
         return tmp_version
 
     platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
-    return ExecContext(runner=runner, platform=platform, resolve_tag=resolve_tag)
+    return ExecContext(
+        runner=runner,
+        platform=platform,
+        resolve_tag=resolve_tag,
+        resolve_release=resolve_release,
+    )
 
 
 def _record() -> tuple[list[list[str]], Runner]:
@@ -513,7 +526,7 @@ def test_zip_extracts_only_the_nested_member(tmp_path: Path, monkeypatch: pytest
     assert os.readlink(link) == str(binary)
 
 
-def test_install_download_returns_false_when_unverified(
+def test_unhashed_tarball_install_is_unverified_with_a_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -523,7 +536,9 @@ def test_install_download_returns_false_when_unverified(
         kind="tarball",
         params={"url": "https://x/eza.tar.gz", "member": "eza", "bin_dir": str(tmp_path / "bin")},
     )
-    assert install_download(method, _ctx(runner)) is False
+    reason = install_download(method, _ctx(runner))
+    assert reason == "unpinned url; no sha256 to verify against"
+    assert (tmp_path / "bin" / "eza").is_symlink()
 
 
 def test_tarball_with_checksum_param_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -588,6 +603,12 @@ def fixture_runner(
 
     def runner(cmd: list[str]) -> None:
         calls.append(cmd)
+        if cmd and cmd[0] == "curl" and "-o" in cmd:
+            dest = Path(cmd[cmd.index("-o") + 1])
+            if dest.name not in files:
+                return
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(files[dest.name])
         if workdir is not None and cmd[0] == "sh" and len(cmd) >= 3 and "curl" in cmd[2]:
             for name, content in files.items():
                 (workdir / name).write_bytes(content)
@@ -629,6 +650,75 @@ RG_ASSET = "ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz"
 RG_BASE = "https://github.com/BurntSushi/ripgrep/releases/download/15.1.0"
 
 
+def test_release_digest_verifies_an_unchecksummed_asset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    workdir = _workdir(tmp_path, monkeypatch)
+    payload = b"archive-bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+    asset = "tool-1.0.0-x86_64.tar.gz"
+
+    def fetch(url: str) -> bytes:
+        return json.dumps(
+            {
+                "tag_name": "v1.0.0",
+                "assets": [{"name": asset, "digest": f"sha256:{digest}"}],
+            }
+        ).encode()
+
+    member = tmp_path / ".local" / "opt" / "tool" / "tool"
+    calls, runner = fixture_runner(workdir, {asset: payload}, member=member)
+    bindir = tmp_path / "bin"
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "org/tool",
+            "asset": "tool-{ver}-{arch.machine}.tar.gz",
+            "member": "tool",
+            "strip": 0,
+            "bin_dir": str(bindir),
+        },
+    )
+    ctx = _ctx(
+        runner,
+        tmp_version="unused",
+        resolve_release=functools.partial(resolve_github_release, fetch=fetch),
+    )
+    assert install_download(method, ctx) is None
+    url = f"https://github.com/org/tool/releases/download/v1.0.0/{asset}"
+    assert calls[0] == ["curl", "-fsSL", "-o", str(workdir / asset), "--", url]
+    assert (bindir / "tool").is_symlink()
+    assert not workdir.exists()
+
+
+def test_install_without_checksum_or_digest_is_unverified_with_a_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    asset = "tool-1.0.0-x86_64.tar.gz"
+    member = tmp_path / ".local" / "opt" / "tool" / "tool"
+    _, runner = fixture_runner(None, {}, member=member)
+    bindir = tmp_path / "bin"
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "org/tool",
+            "asset": "tool-{ver}-{arch.machine}.tar.gz",
+            "member": "tool",
+            "bin_dir": str(bindir),
+        },
+    )
+
+    def empty_release(_repo: str) -> Release:
+        return Release("v1.0.0", {})
+
+    reason = install_download(method, _ctx(runner, resolve_release=empty_release))
+    assert reason is not None
+    assert asset in reason
+    assert (bindir / "tool").is_symlink()
+
+
 def test_verified_archive_fetches_verifies_and_extracts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -641,15 +731,18 @@ def test_verified_archive_fetches_verifies_and_extracts(
         workdir, {RG_ASSET: payload, f"{RG_ASSET}.sha256": sums}, member=member
     )
     bindir = tmp_path / "bin"
-    assert install_download(_rg_method(bindir), _ctx(runner, tmp_version="15.1.0")) is True
+    assert install_download(_rg_method(bindir), _ctx(runner, tmp_version="15.1.0")) is None
     opt = tmp_path / ".local" / "opt" / "rg"
-    rg_url = shlex.quote(f"{RG_BASE}/{RG_ASSET}")
-    rg_path = shlex.quote(str(workdir / RG_ASSET))
-    rg_sum_path = shlex.quote(str(workdir / RG_ASSET) + ".sha256")
-    rg_sum_url = shlex.quote(f"{RG_BASE}/{RG_ASSET}.sha256")
-    fetch = f"curl -fsSL -o {rg_path} -- {rg_url} && curl -fsSL -o {rg_sum_path} -- {rg_sum_url}"
     assert calls == [
-        ["sh", "-c", fetch],
+        ["curl", "-fsSL", "-o", str(workdir / RG_ASSET), "--", f"{RG_BASE}/{RG_ASSET}"],
+        [
+            "curl",
+            "-fsSL",
+            "-o",
+            str(workdir / f"{RG_ASSET}.sha256"),
+            "--",
+            f"{RG_BASE}/{RG_ASSET}.sha256",
+        ],
         ["tar", "-xzf", str(workdir / RG_ASSET), "-C", str(opt), "--strip-components=1"],
     ]
     assert (bindir / "rg").is_symlink()
@@ -715,7 +808,7 @@ def test_verified_mismatch_raises_and_cleans_up(tmp_path: Path, monkeypatch: pyt
         install_download(_rg_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
     assert excinfo.value.asset == RG_ASSET
     assert excinfo.value.expected == "0" * 64
-    assert len(calls) == 1  # fetch only; no extraction commands after the mismatch
+    assert len(calls) == 2  # asset + checksum fetch; no extraction after the mismatch
     assert not workdir.exists()  # temp dir removed on the failure path too
 
 
@@ -771,7 +864,7 @@ def test_verified_raw_copies_from_temp_into_bin(tmp_path: Path, monkeypatch: pyt
             "bin_dir": str(bindir),
         },
     )
-    assert install_download(method, _ctx(runner, tmp_version="v4.44.0")) is True
+    assert install_download(method, _ctx(runner, tmp_version="v4.44.0")) is None
     # WR-04: placed via _replace_raw (sibling temp + os.replace), never a
     # shelled cp/chmod through the live path.
     assert not any(cmd and cmd[0] in {"cp", "chmod"} for cmd in calls)
@@ -804,9 +897,9 @@ def test_verified_zip_extracts_member_from_temp(tmp_path: Path, monkeypatch: pyt
             "bin_dir": str(bindir),
         },
     )
-    assert install_download(method, _ctx(runner, tmp_version="v2.0.0")) is True
+    assert install_download(method, _ctx(runner, tmp_version="v2.0.0")) is None
     opt = tmp_path / ".local" / "opt" / "deno"
-    assert calls[1:] == [
+    assert calls[2:] == [
         ["unzip", "-q", "-o", str(workdir / asset), "deno", "-d", str(opt)],
     ]
     assert (bindir / "deno").is_symlink()
@@ -1201,7 +1294,7 @@ def test_verified_raw_install_replaces_a_link_instead_of_writing_through_it(
             "bin_dir": str(bindir),
         },
     )
-    assert install_download(method, _ctx(runner, tmp_version="v4.44.0")) is True
+    assert install_download(method, _ctx(runner, tmp_version="v4.44.0")) is None
     assert not link.is_symlink()
     assert link.read_bytes() == payload
     assert (foreign / "keep").read_text() == "important"

@@ -17,7 +17,7 @@ from installer.resolve import resolve_methods
 from installer.run import CommandError, MethodAwareRunner, Runner, run_command
 from installer.skill_lifecycle import perform_action
 from installer.status import is_installed
-from installer.versions import TagResolver, VersionError, resolve_github_tag
+from installer.versions import TagResolver, VersionError, release_resolver, resolve_github_tag
 
 Status = InstallStatus
 ChecksumPolicy = Literal["fail", "continue"]
@@ -30,6 +30,7 @@ class InstallOutcome:
     method_kind: str | None = None
     errors: tuple[Exception, ...] = ()
     verified: bool = False
+    unverified_reason: str | None = None
     # Only on DEPENDENCY_FAILED: the dependency ids that did not resolve.
     # install_tool never sets it — the engine installs one tool, not a run.
     blocked_by: tuple[str, ...] = ()
@@ -52,6 +53,7 @@ class InstallOutcome:
         method_kind: str | None = None,
         errors: tuple[Exception, ...] = (),
         verified: bool = False,
+        unverified_reason: str | None = None,
         blocked_by: tuple[str, ...] = (),
         postinstall_warning: str | None = None,
         handoff: tuple[str, ...] = (),
@@ -62,34 +64,38 @@ class InstallOutcome:
         object.__setattr__(self, "method_kind", method_kind)
         object.__setattr__(self, "errors", errors)
         object.__setattr__(self, "verified", verified)
+        object.__setattr__(self, "unverified_reason", unverified_reason)
         object.__setattr__(self, "blocked_by", blocked_by)
         object.__setattr__(self, "postinstall_warning", postinstall_warning)
         object.__setattr__(self, "handoff", handoff)
         object.__setattr__(self, "post_install_handoff", post_install_handoff)
 
 
-def _perform(tool: Tool, method: Method, ctx: ExecContext) -> tuple[bool, tuple[str, ...]]:
+def _perform(
+    tool: Tool, method: Method, ctx: ExecContext
+) -> tuple[bool, str | None, tuple[str, ...]]:
     """Route download kinds to the download executor; everything else to a command executor.
 
-    Returns ``(verified, handoff)``. `verified` is True when the download was
-    sha256-verified (non-download methods are never marked verified — their
-    package managers do their own checks; app zips have no published
-    checksums to verify). A non-empty `handoff` means the reviewed setup must
-    run in a console after the installer releases the terminal (a host_setup
-    or skill_pack method never performs its own install here).
+    Returns ``(verified, unverified_reason, handoff)``. `verified` is True when
+    the download was sha256-verified (non-download methods are never marked
+    verified — their package managers do their own checks; app zips have no
+    published checksums to verify). A non-empty `handoff` means the reviewed
+    setup must run in a console after the installer releases the terminal (a
+    host_setup or skill_pack method never performs its own install here).
     """
     if method.kind in download.DOWNLOAD_KINDS:
-        return download.install_download(method, ctx), ()
+        reason = download.install_download(method, ctx)
+        return reason is None, reason, ()
     if method.kind in apps.APP_KINDS:
         apps.install_app(method, ctx.runner)
-        return False, ()
+        return False, None, ()
     if method.kind == "skill_pack":
         outcome = perform_action(tool, "install", ctx.runner)
-        return False, outcome.instructions
+        return False, None, outcome.instructions
     if method.kind == "host_setup":
-        return False, executors.host_setup_handoff(method)
+        return False, None, executors.host_setup_handoff(method)
     executors.execute(method, ctx.runner)
-    return False, ()
+    return False, None, ()
 
 
 def install_tool(
@@ -136,13 +142,18 @@ def install_tool(
     if not methods:
         return InstallOutcome(tool.id, InstallStatus.NO_METHOD)
 
-    ctx = ExecContext(runner=runner, platform=platform, resolve_tag=resolve_tag)
+    ctx = ExecContext(
+        runner=runner,
+        platform=platform,
+        resolve_tag=resolve_tag,
+        resolve_release=release_resolver(resolve_tag),
+    )
     errors: list[Exception] = []
     for method in methods:
         if isinstance(runner, MethodAwareRunner):
             runner.method_started(method.kind)
         try:
-            verified, handoff = _perform(tool, method, ctx)
+            verified, unverified_reason, handoff = _perform(tool, method, ctx)
         except ChecksumMismatch as exc:
             if checksum_policy == "fail":
                 return InstallOutcome(
@@ -178,6 +189,7 @@ def install_tool(
                 InstallStatus.INSTALLED,
                 method_kind=method.kind,
                 verified=verified,
+                unverified_reason=unverified_reason,
                 postinstall_warning=warning,
                 post_install_handoff=post_install_handoff,
             )
