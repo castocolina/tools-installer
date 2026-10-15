@@ -759,7 +759,7 @@ def _build_app(
     initial_view: str = BASE_VIEW,
     link_mode: str = "centralized",
     apply_daemon_default: bool = False,
-    execute: ExecuteInputs | None = None,
+    unattended: bool = False,
     settings: SettingsStore | None = None,
     prompt_link_mode: bool = False,
     daemon_default_warnings: DaemonDefaultWarnings | None = None,
@@ -1131,8 +1131,18 @@ def _build_app(
         terminal_follow_up=_sync_omz_terminals,
     )
 
-    if execute is not None:
-        execute = replace(execute, version_refresh=version_refresh, updates=updates)
+    # D-12: _build_app builds ExecuteInputs itself, so no route (current or
+    # future) can build an app that cannot execute an accepted selection.
+    # link_mode is read LIVE through _current_link_mode, exactly like every
+    # other closure above.
+    execute = _execute_inputs(
+        tools,
+        platform,
+        link_mode=_current_link_mode,
+        unattended=unattended,
+        disk_pressure=disk_pressure,
+    )
+    execute = replace(execute, version_refresh=version_refresh, updates=updates)
 
     return UnifiedApp(
         tools,
@@ -1221,33 +1231,20 @@ def _run_interactive_wizard(
     prompt_link_mode: bool,
 ) -> int:
     warnings = DaemonDefaultWarnings()
-    # Built BEFORE _build_app: execute= evaluates _execute_inputs inside that
-    # call's argument list, so the only way both receive the same probe (and
-    # the same cache) is to name them here and pass each in.
-    cache = _timer_state_cache(
-        platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
-    )
-    probe = _disk_pressure_probe(platform, timer_cache=cache)
     with _stdin_on_tty():
         # Only the genuine interactive wizard flow auto-applies the daemon
-        # default (allowlist at the _build_app call site).
+        # default (allowlist at the _build_app call site). _build_app builds
+        # execute and the one shared timer cache / disk-pressure probe itself
+        # (D-12), so the wizard passes no cache, probe or execute.
         app = _build_app(
             tools,
             platform,
             link_mode=settings.link_mode,
             apply_daemon_default=True,
-            execute=_execute_inputs(
-                tools,
-                platform,
-                link_mode=lambda: settings.link_mode,
-                unattended=options.yes,
-                disk_pressure=probe,
-            ),
+            unattended=options.yes,
             settings=settings,
             prompt_link_mode=prompt_link_mode,
             daemon_default_warnings=warnings,
-            disk_pressure=probe,
-            timer_cache=cache,
         )
         app.run()
     # BEFORE the abort return: an aborted wizard is still a run whose

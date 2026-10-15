@@ -1,3 +1,4 @@
+import contextlib
 import importlib
 import inspect
 import io
@@ -5,16 +6,19 @@ import os
 import pty
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal, cast
 
 import pytest
 from rich.console import Console
+from textual.pilot import Pilot
 
 import setup
 from installer import pnpm_globals, systemd_daemon
 from installer.app import UninstallDecision
 from installer.diskusage import DiskPressure
+from installer.engine import InstallOutcome
 from installer.enums import DaemonState, Severity
 from installer.execute_screen import ExecuteInputs
 from installer.guards import install_shims
@@ -30,7 +34,15 @@ from installer.shellrc import ShellrcConsolidation, ShellrcRefusal, write_myshel
 from installer.terminal_shell import TerminalShellResult
 from installer.tweaks import BUNDLES
 from installer.uninstall import SweepResult
-from installer.wizard_app import DoctorScreen, PolicyInputs, UninstallInputs, UninstallScreen
+from installer.wizard_app import (
+    BASE_VIEW,
+    DoctorScreen,
+    ExecuteScreen,
+    PolicyInputs,
+    UnifiedApp,
+    UninstallInputs,
+    UninstallScreen,
+)
 
 # Aliased once, matching tests/test_daemon.py's convention for pinning a
 # private composition-root function under test.
@@ -465,6 +477,93 @@ def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
     monkeypatch.setattr("installer.settings.default_settings_path", lambda: settings_path)
     monkeypatch.setattr(setup, "default_settings_path", lambda: settings_path, raising=False)
+
+
+def _recording_install(recorder: list[str]) -> Callable[..., InstallOutcome]:
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: object,
+        resolve_tag: object,
+        *,
+        checksum_policy: str = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: object = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        recorder.append(tool.id)
+        return InstallOutcome(tool.id, "installed")
+
+    return install
+
+
+def _hermetic_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str]:
+    """Hermetic setup for the TUI route pilots: a scratch HOME (_sandbox), an
+    empty PATH, no systemd, the Linux platform, a one-tool fake catalog, a
+    seeded settings file (no first-run picker), a fake TTY, and the install
+    closure replaced at the _execute_inputs seam (D-12) with a recorder.
+    Returns the recorder's installed tool ids. No real systemctl, launchctl,
+    network or HOME is ever reached."""
+    _sandbox(monkeypatch, tmp_path)
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    monkeypatch.setenv("PATH", str(empty_bin))
+
+    def _no_systemd(**_k: object) -> bool:
+        return False
+
+    monkeypatch.setattr(setup.systemd_daemon, "systemd_available", _no_systemd)
+    monkeypatch.setattr(setup, "detect", _linux_platform)
+    tool = Tool(
+        id="rg",
+        name="rg",
+        category="search",
+        cmd="rg",
+        methods=(Method(kind="brew", params={"formula": "ripgrep"}),),
+        tier="system",
+    )
+
+    def _one_tool(_registry: object) -> list[Tool]:
+        return [tool]
+
+    monkeypatch.setattr(setup, "load_tools", _one_tool)
+    save_settings(tmp_path / "settings.json", Settings("centralized"))
+    monkeypatch.setattr(setup, "_has_controlling_tty", lambda: True)
+    monkeypatch.setattr(setup, "_stdin_on_tty", contextlib.nullcontext)
+    installed: list[str] = []
+    real_inputs = setup._execute_inputs  # pyright: ignore[reportPrivateUsage]
+
+    def recording_inputs(
+        tools: list[Tool],
+        platform: Platform,
+        *,
+        link_mode: str | Callable[[], str],
+        unattended: bool,
+        disk_pressure: Callable[[], DiskPressure],
+    ) -> ExecuteInputs:
+        inputs = real_inputs(
+            tools,
+            platform,
+            link_mode=link_mode,
+            unattended=unattended,
+            disk_pressure=disk_pressure,
+        )
+
+        def _never_installed(_tool: Tool) -> bool:
+            return False
+
+        def _pinned_tag(_repo: str) -> str:
+            return "v1.0.0"
+
+        return replace(
+            inputs,
+            installed=_never_installed,
+            install=_recording_install(installed),
+            resolve_tag=_pinned_tag,
+        )
+
+    monkeypatch.setattr(setup, "_execute_inputs", recording_inputs)  # pyright: ignore[reportPrivateUsage]
+    return installed
 
 
 def _store_link_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str) -> Path:
@@ -1586,31 +1685,73 @@ def test_sync_terminals_surfaces_a_silent_revert_as_a_message(
     assert "konsole" in warning
 
 
-def test_build_app_rebinds_execute_onto_shared_services_when_execute_is_passed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _sandbox(monkeypatch, tmp_path)
-    platform = _platform()
-    execute = setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
-        [], platform, link_mode="centralized", unattended=False, disk_pressure=_unused_probe
-    )
-    app = setup._build_app(  # pyright: ignore[reportPrivateUsage]
-        [], platform, execute=execute
-    )
-    assert app._execute is not None  # pyright: ignore[reportPrivateUsage]
-    assert app._execute.updates is app.catalog._updates  # pyright: ignore[reportPrivateUsage]
-    assert (
-        app._execute.version_refresh is app.catalog._version_refresh  # pyright: ignore[reportPrivateUsage]
-    )
-
-
-def test_build_app_leaves_execute_none_when_caller_omits_it(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_build_app_always_builds_execute(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """D-12: _build_app builds ExecuteInputs itself, so no route can ever
+    build an app that cannot execute an accepted selection."""
     _sandbox(monkeypatch, tmp_path)
     platform = _platform()
     app = setup._build_app([], platform)  # pyright: ignore[reportPrivateUsage]
-    assert app._execute is None  # pyright: ignore[reportPrivateUsage]
+    execute = app._execute  # pyright: ignore[reportPrivateUsage]
+    assert execute is not None
+    assert isinstance(execute, ExecuteInputs)
+    assert execute.catalog == []
+    assert execute.unattended is False
+    assert execute.updates is app.catalog._updates  # pyright: ignore[reportPrivateUsage]
+    assert (
+        execute.version_refresh is app.catalog._version_refresh  # pyright: ignore[reportPrivateUsage]
+    )
+    unattended_app = setup._build_app([], platform, unattended=True)  # pyright: ignore[reportPrivateUsage]
+    assert unattended_app._execute is not None  # pyright: ignore[reportPrivateUsage]
+    assert unattended_app._execute.unattended is True  # pyright: ignore[reportPrivateUsage]
+
+
+def test_build_app_has_no_execute_parameter() -> None:
+    """D-12's rejected alternative (passing execute= at the four routes)
+    stays rejected: the parameter is gone, so no current or future caller can
+    hand an app that cannot execute."""
+    assert "execute" not in inspect.signature(setup._build_app).parameters  # pyright: ignore[reportPrivateUsage]
+
+
+async def _pilot_accepts_the_selection(
+    app: UnifiedApp, pilot: Pilot[list[str] | None], recorded: list[str]
+) -> None:
+    """Navigate to the catalog (the one navigation path), mark the fake tool,
+    accept, start the run and wait for it to settle. Shared by every route
+    pilot: --doctor/--fix open on doctor, --uninstall on uninstall, --guard
+    on policies, and setup already starts on the catalog (no-op call)."""
+    await app.show_view(BASE_VIEW)
+    assert app.current_view == BASE_VIEW
+    await pilot.pause()
+    app.catalog.selected.add("rg")
+    await pilot.press("enter")
+    screen = cast(ExecuteScreen, app.screen)
+    assert screen.finished is False
+    await pilot.press("enter")
+    for _ in range(400):
+        screen = app.screen
+        if isinstance(screen, ExecuteScreen) and screen.finished:
+            break
+        await pilot.pause()
+    await pilot.pause()
+    assert recorded == ["rg"]
+
+
+async def test_doctor_route_executes_the_accepted_selection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """F2 tracer: Enter on a catalog selection in the doctor route runs it,
+    never exits with the ids."""
+    recorded = _hermetic_route(monkeypatch, tmp_path)
+    apps: list[UnifiedApp] = []
+
+    def recording_run(self: UnifiedApp) -> None:
+        apps.append(self)
+
+    monkeypatch.setattr(UnifiedApp, "run", recording_run)
+    assert setup.main(["--doctor"]) == 0
+    app = apps[0]
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _pilot_accepts_the_selection(app, pilot, recorded)
 
 
 def test_build_app_reresolve_reads_live_inventory_not_cache(
@@ -2078,18 +2219,7 @@ def test_live_set_link_mode_rereads_fix_preview_apply_execute_and_policies(
     monkeypatch.setattr(setup, "_SHELL", "/bin/zsh")
     seen = _capture_app(monkeypatch)
     store = SettingsStore(tmp_path / "settings.json", link_mode="centralized")
-    setup._build_app(  # pyright: ignore[reportPrivateUsage]
-        [],
-        _platform(),
-        settings=store,
-        execute=setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
-            [],
-            _platform(),
-            link_mode=lambda: store.link_mode,
-            unattended=True,
-            disk_pressure=_unused_probe,
-        ),
-    )
+    setup._build_app([], _platform(), settings=store)  # pyright: ignore[reportPrivateUsage]
     preview = seen[0]["fix_preview"]
     assert callable(preview)
     store.set_link_mode("split")
