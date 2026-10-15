@@ -87,6 +87,12 @@ Out of scope: receipts and health (19); script `paths`/`remove`/`update`/`writab
 - **D-14:** `versions.py` `parse_version` (:54) returns `None` for `-1`-like output. It parses lazygit's `version=0.44.1, …` and unquotes procs' output. These are covered by a parametrized test over the audit fixtures.
 - **D-15:** The 35 data fixes are applied as written in audits C/D/E/F, "Registry fixes (data only)". Sublime's `member` is skipped because Phase 17 did it. Each fix maps to a test or to a `verify-registry` pass.
 
+### Ledger amendments (planning, 2026-10-15; RUN-LEDGER)
+- **Ledger L-18-01 (D-11 amended, verifiable):** `uv run --no-dev` alone still resolves `.venv/bin/ruff` in a venv synced with dev dependencies (`make install` then `make setup`); `--no-dev --exact` hides it but uninstalls 25 packages. Every launcher in D-11 uses `uv run --isolated --no-dev` instead (verified in a scratch venv and the real repo: ruff hidden, venv untouched, ~0.1 s warm). The same applies to `scripts/container-e2e-verify.sh` and `tests/test_install_sh.py:223`.
+- **Ledger L-18-02 (R5 count, verifiable):** a live API probe of all 89 `github_release` methods: 153 of 171 rendered assets expose a `digest`. 43 methods verify immediately, difftastic/delta add 3 once their data fixes land; gron (x2) and jless (x2) stay unverified because their latest releases publish no digest. "50 -> 0 wherever GitHub exposes a sha256 digest" is asserted as "every method whose asset has a digest is verified" with those four listed as the known no-digest exceptions.
+- **Ledger L-18-03 (seed, jev):** the ~62 undated tools' `verified` key is seeded with `2026-10-13`, the audit date (Laya low confidence -> TypeSafe audit_date p=0.72).
+- **Ledger L-18-04 (D-07 state, jev):** the last-verified digests live in a JSON state file restored and saved with `actions/cache` in the weekly job, never committed; a cache miss means "no previous digest", so every asset is downloaded once (Laya low confidence -> TypeSafe actions_cache p=0.95).
+
 ### Claude's Discretion
 - Plan and wave order. Suggested:
   1. Schema (D-01..D-03), because the data must satisfy the new loader.
