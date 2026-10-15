@@ -7,7 +7,7 @@ import pytest
 
 import installer.apps as apps_mod
 from installer import atomic
-from installer.apps import APP_KINDS, install_app, update_app
+from installer.apps import APP_KINDS, cli_spec, install_app, update_app
 from installer.executors import ExecutorError
 from installer.model import Method
 from installer.run import Runner
@@ -48,6 +48,54 @@ def test_install_app_builds_curl_ditto_mv_pipeline(tmp_path: Path, monkeypatch: 
         f" && mv \"$tmp/x/\"'Demo App.app' {shlex.quote(str(apps))}/"
     )
     assert calls == [["sh", "-c", expected]]
+
+
+def test_install_app_links_the_cli_under_cli_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    cli = "Contents/MacOS/draw.io"
+    member = tmp_path / "Applications" / "draw.io.app" / cli
+    member.parent.mkdir(parents=True)
+    member.write_bytes(b"drawio-cli")
+    member.chmod(0o755)
+    calls, runner = fixture_runner(None, {}, member=member)
+    install_app(
+        _method(app="draw.io.app", cli=cli, cli_name="drawio"),
+        runner,
+    )
+    link = tmp_path / ".local" / "bin" / "drawio"
+    assert link.is_symlink()
+    assert os.readlink(link) == str(member)
+    assert not (tmp_path / ".local" / "bin" / "draw.io").exists()
+    assert not any(cmd and cmd[0] in SHELLED_LINKERS for cmd in calls)
+
+
+def test_cli_spec_without_cli_name_keeps_the_basename() -> None:
+    assert cli_spec(_method(cli="Contents/SharedSupport/bin/subl")) == (
+        "Contents/SharedSupport/bin/subl",
+        "subl",
+    )
+
+
+@pytest.mark.parametrize(
+    "cli_name",
+    ["", 1, "bin/drawio", ".", ".."],
+)
+def test_cli_spec_rejects_a_bad_cli_name(cli_name: object) -> None:
+    with pytest.raises(ExecutorError, match="invalid cli_name"):
+        cli_spec(_method(cli="Contents/MacOS/draw.io", cli_name=cli_name))
+
+
+def test_install_app_rejects_bad_cli_name_before_side_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    calls, runner = _record()
+    with pytest.raises(ExecutorError, match="invalid cli_name"):
+        install_app(_method(cli="Contents/MacOS/draw.io", cli_name="bin/drawio"), runner)
+    assert calls == []
 
 
 def test_install_app_symlinks_declared_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

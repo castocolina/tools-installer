@@ -434,6 +434,30 @@ def test_remove_paths_unlinks_symlink_to_dir_without_deleting_target(tmp_path: P
     assert (target_dir / "keep").read_text() == "important"  # contents preserved
 
 
+def test_plan_app_uses_cli_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    bundle = tmp_path / "Applications" / "draw.io.app"
+    bundle.mkdir(parents=True)
+    (bin_dir / "drawio").symlink_to(bundle / "Contents/MacOS/draw.io")
+    tool = _tool(
+        Method(
+            kind="app",
+            params={
+                "url": "https://example.test/drawio.zip",
+                "app": "draw.io.app",
+                "cli": "Contents/MacOS/draw.io",
+                "cli_name": "drawio",
+            },
+        )
+    )
+    planned = set(plan_uninstall([tool], bin_dir))
+    assert bin_dir / "drawio" in planned
+    assert bundle in planned
+    assert bin_dir / "draw.io" not in planned
+
+
 def test_plan_collects_app_bundle_and_cli_link(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     bin_dir = tmp_path / ".local" / "bin"
