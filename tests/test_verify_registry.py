@@ -9,6 +9,7 @@ import io
 import json
 import tarfile
 import time
+import tomllib
 import zipfile
 from collections import Counter, defaultdict
 from collections.abc import Callable
@@ -2642,7 +2643,59 @@ strip = 0
     assert lines[url_idx + 1].strip().startswith("sha256 =")
 
 
-def test_writer_refuses_an_unintended_change(tmp_path: Path) -> None:
+def test_writer_guard_refuses_an_edit_that_breaks_the_toml() -> None:
+    pin = "c" * 64
+    content = f"""
+[[tool]]
+id = "compact"
+name = "compact"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+verified=2026-10-01
+[[tool.method]]
+kind = "tarball"
+url = "https://example.com/x-{{ver}}.tar.gz"
+version = "1.0"
+member = "bin/x"
+strip = 0
+sha256 = "{pin}"
+"""
+    with pytest.raises(RegistryWriteError):
+        apply_registry_edits(content, [RegistryEdit("compact", None, "verified", "2026-10-20")])
+
+
+def test_writer_guard_refuses_an_edit_that_changes_another_value() -> None:
+    pin = "d" * 64
+    content = (
+        "\n[[tool]]\n"
+        'id = "nested"\n'
+        'name = "nested"\n'
+        'category = "git"\n'
+        'cmd = "x"\n'
+        'priority = "P2"\n'
+        'audience = "both"\n'
+        'desc = """\n'
+        "verified = 2020-01-01\n"
+        "still in the string\n"
+        '"""\n'
+        'tier = "user"\n'
+        "verified = 2026-10-01\n"
+        "[[tool.method]]\n"
+        'kind = "tarball"\n'
+        'url = "https://example.com/x-{ver}.tar.gz"\n'
+        'version = "1.0"\n'
+        'member = "bin/x"\n'
+        "strip = 0\n"
+        f'sha256 = "{pin}"\n'
+    )
+    with pytest.raises(RegistryWriteError):
+        apply_registry_edits(content, [RegistryEdit("nested", None, "verified", "2026-10-20")])
+
+
+def test_writer_refuses_an_unintended_change() -> None:
     content = """
 # id = "ghost" only in a comment
 [[tool]]
@@ -2660,13 +2713,10 @@ url = "https://example.com/x.tar.gz"
 member = "bin/x"
 strip = 0
 """
-    registry = tmp_path / "registry.toml"
-    registry.write_text(content)
     with pytest.raises(RegistryWriteError):
         apply_registry_edits(content, [RegistryEdit("ghost", None, "verified", "2026-10-20")])
     with pytest.raises(RegistryWriteError):
         apply_registry_edits(content, [RegistryEdit("real", 3, "sha256", '"abc"')])
-    assert registry.read_text() == content
 
 
 def test_writer_ignores_keys_inside_comments(tmp_path: Path) -> None:
@@ -2768,6 +2818,81 @@ archive = "xz"
 sha256 = "{pin}"
 """
     return _write_registry(tmp_path, content)
+
+
+def _two_repo_github_pin_registry(tmp_path: Path) -> Path:
+    pin_a = "a" * 64
+    pin_b = "b" * 64
+    content = f"""
+[[tool]]
+id = "dual"
+name = "dual"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+verified = 2026-10-01
+[[tool.method]]
+kind = "tarball"
+url = "https://github.com/o/r1/releases/download/{{ver}}/a-{{ver}}.tar.gz"
+version = "1.0.0"
+member = "bin/a"
+strip = 0
+sha256 = "{pin_a}"
+[[tool.method]]
+kind = "tarball"
+url = "https://github.com/o/r2/releases/download/{{ver}}/b-{{ver}}.tar.gz"
+version = "1.0.0"
+member = "bin/b"
+strip = 0
+sha256 = "{pin_b}"
+"""
+    return _write_registry(tmp_path, content)
+
+
+def test_auto_bump_with_different_newer_tags_is_not_applied(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from installer import verify_registry as vr
+
+    registry = _two_repo_github_pin_registry(tmp_path)
+    url_a = "https://github.com/o/r1/releases/download/1.0.0/a-1.0.0.tar.gz"
+    url_b = "https://github.com/o/r2/releases/download/1.0.0/b-1.0.0.tar.gz"
+    tar_a = _gz_tar_bytes({"bin/a": b"a"})
+    tar_b = _gz_tar_bytes({"bin/b": b"b"})
+
+    def release(repo: str) -> Release:
+        if repo == "o/r1":
+            return Release(tag="v2.0.0", digests={})
+        if repo == "o/r2":
+            return Release(tag="v3.0.0", digests={})
+        raise VersionError("unknown")
+
+    def head(url: str) -> str:
+        if url in (url_a, url_b):
+            return 'etag:"1"'
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    def download(url: str, dest: Path) -> None:
+        if url == url_a:
+            dest.write_bytes(tar_a)
+        elif url == url_b:
+            dest.write_bytes(tar_b)
+        else:
+            raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    probe = Probe(release=release, head=head, download=download)
+    before = registry.read_text()
+    code = vr.main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--write"],
+        probe=probe,
+        today=date(2026, 10, 15),
+    )
+    out = capsys.readouterr().out
+    assert code == 1
+    assert registry.read_text() == before
+    assert "pinned methods report different newer tags" in out
 
 
 def test_newer_github_pin_is_bumped_when_the_candidate_passes(
@@ -3164,17 +3289,26 @@ def test_unpinned_entries_never_gain_pin_keys(tmp_path: Path) -> None:
     assets = _canned_difftastic_assets()
     release = _release(assets=assets)
     probe = _probe(release, assets)
-    before = registry.read_text()
+    before_text = registry.read_text()
     vr.main(
         ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--write"],
         probe=probe,
         today=date(2026, 10, 15),
     )
-    after = registry.read_text()
-    for line in after.splitlines():
-        if "version =" in line and line.strip().startswith("version"):
-            assert "difftastic" in before  # pinned version lines unchanged for unpinned
-    assert before.count("sha256 =") == after.count("sha256 =")
+    after_text = registry.read_text()
+    before_doc = tomllib.loads(before_text)
+    after_doc = tomllib.loads(after_text)
+    before_tools = {tool["id"]: tool for tool in before_doc["tool"]}
+    after_tools = {tool["id"]: tool for tool in after_doc["tool"]}
+    for tool_id, after_tool in after_tools.items():
+        before_tool = before_tools[tool_id]
+        before_methods = before_tool.get("method", [])
+        after_methods = after_tool.get("method", [])
+        assert len(before_methods) == len(after_methods)
+        for index, after_method in enumerate(after_methods):
+            before_method = before_methods[index]
+            added = set(after_method) - set(before_method)
+            assert not added.intersection({"version", "sha256"})
 
 
 def test_candidate_for_an_unknown_or_unpinned_tool_is_an_error(
