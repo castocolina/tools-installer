@@ -644,10 +644,7 @@ MACOS_ONLY = {"gnu-bash"}
 MACOS_ARM64_ONLY = {"container", "podman"}
 # Membership means the tool provably cannot work on that platform+arch, not
 # that its packaging is inconvenient there.
-# jetbrains-toolbox: Toolbox App 2.3+ ships a native Linux arm64 build, but no
-# stable arm64-specific download URL for data.services.jetbrains.com's
-# "latest" redirect could be confirmed -- left undeclared rather than guessed.
-NO_LINUX_ARM64 = {"puppeteer", "jetbrains-toolbox"}
+NO_LINUX_ARM64 = {"puppeteer"}
 # wezterm: Arch arm64 IS covered (its pacman method declares no arch list),
 # but Debian/Fedora arm64 have no path — this session's live check of
 # api.github.com/repos/wezterm/wezterm/releases/latest found only .deb arm64
@@ -1439,13 +1436,17 @@ def test_kitty_has_no_linux_download_fallback() -> None:
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0")
     assert [m.kind for m in resolve_methods(kitty, fedora)] == ["script", "dnf"]
     assert [m.kind for m in resolve_methods(kitty, bazzite)] == ["script"]
-    assert [m.kind for m in resolve_methods(kitty, macos)] == ["cask"]
+    assert [m.kind for m in resolve_methods(kitty, macos)] == ["script", "cask"]
     assert all(method.kind != "github_release" for method in kitty.methods)
 
 
 def test_kitty_linux_script_declares_vendor_bin_dir() -> None:
     kitty = _tools_by_id()["kitty"]
-    script = next(method for method in kitty.methods if method.kind == "script")
+    script = next(
+        method
+        for method in kitty.methods
+        if method.kind == "script" and method.os == ("debian", "arch", "fedora")
+    )
     assert script.os == ("debian", "arch", "fedora")
     assert script.params["url"] == "https://sw.kovidgoyal.net/kitty/installer.sh"
     assert script.params["args"] == ["launch=n"]
@@ -1511,8 +1512,8 @@ def test_kitty_cask_blocks_a_too_old_macos_version() -> None:
     new_enough = Platform(
         os="macos", arch="arm64", immutable=False, has_brew=True, os_version="12.0"
     )
-    assert resolve_methods(kitty, too_old) == []
-    assert [m.kind for m in resolve_methods(kitty, new_enough)] == ["cask"]
+    assert [m.kind for m in resolve_methods(kitty, too_old)] == ["script"]
+    assert [m.kind for m in resolve_methods(kitty, new_enough)] == ["script", "cask"]
 
 
 def test_wezterm_appimage_covers_bazzite_where_kitty_cannot() -> None:
@@ -2248,3 +2249,108 @@ def test_audit_fix_d7_hyperfine_uses_the_musl_assets() -> None:
     assert render_asset(str(linux.params["asset"]), ver, arch_tokens("arm64")) == (
         "hyperfine-v1.19.0-aarch64-unknown-linux-musl.tar.gz"
     )
+
+
+def test_audit_fix_e2_jetbrains_toolbox_ships_linux_arm64() -> None:
+    toolbox = _tools_by_id()["jetbrains-toolbox"]
+    linux_arm64 = Platform(os="fedora", arch="arm64", immutable=False, has_brew=False)
+    methods = resolve_methods(toolbox, linux_arm64)
+    assert len(methods) == 1
+    arm64 = methods[0]
+    assert arm64.kind == "tarball"
+    assert arm64.params["url"] == (
+        "https://data.services.jetbrains.com/products/download?platform=linuxARM64&code=TBA"
+    )
+    assert arm64.params["member"] == "bin/jetbrains-toolbox"
+    assert arm64.params["strip"] == 1
+    linux_amd64 = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
+    amd64 = resolve_methods(toolbox, linux_amd64)[0]
+    assert amd64.params["url"] == (
+        "https://data.services.jetbrains.com/products/download?platform=linux&code=TBA"
+    )
+    block = (
+        REGISTRY.read_text(encoding="utf-8")
+        .split('id = "jetbrains-toolbox"', 1)[1]
+        .split("[[tool]]", 1)[0]
+    )
+    assert "no arm64 URL" not in block
+
+
+def test_audit_fix_e4_opencode_script_skips_path_edits() -> None:
+    opencode = _tools_by_id()["opencode"]
+    script = next(m for m in opencode.methods if m.kind == "script")
+    assert script.params.get("args") == ["--no-modify-path"]
+
+
+def test_audit_fix_e5_jless_linux_release_is_amd64_only() -> None:
+    jless = _tools_by_id()["jless"]
+    linux = next(
+        m
+        for m in jless.methods
+        if m.kind == "github_release" and m.os == ("debian", "arch", "fedora")
+    )
+    assert linux.arch == ("amd64",)
+
+
+def test_audit_fix_e6_broot_macos_release_is_arm64_only() -> None:
+    broot = _tools_by_id()["broot"]
+    macos = next(m for m in broot.methods if m.kind == "github_release" and m.os == ("macos",))
+    assert macos.arch == ("arm64",)
+
+
+def test_audit_fix_e7_drawio_linux_release_is_checksummed() -> None:
+    drawio = _tools_by_id()["drawio-desktop"]
+    linux = [
+        m
+        for m in drawio.methods
+        if m.kind == "github_release" and m.os == ("debian", "arch", "fedora")
+    ]
+    assert len(linux) == 2
+    assert all(m.params.get("checksum") == "Files-SHA256-Hashes.txt" for m in linux)
+
+
+def test_audit_fix_e10_glab_has_native_fallbacks() -> None:
+    glab = _tools_by_id()["glab"]
+    native = {m.kind: m for m in glab.methods if m.kind in ("dnf", "pacman", "apt")}
+    assert set(native) == {"dnf", "pacman", "apt"}
+    for method in native.values():
+        assert method.params["package"] == "glab"
+    assert [m.kind for m in resolve_methods(glab, Platform("fedora", "amd64", False, True))] == [
+        "dnf",
+        "brew",
+    ]
+    assert [m.kind for m in resolve_methods(glab, Platform("fedora", "amd64", True, True))] == [
+        "brew"
+    ]
+    assert [m.kind for m in resolve_methods(glab, Platform("debian", "amd64", False, False))] == [
+        "apt"
+    ]
+
+
+def test_audit_fix_e11_pi_uninstall_text_does_not_assume_pnpm() -> None:
+    pi = _tools_by_id()["pi"]
+    text = pi.uninstall.lower()
+    assert "pnpm" in text
+    assert "volta" in text
+    assert "manager that installed" in text
+
+
+def test_audit_fix_e8_kitty_script_covers_macos() -> None:
+    kitty = _tools_by_id()["kitty"]
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
+    methods = resolve_methods(kitty, macos)
+    assert methods[0].kind == "script"
+    assert methods[0].params["url"] == "https://sw.kovidgoyal.net/kitty/installer.sh"
+    assert methods[0].params.get("args") == ["launch=n"]
+    assert methods[0].params["bin_dir"] == "/Applications/kitty.app/Contents/MacOS"
+    macos_brew = Platform(
+        os="macos", arch="arm64", immutable=False, has_brew=True, os_version="14.0"
+    )
+    kinds = [m.kind for m in resolve_methods(kitty, macos_brew)]
+    assert kinds[0] == "script"
+    assert "cask" in kinds
+    linux = next(
+        m for m in kitty.methods if m.kind == "script" and m.os == ("debian", "arch", "fedora")
+    )
+    assert linux.params["bin_dir"] == "~/.local/kitty.app/bin"
+    assert linux.os == ("debian", "arch", "fedora")

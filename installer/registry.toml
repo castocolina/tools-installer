@@ -1505,6 +1505,7 @@ owner_probes = ["pacman"]
 kind = "script"
 url = "https://opencode.ai/install"
 shell = "bash"
+args = ["--no-modify-path"]
 bin_dir = "~/.opencode/bin"
 [[tool.method]]
 kind = "pacman"
@@ -2036,6 +2037,7 @@ desc = "A command-line JSON viewer"
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
+arch = ["amd64"]
 repo = "PaulJuliusMartinez/jless"
 asset = "jless-v{ver}-{arch.machine}-unknown-linux-gnu.zip"
 member = "jless"
@@ -2242,6 +2244,7 @@ archive = "zip"
 [[tool.method]]
 kind = "github_release"
 os = ["macos"]
+arch = ["arm64"]
 repo = "Canop/broot"
 asset = "broot_{ver}.zip"
 member = "{arch.machine}-apple-darwin/broot"
@@ -2331,9 +2334,8 @@ os = ["macos"]
 cask = "jetbrains-toolbox"
 app = "JetBrains Toolbox.app"
 # Official "latest" redirect (data.services.jetbrains.com/products/download);
-# amd64 only -- Toolbox App 2.3+ ships a native arm64 Linux build too, but no
-# stable arm64-specific URL for this endpoint could be confirmed, so it's
-# left undeclared rather than guessed. Extracted to ~/.local/opt (userspace).
+# amd64 and arm64 Linux each have a platform=linux / linuxARM64 endpoint.
+# Extracted to ~/.local/opt (userspace).
 # Verified 2026-10-14: Toolbox 3.8 nests the launcher under bin/
 # (jetbrains-toolbox-3.8.1.88030/bin/jetbrains-toolbox; strip 1 drops the top dir).
 [[tool.method]]
@@ -2341,6 +2343,13 @@ kind = "tarball"
 os = ["debian", "arch", "fedora"]
 arch = ["amd64"]
 url = "https://data.services.jetbrains.com/products/download?platform=linux&code=TBA"
+member = "bin/jetbrains-toolbox"
+strip = 1
+[[tool.method]]
+kind = "tarball"
+os = ["debian", "arch", "fedora"]
+arch = ["arm64"]
+url = "https://data.services.jetbrains.com/products/download?platform=linuxARM64&code=TBA"
 member = "bin/jetbrains-toolbox"
 strip = 1
 # Verified 2026-09-16 (15.4-RESEARCH.md, independently re-confirmed live
@@ -2687,6 +2696,15 @@ url = "https://sw.kovidgoyal.net/kitty/installer.sh"
 shell = "sh"
 args = ["launch=n"]
 bin_dir = "~/.local/kitty.app/bin"
+# installer.sh installs to /Applications/kitty.app on macOS without sudo; non-admin
+# users fall through to the cask when the script cannot write /Applications.
+[[tool.method]]
+kind = "script"
+os = ["macos"]
+url = "https://sw.kovidgoyal.net/kitty/installer.sh"
+shell = "sh"
+args = ["launch=n"]
+bin_dir = "/Applications/kitty.app/Contents/MacOS"
 [[tool.method]]
 kind = "dnf"
 package = "kitty"
@@ -2818,6 +2836,15 @@ verified = 2026-10-13
 [[tool.method]]
 kind = "brew"
 formula = "glab"
+[[tool.method]]
+kind = "dnf"
+package = "glab"
+[[tool.method]]
+kind = "pacman"
+package = "glab"
+[[tool.method]]
+kind = "apt"
+package = "glab"
 
 
 
@@ -2835,7 +2862,7 @@ requires = ["pnpm"]
 source = "https://github.com/earendil-works/pi"
 owner = "pnpm"
 owner_probes = ["host-setup"]
-uninstall = "pnpm remove -g @earendil-works/pi-coding-agent"
+uninstall = "Remove with the manager that installed it (e.g. pnpm remove -g @earendil-works/pi-coding-agent, or volta uninstall @earendil-works/pi-coding-agent)"
 [[tool.method]]
 kind = "host_setup"
 setup_id = "pi"
@@ -2862,6 +2889,7 @@ arch = ["amd64"]
 repo = "jgraph/drawio-desktop"
 asset = "drawio-x86_64-{ver}.AppImage"
 member = "drawio"
+checksum = "Files-SHA256-Hashes.txt"
 raw = true
 [[tool.method]]
 kind = "github_release"
@@ -2870,6 +2898,7 @@ arch = ["arm64"]
 repo = "jgraph/drawio-desktop"
 asset = "drawio-arm64-{ver}.AppImage"
 member = "drawio"
+checksum = "Files-SHA256-Hashes.txt"
 raw = true
 [[tool.method]]
 kind = "app"
