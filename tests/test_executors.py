@@ -1016,3 +1016,82 @@ def test_run_smoke_check_invents_no_failure_from_a_name_it_cannot_interpret() ->
     unknown as a fact, which is the rule NodeGlobalsReport.known enforces.
     """
     assert executors.run_smoke_check("not-a-check") is None
+
+
+def _script(path: Path, body: str, *, mode: int = 0o755) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    path.chmod(mode)
+    return path
+
+
+def test_smoke_binary_fails_on_exit_127(tmp_path: Path) -> None:
+    script = _script(tmp_path / "bin", "#!/bin/sh\nexit 127\n")
+    with pytest.raises(ExecutorError, match="smoke run failed"):
+        executors.smoke_binary(script)
+
+
+def test_smoke_binary_fails_on_exit_126(tmp_path: Path) -> None:
+    script = _script(tmp_path / "bin", "#!/bin/sh\nexit 126\n")
+    with pytest.raises(ExecutorError, match="smoke run failed"):
+        executors.smoke_binary(script)
+
+
+def test_smoke_binary_fails_on_a_loader_error(tmp_path: Path) -> None:
+    script = _script(
+        tmp_path / "bin",
+        "#!/bin/sh\necho \"version 'GLIBC_2.34' not found\" >&2\nexit 1\n",
+    )
+    with pytest.raises(ExecutorError, match="smoke run failed"):
+        executors.smoke_binary(script)
+
+
+def test_smoke_binary_fails_on_a_loader_error_even_on_exit_0(tmp_path: Path) -> None:
+    script = _script(
+        tmp_path / "bin",
+        "#!/bin/sh\necho 'error while loading shared libraries: libfoo.so.1' >&2\nexit 0\n",
+    )
+    with pytest.raises(ExecutorError, match="loader error on exit 0"):
+        executors.smoke_binary(script)
+
+
+def test_smoke_binary_passes_with_other_stderr_on_exit_0(tmp_path: Path) -> None:
+    script = _script(
+        tmp_path / "bin",
+        "#!/bin/sh\necho 'warning: config not found' >&2\nexit 0\n",
+    )
+    executors.smoke_binary(script)
+
+
+def test_smoke_binary_fails_when_the_file_cannot_execute(tmp_path: Path) -> None:
+    script = _script(tmp_path / "bin", "not a script\n", mode=0o644)
+    with pytest.raises(ExecutorError, match="smoke run failed"):
+        executors.smoke_binary(script)
+
+
+def test_smoke_binary_passes_on_exit_0_and_on_other_exit_codes(tmp_path: Path) -> None:
+    ok = _script(tmp_path / "ok", "#!/bin/sh\nexit 0\n")
+    executors.smoke_binary(ok)
+    other = _script(tmp_path / "two", "#!/bin/sh\nexit 2\n")
+    executors.smoke_binary(other)
+
+
+def test_smoke_binary_passes_on_timeout(tmp_path: Path) -> None:
+    script = _script(tmp_path / "bin", "#!/bin/sh\nsleep 5\n")
+    executors.smoke_binary(script, timeout=0.2)
+
+
+def test_smoke_binary_hides_the_display(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    marker = tmp_path / "display.txt"
+    script = _script(
+        tmp_path / "bin",
+        f'#!/bin/sh\necho "${{DISPLAY-unset}}" > {marker}\nexit 0\n',
+    )
+    monkeypatch.setenv("DISPLAY", ":0")
+    executors.smoke_binary(script)
+    assert marker.read_text(encoding="utf-8").strip() == "unset"
+
+
+def test_method_smoke_argv_defaults_to_version() -> None:
+    assert executors.method_smoke_argv(Method("github_release", {})) == ("--version",)
+    assert executors.method_smoke_argv(Method("github_release", {"smoke_argv": ["-V"]})) == ("-V",)

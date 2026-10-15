@@ -212,6 +212,119 @@ def test_github_release_routes_to_download(monkeypatch: pytest.MonkeyPatch, tmp_
     assert not any(cmd and cmd[0] in SHELLED_LINKERS for cmd in calls)
 
 
+def test_smoke_failure_falls_through_to_the_next_method(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+    bin_dir = tmp_path / "bin"
+    fail_body = b"#!/bin/sh\nexit 127\n"
+    ok_body = b"#!/bin/sh\nexit 0\n"
+
+    first = Method(
+        kind="github_release",
+        params={
+            "repo": "x/y",
+            "asset": "rg-{ver}.tar.gz",
+            "member": "rg",
+            "bin_dir": str(bin_dir),
+        },
+    )
+    second = Method(
+        kind="github_release",
+        params={
+            "repo": "x/y2",
+            "asset": "rg-{ver}.tar.gz",
+            "member": "rg",
+            "bin_dir": str(bin_dir),
+            "bin_name": "rg2",
+        },
+    )
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        if cmd and cmd[0] == "curl" and "-o" in cmd:
+            dest = Path(cmd[cmd.index("-o") + 1])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"archive")
+        if cmd and cmd[0] == "tar":
+            dest = Path(cmd[cmd.index("-C") + 1])
+            from installer.atomic import NEW_SUFFIX
+
+            if dest.name.endswith(NEW_SUFFIX):
+                live = dest.parent / dest.name[: -len(NEW_SUFFIX)]
+            else:
+                live = dest
+            if live.name == "rg":
+                target = dest / "rg"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(fail_body)
+                target.chmod(0o755)
+            elif live.name == "rg2":
+                target = dest / "rg"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(ok_body)
+                target.chmod(0o755)
+
+    outcome = install_tool(
+        _tool(first, second, tool_id="rg"),
+        Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        runner=runner,
+        resolve_tag=lambda _repo: "1.0.0",
+    )
+    assert outcome.status == "installed"
+    link = bin_dir / "rg2"
+    assert link.is_symlink()
+    assert "rg2" in os.readlink(link)
+    assert calls
+
+
+def test_single_failing_method_leaves_no_link(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+    bin_dir = tmp_path / "bin"
+    member = tmp_path / ".local" / "opt" / "rg" / "rg"
+    _calls, base = fixture_runner(None, {"rg-1.0.0.tar.gz": b"archive"}, member=member)
+
+    def runner(cmd: list[str]) -> None:
+        base(cmd)
+        if cmd and cmd[0] == "tar":
+            dest = Path(cmd[cmd.index("-C") + 1])
+            target = dest / "rg"
+            target.write_bytes(b"#!/bin/sh\nexit 127\n")
+            target.chmod(0o755)
+
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "x/y",
+            "asset": "rg-{ver}.tar.gz",
+            "member": "rg",
+            "bin_dir": str(bin_dir),
+        },
+    )
+    outcome = install_tool(
+        _tool(method),
+        Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        runner=runner,
+        resolve_tag=lambda _repo: "1.0.0",
+    )
+    assert outcome.status == "failed"
+    assert not (bin_dir / "rg").exists()
+    assert not (tmp_path / ".local" / "opt" / "rg").exists()
+
+
 def test_github_release_directory_member_falls_through_the_ladder(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -241,9 +354,19 @@ def test_github_release_directory_member_falls_through_the_ladder(
 
     def plant_directory(cmd: list[str]) -> None:
         runner(cmd)
-        if cmd and cmd[0] == "tar" and member.exists():
-            member.unlink()
-            member.mkdir()
+        if cmd and cmd[0] == "tar":
+            dest = Path(cmd[cmd.index("-C") + 1])
+            from installer.atomic import NEW_SUFFIX
+
+            live_opt = (
+                dest.parent / dest.name[: -len(NEW_SUFFIX)]
+                if dest.name.endswith(NEW_SUFFIX)
+                else dest
+            )
+            staged = dest / member.relative_to(live_opt)
+            if staged.exists():
+                staged.unlink()
+                staged.mkdir()
 
     outcome = install_tool(
         _tool(download, brew),

@@ -67,22 +67,16 @@ def run_interactive_command(cmd: list[str]) -> None:
 TIMEOUT_CODE = 124  # what GNU timeout(1) reports, so the number is readable
 
 
-def run_output(cmd: list[str], *, timeout: float | None = None) -> str:
-    """Run argv and return its stdout, raising CommandError on non-zero exit.
+def run_output_with_stderr(
+    cmd: list[str],
+    *,
+    timeout: float | None = None,
+    env: Mapping[str, str] | None = None,
+) -> tuple[str, str]:
+    """Run argv and return ``(stdout, stderr)``, raising CommandError on non-zero exit.
 
-    The capturing counterpart of run_command, for the two cases where inherited
-    stdio is wrong: reading a tool's answer, and running a child while a caller
-    (the Textual app) owns the terminal. The child's stderr is folded into the
-    error so a failure still says why.
-
-    `timeout` bounds a QUERY — a command run to read an answer, where waiting
-    forever is never the right behaviour. A caller that reads a tool's answer
-    while a TUI owns the terminal has no recoverable input path if the child
-    wedges (Textual holds the terminal in raw mode, so Ctrl+C arrives as a byte
-    on a queue nobody is draining), so the bound belongs here rather than in an
-    interrupt handler. It stays optional and unset by default: a side-effecting
-    child (`pnpm add -g` of a Puppeteer-carrying package) legitimately takes
-    minutes, and killing it half-way is worse than waiting.
+    Same subprocess call and error mapping as :func:`run_output`. ``env`` is
+    passed through to the child; ``None`` means inherit the parent environment.
     """
     try:
         # DEVNULL + a new session close both input paths the child could
@@ -98,6 +92,7 @@ def run_output(cmd: list[str], *, timeout: float | None = None) -> str:
             timeout=timeout,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
+            env=env,
         )
     except subprocess.TimeoutExpired as exc:
         raise CommandError(cmd, TIMEOUT_CODE, detail=f"timed out after {exc.timeout:g}s") from exc
@@ -105,7 +100,33 @@ def run_output(cmd: list[str], *, timeout: float | None = None) -> str:
         raise CommandError(cmd, exc.returncode, detail=(exc.stderr or "").strip()) from exc
     except OSError as exc:
         raise CommandError(cmd, 127) from exc
-    return completed.stdout
+    return completed.stdout, completed.stderr
+
+
+def run_output(
+    cmd: list[str],
+    *,
+    timeout: float | None = None,
+    env: Mapping[str, str] | None = None,
+) -> str:
+    """Run argv and return its stdout, raising CommandError on non-zero exit.
+
+    The capturing counterpart of run_command, for the two cases where inherited
+    stdio is wrong: reading a tool's answer, and running a child while a caller
+    (the Textual app) owns the terminal. The child's stderr is folded into the
+    error so a failure still says why. The stderr of a successful run is
+    available through :func:`run_output_with_stderr`.
+
+    `timeout` bounds a QUERY — a command run to read an answer, where waiting
+    forever is never the right behaviour. A caller that reads a tool's answer
+    while a TUI owns the terminal has no recoverable input path if the child
+    wedges (Textual holds the terminal in raw mode, so Ctrl+C arrives as a byte
+    on a queue nobody is draining), so the bound belongs here rather than in an
+    interrupt handler. It stays optional and unset by default: a side-effecting
+    child (`pnpm add -g` of a Puppeteer-carrying package) legitimately takes
+    minutes, and killing it half-way is worse than waiting.
+    """
+    return run_output_with_stderr(cmd, timeout=timeout, env=env)[0]
 
 
 def run_captured(cmd: list[str]) -> None:

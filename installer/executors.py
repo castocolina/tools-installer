@@ -5,8 +5,9 @@ Download-based kinds (github_release, tarball) live in `installer.download`.
 """
 
 import os
+import re
 import shlex
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from shutil import which
 from typing import cast
@@ -16,12 +17,18 @@ from installer.guards import real_pnpm, shell_path
 from installer.host_setup import HOST_SETUPS
 from installer.locations import applications_dir
 from installer.model import Method
-from installer.run import CommandError, Runner, run_output
+from installer.run import CommandError, Runner, run_output, run_output_with_stderr
 from installer.versions import (
     PNPM_ALLOW_BUILD_MIN,
     PNPM_CO_INSTALL_MIN,
+    PROBE_VERSION_TIMEOUT,
     meets_minimum,
     probe_version,
+)
+
+_LOADER_ERROR = re.compile(
+    r"GLIBC_|error while loading shared libraries|Exec format error|"
+    r"cannot execute binary file|Library not loaded"
 )
 
 
@@ -44,6 +51,63 @@ def require_str(method: Method, key: str) -> str:
     if not isinstance(value, str) or not value:
         raise ExecutorError(f"method '{method.kind}' is missing or empty required param '{key}'")
     return value
+
+
+def method_smoke_argv(method: Method) -> tuple[str, ...]:
+    """Return the method's declared smoke argv tail, else ``(\"--version\",)``."""
+    raw = method.params.get("smoke_argv")
+    if isinstance(raw, list):
+        items = cast(list[object], raw)
+        if all(isinstance(item, str) for item in items):
+            return tuple(str(item) for item in items)
+    return ("--version",)
+
+
+def staged_member(root: Path, member: str) -> Path:
+    """Resolve an archive member to a regular file contained in ``root``."""
+    try:
+        path = (root / member).resolve(strict=True)
+    except OSError as exc:
+        raise ExecutorError(f"archive member '{member}' is missing: {exc}") from exc
+    root_resolved = root.resolve()
+    if not path.is_relative_to(root_resolved) or not path.is_file():
+        raise ExecutorError(
+            f"archive member '{member}' is not a regular file inside the staged tree: {path}"
+        )
+    return path
+
+
+def smoke_binary(
+    path: Path,
+    argv: Sequence[str] = ("--version",),
+    *,
+    timeout: float = PROBE_VERSION_TIMEOUT,
+) -> None:
+    """Run a freshly verified binary once to catch loader/arch failures before linking.
+
+    Runs only after checksum verification. Exit 126/127, an OSError, or a loader
+    error in stderr fails. Other non-zero exits and timeouts mean the binary ran.
+    Loader patterns are checked in stderr even on exit 0. DISPLAY and
+    WAYLAND_DISPLAY are removed so a GUI binary cannot open a window.
+    """
+    env = {
+        key: value for key, value in os.environ.items() if key not in ("DISPLAY", "WAYLAND_DISPLAY")
+    }
+    cmd = [str(path), *argv]
+    try:
+        _stdout, stderr = run_output_with_stderr(cmd, timeout=timeout, env=env)
+    except CommandError as exc:
+        detail = exc.detail or ""
+        if exc.returncode in (126, 127) or _LOADER_ERROR.search(detail):
+            raise ExecutorError(f"smoke run failed for {path}: {exc}") from exc
+        return
+    if _LOADER_ERROR.search(stderr):
+        for line in stderr.splitlines():
+            if _LOADER_ERROR.search(line):
+                raise ExecutorError(f"smoke run failed for {path}: loader error on exit 0: {line}")
+        raise ExecutorError(
+            f"smoke run failed for {path}: loader error on exit 0: {stderr.strip()}"
+        )
 
 
 def link_executable(binary: Path, link: Path, member: str, *, chmod: bool = True) -> None:

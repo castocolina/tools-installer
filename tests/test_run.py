@@ -17,6 +17,7 @@ from installer.run import (
     run_captured,
     run_command,
     run_output,
+    run_output_with_stderr,
     run_query,
     unbuffered_argv,
 )
@@ -123,6 +124,7 @@ def test_run_output_unbounded_by_default(monkeypatch: pytest.MonkeyPatch) -> Non
         timeout: float | None,
         stdin: int,
         start_new_session: bool,
+        env: Mapping[str, str] | None,
     ) -> subprocess.CompletedProcess[str]:
         seen.update(
             {
@@ -132,18 +134,27 @@ def test_run_output_unbounded_by_default(monkeypatch: pytest.MonkeyPatch) -> Non
                 "timeout": timeout,
                 "stdin": stdin,
                 "start_new_session": start_new_session,
+                "env": env,
             }
         )
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     run_output(["anything"])
+    assert seen["env"] is None
     assert seen["timeout"] is None
     # RESEARCH Pitfall 4 closes the update gap in D-10: updates run through
     # run_captured -> run_output, so update children get closed stdin and a
     # new session too (SPEC R7 names install AND update children).
     assert seen["stdin"] is subprocess.DEVNULL
     assert seen["start_new_session"] is True
+
+
+def test_run_output_with_stderr_returns_both_streams() -> None:
+    out, err = run_output_with_stderr(["/bin/sh", "-c", "echo out; echo err >&2"])
+    assert out == "out\n"
+    assert err == "err\n"
+    assert run_output(["/bin/sh", "-c", "echo out; echo err >&2"]) == "out\n"
 
 
 def test_run_captured_child_runs_in_its_own_session() -> None:

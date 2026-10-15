@@ -3,6 +3,7 @@
 import os
 import shutil
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -16,7 +17,13 @@ from installer.atomic import (
     staged_sibling,
 )
 from installer.checksums import ChecksumMismatch, expected_sha256, sha256_file
-from installer.executors import ExecutorError, link_executable, require_str
+from installer.executors import (
+    ExecutorError,
+    method_smoke_argv,
+    require_str,
+    smoke_binary,
+    staged_member,
+)
 from installer.locations import bin_dir, ensure_dir, opt_dir
 from installer.model import Method
 from installer.platform import Platform
@@ -208,7 +215,16 @@ def install_download(method: Method, ctx: ExecContext) -> str | None:
         if method.params.get("raw") is True:
             _replace_raw(link, asset_path)
         else:
-            _place_verified(method, ctx, target, link, asset_path)
+            verified = target.checksum is not None or target.sha256 is not None
+            _replace_archive(
+                method,
+                ctx,
+                target,
+                link,
+                asset_path,
+                verified=verified,
+                smoke_argv=method_smoke_argv(method),
+            )
         if target.checksum is not None or target.sha256 is not None:
             return None
         return target.unverified_reason
@@ -278,10 +294,16 @@ def _fetch_verified(
     return asset_path
 
 
-def _replace_raw(link: Path, asset_path: Path) -> None:
+def _replace_raw(link: Path, asset_path: Path, *, smoke_argv: Sequence[str] | None = None) -> None:
     new = staged_sibling(link, NEW_SUFFIX)
     shutil.copy2(asset_path, new)
     new.chmod(0o755)
+    if smoke_argv is not None:
+        try:
+            smoke_binary(new, smoke_argv)
+        except Exception:
+            new.unlink(missing_ok=True)
+            raise
     os.replace(new, link)
 
 
@@ -293,19 +315,25 @@ def _replace_archive(
     asset_path: Path,
     *,
     verified: bool,
+    smoke_argv: Sequence[str] | None = None,
 ) -> UpdateExecResult:
     opt = opt_dir(link.name)
     new = staged_sibling(opt, NEW_SUFFIX)
     old = staged_sibling(opt, OLD_SUFFIX)
     original_target = capture_symlink_target(link)
     recover_update_remnants(opt)
-    _extract_into(method, ctx, target, asset_path, new)
-    binary = new / target.member
     try:
-        binary.chmod(0o755)
-    except OSError as extra:
+        _extract_into(method, ctx, target, asset_path, new)
+        binary = staged_member(new, target.member)
+        try:
+            binary.chmod(0o755)
+        except OSError as extra:
+            raise ExecutorError(f"staged binary is not executable: {extra}") from extra
+        if smoke_argv is not None:
+            smoke_binary(binary, smoke_argv)
+    except Exception:
         shutil.rmtree(new, ignore_errors=True)
-        raise ExecutorError(f"staged binary is not executable: {extra}") from extra
+        raise
     try:
         if opt.exists():
             os.replace(opt, old)
@@ -340,7 +368,10 @@ def _replace_archive(
 def _extract_into(
     method: Method, ctx: ExecContext, target: DownloadTarget, asset_path: Path, dest: Path
 ) -> None:
-    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ExecutorError(f"cannot create opt dir: {exc}") from exc
     if _opt_str(method, "archive") == "zip":
         ctx.runner(["unzip", "-q", "-o", str(asset_path), target.member, "-d", str(dest)])
         return
@@ -366,35 +397,8 @@ def _undo_archive_swap(
         os.replace(old, opt)
     if original_target is not None:
         replace_symlink(link, original_target)
+    elif link.is_symlink():
+        link.unlink()
     shutil.rmtree(new, ignore_errors=True)
     if old.exists():
         shutil.rmtree(old, ignore_errors=True)
-
-
-def _place_verified(
-    method: Method, ctx: ExecContext, target: DownloadTarget, link: Path, asset_path: Path
-) -> None:
-    """Install a verified download from its temp path (plain argv, no shell)."""
-    if method.params.get("raw") is True:
-        _replace_raw(link, asset_path)
-        return
-    try:
-        opt = ensure_dir(opt_dir(link.name))
-    except OSError as exc:
-        raise ExecutorError(f"cannot create opt dir: {exc}") from exc
-    binary = opt / target.member
-    if _opt_str(method, "archive") == "zip":
-        ctx.runner(["unzip", "-q", "-o", str(asset_path), target.member, "-d", str(opt)])
-    else:
-        strip = _opt_int(method, "strip", 0)
-        ctx.runner(
-            [
-                "tar",
-                f"-x{_tar_flag(method)}f",
-                str(asset_path),
-                "-C",
-                str(opt),
-                f"--strip-components={strip}",
-            ]
-        )
-    link_executable(binary, link, target.member)

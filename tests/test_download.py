@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from installer import atomic, download
+from installer.atomic import NEW_SUFFIX, staged_sibling
 from installer.checksums import ChecksumMismatch
 from installer.download import DOWNLOAD_KINDS, ExecContext, install_download, update_download
 from installer.executors import ExecutorError
@@ -68,6 +69,7 @@ def test_github_release_archive_extracts_to_opt_and_symlinks(
     )
     install_download(method, _ctx(runner, tmp_version="15.1.0"))
     opt = tmp_path / ".local" / "opt" / "rg"
+    staged = staged_sibling(opt, NEW_SUFFIX)
     link = bin_dir / "rg"
     url = (
         "https://github.com/BurntSushi/ripgrep/releases/download/"
@@ -75,7 +77,7 @@ def test_github_release_archive_extracts_to_opt_and_symlinks(
     )
     assert calls == [
         ["curl", "-fsSL", "-o", str(workdir / asset), "--", url],
-        ["tar", "-xzf", str(workdir / asset), "-C", str(opt), "--strip-components=1"],
+        ["tar", "-xzf", str(workdir / asset), "-C", str(staged), "--strip-components=1"],
     ]
     assert not any(cmd and cmd[0] == "sh" for cmd in calls)
     assert link.is_symlink()
@@ -124,10 +126,11 @@ def test_tarball_uses_url_verbatim_and_strip_defaults_to_zero(
     )
     install_download(method, _ctx(runner))
     opt = tmp_path / ".local" / "opt" / "eza"
+    staged = staged_sibling(opt, NEW_SUFFIX)
     link = bin_dir / "eza"
     assert calls == [
         ["curl", "-fsSL", "-o", str(workdir / asset), "--", url],
-        ["tar", "-xzf", str(workdir / asset), "-C", str(opt), "--strip-components=0"],
+        ["tar", "-xzf", str(workdir / asset), "-C", str(staged), "--strip-components=0"],
     ]
     assert link.is_symlink()
     assert os.readlink(link) == str(member)
@@ -136,7 +139,7 @@ def test_tarball_uses_url_verbatim_and_strip_defaults_to_zero(
 
 def test_tar_flag_covers_gzip_default_and_xz_for_all_three_extract_sites() -> None:
     """_tar_flag() backs install staging, _extract_into (update path), and
-    _place_verified alike -- one unit test at this level covers the archive-format
+    _extract_into alike -- one unit test at this level covers the archive-format
     decision for all three."""
     gzip_default = Method(kind="tarball", params={"url": "https://x/y.tar.gz", "member": "y"})
     xz = Method(
@@ -171,9 +174,10 @@ def test_tarball_archive_xz_uses_tar_capital_j_flag(
     install_download(method, _ctx(runner))
     opt = tmp_path / ".local" / "opt" / "sublime_text"
     link = bin_dir / "sublime_text"
+    staged = staged_sibling(opt, NEW_SUFFIX)
     assert calls == [
         ["curl", "-fsSL", "-o", str(workdir / asset), "--", url],
-        ["tar", "-xJf", str(workdir / asset), "-C", str(opt), "--strip-components=0"],
+        ["tar", "-xJf", str(workdir / asset), "-C", str(staged), "--strip-components=0"],
     ]
     assert link.is_symlink()
     assert os.readlink(link) == str(member)
@@ -196,12 +200,15 @@ def test_unverified_archive_with_a_directory_member_links_nothing(
     def plant_directory(cmd: list[str]) -> None:
         runner(cmd)
         if _is_extraction(cmd):
-            member.unlink()
-            member.mkdir()
+            dest = _extract_dest(cmd)
+            live_opt = _live_opt_from_extract_dest(dest)
+            staged = dest / member.relative_to(live_opt)
+            staged.unlink()
+            staged.mkdir()
 
     with pytest.raises(ExecutorError, match="tool"):
         install_download(method, _ctx(plant_directory))
-    assert member.is_dir()
+    assert not member.exists()
     assert not (bin_dir / "tool").exists()
     assert not (bin_dir / "tool").is_symlink()
     assert not any(cmd and cmd[0] in {"ln", "chmod"} for cmd in calls)
@@ -227,21 +234,22 @@ def test_unverified_archive_links_the_member_file_atomically(
     assert not any(cmd and cmd[0] in {"ln", "chmod"} for cmd in calls)
 
 
-def test_reinstall_over_a_link_to_a_directory_leaves_its_files_byte_identical(
+def test_reinstall_never_writes_through_a_link_to_a_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Replacing a link-to-directory must replace the link, never write inside it."""
+    """Staged swap replaces links without writing through a foreign directory."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    opt = tmp_path / ".local" / "opt" / "subl"
-    planted = opt / "sublime_text"
-    inner = planted / "inner"
-    inner.parent.mkdir(parents=True)
-    inner.write_bytes(b"keep-me")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    os.symlink(str(planted), bin_dir / "subl")
-    member = opt / "sublime_text" / "sublime_text"
-    calls, runner = fixture_runner(None, {}, member=member)
+
+    outside = tmp_path / "outside-dir"
+    outside.mkdir()
+    marker = outside / "marker"
+    marker.write_bytes(b"keep-outside")
+    os.symlink(str(outside), bin_dir / "subl")
+
+    member = tmp_path / ".local" / "opt" / "subl" / "sublime_text" / "sublime_text"
+    _, runner = fixture_runner(None, {}, member=member)
     method = Method(
         kind="tarball",
         params={
@@ -253,12 +261,35 @@ def test_reinstall_over_a_link_to_a_directory_leaves_its_files_byte_identical(
         },
     )
     install_download(method, _ctx(runner))
-    assert inner.read_bytes() == b"keep-me"
-    assert sorted(path.name for path in planted.iterdir()) == ["inner", "sublime_text"]
+    assert marker.read_bytes() == b"keep-outside"
     link = bin_dir / "subl"
     assert link.is_symlink()
     assert os.readlink(link) == str(member)
-    assert not any(cmd and cmd[0] in {"ln", "chmod"} for cmd in calls)
+
+    opt = tmp_path / ".local" / "opt" / "subl2"
+    legacy = opt / "legacy"
+    inner = legacy / "inner"
+    inner.parent.mkdir(parents=True)
+    inner.write_bytes(b"keep-me")
+    os.symlink(str(legacy), bin_dir / "subl2")
+    member2 = opt / "sublime_text" / "sublime_text"
+    _, runner2 = fixture_runner(None, {}, member=member2)
+    method2 = Method(
+        kind="tarball",
+        params={
+            "url": "https://x/sublime_text.tar.xz",
+            "member": "sublime_text/sublime_text",
+            "bin_name": "subl2",
+            "archive": "xz",
+            "bin_dir": str(bin_dir),
+        },
+    )
+    install_download(method2, _ctx(runner2))
+    link2 = bin_dir / "subl2"
+    assert link2.is_symlink()
+    assert os.readlink(link2) == str(member2)
+    assert member2.is_file()
+    assert not legacy.exists()
 
 
 def test_tarball_bin_name_overrides_the_symlink_name(
@@ -478,6 +509,7 @@ def test_github_release_zip_uses_unzip_and_ignores_strip(
     )
     install_download(method, _ctx(runner, tmp_version="v2.1.4"))
     opt = tmp_path / ".local" / "opt" / "deno"
+    staged = staged_sibling(opt, NEW_SUFFIX)
     link = bin_dir / "deno"
     url = (
         "https://github.com/denoland/deno/releases/download/"
@@ -485,7 +517,7 @@ def test_github_release_zip_uses_unzip_and_ignores_strip(
     )
     assert calls == [
         ["curl", "-fsSL", "-o", str(workdir / asset), "--", url],
-        ["unzip", "-q", "-o", str(workdir / asset), "deno", "-d", str(opt)],
+        ["unzip", "-q", "-o", str(workdir / asset), "deno", "-d", str(staged)],
     ]
     assert link.is_symlink()
     assert os.readlink(link) == str(member)
@@ -512,10 +544,11 @@ def test_zip_extracts_only_the_nested_member(tmp_path: Path, monkeypatch: pytest
     )
     install_download(method, _ctx(runner, tmp_version="v1.57.0"))
     opt = tmp_path / ".local" / "opt" / "broot"
+    staged = staged_sibling(opt, NEW_SUFFIX)
     url = "https://github.com/Canop/broot/releases/download/v1.57.0/broot_1.57.0.zip"
     assert calls == [
         ["curl", "-fsSL", "-o", str(workdir / asset), "--", url],
-        ["unzip", "-q", "-o", str(workdir / asset), member_rel, "-d", str(opt)],
+        ["unzip", "-q", "-o", str(workdir / asset), member_rel, "-d", str(staged)],
     ]
     link = bin_dir / "broot"
     assert link.is_symlink()
@@ -591,11 +624,28 @@ def _is_extraction(cmd: list[str]) -> bool:
     return " tar " in script or "unzip " in script or "ditto " in script
 
 
+_MEMBER_SCRIPT = b"#!/bin/sh\nexit 0\n"
+
+
+def _extract_dest(cmd: list[str]) -> Path:
+    if cmd[0] == "tar":
+        return Path(cmd[cmd.index("-C") + 1])
+    if cmd[0] == "unzip":
+        return Path(cmd[cmd.index("-d") + 1])
+    raise AssertionError(f"not an extraction argv: {cmd}")
+
+
+def _live_opt_from_extract_dest(dest: Path) -> Path:
+    if dest.name.endswith(NEW_SUFFIX):
+        return dest.parent / dest.name[: -len(NEW_SUFFIX)]
+    return dest
+
+
 def fixture_runner(
     workdir: Path | None, files: dict[str, bytes], *, member: Path | None = None
 ) -> tuple[list[list[str]], Runner]:
     """Record argv. A curl fetch drops `files` into `workdir`; an extraction
-    materializes `member` as a regular file when one is given."""
+    materializes `member` as an executable script at the extraction dest."""
     calls: list[list[str]] = []
 
     def runner(cmd: list[str]) -> None:
@@ -610,8 +660,17 @@ def fixture_runner(
             for name, content in files.items():
                 (workdir / name).write_bytes(content)
         if member is not None and _is_extraction(cmd):
-            member.parent.mkdir(parents=True, exist_ok=True)
-            member.write_bytes(b"member-bytes")
+            if cmd[0] in {"tar", "unzip"}:
+                dest = _extract_dest(cmd)
+                live_opt = _live_opt_from_extract_dest(dest)
+                target = dest / member.relative_to(live_opt)
+            else:
+                target = member
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                return
+            target.write_bytes(_MEMBER_SCRIPT)
+            target.chmod(0o755)
 
     return calls, runner
 
@@ -824,7 +883,14 @@ def test_verified_archive_fetches_verifies_and_extracts(
             "--",
             f"{RG_BASE}/{RG_ASSET}.sha256",
         ],
-        ["tar", "-xzf", str(workdir / RG_ASSET), "-C", str(opt), "--strip-components=1"],
+        [
+            "tar",
+            "-xzf",
+            str(workdir / RG_ASSET),
+            "-C",
+            str(staged_sibling(opt, NEW_SUFFIX)),
+            "--strip-components=1",
+        ],
     ]
     assert (bindir / "rg").is_symlink()
     assert os.readlink(bindir / "rg") == str(member)
@@ -848,12 +914,15 @@ def test_verified_archive_with_a_directory_member_links_nothing(
     def plant_directory(cmd: list[str]) -> None:
         runner(cmd)
         if _is_extraction(cmd):
-            member.unlink()
-            member.mkdir()
+            dest = _extract_dest(cmd)
+            live_opt = _live_opt_from_extract_dest(dest)
+            staged = dest / member.relative_to(live_opt)
+            staged.unlink()
+            staged.mkdir()
 
     with pytest.raises(ExecutorError, match="rg"):
         install_download(_rg_method(bindir), _ctx(plant_directory, tmp_version="15.1.0"))
-    assert member.is_dir()
+    assert not member.exists()
     assert not (bindir / "rg").exists()
     assert not (bindir / "rg").is_symlink()
 
@@ -980,8 +1049,9 @@ def test_verified_zip_extracts_member_from_temp(tmp_path: Path, monkeypatch: pyt
     )
     assert install_download(method, _ctx(runner, tmp_version="v2.0.0")) is None
     opt = tmp_path / ".local" / "opt" / "deno"
+    staged = staged_sibling(opt, NEW_SUFFIX)
     assert calls[2:] == [
-        ["unzip", "-q", "-o", str(workdir / asset), "deno", "-d", str(opt)],
+        ["unzip", "-q", "-o", str(workdir / asset), "deno", "-d", str(staged)],
     ]
     assert (bindir / "deno").is_symlink()
     assert os.readlink(bindir / "deno") == str(member)
@@ -1304,7 +1374,7 @@ def test_update_download_directory_member_rolls_back(
         else:
             plain_runner(cmd)
 
-    with pytest.raises(ExecutorError, match="restored"):
+    with pytest.raises(ExecutorError, match="regular file"):
         update_download(_rg_update_method(tmp_path / "bin"), _ctx(dir_member_runner))
     assert (opt / "marker").read_text() == "original"
     assert (opt / "rg").read_bytes() == b"old-binary"
@@ -1476,3 +1546,274 @@ def test_supplied_sha256_is_never_discarded(
     _, runner2 = fixture_runner(workdir, {asset: payload}, member=member)
     assert install_download(good, _ctx(runner2)) is None
     assert (bindir / "x").is_symlink()
+
+
+def _member_script(exit_code: int = 0, *, extra: str = "") -> bytes:
+    return f"#!/bin/sh\n{extra}exit {exit_code}\n".encode()
+
+
+def _script_member_runner(
+    member: Path, body: bytes, *, workdir: Path | None = None, files: dict[str, bytes] | None = None
+) -> tuple[list[list[str]], Runner]:
+    file_map = dict(files or {})
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        if cmd and cmd[0] == "curl" and "-o" in cmd:
+            dest = Path(cmd[cmd.index("-o") + 1])
+            if dest.name not in file_map:
+                return
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(file_map[dest.name])
+        if workdir is not None and cmd[0] == "sh" and len(cmd) >= 3 and "curl" in cmd[2]:
+            for name, content in file_map.items():
+                (workdir / name).write_bytes(content)
+        if _is_extraction(cmd):
+            if cmd[0] in {"tar", "unzip"}:
+                dest = _extract_dest(cmd)
+                live_opt = _live_opt_from_extract_dest(dest)
+                target = dest / member.relative_to(live_opt)
+            else:
+                target = member
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(body)
+            target.chmod(0o755)
+
+    return calls, runner
+
+
+def test_smoke_failure_keeps_an_existing_good_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt = tmp_path / ".local" / "opt" / "rg"
+    binary = opt / "rg"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"good-binary")
+    planted = opt / "planted"
+    planted.write_bytes(b"planted-bytes")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    os.symlink(str(binary), bin_dir / "rg")
+    member = binary
+    asset = "rg-1.0.0.tar.gz"
+    calls, runner = _script_member_runner(member, _member_script(127), files={asset: b"archive"})
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "x/y",
+            "asset": "rg-{ver}.tar.gz",
+            "member": "rg",
+            "bin_dir": str(bin_dir),
+        },
+    )
+    with pytest.raises(ExecutorError):
+        install_download(method, _ctx(runner, tmp_version="1.0.0"))
+    assert binary.read_bytes() == b"good-binary"
+    assert planted.read_bytes() == b"planted-bytes"
+    assert os.readlink(bin_dir / "rg") == str(binary)
+    assert not any(cmd and cmd[0] in {"ln", "chmod"} for cmd in calls)
+
+
+def test_mismatch_never_runs_the_staged_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    workdir = _workdir(tmp_path, monkeypatch)
+    marker = tmp_path / "smoke-ran"
+    body = _member_script(0, extra=f"touch {marker}\n")
+    member = tmp_path / ".local" / "opt" / "tool" / "tool"
+    asset = "tool-1.0.0.tar.gz"
+    payload = b"archive"
+    _, runner = _script_member_runner(member, body, workdir=workdir, files={asset: payload})
+    method = Method(
+        kind="tarball",
+        params={
+            "url": "https://x/tool-1.0.0.tar.gz",
+            "member": "tool",
+            "sha256": "0" * 64,
+            "bin_dir": str(tmp_path / "bin"),
+        },
+    )
+    with pytest.raises(ChecksumMismatch):
+        install_download(method, _ctx(runner))
+    assert not marker.exists()
+
+
+def test_declared_smoke_argv_is_used(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    member = tmp_path / ".local" / "opt" / "tool" / "tool"
+    body = _member_script(
+        127,
+        extra='if [ "$1" = "--custom" ]; then exit 0; fi\n',
+    )
+    _, runner = _script_member_runner(member, body)
+    bin_dir = tmp_path / "bin"
+    params: dict[str, object] = {
+        "repo": "x/y",
+        "asset": "tool-{ver}.tar.gz",
+        "member": "tool",
+        "bin_dir": str(bin_dir),
+    }
+    with pytest.raises(ExecutorError):
+        install_download(Method("github_release", params), _ctx(runner, tmp_version="1.0.0"))
+    custom = Method(
+        kind="github_release",
+        params={**params, "smoke_argv": ["--custom"]},
+    )
+    install_download(custom, _ctx(runner, tmp_version="1.0.0"))
+    assert (bin_dir / "tool").is_symlink()
+
+
+def test_update_download_does_not_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt, _binary, link = _plant_archive_install(tmp_path)
+    body = _member_script(127)
+    _calls, runner = _curl_and_extract_runner({}, extracted=body)
+    result = update_download(
+        _rg_update_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0")
+    )
+    assert result.verified is False
+    assert (opt / "rg").read_bytes() == body
+    assert link.exists()
+
+
+def test_failed_extraction_leaves_no_staged_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt = tmp_path / ".local" / "opt" / "rg"
+    binary = opt / "rg"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"good")
+    planted = opt / "planted"
+    planted.write_bytes(b"planted")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    os.symlink(str(binary), bin_dir / "rg")
+    member = binary
+    workdir = _workdir(tmp_path, monkeypatch)
+    checksum_name = f"{RG_ASSET}.sha256"
+    digest_line = (
+        f"0eb3e36bfb24dcd9bb1d1bece1531216b59539a8fde17ee80224af0653c92aa3  {RG_ASSET}\n"
+    ).encode()
+    _calls, base_runner = fixture_runner(
+        workdir,
+        {RG_ASSET: b"archive", checksum_name: digest_line},
+        member=member,
+    )
+
+    def failing_runner(cmd: list[str]) -> None:
+        base_runner(cmd)
+        if cmd and cmd[0] == "tar":
+            raise CommandError(cmd, 1, detail="extract failed")
+
+    with pytest.raises(CommandError):
+        install_download(_rg_method(bin_dir), _ctx(failing_runner, tmp_version="15.1.0"))
+    assert not staged_sibling(opt, NEW_SUFFIX).exists()
+    assert binary.read_bytes() == b"good"
+    assert planted.read_bytes() == b"planted"
+    assert os.readlink(bin_dir / "rg") == str(binary)
+
+
+def test_member_symlink_outside_staging_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / "bin"
+    opt = tmp_path / ".local" / "opt" / "tool"
+    member_name = "tool"
+    outside = tmp_path / "outside.sh"
+    outside.write_text("#!/bin/sh\n: > marker\n", encoding="utf-8")
+    outside.chmod(0o644)
+    marker = tmp_path / "marker"
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        if cmd and cmd[0] == "curl" and "-o" in cmd:
+            dest = Path(cmd[cmd.index("-o") + 1])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"archive")
+        if _is_extraction(cmd):
+            dest = _extract_dest(cmd)
+            (dest / member_name).symlink_to(outside)
+
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "x/y",
+            "asset": "tool-{ver}.tar.gz",
+            "member": member_name,
+            "bin_dir": str(bin_dir),
+        },
+    )
+    with pytest.raises(ExecutorError, match=member_name):
+        install_download(method, _ctx(runner, tmp_version="1.0.0"))
+    assert outside.stat().st_mode & 0o777 == 0o644
+    assert not marker.exists()
+    assert not staged_sibling(opt, NEW_SUFFIX).exists()
+    assert not (bin_dir / member_name).exists()
+
+
+def test_member_symlink_inside_staging_installs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / "bin"
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        if cmd and cmd[0] == "curl" and "-o" in cmd:
+            dest = Path(cmd[cmd.index("-o") + 1])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"archive")
+        if _is_extraction(cmd):
+            dest = _extract_dest(cmd)
+            real_path = dest / "real"
+            real_path.parent.mkdir(parents=True, exist_ok=True)
+            real_path.write_bytes(_MEMBER_SCRIPT)
+            real_path.chmod(0o755)
+            (dest / "tool").symlink_to("real")
+
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "x/y",
+            "asset": "tool-{ver}.tar.gz",
+            "member": "tool",
+            "bin_dir": str(bin_dir),
+        },
+    )
+    install_download(method, _ctx(runner, tmp_version="1.0.0"))
+    link = bin_dir / "tool"
+    assert link.is_symlink()
+    resolved = Path(os.readlink(link)).resolve()
+    assert str(resolved).startswith(str((tmp_path / ".local" / "opt" / "tool").resolve()))
+
+
+def test_fresh_install_failure_after_relink_leaves_no_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / "bin"
+    member = tmp_path / ".local" / "opt" / "rg" / "rg"
+    _, runner = fixture_runner(None, {RG_ASSET: b"archive"}, member=member)
+    real_replace_symlink = download.replace_symlink
+
+    def boom_after_relink(link: Path, target: str) -> None:
+        real_replace_symlink(link, target)
+        raise OSError("post-swap validation failed")
+
+    monkeypatch.setattr(download, "replace_symlink", boom_after_relink)
+    with pytest.raises(ExecutorError):
+        install_download(_rg_method(bin_dir), _ctx(runner, tmp_version="15.1.0"))
+    link = bin_dir / "rg"
+    assert not link.exists()
+    assert not link.is_symlink()
+    opt = tmp_path / ".local" / "opt" / "rg"
+    assert not opt.exists()
+    assert not staged_sibling(opt, NEW_SUFFIX).exists()
+    assert not staged_sibling(opt, atomic.OLD_SUFFIX).exists()
