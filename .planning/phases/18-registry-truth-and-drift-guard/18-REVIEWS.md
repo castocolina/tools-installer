@@ -229,3 +229,87 @@ One reviewer ran (`opencode-plan-review`, the only entry in `review.default_revi
 
 The 18-15 HIGHs are restatements of H6 and H7 and resolve with them.
 
+## Verification coverage
+
+Source-grounding pass (`plan_review.source_grounding: true`). It ran on 2026-10-15 over all 19 plans at `fb7ea2d`.
+
+**Authority.** `drift-guard authority --raw` returned `intel`. The config sets `grep`, and `intel.enabled: true` upgrades it to `intel`. `.planning/intel/api-map.json` / `API-SURFACE.md` list only 6 CLI entry points (`make setup/doctor/fix/uninstall/guard`, `make e2e`). Under that authority, every Python symbol, registry key and shell function is **UNCHECKABLE** (severity INFO). These were not treated as verified or missing on that basis. Supplementary grep evidence was collected so that this block is not empty: declarations were grepped over `git ls-files` outside `.planning/`. `drift-guard severity` under `intel`: VERIFIED → none, MISSING → needs-acknowledgement (no hardBlock), AMBIGUOUS → MEDIUM, UNCHECKABLE → INFO. No verdict produced a hardBlock.
+
+**Enumeration.** Every backticked token in the 19 PLAN.md files that has a symbol shape (`module.func`, `Class.attr`, `path::name`, `name(...)`, snake/camel identifiers), a path shape or a `--flag` shape. Tokens were de-duplicated per kind and name. Names declared in any plan's "Artifacts this phase produces" section were excluded (they are new by design). Result: 223 distinct cited symbols.
+
+| Grep-evidence verdict | Count | Meaning |
+|---|---|---|
+| Declared once (`def`/`class`/assignment) | 95 | Python symbol has exactly one declaration |
+| Declared in several places | 18 | Registry/param key names and test helpers declared in several modules (`npm_pkg`, `owner_probes`, `link_mode`, `latest_version`, `checked_at`, `failed_at`, `_tool`, `fake_which`, `wire_path`, `with_sensitive_confirm`, `setup._execute_inputs`, ...). Each plan names the module, and each declaration matches it, so none is a real AMBIGUOUS |
+| Referenced, not declared | 28 | Registry kinds/keys (`github_release`, `rpm_ostree`, `skill_pack`, `host_setup`, `min_os_version`), shell functions and markers in `scripts/container-e2e-verify.sh` (`run_setup_as_tester`, `install_root_prereqs`, `cmd_pass1`, `cmd_pass2`, `sync_workspace`, `TRACER_*_OK`, `PASS1_COUNTS`), env names (`GH_TOKEN`, `GITHUB_TOKEN`, `CODEX_NON_INTERACTIVE`), and stdlib names (`JSONDecodeError`, `__cause__`, `BaseException`). All are present in the source |
+| Paths and flags that exist | 33 | 23 repo paths, 10 flags |
+| Not found | 49 | All acknowledged below (needs-acknowledgement; none is a hallucinated existing-code reference) |
+
+Not-found symbols and their acknowledgement:
+
+| Cited at | Token | Why absent (acknowledgement) |
+|---|---|---|
+| 18-01-PLAN.md:93 | `--no-verify` | git flag (external CLI); cited as a prohibition |
+| 18-03-PLAN.md:106 | `bin_dir/java` | illustrative path fragment, not a repo path |
+| 18-03-PLAN.md:197 | `java_home` | macOS `/usr/libexec/java_home` (external OS binary) |
+| 18-05-PLAN.md:29 | `--no-dev` | uv CLI flag (external) |
+| 18-05-PLAN.md:29 | `--isolated` | uv CLI flag (external) |
+| 18-05-PLAN.md:115 | `_recipes()` | private helper inside new file `tests/test_makefile.py` (created by 18-05) |
+| 18-05-PLAN.md:194 | `--exact` | uv CLI flag (external; cited as rejected alternative) |
+| 18-08-PLAN.md:66 | `--no-modify-path` | opencode installer-script flag (external) |
+| 18-08-PLAN.md:68 | `kitty.app/Contents/MacOS/kitty` | macOS bundle path on the target host (external) |
+| 18-08-PLAN.md:90 | `test_audit_fix_` | test-name prefix, not a symbol |
+| 18-09-PLAN.md:29 | `GLIBC_` | loader error substring (string literal) |
+| 18-09-PLAN.md:146 | `--custom` | fixture argv in a new test (created by 18-09) |
+| 18-09-PLAN.md:154 | `WAYLAND_DISPLAY` | environment variable name (external) |
+| 18-11-PLAN.md:115 | `.../v32.4.1/draw.io-arm64-32.4.1.zip` | elided upstream release URL (external) |
+| 18-12-PLAN.md:55 | `--candidate` | CLI flag created by 18-13 (cited by 18-12 as a later plan's) |
+| 18-12-PLAN.md:59 | `actions/cache` | GitHub Action (external) |
+| 18-12-PLAN.md:77 | `urllib.error.HTTPError` | stdlib `urllib.error.HTTPError` |
+| 18-12-PLAN.md:82 | `tests/fixtures/` | plan asserts it does NOT exist (correct: absent) |
+| 18-12-PLAN.md:119 | `TimeoutError` | stdlib builtin |
+| 18-12-PLAN.md:157 | `tempfile.TemporaryDirectory` | stdlib `tempfile` |
+| 18-12-PLAN.md:157 | `zipfile.ZipFile(path).namelist()` | stdlib `zipfile` |
+| 18-13-PLAN.md:67 | `--state` | CLI flag created by 18-12 |
+| 18-14-PLAN.md:30 | `--body-file` | gh CLI flag (external) |
+| 18-14-PLAN.md:32 | `workflow_dispatch` | GitHub Actions trigger key (external) |
+| 18-14-PLAN.md:140 | `tempfile.NamedTemporaryFile` | stdlib `tempfile` |
+| 18-15-PLAN.md:91 | `.../v31.0.2/draw.io-x64-31.0.2.zip` | elided upstream release URL (external) |
+| 18-15-PLAN.md:97 | `.e2e-artifacts/verify-registry/` | gitignored run-evidence dir created by 18-15 |
+| 18-15-PLAN.md:180 | `stable_update_check` | Sublime HQ upstream endpoint (external URL path) |
+| 18-16-PLAN.md:143 | `installer/assets.py::render_pinned_url` | plan explicitly records the deviation from 18-PATTERNS.md: the renderer is `download.pinned_url`, not `assets.render_pinned_url` (correctly absent) |
+| 18-18-PLAN.md:90 | `.e2e-artifacts/container/18-18-ruff-probe.log` | gitignored run evidence created by 18-18 |
+| 18-01..18-19 (each plan's `<output>`) | `18-NN-SUMMARY.md` (19 files) | execution output created by each plan |
+
+**UNCHECKABLE / skipped.**
+- Signatures (argument lists, return types) cannot be asserted under `intel`/`grep`. Every `name(args) -> type` citation was checked for the name only.
+- External surfaces are not in the repo and are UNCHECKABLE: uv/gh/git flags, GitHub API and Actions semantics, upstream release asset names and digests, macOS binaries (`java_home`, `xcode-select`).
+- Live-behaviour claims in the plans' context blocks were spot-checked, not enumerated. Each one below was confirmed against the tree:
+  - `parse_version('-1') == (1, 0, 0, 1)`, `parse_version('jq-1.8.1') == (1, 8, 1, 1)`, `parse_version('"0.20.0"') is None`, `extract_observed_version('version=0.44.1, os=linux') is None`.
+  - 90 `[[tool]]` blocks and 89 `github_release` methods in `installer/registry.toml`.
+  - The `managed-download` probe is present at `installer/model.py:55`, `installer/install_ownership.py:86,376` and `installer/registry.toml:2734,2783`.
+  - `drawio-cli` is present at `installer/registry.toml:2772`.
+- The 18-RESEARCH.md "Live findings" counts (153/171 digests) were not re-probed (network).
+
+**Source-grounding finding (orchestrator, MEDIUM, actionable).** In 18-02, the procs fixture does not match procs' real output. The audit records procs printing `procs "0.14.12 (…` (`.planning/research/audit-2026-10-13/E-registry-user-part2.md:75`), with one *unbalanced* leading quote, and `tests/test_versions.py:423` pins `procs "0.14.12` as None today. 18-02-PLAN.md:124 tests the balanced `procs "v0.14.10"`, and its normalizer "strips one pair of surrounding ... quotes" (18-02-PLAN.md:134). The real procs output therefore stays unparsed while the fixture passes. Fix: make the normalizer strip a leading quote even without a closing one, and use the audit's real string as the fixture row.
+
+## Cross-artifact fact-drift findings
+
+- **Phase status** (`drift-guard phase-status --phase 18`): verdict `lag`. STATE.md says "Ready to execute" (rank 1) and ROADMAP.md says "Not started" (rank 0), with STATE.md as the authority. This is one non-terminal step and not a finding.
+- **Success criteria ↔ must_haves.truths** (ROADMAP.md authority): no contradiction.
+  - SC1: 18-01 and 18-04.
+  - SC2: 18-12 and 18-14. "Weekly non-blocking" matches a schedule/dispatch-only job outside `ci.yml`.
+  - SC3: 18-07, 18-15 and 18-16. 18-15 states the residual gron/jless set through Ledger L-18-02, which reads "wherever GitHub exposes a sha256 digest".
+  - SC4: 18-02, 18-03, 18-05 and 18-18.
+  - SC5: 18-06 and 18-08.
+- **Requirement IDs** (ROADMAP.md authority): REG-01..REG-10 each appear in at least one plan's `requirements:`. No plan cites an ID outside the roadmap list.
+- **CONTEXT.md decisions ↔ plan usage** (CONTEXT.md authority): no contradiction. Each apparent difference is an amendment recorded inside CONTEXT.md itself:
+  - D-02's "reject future values" is amended by L-18-06 (today + 1).
+  - D-07's "inconclusive, no issue call" is amended by L-18-05.
+  - D-11's `--no-dev` is amended by L-18-01 (`--isolated --no-dev`).
+  - D-08's single cron is amended by L-18-07.
+  - D-07 names `download._resolve_target`; 18-07 renames it to public `resolve_target`. That is a rename the plan declares, not a contradiction.
+  - Stale line numbers in D-12 (`model.py:57`, `registry.toml:2721`) differ from the current source (`:55`, `:2734`). That is CONTEXT ↔ source, not a judgment pair, so it is noted only.
+- Coverage: STATE.md, ROADMAP.md and CONTEXT.md were all present, so no axis was skipped.
+
+Advisory only. These findings set no hardBlock and count toward neither HIGH_COUNT nor ACTIONABLE_COUNT.
