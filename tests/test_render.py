@@ -628,3 +628,19 @@ def test_guidance_text_non_emphasised_item_renders_exactly_as_before() -> None:
     text = guidance_text([item])
     styles = {str(span.style) for span in text.spans}
     assert styles == {"yellow"}
+
+
+def test_render_remove_yourself_lists_paths_without_escalation() -> None:
+    from installer.render import render_remove_yourself
+
+    console, buf = _console()
+    render_remove_yourself([Path("/x/bin/yq"), Path("/x/bin/drawio")], console)
+    text = buf.getvalue()
+    assert "/x/bin/yq" in text
+    assert "/x/bin/drawio" in text
+    assert "remove them yourself" in text
+    for banned in ("sudo", "pkexec", "doas"):
+        assert banned not in text
+    empty, empty_buf = _console()
+    render_remove_yourself([], empty)
+    assert empty_buf.getvalue() == ""

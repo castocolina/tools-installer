@@ -1,6 +1,6 @@
 """Render the pre-flight audit and the post-install summary to a Console."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from rich.console import Console
@@ -171,6 +171,22 @@ def render_uninstall(paths: list[Path], console: Console) -> None:
         console.print("Nothing to uninstall: no tools-installer artifacts found.")
         return
     console.print("The following will be removed:")
+    for path in paths:
+        console.print(f"  {path}")
+
+
+def render_remove_yourself(paths: Sequence[Path], console: Console) -> None:
+    """Name the on-disk matches this installer cannot prove it wrote.
+
+    They are never deleted (SAFE-03/D-04); the user decides. The wording
+    names only paths — no privilege-escalation commands, ever.
+    """
+    if not paths:
+        return
+    console.print(
+        "Not removed (tools-installer cannot prove it installed these); "
+        "remove them yourself if you want them gone:"
+    )
     for path in paths:
         console.print(f"  {path}")
 

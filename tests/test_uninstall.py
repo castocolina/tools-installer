@@ -1,7 +1,9 @@
 from collections.abc import Callable
+from io import StringIO
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 
 from installer.download import link_name
 from installer.model import Method, Tool, load_tools
@@ -1400,3 +1402,85 @@ def test_empty_extra_policies_leaves_the_sweep_unchanged(
     rc_path, bin_dir = _enabled_countdown(tmp_path)
     result = sweep_tweaks(BUNDLES, rc_path=rc_path, bin_dir=bin_dir, extra_policies=())
     assert result == SweepResult(swept=("tweak:countdown",))
+
+
+def _uninstall_console() -> tuple[Console, StringIO]:
+    """A rich Console writing to a StringIO, for the CLI-path tests."""
+    buf = StringIO()
+    return Console(file=buf, width=100, no_color=True), buf
+
+
+def test_tui_and_cli_delete_the_same_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The prohibition: --yes must never delete what the TUI would refuse."""
+    from installer.app import run_uninstall
+
+    tui_home = tmp_path / "tui"
+    cli_home = tmp_path / "cli"
+    tui_home.mkdir()
+    cli_home.mkdir()
+
+    monkeypatch.setattr(Path, "home", lambda: tui_home)
+    tui_tools = plant_removal_fixtures(tui_home)
+    rows = classify_tools(
+        tui_tools,
+        tui_home / ".local" / "bin",
+        installed={t.id: True for t in tui_tools},
+        platform=_LINUX,
+    )
+    tui_set = {p for row in rows if row.state == "removable" for p in row.paths}
+    assert tui_set
+
+    monkeypatch.setattr(Path, "home", lambda: cli_home)
+    cli_tools = plant_removal_fixtures(cli_home)
+    cli_bin = cli_home / ".local" / "bin"
+    console, _buf = _uninstall_console()
+    removed = run_uninstall(
+        cli_tools,
+        console,
+        default_bin_dir=cli_bin,
+        myshellrc_path=cli_home / ".myshellrc",
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=(),
+        zshrc_path=cli_home / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+    )
+    assert {p.relative_to(cli_home) for p in removed} == {p.relative_to(tui_home) for p in tui_set}
+
+
+def test_failed_opt_dir_delete_leaves_the_remainder_listed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backstop: if deleting the opt dir fails after the link was removed,
+    the remainder is still listed on the next plan."""
+    import installer.uninstall as uninstall_module
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    opt = tmp_path / ".local" / "opt" / "fd"
+    opt.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (opt / "fd").write_text("binary")
+    (bin_dir / "fd").symlink_to(opt / "fd")
+    tool = _dl_tool("fd", "fd")
+    assert plan_removal([tool], bin_dir).removable == (bin_dir / "fd", opt)
+
+    real_rmtree = uninstall_module.shutil.rmtree
+
+    def failing_rmtree(path: object, **_kwargs: object) -> None:
+        if path == opt:
+            raise OSError("disk gremlins")
+        real_rmtree(path)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(uninstall_module.shutil, "rmtree", failing_rmtree)
+    with pytest.raises(OSError):
+        remove_paths([bin_dir / "fd", opt])
+    monkeypatch.setattr(uninstall_module.shutil, "rmtree", real_rmtree)
+
+    plan = plan_removal([tool], bin_dir)
+    assert plan.removable == ()
+    assert opt in plan.yourself
+    rows = classify_tools([tool], bin_dir, installed={"fd": True}, platform=_LINUX)
+    assert rows[0].state == "managed"
+    assert str(opt) in rows[0].hint

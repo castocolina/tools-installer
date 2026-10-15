@@ -56,6 +56,7 @@ from installer.render import (
     render_post_install_handoff,
     render_postinstall_warnings,
     render_rc_duplicates,
+    render_remove_yourself,
     render_skipped,
     render_summary,
     render_uninstall,
@@ -86,7 +87,7 @@ from installer.tweaks import TweakBundle
 from installer.uninstall import (
     SweepResult,
     active_policies,
-    plan_uninstall,
+    plan_removal,
     policy_owned,
     remove_paths,
     sweep_policies,
@@ -536,7 +537,9 @@ def run_uninstall(
     any pip/npm-ban artifacts (shims + alias blocks), and still-enabled shell
     tweaks (the background maintenance daemon included, when active).
 
-    Returns the removed download/app paths ([] if nothing to remove or declined).
+    Returns the removed proven paths ([] if nothing to remove or declined).
+    Only plan_removal's proven artifacts are removed; unproven name matches
+    are listed via render_remove_yourself and left on disk (SAFE-03/D-04).
 
     `bundles`, `zshrc_path`, `daemon_policy`, and `extra_policies` are required,
     unlike on the uninstall primitives they forward to. There the defaults are
@@ -557,7 +560,8 @@ def run_uninstall(
     is the only path that deletes the user's shell config, so the invariant is
     held by construction rather than by that argument staying true.
     """
-    paths = plan_uninstall(tools, default_bin_dir)
+    plan = plan_removal(tools, default_bin_dir)
+    paths = list(plan.removable)
     shimmed = [name for name, installed in guard_status(default_bin_dir).items() if installed]
     # Built once and held across the teardown: the preview below and the sweep
     # at the end act on these same objects, so nothing removed in between can
@@ -577,6 +581,8 @@ def run_uninstall(
     # not be told there is nothing to uninstall.
     if not paths and not shimmed and not tweaks:
         render_uninstall([], console)  # prints the "nothing to uninstall" line
+        # Even here the user learns what matched by name and was left alone.
+        render_remove_yourself(plan.yourself, console)
         # A daemon with no footprint left never appears in `tweaks`
         # (active_policies includes it only when policy_owned() is True) and
         # needs no confirm --
@@ -588,6 +594,7 @@ def run_uninstall(
         return []
     if paths:
         render_uninstall(paths, console)
+    render_remove_yourself(plan.yourself, console)
     if shimmed:
         console.print(f"The pip/npm ban will also be removed ({', '.join(shimmed)}).")
     if tweaks:

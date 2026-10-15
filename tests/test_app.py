@@ -3450,3 +3450,107 @@ def test_run_wizard_never_asks_sensitive_question_without_login_shell_action(
     assert summary.installed == ("rg",)
     assert prompter.questions == [_BATCH_QUESTION]
     assert "chsh -s" not in buf.getvalue()
+
+
+def _uninstall_kwargs(
+    tmp_path: Path, bin_dir: Path, confirm: Callable[[str], bool]
+) -> dict[str, object]:
+    from installer.shellrc import write_myshellrc
+
+    myshellrc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], myshellrc)
+    return {
+        "default_bin_dir": bin_dir,
+        "myshellrc_path": myshellrc,
+        "rc_paths": [],
+        "confirm": confirm,
+        "bundles": (),
+        "zshrc_path": tmp_path / ".zshrc",
+        "daemon_policy": None,
+        "extra_policies": (),
+    }
+
+
+def test_run_uninstall_deletes_only_proven_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+    from tests.test_uninstall import plant_removal_fixtures
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tools = plant_removal_fixtures(tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    console, buf = _console()
+    removed = run_uninstall(tools, console, **_uninstall_kwargs(tmp_path, bin_dir, lambda _m: True))  # type: ignore[arg-type]
+    opt_fd = tmp_path / ".local" / "opt" / "fd"
+    assert set(removed) == {bin_dir / "fd", opt_fd}
+    assert not (bin_dir / "fd").is_symlink()
+    assert not opt_fd.exists()
+    # Foreign files survive byte-identical.
+    assert (bin_dir / "ruff").read_text() == "uv-installed ruff"
+    assert (bin_dir / "yq").read_text() == "pip-installed yq"
+    assert (bin_dir / "drawio").read_text() == "shared drawio"
+    text = buf.getvalue()
+    assert str(bin_dir / "ruff") in text
+    assert str(bin_dir / "yq") in text
+    assert str(bin_dir / "drawio") in text
+
+
+def test_run_uninstall_with_only_unproven_matches_still_lists_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+    from tests.test_uninstall import plant_removal_fixtures
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tools = [t for t in plant_removal_fixtures(tmp_path) if t.id != "fd"]
+    bin_dir = tmp_path / ".local" / "bin"
+
+    def fail_confirm(_message: str) -> bool:
+        raise AssertionError("confirm must not be called with nothing proven")
+
+    console, buf = _console()
+    removed = run_uninstall(tools, console, **_uninstall_kwargs(tmp_path, bin_dir, fail_confirm))  # type: ignore[arg-type]
+    assert removed == []
+    text = buf.getvalue()
+    assert "Nothing to uninstall" in text
+    assert "remove them yourself" in text
+    assert str(bin_dir / "yq") in text
+
+
+def test_second_yes_run_deletes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from installer.app import run_uninstall
+    from tests.test_uninstall import plant_removal_fixtures
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tools = plant_removal_fixtures(tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    kwargs = _uninstall_kwargs(tmp_path, bin_dir, lambda _m: True)
+    console, _buf = _console()
+    first = run_uninstall(tools, console, **kwargs)  # type: ignore[arg-type]
+    assert first
+
+    def snapshot() -> dict[Path, bytes]:
+        return {
+            p.relative_to(tmp_path): p.read_bytes()
+            for p in sorted(tmp_path.rglob("*"))
+            if p.is_file() and not p.is_symlink()
+        }
+
+    def link_targets() -> dict[Path, str]:
+        return {
+            p.relative_to(tmp_path): str(p.readlink())
+            for p in sorted(tmp_path.rglob("*"))
+            if p.is_symlink()
+        }
+
+    before_files, before_links = snapshot(), link_targets()
+    console2, _buf2 = _console()
+    second = run_uninstall(
+        tools,
+        console2,
+        **kwargs,  # type: ignore[arg-type]
+    )
+    assert second == []
+    assert snapshot() == before_files
+    assert link_targets() == before_links
