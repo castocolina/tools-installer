@@ -39,6 +39,7 @@ Started 2026-10-14. Hourly resume cron: session job (deleted at run end).
 | 17 | Wave 1 executed cross-AI (pi router-env/my-coding), sequential: 17-01, 17-02, 17-03, 17-04, 17-05, 17-12 | — | — | All 6 SUMMARY present; gate `make validate` rc 0, `make test` 3467 passed / 4 skipped, coverage 95.87% | No fallback to gsd-executor needed |
 | 17 | Foreign commit 71eb54f (todo capture from another session) dropped STATE.md Blockers/Concerns and truncated one todo line | — (verifiable) | — | Orchestrator restored the section after wave 1 | Concurrent session on main; content only, no code |
 | 17 | W5 wave-1 CI oracle: macOS red 3 times (tests ran on macOS for the first time once 17-01 fixed pyright) | — (verifiable) | — | Gap plans 17-14 (dot-dot /tmp → /usr), 17-15 (race test writer waits for reader inside each window), 17-16 (daemon in-flight test gated by an Event), all via pi; attempt 4 run 38657359355 green on both jobs; PR #1 closed, branch deleted | Root-cause test fixes only, no skips; Q3 race reproduced on macOS so it was fixed |
+| 17 | Wave 2 executed cross-AI (pi): 17-06, 17-07 | — | — | Both SUMMARY present; gate `make validate` rc 0, `make test` 3498 passed / 4 skipped, coverage 96% | No fallback to gsd-executor needed |
 
 ## Deferred questions / human verification
 
@@ -52,3 +53,4 @@ Started 2026-10-14. Hourly resume cron: session job (deleted at run end).
 |------|------|------|---------|
 | 2026-10-14 ~16:20–16:50 | Claude session (gsd-planner revision, phase 17) | session limit until 16:50 | resumed the same agent via SendMessage after reset; no work lost |
 | 2026-10-14 19:07–19:17 | pi executor 17-02 (router-env → grok-4.7 402 usage balance exhausted) | 10 min | retried with a resume note; task 1 commit kept, partial task-2 edits reviewed and committed by pi |
+| 2026-10-14 21:39–22:28 | pi executor 17-07 (router-env 429) | 3 × 10 min | try 4 succeeded 22:48; partial uncommitted edits carried across tries, 3 commits |
