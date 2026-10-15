@@ -2339,6 +2339,12 @@ sha256 = "{digest}"
 kind = "app"
 url = "https://vendor.example/app.zip"
 app = "App.app"
+[[tool.method]]
+kind = "app"
+url = "https://vendor.example/app-{{ver}}.zip"
+version = "1.0"
+app = "App.app"
+sha256 = "{digest}"
 """
 
     registry = _write_registry(tmp_path, content)
@@ -2365,6 +2371,7 @@ app = "App.app"
     assert ("mixed", 1, "github_release") in entries
     assert ("mixed", 3, "tarball") in entries
     assert ("mixed", 5, "app") in entries
+    assert ("mixed", 6, "app") not in entries
     text = format_report(report)
     assert "Unverified at install (no checksum file, pinned sha256 or GitHub digest):" in text
     assert "- `mixed` method 1 (github_release):" in text

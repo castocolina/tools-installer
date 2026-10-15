@@ -23,7 +23,7 @@ import unicodedata
 import urllib.request
 import zipfile
 from collections import defaultdict
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path, PurePosixPath
@@ -33,6 +33,7 @@ from urllib.error import HTTPError, URLError
 from installer.atomic import atomic_write_text
 from installer.checksums import expected_sha256, sha256_file
 from installer.download import (
+    UNPINNED_REASON,
     DownloadTarget,
     ExecContext,
     pinned_url,
@@ -112,6 +113,7 @@ class Finding:
     member: str | None = None
     platforms: tuple[str, ...] = ()
     sha256: str | None = None
+    latest_tag: str | None = None
 
 
 @dataclass(frozen=True)
@@ -226,7 +228,13 @@ def _resolve_app_target(method: Method) -> DownloadTarget:
     asset = PurePosixPath(url).name
     sha256_pin = method.params.get("sha256")
     pin = sha256_pin if isinstance(sha256_pin, str) and sha256_pin else None
-    return DownloadTarget(url=url, member=member, asset=asset, sha256=pin)
+    return DownloadTarget(
+        url=url,
+        member=member,
+        asset=asset,
+        sha256=pin,
+        unverified_reason=None if pin else UNPINNED_REASON,
+    )
 
 
 def _method_applies(method: Method, platform: Platform) -> bool:
@@ -316,6 +324,7 @@ def _newer_stable_findings(
                         url=rendered,
                         status="drift",
                         reason=f"newer stable release {tag} (pinned {version})",
+                        latest_tag=tag,
                     )
                 )
             elif outdated is None:
@@ -398,11 +407,7 @@ def _collect_targets(
                         )
                         continue
 
-                    if target.unverified_reason or (
-                        method.kind == "app"
-                        and isinstance(method.params.get("url"), str)
-                        and "{ver}" not in str(method.params.get("url"))
-                    ):
+                    if target.unverified_reason:
                         key_uv = (tool.id, method_index, method.kind)
                         unverified_assets.setdefault(key_uv, set()).add(target.asset)
 
@@ -848,14 +853,7 @@ def check_registry(
                 None,
             )
 
-    merged: dict[tuple[str, str, str, str], Finding] = {}
-    for finding in (*pre_findings, *newer_findings, *findings.values()):
-        key = (finding.tool_id, finding.url, finding.member or "", finding.reason)
-        merged[key] = finding
-    ordered = sorted(
-        merged.values(),
-        key=lambda f: (f.tool_id, f.url, f.member or "", f.platforms),
-    )
+    ordered = _merge_findings((*pre_findings, *newer_findings, *findings.values()))
 
     blocked: str | None = None
     if rate_limit_code is not None:
@@ -1053,7 +1051,17 @@ def apply_registry_edits(text: str, edits: Sequence[RegistryEdit]) -> str:
     return new_text
 
 
-_NEWER_STABLE_RE = re.compile(r"^newer stable release (\S+) \(pinned")
+def _merge_findings(findings: Iterable[Finding]) -> tuple[Finding, ...]:
+    merged: dict[tuple[str, str, str, str], Finding] = {}
+    for finding in findings:
+        key = (finding.tool_id, finding.url, finding.member or "", finding.reason)
+        merged[key] = finding
+    return tuple(
+        sorted(
+            merged.values(),
+            key=lambda item: (item.tool_id, item.url, item.member or "", item.platforms),
+        )
+    )
 
 
 def _is_pinned_method(method: Method) -> bool:
@@ -1105,10 +1113,9 @@ def _auto_bump_candidate(
     for finding in findings:
         if finding.tool_id != tool_id or finding.status != "drift":
             continue
-        match = _NEWER_STABLE_RE.match(finding.reason)
-        if match is None:
+        tag = finding.latest_tag
+        if tag is None:
             continue
-        tag = match.group(1)
         tags.append(tag)
         url_by_tag[tag] = finding.url
     if not tags:
@@ -1155,13 +1162,10 @@ def _first_failed_finding(report: Report) -> tuple[str, str]:
 
 def _pinned_finding_member(method: Method) -> str | None:
     if method.kind == "app":
-        app = method.params.get("app")
-        if not isinstance(app, str) or not app:
-            return None
-        cli = method.params.get("cli")
-        if isinstance(cli, str) and cli:
-            return f"{app}/{cli}"
-        return app
+        version = method.params.get("version")
+        if isinstance(version, str) and version:
+            return _resolve_app_target(_method_at_version(method, version)).member
+        return _resolve_app_target(method).member
     member = method.params.get("member")
     return member if isinstance(member, str) else None
 
@@ -1234,16 +1238,8 @@ def _finalize_report_after_bumps(
                 reason=f"bump to {bump.new_version} not applied: {reason}",
             )
         )
-    merged: dict[tuple[str, str, str, str], Finding] = {}
-    for finding in findings:
-        key = (finding.tool_id, finding.url, finding.member or "", finding.reason)
-        merged[key] = finding
-    ordered = sorted(
-        merged.values(),
-        key=lambda item: (item.tool_id, item.url, item.member or "", item.platforms),
-    )
     return Report(
-        findings=tuple(ordered),
+        findings=_merge_findings(findings),
         not_checkable=initial.not_checkable,
         notes=tuple(notes),
         blocked=initial.blocked,
