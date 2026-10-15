@@ -256,6 +256,8 @@ run_setup_as_tester() {
 eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"
 export PATH=\"\$HOME/.local/bin:\$PATH\"
 export COLUMNS=2000
+# Container has no FUSE device; extract-and-run stands in for a desktop that mounts AppImages.
+export APPIMAGE_EXTRACT_AND_RUN=1
 if [[ -r \"\$HOME/.github-token\" ]]; then export GITHUB_TOKEN=\"\$(cat \"\$HOME/.github-token\")\"; fi
 cd /home/tester/workspace
 uv run --isolated --no-dev setup.py ${args}

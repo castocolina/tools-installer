@@ -2407,6 +2407,17 @@ def test_audit_fix_e7_drawio_linux_release_is_checksummed() -> None:
     assert all(m.params.get("checksum") == "Files-SHA256-Hashes.txt" for m in linux)
 
 
+def test_drawio_desktop_declares_its_smoke_argv() -> None:
+    drawio = _tools_by_id()["drawio-desktop"]
+    linux = [
+        m
+        for m in drawio.methods
+        if m.kind == "github_release" and m.os == ("debian", "arch", "fedora")
+    ]
+    expected = ["--ozone-platform=headless", "--version"]
+    assert all(m.params.get("smoke_argv") == expected for m in linux)
+
+
 def test_audit_fix_e10_glab_has_native_fallbacks() -> None:
     glab = _tools_by_id()["glab"]
     native = {m.kind: m for m in glab.methods if m.kind in ("dnf", "pacman", "apt")}

@@ -2905,6 +2905,7 @@ repo = "jgraph/drawio-desktop"
 asset = "drawio-x86_64-{ver}.AppImage"
 member = "drawio"
 checksum = "Files-SHA256-Hashes.txt"
+smoke_argv = ["--ozone-platform=headless", "--version"]
 raw = true
 [[tool.method]]
 kind = "github_release"
@@ -2914,6 +2915,7 @@ repo = "jgraph/drawio-desktop"
 asset = "drawio-arm64-{ver}.AppImage"
 member = "drawio"
 checksum = "Files-SHA256-Hashes.txt"
+smoke_argv = ["--ozone-platform=headless", "--version"]
 raw = true
 # macOS app pins are bumped by `make verify-registry ARGS="--write"` when GitHub has a newer release.
 [[tool.method]]
