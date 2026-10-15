@@ -6,15 +6,15 @@ current_phase: 18
 current_phase_name: Registry truth and drift guard
 status: executing
 stopped_at: "Phase 17: all 20 plans executed; final gates + CI oracle green; e2e re-run pending"
-last_updated: "2026-10-15T16:49:13.638Z"
+last_updated: "2026-10-15T21:01:29.168Z"
 last_activity: 2026-10-14
 last_activity_desc: Phase 17 execution started
-state_head: 9da4505001a0d212d587b997b5f850d72cd37371
+state_head: 5a2ddde0c52e346c70eb113d1e13065458bf30eb
 progress:
-  total_phases: 10
+  total_phases: 11
   completed_phases: 0
   total_plans: 41
-  completed_plans: 20
+  completed_plans: 40
   percent: 0
 ---
 
@@ -74,6 +74,10 @@ Recent decisions affecting current work:
 - [2026-10-15] [catalog] Add iTerm2 macOS-only entry after tool-onboarding refactor — [todo file](.planning/todos/pending/2026-10-15-add-iterm2-macos-only-entry-after-tool-onboarding-refactor.md)
 - [2026-10-15] [catalog] Adopt Apple Containers runtime; colima stays compose path — [todo file](.planning/todos/pending/2026-10-15-adopt-apple-containers-runtime-colima-stays-compose-path.md)
 - [2026-10-15] [catalog] Onboard Bruno API client via the tool-onboarding skill (nice to have) — [todo file](.planning/todos/pending/2026-10-15-onboard-bruno-api-client-via-the-tool-onboarding-skill.md)
+
+### Roadmap Evolution
+
+- Phase 26 added: Commit and push quality hooks (user request 2026-10-15; runs last in the v0.50.0 autonomous run)
 
 ## Deferred Items
 

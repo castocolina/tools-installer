@@ -22,7 +22,7 @@
 
 **Phase Numbering:**
 
-- Integer phases (17–25): Planned milestone work
+- Integer phases (17–26): Planned milestone work
 - Decimal phases (e.g. 17.1): Urgent insertions (marked with INSERTED)
 
 - [ ] **Phase 17: Stop the bleeding** - Fix host hazards H1–H7 and the false-success, crash and dead-route bugs; CI green on both OSes with the PR check required
@@ -35,6 +35,7 @@
 - [ ] **Phase 24: Onboarding through the skill and e2e** - herdr and Alacritty onboarded through the skill; three-distro container e2e with leftover checks; real-host UAT
 - [ ] **Phase 24.1: Onboard Neovim through the tool-onboarding skill** (INSERTED) - nvim in the catalog, no-reboot path on Bazzite
 - [ ] **Phase 25: Lean** - Delete ~2,000 lines of dead code and put app composition under pyright and the coverage gate
+- [ ] **Phase 26: Commit and push quality hooks** - Fast checks on commit, the full test suite on push, installed by `make install`
 
 ## Phase Details
 
@@ -245,10 +246,24 @@ Plans (numbered in creation order; W = execution wave):
 
 **Plans**: TBD
 
+### Phase 26: Commit and push quality hooks
+
+**Goal**: The local git hooks enforce the AGENTS.md gate: fast static checks on every commit and the full test suite on every push, installed by `make install`, so a red suite never reaches the remote.
+**Depends on**: Phase 25 (added 2026-10-15 at the user's request, runs at the end of the v0.50.0 autonomous run)
+**Requirements**: TBD (spec at run time)
+**Success Criteria** (what must be TRUE):
+
+  1. A commit runs the fast checks (ruff check, ruff format --check, pyright, bandit, vulture, shellcheck) and a push runs `make test` (pytest -n auto with the 90% coverage gate); which check runs at which stage is decided and documented.
+  2. `make install` installs both hook types (`default_install_hook_types: [pre-commit, pre-push]`), and a test pins the hook configuration.
+  3. `.claude/dev-environment.md` documents the split; CI (`ci.yml`, ubuntu + macOS) stays the remote backstop and is green.
+
+**Context (2026-10-15):** today pre-commit runs only at commit and runs no tests; `.git/hooks` has only `pre-commit`; CI runs `make validate && make test` on push to main and on PRs. pylint is not added: ruff covers its rules.
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-17 → (18 ∥ 19) → 20 → 21 → 22 → 23 → 24 → 25. Phases 18 and 19 both need only 17 and may run in parallel; 22 needs 19 and 21; 23 needs 20 and 22; 24 needs 22 and 23; 25 runs last.
+17 → (18 ∥ 19) → 20 → 21 → 22 → 23 → 24 → 24.1 → 25 → 26. Phases 18 and 19 both need only 17 and may run in parallel; 22 needs 19 and 21; 23 needs 20 and 22; 24 needs 22 and 23; 25 runs after the rewrites; 26 (added 2026-10-15) runs last.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -262,6 +277,7 @@ Plans (numbered in creation order; W = execution wave):
 | 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 0/TBD | Not started | - |
 | 25. Lean | 0/TBD | Not started | - |
+| 26. Commit and push quality hooks | 0/TBD | Not started | - |
 
 ## Backlog
 
