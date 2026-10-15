@@ -79,6 +79,7 @@ Started 2026-10-14. Hourly resume cron: session job (deleted at run end).
 | 18 | Wave 3 executed cross-AI (pi), 18-08 → 18-10 → 18-16, each on try 1 (14:31–14:50) | — (verifiable) | — | 9 commits; gate: validate rc 0, test 3698 passed / 4 skipped, coverage 95.99%; 0 new suppressions; pi's edit tool truncated large test files in 3 plans (recovered by patch scripts) → executor prompt now requires small hunks / out-of-repo patch scripts plus a wc/diff-stat check | Recurring executor-tool hazard, not product code |
 | 18 | Wave 4 executed cross-AI (pi), 18-09 → 18-20, each on try 1 (14:51–15:06) | — (verifiable) | — | 6 commits; gate: validate rc 0, test 3735 passed / 4 skipped, coverage 95.99%; 0 new suppressions; one more truncation of tests/test_download.py in 18-09, restored from git and re-applied via a deleted patch script | Executor-tool hazard already mitigated in the prompt |
 | 18 | Wave 5 executed cross-AI (pi), 18-12 → 18-19, each on try 1 (15:07–15:26) | — (verifiable) | — | 7 commits; gate: validate rc 0, test 3784 passed / 4 skipped, coverage 95.33%; 0 new suppressions; new scripts/verify_registry module ~79% covered (watch at code review) | Suite gate 90% holds |
+| 18 | Wave 6 executed cross-AI (pi), 18-11 → 18-17, each on try 1 (15:28–15:46) | — (verifiable) | — | 5 commits (18-17 landed its 3 intertwined tasks in one commit, recorded); gate: validate rc 0, test 3831 passed / 4 skipped, coverage 95.60%; 0 new suppressions | Coherent-commit rule allows one self-contained change |
 
 ## Deferred questions / human verification
 
