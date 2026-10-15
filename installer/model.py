@@ -37,6 +37,39 @@ METHOD_KINDS = (
     "cask",
 )
 
+# Later phases extend a kind's keys by editing its entry (Phases 22 and 24).
+METHOD_PARAMS: dict[str, frozenset[str]] = {
+    "script": frozenset({"url", "shell", "bin_dir", "env", "detect_path", "version_file", "args"}),
+    "node": frozenset({"npm_pkg", "co_install", "allow_build", "min_node", "smoke", "versions"}),
+    "uv-tool": frozenset({"pypi_pkg"}),
+    "sdkman": frozenset({"candidate", "bin_dir", "version"}),
+    "host_setup": frozenset({"setup_id"}),
+    "skill_pack": frozenset(),
+    "github_release": frozenset(
+        {
+            "repo",
+            "asset",
+            "checksum",
+            "member",
+            "strip",
+            "raw",
+            "archive",
+            "bin_name",
+            "bin_dir",
+        }
+    ),
+    "tarball": frozenset(
+        {"url", "member", "strip", "bin_name", "archive", "bin_dir", "version", "sha256"}
+    ),
+    "app": frozenset({"url", "app", "cli", "cli_name", "version", "sha256"}),
+    "dnf": frozenset({"package"}),
+    "apt": frozenset({"package"}),
+    "pacman": frozenset({"package"}),
+    "rpm_ostree": frozenset({"package"}),
+    "brew": frozenset({"formula", "detect_path", "min_os_version", "bin_dir"}),
+    "cask": frozenset({"cask", "app", "min_os_version"}),
+}
+
 # Multi-hook post-install action names. Distinct from `Tool.postinstall` above:
 # `postinstall` selects a single hook from POSTINSTALL_HOOK_NAMES by name for a
 # package-owned side effect (e.g. registering an MCP server); `post_install`
@@ -664,6 +697,10 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
                 raise ValueError(f"tool '{row['id']}': method 'arch' must be a list of strings")
             arch_targets = tuple(raw_arch)
             params = {k: v for k, v in entry.items() if k not in ("kind", "os", "arch")}
+            unknown = set(params) - METHOD_PARAMS[kind]
+            if unknown:
+                key = sorted(unknown)[0]
+                raise ValueError(f"tool '{row['id']}': method '{kind}' has unknown key '{key}'")
             if kind == "node":
                 npm_pkg = params.get("npm_pkg")
                 if not isinstance(npm_pkg, str) or not npm_pkg:

@@ -4,6 +4,8 @@ import pytest
 
 from installer.enums import Audience, Priority, Tier
 from installer.model import (
+    METHOD_KINDS,
+    METHOD_PARAMS,
     POSTINSTALL_HOOK_NAMES,
     SKILL_HARNESSES,
     Method,
@@ -800,7 +802,82 @@ def test_node_method_rejects_smoke_empty_string(tmp_path: Path) -> None:
         load_tools(_node_registry(tmp_path, 'smoke = ""'))
 
 
-def test_non_node_method_leaves_new_keys_untouched(tmp_path: Path) -> None:
+def test_unknown_method_key_names_the_tool_and_key(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "rg"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "x/y"
+asset = "a"
+member = "rg"
+formula = "x"
+""",
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"tool 'rg': method 'github_release' has unknown key 'formula'",
+    ):
+        load_tools(manifest)
+
+
+def test_key_valid_for_another_kind_is_rejected(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "rg"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "brew"
+formula = "rg"
+npm_pkg = "x"
+""",
+    )
+    with pytest.raises(ValueError, match=r"has unknown key 'npm_pkg'"):
+        load_tools(manifest)
+
+
+def test_kind_only_method_loads(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "rg"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "brew"
+""",
+    )
+    tools = load_tools(manifest)
+    assert tools[0].methods[0].params == {}
+
+
+def test_method_params_covers_every_kind() -> None:
+    assert set(METHOD_PARAMS) == set(METHOD_KINDS)
+    assert METHOD_PARAMS["skill_pack"] == frozenset()
+    for allowed in METHOD_PARAMS.values():
+        assert "kind" not in allowed
+        assert "os" not in allowed
+        assert "arch" not in allowed
+
+
+def test_shipped_registry_uses_only_allowed_method_keys() -> None:
+    registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+    tools = load_tools(registry)
+    for tool in tools:
+        for method in tool.methods:
+            allowed = METHOD_PARAMS[method.kind]
+            assert set(method.params) <= allowed, (tool.id, method.kind, method.params)
+
+
+def test_method_with_a_key_outside_its_kind_is_rejected(tmp_path: Path) -> None:
     manifest = _write(
         tmp_path,
         """
@@ -818,13 +895,52 @@ min_node = 22
 smoke = "not-a-check"
 """,
     )
-    tools = load_tools(manifest)
-    params = tools[0].methods[0].params
-    assert params["co_install"] == "not-validated"
-    assert params["allow_build"] == 1
-    assert params["versions"] == "nope"
-    assert params["min_node"] == 22
-    assert params["smoke"] == "not-a-check"
+    with pytest.raises(ValueError, match=r"has unknown key 'allow_build'"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("os", "macos", "method 'os' must be a list of strings"),
+        ("arch", "arm64", "method 'arch' must be a list of strings"),
+    ],
+)
+def test_string_os_and_arch_still_fail_after_the_closed_key_check(
+    tmp_path: Path, field: str, value: str, message: str
+) -> None:
+    manifest = _write(
+        tmp_path,
+        f"""
+[[tool]]
+id = "rg"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "brew"
+formula = "x"
+{field} = "{value}"
+""",
+    )
+    with pytest.raises(ValueError, match=message):
+        load_tools(manifest)
+
+    manifest_ok = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "rg"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "brew"
+formula = "x"
+os = ["macos"]
+arch = ["arm64"]
+""",
+    )
+    tools = load_tools(manifest_ok)
+    assert tools[0].methods[0].params == {"formula": "x"}
 
 
 def test_postinstall_field_parses_with_a_known_hook_name(tmp_path: Path) -> None:
