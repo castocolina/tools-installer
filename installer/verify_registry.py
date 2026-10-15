@@ -1,4 +1,8 @@
-"""Read-only registry drift check over downloadable install methods."""
+"""Read-only registry drift check over downloadable install methods.
+
+Exit codes: 0 ok; 1 confirmed drift; 2 inconclusive/blocked or issue upsert failed;
+64 ``--candidate`` usage error; 70 internal error; 73 registry write refused.
+"""
 
 from __future__ import annotations
 
@@ -9,9 +13,12 @@ import http.client
 import json
 import os
 import re
+import shutil
+import sys
 import tarfile
 import tempfile
 import tomllib
+import traceback
 import unicodedata
 import urllib.request
 import zipfile
@@ -47,6 +54,7 @@ from installer.versions import (
 
 EXIT_USAGE = 64
 EXIT_WRITE_REFUSED = 73
+EXIT_INTERNAL = 70
 
 EditKey = Literal["verified", "version", "sha256"]
 
@@ -54,6 +62,7 @@ __all__ = [
     "CHECKABLE_KINDS",
     "EXIT_USAGE",
     "EXIT_WRITE_REFUSED",
+    "EXIT_INTERNAL",
     "Finding",
     "Probe",
     "RegistryEdit",
@@ -1618,6 +1627,17 @@ def github_token(gh: Callable[[list[str]], str]) -> str | None:
     return text or None
 
 
+_EXIT_EPILOG = """
+Exit codes:
+  0  ok
+  1  confirmed drift
+  2  inconclusive/blocked or issue upsert failed
+  64 --candidate usage error
+  70 internal error
+  73 registry write refused
+"""
+
+
 def default_probe(token: str | None = None) -> Probe:
     fetch = functools.partial(urlopen_fetch, token=token)
     cached_release = functools.cache(functools.partial(resolve_github_release, fetch=fetch))
@@ -1635,16 +1655,12 @@ def default_probe(token: str | None = None) -> Probe:
     def download(url: str, dest: Path) -> None:
         request = urllib.request.Request(url)
         with urllib.request.urlopen(request, timeout=20) as resp, dest.open("wb") as handle:
-            while True:
-                chunk = resp.read(1024 * 1024)
-                if not chunk:
-                    break
-                handle.write(chunk)
+            shutil.copyfileobj(resp, handle)
 
     return Probe(release=cached_release, head=head, download=download)
 
 
-def main(
+def _run_verify_registry(
     argv: Sequence[str] | None = None,
     *,
     probe: Probe | None = None,
@@ -1652,7 +1668,9 @@ def main(
     today: date | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(
-        description="Verify registry download targets against upstream."
+        description="Verify registry download targets against upstream.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_EXIT_EPILOG.strip(),
     )
     parser.add_argument("--registry", type=Path, default=REGISTRY)
     parser.add_argument("--state", type=Path, default=None)
@@ -1679,12 +1697,17 @@ def main(
     registry_text = args.registry.read_text(encoding="utf-8")
     tools = load_tools(args.registry)
     state = _load_state(state_path)
+    explicit, err = _parse_explicit_candidates(args.candidate, tools)
+    if err is not None:
+        print(err, file=sys.stderr)
+        return EXIT_USAGE
+    if explicit and not args.write:
+        print("--candidate requires --write", file=sys.stderr)
+        return EXIT_USAGE
     gh_runner = gh if gh is not None else functools.partial(run_output, timeout=60)
     if probe is None:
         token = github_token(gh_runner)
         if token is None:
-            import sys
-
             print(
                 "note: unauthenticated GitHub API (60 requests/hour); "
                 "run gh auth login or set GH_TOKEN",
@@ -1693,20 +1716,9 @@ def main(
         active_probe = default_probe(token)
     else:
         active_probe = probe
-    import sys
-
-    def _persist_state(current: Mapping[str, str]) -> None:
-        _save_state(state_path, current)
-
+    _persist_state = functools.partial(_save_state, state_path)
     initial_report = check_registry(tools, active_probe, state, on_verified=_persist_state)
     report = initial_report
-    if args.candidate:
-        explicit, err = _parse_explicit_candidates(args.candidate, tools)
-        if err is not None:
-            print(err, file=sys.stderr)
-            return EXIT_USAGE
-    else:
-        explicit = {}
     if args.write:
         try:
             bumps = _plan_bumps(tools, initial_report, active_probe, explicit)
@@ -1726,19 +1738,31 @@ def main(
         except RegistryWriteError as exc:
             print(str(exc), file=sys.stderr)
             return EXIT_WRITE_REFUSED
-    elif explicit:
-        print("--candidate requires --write", file=sys.stderr)
-        return EXIT_USAGE
     exit_code = report.exit_code
     if args.issue and report.exit_code == 1:
         try:
             upsert_drift_issue(format_report(report, include_passed=False), gh_runner)
-        except CommandError as exc:
+        except (CommandError, ValueError, LookupError, TypeError) as exc:
             print(str(exc), file=sys.stderr)
             exit_code = 2
     print(format_report(report), end="")
     _save_state(state_path, state)
     return exit_code
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    probe: Probe | None = None,
+    gh: Callable[[list[str]], str] | None = None,
+    today: date | None = None,
+) -> int:
+    try:
+        return _run_verify_registry(argv, probe=probe, gh=gh, today=today)
+    except Exception as exc:
+        print(f"verify-registry: internal error: {exc!r}", file=sys.stderr)
+        traceback.print_exc()
+        return EXIT_INTERNAL
 
 
 if __name__ == "__main__":

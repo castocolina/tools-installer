@@ -23,6 +23,7 @@ import pytest
 from installer.model import load_tools
 from installer.run import CommandError
 from installer.verify_registry import (
+    EXIT_INTERNAL,
     EXIT_USAGE,
     EXIT_WRITE_REFUSED,
     Finding,
@@ -3198,6 +3199,119 @@ def test_candidate_for_an_unknown_or_unpinned_tool_is_an_error(
         assert code == EXIT_USAGE
         assert err.strip()
         assert registry.read_bytes() == before
+
+
+def test_candidate_usage_errors_cost_no_network(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from installer import verify_registry as vr
+
+    registry = _difftastic_registry(tmp_path, prefix_template=False)
+    counts = {"release": 0, "head": 0, "download": 0}
+
+    def release_fn(_repo: str) -> Release:
+        counts["release"] += 1
+        return _release(assets=_canned_difftastic_assets())
+
+    def head_fn(_url: str) -> str:
+        counts["head"] += 1
+        return 'etag:"1"'
+
+    def download_fn(_url: str, dest: Path) -> None:
+        counts["download"] += 1
+        dest.write_bytes(b"")
+
+    probe = Probe(release=release_fn, head=head_fn, download=download_fn)
+    state = str(tmp_path / "s.json")
+    capsys.readouterr()
+    code_a = vr.main(
+        ["--registry", str(registry), "--state", state, "--write", "--candidate", "nope=1"],
+        probe=probe,
+    )
+    capsys.readouterr()
+    code_b = vr.main(
+        ["--registry", str(registry), "--state", state, "--candidate", "difftastic=1"],
+        probe=probe,
+    )
+    assert code_a == EXIT_USAGE
+    assert code_b == EXIT_USAGE
+    assert counts == {"release": 0, "head": 0, "download": 0}
+
+
+def test_an_unexpected_error_exits_70_not_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _difftastic_registry(tmp_path, prefix_template=True)
+    assets = _canned_difftastic_assets()
+
+    def head(_url: str) -> str:
+        raise RuntimeError("boom")
+
+    def download(_u: str, dest: Path) -> None:
+        dest.write_bytes(b"")
+
+    probe = Probe(
+        release=lambda _r: _release(assets=assets),
+        head=head,
+        download=download,
+    )
+    code = main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json")],
+        probe=probe,
+    )
+    captured = capsys.readouterr()
+    assert code == EXIT_INTERNAL
+    assert "internal error" in captured.err
+    assert "boom" in captured.err
+
+
+def test_malformed_gh_issue_list_is_an_upsert_failure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _drift_registry(tmp_path)
+    assets = _canned_difftastic_assets()
+    gh = _GhRecorder(list_json="not json")
+    code = main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--issue"],
+        probe=_probe(_release(assets=assets), assets),
+        gh=gh,
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.err.strip()
+
+
+def test_gh_command_failure_during_upsert_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _drift_registry(tmp_path)
+    assets = _canned_difftastic_assets()
+
+    class _GhCreateFails:
+        def __call__(self, cmd: list[str]) -> str:
+            if cmd[:3] == ["gh", "issue", "create"]:
+                raise CommandError(["gh", "issue", "create"], 1)
+            if cmd[:3] == ["gh", "issue", "list"]:
+                return "[]"
+            return ""
+
+    code = main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--issue"],
+        probe=_probe(_release(assets=assets), assets),
+        gh=_GhCreateFails(),
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.err.strip()
+
+
+def test_help_lists_the_exit_codes(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--help"])
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    for code in ("64", "70", "73"):
+        assert code in out
 
 
 class _GhRecorder:
