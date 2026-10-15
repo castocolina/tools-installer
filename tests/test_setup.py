@@ -3408,3 +3408,53 @@ def test_headless_run_exits_1_on_failure(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.setattr(setup, "_verify_and_clean", noop)
     monkeypatch.setattr(setup, "_sync_terminals_and_report", noop)
     assert setup.main(["--all", "--yes"]) == 1
+
+
+def test_all_yes_with_a_damaged_settings_json_warns_before_acting(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WR-05: the headless --all route prints the D-11 settings warning to
+    stderr before it wires anything, and never rewrites the damaged file."""
+    buffer = io.StringIO()
+    summary = Summary(installed=("fd",), already=(), failed=(), no_method=())
+    _noninteractive_all_fixture(monkeypatch, buffer, summary)
+    path = tmp_path / "settings.json"
+    path.write_bytes(b'{"link_mode": ')
+    monkeypatch.setattr("installer.settings.default_settings_path", lambda: path)
+    monkeypatch.setattr(setup, "default_settings_path", lambda: path, raising=False)
+
+    assert setup.main(["--all", "--yes"]) == 0
+
+    err = capsys.readouterr().err
+    assert "Ignoring invalid settings file" in err
+    assert str(path) in err
+    assert path.read_bytes() == b'{"link_mode": '
+
+
+def test_non_tty_doctor_with_a_damaged_settings_json_warns_before_acting(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WR-05: the non-TTY --doctor route prints the settings warning too."""
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup.sys, "stdin", _NonTtyStdin())
+
+    def no_dev_tty(_path: str, _flags: int) -> int:
+        raise OSError("no controlling terminal")
+
+    monkeypatch.setattr(setup.os, "open", no_dev_tty)
+    ran: list[int] = []
+
+    def fake_run_doctor(*_args: object, **_kwargs: object) -> None:
+        ran.append(1)
+
+    monkeypatch.setattr(setup, "run_doctor", fake_run_doctor)
+    path = tmp_path / "settings.json"
+    path.write_bytes(b'{"link_mode": ')
+
+    assert setup.main(["--doctor"]) == 0
+
+    assert ran == [1]
+    err = capsys.readouterr().err
+    assert "Ignoring invalid settings file" in err
+    assert str(path) in err
+    assert path.read_bytes() == b'{"link_mode": '

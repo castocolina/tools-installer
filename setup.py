@@ -108,6 +108,10 @@ _SHELLRC = Path.home() / ".shellrc"
 _ZSHRC = zshrc_path(Path.home(), os.environ)
 _RC_PATHS = [_ZSHRC, Path.home() / ".bashrc"]
 _SHELL = os.environ.get("SHELL", "")
+# WR-05: a dedicated stderr console, separate from the monkeypatch-able
+# `Console` the routes build, so headless routes can announce the settings
+# warning without a test double rerouting it.
+_WARN_CONSOLE = Console(stderr=True)
 # The daemon's own artifacts, computed exactly like _MYSHELLRC (Path.home()-derived
 # at import time): the LaunchAgent plist, its log file, the wrapper script it
 # invokes, and the "decided" ownership record. _DAEMON_STATE_PATH deliberately
@@ -1280,9 +1284,15 @@ def _run_interactive_wizard(
     return code
 
 
-def _settings_store(link_mode_option: str | None) -> tuple[SettingsStore, bool]:
+def _settings_store(
+    link_mode_option: str | None, *, announce_warning: bool = False
+) -> tuple[SettingsStore, bool]:
     path = default_settings_path()
     loaded = load_settings(path)
+    # WR-05: the TUI shows the warning via startup_warning; every headless
+    # route announces it here instead, before it acts on the default mode.
+    if announce_warning and loaded.warning:
+        _WARN_CONSOLE.print(loaded.warning, style="yellow")
     stored = loaded.settings.link_mode
     mode = resolve_link_mode(flag=link_mode_option, stored=stored)
     needs_choice = link_mode_needs_choice(flag=link_mode_option, stored=stored)
@@ -1304,8 +1314,9 @@ def _session_exit_code(app: UnifiedApp) -> int:
 def _run_doctor(console: Console) -> int:
     tools = load_tools(_REGISTRY)
     platform = detect()
-    store, _needs_choice = _settings_store(None)
-    if _has_controlling_tty():
+    tty = _has_controlling_tty()
+    store, _needs_choice = _settings_store(None, announce_warning=not tty)
+    if tty:
         with _stdin_on_tty():
             app = _build_app(tools, platform, initial_view="doctor", settings=store)
             app.run()
@@ -1334,8 +1345,9 @@ def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
     # confusion the doctor/fix split removes.
     tools = load_tools(_REGISTRY)
     platform = detect()
-    store, needs_choice = _settings_store(link_mode_option)
-    if _has_controlling_tty() and link_mode_option is None:
+    wired_tui = _has_controlling_tty() and link_mode_option is None
+    store, needs_choice = _settings_store(link_mode_option, announce_warning=not wired_tui)
+    if wired_tui:
         with _stdin_on_tty():
             app = _build_app(
                 tools,
@@ -1466,7 +1478,7 @@ def main(argv: list[str]) -> int:
                 app.run()
             return _session_exit_code(app)
         if options.guard:
-            store, _needs_choice = _settings_store(options.link_mode)
+            store, _needs_choice = _settings_store(options.link_mode, announce_warning=True)
             return _run_guard(
                 console,
                 remove=False,
@@ -1485,7 +1497,11 @@ def main(argv: list[str]) -> int:
     tools = load_tools(_REGISTRY)
     platform = detect()
     prompter = CallbackPrompter(ask_checkbox=_ask_checkbox, ask_confirm=_ask_confirm)
-    store, needs_choice = _settings_store(options.link_mode)
+    # --all/--categories is the headless install route (it never opens the
+    # wizard); the plain-TTY route shows the warning in the TUI instead.
+    store, needs_choice = _settings_store(
+        options.link_mode, announce_warning=bool(options.all or options.categories)
+    )
     if not options.all and not options.categories:
         return _run_interactive_wizard(
             tools,
