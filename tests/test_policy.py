@@ -324,3 +324,188 @@ def test_link_mode_move_keeps_foreign_rc_bytes_identical(tmp_path: Path) -> None
         copy.write_text(text)
         remove_source_block(copy)
         assert copy.read_text().rstrip("\n") == foreign.rstrip("\n")
+
+
+def test_move_link_mode_restores_the_old_block_when_apply_fails(tmp_path: Path) -> None:
+    mode = {"v": "centralized"}
+    ban, tweak = _mode_policies(tmp_path, mode)
+    ban.apply()
+    tweak.apply()
+    myshellrc = tmp_path / ".myshellrc"
+    zshrc = tmp_path / ".zshrc"
+    bashrc = tmp_path / ".bashrc"
+
+    def failing_apply() -> PolicyResult:
+        if mode["v"] == "split":
+            raise OSError("no space left on device")
+        return tweak_policy(
+            next(b for b in BUNDLES if b.id == "claude-skip"),
+            rc_path=myshellrc,
+        ).apply()
+
+    moved_tweak = Policy(
+        id=tweak.id,
+        label=tweak.label,
+        description=tweak.description,
+        active=tweak.active,
+        apply=failing_apply,
+        remove=tweak.remove,
+        link_mode_aware=True,
+    )
+
+    report = move_link_mode([ban, moved_tweak], "split", _setter(mode), old_mode="centralized")
+
+    assert mode["v"] == "split"
+    statuses = {entry.policy_id: entry.status for entry in report}
+    assert statuses == {"ban": "moved", "tweak:claude-skip": "failed"}
+    failed = next(entry for entry in report if entry.status == "failed")
+    assert "no space left on device" in failed.detail
+    assert "restored" in failed.detail
+    # the tweak's old block is back in the old file, the ban's is gone (it moved)
+    assert "tools-installer tweak:claude-skip" in myshellrc.read_text()
+    assert "tools-installer ban" not in myshellrc.read_text()
+    # the ban still moved
+    assert "tools-installer ban" not in myshellrc.read_text()
+    assert "tools-installer ban" in zshrc.read_text()
+    assert "tools-installer ban" in bashrc.read_text()
+
+
+def test_move_link_mode_restores_everything_when_saving_the_mode_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.settings import SettingsStore
+
+    state_path = tmp_path / "state" / "settings.json"
+    state_path.parent.mkdir(parents=True)
+    store = SettingsStore(state_path, link_mode="centralized")
+    ban, tweak = _mode_policies(tmp_path, {"v": store.link_mode})
+    # the closures must read the STORE's live mode, like setup.py's do
+    myshellrc = tmp_path / ".myshellrc"
+    zshrc = tmp_path / ".zshrc"
+    bashrc = tmp_path / ".bashrc"
+    shim_dir = tmp_path / ".local" / "bin"
+    shim_dir.mkdir(parents=True, exist_ok=True)
+
+    def apply_rc_paths() -> list[Path]:
+        return [myshellrc] if store.link_mode == "centralized" else [zshrc, bashrc]
+
+    ban = ban_policy(
+        shim_dir=shim_dir,
+        apply_rc_paths=apply_rc_paths,
+        remove_rc_paths=[myshellrc, zshrc, bashrc],
+        path_value=str(shim_dir),
+        which=lambda _name: None,
+    )
+    tweak = tweak_policy(
+        next(b for b in BUNDLES if b.id == "claude-skip"),
+        rc_path=myshellrc,
+        ensure_sourced_from=lambda: (zshrc, bashrc) if store.link_mode == "split" else (),
+    )
+    ban.apply()
+    tweak.apply()
+    original_rc = myshellrc.read_text()
+
+    def disk_full(path: Path, settings: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("installer.settings.save_settings", disk_full)
+    with pytest.raises(OSError, match="disk full"):
+        move_link_mode([ban, tweak], "split", store.set_link_mode, old_mode="centralized")
+
+    assert store.link_mode == "centralized"
+    assert myshellrc.read_text() == original_rc
+    for split_rc in (zshrc, bashrc):
+        assert not split_rc.exists() or "tools-installer ban" not in split_rc.read_text()
+
+
+def test_move_link_mode_with_no_policies_only_saves_the_mode(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def set_mode(value: str) -> None:
+        calls.append(value)
+
+    report = move_link_mode([], "split", set_mode, old_mode="centralized")
+
+    assert report == ()
+    assert calls == ["split"]
+    assert not (tmp_path / ".myshellrc").exists()
+    assert not (tmp_path / ".zshrc").exists()
+    assert not (tmp_path / ".bashrc").exists()
+
+
+def test_move_link_mode_rolls_back_when_re_saving_the_new_mode_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.settings import SettingsStore, save_settings
+
+    state_path = tmp_path / "state" / "settings.json"
+    state_path.parent.mkdir(parents=True)
+    store = SettingsStore(state_path, link_mode="centralized")
+    myshellrc = tmp_path / ".myshellrc"
+    zshrc = tmp_path / ".zshrc"
+    bashrc = tmp_path / ".bashrc"
+    shim_dir = tmp_path / ".local" / "bin"
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    bundle = next(b for b in BUNDLES if b.id == "claude-skip")
+
+    def apply_rc_paths() -> list[Path]:
+        return [myshellrc] if store.link_mode == "centralized" else [zshrc, bashrc]
+
+    ban = ban_policy(
+        shim_dir=shim_dir,
+        apply_rc_paths=apply_rc_paths,
+        remove_rc_paths=[myshellrc, zshrc, bashrc],
+        path_value=str(shim_dir),
+        which=lambda _name: None,
+    )
+    tweak = tweak_policy(
+        bundle,
+        rc_path=myshellrc,
+        ensure_sourced_from=lambda: (zshrc, bashrc) if store.link_mode == "split" else (),
+    )
+    ban.apply()
+    tweak.apply()
+
+    def failing_apply() -> PolicyResult:
+        if store.link_mode == "split":
+            raise OSError("apply boom")
+        return tweak_policy(bundle, rc_path=myshellrc).apply()
+
+    moved_tweak = Policy(
+        id=tweak.id,
+        label=tweak.label,
+        description=tweak.description,
+        active=tweak.active,
+        apply=failing_apply,
+        remove=tweak.remove,
+        link_mode_aware=True,
+    )
+
+    real_save = save_settings
+    split_saves = 0
+
+    def flaky_save(path: Path, settings: object) -> None:
+        nonlocal split_saves
+        if settings.link_mode == "split":  # type: ignore[union-attr]
+            split_saves += 1
+            if split_saves == 2:  # the re-save after the failed apply's restore
+                raise OSError("disk full")
+        real_save(path, settings)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("installer.settings.save_settings", flaky_save)
+    with pytest.raises(OSError, match="disk full"):
+        move_link_mode(
+            [ban, moved_tweak],
+            "split",
+            store.set_link_mode,
+            old_mode="centralized",
+        )
+
+    assert store.link_mode == "centralized"
+    assert split_saves == 2
+    # both blocks are back in ~/.myshellrc; the already-moved ban was taken
+    # back out of the split rcs
+    assert "tools-installer ban" in myshellrc.read_text()
+    assert "tools-installer tweak:claude-skip" in myshellrc.read_text()
+    assert "tools-installer ban" not in zshrc.read_text()
+    assert "tools-installer ban" not in bashrc.read_text()

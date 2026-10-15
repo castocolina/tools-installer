@@ -2811,11 +2811,19 @@ class UnifiedApp(App[list[str] | None]):
         setter = self._set_link_mode
         if setter is None:
             return
-        _, error = run_live(lambda: setter(value))
+        policies_screen = self._views.get("policies")
+        aware_active = (
+            policies_screen.link_mode_aware_active()
+            if isinstance(policies_screen, PoliciesScreen)
+            else []
+        )
+        old = self._read_link_mode() if self._read_link_mode is not None else "centralized"
+        report, error = run_live(lambda: move_link_mode(aware_active, value, setter, old_mode=old))
         if error is not None:
             target.status.set(error, "error")
             return
-        target.status.set(f"Link mode saved: {value}.", "ok")
+        text, severity = _link_mode_status(value, report or ())
+        target.status.set(text, severity)
 
     def on_catalog_screen_decided(self, message: CatalogScreen.Decided) -> None:
         if self._execute is None or message.result is None:

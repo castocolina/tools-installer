@@ -32,7 +32,7 @@ from installer.guards import (
 )
 from installer.omz import owned_plugins, plugins_owned, remove_plugins, write_plugins
 from installer.run import CommandError, OutputRunner, Runner, run_captured
-from installer.shellrc import ensure_source
+from installer.shellrc import ShellrcRefusal, ensure_source
 from installer.terminal_shell import terminal_sync_warning
 from installer.tweaks import (
     TweakBundle,
@@ -185,6 +185,22 @@ class PolicyMove:
     detail: str
 
 
+def _rollback(policies: list[Policy], set_link_mode: Callable[[str], None]) -> None:
+    """Return every removed policy to the live (old) mode: remove() then
+    apply(), both closures reading the live mode. remove() is mode-independent
+    for the link-mode-aware policies (the ban strips the remove_rc_paths
+    union, the tweak its fixed rc_path), so it also takes an already-moved
+    block back out of the new mode's files, and it is a no-op for a policy
+    that is still removed. Each policy's rollback error is caught so it can
+    never replace the original exception the caller re-raises."""
+    for policy in policies:
+        try:
+            policy.remove()
+            policy.apply()
+        except (OSError, CommandError, ShellrcRefusal):
+            continue
+
+
 def move_link_mode(
     policies: Sequence[Policy],
     new_mode: str,
@@ -195,19 +211,49 @@ def move_link_mode(
     """Move active link-mode-aware policies from `old_mode` to `new_mode` (D-09).
 
     Removes each policy while the old mode is still live, saves the new mode,
-    then applies each in the new mode, returning one entry per policy. Callers
-    pass only link-mode-aware, active policies; the function trusts that (no
-    second active filter). With an empty list it only saves the mode.
+    then applies each in the new mode, returning one entry per policy. A
+    policy whose new-mode apply fails has its old block restored (mode set
+    back, apply, mode set forward) and is reported `failed`; the others still
+    move. Callers pass only link-mode-aware, active policies; the function
+    trusts that (no second active filter). With an empty list it only saves
+    the mode.
+
+    Both raise paths re-raise instead of reporting: when the save of the new
+    mode fails, or when re-saving the new mode after an apply-failure restore
+    fails, the live mode is the old one (SettingsStore.set_link_mode saves
+    before it assigns) and every removed policy is rolled back to it via
+    _rollback, then the original error propagates so run_live shows it.
     """
+    expected = (OSError, CommandError, ShellrcRefusal)
+    removed: list[Policy] = []
+    report: list[PolicyMove] = []
     for policy in policies:
-        policy.remove()
-    set_link_mode(new_mode)
-    for policy in policies:
-        policy.apply()
-    return tuple(
-        PolicyMove(policy.id, "moved", f"moved from {old_mode} to {new_mode}")
-        for policy in policies
-    )
+        try:
+            policy.remove()
+        except expected as exc:
+            report.append(PolicyMove(policy.id, "failed", f"{exc}; left as it was"))
+            continue
+        removed.append(policy)
+    try:
+        set_link_mode(new_mode)
+    except expected:
+        _rollback(removed, set_link_mode)
+        raise
+    for policy in removed:
+        try:
+            policy.apply()
+        except expected as exc:
+            try:
+                set_link_mode(old_mode)
+                policy.apply()
+                set_link_mode(new_mode)
+            except expected as restore_exc:
+                _rollback(removed, set_link_mode)
+                raise restore_exc
+            report.append(PolicyMove(policy.id, "failed", f"{exc}; old block restored"))
+            continue
+        report.append(PolicyMove(policy.id, "moved", f"moved from {old_mode} to {new_mode}"))
+    return tuple(report)
 
 
 @dataclass(frozen=True)

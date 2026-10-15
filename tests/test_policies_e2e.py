@@ -16,10 +16,18 @@ from installer import systemd_daemon
 from installer.doctor import DoctorReport
 from installer.guards import REDIRECT_SENTINEL, SHIM_SENTINEL, guard_status
 from installer.model import Method, Tool
-from installer.policy import Policy, ban_policy, daemon_policy, omz_plugins_policy, tweak_policy
+from installer.policy import (
+    Policy,
+    PolicyResult,
+    ban_policy,
+    daemon_policy,
+    omz_plugins_policy,
+    tweak_policy,
+)
 from installer.tweaks import BUNDLES, TweakBundle
 from installer.uninstall import SweepResult
 from installer.wizard_app import (
+    LinkModeScreen,
     PoliciesScreen,
     PolicyInputs,
     TimePickerScreen,
@@ -779,3 +787,203 @@ async def test_policies_screen_link_mode_change_moves_active_policies(
         assert "Link mode saved: split" in screen.status.text
         assert "Moved: ban" in screen.status.text
         assert screen.status.severity == "ok"
+
+
+def _mode_app(
+    home: Path,
+    mode: dict[str, str],
+    policies: list[Policy],
+    *,
+    prompt_link_mode: bool = False,
+) -> UnifiedApp:
+    bin_dir = home / ".local" / "bin"
+    return UnifiedApp(
+        [_tool()],
+        {"rg": True},
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: (guard_status(bin_dir), None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=UninstallInputs(
+            rows=list,
+            ban_names=list,
+            has_path_block=lambda: False,
+            remove=lambda _d: SweepResult(),
+        ),
+        policies=PolicyInputs(
+            policies=policies,
+            link_mode=lambda: mode["v"],
+            set_link_mode=lambda value: mode.__setitem__("v", value),
+        ),
+        initial_view="policies",
+        prompt_link_mode=prompt_link_mode,
+    )
+
+
+def _test_tweak(home: Path, mode: dict[str, str]) -> Policy:
+    rc = home / ".myshellrc"
+    zshrc = home / ".zshrc"
+    bashrc = home / ".bashrc"
+    bundle = next(b for b in BUNDLES if b.id == "claude-skip")
+    return tweak_policy(
+        bundle,
+        rc_path=rc,
+        ensure_sourced_from=lambda: (zshrc, bashrc) if mode["v"] == "split" else (),
+    )
+
+
+def _test_ban(home: Path, mode: dict[str, str]) -> Policy:
+    bin_dir = home / ".local" / "bin"
+    rc = home / ".myshellrc"
+    zshrc = home / ".zshrc"
+    bashrc = home / ".bashrc"
+    return ban_policy(
+        shim_dir=bin_dir,
+        apply_rc_paths=lambda: [rc] if mode["v"] == "centralized" else [zshrc, bashrc],
+        remove_rc_paths=[rc, zshrc, bashrc],
+        path_value=str(bin_dir),
+        which=lambda _name: None,
+    )
+
+
+async def test_move_link_mode_ignores_policies_that_are_not_link_mode_aware(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home = Path.home()
+    _plant_volta_and_pnpm(home)
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    calls: list[str] = []
+
+    def recorded(name: str, fn: Callable[[], PolicyResult]) -> Callable[[], PolicyResult]:
+        def wrapped() -> PolicyResult:
+            calls.append(name)
+            return fn()
+
+        return wrapped
+
+    daemon_like = Policy(
+        id="daemon",
+        label="Daemon",
+        description="not link-mode aware",
+        active=True,
+        apply=recorded("daemon-apply", lambda: PolicyResult((), None, None)),
+        remove=recorded("daemon-remove", lambda: PolicyResult((), None, None)),
+    )
+    mode = {"v": "centralized"}
+    ban = _test_ban(home, mode)
+    app = _mode_app(home, mode, [daemon_like, ban])
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        screen.active_state["daemon"] = True
+        await pilot.press("m", "down", "down", "enter")
+        await pilot.pause()
+
+    assert calls == []  # the daemon-like policy was never touched
+
+
+async def test_first_run_link_mode_picker_moves_active_policies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home = Path.home()
+    _plant_volta_and_pnpm(home)
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    rc = home / ".myshellrc"
+    zshrc = home / ".zshrc"
+    bashrc = home / ".bashrc"
+    mode = {"v": "centralized"}
+    ban = ban_policy(
+        shim_dir=bin_dir,
+        apply_rc_paths=lambda: [rc] if mode["v"] == "centralized" else [zshrc, bashrc],
+        remove_rc_paths=[rc, zshrc, bashrc],
+        path_value=str(bin_dir),
+        which=lambda _name: None,
+    )
+    ban.apply()  # active before the app is built, so active_state starts True
+    ban = ban_policy(
+        shim_dir=bin_dir,
+        apply_rc_paths=lambda: [rc] if mode["v"] == "centralized" else [zshrc, bashrc],
+        remove_rc_paths=[rc, zshrc, bashrc],
+        path_value=str(bin_dir),
+        which=lambda _name: None,
+    )
+    app = _mode_app(home, mode, [ban], prompt_link_mode=True)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, LinkModeScreen)
+        await pilot.press("down", "down", "enter")  # pick split
+        await pilot.pause()
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert mode["v"] == "split"
+        assert "tools-installer ban" not in rc.read_text()
+        assert "tools-installer ban" in zshrc.read_text()
+        assert "tools-installer ban" in bashrc.read_text()
+        assert "Link mode saved: split" in screen.status.text
+        assert "Moved: ban" in screen.status.text
+
+
+async def test_policies_screen_reports_a_failed_move(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home = Path.home()
+    _plant_volta_and_pnpm(home)
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    rc = home / ".myshellrc"
+    zshrc = home / ".zshrc"
+    bashrc = home / ".bashrc"
+    mode = {"v": "centralized"}
+    ban = ban_policy(
+        shim_dir=bin_dir,
+        apply_rc_paths=lambda: [rc] if mode["v"] == "centralized" else [zshrc, bashrc],
+        remove_rc_paths=[rc, zshrc, bashrc],
+        path_value=str(bin_dir),
+        which=lambda _name: None,
+    )
+    tweak = _test_tweak_with_failing_split_apply(home, mode)
+    app = _mode_app(home, mode, [ban, tweak])
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        await pilot.press("space")
+        await _settle_toggle(screen, pilot)
+        await pilot.press("down", "space")
+        await _settle_toggle(screen, pilot)
+        await pilot.press("m", "down", "down", "enter")
+        await pilot.pause()
+
+        assert mode["v"] == "split"
+        assert "Moved: ban" in screen.status.text
+        assert "Failed: tweak:claude-skip" in screen.status.text
+        assert "apply boom" in screen.status.text
+        assert screen.status.severity == "warn"
+        assert str(screen.status.severity) != "error"
+
+
+def _test_tweak_with_failing_split_apply(home: Path, mode: dict[str, str]) -> Policy:
+    base = _test_tweak(home, mode)
+    rc = home / ".myshellrc"
+    bundle = next(b for b in BUNDLES if b.id == "claude-skip")
+
+    def apply() -> PolicyResult:
+        if mode["v"] == "split":
+            raise OSError("apply boom")
+        return tweak_policy(bundle, rc_path=rc).apply()
+
+    return Policy(
+        id=base.id,
+        label=base.label,
+        description=base.description,
+        active=base.active,
+        apply=apply,
+        remove=base.remove,
+        link_mode_aware=True,
+    )
