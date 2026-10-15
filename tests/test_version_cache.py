@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from installer.manager_versions import ManagerVersion, OutdatedReport
+from installer.model import load_tools
 from installer.ownership import ManagerInventory
 from installer.version_cache import (
     RETRY_BACKOFF,
@@ -38,6 +39,25 @@ def test_round_trip_through_the_versioned_envelope(tmp_path: Path) -> None:
     assert raw["tools"]["codegraph"]["checked_at"] == "2026-09-01T00:00:00+00:00"
     loaded = load_version_cache(path)
     assert loaded["codegraph"] == entry
+
+
+def test_stale_drawio_cli_cache_entry_is_ignored(tmp_path: Path) -> None:
+    registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+    path = tmp_path / "versions.json"
+    stale_entry = VersionCacheEntry(
+        latest_version="v31.0.2",
+        checked_at="2026-09-01T00:00:00+00:00",
+        failed_at=None,
+    )
+    save_version_cache(
+        path,
+        {"drawio-cli": stale_entry, "drawio-desktop": stale_entry},
+    )
+    loaded = load_version_cache(path)
+    assert "drawio-cli" in loaded
+    catalog_ids = {tool.id for tool in load_tools(registry)}
+    assert "drawio-cli" not in catalog_ids
+    save_version_cache(path, loaded)
 
 
 def test_legacy_flat_mapping_still_loads(tmp_path: Path) -> None:

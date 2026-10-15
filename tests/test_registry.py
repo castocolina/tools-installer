@@ -165,7 +165,6 @@ _PRE_15_3_HUMAN_TOOLS = {
     "claude",
     "codex",
     "cursor-agent",
-    "drawio-desktop",
     "jetbrains-toolbox",
     "kitty",
     "matt-pocock-skills",
@@ -208,7 +207,7 @@ def test_registry_audience_distribution_is_pinned() -> None:
     assert dict(Counter(t.audience for t in load_tools(REGISTRY))) == {
         "both": 47,
         "ai": 9,
-        "human": 34,
+        "human": 33,
     }
 
 
@@ -1107,6 +1106,47 @@ def test_gron_uses_tgz_with_trailing_version() -> None:
     assert method.params["strip"] == 0
 
 
+def test_drawio_desktop_is_the_only_drawio_row() -> None:
+    tools = _tools_by_id()
+    assert "drawio-cli" not in tools
+    assert tools["drawio-desktop"].audience == "both"
+    assert len(tools) == 89
+
+
+def test_removed_owner_probe_is_rejected_at_load(tmp_path: Path) -> None:
+    manifest = tmp_path / "registry.toml"
+    manifest.write_text(
+        """
+[[tool]]
+id = "demo"
+category = "dev"
+tier = "user"
+verified = 2026-10-13
+owner_probes = ["managed-download"]
+[[tool.method]]
+kind = "brew"
+formula = "demo"
+"""
+    )
+    with pytest.raises(ValueError, match="unknown owner probe 'managed-download'"):
+        load_tools(manifest)
+
+
+def test_existing_drawio_install_shows_under_drawio_desktop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import installer.status as status
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    drawio = bin_dir / "drawio"
+    drawio.write_bytes(b"")
+    drawio.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    drawio_desktop = _tools_by_id()["drawio-desktop"]
+    assert status.is_installed(drawio_desktop) is True
+
+
 def test_registry_has_unique_tools_and_cmds() -> None:
     tools = load_tools(REGISTRY)
     ids = [t.id for t in tools]
@@ -1115,9 +1155,7 @@ def test_registry_has_unique_tools_and_cmds() -> None:
     for tool in tools:
         by_cmd.setdefault(tool.cmd, set()).add(tool.id)
     duplicates = {cmd: tool_ids for cmd, tool_ids in by_cmd.items() if len(tool_ids) > 1}
-    # drawio-cli ships inside drawio-desktop's own release and is never
-    # independently invocable, so both reviewed entries share the `drawio` cmd.
-    assert duplicates == {"drawio": {"drawio-desktop", "drawio-cli"}}
+    assert duplicates == {}
 
 
 def test_registry_tier_distribution_is_pinned() -> None:
@@ -1127,19 +1165,17 @@ def test_registry_tier_distribution_is_pinned() -> None:
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 26,
         "ai": 17,
-        "user": 47,
+        "user": 46,
     }
 
 
 def test_d09_borderline_tools_stay_user_tier() -> None:
-    # D-09: mmdc, gitleaks, vale and drawio-cli were reviewed against
-    # .claude/architecture.md's tier criterion and confirmed correct as
-    # user-tier -- each is invoked by the human on the human's own artifact
-    # (a diagram, a repo scan, prose, an export), not infrastructure an
-    # agent consumes underneath. This closes the "borderline" review rather
-    # than leaving the decision recorded only in a discussion log.
+    # D-09: mmdc, gitleaks and vale were reviewed against .claude/architecture.md's
+    # tier criterion and confirmed correct as user-tier -- each is invoked by the
+    # human on the human's own artifact (a diagram, a repo scan, prose), not
+    # infrastructure an agent consumes underneath.
     tools = _tools_by_id()
-    for tool_id in ("mmdc", "gitleaks", "vale", "drawio-cli"):
+    for tool_id in ("mmdc", "gitleaks", "vale"):
         assert tools[tool_id].tier == "user", tool_id
 
 
@@ -1165,12 +1201,10 @@ def test_reconciliation_tier_audit_confirms_all_11_re_added_rows() -> None:
     # priority. gh is already tier="user" despite agents using it too.
     assert tools["glab"].tier == "user"
 
-    # drawio-desktop/drawio-cli (diagram render tools, audience=human/both)
-    # match the existing mmdc precedent (diagram-category, tier="user",
-    # audience="both"): general-purpose rendering tools any developer or
-    # agent can invoke, not agent-specific harnesses.
+    # drawio-desktop (diagram render tool, audience=both) matches the existing
+    # mmdc precedent (diagram-category, tier="user", audience="both").
     assert tools["drawio-desktop"].tier == "user"
-    assert tools["drawio-cli"].tier == "user"
+    assert tools["drawio-desktop"].audience == "both"
 
     # pi (own coding-agent harness, kind="host_setup") is a standalone,
     # human-driven agent CLI -- the same shape as claude/codex/opencode/
@@ -1962,11 +1996,9 @@ def test_native_package_manager_rows_declare_their_owner_probes() -> None:
     for tool_id, owner_probes in expected.items():
         assert tools[tool_id].owner_probes == owner_probes, tool_id
 
-    # The three pre-existing owner_probes rows keep their values, untouched
-    # by this plan.
+    # The pre-existing host-setup owner_probes row keeps its value.
     assert tools["pi"].owner_probes == ("host-setup",)
-    assert tools["drawio-desktop"].owner_probes == ("managed-download",)
-    assert tools["drawio-cli"].owner_probes == ("managed-download",)
+    assert tools["drawio-desktop"].owner_probes == ()
 
     # The second assertion is the one that matters over time: it turns
     # "someone added a dnf-installable tool and forgot to opt it in" from a

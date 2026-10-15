@@ -39,9 +39,9 @@ class Ownership:
     # removal COMMAND built by parsing prose is a command built on a
     # formatting accident (Round-3 review HIGH). Defaults to `None` so
     # `_UNKNOWN` and every pre-existing construction stay valid. Left `None`
-    # by `_managed_download` and `_host_setup` on purpose: no downstream
-    # caller ever builds a native removal command from either of those, so an
-    # absent name there is correct rather than a gap.
+    # by `_host_setup` on purpose: no downstream caller ever builds a native
+    # removal command from that probe, so an absent name there is correct
+    # rather than a gap.
     package: str | None = None
 
 
@@ -78,15 +78,6 @@ def _run(probe: ProbeRunner, command: list[str]) -> str | None:
         return probe(command)
     except (OSError, RuntimeError, subprocess.SubprocessError):
         return None
-
-
-def _managed_download(tool: Tool, probe: ProbeRunner) -> Ownership | None:
-    if not any(method.kind in {"github_release", "tarball", "app"} for method in tool.methods):
-        return None
-    output = _run(probe, ["tools-installer-managed-download", "list", tool.id])
-    if output is not None and tool.id in _lines(output):
-        return Ownership("managed download", "verified", f"managed download lists {tool.id}")
-    return None
 
 
 def _host_setup(tool: Tool, probe: ProbeRunner) -> Ownership | None:
@@ -373,7 +364,6 @@ def _sdkman(tool: Tool, probe: ProbeRunner) -> Ownership | None:
 
 
 _PROBES: dict[str, Callable[[Tool, ProbeRunner], Ownership | None]] = {
-    "managed-download": _managed_download,
     "host-setup": _host_setup,
     "brew": _brew,
     "apt": _apt,

@@ -2807,13 +2807,12 @@ name = "draw.io Desktop"
 category = "diagram"
 cmd = "drawio"
 priority = "P2"
-audience = "human"
+audience = "both"
 desc = "Official draw.io Desktop release with export CLI; uninstall removes its managed app or AppImage."
 tier = "user"
 verified = 2026-10-13
 source = "https://github.com/jgraph/drawio-desktop"
 owner = "tools-installer managed release"
-owner_probes = ["managed-download"]
 uninstall = "Remove ~/.local/bin/drawio or ~/Applications/draw.io.app"
 [[tool.method]]
 kind = "github_release"
@@ -2848,55 +2847,6 @@ app = "draw.io.app"
 cli = "Contents/MacOS/draw.io"
 cli_name = "drawio"
 
-
-
-[[tool]]
-id = "drawio-cli"
-name = "draw.io CLI"
-category = "diagram"
-cmd = "drawio"
-priority = "P2"
-audience = "both"
-desc = "Export CLI shipped by draw.io Desktop; uninstall it with the managed desktop release."
-tier = "user"
-verified = 2026-10-13
-requires = ["drawio-desktop"]
-source = "https://github.com/jgraph/drawio-desktop"
-owner = "tools-installer managed release"
-owner_probes = ["managed-download"]
-uninstall = "Uninstall drawio-desktop to remove the drawio CLI"
-[[tool.method]]
-kind = "github_release"
-os = ["debian", "arch", "fedora"]
-arch = ["amd64"]
-repo = "jgraph/drawio-desktop"
-asset = "drawio-x86_64-{ver}.AppImage"
-member = "drawio"
-raw = true
-[[tool.method]]
-kind = "github_release"
-os = ["debian", "arch", "fedora"]
-arch = ["arm64"]
-repo = "jgraph/drawio-desktop"
-asset = "drawio-arm64-{ver}.AppImage"
-member = "drawio"
-raw = true
-[[tool.method]]
-kind = "app"
-os = ["macos"]
-arch = ["arm64"]
-url = "https://github.com/jgraph/drawio-desktop/releases/download/v31.0.2/draw.io-arm64-31.0.2.zip"
-app = "draw.io.app"
-cli = "Contents/MacOS/draw.io"
-cli_name = "drawio"
-[[tool.method]]
-kind = "app"
-os = ["macos"]
-arch = ["amd64"]
-url = "https://github.com/jgraph/drawio-desktop/releases/download/v31.0.2/draw.io-x64-31.0.2.zip"
-app = "draw.io.app"
-cli = "Contents/MacOS/draw.io"
-cli_name = "drawio"
 
 
 

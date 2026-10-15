@@ -86,7 +86,6 @@ POST_INSTALL_ACTIONS = (
 )
 SENSITIVE_POST_INSTALL_ACTIONS = ("set_login_shell",)
 OWNER_PROBES = (
-    "managed-download",
     "host-setup",
     "brew",
     "apt",

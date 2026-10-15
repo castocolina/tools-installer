@@ -25,7 +25,6 @@ def _tool(
 
 def _manager_for(command: list[str]) -> str:
     return {
-        "tools-installer-managed-download": "managed-download",
         "brew": "brew",
         "dpkg-query": "apt",
         "rpm": "dnf",
@@ -108,14 +107,6 @@ def test_host_setup_owner_uses_the_reviewed_setup_probe() -> None:
     ("probe", "methods", "output", "manager", "detail", "package"),
     [
         (
-            "managed-download",
-            (Method(kind="github_release", params={"member": "demo"}),),
-            "demo\n",
-            "managed download",
-            "managed download lists demo",
-            None,
-        ),
-        (
             "brew",
             (Method(kind="brew", params={"formula": "demo"}),),
             "demo 1.2.3\n",
@@ -176,8 +167,8 @@ def test_owner_verifies_each_manager_from_its_own_output(
     """Mutable host: every declared probe answers from its own manager's
     output. The dnf/apt/pacman rows here are the counterpart to
     `test_native_package_manager_probes_stand_down_on_an_immutable_host`.
-    `package` is the matched name each probe reports -- `None` only for
-    `managed-download`, which never populates it (Round-3 review HIGH)."""
+    `package` is the matched name each probe reports -- `None` only for probes
+    that never populate it (Round-3 review HIGH)."""
     assert detect_owner(
         _tool(owner_probes=(probe,), methods=methods), _probe({probe: output}), immutable=False
     ) == Ownership(manager, "verified", detail, package=package)
