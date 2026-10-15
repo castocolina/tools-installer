@@ -182,6 +182,23 @@ def test_parse_version_refuses_a_non_numeric_component_instead_of_zero_filling()
     assert parse_version("11.") is None
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["-1", "--1", "--2", "-v1.2.3", "a-1"],
+    ids=["-1", "--1", "--2", "-v1.2.3", "a-1"],
+)
+def test_parse_version_never_fabricates_from_a_bare_flag(text: str) -> None:
+    assert parse_version(text) is None
+    assert parse_status_version(text) is None
+    assert extract_observed_version(text) is None
+
+
+def test_glued_name_versions_still_parse() -> None:
+    assert parse_version("jq-1.8.1") == (1, 8, 1, 1)
+    assert parse_version("tool-2.3.4-rc.1") == (2, 3, 4, 0)
+    assert extract_observed_version("jq-1.8.1") == "jq-1.8.1"
+
+
 def test_parse_declared_version_accepts_one_to_three_numeric_groups() -> None:
     assert parse_declared_version("22.12.0") == (22, 12, 0)
     assert parse_declared_version("v22.12.0") == (22, 12, 0)

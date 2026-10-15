@@ -52,7 +52,9 @@ _OBSERVED_VERSION = re.compile(r"^[vV]?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\
 # and a token with an embedded prerelease hyphen like `tool-2.3.4-rc.1` still
 # isolates at "2.3.4-rc.1" (the *rc.1* hyphen's next character is a letter,
 # not `[vV]?\d`, so it is never a valid split point; backtracking lands on
-# the '-' before "2.3.4" instead).
+# the '-' before "2.3.4" instead). The glued-name prefix before that delimiter
+# must start with an ASCII letter and be at least two characters (audit B WR-02:
+# bare flags like `-1` and one-letter names like `a-1` must not strip).
 _NAME_PREFIX_BOUNDARY = re.compile(r".*[-\s](?=[vV]?\d)")
 
 
@@ -65,7 +67,12 @@ def _strip_name_prefix(token: str) -> str:
     "did it match" branch.
     """
     match = _NAME_PREFIX_BOUNDARY.match(token)
-    return token[match.end() :] if match else token
+    if match is None:
+        return token
+    prefix = token[: match.end() - 1]
+    if len(prefix) < 2 or not prefix[0].isascii() or not prefix[0].isalpha():
+        return token
+    return token[match.end() :]
 
 
 def _match_observed_version(token: str) -> re.Match[str] | None:
