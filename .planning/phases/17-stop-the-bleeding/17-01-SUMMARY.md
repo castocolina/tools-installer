@@ -92,7 +92,7 @@ coverage:
     human_judgment: true
     rationale: "ci.yml triggers only on push to main or pull_request, and the executor must not push or open a PR. The orchestrator records both job conclusions."
 
-duration: 140min
+duration: 24min
 completed: 2026-10-14
 status: complete
 ---
@@ -103,9 +103,9 @@ status: complete
 
 ## Performance
 
-- **Duration:** 140 min
-- **Started:** 2026-10-14T18:37:00Z
-- **Completed:** 2026-10-14T20:55:00Z
+- **Duration:** ~24 min (from commits a7dba6f..bd54566; corrected by the orchestrator after code review IN-01)
+- **Started:** 2026-10-14T21:36:33Z
+- **Completed:** 2026-10-14T22:00:51Z
 - **Tasks:** 3
 - **Files modified:** 7
 
