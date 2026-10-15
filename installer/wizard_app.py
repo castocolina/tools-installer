@@ -2474,6 +2474,7 @@ class UnifiedApp(App[list[str] | None]):
         execute: ExecuteInputs | None = None,
         prompt_link_mode: bool = False,
         terminal_sync: Callable[[], str | None] | None = None,
+        startup_warning: str | None = None,
     ) -> None:
         super().__init__()
         self._staged: set[str] = set()
@@ -2499,6 +2500,11 @@ class UnifiedApp(App[list[str] | None]):
         # is queued here rather than dropped, and flushed to the next screen
         # that becomes visible (show_view) or the next _install_closed render.
         self._pending_warnings: list[str] = []
+        # D-11: a damaged settings.json reaches the first screen through the
+        # SAME T-15.6-13 queue as every other warning, never a side channel.
+        self._startup_warning = startup_warning
+        if startup_warning is not None:
+            self._pending_warnings.append(startup_warning)
         # Set by on_install_run_finished when the post-run cache invalidation
         # fails, consumed (and cleared) by the _install_closed that follows:
         # the execute screen is still on top when the failure happens, so
@@ -2620,6 +2626,20 @@ class UnifiedApp(App[list[str] | None]):
             self.install_screen(screen, name)
         if self._initial_view != BASE_VIEW:
             await self.show_view(self._initial_view)
+        else:
+            # The base catalog is never pushed, so show_view never flushes for
+            # it: deliver the startup warning here, before the first-run
+            # picker is pushed, so the picker sits on top of an informed view.
+            catalog = self.catalog
+            if catalog.is_mounted:
+                self._flush_pending_warnings(catalog)
+            else:
+                # App.on_mount runs before the default screen mounts, so the
+                # first-run launch (the only path that gets here unmounted)
+                # defers the flush one tick. call_later, not call_after_refresh:
+                # the repaint hook does not fire from inside on_mount before
+                # the default screen exists.
+                self.call_later(self._flush_pending_warnings, catalog)
         if self._daemon_default is not None:
             self._apply_daemon_default_worker()
         # Last in on_mount so a first-run user answers exactly one question;

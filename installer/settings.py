@@ -4,10 +4,12 @@ Shape and write path deliberately mirror installer.version_cache because that
 module already established this project's JSON-state convention (Phase 12), so
 there is exactly one persistence mechanism to reason about.
 
-load_settings has two outcomes and only two. Missing or JSON null is the
-valid, expected encoding of "never chosen" and returns Settings(). Present
-but not a LINK_MODES member is a defect (tampered or hand-edited) and also
-returns Settings(). Both land on Settings(); only one of them is a problem.
+load_settings has three outcomes and only three. Missing or JSON null is the
+valid, expected encoding of "never chosen" and returns defaults with no
+warning. Present but not a LINK_MODES member is a defect (tampered or
+hand-edited) and also returns defaults, no warning. Undecodable bytes —
+invalid UTF-8 or invalid JSON — return defaults plus a warning naming the
+file, so a damaged settings.json costs the user a warning, never the app.
 
 The closed-set check is the mitigation for a tampered or hand-edited state
 file: without it an arbitrary string reaches
@@ -37,32 +39,52 @@ class Settings:
     link_mode: str | None = None
 
 
+@dataclass(frozen=True)
+class LoadedSettings:
+    """What load_settings hands back: the effective Settings plus, when the file
+    itself could not be decoded, the one-line warning the first screen shows."""
+
+    settings: Settings
+    warning: str | None = None
+
+
 def default_settings_path() -> Path:
     return Path.home() / ".local" / "state" / "tools-installer" / "settings.json"
 
 
-def load_settings(path: Path) -> Settings:
-    """Read the settings envelope.
+def load_settings(path: Path) -> LoadedSettings:
+    """Read the settings envelope, exactly once.
 
-    Two outcomes only: missing or null → Settings() ("never chosen"); present
-    but not a LINK_MODES member → Settings() (rejected). JSON null is the
-    valid encoding of "the user has never chosen"; a number, a list, a nested
-    object or an arbitrary string is a defect. Both land on Settings(); only
-    one of them is a problem.
+    Three outcomes: missing or unreadable → defaults, no warning (as always);
+    null or not a LINK_MODES member → defaults, never chosen or rejected, no
+    warning; undecodable (invalid UTF-8 or invalid JSON) → defaults plus a
+    warning naming the file. ONE read feeds both the decode and the parse —
+    the rejected separate settings_warning probe stays rejected.
     """
     try:
-        raw_decoded: object = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return Settings()
+        raw_decoded: object = json.loads(path.read_text(encoding="utf-8"))
+    except OSError:
+        # Missing or unreadable file: today's behaviour, no warning.
+        return LoadedSettings(Settings())
+    except ValueError as exc:
+        # Covers exactly the two errors D-11 names: UnicodeDecodeError (invalid
+        # UTF-8) and json.JSONDecodeError (invalid JSON).
+        return LoadedSettings(
+            Settings(),
+            warning=(
+                f"Ignoring invalid settings file {path}: {exc}; "
+                "using defaults until you change a setting."
+            ),
+        )
     if not isinstance(raw_decoded, dict):
-        return Settings()
+        return LoadedSettings(Settings())
     data = cast(dict[str, object], raw_decoded)
     raw = data.get("link_mode")
     if raw is None:
-        return Settings()
+        return LoadedSettings(Settings())
     if not isinstance(raw, str) or raw not in LINK_MODES:
-        return Settings()
-    return Settings(raw)
+        return LoadedSettings(Settings())
+    return LoadedSettings(Settings(raw))
 
 
 def save_settings(path: Path, settings: Settings) -> None:
@@ -97,9 +119,13 @@ def link_mode_needs_choice(*, flag: str | None, stored: str | None) -> bool:
 class SettingsStore:
     """The single live owner of the session's link mode."""
 
-    def __init__(self, path: Path, *, link_mode: str) -> None:
+    def __init__(self, path: Path, *, link_mode: str, warning: str | None = None) -> None:
         self._path = path
         self._link_mode = link_mode
+        # The "invalid on disk" flag: set only at construction from
+        # load_settings' warning, cleared only by a successful set_link_mode
+        # (a user change is the only thing that rewrites the file).
+        self._warning = warning
 
     @property
     def link_mode(self) -> str:
@@ -108,6 +134,10 @@ class SettingsStore:
     @property
     def path(self) -> Path:
         return self._path
+
+    @property
+    def warning(self) -> str | None:
+        return self._warning
 
     def set_link_mode(self, value: str) -> None:
         if value not in LINK_MODES:

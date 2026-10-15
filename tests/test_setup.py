@@ -1743,6 +1743,47 @@ async def _pilot_accepts_the_selection(
 
 
 @pytest.mark.parametrize(
+    ("case_id", "fixture"),
+    [
+        ("invalid-utf8", b'\xff\xfe{"link_mode": "split"}'),
+        ("invalid-json", b'{"link_mode": '),
+    ],
+)
+async def test_invalid_settings_file_launches_to_the_first_screen_with_a_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    case_id: str,
+    fixture: bytes,
+) -> None:
+    """SPEC R8 / D-11: a damaged settings.json costs the user a warning, never
+    the app and never their file. The bytes on disk are identical after a full
+    launch whose first-run picker is dismissed."""
+    del case_id
+    from textual.screen import Screen
+
+    from installer.wizard_app import LinkModeScreen
+
+    _hermetic_route(monkeypatch, tmp_path)
+    path = tmp_path / "settings.json"
+    path.write_bytes(fixture)
+    apps: list[UnifiedApp] = []
+
+    def recording_run(self: UnifiedApp) -> None:
+        apps.append(self)
+
+    monkeypatch.setattr(UnifiedApp, "run", recording_run)
+    assert setup.main([]) == 0
+    app = apps[0]
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert isinstance(app.screen, LinkModeScreen)
+        assert str(path) in app.catalog.status.text
+        assert app.catalog.status.severity is Severity.WARN
+        await pilot.press("escape")
+        assert isinstance(app.screen, Screen)
+    assert path.read_bytes() == fixture
+
+
+@pytest.mark.parametrize(
     ("route_id", "argv"),
     [
         ("setup", []),
@@ -2252,7 +2293,7 @@ def test_link_mode_flag_overrides_stored_split_without_rewriting_it(
     assert isinstance(policies, PolicyInputs)
     assert policies.link_mode is not None
     assert policies.link_mode() == "single"
-    assert load_settings(path).link_mode == "split"
+    assert load_settings(path).settings.link_mode == "split"
     assert seen[0].get("prompt_link_mode") is False
 
 
@@ -2356,7 +2397,7 @@ def test_non_interactive_fix_with_link_mode_flag_writes_split_and_stores_nothing
     assert setup.main(["--fix", "--link-mode", "split"]) == 0
     assert written == ["split"]
     assert not path.exists()
-    assert load_settings(path).link_mode is None
+    assert load_settings(path).settings.link_mode is None
 
 
 # -- D-05/Task 2: setup.py is excluded from pyright and coverage by design

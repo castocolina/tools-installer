@@ -1165,6 +1165,9 @@ def _build_app(
         updates=updates,
         execute=execute,
         prompt_link_mode=prompt_link_mode,
+        # D-11: a damaged settings.json surfaces as the startup warning on the
+        # first screen the route opens, carried through the store's flag.
+        startup_warning=settings.warning if settings is not None else None,
         # D-01/15.6-06 Task 1: the SAME closure `omz_plugins_policy` and
         # `updates` above are wired with -- every interactive close
         # re-synchronizes terminal configuration exactly like Policies' own
@@ -1277,10 +1280,11 @@ def _run_interactive_wizard(
 
 def _settings_store(link_mode_option: str | None) -> tuple[SettingsStore, bool]:
     path = default_settings_path()
-    stored = load_settings(path).link_mode
+    loaded = load_settings(path)
+    stored = loaded.settings.link_mode
     mode = resolve_link_mode(flag=link_mode_option, stored=stored)
     needs_choice = link_mode_needs_choice(flag=link_mode_option, stored=stored)
-    return SettingsStore(path, link_mode=mode), needs_choice
+    return SettingsStore(path, link_mode=mode, warning=loaded.warning), needs_choice
 
 
 def _session_exit_code(app: UnifiedApp) -> int:

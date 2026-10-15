@@ -3004,7 +3004,7 @@ async def test_dismissed_first_run_picker_persists_nothing(tmp_path: Path) -> No
     async with app.run_test(size=(100, 30)) as pilot:
         assert isinstance(app.screen, LinkModeScreen)
         await pilot.press("escape")
-    assert not path.exists() or load_settings(path).link_mode is None
+    assert not path.exists() or load_settings(path).settings.link_mode is None
 
 
 async def test_first_run_setter_oserror_surfaces_on_the_visible_screen() -> None:
@@ -4635,6 +4635,7 @@ def test_unified_app_signature_carries_no_disk_pressure_parameter() -> None:
         "execute",
         "prompt_link_mode",
         "terminal_sync",
+        "startup_warning",
     ]
 
 
