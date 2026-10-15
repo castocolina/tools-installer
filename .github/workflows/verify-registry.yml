@@ -1,0 +1,45 @@
+# Weekly registry drift report (never in the PR gate; never writes the repo).
+# Re-dispatch manually if GitHub disabled the schedule after 60 idle days.
+# The Thursday cron only refreshes the cached state file to make GitHub's 7-day
+# cache eviction unlikely (a mitigation; a miss costs one full download).
+name: verify-registry
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+    - cron: "47 5 * * 4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Restore verify-registry state
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.local/state/tools-installer/verify-registry.json
+          key: verify-registry-${{ github.run_id }}
+          restore-keys: verify-registry-
+      - name: Check registry drift
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 5 * * 1'
+        timeout-minutes: 25
+        run: make verify-registry ARGS="--issue"
+      - name: Save verify-registry state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.local/state/tools-installer/verify-registry.json
+          key: verify-registry-${{ github.run_id }}

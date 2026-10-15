@@ -559,6 +559,7 @@ def check_registry(
     state: MutableMapping[str, str],
     *,
     _full_verify: bool = True,
+    on_verified: Callable[[Mapping[str, str]], None] | None = None,
 ) -> Report:
     not_checkable = _not_checkable_tool_ids(tools)
     pre_findings: list[Finding] = []
@@ -889,6 +890,8 @@ def check_registry(
             sha256=actual_hash.lower(),
         )
         state[state_k] = fingerprint
+        if on_verified is not None:
+            on_verified(state)
 
     for key, finding in list(findings.items()):
         url = finding.url
@@ -1639,7 +1642,10 @@ def main(
         active_probe = probe
     import sys
 
-    initial_report = check_registry(tools, active_probe, state)
+    def _persist_state(current: Mapping[str, str]) -> None:
+        _save_state(state_path, current)
+
+    initial_report = check_registry(tools, active_probe, state, on_verified=_persist_state)
     report = initial_report
     if args.candidate:
         explicit, err = _parse_explicit_candidates(args.candidate, tools)

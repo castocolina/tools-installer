@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import tarfile
 import zipfile
 from collections import Counter, defaultdict
@@ -2808,3 +2809,143 @@ def test_issue_body_never_breaks_out_of_a_code_span() -> None:
         if not line:
             continue
         assert line.startswith(("blocked:", "note:", "## ", "- ", "Unverified")) or line == "- none"
+
+
+class _SimulatedRunnerKill(BaseException):
+    """Stand-in for the runner stopping the verify step mid-run."""
+
+
+def test_state_is_saved_after_each_verified_asset(tmp_path: Path) -> None:
+    tar_a = _gz_tar_bytes({"bin/a": b"a"})
+    tar_b = _gz_tar_bytes({"bin/b": b"b"})
+    hash_a = hashlib.sha256(tar_a).hexdigest()
+    hash_b = hashlib.sha256(tar_b).hexdigest()
+    url_a = "https://vendor.example/a-1.0.tar.gz"
+    url_b = "https://vendor.example/b-1.0.tar.gz"
+    content = f"""
+[[tool]]
+id = "tool_a"
+name = "tool_a"
+category = "git"
+cmd = "a"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://vendor.example/a-{{ver}}.tar.gz"
+version = "1.0"
+member = "bin/a"
+strip = 0
+sha256 = "{hash_a}"
+[[tool]]
+id = "tool_b"
+name = "tool_b"
+category = "git"
+cmd = "b"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://vendor.example/b-{{ver}}.tar.gz"
+version = "1.0"
+member = "bin/b"
+strip = 0
+sha256 = "{hash_b}"
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="0", assets={})
+    key_a = state_key("tool_a", url_a, "bin/a", archive="gz", strip=0, raw=False)
+
+    def download(url: str, dest: Path) -> None:
+        if url == url_b:
+            raise _SimulatedRunnerKill("stopped after first asset")
+        dest.write_bytes(tar_a if url == url_a else tar_b)
+
+    probe = Probe(release=lambda _r: release, head=lambda _u: 'etag:"1"', download=download)
+    state_path = tmp_path / "state.json"
+    with pytest.raises(_SimulatedRunnerKill):
+        main(
+            ["--registry", str(registry), "--state", str(state_path)],
+            probe=probe,
+        )
+    saved = json.loads(state_path.read_text())
+    assert key_a in saved
+    assert saved[key_a]
+
+
+def test_cache_miss_downloads_every_asset_once(tmp_path: Path) -> None:
+    zip_body = _zip_bytes(
+        {
+            "x86_64-unknown-linux-gnu/bin/a": b"a",
+            "aarch64-unknown-linux-gnu/bin/b": b"b",
+            "x86_64-apple-darwin/bin/c": b"c",
+        }
+    )
+    digest = hashlib.sha256(zip_body).hexdigest()
+    url = "https://github.com/o/shared/releases/download/1.0.0/pkg-1.0.0.zip"
+    content = """
+[[tool]]
+id = "one"
+name = "one"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+os = ["debian"]
+repo = "o/shared"
+asset = "pkg-{ver}.zip"
+member = "x86_64-unknown-linux-gnu/bin/a"
+archive = "zip"
+strip = 0
+[[tool]]
+id = "two"
+name = "two"
+category = "git"
+cmd = "y"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+os = ["debian"]
+repo = "o/shared"
+asset = "pkg-{ver}.zip"
+member = "aarch64-unknown-linux-gnu/bin/b"
+archive = "zip"
+strip = 0
+[[tool]]
+id = "three"
+name = "three"
+category = "git"
+cmd = "z"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "o/shared"
+asset = "pkg-{ver}.zip"
+member = "x86_64-apple-darwin/bin/c"
+archive = "zip"
+strip = 0
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="1.0.0", assets={"pkg-1.0.0.zip": digest})
+    probe, downloads = _map_probe(release, payloads={"pkg-1.0.0.zip": zip_body})
+    state_path = tmp_path / "state.json"
+    assert not state_path.exists()
+    code = main(["--registry", str(registry), "--state", str(state_path)], probe=probe)
+    assert code == 0
+    assert downloads[url] == 1
+    saved = json.loads(state_path.read_text())
+    assert len(saved) == 3
+    probe2, downloads2 = _map_probe(release, payloads={"pkg-1.0.0.zip": zip_body})
+    code2 = main(["--registry", str(registry), "--state", str(state_path)], probe=probe2)
+    assert code2 == 0
+    assert sum(downloads2.values()) == 0

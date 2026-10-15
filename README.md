@@ -307,6 +307,11 @@ skipped tests, lowered coverage floors). The full contributor rules live in
 [testing](.claude/testing.md), [git workflow](.claude/git-workflow.md), and
 [dev environment](.claude/dev-environment.md).
 
+
+### Registry drift
+
+A scheduled GitHub Actions workflow (`verify-registry.yml`) runs weekly (Monday cron) and on manual dispatch — never in the PR gate. It calls `make verify-registry ARGS="--issue"`, which opens or updates a single issue labelled `registry-drift` when drift is confirmed (inconclusive findings are listed beside drift). When GitHub is rate-limited or unreachable and no drift was confirmed, it posts nothing (drift confirmed in an otherwise blocked run is still posted, with a note). The job keeps its digest state between runs via Actions cache restore/save (including when a run hits its time limit, so the next run resumes). A mid-week schedule entry only restores and re-saves that state to make GitHub's 7-day cache eviction unlikely; if the state is lost anyway, the next check downloads every asset once and rebuilds it.
+
 ## Project layout
 
 ```
