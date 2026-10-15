@@ -130,7 +130,12 @@ def _resolve_target(method: Method, ctx: ExecContext) -> DownloadTarget:
 def link_name(method: Method, member: str) -> str:
     """The bin link name a download method creates: `bin_name` when set, else
     the basename of `member`. The one rule for install, update and uninstall,
-    so the uninstaller looks for the link under the name install gave it."""
+    so the uninstaller looks for the link under the name install gave it.
+    One input asymmetry to know about (17-REVIEW IN-05): install and update
+    pass the RENDERED member (`target.member`, after render_asset), while
+    uninstall passes the raw registry `member` template — the basenames are
+    identical for every current registry entry, which is what makes the
+    shared rule hold."""
     return _opt_str(method, "bin_name") or PurePosixPath(member).name
 
 

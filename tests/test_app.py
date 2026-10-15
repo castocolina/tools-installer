@@ -2048,19 +2048,26 @@ def test_run_uninstall_also_removes_guard_artifacts(tmp_path: Path):
     assert "Nothing to uninstall" not in out
 
 
-def test_perform_uninstall_removes_only_chosen_levers(tmp_path: Path) -> None:
+def test_perform_uninstall_removes_only_chosen_levers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from installer.app import UninstallDecision, perform_uninstall
     from installer.shellrc import write_myshellrc
 
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    opt = tmp_path / ".local" / "opt" / "fd"
+    opt.mkdir(parents=True)
+    binary = opt / "fd"
+    binary.write_text("binary")
     artifact = bin_dir / "fd"
-    artifact.write_text("binary")
+    artifact.symlink_to(binary)
     myshellrc = tmp_path / ".myshellrc"
     write_myshellrc([bin_dir], myshellrc)  # writes the managed PATH block
 
-    # Only the artifact is selected; ban + path-block left intact.
-    decision = UninstallDecision(paths=(artifact,), remove_ban=False, remove_path_block=False)
+    # Only the tool's proven pair is selected; ban + path-block left intact.
+    decision = UninstallDecision(paths=(artifact, opt), remove_ban=False, remove_path_block=False)
     perform_uninstall(
         decision,
         bin_dir=bin_dir,
@@ -2072,7 +2079,8 @@ def test_perform_uninstall_removes_only_chosen_levers(tmp_path: Path) -> None:
         extra_policies=(),
     )
 
-    assert not artifact.exists()
+    assert not artifact.is_symlink()
+    assert not opt.exists()
     assert "tools-installer path" in myshellrc.read_text()  # block preserved
 
 
@@ -3554,3 +3562,121 @@ def test_second_yes_run_deletes_nothing(tmp_path: Path, monkeypatch: pytest.Monk
     assert second == []
     assert snapshot() == before_files
     assert link_targets() == before_links
+
+
+def test_run_uninstall_survives_a_looping_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CR-01: a self-looping bin link crashes nothing -- it is unproven, so the
+    run lists it for manual removal and completes."""
+    from installer.app import run_uninstall
+    from tests.test_uninstall import loop_tool
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "foo").symlink_to("foo")
+    tool = loop_tool("foo")
+    console, buf = _console()
+    removed = run_uninstall(
+        [tool],
+        console,
+        **_uninstall_kwargs(tmp_path, bin_dir, lambda _m: True),  # type: ignore[arg-type]
+    )
+    assert removed == []
+    assert (bin_dir / "foo").is_symlink()  # untouched
+    assert str(bin_dir / "foo") in buf.getvalue()
+
+
+def test_run_uninstall_refuses_paths_changed_since_the_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """opencode H1: a proven link replaced by a foreign regular file between
+    the preview and the confirm is refused and reported, not deleted."""
+    from installer.app import run_uninstall
+    from tests.test_uninstall import loop_tool
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    opt = tmp_path / ".local" / "opt" / "fd"
+    opt.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (opt / "fd").write_text("bin")
+    (bin_dir / "fd").symlink_to(opt / "fd")
+    tool = loop_tool("fd")
+
+    def swap_then_confirm(_message: str) -> bool:
+        (bin_dir / "fd").unlink()
+        (bin_dir / "fd").write_text("foreign file")
+        return True
+
+    console, buf = _console()
+    removed = run_uninstall(
+        [tool],
+        console,
+        **_uninstall_kwargs(tmp_path, bin_dir, swap_then_confirm),  # type: ignore[arg-type]
+    )
+    assert removed == []
+    assert (bin_dir / "fd").read_text() == "foreign file"  # the replacement survives
+    assert opt.exists()  # the opt dir is no longer proven either
+    assert "changed since the preview" in buf.getvalue()
+    assert str(bin_dir / "fd") in buf.getvalue()
+
+
+def test_perform_uninstall_refuses_paths_changed_since_the_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The TUI apply path re-checks the same proof at deletion time (H1):
+    a still-proven link is removed, a replaced one is refused with a warning."""
+    from installer.app import UninstallDecision, perform_uninstall
+    from tests.test_uninstall import plant_removal_fixtures
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    plant_removal_fixtures(tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    opt_fd = tmp_path / ".local" / "opt" / "fd"
+    myshellrc = tmp_path / ".myshellrc"
+    myshellrc.write_text("")
+
+    # fd's link is swapped for a foreign file after the preview was rendered.
+    (bin_dir / "fd").unlink()
+    (bin_dir / "fd").write_text("foreign file")
+
+    decision = UninstallDecision(
+        paths=(bin_dir / "fd", opt_fd), remove_ban=False, remove_path_block=False
+    )
+    result = perform_uninstall(
+        decision,
+        bin_dir=bin_dir,
+        myshellrc_path=myshellrc,
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+    )
+    assert (bin_dir / "fd").read_text() == "foreign file"  # the replacement survives
+    assert opt_fd.exists()  # without its link, the opt dir is unproven too
+    assert any("changed since the preview" in warning for warning in result.warnings)
+    assert any(str(bin_dir / "fd") in warning for warning in result.warnings)
+
+    # A still-proven link is still removed, with no refusal warning.
+    (opt_fd / "fd").write_text("bin")
+    (bin_dir / "fd").unlink()
+    (bin_dir / "fd").symlink_to(opt_fd / "fd")
+    decision = UninstallDecision(
+        paths=(bin_dir / "fd", opt_fd), remove_ban=False, remove_path_block=False
+    )
+    result = perform_uninstall(
+        decision,
+        bin_dir=bin_dir,
+        myshellrc_path=myshellrc,
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+    )
+    assert result.warnings == ()
+    assert not (bin_dir / "fd").is_symlink()
+    assert not opt_fd.exists()

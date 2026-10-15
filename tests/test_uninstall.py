@@ -6,6 +6,7 @@ import pytest
 from rich.console import Console
 
 from installer.download import link_name
+from installer.enums import UninstallState
 from installer.model import Method, Tool, load_tools
 from installer.policy import Policy, daemon_policy, omz_plugins_policy, tweak_policy
 from installer.run import CommandError
@@ -39,6 +40,12 @@ def _dl_tool(tool_id: str, member: str) -> Tool:
             ),
         ),
     )
+
+
+def loop_tool(tool_id: str) -> Tool:
+    """Public form of `_dl_tool`: tests/test_app.py imports it (pyright
+    reportPrivateUsage keeps underscore names module-private)."""
+    return _dl_tool(tool_id, tool_id)
 
 
 def plant_removal_fixtures(home: Path) -> list[Tool]:
@@ -115,6 +122,30 @@ def test_plan_uninstall_names_the_link_like_install(
         ),
     )
     assert plan_uninstall([tool], bin_dir) == [opt, bin_dir / "subl"]
+
+
+def test_plan_removal_survives_looping_link_and_opt_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CR-01: a symlink loop is unproven, never a crash. A self-looping bin
+    link (bin/foo -> foo) and a looping opt dir must leave plan_removal (and
+    every caller: classify_tools, UninstallScreen, run_uninstall) standing,
+    with the looping names still listed for manual removal."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    opt = tmp_path / ".local" / "opt"
+    bin_dir.mkdir(parents=True)
+    opt.mkdir(parents=True)
+    (bin_dir / "foo").symlink_to("foo")  # self-loop at a catalog link name
+    (opt / "loop").symlink_to("loop")  # looping opt dir
+    (bin_dir / "bar").symlink_to(opt / "loop" / "bar")
+    tools = [_dl_tool("foo", "foo"), _dl_tool("bar", "bar")]
+    plan = plan_removal(tools, bin_dir)
+    assert plan.removable == ()
+    assert bin_dir / "foo" in plan.yourself
+    assert bin_dir / "bar" in plan.yourself
+    rows = classify_tools(tools, bin_dir, installed={"foo": False, "bar": False}, platform=_LINUX)
+    assert all(row.state != UninstallState.REMOVABLE for row in rows)
 
 
 @pytest.mark.parametrize(

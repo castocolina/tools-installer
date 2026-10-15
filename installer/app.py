@@ -90,6 +90,7 @@ from installer.uninstall import (
     plan_removal,
     policy_owned,
     remove_paths,
+    still_removable,
     sweep_policies,
     sweep_tweaks,
 )
@@ -611,7 +612,16 @@ def run_uninstall(
             console.print(f"  omz-plugins {detail}.")
     if not confirm("Remove these artifacts?"):
         return []
-    remove_paths(paths)
+    # H1 (17-REVIEW-opencode.md): the preview is not a permission slip. The
+    # proof is recomputed NOW, at deletion time, and only paths still proven
+    # are deleted; anything that changed since the preview is reported and
+    # left on disk.
+    fresh = set(plan_removal(tools, default_bin_dir).removable)
+    kept = [path for path in paths if path in fresh]
+    for path in paths:
+        if path not in fresh:
+            console.print(f"changed since the preview; not removed: {path}")
+    remove_paths(kept)
     remove_managed_block(myshellrc_path)
     remove_shims(default_bin_dir)
     remove_ban_aliases(myshellrc_path)
@@ -650,7 +660,7 @@ def run_uninstall(
         and daemon_policy.clear_decided is not None
     ):
         daemon_policy.clear_decided()
-    return paths
+    return kept
 
 
 @dataclass(frozen=True)
@@ -691,7 +701,17 @@ def perform_uninstall(
     daemon is never constructed, or when the caller genuinely has none to
     offer. Dropping `extra_policies` leaves a cache-redirect file on disk
     while the uninstall reports success."""
-    remove_paths(list(decision.paths))
+    # H1 (17-REVIEW-opencode.md): same deletion-time re-proof as run_uninstall.
+    # A path no longer proven (its link swapped for a foreign file, dangling,
+    # looping) is refused and reported through SweepResult.warnings, which the
+    # UninstallScreen already renders; the rest go ahead.
+    kept = [path for path in decision.paths if still_removable(path, bin_dir)]
+    refused = tuple(
+        f"changed since the preview; not removed: {path}"
+        for path in decision.paths
+        if path not in kept
+    )
+    remove_paths(kept)
     if decision.remove_ban:
         remove_shims(bin_dir)
         remove_ban_aliases(myshellrc_path)
@@ -716,7 +736,7 @@ def perform_uninstall(
             and daemon_policy.clear_decided is not None
         ):
             daemon_policy.clear_decided()
-        return swept
+        return dataclasses.replace(swept, warnings=swept.warnings + refused)
     # decision.remove_tweaks is False here -- either the user genuinely left
     # an ACTIVE tweaks row unselected (keep the marker, nothing to clear), or
     # there was no tweaks row to select at all because the daemon was already
@@ -732,4 +752,4 @@ def perform_uninstall(
         and not policy_owned(daemon_policy)
     ):
         daemon_policy.clear_decided()
-    return SweepResult()
+    return SweepResult(warnings=refused)

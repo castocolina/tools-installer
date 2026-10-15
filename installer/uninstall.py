@@ -125,6 +125,37 @@ class RemovalPlan:
     yourself: tuple[Path, ...]
 
 
+def is_still_proven(path: Path) -> bool:
+    """The per-link form of `plan_removal`'s proof, re-checkable at deletion time.
+
+    A bin link is proven when it is a symlink whose target is a regular file
+    inside this tool's own opt_dir(<link name>) — the same archive-layout
+    proof `plan_removal` makes, evaluated NOW rather than at preview time.
+    Resolution is strict: a dangling or looping link raises (OSError/RuntimeError
+    on 3.11+) and is unproven — never a crash (CR-01)."""
+    if not path.is_symlink():
+        return False
+    try:
+        resolved = path.resolve(strict=True)
+        opt_real = opt_dir(path.name).resolve(strict=True)
+    except (OSError, RuntimeError):  # dangling or looping: never proof
+        return False
+    return resolved.is_file() and resolved.is_relative_to(opt_real)
+
+
+def still_removable(path: Path, bin_dir: Path) -> bool:
+    """`path` is still proven at deletion time (opencode H1).
+
+    True for the bin link itself (`is_still_proven`) and for the opt dir of a
+    link that is still proven — the two members `plan_removal` puts in
+    `removable`. The opt-dir half is proven DERIVATIVELY: without its bin
+    link it is just a directory, and a preview that listed it must not
+    delete a tree whose proof has since lapsed."""
+    if is_still_proven(path):
+        return True
+    return path == opt_dir(path.name) and is_still_proven(bin_dir / path.name)
+
+
 def plan_removal(tools: list[Tool], default_bin_dir: Path) -> RemovalPlan:
     """Prove removability by the archive layout only; name the rest.
 
@@ -143,12 +174,7 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path) -> RemovalPlan:
                 continue
             link, name = hit
             opt = opt_dir(name)
-            if not link.is_symlink():
-                continue
-            resolved = link.resolve()
-            if not resolved.is_file():
-                continue
-            if not resolved.is_relative_to(opt.resolve()):
+            if not is_still_proven(link):
                 continue
             for path in (link, opt):
                 if path not in seen:
@@ -367,12 +393,12 @@ def classify_tools(
                 hint += f" · remove it yourself: {', '.join(str(p) for p in plan.yourself)}"
             rows.append(ToolRow(tool, UninstallState.REMOVABLE, list(plan.removable), hint, True))
         elif plan.yourself:
-            youself_hint = f"remove it yourself: {', '.join(str(p) for p in plan.yourself)}"
+            yourself_hint = f"remove it yourself: {', '.join(str(p) for p in plan.yourself)}"
             if installed.get(tool.id, False):
-                youself_hint = (
-                    f"{_managed_hint(tool, which, platform, owner_hint)} · {youself_hint}"
+                yourself_hint = (
+                    f"{_managed_hint(tool, which, platform, owner_hint)} · {yourself_hint}"
                 )
-            rows.append(ToolRow(tool, UninstallState.MANAGED, [], youself_hint, False))
+            rows.append(ToolRow(tool, UninstallState.MANAGED, [], yourself_hint, False))
         elif installed.get(tool.id, False):
             rows.append(
                 ToolRow(
