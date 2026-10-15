@@ -41,6 +41,22 @@ def test_round_trip_through_the_versioned_envelope(tmp_path: Path) -> None:
     assert loaded["codegraph"] == entry
 
 
+def test_digests_round_trip_through_the_cache_file(tmp_path: Path) -> None:
+    path = tmp_path / "versions.json"
+    digest = "b" * 64
+    entry = VersionCacheEntry(
+        latest_version="v1.2.0",
+        checked_at="2026-09-01T00:00:00+00:00",
+        failed_at=None,
+        digests={"asset.tar.gz": digest},
+    )
+    save_version_cache(path, {"codegraph": entry})
+    raw = json.loads(path.read_text())
+    assert raw["tools"]["codegraph"]["digests"] == {"asset.tar.gz": digest}
+    loaded = load_version_cache(path)
+    assert loaded["codegraph"].digests == {"asset.tar.gz": digest}
+
+
 def test_stale_drawio_cli_cache_entry_is_ignored(tmp_path: Path) -> None:
     registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
     path = tmp_path / "versions.json"

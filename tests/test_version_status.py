@@ -1,6 +1,7 @@
 import json
 import threading
 import time
+import urllib.request
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -46,7 +47,7 @@ from installer.version_status import (
     resolve_github_release_status,
     resolve_status,
 )
-from installer.versions import VersionError
+from installer.versions import Release, VersionError, resolve_github_tag
 
 _MANAGED = Path("/tmp/tools-installer-bin")
 
@@ -209,6 +210,103 @@ def test_preserved_older_latest_is_stale_after_a_failed_fetch() -> None:
     assert entry.latest_version == "v1.5.0"
     assert entry.checked_at == old.checked_at
     assert entry.failed_at is not None
+
+
+_DIGEST_A = "a" * 64
+
+
+def test_refresh_stores_digests_from_one_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    calls: list[str] = []
+
+    def fake_resolver(_resolve_tag: object) -> Callable[[str], Release]:
+        def resolve(repo: str) -> Release:
+            calls.append(repo)
+            return Release("v1.2.0", {"a.tar.gz": _DIGEST_A})
+
+        return resolve
+
+    monkeypatch.setattr("installer.version_status.release_resolver", fake_resolver)
+    _status, entry = resolve_github_release_status(
+        _codegraph(),
+        repo="colbymchenry/codegraph",
+        entry=None,
+        now=now,
+        probe_output=lambda argv: "1.2.0",
+        resolve_tag=lambda repo: "v1.2.0",
+    )
+    assert calls == ["colbymchenry/codegraph"]
+    assert entry is not None
+    assert entry.latest_version == "v1.2.0"
+    assert entry.digests == {"a.tar.gz": _DIGEST_A}
+
+
+def test_failed_refresh_keeps_the_previous_digests(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    old = VersionCacheEntry(
+        latest_version="v1.5.0",
+        checked_at=(now - timedelta(days=8)).isoformat(),
+        failed_at=None,
+        digests={"a.tar.gz": _DIGEST_A},
+    )
+
+    def fake_resolver(_resolve_tag: object) -> Callable[[str], Release]:
+        def resolve(_repo: str) -> Release:
+            raise VersionError("rate limited")
+
+        return resolve
+
+    monkeypatch.setattr("installer.version_status.release_resolver", fake_resolver)
+    _status, entry = resolve_github_release_status(
+        _codegraph(),
+        repo="colbymchenry/codegraph",
+        entry=old,
+        now=now,
+        probe_output=lambda argv: "1.2.0",
+        resolve_tag=lambda repo: "v9.9.9",
+    )
+    assert entry is not None
+    assert entry.digests == {"a.tar.gz": _DIGEST_A}
+    assert entry.failed_at is not None
+
+
+def test_refresh_reads_tag_and_digests_from_one_api_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    calls = 0
+
+    class FakeResp:
+        def __enter__(self) -> "FakeResp":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "tag_name": "v1.2.0",
+                    "assets": [{"name": "a.tar.gz", "digest": f"sha256:{_DIGEST_A}"}],
+                }
+            ).encode()
+
+    def fake_urlopen(_req: urllib.request.Request, timeout: int) -> FakeResp:
+        nonlocal calls
+        calls += 1
+        return FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    _status, entry = resolve_github_release_status(
+        _codegraph(),
+        repo="colbymchenry/codegraph",
+        entry=None,
+        now=now,
+        probe_output=lambda argv: "1.2.0",
+        resolve_tag=resolve_github_tag,
+    )
+    assert calls == 1
+    assert entry is not None
+    assert entry.latest_version == "v1.2.0"
+    assert entry.digests == {"a.tar.gz": _DIGEST_A}
 
 
 def _gh_tool(tool_id: str) -> Tool:

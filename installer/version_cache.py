@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -46,11 +46,16 @@ MANAGER_STALE_AFTER = timedelta(hours=6)
 MANAGER_RETRY_BACKOFF = timedelta(minutes=30)
 
 
+def _empty_digest_map() -> dict[str, str]:
+    return {}
+
+
 @dataclass(frozen=True)
 class VersionCacheEntry:
     latest_version: str | None
     checked_at: str | None
     failed_at: str | None = None
+    digests: Mapping[str, str] = field(default_factory=_empty_digest_map)
 
 
 @dataclass(frozen=True)
@@ -114,7 +119,18 @@ def _entry_from_raw(raw: object) -> VersionCacheEntry | None:
         return None
     if not isinstance(failed, (str, type(None))):
         return None
-    return VersionCacheEntry(latest_version=latest, checked_at=checked, failed_at=failed)
+    digests_raw = _as_object(mapping.get("digests"))
+    digests: dict[str, str] = {}
+    if digests_raw is not None:
+        for key, value in digests_raw.items():
+            if isinstance(value, str):
+                digests[key] = value
+    return VersionCacheEntry(
+        latest_version=latest,
+        checked_at=checked,
+        failed_at=failed,
+        digests=digests,
+    )
 
 
 def _tools_mapping(raw: object) -> dict[str, object] | None:
@@ -211,6 +227,7 @@ def save_version_cache(
                 "latest_version": entry.latest_version,
                 "checked_at": entry.checked_at,
                 "failed_at": entry.failed_at,
+                "digests": dict(entry.digests),
             }
             for tool_id, entry in cache.items()
         },

@@ -45,7 +45,7 @@ from __future__ import annotations
 import os
 import shutil
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -85,6 +85,7 @@ from installer.versions import (
     extract_observed_version,
     is_outdated,
     probe_version_output,
+    release_resolver,
     resolve_github_tag,
 )
 
@@ -179,15 +180,27 @@ def resolve_github_release_status(
     new_entry: VersionCacheEntry | None
     if allow_fetch and should_fetch(entry, now=now):
         try:
-            latest = resolve_tag(repo)
-            new_entry = VersionCacheEntry(latest_version=latest, checked_at=now_iso, failed_at=None)
+            release = release_resolver(resolve_tag)(repo)
+            latest = release.tag
+            new_entry = VersionCacheEntry(
+                latest_version=latest,
+                checked_at=now_iso,
+                failed_at=None,
+                digests=release.digests,
+            )
             fetched = True
         except (VersionError, OSError):
             latest = entry.latest_version if entry is not None else None
+            prior_digests: Mapping[str, str] = (
+                entry.digests
+                if entry is not None
+                else VersionCacheEntry(latest_version=None, checked_at=None).digests
+            )
             new_entry = VersionCacheEntry(
                 latest_version=entry.latest_version if entry is not None else None,
                 checked_at=entry.checked_at if entry is not None else None,
                 failed_at=now_iso,
+                digests=prior_digests,
             )
     else:
         latest = entry.latest_version if entry is not None else None
