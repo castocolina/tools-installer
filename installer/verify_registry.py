@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import copy
 import functools
+import http.client
 import json
 import os
 import re
@@ -77,6 +78,8 @@ ALL_ARCH = ("amd64", "arm64")
 REGISTRY = Path(__file__).with_name("registry.toml")
 
 DRIFT_LABEL = "registry-drift"
+
+_TRANSPORT_ERRORS = (URLError, TimeoutError, OSError, http.client.HTTPException)
 
 FindingStatus = Literal["ok", "drift", "inconclusive"]
 
@@ -275,7 +278,7 @@ def _release_read_finding(tool_id: str, repo: str, exc: VersionError) -> Finding
                 "release read forbidden (HTTP 403)",
             )
         return Finding(tool_id, url, "inconclusive", _head_error_reason(cause))
-    if isinstance(cause, (URLError, TimeoutError, OSError)):
+    if isinstance(cause, _TRANSPORT_ERRORS):
         return Finding(tool_id, url, "inconclusive", str(cause))
     return Finding(tool_id, url, "inconclusive", str(exc))
 
@@ -384,17 +387,18 @@ def _collect_targets(
                                 pre_findings.append(_release_read_finding(tool.id, repo, exc))
                         continue
                     except ExecutorError as exc:
-                        url = pinned_url(method) if method.kind in ("app", "tarball") else ""
+                        raw_url = method.params.get("url")
+                        url = raw_url if isinstance(raw_url, str) and raw_url else ""
+                        if not url and method.kind not in ("app", "tarball"):
+                            url = f"github:{method.params.get('repo', '')}"
                         pre_findings.append(
                             Finding(
                                 tool_id=tool.id,
-                                url=url or f"github:{method.params.get('repo', '')}",
+                                url=url,
                                 status="drift",
                                 reason=str(exc),
                             )
                         )
-                        continue
-                    except ValueError:
                         continue
 
                     if target.unverified_reason or (
@@ -572,7 +576,6 @@ def check_registry(
     probe: Probe,
     state: MutableMapping[str, str],
     *,
-    _full_verify: bool = True,
     on_verified: Callable[[Mapping[str, str]], None] | None = None,
 ) -> Report:
     not_checkable = _not_checkable_tool_ids(tools)
@@ -637,8 +640,6 @@ def check_registry(
         except HTTPError:
             download_http += 1
             raise
-        except (URLError, TimeoutError, OSError):
-            raise
 
     def head_once(url: str) -> str:
         nonlocal head_attempted, head_http
@@ -650,7 +651,7 @@ def check_registry(
             except HTTPError as exc:
                 head_http += 1
                 url_head[url] = exc
-            except BaseException as exc:
+            except _TRANSPORT_ERRORS as exc:
                 url_head[url] = exc
         result = url_head[url]
         if isinstance(result, BaseException):
@@ -699,23 +700,12 @@ def check_registry(
                     platforms=target.platforms,
                 )
             continue
-        except (URLError, TimeoutError, OSError) as exc:
+        except _TRANSPORT_ERRORS as exc:
             findings[key] = Finding(
                 tool_id=target.tool_id,
                 url=target.url,
                 status="inconclusive",
                 reason=str(exc),
-                member=target.member,
-                platforms=target.platforms,
-            )
-            continue
-
-        if not _full_verify:
-            findings[key] = Finding(
-                tool_id=target.tool_id,
-                url=target.url,
-                status="ok",
-                reason="ok",
                 member=target.member,
                 platforms=target.platforms,
             )
@@ -728,7 +718,7 @@ def check_registry(
                 with tempfile.TemporaryDirectory() as tmp:
                     sidecar = Path(tmp) / "checksum"
                     tracked_download(checksum_url, sidecar)
-                    checksum_text = sidecar.read_text()
+                    checksum_text = sidecar.read_text(encoding="utf-8", errors="replace")
             except HTTPError as exc:
                 if exc.code in (404, 410):
                     findings[key] = Finding(
@@ -749,7 +739,7 @@ def check_registry(
                         platforms=target.platforms,
                     )
                 continue
-            except (URLError, TimeoutError, OSError) as exc:
+            except _TRANSPORT_ERRORS as exc:
                 findings[key] = Finding(
                     tool_id=target.tool_id,
                     url=target.url,
@@ -853,7 +843,7 @@ def check_registry(
                         platforms=target.platforms,
                     )
                 continue
-            except (URLError, TimeoutError, OSError) as exc:
+            except _TRANSPORT_ERRORS as exc:
                 findings[key] = Finding(
                     tool_id=target.tool_id,
                     url=target.url,

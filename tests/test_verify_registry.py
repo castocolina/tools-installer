@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import http.client
 import io
 import json
 import tarfile
@@ -509,6 +510,259 @@ strip = 0
     report = check_registry(load_tools(registry), probe, state={})
     assert report.findings[0].status == "drift"
     assert "checksum file disagrees" in report.findings[0].reason
+
+
+def test_head_incomplete_read_is_inconclusive(tmp_path: Path) -> None:
+    content = """
+[[tool]]
+id = "t1"
+name = "t1"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "a-{ver}.tar.gz"
+member = "bin/x"
+strip = 0
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="1.0.0", assets={})
+
+    def head(url: str) -> str:
+        raise http.client.IncompleteRead(b"")
+
+    probe, _ = _map_probe(release, head=head)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.findings[0].status == "inconclusive"
+
+
+def test_download_incomplete_read_is_inconclusive(tmp_path: Path) -> None:
+    tar = _gz_tar_bytes({"bin/x": b"x"})
+    content = """
+[[tool]]
+id = "t1"
+name = "t1"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "a-{ver}.tar.gz"
+member = "bin/x"
+strip = 0
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="1.0.0", assets={"a-1.0.0.tar.gz": hashlib.sha256(tar).hexdigest()})
+    url = "https://github.com/o/r/releases/download/1.0.0/a-1.0.0.tar.gz"
+
+    def download(u: str, dest: Path) -> None:
+        if u == url or u.endswith("a-1.0.0.tar.gz"):
+            raise http.client.IncompleteRead(b"")
+
+    probe, _ = _map_probe(release, payloads={"a-1.0.0.tar.gz": tar})
+    probe = Probe(release=probe.release, head=probe.head, download=download)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert any(f.status == "inconclusive" for f in report.findings)
+
+
+def test_tarball_without_url_is_drift_not_a_crash(tmp_path: Path) -> None:
+    content = """
+[[tool]]
+id = "t1"
+name = "t1"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+member = "bin/x"
+strip = 0
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="0", assets={})
+    probe, _ = _map_probe(release)
+    report = check_registry(load_tools(registry), probe, state={})
+    drift = [f for f in report.findings if f.tool_id == "t1"]
+    assert len(drift) == 1
+    assert drift[0].status == "drift"
+    assert "url" in drift[0].reason.lower()
+
+
+def test_binary_checksum_file_is_drift_not_a_crash(tmp_path: Path) -> None:
+    tar = _gz_tar_bytes({"bin/x": b"x"})
+    digest = hashlib.sha256(tar).hexdigest()
+    content = """
+[[tool]]
+id = "t1"
+name = "t1"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "a-{ver}.tar.gz"
+member = "bin/x"
+checksum = "SHA256SUMS"
+strip = 0
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="1.0.0", assets={"a-1.0.0.tar.gz": digest})
+    probe, _ = _map_probe(
+        release,
+        payloads={
+            "a-1.0.0.tar.gz": tar,
+            "SHA256SUMS": b"\xff\xfe\x00",
+        },
+    )
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.findings[0].status == "drift"
+    assert "checksum file missing entry" in report.findings[0].reason
+
+
+def test_checksum_sidecar_404_is_drift(tmp_path: Path) -> None:
+    tar = _gz_tar_bytes({"bin/x": b"x"})
+    digest = hashlib.sha256(tar).hexdigest()
+    content = """
+[[tool]]
+id = "t1"
+name = "t1"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "a-{ver}.tar.gz"
+member = "bin/x"
+checksum = "SHA256SUMS"
+strip = 0
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="1.0.0", assets={"a-1.0.0.tar.gz": digest})
+    checksum_url = "https://github.com/o/r/releases/download/1.0.0/SHA256SUMS"
+
+    def download(url: str, dest: Path) -> None:
+        if url == checksum_url or url.endswith("SHA256SUMS"):
+            raise _http_error(url, 404)
+        dest.write_bytes(tar)
+
+    probe, _ = _map_probe(release, payloads={"a-1.0.0.tar.gz": tar})
+    probe = Probe(release=probe.release, head=probe.head, download=download)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.findings[0].status == "drift"
+
+
+def test_checksum_sidecar_5xx_is_inconclusive(tmp_path: Path) -> None:
+    tar = _gz_tar_bytes({"bin/x": b"x"})
+    digest = hashlib.sha256(tar).hexdigest()
+    content = """
+[[tool]]
+id = "t1"
+name = "t1"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "a-{ver}.tar.gz"
+member = "bin/x"
+checksum = "SHA256SUMS"
+strip = 0
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="1.0.0", assets={"a-1.0.0.tar.gz": digest})
+
+    def download(url: str, dest: Path) -> None:
+        if url.endswith("SHA256SUMS"):
+            raise _http_error(url, 503)
+        dest.write_bytes(tar)
+
+    probe, _ = _map_probe(release, payloads={"a-1.0.0.tar.gz": tar})
+    probe = Probe(release=probe.release, head=probe.head, download=download)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.findings[0].status == "inconclusive"
+
+
+def test_checksum_sidecar_network_error_is_inconclusive(tmp_path: Path) -> None:
+    tar = _gz_tar_bytes({"bin/x": b"x"})
+    digest = hashlib.sha256(tar).hexdigest()
+    content = """
+[[tool]]
+id = "t1"
+name = "t1"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "a-{ver}.tar.gz"
+member = "bin/x"
+checksum = "SHA256SUMS"
+strip = 0
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="1.0.0", assets={"a-1.0.0.tar.gz": digest})
+
+    def download(url: str, dest: Path) -> None:
+        if url.endswith("SHA256SUMS"):
+            raise URLError("network")
+        dest.write_bytes(tar)
+
+    probe, _ = _map_probe(release, payloads={"a-1.0.0.tar.gz": tar})
+    probe = Probe(release=probe.release, head=probe.head, download=download)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.findings[0].status == "inconclusive"
+
+
+def test_asset_get_404_after_a_passing_head_is_drift(tmp_path: Path) -> None:
+    content = """
+[[tool]]
+id = "t1"
+name = "t1"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "a-{ver}.tar.gz"
+member = "bin/x"
+strip = 0
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="1.0.0", assets={})
+    asset_url = "https://github.com/o/r/releases/download/1.0.0/a-1.0.0.tar.gz"
+
+    def download(url: str, dest: Path) -> None:
+        if url == asset_url or url.endswith("a-1.0.0.tar.gz"):
+            raise _http_error(url, 404)
+
+    probe, _ = _map_probe(release)
+    probe = Probe(release=probe.release, head=probe.head, download=download)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.findings[0].status == "drift"
 
 
 def test_downloaded_hash_mismatch_is_drift(tmp_path: Path) -> None:
