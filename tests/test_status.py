@@ -1,9 +1,15 @@
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 from installer.model import Method, Tool, load_tools
-from installer.status import dangling_shim, is_default_shell, is_installed
+from installer.status import (
+    dangling_shim,
+    is_default_shell,
+    is_installed,
+    macos_stub_reason,
+)
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -446,3 +452,71 @@ def test_dangling_shim_false_when_binary_is_absent(tmp_path: Path) -> None:
         )
         is False
     )
+
+
+def _java_tool(*, bin_dir: str | None = None) -> Tool:
+    params: dict[str, object] = {"candidate": "java"}
+    if bin_dir is not None:
+        params["bin_dir"] = bin_dir
+    return Tool(
+        id="java",
+        name="java",
+        category="system",
+        cmd="java",
+        methods=(Method(kind="sdkman", params=params),),
+    )
+
+
+def test_java_stub_alone_is_not_installed_with_a_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.status as status
+
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/java" if cmd == "java" else None
+
+    monkeypatch.setattr(status.shutil, "which", fake_which)
+
+    def probe_fail(argv: Sequence[str]) -> bool:
+        return False
+
+    tool = _java_tool()
+    assert is_installed(tool, darwin=True, probe=probe_fail) is False
+    reason = macos_stub_reason(tool, darwin=True, probe=probe_fail)
+    assert reason is not None
+    assert "/usr/bin/java" in reason
+    assert "/usr/libexec/java_home" in reason
+
+
+def test_java_stub_with_a_real_jdk_is_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.status as status
+
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/java" if cmd == "java" else None
+
+    monkeypatch.setattr(status.shutil, "which", fake_which)
+
+    def probe_ok(argv: Sequence[str]) -> bool:
+        return True
+
+    tool = _java_tool()
+    assert is_installed(tool, darwin=True, probe=probe_ok) is True
+    assert macos_stub_reason(tool, darwin=True, probe=probe_ok) is None
+
+
+def test_stub_falls_through_to_a_declared_bin_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import installer.status as status
+
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/java" if cmd == "java" else None
+
+    monkeypatch.setattr(status.shutil, "which", fake_which)
+
+    def probe_fail(argv: Sequence[str]) -> bool:
+        return False
+
+    bin_dir = tmp_path / "sdkman" / "candidates" / "java" / "current" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "java").touch()
+    tool = _java_tool(bin_dir=str(bin_dir))
+    assert is_installed(tool, darwin=True, probe=probe_fail) is True

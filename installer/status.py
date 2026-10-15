@@ -3,10 +3,55 @@ present, or a declared detect_path marker file present."""
 
 import os
 import shutil
-from collections.abc import Mapping, Sequence
+import sys
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from installer.model import Tool
+from installer.run import CommandError, run_output
+from installer.versions import PROBE_VERSION_TIMEOUT
+
+MACOS_STUBS: Mapping[str, tuple[str, ...]] = {
+    "/usr/bin/java": ("/usr/libexec/java_home",),
+    "/usr/bin/git": ("/usr/bin/xcode-select", "-p"),
+}
+
+StubProbe = Callable[[Sequence[str]], bool]
+
+
+def _default_stub_probe(argv: Sequence[str]) -> bool:
+    try:
+        run_output(list(argv), timeout=PROBE_VERSION_TIMEOUT)
+    except CommandError:
+        return False
+    return True
+
+
+def _is_darwin(*, darwin: bool | None) -> bool:
+    if darwin is not None:
+        return darwin
+    return sys.platform == "darwin"
+
+
+def macos_stub_reason(
+    tool: Tool,
+    *,
+    darwin: bool | None = None,
+    probe: StubProbe | None = None,
+) -> str | None:
+    """When `which` resolves to a macOS shim, return None if the real tool exists else a reason."""
+    if not _is_darwin(darwin=darwin):
+        return None
+    resolved = shutil.which(tool.cmd)
+    if resolved is None:
+        return None
+    argv = MACOS_STUBS.get(resolved)
+    if argv is None:
+        return None
+    run_probe = _default_stub_probe if probe is None else probe
+    if run_probe(argv):
+        return None
+    return f"{resolved} is the macOS stub; the real tool is missing ({' '.join(argv)} failed)"
 
 
 def _default_app_roots() -> tuple[Path, ...]:
@@ -15,7 +60,13 @@ def _default_app_roots() -> tuple[Path, ...]:
     return (Path.home() / "Applications", Path("/Applications"))
 
 
-def is_installed(tool: Tool, app_roots: tuple[Path, ...] | None = None) -> bool:
+def is_installed(
+    tool: Tool,
+    app_roots: tuple[Path, ...] | None = None,
+    *,
+    darwin: bool | None = None,
+    probe: StubProbe | None = None,
+) -> bool:
     """True if the tool's command resolves on PATH, any app/cask bundle exists,
     or a declared detect_path is present.
 
@@ -37,7 +88,8 @@ def is_installed(tool: Tool, app_roots: tuple[Path, ...] | None = None) -> bool:
     formula on some hosts, so its declared bin_dir does not exist while the
     tool is plainly installed. Widening only ever turns False into True.
     """
-    if shutil.which(tool.cmd) is not None:
+    resolved = shutil.which(tool.cmd)
+    if resolved is not None and macos_stub_reason(tool, darwin=darwin, probe=probe) is None:
         return True
     for method in tool.methods:
         detect_path = method.params.get("detect_path")

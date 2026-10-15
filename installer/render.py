@@ -52,7 +52,12 @@ def render_audit(statuses: list[ToolStatus], console: Console) -> None:
     table.add_column("Category")
     table.add_column("State")
     for status in statuses:
-        state = "installed" if status.installed else "missing"
+        if status.installed:
+            state = "installed"
+        elif status.reason:
+            state = f"missing ({escape(status.reason)})"
+        else:
+            state = "missing"
         table.add_row(status.tool.id, status.tool.category, state)
     console.print(table)
 
