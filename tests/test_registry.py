@@ -543,8 +543,7 @@ def test_gh_uses_nested_member_on_linux_and_brew_only_on_macos() -> None:
     assert method.kind == "github_release"
     assert method.params["member"] == "bin/gh"
     assert method.params["strip"] == 1
-    # gh ships macOS only as zip/pkg, so only brew is left on a Mac.
-    assert [m.kind for m in resolve_methods(gh, macos)] == ["brew"]
+    assert [m.kind for m in resolve_methods(gh, macos)][:2] == ["github_release", "brew"]
 
 
 def test_codegraph_github_release_is_os_split_checksum_verified_and_nested() -> None:
@@ -623,14 +622,14 @@ def test_hyperfine_linux_uses_gnu_and_strips() -> None:
     hf = next(t for t in load_tools(REGISTRY) if t.id == "hyperfine")
     linux = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
     method = resolve_methods(hf, linux)[0]
-    assert method.params["asset"] == "hyperfine-v{ver}-{arch.machine}-unknown-linux-gnu.tar.gz"
+    assert method.params["asset"] == "hyperfine-v{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
     assert method.params["strip"] == 1
 
 
 def test_download_tools_resolve_github_release_then_brew_on_macos() -> None:
     tools = {t.id: t for t in load_tools(REGISTRY)}
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
-    for tool_id in ("starship", "just", "ruff", "dust"):
+    for tool_id in ("starship", "just", "dust"):
         kinds = [m.kind for m in resolve_methods(tools[tool_id], macos)]
         assert kinds == ["github_release", "brew"], tool_id
 
@@ -1234,7 +1233,7 @@ def test_gitui_is_linux_download_and_brew_only_on_macos() -> None:
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
     assert [m.kind for m in resolve_methods(gitui, linux)] == ["github_release", "brew"]
-    assert [m.kind for m in resolve_methods(gitui, macos)] == ["brew"]
+    assert [m.kind for m in resolve_methods(gitui, macos)][:2] == ["github_release", "brew"]
 
 
 def test_miller_cmd_is_mlr_and_strips_nested_member() -> None:
@@ -2157,3 +2156,95 @@ def test_audit_fix_c8_brew_script_is_split_by_arch() -> None:
     amd_script = next(m for m in resolve_methods(brew, mac_amd) if m.kind == "script")
     assert arm_script.params["bin_dir"] == "/opt/homebrew/bin"
     assert amd_script.params["bin_dir"] == "/usr/local/bin"
+
+
+def test_audit_fix_d1_difftastic_asset_carries_the_version() -> None:
+    from installer.assets import arch_tokens, render_asset
+
+    difftastic = next(t for t in load_tools(REGISTRY) if t.id == "difftastic")
+    linux = next(
+        m
+        for m in difftastic.methods
+        if m.kind == "github_release" and m.os == ("debian", "arch", "fedora")
+    )
+    macos = next(m for m in difftastic.methods if m.kind == "github_release" and m.os == ("macos",))
+    amd64 = arch_tokens("amd64")
+    ver = "0.71.0"
+    assert render_asset(str(linux.params["asset"]), ver, amd64) == (
+        "difft-0.71.0-x86_64-unknown-linux-gnu.tar.gz"
+    )
+    assert render_asset(str(macos.params["asset"]), ver, amd64) == (
+        "difft-0.71.0-x86_64-apple-darwin.tar.gz"
+    )
+
+
+def test_audit_fix_d2_delta_macos_release_is_arm64_only() -> None:
+    delta = next(t for t in load_tools(REGISTRY) if t.id == "delta")
+    macos_method = next(
+        m for m in delta.methods if m.kind == "github_release" and m.os == ("macos",)
+    )
+    assert macos_method.arch == ("arm64",)
+    mac_intel = Platform(os="macos", arch="amd64", immutable=False, has_brew=True)
+    assert resolve_methods(delta, mac_intel)[0].kind == "brew"
+
+
+def test_audit_fix_d3_gh_has_a_macos_release() -> None:
+    gh = next(t for t in load_tools(REGISTRY) if t.id == "gh")
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    methods = resolve_methods(gh, macos)
+    release = next(m for m in methods if m.kind == "github_release")
+    assert release.params["asset"] == "gh_{ver}_macOS_{arch.deb}.zip"
+    assert release.params["archive"] == "zip"
+    assert release.params["member"] == "gh_{ver}_macOS_{arch.deb}/bin/gh"
+    assert release.params["checksum"] == "gh_{ver}_checksums.txt"
+    assert methods.index(release) < next(i for i, m in enumerate(methods) if m.kind == "brew")
+
+
+def test_audit_fix_d4_gitui_uses_the_org_repo_and_ships_macos() -> None:
+    gitui = next(t for t in load_tools(REGISTRY) if t.id == "gitui")
+    releases = [m for m in gitui.methods if m.kind == "github_release"]
+    assert all(m.params["repo"] == "gitui-org/gitui" for m in releases)
+    mac_arm = next(m for m in releases if m.os == ("macos",) and m.arch == ("arm64",))
+    mac_amd = next(m for m in releases if m.os == ("macos",) and m.arch == ("amd64",))
+    assert mac_arm.params["asset"] == "gitui-mac.tar.gz"
+    assert mac_amd.params["asset"] == "gitui-mac-x86.tar.gz"
+    assert mac_arm.params["member"] == "gitui"
+    assert mac_arm.params["strip"] == 0
+
+
+def test_audit_fix_d5_tealdeer_uses_the_org_repo() -> None:
+    tealdeer = next(t for t in load_tools(REGISTRY) if t.id == "tealdeer")
+    releases = [m for m in tealdeer.methods if m.kind == "github_release"]
+    assert len(releases) == 2
+    assert all(m.params["repo"] == "tealdeer-rs/tealdeer" for m in releases)
+
+
+def test_audit_fix_d6_ruff_has_a_uv_tool_method_after_its_releases() -> None:
+    ruff = next(t for t in load_tools(REGISTRY) if t.id == "ruff")
+    kinds = [m.kind for m in ruff.methods]
+    release_indices = [i for i, k in enumerate(kinds) if k == "github_release"]
+    uv_index = kinds.index("uv-tool")
+    assert uv_index > max(release_indices)
+    assert ruff.methods[uv_index].params["pypi_pkg"] == "ruff"
+    ladder = resolve_methods(ruff, Platform("fedora", "amd64", False, True))
+    assert [m.kind for m in ladder] == ["github_release", "uv-tool", "brew"]
+
+
+def test_audit_fix_d7_hyperfine_uses_the_musl_assets() -> None:
+    from installer.assets import arch_tokens, render_asset
+
+    hyperfine = next(t for t in load_tools(REGISTRY) if t.id == "hyperfine")
+    linux = next(
+        m
+        for m in hyperfine.methods
+        if m.kind == "github_release" and m.os == ("debian", "arch", "fedora")
+    )
+    assert linux.params["member"] == "hyperfine"
+    assert linux.params["strip"] == 1
+    ver = "1.19.0"
+    assert render_asset(str(linux.params["asset"]), ver, arch_tokens("amd64")) == (
+        "hyperfine-v1.19.0-x86_64-unknown-linux-musl.tar.gz"
+    )
+    assert render_asset(str(linux.params["asset"]), ver, arch_tokens("arm64")) == (
+        "hyperfine-v1.19.0-aarch64-unknown-linux-musl.tar.gz"
+    )

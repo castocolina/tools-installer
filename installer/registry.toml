@@ -307,13 +307,14 @@ desc = "A syntax-highlighting pager for git, diff, and grep output"
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "dandavison/delta"
-# delta publishes no musl build, so gnu is the only Linux binary (unlike fd/bat/sd).
+# Upstream publishes a musl asset for x86_64 Linux only; this gnu method covers all Linux arches.
 asset = "delta-{ver}-{arch.machine}-unknown-linux-gnu.tar.gz"
 member = "delta"
 strip = 1
 [[tool.method]]
 kind = "github_release"
 os = ["macos"]
+arch = ["arm64"]
 repo = "dandavison/delta"
 asset = "delta-{ver}-{arch.machine}-apple-darwin.tar.gz"
 member = "delta"
@@ -442,7 +443,6 @@ audience = "both"
 tier = "user"
 verified = 2026-10-13
 desc = "Uses GitHub from the terminal so agents and users can inspect PRs, issues, and auth state."
-# gh ships macOS only as .zip/.pkg; mac installs via brew.
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
@@ -450,6 +450,15 @@ repo = "cli/cli"
 asset = "gh_{ver}_linux_{arch.deb}.tar.gz"
 checksum = "gh_{ver}_checksums.txt"
 member = "bin/gh"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "cli/cli"
+asset = "gh_{ver}_macOS_{arch.deb}.zip"
+archive = "zip"
+member = "gh_{ver}_macOS_{arch.deb}/bin/gh"
+checksum = "gh_{ver}_checksums.txt"
 strip = 1
 [[tool.method]]
 kind = "brew"
@@ -693,6 +702,7 @@ priority = "P1"
 audience = "both"
 tier = "user"
 verified = 2026-10-13
+requires = ["uv"]
 desc = "An extremely fast Python linter and formatter"
 [[tool.method]]
 kind = "github_release"
@@ -710,6 +720,9 @@ asset = "ruff-{arch.machine}-apple-darwin.tar.gz"
 checksum = "{asset}.sha256"
 member = "ruff"
 strip = 1
+[[tool.method]]
+kind = "uv-tool"
+pypi_pkg = "ruff"
 [[tool.method]]
 kind = "brew"
 formula = "ruff"
@@ -756,7 +769,7 @@ desc = "A command-line benchmarking tool"
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "sharkdp/hyperfine"
-asset = "hyperfine-v{ver}-{arch.machine}-unknown-linux-gnu.tar.gz"
+asset = "hyperfine-v{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
 member = "hyperfine"
 strip = 1
 [[tool.method]]
@@ -900,14 +913,14 @@ desc = "A structural diff that understands syntax"
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
 repo = "Wilfred/difftastic"
-asset = "difft-{arch.machine}-unknown-linux-gnu.tar.gz"
+asset = "difft-{ver}-{arch.machine}-unknown-linux-gnu.tar.gz"
 member = "difft"
 strip = 0
 [[tool.method]]
 kind = "github_release"
 os = ["macos"]
 repo = "Wilfred/difftastic"
-asset = "difft-{arch.machine}-apple-darwin.tar.gz"
+asset = "difft-{ver}-{arch.machine}-apple-darwin.tar.gz"
 member = "difft"
 strip = 0
 [[tool.method]]
@@ -924,12 +937,27 @@ audience = "human"
 tier = "user"
 verified = 2026-10-13
 desc = "Blazing-fast terminal UI for git"
-# gitui's macOS assets don't use our arch tokens, so install via brew on a Mac.
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
-repo = "extrawurst/gitui"
+repo = "gitui-org/gitui"
 asset = "gitui-linux-{arch.machine}.tar.gz"
+member = "gitui"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+arch = ["arm64"]
+repo = "gitui-org/gitui"
+asset = "gitui-mac.tar.gz"
+member = "gitui"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+arch = ["amd64"]
+repo = "gitui-org/gitui"
+asset = "gitui-mac-x86.tar.gz"
 member = "gitui"
 strip = 0
 [[tool.method]]
@@ -1259,7 +1287,7 @@ desc = "A fast tldr client — simplified, community-driven man pages"
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
-repo = "dbrgn/tealdeer"
+repo = "tealdeer-rs/tealdeer"
 asset = "tealdeer-linux-{arch.machine}-musl"
 checksum = "{asset}.sha256"
 member = "tldr"
@@ -1267,7 +1295,7 @@ raw = true
 [[tool.method]]
 kind = "github_release"
 os = ["macos"]
-repo = "dbrgn/tealdeer"
+repo = "tealdeer-rs/tealdeer"
 asset = "tealdeer-macos-{arch.machine}"
 checksum = "{asset}.sha256"
 member = "tldr"
