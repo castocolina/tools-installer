@@ -80,6 +80,7 @@ Started 2026-10-14. Hourly resume cron: session job (deleted at run end).
 | 18 | Wave 4 executed cross-AI (pi), 18-09 → 18-20, each on try 1 (14:51–15:06) | — (verifiable) | — | 6 commits; gate: validate rc 0, test 3735 passed / 4 skipped, coverage 95.99%; 0 new suppressions; one more truncation of tests/test_download.py in 18-09, restored from git and re-applied via a deleted patch script | Executor-tool hazard already mitigated in the prompt |
 | 18 | Wave 5 executed cross-AI (pi), 18-12 → 18-19, each on try 1 (15:07–15:26) | — (verifiable) | — | 7 commits; gate: validate rc 0, test 3784 passed / 4 skipped, coverage 95.33%; 0 new suppressions; new scripts/verify_registry module ~79% covered (watch at code review) | Suite gate 90% holds |
 | 18 | Wave 6 executed cross-AI (pi), 18-11 → 18-17, each on try 1 (15:28–15:46) | — (verifiable) | — | 5 commits (18-17 landed its 3 intertwined tasks in one commit, recorded); gate: validate rc 0, test 3831 passed / 4 skipped, coverage 95.60%; 0 new suppressions | Coherent-commit rule allows one self-contained change |
+| 18 | Wave 7 executed cross-AI (pi), 18-13 on try 1 (15:47–15:54) | — (verifiable) | — | 3 commits; gate: validate rc 0, test 3846 passed / 4 skipped, coverage 95.30%; 0 new suppressions | Fixed test dates (2026-10-15) stay valid as the host clock moves forward |
 
 ## Deferred questions / human verification
 
