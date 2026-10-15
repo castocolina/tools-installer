@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import functools
 import json
 import os
 import re
 import tarfile
 import tempfile
+import tomllib
 import urllib.request
 import zipfile
 from collections import defaultdict
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 from urllib.error import HTTPError, URLError
@@ -40,13 +43,21 @@ from installer.versions import (
     urlopen_fetch,
 )
 
+EXIT_USAGE = 64
+
+EditKey = Literal["verified", "version", "sha256"]
+
 __all__ = [
     "CHECKABLE_KINDS",
+    "EXIT_USAGE",
     "Finding",
     "Probe",
+    "RegistryEdit",
+    "RegistryWriteError",
     "Release",
     "Report",
     "UnverifiedMethod",
+    "apply_registry_edits",
     "check_registry",
     "default_probe",
     "default_state_path",
@@ -80,6 +91,7 @@ class Finding:
     reason: str
     member: str | None = None
     platforms: tuple[str, ...] = ()
+    sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -922,6 +934,176 @@ def check_registry(
     )
 
 
+class RegistryWriteError(RuntimeError):
+    """Raised when a registry edit would change more than the intended keys."""
+
+
+@dataclass(frozen=True)
+class RegistryEdit:
+    tool_id: str
+    method_index: int | None
+    key: EditKey
+    value: str
+
+
+_SUBTABLE_HEADER_RE = re.compile(r"^\[\[tool\.method\]\]|^\[tool\.")
+
+
+def _is_subtable_header(line: str) -> bool:
+    stripped = line.strip()
+    if stripped == "[[tool]]":
+        return False
+    if _SUBTABLE_HEADER_RE.match(stripped):
+        return True
+    return stripped.startswith("[[") and stripped != "[[tool]]"
+
+
+def _parse_edit_value(literal: str) -> object:
+    parsed = tomllib.loads(f"v = {literal}")
+    return parsed["v"]
+
+
+def _apply_edits_to_document(
+    doc: dict[str, object], edits: Sequence[RegistryEdit]
+) -> dict[str, object]:
+    out = copy.deepcopy(doc)
+    tools = out.get("tool")
+    if not isinstance(tools, list):
+        raise RegistryWriteError("missing tool table")
+    tool_rows = cast(list[object], tools)
+    for edit in edits:
+        tool_entry: dict[str, object] | None = None
+        for entry in tool_rows:
+            if not isinstance(entry, dict):
+                continue
+            row = cast(dict[str, object], entry)
+            if row.get("id") == edit.tool_id:
+                tool_entry = row
+                break
+        if tool_entry is None:
+            raise RegistryWriteError(f"unknown tool {edit.tool_id!r}")
+        parsed_value = _parse_edit_value(edit.value)
+        if edit.method_index is None:
+            if edit.key != "verified":
+                raise RegistryWriteError(f"unsupported tool-level key {edit.key!r}")
+            tool_entry["verified"] = parsed_value
+            continue
+        methods_raw = tool_entry.get("method")
+        if not isinstance(methods_raw, list):
+            raise RegistryWriteError("method index out of range")
+        methods = cast(list[object], methods_raw)
+        if edit.method_index >= len(methods):
+            raise RegistryWriteError("method index out of range")
+        method_entry = methods[edit.method_index]
+        if not isinstance(method_entry, dict):
+            raise RegistryWriteError("invalid method table")
+        cast(dict[str, object], method_entry)[edit.key] = parsed_value
+    return out
+
+
+def _tool_blocks(lines: list[str]) -> list[tuple[int, int]]:
+    starts = [index for index, line in enumerate(lines) if line.strip() == "[[tool]]"]
+    blocks: list[tuple[int, int]] = []
+    for idx, start in enumerate(starts):
+        end = starts[idx + 1] if idx + 1 < len(starts) else len(lines)
+        blocks.append((start, end))
+    return blocks
+
+
+def _tool_id_in_block(lines: list[str], start: int, end: int) -> str | None:
+    index = start + 1
+    while index < end:
+        line = lines[index]
+        if _is_subtable_header(line):
+            break
+        if line.lstrip().startswith("#"):
+            index += 1
+            continue
+        match = re.match(r'^id\s*=\s*"([^"]+)"\s*$', line)
+        if match:
+            return match.group(1)
+        index += 1
+    return None
+
+
+def _method_blocks(lines: list[str], tool_start: int, tool_end: int) -> list[tuple[int, int]]:
+    blocks: list[tuple[int, int]] = []
+    index = tool_start + 1
+    while index < tool_end:
+        if lines[index].strip() == "[[tool.method]]":
+            method_start = index
+            index += 1
+            while index < tool_end and not _is_subtable_header(lines[index]):
+                index += 1
+            blocks.append((method_start, index))
+        else:
+            index += 1
+    return blocks
+
+
+def _region_for_edit(lines: list[str], edit: RegistryEdit) -> tuple[int, int]:
+    for tool_start, tool_end in _tool_blocks(lines):
+        if _tool_id_in_block(lines, tool_start, tool_end) != edit.tool_id:
+            continue
+        if edit.method_index is None:
+            region_start = tool_start + 1
+            region_end = tool_end
+            for index in range(tool_start + 1, tool_end):
+                if _is_subtable_header(lines[index]):
+                    region_end = index
+                    break
+            return region_start, region_end
+        methods = _method_blocks(lines, tool_start, tool_end)
+        if edit.method_index >= len(methods):
+            raise RegistryWriteError("method index out of range")
+        return methods[edit.method_index]
+    raise RegistryWriteError(f"unknown tool {edit.tool_id!r}")
+
+
+def _is_data_line(line: str, key: str) -> bool:
+    if line.lstrip().startswith("#"):
+        return False
+    return line.startswith(f"{key} = ")
+
+
+def _apply_one_edit(lines: list[str], edit: RegistryEdit) -> None:
+    region_start, region_end = _region_for_edit(lines, edit)
+    key = edit.key
+    replacement = f"{key} = {edit.value}"
+    for index in range(region_start, region_end):
+        if _is_data_line(lines[index], key):
+            lines[index] = replacement
+            return
+    anchor = "tier = " if edit.method_index is None else "url = "
+    for index in range(region_start, region_end):
+        if lines[index].lstrip().startswith("#"):
+            continue
+        if lines[index].startswith(anchor):
+            lines.insert(index + 1, replacement)
+            return
+    raise RegistryWriteError(f"missing anchor {anchor!r} for {edit.tool_id}")
+
+
+def apply_registry_edits(text: str, edits: Sequence[RegistryEdit]) -> str:
+    if not edits:
+        return text
+    original_doc = tomllib.loads(text)
+    expected_doc = _apply_edits_to_document(original_doc, edits)
+    lines = text.splitlines()
+    for edit in edits:
+        _apply_one_edit(lines, edit)
+    new_text = "\n".join(lines)
+    if text.endswith("\n"):
+        new_text += "\n"
+    try:
+        new_doc = tomllib.loads(new_text)
+    except tomllib.TOMLDecodeError as exc:
+        raise RegistryWriteError("unintended change") from exc
+    if new_doc != expected_doc:
+        raise RegistryWriteError("unintended change")
+    return new_text
+
+
 def format_report(report: Report, *, include_passed: bool = True) -> str:
     lines: list[str] = []
     if report.blocked:
@@ -1040,13 +1222,20 @@ def main(
     *,
     probe: Probe | None = None,
     gh: Callable[[list[str]], str] | None = None,
+    today: date | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(
         description="Verify registry download targets against upstream."
     )
     parser.add_argument("--registry", type=Path, default=REGISTRY)
     parser.add_argument("--state", type=Path, default=None)
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="Write verified dates for passing tools (maintainer only).",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
+    write_day = today if today is not None else date.today()
     state_path = args.state if args.state is not None else default_state_path()
     tools = load_tools(args.registry)
     state = _load_state(state_path)
@@ -1065,6 +1254,24 @@ def main(
     else:
         active_probe = probe
     report = check_registry(tools, active_probe, state)
+    if args.write:
+        registry_text = args.registry.read_text()
+        edits = [
+            RegistryEdit(
+                tool_id,
+                None,
+                "verified",
+                write_day.isoformat(),
+            )
+            for tool_id in report.passed_tools()
+        ]
+        if edits:
+            updated = apply_registry_edits(registry_text, edits)
+            atomic_write_text(args.registry, updated)
+            import sys
+
+            for tool_id in report.passed_tools():
+                print(f"dated {tool_id}", file=sys.stderr)
     print(format_report(report), end="")
     _save_state(state_path, state)
     return report.exit_code

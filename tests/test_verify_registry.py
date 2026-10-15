@@ -6,10 +6,12 @@ import hashlib
 import io
 import tarfile
 import zipfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable
+from datetime import date
 from email.message import Message
 from pathlib import Path
+from shutil import copyfile
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -18,7 +20,10 @@ from installer.model import load_tools
 from installer.run import CommandError
 from installer.verify_registry import (
     Probe,
+    RegistryEdit,
+    RegistryWriteError,
     Release,
+    apply_registry_edits,
     check_registry,
     format_report,
     main,
@@ -1892,3 +1897,206 @@ def test_main_never_prints_the_token(
     captured2 = capsys.readouterr()
     assert recorded == [None]
     assert "unauthenticated GitHub API (60 requests/hour)" in captured2.err
+
+
+# --- plan 18-13 task 1: --write / apply_registry_edits ---
+
+_REAL_REGISTRY = Path(__file__).resolve().parents[1] / "installer" / "registry.toml"
+
+
+def _two_tool_write_fixture(tmp_path: Path) -> Path:
+    tar_a = _gz_tar_bytes({"bin/a": b"x"})
+    hash_a = hashlib.sha256(tar_a).hexdigest()
+    pin_b = "b" * 64
+    content = f"""
+[[tool]]
+id = "tool_a"
+name = "tool_a"
+category = "git"
+cmd = "a"
+priority = "P2"
+audience = "both"
+tier = "user"
+verified = 2026-10-01
+[[tool.method]]
+kind = "tarball"
+url = "https://example.com/a-{{ver}}.tar.gz"
+version = "1.0.0"
+member = "bin/a"
+strip = 0
+sha256 = "{hash_a}"
+
+[[tool]]
+id = "tool_b"
+name = "tool_b"
+category = "git"
+cmd = "b"
+priority = "P2"
+audience = "both"
+tier = "user"
+verified = 2026-10-01
+[[tool.method]]
+kind = "tarball"
+url = "https://example.com/b-{{ver}}.tar.gz"
+version = "1.0.0"
+member = "bin/b"
+strip = 0
+sha256 = "{pin_b}"
+"""
+    return _write_registry(tmp_path, content)
+
+
+def test_write_dates_only_passing_tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from installer import verify_registry as vr
+
+    registry = _two_tool_write_fixture(tmp_path)
+    tar_a = _gz_tar_bytes({"bin/a": b"x"})
+    tar_b = _gz_tar_bytes({"bin/b": b"y"})
+    url_a = "https://example.com/a-1.0.0.tar.gz"
+    url_b = "https://example.com/b-1.0.0.tar.gz"
+    release = Release(tag="v1.0.0", digests={})
+
+    def head(url: str) -> str:
+        if url in (url_a, url_b):
+            return 'etag:"1"'
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    def download(url: str, dest: Path) -> None:
+        if url == url_a:
+            dest.write_bytes(tar_a)
+        elif url == url_b:
+            dest.write_bytes(tar_b)
+        else:
+            raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    probe = Probe(release=lambda _r: release, head=head, download=download)
+    state_path = tmp_path / "state.json"
+    today = date(2026, 10, 20)
+    code = vr.main(
+        ["--registry", str(registry), "--state", str(state_path), "--write"],
+        probe=probe,
+        today=today,
+    )
+    text = registry.read_text()
+    assert "tool_a\n" in text or 'id = "tool_a"' in text
+    assert "verified = 2026-10-20" in text.split('id = "tool_a"')[1].split("[[tool]]")[0]
+    assert "tool_b" in text
+    b_block = text.split('id = "tool_b"')[1].split("[[tool]]")[0]
+    assert "verified = 2026-10-01" in b_block
+    assert code == 1
+
+
+def test_writer_keeps_every_other_byte(tmp_path: Path) -> None:
+    dest = tmp_path / "registry.toml"
+    copyfile(_REAL_REGISTRY, dest)
+    before = dest.read_text().splitlines()
+    after_text = apply_registry_edits(
+        dest.read_text(), [RegistryEdit("jq", None, "verified", "2026-10-20")]
+    )
+    after = after_text.splitlines()
+    delta_before = Counter(before) - Counter(after)
+    delta_after = Counter(after) - Counter(before)
+    assert delta_before == Counter({"verified = 2026-10-13": 1})
+    assert delta_after == Counter({"verified = 2026-10-20": 1})
+
+
+def test_writer_inserts_a_missing_key_at_the_anchor(tmp_path: Path) -> None:
+    content = """
+[[tool]]
+id = "bare"
+name = "bare"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://example.com/x-{ver}.tar.gz"
+version = "1"
+member = "bin/x"
+strip = 0
+"""
+    registry = tmp_path / "registry.toml"
+    registry.write_text(content)
+    out = apply_registry_edits(
+        content,
+        [
+            RegistryEdit("bare", None, "verified", "2026-10-20"),
+            RegistryEdit("bare", 0, "sha256", '"' + "c" * 64 + '"'),
+        ],
+    )
+    lines = out.splitlines()
+    tier_idx = next(i for i, line in enumerate(lines) if line.strip().startswith("tier ="))
+    assert lines[tier_idx + 1].strip() == "verified = 2026-10-20"
+    url_idx = next(i for i, line in enumerate(lines) if line.strip().startswith("url ="))
+    assert lines[url_idx + 1].strip().startswith("sha256 =")
+
+
+def test_writer_refuses_an_unintended_change(tmp_path: Path) -> None:
+    content = """
+# id = "ghost" only in a comment
+[[tool]]
+id = "real"
+name = "real"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+verified = 2026-10-01
+[[tool.method]]
+kind = "tarball"
+url = "https://example.com/x.tar.gz"
+member = "bin/x"
+strip = 0
+"""
+    registry = tmp_path / "registry.toml"
+    registry.write_text(content)
+    with pytest.raises(RegistryWriteError):
+        apply_registry_edits(content, [RegistryEdit("ghost", None, "verified", "2026-10-20")])
+    with pytest.raises(RegistryWriteError):
+        apply_registry_edits(content, [RegistryEdit("real", 3, "sha256", '"abc"')])
+    assert registry.read_text() == content
+
+
+def test_writer_ignores_keys_inside_comments(tmp_path: Path) -> None:
+    content = """
+[[tool]]
+id = "cmt"
+name = "cmt"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+verified = 2026-10-01
+# version = 1.0 inside a comment
+[[tool.method]]
+kind = "tarball"
+url = "https://example.com/x-{ver}.tar.gz"
+version = "2.0"
+member = "bin/x"
+strip = 0
+sha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+"""
+    out = apply_registry_edits(content, [RegistryEdit("cmt", 0, "version", '"3.0"')])
+    assert "# version = 1.0 inside a comment" in out
+    assert 'version = "3.0"' in out
+    assert out.count("version =") == 2
+
+
+def test_without_write_the_registry_is_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import verify_registry as vr
+
+    registry = _two_tool_write_fixture(tmp_path)
+    before = registry.read_bytes()
+    tar_a = _gz_tar_bytes({"bin/a": b"x"})
+    rendered_a = "https://github.com/o/r/releases/download/1.0.0/a-1.0.0.tar.gz"
+    release = Release(tag="v1.0.0", digests={})
+    probe, _ = _map_probe(release, payloads={rendered_a: tar_a})
+    state_path = tmp_path / "state.json"
+    vr.main(["--registry", str(registry), "--state", str(state_path)], probe=probe)
+    assert registry.read_bytes() == before
