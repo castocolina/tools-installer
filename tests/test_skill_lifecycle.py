@@ -282,12 +282,8 @@ def test_superpowers_install_on_claude_only_host_is_framed_and_labeled(tmp_path:
 
     assert outcome.instructions[0] == _HOST_HEADER
     assert outcome.instructions[1] == "Claude Code:"
-    assert outcome.instructions[2:6] == (
-        "/plugin install superpowers@claude-plugins-official",
-        "or, instead, from the obra marketplace:",
-        "/plugin marketplace add obra/superpowers-marketplace",
-        "/plugin install superpowers@superpowers-marketplace",
-    )
+    assert outcome.instructions[2] == "/plugin install superpowers@claude-plugins-official"
+    assert "obra/superpowers-marketplace" not in "\n".join(outcome.instructions)
     assert "pi install" not in "\n".join(outcome.instructions)
 
 

@@ -2027,10 +2027,7 @@ def test_superpowers_by_harness_marks_claude_alternative_and_explains_codex() ->
     assert lifecycle is not None
     pairs = dict(lifecycle.install.by_harness)
     claude = pairs["claude"]
-    official = claude.index("/plugin install superpowers@claude-plugins-official")
-    add = claude.index("/plugin marketplace add obra/superpowers-marketplace")
-    assert claude[official + 1] == "or, instead, from the obra marketplace:"
-    assert add == official + 2
+    assert claude == ("/plugin install superpowers@claude-plugins-official",)
     codex = pairs["codex"]
     assert len(codex) == 1
     assert "/plugins" in codex[0]
@@ -2354,3 +2351,111 @@ def test_audit_fix_e8_kitty_script_covers_macos() -> None:
     )
     assert linux.params["bin_dir"] == "~/.local/kitty.app/bin"
     assert linux.os == ("debian", "arch", "fedora")
+
+
+def test_audit_fix_f1_graphify_records_the_cwd_scope_and_uninstall() -> None:
+    graphify = _tools_by_id()["graphify"]
+    block = (
+        REGISTRY.read_text(encoding="utf-8").split('id = "graphify"', 1)[1].split("[[tool]]", 1)[0]
+    )
+    assert "project/CWD-scoped" in block or "CWD-scoped" in block
+    assert graphify.uninstall == "graphify uninstall; uv tool uninstall graphifyy"
+
+
+def test_audit_fix_f2_codegraph_comment_records_1_6_2() -> None:
+    block = (
+        REGISTRY.read_text(encoding="utf-8").split('id = "codegraph"', 1)[1].split("[[tool]]", 1)[0]
+    )
+    assert "v1.6.2" in block
+    assert "UserPromptSubmit" in block or "prompt-hook" in block
+    assert "CLAUDE.md" in block
+    assert "~/.codegraph/versions" in block
+    assert "codegraph upgrade" in block
+
+
+def test_audit_fix_f3_rtk_comment_records_0_52_0() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    block = (
+        text.split('[[tool]]\nid = "rtk"', 1)[0][-2500:]
+        + text.split('[[tool]]\nid = "rtk"', 1)[1].split("\n[[tool]]", 1)[0]
+    )
+    assert "0.52.0" in block
+    assert "--opencode" in block
+    assert "#2097" in block or "2097" in block
+
+
+def test_audit_fix_f4_ponytail_probes_pi_and_documents_claude_removal() -> None:
+    ponytail = _tools_by_id()["ponytail"]
+    assert ponytail.skill_lifecycle is not None
+    removal = "\n".join(ponytail.skill_lifecycle.removal.instructions)
+    assert "/plugin uninstall ponytail@ponytail" in removal
+    probes = ponytail.skill_lifecycle.status_probes
+    pi_probe = next((p for p in probes if p.harness == "pi"), None)
+    if pi_probe is not None:
+        assert pi_probe.via == "plugin-cli"
+        assert pi_probe.match == "DietrichGebert/ponytail"
+        return
+    snippet = (
+        REGISTRY.read_text(encoding="utf-8").split('id = "ponytail"', 1)[1].split("[[tool]]", 1)[0]
+    )
+    assert "/plugin uninstall ponytail@ponytail" in snippet
+    tmp_registry = REGISTRY.read_text(encoding="utf-8")
+    if (
+        '{ harness = "pi", via = "plugin-cli", match = "DietrichGebert/ponytail" }'
+        not in tmp_registry
+    ):
+        pi_probe_row = '{ harness = "pi", via = "plugin-cli", match = "DietrichGebert/ponytail" }'
+        codex_probe = '{ harness = "codex", via = "plugin-cli", match = "ponytail" }'
+        tmp_registry = tmp_registry.replace(
+            codex_probe,
+            f"{codex_probe}\n  {pi_probe_row}",
+            1,
+        )
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as handle:
+        handle.write(tmp_registry)
+        tmp_path = Path(handle.name)
+    try:
+        with pytest.raises(ValueError, match="status_probes") as exc:
+            load_tools(tmp_path)
+        assert "pi" in str(exc.value)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def test_audit_fix_f5_superpowers_has_one_claude_route() -> None:
+    superpowers = _tools_by_id()["superpowers"]
+    assert superpowers.skill_lifecycle is not None
+    claude = dict(superpowers.skill_lifecycle.install.by_harness)["claude"]
+    joined = "\n".join(claude)
+    assert "or, instead" not in joined.lower()
+    assert "obra/superpowers-marketplace" not in joined
+    text = REGISTRY.read_text(encoding="utf-8")
+    assert "or, instead, from the obra marketplace" not in text
+
+
+def test_audit_fix_f6_matt_pocock_default_is_the_plugin_route() -> None:
+    matt = _tools_by_id()["matt-pocock-skills"]
+    assert matt.skill_lifecycle is not None
+    default = "\n".join(matt.skill_lifecycle.install.instructions)
+    assert "claude plugin install mattpocock-skills@claude-plugins-official" in default
+    assert "codex plugin" in default
+    probes = matt.skill_lifecycle.status_probes
+    assert any(p.harness == "claude" and p.via == "plugin-cli" for p in probes)
+
+
+def test_audit_fix_f7_opengsd_notes_node_24() -> None:
+    opengsd = _tools_by_id()["opengsd"]
+    assert opengsd.skill_lifecycle is not None
+    joined = "\n".join(opengsd.skill_lifecycle.install.instructions)
+    assert "Node" in joined and "24" in joined
+
+
+def test_audit_fix_f8_puppeteer_records_cft_linux_arm64() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    anchor = text.index('[[tool]]\nid = "puppeteer"')
+    block = text[text.rfind("# Linux arm64: puppeteer", 0, anchor) : anchor]
+    assert "linux-arm64" in block
+    assert "@puppeteer/browsers" in block
+    assert "linux64" in block

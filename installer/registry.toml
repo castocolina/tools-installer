@@ -1621,6 +1621,9 @@ audience = "ai"
 tier = "ai"
 verified = 2026-09-06
 desc = "Local code-intelligence knowledge graph CLI and MCP server; ships its own Node runtime"
+# Verified 2026-10-15 (audit F2, v1.6.2): `--no-permissions` does NOT stop the
+# codegraph prompt-hook UserPromptSubmit hook or the ~/.claude/CLAUDE.md block.
+# `codegraph upgrade` migrates the install to ~/.codegraph/versions.
 # Verified 2026-09-06 (Phase 9, REQ-codegraph-mcp-postinstall): codegraph's real
 # `install --help` (v1.2.0) accepts `--target <ids>` (comma-separated real target ids
 # -- claude, cursor, codex, opencode, hermes, gemini, antigravity, kiro -- NOT
@@ -1692,7 +1695,9 @@ tier = "ai"
 verified = 2026-10-14
 requires = ["uv"]
 desc = "Turns a codebase (plus docs, SQL schemas, configs, PDFs) into a queryable local knowledge graph for AI agents."
+uninstall = "graphify uninstall; uv tool uninstall graphifyy"
 # Verified 2026-10-14: postinstall removed (Phase 17, SAFE-02). Every graphify
+# <host> install is project/CWD-scoped, not a global registration.
 # host-registration form tested in a disposable container writes into the
 # working directory for at least one host (.opencode, .cursor; the per-host
 # form also writes CLAUDE.md/AGENTS.md/.claude), so the installer runs none;
@@ -1713,6 +1718,8 @@ desc = "Turns a codebase (plus docs, SQL schemas, configs, PDFs) into a queryabl
 kind = "uv-tool"
 pypi_pkg = "graphifyy"
 
+# Verified 2026-10-15 (audit F3, v0.52.0): `--opencode` implies Claude install
+# (rtk main.rs:2671). `--agent cursor` no longer touches ~/.claude (#2097).
 # Verified 2026-09-06: confirmed live via api.github.com/repos/rtk-ai/rtk/
 # releases/latest (tag v0.48.0 at research time) and by downloading and
 # reading checksums.txt directly -- the standard multi-line <hash>  <filename>
@@ -1750,6 +1757,7 @@ audience = "ai"
 tier = "ai"
 verified = 2026-09-11
 desc = "CLI proxy that rewrites/compresses common dev-command output to cut LLM-visible token usage 60-90%."
+# Audit F3 (v0.52.0): `--opencode` implies Claude install; `--agent cursor` no longer touches ~/.claude (#2097).
 postinstall = "rtk-register"
 # Verified 2026-09-11: rtk v0.49.0's `claude` host registration
 # (`rtk init -g --auto-patch`) live-tested against a freshly downloaded,
@@ -2560,12 +2568,14 @@ versions = { puppeteer = "^25" }
 # Linux arm64: puppeteer's own troubleshooting documentation states Chrome
 # publishes no Linux arm64 binary, so the browser puppeteer downloads by
 # default cannot run there at all. This is NOT a caveat — it is why the Linux
-# method declares `arch = ["amd64"]`. The entry resolves no method on Linux
-# arm64, so `installer/deps.py` skips both puppeteer and mmdc there with a
-# dependency-unavailable warning instead of reporting a successful install of
-# a tool that cannot render. Documented workaround for a user who has a
-# distro-provided browser: point puppeteer at it via PUPPETEER_EXECUTABLE_PATH.
-# Supporting that path is out of this phase's scope.
+# method declares `arch = ["amd64"]`. Chrome for Testing now ships linux-arm64
+# (2026-10), but `@puppeteer/browsers` still maps LINUX_ARM to linux64. The
+# entry resolves no method on Linux arm64, so `installer/deps.py` skips both
+# puppeteer and mmdc there with a dependency-unavailable warning instead of
+# reporting a successful install of a tool that cannot render. Documented
+# workaround for a user who has a distro-provided browser: point puppeteer at
+# it via PUPPETEER_EXECUTABLE_PATH. Supporting that path is out of this phase's
+# scope.
 # `min_node = "22.12.0"` is puppeteer 25's own `engines.node` floor, and plan
 # 05-01's executor preflight refuses the install below it rather than letting
 # the postinstall fail obscurely.
@@ -2982,6 +2992,7 @@ approval_disclosures = [
 status_probes = [
   { harness = "claude", via = "plugin-cli", match = "ponytail" },
   { harness = "codex", via = "plugin-cli", match = "ponytail" },
+  { harness = "pi", via = "plugin-cli", match = "DietrichGebert/ponytail" },
 ]
 [tool.skill_lifecycle.install]
 mode = "manual-required"
@@ -3054,6 +3065,7 @@ mode = "manual-required"
 instructions = [
   "Before removing the plugin, run node scripts/uninstall.js from the installed Ponytail plugin directory to clean optional state.",
   "codex plugin remove ponytail",
+  "In Claude Code: /plugin uninstall ponytail@ponytail",
 ]
 
 
@@ -3213,9 +3225,6 @@ instructions = [
 antigravity = ["agy plugin install https://github.com/obra/superpowers"]
 claude = [
   "/plugin install superpowers@claude-plugins-official",
-  "or, instead, from the obra marketplace:",
-  "/plugin marketplace add obra/superpowers-marketplace",
-  "/plugin install superpowers@superpowers-marketplace",
 ]
 codex = ["/plugins (opens the plugin browser; search for superpowers and install it)"]
 copilot = [
@@ -3365,8 +3374,11 @@ targets = [
 [tool.skill_lifecycle.install]
 mode = "manual-required"
 instructions = [
-  "After leaving the installer, choose skills and harnesses in the official skills CLI:",
-  "npx skills@latest add mattpocock/skills",
+  "After leaving the installer, use the claude/codex plugin route when that host is present:",
+  "claude plugin install mattpocock-skills@claude-plugins-official",
+  "codex plugin marketplace add mattpocock/skills",
+  "codex plugin add mattpocock-skills@mattpocock",
+  "For other hosts, choose skills and harnesses in the official skills CLI (npx skills@latest add mattpocock/skills).",
   "Run /setup-matt-pocock-skills in the selected agent and answer its project questions.",
 ]
 [tool.skill_lifecycle.install.by_harness]
@@ -3456,7 +3468,7 @@ targets = [
 [tool.skill_lifecycle.install]
 mode = "manual-required"
 instructions = [
-  "After leaving the installer, run the required guided cross-runtime installer in a console:",
+  "After leaving the installer, run the required guided cross-runtime installer in a console (Node >= 24 per npm engines):",
   "npx @opengsd/gsd-core@latest",
   "Select the runtime and global or local scope; do not copy files from the repository.",
 ]
