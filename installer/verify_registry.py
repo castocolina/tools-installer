@@ -15,7 +15,7 @@ import urllib.request
 import zipfile
 from collections import defaultdict
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
@@ -880,6 +880,7 @@ def check_registry(
             reason="ok",
             member=target.member,
             platforms=target.platforms,
+            sha256=actual_hash.lower(),
         )
         state[state_k] = fingerprint
 
@@ -1104,6 +1105,294 @@ def apply_registry_edits(text: str, edits: Sequence[RegistryEdit]) -> str:
     return new_text
 
 
+_NEWER_STABLE_RE = re.compile(r"^newer stable release (\S+) \(pinned")
+
+
+def _is_pinned_method(method: Method) -> bool:
+    if method.kind not in ("app", "tarball"):
+        return False
+    url = method.params.get("url")
+    if not isinstance(url, str) or "{ver}" not in url:
+        return False
+    version = method.params.get("version")
+    sha256 = method.params.get("sha256")
+    return isinstance(version, str) and bool(version) and isinstance(sha256, str) and bool(sha256)
+
+
+def _pinned_method_entries(tool: Tool) -> list[tuple[int, Method]]:
+    return [
+        (index, method) for index, method in enumerate(tool.methods) if _is_pinned_method(method)
+    ]
+
+
+def _pinned_version(tool: Tool) -> str:
+    for _index, method in _pinned_method_entries(tool):
+        version = method.params.get("version")
+        if isinstance(version, str) and version:
+            return version
+    return ""
+
+
+def _method_at_version(method: Method, version: str) -> Method:
+    params = dict(method.params)
+    params["version"] = version
+    return Method(kind=method.kind, os=method.os, arch=method.arch, params=params)
+
+
+def _tag_to_candidate_version(tag: str) -> str:
+    if tag.startswith(("v", "V")):
+        return tag[1:]
+    return tag
+
+
+def _old_pinned_urls(tool: Tool) -> set[str]:
+    return {pinned_url(method) for _index, method in _pinned_method_entries(tool)}
+
+
+def _auto_bump_candidate(
+    tool_id: str, findings: Sequence[Finding]
+) -> tuple[str | None, str | None, str | None]:
+    tags: list[str] = []
+    url_by_tag: dict[str, str] = {}
+    for finding in findings:
+        if finding.tool_id != tool_id or finding.status != "drift":
+            continue
+        match = _NEWER_STABLE_RE.match(finding.reason)
+        if match is None:
+            continue
+        tag = match.group(1)
+        tags.append(tag)
+        url_by_tag[tag] = finding.url
+    if not tags:
+        return None, None, None
+    versions = {_tag_to_candidate_version(tag): tag for tag in tags}
+    if len(versions) != 1:
+        first = _tag_to_candidate_version(tags[0])
+        return first, url_by_tag[tags[0]], "pinned methods report different newer tags"
+    return next(iter(versions)), None, None
+
+
+def _candidate_tool_copy(tool: Tool, candidate: str, release: ReleaseResolver) -> Tool:
+    methods: list[Method] = []
+    for _index, method in _pinned_method_entries(tool):
+        params = dict(method.params)
+        params["version"] = candidate
+        probe = _method_at_version(method, candidate)
+        rendered = pinned_url(probe)
+        match = _GITHUB_RELEASE_PATH.match(rendered)
+        if match is not None:
+            repo = match.group(1)
+            asset = PurePosixPath(rendered).name
+            digest: str | None = None
+            try:
+                digest = release(repo).digests.get(asset)
+            except VersionError:
+                digest = None
+            if digest is not None:
+                params["sha256"] = digest.lower()
+            else:
+                params.pop("sha256", None)
+        else:
+            params.pop("sha256", None)
+        methods.append(Method(kind=method.kind, os=method.os, arch=method.arch, params=params))
+    return replace(tool, methods=methods)
+
+
+def _first_failed_finding(report: Report) -> tuple[str, str]:
+    for finding in report.findings:
+        if finding.status != "ok":
+            return finding.url, finding.reason
+    return "", "candidate check failed"
+
+
+def _finding_for_pinned_method(
+    report: Report, tool_id: str, method: Method, candidate: str
+) -> Finding | None:
+    url = pinned_url(_method_at_version(method, candidate))
+    member = method.params.get("member")
+    member_str = member if isinstance(member, str) else None
+    for finding in report.findings:
+        if finding.tool_id != tool_id or finding.url != url:
+            continue
+        if finding.member == member_str:
+            return finding
+    return None
+
+
+@dataclass(frozen=True)
+class _BumpResult:
+    tool_id: str
+    applied: bool
+    old_version: str
+    new_version: str
+    fail_url: str | None = None
+    fail_reason: str | None = None
+    candidate_findings: tuple[Finding, ...] = ()
+    bump_edits: tuple[RegistryEdit, ...] = ()
+
+
+def _build_bump_edits(
+    tool: Tool, candidate: str, candidate_report: Report
+) -> tuple[RegistryEdit, ...]:
+    edits: list[RegistryEdit] = []
+    for index, method in _pinned_method_entries(tool):
+        finding = _finding_for_pinned_method(candidate_report, tool.id, method, candidate)
+        if finding is None or finding.sha256 is None:
+            raise RegistryWriteError(f"missing candidate hash for {tool.id}")
+        edits.append(RegistryEdit(tool.id, index, "version", f'"{candidate}"'))
+        edits.append(RegistryEdit(tool.id, index, "sha256", f'"{finding.sha256}"'))
+    return tuple(edits)
+
+
+def _finalize_report_after_bumps(
+    initial: Report, tools_by_id: dict[str, Tool], bumps: Sequence[_BumpResult]
+) -> Report:
+    findings: list[Finding] = list(initial.findings)
+    notes: list[str] = list(initial.notes)
+    for bump in bumps:
+        tool = tools_by_id[bump.tool_id]
+        if bump.applied:
+            old_urls = _old_pinned_urls(tool)
+            findings = [
+                finding
+                for finding in findings
+                if not (finding.tool_id == bump.tool_id and finding.url in old_urls)
+            ]
+            findings.extend(bump.candidate_findings)
+            notes.append(f"bumped {bump.tool_id} {bump.old_version} -> {bump.new_version}")
+            continue
+        fail_url = bump.fail_url
+        if fail_url is None:
+            old_urls = _old_pinned_urls(tool)
+            fail_url = next(iter(old_urls), "")
+        reason = bump.fail_reason or "candidate check failed"
+        findings.append(
+            Finding(
+                tool_id=bump.tool_id,
+                url=fail_url,
+                status="drift",
+                reason=f"bump to {bump.new_version} not applied: {reason}",
+            )
+        )
+    merged: dict[tuple[str, str, str, str], Finding] = {}
+    for finding in findings:
+        key = (finding.tool_id, finding.url, finding.member or "", finding.reason)
+        merged[key] = finding
+    ordered = sorted(
+        merged.values(),
+        key=lambda item: (item.tool_id, item.url, item.member or "", item.platforms),
+    )
+    return Report(
+        findings=tuple(ordered),
+        not_checkable=initial.not_checkable,
+        notes=tuple(notes),
+        blocked=initial.blocked,
+        unverified=initial.unverified,
+    )
+
+
+def _parse_explicit_candidates(
+    raw: Sequence[str], tools: Sequence[Tool]
+) -> tuple[dict[str, str], str | None]:
+    tools_by_id = {tool.id: tool for tool in tools}
+    out: dict[str, str] = {}
+    for item in raw:
+        if "=" not in item:
+            return {}, f"invalid --candidate {item!r}: expected <tool_id>=<version>"
+        tool_id, version = item.split("=", 1)
+        if not tool_id or not version:
+            return {}, f"invalid --candidate {item!r}: expected <tool_id>=<version>"
+        tool = tools_by_id.get(tool_id)
+        if tool is None:
+            return {}, f"unknown tool {tool_id!r} for --candidate"
+        if not _pinned_method_entries(tool):
+            return {}, f"tool {tool_id!r} has no pinned methods for --candidate"
+        out[tool_id] = version
+    return out, None
+
+
+def _plan_bumps(
+    tools: Sequence[Tool],
+    initial: Report,
+    probe: Probe,
+    explicit: Mapping[str, str],
+) -> list[_BumpResult]:
+    tools_by_id = {tool.id: tool for tool in tools}
+    results: list[_BumpResult] = []
+    candidate_versions: dict[str, str] = dict(explicit)
+    auto_failures: list[tuple[str, str, str, str, str]] = []
+    for tool in tools:
+        if tool.id in candidate_versions:
+            continue
+        version, fail_url, fail_reason = _auto_bump_candidate(tool.id, initial.findings)
+        if fail_reason is not None:
+            auto_failures.append(
+                (
+                    tool.id,
+                    _pinned_version(tool),
+                    version or "",
+                    fail_url or "",
+                    fail_reason,
+                )
+            )
+            continue
+        if version is not None:
+            candidate_versions[tool.id] = version
+    for tool_id, old_version, new_version, fail_url, fail_reason in auto_failures:
+        results.append(
+            _BumpResult(
+                tool_id=tool_id,
+                applied=False,
+                old_version=old_version,
+                new_version=new_version,
+                fail_url=fail_url,
+                fail_reason=fail_reason,
+            )
+        )
+    for tool_id, candidate in sorted(candidate_versions.items()):
+        tool = tools_by_id[tool_id]
+        old_version = _pinned_version(tool)
+        pinned_copy = _candidate_tool_copy(tool, candidate, probe.release)
+        candidate_report = check_registry([pinned_copy], probe, {})
+        if not all(finding.status == "ok" for finding in candidate_report.findings):
+            fail_url, fail_reason = _first_failed_finding(candidate_report)
+            results.append(
+                _BumpResult(
+                    tool_id=tool_id,
+                    applied=False,
+                    old_version=old_version,
+                    new_version=candidate,
+                    fail_url=fail_url,
+                    fail_reason=fail_reason,
+                )
+            )
+            continue
+        bump_edits = _build_bump_edits(tool, candidate, candidate_report)
+        results.append(
+            _BumpResult(
+                tool_id=tool_id,
+                applied=True,
+                old_version=old_version,
+                new_version=candidate,
+                candidate_findings=candidate_report.findings,
+                bump_edits=bump_edits,
+            )
+        )
+    return results
+
+
+def _registry_edits_for_write(
+    report: Report, bumps: Sequence[_BumpResult], write_day: date
+) -> list[RegistryEdit]:
+    edits: list[RegistryEdit] = []
+    for bump in bumps:
+        if bump.applied:
+            edits.extend(bump.bump_edits)
+    for tool_id in report.passed_tools():
+        edits.append(RegistryEdit(tool_id, None, "verified", write_day.isoformat()))
+    return edits
+
+
 def format_report(report: Report, *, include_passed: bool = True) -> str:
     lines: list[str] = []
     if report.blocked:
@@ -1234,6 +1523,13 @@ def main(
         action="store_true",
         help="Write verified dates for passing tools (maintainer only).",
     )
+    parser.add_argument(
+        "--candidate",
+        action="append",
+        default=[],
+        metavar="TOOL=VERSION",
+        help="Bump a pinned tool to an explicit candidate version (repeatable).",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     write_day = today if today is not None else date.today()
     state_path = args.state if args.state is not None else default_state_path()
@@ -1253,25 +1549,35 @@ def main(
         active_probe = default_probe(token)
     else:
         active_probe = probe
-    report = check_registry(tools, active_probe, state)
-    if args.write:
-        registry_text = args.registry.read_text()
-        edits = [
-            RegistryEdit(
-                tool_id,
-                None,
-                "verified",
-                write_day.isoformat(),
-            )
-            for tool_id in report.passed_tools()
-        ]
-        if edits:
-            updated = apply_registry_edits(registry_text, edits)
-            atomic_write_text(args.registry, updated)
-            import sys
+    import sys
 
+    initial_report = check_registry(tools, active_probe, state)
+    report = initial_report
+    if args.candidate:
+        explicit, err = _parse_explicit_candidates(args.candidate, tools)
+        if err is not None:
+            print(err, file=sys.stderr)
+            return EXIT_USAGE
+    else:
+        explicit = {}
+    if args.write:
+        bumps = _plan_bumps(tools, initial_report, active_probe, explicit)
+        tools_by_id = {tool.id: tool for tool in tools}
+        report = _finalize_report_after_bumps(initial_report, tools_by_id, bumps)
+        registry_text = args.registry.read_text()
+        edits = _registry_edits_for_write(report, bumps, write_day)
+        if edits:
+            try:
+                updated = apply_registry_edits(registry_text, edits)
+            except RegistryWriteError as exc:
+                print(str(exc), file=sys.stderr)
+                return EXIT_USAGE
+            atomic_write_text(args.registry, updated)
             for tool_id in report.passed_tools():
                 print(f"dated {tool_id}", file=sys.stderr)
+    elif explicit:
+        print("--candidate requires --write", file=sys.stderr)
+        return EXIT_USAGE
     print(format_report(report), end="")
     _save_state(state_path, state)
     return report.exit_code

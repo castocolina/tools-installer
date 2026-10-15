@@ -19,6 +19,7 @@ import pytest
 from installer.model import load_tools
 from installer.run import CommandError
 from installer.verify_registry import (
+    EXIT_USAGE,
     Probe,
     RegistryEdit,
     RegistryWriteError,
@@ -1971,7 +1972,7 @@ def test_write_dates_only_passing_tools(tmp_path: Path, monkeypatch: pytest.Monk
 
     probe = Probe(release=lambda _r: release, head=head, download=download)
     state_path = tmp_path / "state.json"
-    today = date(2026, 10, 20)
+    today = date(2026, 10, 15)
     code = vr.main(
         ["--registry", str(registry), "--state", str(state_path), "--write"],
         probe=probe,
@@ -1979,7 +1980,7 @@ def test_write_dates_only_passing_tools(tmp_path: Path, monkeypatch: pytest.Monk
     )
     text = registry.read_text()
     assert "tool_a\n" in text or 'id = "tool_a"' in text
-    assert "verified = 2026-10-20" in text.split('id = "tool_a"')[1].split("[[tool]]")[0]
+    assert "verified = 2026-10-15" in text.split('id = "tool_a"')[1].split("[[tool]]")[0]
     assert "tool_b" in text
     b_block = text.split('id = "tool_b"')[1].split("[[tool]]")[0]
     assert "verified = 2026-10-01" in b_block
@@ -2100,3 +2101,435 @@ def test_without_write_the_registry_is_untouched(
     state_path = tmp_path / "state.json"
     vr.main(["--registry", str(registry), "--state", str(state_path)], probe=probe)
     assert registry.read_bytes() == before
+
+
+# --- plan 18-13 task 2: pin bump and --candidate ---
+
+
+def _github_pin_registry(tmp_path: Path, *, tool_id: str = "helm") -> Path:
+    pin = "a" * 64
+    content = f"""
+[[tool]]
+id = "{tool_id}"
+name = "{tool_id}"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+verified = 2026-10-01
+[[tool.method]]
+kind = "tarball"
+url = "https://github.com/o/r/releases/download/{{ver}}/a-{{ver}}.tar.gz"
+version = "31.0.2"
+member = "bin/x"
+strip = 0
+sha256 = "{pin}"
+"""
+    return _write_registry(tmp_path, content)
+
+
+def _sublime_two_pin_registry(tmp_path: Path) -> Path:
+    tar_old = _xz_tar_bytes({"sublime_text/sublime_text": b"z"})
+    pin = hashlib.sha256(tar_old).hexdigest()
+    content = f"""
+[[tool]]
+id = "sublime"
+name = "sublime"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+verified = 2026-10-01
+[[tool.method]]
+kind = "tarball"
+url = "https://download.example/sublime_text_build_{{ver}}_x64.tar.xz"
+version = "4200"
+member = "sublime_text/sublime_text"
+strip = 0
+archive = "xz"
+sha256 = "{pin}"
+[[tool.method]]
+kind = "tarball"
+url = "https://download.example/sublime_text_build_{{ver}}_arm64.tar.xz"
+version = "4200"
+member = "sublime_text/sublime_text"
+strip = 0
+archive = "xz"
+sha256 = "{pin}"
+"""
+    return _write_registry(tmp_path, content)
+
+
+def test_newer_github_pin_is_bumped_when_the_candidate_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import verify_registry as vr
+
+    registry = _github_pin_registry(tmp_path)
+    old_url = "https://github.com/o/r/releases/download/31.0.2/a-31.0.2.tar.gz"
+    new_url = "https://github.com/o/r/releases/download/32.4.1/a-32.4.1.tar.gz"
+    tar_old = _gz_tar_bytes({"bin/x": b"old"})
+    tar_new = _gz_tar_bytes({"bin/x": b"new"})
+    new_digest = hashlib.sha256(tar_new).hexdigest()
+    release = Release(
+        tag="v32.4.1",
+        digests={"a-32.4.1.tar.gz": new_digest},
+    )
+
+    def head(url: str) -> str:
+        if url in (old_url, new_url):
+            return 'etag:"1"'
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    def download(url: str, dest: Path) -> None:
+        if url == old_url:
+            dest.write_bytes(tar_old)
+        elif url == new_url:
+            dest.write_bytes(tar_new)
+        else:
+            raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    probe = Probe(release=lambda _r: release, head=head, download=download)
+    today = date(2026, 10, 15)
+    code = vr.main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--write"],
+        probe=probe,
+        today=today,
+    )
+    text = registry.read_text()
+    assert 'version = "32.4.1"' in text
+    assert new_digest in text
+    assert "verified = 2026-10-15" in text
+    assert code == 0
+
+
+def test_candidate_flag_bumps_a_pin_without_a_release_source(tmp_path: Path) -> None:
+    from installer import verify_registry as vr
+
+    registry = _sublime_two_pin_registry(tmp_path)
+    url_x64 = "https://download.example/sublime_text_build_4215_x64.tar.xz"
+    url_arm = "https://download.example/sublime_text_build_4215_arm64.tar.xz"
+    tar_x = _xz_tar_bytes({"sublime_text/sublime_text": b"x"})
+    tar_a = _xz_tar_bytes({"sublime_text/sublime_text": b"y"})
+    digest_x = hashlib.sha256(tar_x).hexdigest()
+    digest_a = hashlib.sha256(tar_a).hexdigest()
+    old_x = "https://download.example/sublime_text_build_4200_x64.tar.xz"
+    old_a = "https://download.example/sublime_text_build_4200_arm64.tar.xz"
+    tar_old = _xz_tar_bytes({"sublime_text/sublime_text": b"z"})
+    release = Release(tag="1", digests={})
+
+    def head(url: str) -> str:
+        if url in (old_x, old_a, url_x64, url_arm):
+            return 'etag:"1"'
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    def download(url: str, dest: Path) -> None:
+        mapping = {
+            old_x: tar_old,
+            old_a: tar_old,
+            url_x64: tar_x,
+            url_arm: tar_a,
+        }
+        if url in mapping:
+            dest.write_bytes(mapping[url])
+            return
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    probe = Probe(release=lambda _r: release, head=head, download=download)
+    today = date(2026, 10, 15)
+    code = vr.main(
+        [
+            "--registry",
+            str(registry),
+            "--state",
+            str(tmp_path / "s.json"),
+            "--write",
+            "--candidate",
+            "sublime=4215",
+        ],
+        probe=probe,
+        today=today,
+    )
+    text = registry.read_text()
+    assert text.count('version = "4215"') == 2
+    assert digest_x in text and digest_a in text
+    assert "verified = 2026-10-15" in text
+    assert code == 0
+
+
+def test_one_failing_method_blocks_the_whole_tool_bump(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from installer import verify_registry as vr
+
+    registry = _sublime_two_pin_registry(tmp_path)
+    url_x64 = "https://download.example/sublime_text_build_4215_x64.tar.xz"
+    url_arm = "https://download.example/sublime_text_build_4215_arm64.tar.xz"
+    old_x = "https://download.example/sublime_text_build_4200_x64.tar.xz"
+    old_a = "https://download.example/sublime_text_build_4200_arm64.tar.xz"
+    tar = _xz_tar_bytes({"sublime_text/sublime_text": b"z"})
+    release = Release(tag="1", digests={})
+
+    def head(url: str) -> str:
+        if url == url_arm:
+            raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+        if url in (old_x, old_a, url_x64):
+            return 'etag:"1"'
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    def download(url: str, dest: Path) -> None:
+        if url in (old_x, old_a, url_x64):
+            dest.write_bytes(tar)
+            return
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    probe = Probe(release=lambda _r: release, head=head, download=download)
+    code = vr.main(
+        [
+            "--registry",
+            str(registry),
+            "--state",
+            str(tmp_path / "s.json"),
+            "--write",
+            "--candidate",
+            "sublime=4215",
+        ],
+        probe=probe,
+        today=date(2026, 10, 15),
+    )
+    text = registry.read_text()
+    assert 'version = "4200"' in text
+    assert "verified = 2026-10-01" in text
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "bump to 4215 not applied:" in captured.out
+    assert "arm64" in captured.out
+    assert "dated sublime" not in captured.err
+
+
+def test_renamed_candidate_asset_keeps_the_old_pin(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from installer import verify_registry as vr
+
+    registry = _github_pin_registry(tmp_path)
+    old_url = "https://github.com/o/r/releases/download/31.0.2/a-31.0.2.tar.gz"
+    new_url = "https://github.com/o/r/releases/download/32.4.1/a-32.4.1.tar.gz"
+    tar_old = _gz_tar_bytes({"bin/x": b"old"})
+    release = Release(tag="v32.4.1", digests={})
+
+    def head(url: str) -> str:
+        if url == old_url:
+            return 'etag:"1"'
+        if url == new_url:
+            raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    def download(url: str, dest: Path) -> None:
+        if url == old_url:
+            dest.write_bytes(tar_old)
+            return
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    probe = Probe(release=lambda _r: release, head=head, download=download)
+    code = vr.main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--write"],
+        probe=probe,
+    )
+    captured = capsys.readouterr()
+    assert 'version = "31.0.2"' in registry.read_text()
+    assert "newer stable release" in captured.out
+    assert code == 1
+
+
+def test_write_run_after_a_bump_reports_the_registry_as_written(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from installer import verify_registry as vr
+
+    registry = _github_pin_registry(tmp_path)
+    old_url = "https://github.com/o/r/releases/download/31.0.2/a-31.0.2.tar.gz"
+    new_url = "https://github.com/o/r/releases/download/32.4.1/a-32.4.1.tar.gz"
+    tar_old = _gz_tar_bytes({"bin/x": b"old"})
+    tar_new = _gz_tar_bytes({"bin/x": b"new"})
+    new_digest = hashlib.sha256(tar_new).hexdigest()
+    release = Release(tag="v32.4.1", digests={"a-32.4.1.tar.gz": new_digest})
+
+    def head(url: str) -> str:
+        if url in (old_url, new_url):
+            return 'etag:"1"'
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    def download(url: str, dest: Path) -> None:
+        if url == old_url:
+            dest.write_bytes(tar_old)
+        elif url == new_url:
+            dest.write_bytes(tar_new)
+        else:
+            raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    probe = Probe(release=lambda _r: release, head=head, download=download)
+    code = vr.main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--write"],
+        probe=probe,
+        today=date(2026, 10, 15),
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "newer stable release" not in out
+    assert "bumped helm 31.0.2 -> 32.4.1" in out
+    report = vr.check_registry(load_tools(registry, today=date(2026, 10, 15)), probe, {})
+    assert "helm" in report.passed_tools()
+
+
+def test_bump_replaces_the_findings_of_the_superseded_pin_targets(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from installer import verify_registry as vr
+
+    registry = _github_pin_registry(tmp_path, tool_id="drawio")
+    old_url = "https://github.com/o/r/releases/download/31.0.2/a-31.0.2.tar.gz"
+    new_url = "https://github.com/o/r/releases/download/32.4.1/a-32.4.1.tar.gz"
+    tar_new = _gz_tar_bytes({"bin/x": b"new"})
+    new_digest = hashlib.sha256(tar_new).hexdigest()
+    release = Release(tag="v32.4.1", digests={"a-32.4.1.tar.gz": new_digest})
+
+    def head(url: str) -> str:
+        if url == new_url:
+            return 'etag:"1"'
+        if url == old_url:
+            raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    def download(url: str, dest: Path) -> None:
+        if url == new_url:
+            dest.write_bytes(tar_new)
+            return
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    probe = Probe(release=lambda _r: release, head=head, download=download)
+    code = vr.main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--write"],
+        probe=probe,
+        today=date(2026, 10, 15),
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "asset missing" not in out
+    assert "newer stable release" not in out
+    assert "bumped drawio 31.0.2 -> 32.4.1" in out
+
+
+def test_bump_keeps_the_findings_of_the_tools_unpinned_methods(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from installer import verify_registry as vr
+
+    pin = "a" * 64
+    content = f"""
+[[tool]]
+id = "combo"
+name = "combo"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+verified = 2026-10-01
+[[tool.method]]
+kind = "tarball"
+url = "https://github.com/o/r/releases/download/{{ver}}/a-{{ver}}.tar.gz"
+version = "31.0.2"
+member = "bin/x"
+strip = 0
+sha256 = "{pin}"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "side-{{ver}}.tar.gz"
+member = "bin/y"
+strip = 0
+"""
+    registry = _write_registry(tmp_path, content)
+    old_url = "https://github.com/o/r/releases/download/31.0.2/a-31.0.2.tar.gz"
+    new_url = "https://github.com/o/r/releases/download/32.4.1/a-32.4.1.tar.gz"
+    side_url = "https://github.com/o/r/releases/download/v32.4.1/side-32.4.1.tar.gz"
+    tar_old = _gz_tar_bytes({"bin/x": b"old"})
+    tar_new = _gz_tar_bytes({"bin/x": b"new"})
+    new_digest = hashlib.sha256(tar_new).hexdigest()
+    release = Release(tag="v32.4.1", digests={"a-32.4.1.tar.gz": new_digest})
+
+    def head(url: str) -> str:
+        if url == side_url:
+            raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+        if url in (old_url, new_url):
+            return 'etag:"1"'
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    def download(url: str, dest: Path) -> None:
+        if url == old_url:
+            dest.write_bytes(tar_old)
+        elif url == new_url:
+            dest.write_bytes(tar_new)
+        else:
+            raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    probe = Probe(release=lambda _r: release, head=head, download=download)
+    code = vr.main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--write"],
+        probe=probe,
+        today=date(2026, 10, 15),
+    )
+    out = capsys.readouterr().out
+    text = registry.read_text()
+    assert 'version = "32.4.1"' in text
+    assert new_digest in text
+    assert "verified = 2026-10-01" in text
+    assert "asset missing" in out
+    assert code == 1
+
+
+def test_unpinned_entries_never_gain_pin_keys(tmp_path: Path) -> None:
+    from installer import verify_registry as vr
+
+    registry = _difftastic_registry(tmp_path, prefix_template=False)
+    assets = _canned_difftastic_assets()
+    release = _release(assets=assets)
+    probe = _probe(release, assets)
+    before = registry.read_text()
+    vr.main(
+        ["--registry", str(registry), "--state", str(tmp_path / "s.json"), "--write"],
+        probe=probe,
+        today=date(2026, 10, 15),
+    )
+    after = registry.read_text()
+    for line in after.splitlines():
+        if "version =" in line and line.strip().startswith("version"):
+            assert "difftastic" in before  # pinned version lines unchanged for unpinned
+    assert before.count("sha256 =") == after.count("sha256 =")
+
+
+def test_candidate_for_an_unknown_or_unpinned_tool_is_an_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from installer import verify_registry as vr
+
+    registry = _difftastic_registry(tmp_path, prefix_template=False)
+    assets = _canned_difftastic_assets()
+    probe = _probe(_release(assets=assets), assets)
+    state = str(tmp_path / "s.json")
+    before = registry.read_bytes()
+
+    for args in (
+        ["--registry", str(registry), "--state", state, "--write", "--candidate", "nope=1"],
+        ["--registry", str(registry), "--state", state, "--write", "--candidate", "difftastic=1"],
+        ["--registry", str(registry), "--state", state, "--write", "--candidate", "sublime"],
+    ):
+        capsys.readouterr()
+        code = vr.main(args, probe=probe)
+        err = capsys.readouterr().err
+        assert code == EXIT_USAGE
+        assert err.strip()
+        assert registry.read_bytes() == before
