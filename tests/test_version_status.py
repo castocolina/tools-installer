@@ -1251,6 +1251,13 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
     seen_record = False
     seen_none = False
     checked = 0
+    # opencode M4: a regression that surfaces the previous record during a
+    # LATER generation must be exercised, so the writer may not stop after
+    # its first refresh+invalidate cycle. Two full generations are required
+    # before the early exit; the reader-overlap conditions and the iteration
+    # cap are unchanged.
+    generations = 0
+    _MIN_GENERATIONS = 2
     stop = threading.Event()
     reader_ready = threading.Event()
     _MAX_PASSES = 200
@@ -1271,6 +1278,7 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
             time.sleep(0)
 
     def writer() -> None:
+        nonlocal generations
         try:
             # Do not start before the reader is looping: on a slow runner a
             # head start would let every pass finish before the reader is
@@ -1294,7 +1302,8 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
                 # Same inside the invalidated gap, so a None observation is
                 # guaranteed too.
                 _let_reader_run()
-                if seen_record and seen_none and checked > 0:
+                generations += 1
+                if generations >= _MIN_GENERATIONS and seen_record and seen_none and checked > 0:
                     break
         except BaseException as exc:  # noqa: BLE001 -- collected for the join
             errors.append(exc)

@@ -13,6 +13,8 @@ from installer.model import Method
 from installer.run import Runner
 from tests.test_download import fixture_runner
 
+SHELLED_LINKERS = frozenset({"ln", "chmod"})
+
 
 def _record() -> tuple[list[list[str]], Runner]:
     calls: list[list[str]] = []
@@ -61,8 +63,7 @@ def test_install_app_symlinks_declared_cli(tmp_path: Path, monkeypatch: pytest.M
     assert link.is_symlink()
     assert os.readlink(link) == str(member)
     assert member.stat().st_mode & 0o777 == 0o644  # a bundle CLI keeps its own mode
-    shelled = {"l" + "n", "ch" + "mod"}
-    assert not any(cmd and cmd[0] in shelled for cmd in calls)
+    assert not any(cmd and cmd[0] in SHELLED_LINKERS for cmd in calls)
     assert (tmp_path / ".local" / "bin").is_dir()
 
 
@@ -87,8 +88,7 @@ def test_install_app_cli_that_is_a_directory_links_nothing(
     link = tmp_path / ".local" / "bin" / "demo"
     assert not link.exists()
     assert not link.is_symlink()
-    shelled = {"l" + "n", "ch" + "mod"}
-    assert not any(cmd and cmd[0] in shelled for cmd in calls)
+    assert not any(cmd and cmd[0] in SHELLED_LINKERS for cmd in calls)
 
 
 def test_install_app_without_cli_runs_only_the_pipeline(

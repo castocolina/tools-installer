@@ -1,3 +1,4 @@
+import asyncio
 import html
 import re
 import threading
@@ -2038,9 +2039,10 @@ async def test_owner_cell_semantic_value_reaches_the_mounted_table(tmp_path: Pat
     )
     app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service)
     async with app.run_test(size=(100, 30)) as pilot:
-        # textual types Worker without a type parameter, so this method's
-        # type is partially unknown under strict pyright. The call is real.
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        # WR-07: suppression-free wait -- WorkerManager.__iter__ returns
+        # Iterator[Worker[Any]], so gather type-checks clean under strict
+        # pyright where wait_for_complete's bare-generic signature does not.
+        await asyncio.gather(*(worker.wait() for worker in app.workers))
         await pilot.pause()
         resolved = service.ownership_of("rg")
         assert resolved is not None

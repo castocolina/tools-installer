@@ -14,6 +14,7 @@ from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError
 from installer.versions import VersionError
+from tests.test_apps import SHELLED_LINKERS
 from tests.test_download import fixture_runner
 
 
@@ -195,8 +196,7 @@ def test_github_release_routes_to_download(monkeypatch: pytest.MonkeyPatch, tmp_
     link = bin_dir / "rg"
     assert link.is_symlink()
     assert os.readlink(link) == str(member)
-    shelled = {"l" + "n", "ch" + "mod"}
-    assert not any(cmd and cmd[0] in shelled for cmd in calls)
+    assert not any(cmd and cmd[0] in SHELLED_LINKERS for cmd in calls)
 
 
 def test_github_release_directory_member_falls_through_the_ladder(
