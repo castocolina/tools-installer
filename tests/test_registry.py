@@ -486,7 +486,7 @@ def test_volta_resolves_to_script_on_linux_and_brew_on_macos() -> None:
     assert volta.cmd == "volta"
     assert volta.audience == "both"
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
-    assert [m.kind for m in resolve_methods(volta, macos)][0] == "brew"
+    assert [m.kind for m in resolve_methods(volta, macos)][:2] == ["script", "brew"]
     for platform_os in ("debian", "arch", "fedora"):
         linux = Platform(os=platform_os, arch="amd64", immutable=False, has_brew=True)
         assert [m.kind for m in resolve_methods(volta, linux)][0] == "script"
@@ -642,7 +642,7 @@ def test_download_tools_resolve_github_release_then_brew_on_macos() -> None:
 MACOS_ONLY = {"gnu-bash"}
 # Apple Containers: Homebrew itself requires macos>=26 and arch=arm64. Membership
 # means the tool cannot work on that platform+arch, not that packaging is inconvenient.
-MACOS_ARM64_ONLY = {"container"}
+MACOS_ARM64_ONLY = {"container", "podman"}
 # Membership means the tool provably cannot work on that platform+arch, not
 # that its packaging is inconvenient there.
 # jetbrains-toolbox: Toolbox App 2.3+ ships a native Linux arm64 build, but no
@@ -2089,3 +2089,71 @@ def test_every_shipped_tool_declares_a_verified_date() -> None:
     verified_lines = len(re.findall(r"^verified = \d{4}-\d{2}-\d{2}$", text, re.MULTILINE))
     load_tools(REGISTRY)
     assert verified_lines == tool_headers
+
+
+def test_audit_fix_c1_volta_script_covers_macos() -> None:
+    volta = next(t for t in load_tools(REGISTRY) if t.id == "volta")
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
+    kinds = [m.kind for m in resolve_methods(volta, macos)]
+    assert "script" in kinds
+    block = REGISTRY.read_text(encoding="utf-8")
+    start = block.index('id = "volta"')
+    end = block.index('id = "fnm"', start)
+    volta_block = block[start:end]
+    assert "macOS" in volta_block or "macos" in volta_block.lower()
+    assert "mise" in volta_block
+    assert "No macOS script fallback" not in volta_block
+
+
+def test_audit_fix_c2_podman_brew_is_split() -> None:
+    podman = next(t for t in load_tools(REGISTRY) if t.id == "podman")
+    mac_arm = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    mac_amd = Platform(os="macos", arch="amd64", immutable=False, has_brew=True)
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    assert any(m.kind == "brew" for m in resolve_methods(podman, mac_arm))
+    assert not any(m.kind == "brew" for m in resolve_methods(podman, mac_amd))
+    assert any(m.kind == "brew" for m in resolve_methods(podman, linux))
+
+
+def test_audit_fix_c3_docker_dnf_installs_the_cli() -> None:
+    docker = next(t for t in load_tools(REGISTRY) if t.id == "docker")
+    dnf = next(m for m in docker.methods if m.kind == "dnf")
+    apt = next(m for m in docker.methods if m.kind == "apt")
+    pacman = next(m for m in docker.methods if m.kind == "pacman")
+    assert dnf.params["package"] == "docker-cli"
+    assert apt.params["package"] == "docker.io"
+    assert pacman.params["package"] == "docker"
+    block = REGISTRY.read_text(encoding="utf-8")
+    start = block.index('id = "docker"\nname = "Docker CLI"')
+    end = block.index('id = "podman"', start)
+    assert "engine" in block[start:end].lower()
+
+
+def test_audit_fix_c4_uv_does_not_modify_path() -> None:
+    uv = next(t for t in load_tools(REGISTRY) if t.id == "uv")
+    script = next(m for m in uv.methods if m.kind == "script")
+    assert script.params["env"] == {"UV_NO_MODIFY_PATH": "1"}
+
+
+def test_audit_fix_c5_sdkman_comment_records_5_23_2() -> None:
+    block = REGISTRY.read_text(encoding="utf-8")
+    start = block.index('id = "sdkman"')
+    end = block.index('id = "java"', start)
+    sdkman_block = block[start:end]
+    assert "5.23.2" in sdkman_block
+    assert "unzip" in sdkman_block
+
+
+def test_audit_fix_c6_colima_recommends_docker() -> None:
+    colima = next(t for t in load_tools(REGISTRY) if t.id == "colima")
+    assert colima.recommends == ("docker",)
+
+
+def test_audit_fix_c8_brew_script_is_split_by_arch() -> None:
+    brew = next(t for t in load_tools(REGISTRY) if t.id == "brew")
+    mac_arm = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
+    mac_amd = Platform(os="macos", arch="amd64", immutable=False, has_brew=False)
+    arm_script = next(m for m in resolve_methods(brew, mac_arm) if m.kind == "script")
+    amd_script = next(m for m in resolve_methods(brew, mac_amd) if m.kind == "script")
+    assert arm_script.params["bin_dir"] == "/opt/homebrew/bin"
+    assert amd_script.params["bin_dir"] == "/usr/local/bin"

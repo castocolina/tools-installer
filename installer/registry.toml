@@ -74,6 +74,7 @@ kind = "script"
 url = "https://astral.sh/uv/install.sh"
 shell = "sh"
 bin_dir = "~/.local/bin"
+env = { UV_NO_MODIFY_PATH = "1" }
 [[tool.method]]
 kind = "brew"
 formula = "uv"
@@ -160,15 +161,22 @@ audience = "both"
 tier = "system"
 verified = 2026-10-13
 desc = "Homebrew supplies user-space packages on macOS and immutable Linux when native writes are unsafe."
-# bin_dir assumes Apple Silicon (/opt/homebrew/bin). Intel Macs use /usr/local/bin;
-# arch-aware wiring is a deferred refinement, so PATH may be wrong on Intel.
 [[tool.method]]
 kind = "script"
 os = ["macos"]
+arch = ["arm64"]
 url = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
 shell = "bash"
 env = { NONINTERACTIVE = "1" }
 bin_dir = "/opt/homebrew/bin"
+[[tool.method]]
+kind = "script"
+os = ["macos"]
+arch = ["amd64"]
+url = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
+shell = "bash"
+env = { NONINTERACTIVE = "1" }
+bin_dir = "/usr/local/bin"
 [[tool.method]]
 kind = "script"
 os = ["debian", "arch", "fedora"]
@@ -992,10 +1000,11 @@ audience = "both"
 tier = "system"
 verified = 2026-10-13
 desc = "Controls Docker engines and contexts; agents use it to inspect containers without parsing desktop UI state."
+# apt `docker.io` and pacman `docker` ship the engine plus CLI; dnf uses the CLI-only package name.
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
 kind = "dnf"
-package = "docker"
+package = "docker-cli"
 [[tool.method]]
 kind = "apt"
 package = "docker.io"
@@ -1016,6 +1025,7 @@ audience = "both"
 tier = "system"
 verified = 2026-10-13
 desc = "Rootless container engine often safer on Linux and immutable desktops than daemon-first workflows."
+# podman.io documents Homebrew as unsupported / not recommended for macOS.
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
 kind = "dnf"
@@ -1028,6 +1038,12 @@ kind = "pacman"
 package = "podman"
 [[tool.method]]
 kind = "brew"
+os = ["macos"]
+arch = ["arm64"]
+formula = "podman"
+[[tool.method]]
+kind = "brew"
+os = ["debian", "arch", "fedora"]
 formula = "podman"
 
 [[tool]]
@@ -1040,6 +1056,7 @@ audience = "both"
 tier = "system"
 verified = 2026-09-06
 desc = "Runs container runtimes in a lightweight VM, giving macOS and Linux users a Docker-compatible engine."
+recommends = ["docker"]
 [[tool.method]]
 kind = "brew"
 formula = "colima"
@@ -1812,7 +1829,7 @@ url = "https://get.sdkman.io?ci=true"
 shell = "bash"
 bin_dir = "~/.sdkman/bin"
 detect_path = "~/.sdkman/bin/sdkman-init.sh"
-# Verified 2026-10-10: ~/.sdkman/var/version read as 5.23.0 on this host.
+# Verified 2026-10-13: ~/.sdkman/var/version read as 5.23.2 on this host; requires zip and unzip.
 # installer/version_status.py::_version_file (plan 16-06) reads that file.
 version_file = "~/.sdkman/var/version"
 
@@ -2077,11 +2094,8 @@ audience = "both"
 tier = "system"
 verified = 2026-10-13
 desc = "Node toolchain manager; owns globally installed Node CLIs in its own shim dir"
-# No macOS script fallback: volta's published macOS path is Homebrew only.
-# A Mac with no Homebrew cannot install the redirect target; plan 04-03 gates
-# the redirect on volta resolving, so such a machine keeps today's npm hard
-# block. The remedy is to install brew. Do not invent an unpublished macOS
-# script URL.
+# Verified 2026-10-13: upstream is unmaintained and recommends mise for new installs.
+# get.volta.sh supports macOS (Darwin tarballs) as well as Linux.
 # ~/.volta/bin may not exist yet right after installing volta.
 # collect_bin_dirs only wires a declared bin_dir when the directory already
 # exists, and a brew-installed volta may not create its shim dir until the
@@ -2089,7 +2103,6 @@ desc = "Node toolchain manager; owns globally installed Node CLIs in its own shi
 # step (make fix / Doctor apply) rather than special-casing collect_bin_dirs.
 [[tool.method]]
 kind = "script"
-os = ["debian", "arch", "fedora"]
 url = "https://get.volta.sh"
 shell = "bash"
 bin_dir = "~/.volta/bin"
