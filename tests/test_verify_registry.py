@@ -10,11 +10,12 @@ from collections import defaultdict
 from collections.abc import Callable
 from email.message import Message
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 import pytest
 
 from installer.model import load_tools
+from installer.run import CommandError
 from installer.verify_registry import (
     Probe,
     Release,
@@ -23,6 +24,7 @@ from installer.verify_registry import (
     main,
     state_key,
 )
+from installer.versions import VersionError, urlopen_fetch
 
 _REPO = "Wilfred/difftastic"
 _TAG = "0.71.0"
@@ -597,7 +599,11 @@ sha256 = "{pin}"
     rendered = "https://github.com/o/r/releases/download/v1.0.0/app.zip"
     probe, _ = _map_probe(release, payloads={rendered: zip_body})
     report = check_registry(load_tools(registry), probe, state={})
-    assert all(f.status == "ok" for f in report.findings)
+    assert not any("pinned sha256 differs" in f.reason for f in report.findings)
+    assert any(
+        f.status == "drift" and "newer stable release v2.0.0 (pinned v1.0.0)" in f.reason
+        for f in report.findings
+    )
 
 
 def test_unchanged_asset_is_not_downloaded(tmp_path: Path) -> None:
@@ -1082,3 +1088,807 @@ sha256 = "{pin}"
     assert report2.findings[0].status == "drift"
     assert report2.findings[0].reason == "checksum mismatch"
     assert not any(k.startswith("sublime|") for k in state)
+
+
+def _http_error(
+    url: str,
+    code: int,
+    *,
+    headers: dict[str, str] | None = None,
+) -> HTTPError:
+    msg = Message()
+    for key, value in (headers or {}).items():
+        msg[key] = value
+    return HTTPError(url, code, "err", msg, fp=io.BytesIO())
+
+
+def _version_error_from_http(url: str, code: int, **headers: str) -> VersionError:
+    err = _http_error(url, code, headers=headers)
+    exc = VersionError(f"failed for {url}")
+    exc.__cause__ = err
+    return exc
+
+
+def _version_error_from_transport(cause: BaseException) -> VersionError:
+    exc = VersionError("transport")
+    exc.__cause__ = cause
+    return exc
+
+
+def _pinned_github_tarball_registry(tmp_path: Path, *, version: str = "31.0.2") -> Path:
+    pin = "a" * 64
+    content = f"""
+[[tool]]
+id = "helm"
+name = "helm"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://github.com/o/r/releases/download/{{ver}}/a-{{ver}}.tar.gz"
+version = "{version}"
+member = "bin/x"
+strip = 0
+sha256 = "{pin}"
+"""
+    return _write_registry(tmp_path, content)
+
+
+def _vendor_tarball_registry(tmp_path: Path) -> Path:
+    pin = "a" * 64
+    content = f"""
+[[tool]]
+id = "vendor"
+name = "vendor"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://vendor.example/pkg-{{ver}}.tar.gz"
+version = "1.0"
+member = "bin/x"
+strip = 0
+sha256 = "{pin}"
+"""
+    return _write_registry(tmp_path, content)
+
+
+def test_pinned_github_url_behind_latest_is_newer_stable_drift(tmp_path: Path) -> None:
+    registry = _pinned_github_tarball_registry(tmp_path)
+    tar = _gz_tar_bytes({"bin/x": b"x"})
+    rendered = "https://github.com/o/r/releases/download/31.0.2/a-31.0.2.tar.gz"
+    release = Release(tag="v32.4.1", digests={})
+
+    def rel(_repo: str) -> Release:
+        return release
+
+    probe, _ = _map_probe(release, payloads={rendered: tar})
+    probe = Probe(release=rel, head=probe.head, download=probe.download)
+    report = check_registry(load_tools(registry), probe, state={})
+    drift = [f for f in report.findings if "newer stable" in f.reason]
+    assert len(drift) == 1
+    assert drift[0].status == "drift"
+    assert drift[0].reason == "newer stable release v32.4.1 (pinned 31.0.2)"
+    assert drift[0].url == rendered
+    assert report.exit_code == 1
+
+
+@pytest.mark.parametrize("latest_tag", ["v31.0.2", "v31.0.1"])
+def test_older_or_equal_latest_tag_is_not_newer_stable(tmp_path: Path, latest_tag: str) -> None:
+    registry = _pinned_github_tarball_registry(tmp_path)
+    tar = _gz_tar_bytes({"bin/x": b"x"})
+    rendered = "https://github.com/o/r/releases/download/31.0.2/a-31.0.2.tar.gz"
+    release = Release(tag=latest_tag, digests={})
+    probe, _ = _map_probe(release, payloads={rendered: tar})
+    probe = Probe(release=lambda _r: release, head=probe.head, download=probe.download)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert not any("newer stable release" in f.reason for f in report.findings)
+
+
+def test_incomparable_latest_tag_is_reported_separately(tmp_path: Path) -> None:
+    registry = _pinned_github_tarball_registry(tmp_path)
+    tar = _gz_tar_bytes({"bin/x": b"x"})
+    rendered = "https://github.com/o/r/releases/download/31.0.2/a-31.0.2.tar.gz"
+    release = Release(tag="nightly", digests={})
+    probe, _ = _map_probe(release, payloads={rendered: tar})
+    probe = Probe(release=lambda _r: release, head=probe.head, download=probe.download)
+    report = check_registry(load_tools(registry), probe, state={})
+    inc = [f for f in report.findings if f.status == "inconclusive"]
+    assert len(inc) == 1
+    assert inc[0].reason == "latest tag nightly cannot be compared with pin 31.0.2"
+    assert not any(f.status == "drift" and "newer stable" in f.reason for f in report.findings)
+
+
+def test_pinned_url_without_a_release_source_is_noted(tmp_path: Path) -> None:
+    pin = "a" * 64
+    content = f"""
+[[tool]]
+id = "sublime"
+name = "sublime"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://download.sublimetext.com/sublime_text_build_{{ver}}_mac.zip"
+version = "4180"
+member = "Sublime Text.app/Contents/MacOS/sublime_text"
+strip = 0
+sha256 = "{pin}"
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="1")
+    probe, _ = _map_probe(release)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert not any("newer stable release" in f.reason for f in report.findings)
+    assert any("sublime: newer stable: no release source" in n for n in report.notes)
+
+
+def test_unpinned_github_release_never_reports_newer_stable(tmp_path: Path) -> None:
+    registry = _difftastic_registry(tmp_path, prefix_template=False)
+    assets = _canned_difftastic_assets()
+    release = _release(assets=assets)
+    report = check_registry(load_tools(registry), _probe(release, assets), state={})
+    assert not any("newer stable release" in f.reason for f in report.findings)
+
+
+def test_kinds_that_cannot_be_checked_are_listed(tmp_path: Path) -> None:
+    content = """
+[[tool]]
+id = "brewtool"
+name = "brewtool"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "brew"
+formula = "jq"
+[[tool]]
+id = "scripttool"
+name = "scripttool"
+category = "git"
+cmd = "y"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "script"
+url = "https://example.com/install.sh"
+shell = "bash"
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="1", assets={})
+    probe, _ = _map_probe(release)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert "brewtool" in report.not_checkable
+    assert "scripttool" in report.not_checkable
+    assert report.findings == ()
+
+
+def test_missing_repo_is_drift(tmp_path: Path) -> None:
+    content = """
+[[tool]]
+id = "gone"
+name = "gone"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/missing"
+asset = "a-{ver}.tar.gz"
+member = "bin/x"
+strip = 0
+"""
+    registry = _write_registry(tmp_path, content)
+    api = "https://api.github.com/repos/o/missing/releases/latest"
+
+    def rel(_repo: str) -> Release:
+        raise _version_error_from_http(api, 404)
+
+    probe = Probe(release=rel, head=lambda _u: 'etag:"1"', download=lambda _u, _d: None)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert any(f.status == "drift" and f.reason == "release not found" for f in report.findings)
+    assert report.exit_code == 1
+    assert report.blocked is None
+
+
+@pytest.mark.parametrize(
+    "headers,code",
+    [
+        ({"X-RateLimit-Remaining": "0"}, 403),
+        ({"Retry-After": "60"}, 403),
+        ({}, 429),
+    ],
+)
+def test_rate_limit_without_drift_blocks_the_run(
+    tmp_path: Path, headers: dict[str, str], code: int
+) -> None:
+    registry = _difftastic_registry(tmp_path, prefix_template=False)
+    assets = _canned_difftastic_assets()
+    api = "https://api.github.com/repos/Wilfred/difftastic/releases/latest"
+
+    def rel(_repo: str) -> Release:
+        raise _version_error_from_http(api, code, **headers)
+
+    probe = Probe(
+        release=rel,
+        head=_head_for_release(_release(assets=assets), assets),
+        download=_difftastic_download,
+    )
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.blocked is not None
+    assert "rate limit" in report.blocked.lower()
+    assert report.exit_code == 2
+    text = format_report(report)
+    assert text.splitlines()[0].startswith("blocked:")
+    assert "note:" not in text
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "rate_limit_head404",
+        "transport_head410",
+        "rate_limit_checksum",
+        "rate_limit_member",
+    ],
+)
+def test_blocked_run_still_reports_confirmed_drift(tmp_path: Path, case: str) -> None:
+    vendor_url = "https://vendor.example/pkg-1.0.tar.gz"
+    pin = hashlib.sha256(_gz_tar_bytes({"bin/x": b"x"})).hexdigest()
+    content = f"""
+[[tool]]
+id = "api"
+name = "api"
+category = "git"
+cmd = "a"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "x-{{ver}}.tar.gz"
+member = "bin/x"
+strip = 0
+[[tool]]
+id = "vendor"
+name = "vendor"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://vendor.example/pkg-{{ver}}.tar.gz"
+version = "1.0"
+member = "bin/x"
+strip = 0
+sha256 = "{pin}"
+"""
+    registry = _write_registry(tmp_path, content)
+    api = "https://api.github.com/repos/o/r/releases/latest"
+    tar_ok = _gz_tar_bytes({"bin/x": b"x"})
+    tar_bad = _gz_tar_bytes({"other": b"x"})
+    rate_headers = {"X-RateLimit-Remaining": "0"}
+
+    def rel(_repo: str) -> Release:
+        raise _version_error_from_http(api, 403, **rate_headers)
+
+    def head(url: str) -> str:
+        if case in ("rate_limit_head404", "transport_head410") and url == vendor_url:
+            code = 404 if case == "rate_limit_head404" else 410
+            raise _http_error(url, code)
+        return 'etag:"1"'
+
+    def download(url: str, dest: Path) -> None:
+        if case == "rate_limit_checksum":
+            dest.write_bytes(tar_bad if url == vendor_url else tar_ok)
+        elif case == "rate_limit_member":
+            dest.write_bytes(_gz_tar_bytes({"wrong": b"x"}) if url == vendor_url else tar_ok)
+        else:
+            dest.write_bytes(tar_ok)
+
+    if case == "transport_head410":
+
+        def rel_transport(_repo: str) -> Release:
+            raise _version_error_from_transport(URLError("down"))
+
+        probe = Probe(release=rel_transport, head=head, download=download)
+    else:
+        probe = Probe(release=rel, head=head, download=download)
+
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.blocked is not None
+    assert report.exit_code == 1
+    text = format_report(report)
+    lines = text.splitlines()
+    assert lines[0].startswith("blocked:")
+    assert lines[1].startswith("note: the run was otherwise blocked")
+    assert any(f.status == "drift" for f in report.findings)
+
+
+def test_forbidden_without_rate_limit_evidence_does_not_block(tmp_path: Path) -> None:
+    pin = "a" * 64
+    content = f"""
+[[tool]]
+id = "api"
+name = "api"
+category = "git"
+cmd = "a"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "x-{{ver}}.tar.gz"
+member = "bin/x"
+strip = 0
+[[tool]]
+id = "vendor"
+name = "vendor"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://vendor.example/pkg-{{ver}}.tar.gz"
+version = "1.0"
+member = "bin/x"
+strip = 0
+sha256 = "{pin}"
+"""
+    registry = _write_registry(tmp_path, content)
+    vendor_url = "https://vendor.example/pkg-1.0.tar.gz"
+    api = "https://api.github.com/repos/o/r/releases/latest"
+
+    def rel(_repo: str) -> Release:
+        raise _version_error_from_http(api, 403)
+
+    def head(url: str) -> str:
+        if url == vendor_url:
+            raise _http_error(url, 404)
+        return 'etag:"1"'
+
+    probe = Probe(release=rel, head=head, download=lambda _u, _d: None)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.blocked is None
+    assert report.exit_code == 1
+    forbidden = [
+        f
+        for f in report.findings
+        if f.status == "inconclusive" and f.reason == "release read forbidden (HTTP 403)"
+    ]
+    assert forbidden
+    drift = [f for f in report.findings if f.status == "drift"]
+    assert drift
+    assert "403" in format_report(report)
+
+
+@pytest.mark.parametrize("mode", ["all404", "all503_release", "all503_head_only"])
+def test_http_answers_never_block_the_run(tmp_path: Path, mode: str) -> None:
+    if mode == "all503_head_only":
+        registry = _vendor_tarball_registry(tmp_path)
+
+        def rel(_repo: str) -> Release:
+            raise RuntimeError("release should not be called")
+
+        def head(url: str) -> str:
+            raise _http_error(url, 503)
+
+        probe = Probe(release=rel, head=head, download=lambda _u, _d: None)
+        report = check_registry(load_tools(registry), probe, state={})
+        assert report.blocked is None
+        assert report.exit_code == 2
+        return
+
+    content = """
+[[tool]]
+id = "gone"
+name = "gone"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/missing"
+asset = "a-{ver}.tar.gz"
+member = "bin/x"
+strip = 0
+"""
+    registry = _write_registry(tmp_path, content)
+    api = "https://api.github.com/repos/o/missing/releases/latest"
+    code = 404 if mode == "all404" else 503
+
+    def rel(_repo: str) -> Release:
+        raise _version_error_from_http(api, code)
+
+    probe = Probe(release=rel, head=lambda _u: 'etag:"1"', download=lambda _u, _d: None)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.blocked is None
+    if mode == "all404":
+        assert report.exit_code == 1
+        assert all(f.status == "drift" and f.reason == "release not found" for f in report.findings)
+    else:
+        assert report.exit_code == 2
+        assert all(f.status == "inconclusive" for f in report.findings)
+
+
+@pytest.mark.parametrize("transport", [URLError("net"), TimeoutError()])
+def test_no_network_blocks_the_run(tmp_path: Path, transport: BaseException) -> None:
+    registry = _difftastic_registry(tmp_path, prefix_template=False)
+
+    def rel(_repo: str) -> Release:
+        raise _version_error_from_transport(transport)
+
+    assets = _canned_difftastic_assets()
+    probe = Probe(
+        release=rel,
+        head=_head_for_release(_release(assets=assets), assets),
+        download=_difftastic_download,
+    )
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.exit_code == 2
+    assert report.blocked is not None
+    assert "no GitHub release read got an HTTP response" in report.blocked
+
+
+def test_all_failed_requests_without_release_reads_block_the_run(tmp_path: Path) -> None:
+    pin = "a" * 64
+    content = f"""
+[[tool]]
+id = "vendor"
+name = "vendor"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://vendor.example/pkg-{{ver}}.tar.gz"
+version = "1.0"
+member = "bin/x"
+strip = 0
+sha256 = "{pin}"
+[[tool]]
+id = "latestapp"
+name = "latestapp"
+category = "git"
+cmd = "y"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "app"
+url = "https://vendor.example/app.zip"
+app = "App.app"
+"""
+    registry = _write_registry(tmp_path, content)
+
+    def rel(_repo: str) -> Release:
+        raise RuntimeError("no release read")
+
+    def head(_url: str) -> str:
+        raise URLError("down")
+
+    probe = Probe(release=rel, head=head, download=lambda _u, _d: None)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.exit_code == 2
+    assert report.blocked is not None
+    assert "no HEAD or download request got an HTTP response" in report.blocked
+
+
+@pytest.mark.parametrize("flaky", ["head503", "head403", "download_urlerror", "release_urlerror"])
+def test_one_flaky_host_does_not_hide_drift(tmp_path: Path, flaky: str) -> None:
+    content = """
+[[tool]]
+id = "bad"
+name = "bad"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/good"
+asset = "a-{ver}.tar.gz"
+member = "bin/x"
+strip = 0
+[[tool]]
+id = "good"
+name = "good"
+category = "git"
+cmd = "y"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/bad"
+asset = "b-{ver}.tar.gz"
+member = "bin/y"
+strip = 0
+"""
+    registry = _write_registry(tmp_path, content)
+    good_tar = _gz_tar_bytes({"bin/x": b"x"})
+    good_url = "https://github.com/o/good/releases/download/1.0.0/a-1.0.0.tar.gz"
+    bad_url = "https://github.com/o/bad/releases/download/1.0.0/b-1.0.0.tar.gz"
+    digest = hashlib.sha256(good_tar).hexdigest()
+    release_good = Release(tag="1.0.0", digests={"a-1.0.0.tar.gz": digest})
+
+    def rel(repo: str) -> Release:
+        if flaky == "release_urlerror" and repo == "o/bad":
+            raise _version_error_from_transport(URLError("api down"))
+        if repo == "o/good":
+            return release_good
+        return Release(tag="1.0.0", digests={})
+
+    def head(url: str) -> str:
+        if flaky == "head503" and url == good_url:
+            raise _http_error(url, 503)
+        if flaky == "head403" and url == good_url:
+            raise _http_error(url, 403)
+        if flaky == "release_urlerror" and url == good_url:
+            raise _http_error(url, 404)
+        if flaky != "release_urlerror" and url == bad_url:
+            raise _http_error(url, 404)
+        return 'etag:"1"'
+
+    def download(url: str, dest: Path) -> None:
+        if flaky == "download_urlerror" and url == good_url:
+            raise URLError("dl down")
+        dest.write_bytes(good_tar)
+
+    probe = Probe(release=rel, head=head, download=download)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.exit_code == 1
+    assert any(f.status == "drift" for f in report.findings)
+    assert any(f.status == "inconclusive" for f in report.findings)
+    text = format_report(report)
+    assert "## Drift" in text
+    assert "## Inconclusive" in text
+
+
+def test_inconclusive_without_drift_exits_2(tmp_path: Path) -> None:
+    registry = _difftastic_registry(tmp_path, prefix_template=False)
+    assets = _canned_difftastic_assets()
+    urls = sorted(_release_urls(_release(assets=assets), assets))
+    bad = urls[0]
+
+    def head(url: str) -> str:
+        if url == bad:
+            raise _http_error(url, 503)
+        return 'etag:"ok"'
+
+    release = _release(assets=assets)
+    report = check_registry(load_tools(registry), _probe(release, assets, head=head), state={})
+    assert report.exit_code == 2
+    assert report.blocked is None
+
+
+def test_report_lists_methods_that_would_install_unverified(tmp_path: Path) -> None:
+    digest = hashlib.sha256(_gz_tar_bytes({"bin/x": b"x"})).hexdigest()
+    content = f"""
+[[tool]]
+id = "mixed"
+name = "mixed"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/with-digest"
+asset = "a-{{ver}}.tar.gz"
+member = "bin/x"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+repo = "o/no-digest"
+asset = "b-{{ver}}.tar.gz"
+member = "bin/x"
+strip = 0
+[[tool.method]]
+kind = "github_release"
+repo = "o/checksum"
+asset = "c-{{ver}}.tar.gz"
+member = "bin/x"
+strip = 0
+checksum = "https://vendor.example/sha256sums.txt"
+[[tool.method]]
+kind = "tarball"
+url = "https://vendor.example/latest.tar.gz"
+member = "bin/x"
+strip = 0
+[[tool.method]]
+kind = "tarball"
+url = "https://vendor.example/pin-{{ver}}.tar.gz"
+version = "1.0"
+member = "bin/x"
+strip = 0
+sha256 = "{digest}"
+[[tool.method]]
+kind = "app"
+url = "https://vendor.example/app.zip"
+app = "App.app"
+"""
+
+    registry = _write_registry(tmp_path, content)
+    tar = _gz_tar_bytes({"bin/x": b"x"})
+
+    def rel(repo: str) -> Release:
+        if repo == "o/with-digest":
+            return Release(tag="1.0.0", digests={"a-1.0.0.tar.gz": digest})
+        if repo == "o/no-digest":
+            return Release(tag="1.0.0", digests={})
+        if repo == "o/checksum":
+            return Release(tag="1.0.0", digests={"c-1.0.0.tar.gz": digest})
+        return Release(tag="0", digests={})
+
+    def download(url: str, dest: Path) -> None:
+        if url.endswith("sha256sums.txt"):
+            dest.write_text(f"{hashlib.sha256(tar).hexdigest()}  c-1.0.0.tar.gz\n")
+            return
+        dest.write_bytes(tar)
+
+    probe = Probe(release=rel, head=lambda _u: 'etag:"1"', download=download)
+    report = check_registry(load_tools(registry), probe, state={})
+    entries = {(e.tool_id, e.method_index, e.kind) for e in report.unverified}
+    assert ("mixed", 1, "github_release") in entries
+    assert ("mixed", 3, "tarball") in entries
+    assert ("mixed", 5, "app") in entries
+    text = format_report(report)
+    assert "Unverified at install (no checksum file, pinned sha256 or GitHub digest):" in text
+    assert "- `mixed` method 1 (github_release):" in text
+
+
+def test_unverified_section_says_none_when_everything_verifies(tmp_path: Path) -> None:
+    registry = _difftastic_registry(tmp_path, prefix_template=False)
+    assets = _canned_difftastic_assets()
+    release = _release(assets=assets)
+    report = check_registry(load_tools(registry), _probe(release, assets), state={})
+    text = format_report(report)
+    assert "Unverified at install" in text
+    assert "- none" in text
+
+
+def test_explicit_token_is_sent_to_api_github_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[tuple[str, dict[str, str]]] = []
+
+    class FakeResp:
+        def read(self) -> bytes:
+            return b"{}"
+
+        def __enter__(self) -> FakeResp:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0) -> FakeResp:
+        headers = {k: v for k, v in req.header_items()}
+        captured.append((req.full_url, headers))
+        return FakeResp()
+
+    import urllib.request
+
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    urlopen_fetch("https://api.github.com/repos/o/r/releases/latest", token="t")
+    urlopen_fetch("https://github.com/o/r/releases/download/v1/a.tar.gz", token="t")
+    api_headers = captured[0][1]
+    dl_headers = captured[1][1]
+    assert api_headers.get("Authorization") == "Bearer t"
+    assert "Authorization" not in dl_headers
+    monkeypatch.setenv("GH_TOKEN", "from-env")
+    captured.clear()
+    urlopen_fetch("https://api.github.com/repos/o/r/releases/latest")
+    assert captured[0][1].get("Authorization") == "Bearer from-env"
+
+
+def test_github_token_prefers_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    from installer.verify_registry import github_token
+
+    monkeypatch.setenv("GITHUB_TOKEN", "env-tok")
+    monkeypatch.setenv("GH_TOKEN", "gh-tok")
+    called: list[list[str]] = []
+
+    def gh(cmd: list[str]) -> str:
+        called.append(cmd)
+        return "nope"
+
+    assert github_token(gh) == "env-tok"
+    assert not called
+
+
+def test_github_token_falls_back_to_the_gh_login(monkeypatch: pytest.MonkeyPatch) -> None:
+    from installer.verify_registry import github_token
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    def gh(cmd: list[str]) -> str:
+        assert cmd == ["gh", "auth", "token"]
+        return f"tok{chr(10)}"
+
+    assert github_token(gh) == "tok"
+
+
+def test_github_token_is_none_without_a_gh_login(monkeypatch: pytest.MonkeyPatch) -> None:
+    from installer.verify_registry import github_token
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    def gh(_cmd: list[str]) -> str:
+        raise CommandError(["gh", "auth", "token"], 1)
+
+    assert github_token(gh) is None
+
+
+def test_main_never_prints_the_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from installer import verify_registry as vr
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    registry = _difftastic_registry(tmp_path, prefix_template=False)
+    state_path = tmp_path / "state.json"
+    recorded: list[str | None] = []
+
+    def fake_default_probe(token: str | None = None) -> Probe:
+        recorded.append(token)
+        assets = _canned_difftastic_assets()
+        return _probe(_release(assets=assets), assets)
+
+    monkeypatch.setattr(vr, "default_probe", fake_default_probe)
+
+    def gh(_cmd: list[str]) -> str:
+        return "secret-token-value"
+
+    code = vr.main(
+        ["--registry", str(registry), "--state", str(state_path)],
+        gh=gh,
+    )
+    assert code == 0
+    assert recorded == ["secret-token-value"]
+    captured = capsys.readouterr()
+    blob = captured.out + captured.err
+    assert "secret-token-value" not in blob
+
+    def gh_fail(_cmd: list[str]) -> str:
+        raise CommandError(["gh", "auth", "token"], 1)
+
+    recorded.clear()
+    capsys.readouterr()
+    vr.main(["--registry", str(registry), "--state", str(state_path)], gh=gh_fail)
+    captured2 = capsys.readouterr()
+    assert recorded == [None]
+    assert "unauthenticated GitHub API (60 requests/hour)" in captured2.err

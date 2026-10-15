@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import os
 import re
 import tarfile
 import tempfile
@@ -29,7 +30,15 @@ from installer.executors import ExecutorError, require_str
 from installer.locations import ensure_dir
 from installer.model import Method, Tool, load_tools
 from installer.platform import Platform
-from installer.versions import Release, ReleaseResolver, resolve_github_release
+from installer.run import CommandError, run_output
+from installer.versions import (
+    Release,
+    ReleaseResolver,
+    VersionError,
+    is_outdated,
+    resolve_github_release,
+    urlopen_fetch,
+)
 
 __all__ = [
     "CHECKABLE_KINDS",
@@ -37,10 +46,12 @@ __all__ = [
     "Probe",
     "Release",
     "Report",
+    "UnverifiedMethod",
     "check_registry",
     "default_probe",
     "default_state_path",
     "format_report",
+    "github_token",
     "main",
     "state_key",
 ]
@@ -71,18 +82,33 @@ class Finding:
     platforms: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class UnverifiedMethod:
+    tool_id: str
+    method_index: int
+    kind: str
+    assets: tuple[str, ...]
+
+
 @dataclass
 class Report:
     findings: tuple[Finding, ...]
     not_checkable: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
+    blocked: str | None = None
+    unverified: tuple[UnverifiedMethod, ...] = ()
 
     @property
     def exit_code(self) -> int:
-        if any(f.status == "inconclusive" for f in self.findings):
-            return 2
+        """Return 1 for drift (even when blocked), else 2 when blocked or inconclusive, else 0.
+
+        Implements D-07 per Ledger L-18-05, L-18-15 and L-18-18: a whole-run outage or
+        rate limit suppresses the issue only when it confirmed no drift.
+        """
         if any(f.status == "drift" for f in self.findings):
             return 1
+        if self.blocked is not None or any(f.status == "inconclusive" for f in self.findings):
+            return 2
         return 0
 
     def passed_tools(self) -> tuple[str, ...]:
@@ -177,14 +203,128 @@ def _method_applies(method: Method, platform: Platform) -> bool:
     return not (method.arch and platform.arch not in method.arch)
 
 
-def _collect_targets(tools: Sequence[Tool], probe: Probe) -> list[_TargetIdentity]:
+def _not_checkable_tool_ids(tools: Sequence[Tool]) -> tuple[str, ...]:
+    out: list[str] = []
+    for tool in tools:
+        if not any(m.kind in CHECKABLE_KINDS for m in tool.methods):
+            out.append(tool.id)
+    return tuple(sorted(out))
+
+
+def _header_get(headers: object, name: str) -> str | None:
+    if headers is None:
+        return None
+    getter = getattr(headers, "get", None)
+    if callable(getter):
+        value = getter(name)
+        if value is not None:
+            return str(value)
+        value = getter(name.lower())
+        if value is not None:
+            return str(value)
+    return None
+
+
+def _is_github_rate_limit(error: HTTPError) -> bool:
+    if error.code == 429:
+        return True
+    if error.code != 403:
+        return False
+    remaining = _header_get(error.headers, "X-RateLimit-Remaining")
+    if remaining == "0":
+        return True
+    return _header_get(error.headers, "Retry-After") is not None
+
+
+def _release_read_finding(tool_id: str, repo: str, exc: VersionError) -> Finding:
+    url = f"https://api.github.com/repos/{repo}/releases/latest"
+    cause = exc.__cause__
+    if isinstance(cause, HTTPError):
+        if cause.code == 404:
+            return Finding(tool_id, url, "drift", "release not found")
+        if _is_github_rate_limit(cause):
+            return Finding(
+                tool_id,
+                url,
+                "inconclusive",
+                f"GitHub API rate limit (HTTP {cause.code})",
+            )
+        if cause.code == 403:
+            return Finding(
+                tool_id,
+                url,
+                "inconclusive",
+                "release read forbidden (HTTP 403)",
+            )
+        return Finding(tool_id, url, "inconclusive", _head_error_reason(cause))
+    if isinstance(cause, (URLError, TimeoutError, OSError)):
+        return Finding(tool_id, url, "inconclusive", str(cause))
+    return Finding(tool_id, url, "inconclusive", str(exc))
+
+
+def _newer_stable_findings(
+    tools: Sequence[Tool],
+    release: ReleaseResolver,
+) -> tuple[list[Finding], list[str]]:
+    findings: list[Finding] = []
+    notes: list[str] = []
+    for tool in tools:
+        for method in tool.methods:
+            if method.kind not in ("app", "tarball"):
+                continue
+            url_template = method.params.get("url")
+            if not isinstance(url_template, str) or "{ver}" not in url_template:
+                continue
+            version = method.params.get("version")
+            if not isinstance(version, str) or not version:
+                continue
+            rendered = pinned_url(method)
+            match = _GITHUB_RELEASE_PATH.match(rendered)
+            if match is None:
+                notes.append(f"{tool.id}: newer stable: no release source")
+                continue
+            repo = match.group(1)
+            try:
+                tag = release(repo).tag
+            except VersionError:
+                continue
+            outdated = is_outdated(version, tag)
+            if outdated is True:
+                findings.append(
+                    Finding(
+                        tool_id=tool.id,
+                        url=rendered,
+                        status="drift",
+                        reason=f"newer stable release {tag} (pinned {version})",
+                    )
+                )
+            elif outdated is None:
+                findings.append(
+                    Finding(
+                        tool_id=tool.id,
+                        url=rendered,
+                        status="inconclusive",
+                        reason=f"latest tag {tag} cannot be compared with pin {version}",
+                    )
+                )
+    return findings, notes
+
+
+def _collect_targets(
+    tools: Sequence[Tool],
+    release: ReleaseResolver,
+    *,
+    pre_findings: list[Finding],
+    unverified_assets: dict[tuple[str, int, str], set[str]],
+    seen_release_errors: set[tuple[str, str]],
+) -> list[_TargetIdentity]:
     grouped: dict[
         tuple[str, str, str | None, str, int, bool],
         _TargetIdentity,
     ] = {}
 
     for tool in tools:
-        for method in tool.methods:
+        for method_index, method in enumerate(tool.methods):
             if method.kind not in CHECKABLE_KINDS:
                 continue
             for os_name in ALL_OS:
@@ -206,8 +346,8 @@ def _collect_targets(tools: Sequence[Tool], probe: Probe) -> list[_TargetIdentit
                             ctx = ExecContext(
                                 runner=_runner_never_called,
                                 platform=platform,
-                                resolve_tag=lambda repo: probe.release(repo).tag,
-                                resolve_release=probe.release,
+                                resolve_tag=lambda repo: release(repo).tag,
+                                resolve_release=release,
                             )
                             target = resolve_target(method, ctx)
                             repo = (
@@ -215,9 +355,36 @@ def _collect_targets(tools: Sequence[Tool], probe: Probe) -> list[_TargetIdentit
                                 if method.kind == "github_release"
                                 else None
                             )
-                            tag = probe.release(repo).tag if repo else None
-                    except (ExecutorError, ValueError):
+                            tag = release(repo).tag if repo else None
+                    except VersionError as exc:
+                        if method.kind == "github_release":
+                            repo = require_str(method, "repo")
+                            err_key = (tool.id, repo)
+                            if err_key not in seen_release_errors:
+                                seen_release_errors.add(err_key)
+                                pre_findings.append(_release_read_finding(tool.id, repo, exc))
                         continue
+                    except ExecutorError as exc:
+                        url = pinned_url(method) if method.kind in ("app", "tarball") else ""
+                        pre_findings.append(
+                            Finding(
+                                tool_id=tool.id,
+                                url=url or f"github:{method.params.get('repo', '')}",
+                                status="drift",
+                                reason=str(exc),
+                            )
+                        )
+                        continue
+                    except ValueError:
+                        continue
+
+                    if target.unverified_reason or (
+                        method.kind == "app"
+                        and isinstance(method.params.get("url"), str)
+                        and "{ver}" not in str(method.params.get("url"))
+                    ):
+                        key_uv = (tool.id, method_index, method.kind)
+                        unverified_assets.setdefault(key_uv, set()).add(target.asset)
 
                     member = None if _is_raw(method) else target.member
                     key = (
@@ -300,23 +467,23 @@ def _member_present(names: list[str], member: str, strip: int) -> bool:
     return False
 
 
-def _github_pin_mismatch(target: _TargetIdentity, probe: Probe) -> str | None:
+def _github_pin_mismatch(target: _TargetIdentity, release: ReleaseResolver) -> str | None:
     if target.registry_pin is None:
         return None
     match = _GITHUB_RELEASE_PATH.match(target.url)
     if match is None:
         return None
     repo, url_tag, _asset = match.groups()
-    release = probe.release(repo)
-    if url_tag != release.tag:
+    rel = release(repo)
+    if url_tag != rel.tag:
         return None
-    digest = release.digests.get(target.asset)
+    digest = rel.digests.get(target.asset)
     if digest is None:
         return None
     if digest.lower() != target.registry_pin.lower():
         return (
             f"pinned sha256 differs from GitHub digest for {target.asset} "
-            f"on latest release {release.tag}"
+            f"on latest release {rel.tag}"
         )
     return None
 
@@ -339,14 +506,14 @@ def _fingerprint_for_target(
 
 def _expected_hash(
     target: _TargetIdentity,
-    probe: Probe,
+    release: ReleaseResolver,
     checksum_text: str | None,
 ) -> tuple[str | None, str | None, str | None]:
     """Return (expected hash, checksum-file hash, release digest hash)."""
     digest_hash: str | None = None
     if target.repo is not None:
-        release = probe.release(target.repo)
-        digest_hash = release.digests.get(target.asset)
+        rel = release(target.repo)
+        digest_hash = rel.digests.get(target.asset)
         if digest_hash is not None:
             digest_hash = digest_hash.lower()
 
@@ -375,7 +542,43 @@ def check_registry(
     *,
     _full_verify: bool = True,
 ) -> Report:
-    targets = _collect_targets(tools, probe)
+    not_checkable = _not_checkable_tool_ids(tools)
+    pre_findings: list[Finding] = []
+    seen_release_errors: set[tuple[str, str]] = set()
+    unverified_assets: dict[tuple[str, int, str], set[str]] = {}
+
+    release_reads_attempted = 0
+    release_reads_http = 0
+    rate_limit_code: int | None = None
+    head_attempted = 0
+    head_http = 0
+    download_attempted = 0
+    download_http = 0
+
+    def tracked_release(repo: str) -> Release:
+        nonlocal release_reads_attempted, release_reads_http, rate_limit_code
+        release_reads_attempted += 1
+        try:
+            rel = probe.release(repo)
+            release_reads_http += 1
+            return rel
+        except VersionError as exc:
+            cause = exc.__cause__
+            if isinstance(cause, HTTPError):
+                release_reads_http += 1
+                if _is_github_rate_limit(cause):
+                    rate_limit_code = cause.code
+            raise
+
+    targets = _collect_targets(
+        tools,
+        tracked_release,
+        pre_findings=pre_findings,
+        unverified_assets=unverified_assets,
+        seen_release_errors=seen_release_errors,
+    )
+    newer_findings, newer_notes = _newer_stable_findings(tools, tracked_release)
+
     findings: dict[tuple[str, str, str | None, str, int, bool], Finding] = {}
     url_head: dict[str, str | BaseException] = {}
     url_download_cache: dict[str, tuple[str, dict[str, list[str] | BaseException]]] = {}
@@ -383,10 +586,28 @@ def check_registry(
     def identity_key(t: _TargetIdentity) -> tuple[str, str, str | None, str, int, bool]:
         return (t.tool_id, t.url, t.member, t.archive, t.strip, t.raw)
 
+    def tracked_download(url: str, dest: Path) -> None:
+        nonlocal download_attempted, download_http
+        download_attempted += 1
+        try:
+            probe.download(url, dest)
+            download_http += 1
+        except HTTPError:
+            download_http += 1
+            raise
+        except (URLError, TimeoutError, OSError):
+            raise
+
     def head_once(url: str) -> str:
+        nonlocal head_attempted, head_http
         if url not in url_head:
+            head_attempted += 1
             try:
                 url_head[url] = probe.head(url)
+                head_http += 1
+            except HTTPError as exc:
+                head_http += 1
+                url_head[url] = exc
             except BaseException as exc:
                 url_head[url] = exc
         result = url_head[url]
@@ -399,7 +620,7 @@ def check_registry(
 
     for target in targets:
         key = identity_key(target)
-        pin_drift = _github_pin_mismatch(target, probe)
+        pin_drift = _github_pin_mismatch(target, tracked_release)
         if pin_drift is not None:
             findings[key] = Finding(
                 tool_id=target.tool_id,
@@ -461,7 +682,7 @@ def check_registry(
             try:
                 with tempfile.TemporaryDirectory() as tmp:
                     sidecar = Path(tmp) / "checksum"
-                    probe.download(checksum_url, sidecar)
+                    tracked_download(checksum_url, sidecar)
                     checksum_text = sidecar.read_text()
             except HTTPError as exc:
                 if exc.code in (404, 410):
@@ -494,7 +715,9 @@ def check_registry(
                 )
                 continue
 
-        expected, checksum_hash, digest_hash = _expected_hash(target, probe, checksum_text)
+        expected, checksum_hash, digest_hash = _expected_hash(
+            target, tracked_release, checksum_text
+        )
         if expected == "__disagree__":
             findings[key] = Finding(
                 tool_id=target.tool_id,
@@ -540,7 +763,7 @@ def check_registry(
             try:
                 with tempfile.TemporaryDirectory() as tmp:
                     dest = Path(tmp) / target.asset
-                    probe.download(target.url, dest)
+                    tracked_download(target.url, dest)
                     actual_hash = sha256_file(dest)
                     listings: dict[str, list[str] | BaseException] = {}
                     if not target.raw:
@@ -664,17 +887,49 @@ def check_registry(
                 None,
             )
 
+    merged: dict[tuple[str, str, str, str], Finding] = {}
+    for finding in (*pre_findings, *newer_findings, *findings.values()):
+        key = (finding.tool_id, finding.url, finding.member or "", finding.reason)
+        merged[key] = finding
     ordered = sorted(
-        findings.values(),
+        merged.values(),
         key=lambda f: (f.tool_id, f.url, f.member or "", f.platforms),
     )
-    return Report(findings=tuple(ordered))
+
+    blocked: str | None = None
+    if rate_limit_code is not None:
+        blocked = f"GitHub API rate limit (HTTP {rate_limit_code})"
+    elif release_reads_attempted > 0 and release_reads_http == 0:
+        blocked = "no GitHub release read got an HTTP response"
+    elif (
+        release_reads_attempted == 0
+        and (head_attempted + download_attempted) > 0
+        and (head_http + download_http) == 0
+    ):
+        blocked = "no HEAD or download request got an HTTP response"
+
+    unverified = tuple(
+        UnverifiedMethod(tool_id, idx, kind, tuple(sorted(names)))
+        for (tool_id, idx, kind), names in sorted(unverified_assets.items())
+    )
+
+    return Report(
+        findings=tuple(ordered),
+        not_checkable=not_checkable,
+        notes=tuple(newer_notes),
+        blocked=blocked,
+        unverified=unverified,
+    )
 
 
 def format_report(report: Report, *, include_passed: bool = True) -> str:
     lines: list[str] = []
+    if report.blocked:
+        lines.append(f"blocked: {report.blocked}")
     drift = [f for f in report.findings if f.status == "drift"]
     inconclusive = [f for f in report.findings if f.status == "inconclusive"]
+    if report.blocked and drift:
+        lines.append("note: the run was otherwise blocked; the drift listed below was confirmed")
     if drift:
         lines.append("## Drift")
         for f in drift:
@@ -689,6 +944,15 @@ def format_report(report: Report, *, include_passed: bool = True) -> str:
             lines.append(
                 f"- `{f.tool_id}` {member}`{f.url}` — {f.reason} ({', '.join(f.platforms)})"
             )
+    lines.append("Unverified at install (no checksum file, pinned sha256 or GitHub digest):")
+    if report.unverified:
+        for entry in sorted(report.unverified, key=lambda u: (u.tool_id, u.method_index)):
+            assets = ", ".join(f"`{name}`" for name in entry.assets)
+            lines.append(
+                f"- `{entry.tool_id}` method {entry.method_index} ({entry.kind}): {assets}"
+            )
+    else:
+        lines.append("- none")
     if report.not_checkable:
         lines.append("## Not checkable")
         for note in report.not_checkable:
@@ -732,8 +996,22 @@ def _save_state(path: Path, state: Mapping[str, str]) -> None:
     atomic_write_text(path, json.dumps(dict(sorted(state.items())), indent=2) + "\n")
 
 
-def default_probe() -> Probe:
-    cached_release = functools.cache(resolve_github_release)
+def github_token(gh: Callable[[list[str]], str]) -> str | None:
+    """Return a GitHub API token from the environment or ``gh auth token``."""
+    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
+        value = os.environ.get(name)
+        if value:
+            return value
+    try:
+        text = gh(["gh", "auth", "token"]).strip()
+    except CommandError:
+        return None
+    return text or None
+
+
+def default_probe(token: str | None = None) -> Probe:
+    fetch = functools.partial(urlopen_fetch, token=token)
+    cached_release = functools.cache(functools.partial(resolve_github_release, fetch=fetch))
 
     def head(url: str) -> str:
         request = urllib.request.Request(url, method="HEAD")
@@ -757,7 +1035,12 @@ def default_probe() -> Probe:
     return Probe(release=cached_release, head=head, download=download)
 
 
-def main(argv: Sequence[str] | None = None, *, probe: Probe | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    probe: Probe | None = None,
+    gh: Callable[[list[str]], str] | None = None,
+) -> int:
     parser = argparse.ArgumentParser(
         description="Verify registry download targets against upstream."
     )
@@ -767,7 +1050,20 @@ def main(argv: Sequence[str] | None = None, *, probe: Probe | None = None) -> in
     state_path = args.state if args.state is not None else default_state_path()
     tools = load_tools(args.registry)
     state = _load_state(state_path)
-    active_probe = probe if probe is not None else default_probe()
+    gh_runner = gh if gh is not None else functools.partial(run_output, timeout=60)
+    if probe is None:
+        token = github_token(gh_runner)
+        if token is None:
+            import sys
+
+            print(
+                "note: unauthenticated GitHub API (60 requests/hour); "
+                "run gh auth login or set GH_TOKEN",
+                file=sys.stderr,
+            )
+        active_probe = default_probe(token)
+    else:
+        active_probe = probe
     report = check_registry(tools, active_probe, state)
     print(format_report(report), end="")
     _save_state(state_path, state)

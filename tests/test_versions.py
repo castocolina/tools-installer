@@ -22,6 +22,7 @@ from installer.versions import (
     release_resolver,
     resolve_github_release,
     resolve_github_tag,
+    urlopen_fetch,
 )
 
 
@@ -573,6 +574,36 @@ def test_versions_module_records_the_registry_wide_audit_finding() -> None:
     not_covered = text.split("Not covered:", 1)[1].split("\n# Finds the LAST", 1)[0]
     assert "bash" in not_covered
     assert "procs" not in not_covered
+
+
+def test_explicit_token_is_sent_to_api_github_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[tuple[str, dict[str, str]]] = []
+
+    class FakeResp:
+        def read(self) -> bytes:
+            return b"{}"
+
+        def __enter__(self) -> "FakeResp":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0) -> FakeResp:
+        captured.append((req.full_url, {k: v for k, v in req.header_items()}))
+        return FakeResp()
+
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    urlopen_fetch("https://api.github.com/repos/o/r/releases/latest", token="t")
+    urlopen_fetch("https://github.com/o/r/releases/download/v1/a.tar.gz", token="t")
+    assert captured[0][1].get("Authorization") == "Bearer t"
+    assert "Authorization" not in captured[1][1]
+    monkeypatch.setenv("GH_TOKEN", "from-env")
+    captured.clear()
+    urlopen_fetch("https://api.github.com/repos/o/r/releases/latest")
+    assert captured[0][1].get("Authorization") == "Bearer from-env"
 
 
 def test_extract_observed_version_still_refuses_the_known_residual_shapes() -> None:
