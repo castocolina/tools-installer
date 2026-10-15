@@ -213,7 +213,7 @@ def install_download(method: Method, ctx: ExecContext) -> str | None:
     try:
         asset_path = _fetch_verified(method, ctx, target, workdir)
         if method.params.get("raw") is True:
-            _replace_raw(link, asset_path)
+            _replace_raw(link, asset_path, smoke_argv=method_smoke_argv(method))
         else:
             verified = target.checksum is not None or target.sha256 is not None
             _replace_archive(

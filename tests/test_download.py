@@ -349,7 +349,7 @@ def test_github_release_raw_downloads_binary_directly(
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     workdir = _workdir(tmp_path, monkeypatch)
     asset = "yq_linux_amd64"
-    payload = b"raw-yq"
+    payload = _MEMBER_SCRIPT
     calls, runner = fixture_runner(workdir, {asset: payload})
     bin_dir = tmp_path / "bin"
     method = Method(
@@ -653,9 +653,13 @@ def fixture_runner(
         if cmd and cmd[0] == "curl" and "-o" in cmd:
             dest = Path(cmd[cmd.index("-o") + 1])
             if dest.name not in files:
-                return
+                if files:
+                    return
+                payload = _MEMBER_SCRIPT
+            else:
+                payload = files[dest.name]
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(files[dest.name])
+            dest.write_bytes(payload)
         if workdir is not None and cmd[0] == "sh" and len(cmd) >= 3 and "curl" in cmd[2]:
             for name, content in files.items():
                 (workdir / name).write_bytes(content)
@@ -999,7 +1003,7 @@ def test_verified_raw_copies_from_temp_into_bin(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     workdir = _workdir(tmp_path, monkeypatch)
     asset = "yq_linux_amd64"
-    payload = b"raw-binary"
+    payload = _MEMBER_SCRIPT
     sums = f"{hashlib.sha256(payload).hexdigest()}  {asset}\n".encode()
     calls, runner = fixture_runner(workdir, {asset: payload, "checksums.txt": sums})
     bindir = tmp_path / "bin"
@@ -1160,10 +1164,10 @@ def test_raw_update_replaces_via_staging_not_live_path(
     bindir = tmp_path / "bin"
     link = bindir / "yq"
     _plant_executable(link, b"old-yq")
-    calls, runner = _curl_and_extract_runner({"yq_linux_amd64": b"new-yq"})
+    calls, runner = _curl_and_extract_runner({"yq_linux_amd64": _MEMBER_SCRIPT})
     result = update_download(_raw_method(bindir), _ctx(runner))
     assert result.verified is False
-    assert link.read_bytes() == b"new-yq"
+    assert link.read_bytes() == _MEMBER_SCRIPT
     fetch_to = _fetch_output_path(calls)
     assert fetch_to != link
     assert str(link) not in str(fetch_to)
@@ -1398,10 +1402,10 @@ def test_raw_install_replaces_a_link_instead_of_writing_through_it(
     os.symlink(str(foreign), link)
     workdir = _workdir(tmp_path, monkeypatch)
     asset = "yq_linux_amd64"
-    calls, runner = fixture_runner(workdir, {asset: b"new-yq"})
+    calls, runner = fixture_runner(workdir, {asset: _MEMBER_SCRIPT})
     install_download(_raw_method(bindir), _ctx(runner, tmp_version="v14.1.0"))
     assert not link.is_symlink()
-    assert link.read_bytes() == b"new-yq"
+    assert link.read_bytes() == _MEMBER_SCRIPT
     assert (foreign / "keep").read_text() == "important"
     assert not any(cmd and cmd[0] in {"chmod", "cp"} for cmd in calls)
     fetch_to = Path(calls[0][calls[0].index("-o") + 1])
@@ -1418,7 +1422,7 @@ def test_verified_raw_install_replaces_a_link_instead_of_writing_through_it(
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     workdir = _workdir(tmp_path, monkeypatch)
     asset = "yq_linux_amd64"
-    payload = b"raw-binary"
+    payload = _MEMBER_SCRIPT
     sums = f"{hashlib.sha256(payload).hexdigest()}  {asset}\n".encode()
     calls, runner = fixture_runner(workdir, {asset: payload, "checksums.txt": sums})
     bindir = tmp_path / "bin"
@@ -1817,3 +1821,40 @@ def test_fresh_install_failure_after_relink_leaves_no_link(
     assert not opt.exists()
     assert not staged_sibling(opt, NEW_SUFFIX).exists()
     assert not staged_sibling(opt, atomic.OLD_SUFFIX).exists()
+
+
+def test_raw_asset_is_smoked_before_it_replaces_the_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bindir = tmp_path / "bin"
+    workdir = _workdir(tmp_path, monkeypatch)
+    asset = "yq_linux_amd64"
+    bad = _member_script(127)
+    _, runner = _script_member_runner(
+        tmp_path / ".local" / "bin" / "yq", bad, workdir=workdir, files={asset: bad}
+    )
+    with pytest.raises(ExecutorError):
+        install_download(_raw_method(bindir), _ctx(runner, tmp_version="v14.1.0"))
+    link = bindir / "yq"
+    assert not link.exists()
+    assert not staged_sibling(link, NEW_SUFFIX).exists()
+
+    good = _MEMBER_SCRIPT
+    _, runner2 = _script_member_runner(
+        tmp_path / ".local" / "bin" / "yq", good, workdir=workdir, files={asset: good}
+    )
+    install_download(_raw_method(bindir), _ctx(runner2, tmp_version="v14.1.0"))
+    assert (bindir / "yq").read_bytes() == good
+
+
+def test_raw_update_does_not_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bindir = tmp_path / "bin"
+    link = bindir / "yq"
+    _plant_executable(link, _MEMBER_SCRIPT)
+    bad = _member_script(127)
+    _, runner = _curl_and_extract_runner({"yq_linux_amd64": bad})
+    result = update_download(_raw_method(bindir), _ctx(runner))
+    assert result.verified is False
+    assert link.read_bytes() == bad
