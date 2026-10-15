@@ -1,4 +1,6 @@
-"""Entry point for the tools-installer wizard. Run via `make setup` (uv run setup.py).
+"""Entry point for the tools-installer wizard.
+
+Run via `make setup` (`uv run --isolated --no-dev setup.py`).
 
 This is the composition root: it performs the real terminal IO (the Textual
 catalog screen for selection; questionary for confirms and choices) and the

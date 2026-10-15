@@ -3,7 +3,7 @@
 #
 # Bootstrap one long-lived named container (non-root, sudo-capable, Homebrew
 # + uv) and run Pass 1: a clean install of the full registry.toml catalog
-# through `uv run setup.py --all --yes`, then Pass 2 (rerun, uninstall,
+# through `uv run --isolated --no-dev setup.py --all --yes`, then Pass 2 (rerun, uninstall,
 # reinstall). `make e2e` runs `all`: every step, then removes the container.
 #
 # First line of real logic sources scripts/detect-container-runtime.sh; a
@@ -28,7 +28,7 @@ Usage: container-e2e-verify.sh <command> [options]
                           Homebrew-on-Linux prerequisites, create user tester,
                           bootstrap Homebrew + uv, uv sync. Prints
                           TRACER_HARNESS_READY_OK when ready.
-  pass1                   Run uv run setup.py --all --yes as tester inside the
+  pass1                   Run uv run --isolated --no-dev setup.py --all --yes as tester inside the
                           already-bootstrapped container. Prints
                           TRACER_CLEAN_INSTALL_OK on a clean (or explained)
                           pass. --categories NAME[,NAME...] chunks instead of
@@ -195,7 +195,7 @@ eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 export PATH="$HOME/.local/bin:$PATH"
 cd /home/tester/workspace
 uv sync
-uv run python -c "import installer"
+uv run --isolated --no-dev python -c "import installer"
 '
 }
 
@@ -258,7 +258,7 @@ export PATH=\"\$HOME/.local/bin:\$PATH\"
 export COLUMNS=2000
 if [[ -r \"\$HOME/.github-token\" ]]; then export GITHUB_TOKEN=\"\$(cat \"\$HOME/.github-token\")\"; fi
 cd /home/tester/workspace
-uv run setup.py ${args}
+uv run --isolated --no-dev setup.py ${args}
 "
 }
 

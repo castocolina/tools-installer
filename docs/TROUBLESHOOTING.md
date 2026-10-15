@@ -9,7 +9,7 @@ issue is not here, please open an issue at
 The tool was installed into a userspace bin dir (usually `~/.local/bin`) that is
 not on your `PATH` in the current shell.
 
-1. Run the PATH doctor: `make run` then choose the doctor, or `uv run setup.py --doctor`.
+1. Run the PATH doctor: `make run` then choose the doctor, or `uv run --isolated --no-dev setup.py --doctor`.
    It writes every bin dir into a managed block in `~/.myshellrc` and wires
    `source ~/.myshellrc` into your `~/.zshrc` / `~/.bashrc`.
 2. Restart your shell, or run `. ~/.myshellrc` in the current one.

@@ -220,4 +220,4 @@ def test_run_launches_wizard_with_passthrough_args(harness: Harness) -> None:
     harness.stub("uv", 'printf "uv %s\\n" "$*" >> "$TI_LOG"')
     result = harness.run("--all", "--yes", TI_OS="Linux")
     assert result.returncode == 0
-    assert "uv run setup.py --all --yes" in harness.log_text()
+    assert "uv run --isolated --no-dev setup.py --all --yes" in harness.log_text()

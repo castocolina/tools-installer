@@ -85,7 +85,7 @@ main() {
         return 0
     fi
     cd "$TI_DIR"
-    exec uv run setup.py "$@"
+    exec uv run --isolated --no-dev setup.py "$@"
 }
 
 if [ -z "${TI_SOURCED:-}" ]; then
