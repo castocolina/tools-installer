@@ -98,7 +98,7 @@ Plans:
   4. Launched without the dev venv on PATH, ruff resolves its real owner under `make setup` (container); `/usr/bin/java` alone never counts as installed; `parse_version('-1') is None`, and quoted or `version=` output never yields a fabricated version.
   5. Every C/D/E/F audit data fix is applied, the `managed-download` owner probe is gone, and `drawio-cli` is removed with `drawio-desktop` serving both audiences.
 
-**Plans:** 19 plans
+**Plans:** 20 plans
 
 Plans (numbered in creation order; W = execution wave):
 - [ ] 18-01-PLAN.md — Closed METHOD_PARAMS keys, required `verified` date (seeded), pinned app/tarball rule (W1)
@@ -111,8 +111,9 @@ Plans (numbered in creation order; W = execution wave):
 - [ ] 18-08-PLAN.md — Audit E/F data fixes and the 35-row ledger (W3)
 - [ ] 18-16-PLAN.md — One staged plain-argv fetch (shell pipeline deleted); pinned tarball sha256; updates verify digests (W3)
 - [ ] 18-10-PLAN.md — Release digests stored in the version cache (W3)
-- [ ] 18-09-PLAN.md — Shared smoke run before swap/link; `smoke_argv` key and its docs (W4)
-- [ ] 18-19-PLAN.md — Manager-kind smoke after install, falling through on failure (W5)
+- [ ] 18-09-PLAN.md — Shared smoke run before swap/link (loader errors in stderr on any exit); staged-member containment (W4)
+- [ ] 18-20-PLAN.md — `smoke_argv` registry key, its authoring docs, accurate kitty/wezterm registry comments (W4)
+- [ ] 18-19-PLAN.md — Manager-kind smoke after install, falling through on failure; leftover packages reported with their removal command (W5)
 - [ ] 18-12-PLAN.md — verify-registry check core: assets, members, digests, read-only (W5)
 - [ ] 18-11-PLAN.md — macOS app zips: pinned sha256, staged swap, smoke (W6)
 - [ ] 18-17-PLAN.md — verify-registry verdicts: newer stable, not checkable, outage vs flaky host; `Unverified at install`; gh-login token (W6)
