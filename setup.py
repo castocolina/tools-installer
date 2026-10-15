@@ -1292,7 +1292,7 @@ def _settings_store(
     # WR-05: the TUI shows the warning via startup_warning; every headless
     # route announces it here instead, before it acts on the default mode.
     if announce_warning and loaded.warning:
-        _WARN_CONSOLE.print(loaded.warning, style="yellow")
+        _WARN_CONSOLE.print(loaded.warning, style="yellow", markup=False, soft_wrap=True)
     stored = loaded.settings.link_mode
     mode = resolve_link_mode(flag=link_mode_option, stored=stored)
     needs_choice = link_mode_needs_choice(flag=link_mode_option, stored=stored)
