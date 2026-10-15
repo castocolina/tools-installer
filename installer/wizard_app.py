@@ -50,7 +50,7 @@ from installer.rcclean import PathWriterLine, group_writer_lines
 from installer.render import guidance_text
 from installer.resolve import UnavailableReason
 from installer.run import CommandError
-from installer.session import Summary
+from installer.session import Summary, fold_run
 from installer.shellrc import PathGuardOutcome, guard_path_writers, path_export_guard
 from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit
 from installer.terminal_shell import terminal_sync_warning
@@ -2949,7 +2949,13 @@ class UnifiedApp(App[list[str] | None]):
                 self._version_refresh.invalidate(reason="install run finished")
             except Exception as exc:  # noqa: BLE001 -- post-mutation side effect, reported below
                 self._invalidate_warning = f"version cache invalidation failed: {exc}"
-        incoming = message.summary
+        incoming = fold_run(
+            message.summary,
+            not_attempted=message.not_attempted,
+            update_outcomes=message.update_outcomes,
+            update_errors=message.update_errors,
+            error=message.error,
+        )
         # WR-07: `installed` is the one Summary bucket that means a real
         # mutation happened (a tool actually installed) -- `already` is a
         # confirmed-no-op, and `failed`/`no_method`/`mismatched`/
@@ -2973,6 +2979,9 @@ class UnifiedApp(App[list[str] | None]):
             mismatched=existing.mismatched + incoming.mismatched,
             dependency_failed=existing.dependency_failed + incoming.dependency_failed,
             manual_required=existing.manual_required + incoming.manual_required,
+            not_attempted=existing.not_attempted + incoming.not_attempted,
+            update_failed=existing.update_failed + incoming.update_failed,
+            crash_error=existing.crash_error or incoming.crash_error,
         )
 
     def on_ownership_refreshed(self, message: OwnershipRefreshed) -> None:

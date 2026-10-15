@@ -1272,7 +1272,7 @@ def _run_interactive_wizard(
     managed = set(collect_bin_dirs(tools, platform, _DEFAULT_BIN_DIR))
     confirm = (lambda _message: True) if options.yes else _ask_confirm
     clean_rc_duplicates(_RC_PATHS, managed, os.environ, console, confirm=confirm)
-    if summary.failed or summary.mismatched or summary.dependency_failed:
+    if summary.has_failure:
         render_troubleshooting(console)
         return 1
     return 0
@@ -1502,11 +1502,10 @@ def main(argv: list[str]) -> int:
     # D-01/15.6-06 Task 2: the same shared synchronizer every other lifecycle
     # route calls, after the unattended run's own summary is final.
     _sync_terminals_and_report(console, platform)
-    # dependency_failed counts as a failed run: the tool was wanted, was
-    # installable on this platform, and was skipped only because something it
-    # requires failed. (no_method is deliberately excluded — a tool that has no
-    # method here was never installable, which is not an error.)
-    if summary.failed or summary.mismatched or summary.dependency_failed:
+    # has_failure covers failed/mismatched/dependency_failed/not_attempted/
+    # update_failed/crash_error (D-08); no_method stays excluded — a tool
+    # that has no method here was never installable, which is not an error.
+    if summary.has_failure:
         render_troubleshooting(console)
         return 1
     return 0

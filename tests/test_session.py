@@ -1,5 +1,6 @@
 import inspect
 from collections.abc import Mapping
+from dataclasses import replace
 
 import pytest
 
@@ -13,6 +14,7 @@ from installer.session import (
     Install,
     MismatchChoice,
     Summary,
+    fold_run,
     order_for_install,
     run_installs,
     summarize,
@@ -676,3 +678,60 @@ def test_install_protocol_parameters_are_unchanged() -> None:
         "checksum_policy",
         "tools",
     ]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({"failed": ("rg",)}, True),
+        ({"mismatched": ("rg",)}, True),
+        ({"dependency_failed": ("rg",)}, True),
+        ({"not_attempted": ("rg",)}, True),
+        ({"update_failed": ("rg",)}, True),
+        ({"crash_error": "boom"}, True),
+        ({"no_method": ("rg",)}, False),
+        ({"manual_required": ("rg",)}, False),
+        ({}, False),
+    ],
+)
+def test_summary_has_failure(kwargs: dict[str, object], expected: bool) -> None:
+    summary = replace(Summary(installed=(), already=(), failed=(), no_method=()), **kwargs)  # pyright: ignore[reportArgumentType]
+    assert summary.has_failure is expected
+
+
+def test_fold_run_records_not_attempted_update_failures_and_crash() -> None:
+    from installer.update import UpdateOutcome
+
+    summary = Summary(installed=("a",), already=(), failed=(), no_method=())
+    folded = fold_run(
+        summary,
+        not_attempted=["b"],
+        update_outcomes=[
+            UpdateOutcome("u1", "failed", "brew"),
+            UpdateOutcome("u2", "updated", "brew"),
+            UpdateOutcome("u3", "unknown-owner", "unknown"),
+        ],
+        update_errors=[("u4", "boom")],
+        error="crash",
+    )
+    assert folded.not_attempted == ("b",)
+    assert folded.update_failed == ("u1", "u4")
+    assert folded.crash_error == "crash"
+    assert folded.installed == ("a",)
+    assert folded.failed == ()
+    assert folded.has_failure is True
+
+
+def test_fold_run_drops_duplicate_update_failure_ids() -> None:
+    from installer.update import UpdateOutcome
+
+    summary = Summary(installed=(), already=(), failed=(), no_method=())
+    folded = fold_run(
+        summary,
+        not_attempted=[],
+        update_outcomes=[UpdateOutcome("u1", "failed", "brew")],
+        update_errors=[("u1", "boom")],
+        error=None,
+    )
+    assert folded.update_failed == ("u1",)
+    assert folded.has_failure is True

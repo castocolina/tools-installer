@@ -4024,3 +4024,47 @@ async def test_broken_tool_preflight_counts_as_install(tmp_path: Path) -> None:
         line = next(row for row in _progress_text(screen).splitlines() if "mmdc" in row)
         assert "update" not in line.lower()
         assert "[pending]" in line
+
+
+def _install_raises_after_first(exception: Exception) -> SensitiveInstall:
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        if tool.id == "first":
+            return InstallOutcome(tool.id, "installed")
+        raise exception
+
+    return install
+
+
+@pytest.mark.parametrize("exc", [RuntimeError("boom"), OSError("disk full")])
+async def test_worker_exception_marks_the_run_failed_and_keeps_done_rows(exc: Exception) -> None:
+    tools = [_tool("first"), _tool("second"), _tool("third")]
+    inputs = _inputs(tools=tools, install=_install_raises_after_first(exc))
+    app = _host(inputs, tools)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["first", "second", "third"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert screen.finished
+        assert screen.status.text.startswith("Failed")
+        assert screen.status.severity == "error"
+        assert screen._progress["first"] == "done"  # pyright: ignore[reportPrivateUsage]
+        assert set(screen.not_attempted) == {"second", "third"}
+        summary = app.install_summary
+        assert summary is not None
+        assert summary.installed == ("first",)
+        assert summary.crash_error is not None
+        assert "boom" in summary.crash_error or "disk full" in summary.crash_error
+        assert summary.has_failure is True

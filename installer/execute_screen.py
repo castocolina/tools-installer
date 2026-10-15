@@ -12,7 +12,7 @@ from __future__ import annotations
 import io
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Literal
@@ -54,6 +54,7 @@ from installer.session import (
     MismatchChoice,
     SensitiveInstall,
     Summary,
+    fold_run,
     order_for_install,
     run_installs,
     summarize,
@@ -332,6 +333,23 @@ class PromptOpen(Message):
         super().__init__()
 
 
+def _partial_run(
+    ordered: Sequence[Tool], collected: Mapping[str, InstallOutcome]
+) -> tuple[list[InstallOutcome], Summary, list[str]]:
+    """Rebuild a stopped install phase from its per-tool accumulator (D-07).
+
+    The outcomes the worker already collected, their summary, and the ids it
+    never reached — the same three values a completed run computes, so both
+    stop paths report identically.
+    """
+    outcomes = list(collected.values())
+    return (
+        outcomes,
+        summarize(outcomes),
+        [tool.id for tool in ordered if tool.id not in collected],
+    )
+
+
 class InstallRunFinished(Message):
     """The install worker finished; `error` is None on a fully successful batch.
 
@@ -581,6 +599,8 @@ class ExecuteScreen(ModalScreen[None]):
         summary = summarize([])
         outcomes: list[InstallOutcome] = []
         not_attempted = [tool.id for tool in self._ordered]
+        collected: dict[str, InstallOutcome] = {}
+        result: list[InstallOutcome] | None = None
         path_text = ""
         verify_text = ""
         error: str | None = None
@@ -598,6 +618,9 @@ class ExecuteScreen(ModalScreen[None]):
             runner = StreamingRunner(emit, unbuffer=True)
 
             def on_outcome(outcome: InstallOutcome) -> None:
+                # Keyed by id: a checksum retry calls the install (and so
+                # this callback) twice for one tool; the last outcome wins.
+                collected[outcome.tool_id] = outcome
                 self.post_message(InstallToolFinished(outcome.tool_id, outcome.status))
 
             on_mismatch = None if self._inputs.unattended else self._ask_mismatch
@@ -623,6 +646,7 @@ class ExecuteScreen(ModalScreen[None]):
             )
             if result is None:
                 error = message
+                outcomes, summary, not_attempted = _partial_run(self._ordered, collected)
             else:
                 outcomes = result
                 summary = summarize(outcomes)
@@ -653,6 +677,12 @@ class ExecuteScreen(ModalScreen[None]):
                         error = verify_fail
                 else:
                     verify_text = verify_result
+        except Exception as exc:  # noqa: BLE001 -- the run must report, not die
+            # D-07: a crash mid-run keeps the rows that finished, marks the
+            # rest not attempted, and reaches the exit code as a crash.
+            if result is None:
+                outcomes, summary, not_attempted = _partial_run(self._ordered, collected)
+            error = error or f"run stopped: {exc}"
         finally:
             self.post_message(
                 InstallRunFinished(
@@ -900,7 +930,6 @@ class ExecuteScreen(ModalScreen[None]):
             self._silence_timer.stop()
             self._silence_timer = None
         self._clear_in_flight()
-        self.summary = message.summary
         self.not_attempted = list(message.not_attempted)
         reapply_ids = {tool.id for tool in self._reapply}
         for outcome in message.outcomes:
@@ -916,6 +945,14 @@ class ExecuteScreen(ModalScreen[None]):
                 self._progress[tool.id] = "skipped"
                 if tool.id not in self.not_attempted:
                     self.not_attempted.append(tool.id)
+        folded = fold_run(
+            message.summary,
+            not_attempted=self.not_attempted,
+            update_outcomes=message.update_outcomes,
+            update_errors=message.update_errors,
+            error=message.error,
+        )
+        self.summary = folded
         self._refresh_progress()
         log = self.query_one("#execute-log", RichLog)
 
@@ -950,7 +987,10 @@ class ExecuteScreen(ModalScreen[None]):
             log.write(f"PATH audit could not be completed: {message.verify_error}")
         if message.error and not message.path_error and not message.verify_error:
             log.write(message.error)
-        self.status.set("Done. enter or esc returns to the catalog.", "ok")
+        if folded.has_failure:
+            self.status.set("Failed. enter or esc returns to the catalog.", "error")
+        else:
+            self.status.set("Done. enter or esc returns to the catalog.", "ok")
         self.query_one("#execute-keys", Static).update("enter / esc return to catalog")
         # Do not event.stop(): this message must keep bubbling to UnifiedApp,
         # which records the summary for the process exit code. A future stop()

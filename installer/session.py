@@ -1,7 +1,7 @@
 """Orchestrate installs for a selection of tools and bucket the outcomes."""
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import Literal, Protocol
 
 from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
@@ -10,6 +10,7 @@ from installer.model import Tool
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
 from installer.run import Runner, run_command
+from installer.update import UpdateOutcome
 from installer.versions import TagResolver, resolve_github_tag
 
 # The user's answer to a checksum mismatch: retry the download, skip the
@@ -111,6 +112,52 @@ class Summary:
     mismatched: tuple[str, ...] = ()
     dependency_failed: tuple[str, ...] = ()
     manual_required: tuple[str, ...] = ()
+    not_attempted: tuple[str, ...] = ()
+    update_failed: tuple[str, ...] = ()
+    crash_error: str | None = None
+
+    @property
+    def has_failure(self) -> bool:
+        """Whether this run reported a failure the exit code must surface.
+
+        manual_required and no_method do not count: a handoff the user must
+        run themselves, and a tool that was never installable on this
+        platform, are not errors (the pre-existing setup.py rule, D-08).
+        """
+        return bool(
+            self.failed
+            or self.mismatched
+            or self.dependency_failed
+            or self.not_attempted
+            or self.update_failed
+            or self.crash_error is not None
+        )
+
+
+def fold_run(
+    summary: Summary,
+    *,
+    not_attempted: Sequence[str],
+    update_outcomes: Sequence[UpdateOutcome],
+    update_errors: Sequence[tuple[str, str]],
+    error: str | None,
+) -> Summary:
+    """Fold one run's worker-reported outcome collections into a Summary.
+
+    The single pure fold both ExecuteScreen (status colour) and UnifiedApp
+    (session accumulation) call, so the two cannot disagree about what counts
+    as a failure (D-08). update_failed keeps outcome order first, then error
+    order, duplicates dropped. unknown-owner/unsupported outcomes and skips
+    are not failures (RESEARCH Pattern 3).
+    """
+    ids: list[str] = [o.tool_id for o in update_outcomes if o.status == "failed"]
+    ids.extend(tool_id for tool_id, _message in update_errors)
+    return replace(
+        summary,
+        not_attempted=tuple(not_attempted),
+        update_failed=tuple(dict.fromkeys(ids)),
+        crash_error=error,
+    )
 
 
 def order_for_install(tools: list[Tool]) -> list[Tool]:

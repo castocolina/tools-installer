@@ -3045,3 +3045,31 @@ def test_doctor_apply_does_not_raise_when_no_outcome_is_returned(
     assert isinstance(doctor, DoctorScreen)
 
     doctor._fix()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_interactive_wizard_exits_1_when_the_session_has_a_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    _capture_app(monkeypatch)
+    app = setup.UnifiedApp
+    assert app is not None
+    monkeypatch.setattr(
+        app,
+        "install_summary",
+        Summary(installed=(), already=(), failed=(), no_method=(), crash_error="boom"),
+    )
+    assert setup.main([]) == 1
+
+
+def test_interactive_wizard_exits_0_when_the_session_is_clean(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    _capture_app(monkeypatch)
+    app = setup.UnifiedApp
+    assert app is not None
+    monkeypatch.setattr(
+        app, "install_summary", Summary(installed=("rg",), already=(), failed=(), no_method=())
+    )
+    assert setup.main([]) == 0
