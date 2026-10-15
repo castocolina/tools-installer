@@ -98,7 +98,24 @@ Plans:
   4. Launched without the dev venv on PATH, ruff resolves its real owner under `make setup` (container); `/usr/bin/java` alone never counts as installed; `parse_version('-1') is None`, and quoted or `version=` output never yields a fabricated version.
   5. Every C/D/E/F audit data fix is applied, the `managed-download` owner probe is gone, and `drawio-cli` is removed with `drawio-desktop` serving both audiences.
 
-**Plans**: TBD
+**Plans:** 15 plans
+
+Plans:
+- [ ] 18-01-PLAN.md — Closed METHOD_PARAMS keys, required `verified` date (seeded), pinned app/tarball rule (W1)
+- [ ] 18-02-PLAN.md — Version parser fixes: `-1`, `version=`, quoted output (W1)
+- [ ] 18-03-PLAN.md — macOS java/git stubs never count as installed (W1)
+- [ ] 18-04-PLAN.md — `cli_name` honored only through `apps.cli_spec` (W1)
+- [ ] 18-05-PLAN.md — Launchers run `uv run --isolated --no-dev` (Makefile, install.sh, e2e harness) (W1)
+- [ ] 18-06-PLAN.md — Remove drawio-cli and the managed-download probe; audit C/D data fixes (W2)
+- [ ] 18-07-PLAN.md — One release read gives tag + digests; staged verified fetch; pinned tarball; unverified reason (W2)
+- [ ] 18-08-PLAN.md — Audit E/F data fixes and the 35-row ledger (W3)
+- [ ] 18-09-PLAN.md — Shared smoke run before swap/link; `smoke_argv`; manager-kind smoke (W3)
+- [ ] 18-10-PLAN.md — Release digests stored in the version cache (W3)
+- [ ] 18-11-PLAN.md — macOS app zips: pinned sha256, staged swap, smoke (W4)
+- [ ] 18-12-PLAN.md — verify-registry check core: assets, members, digests, newer stable, inconclusive (W4)
+- [ ] 18-13-PLAN.md — verify-registry `--write`/`--candidate`: dated passes and verified pin bumps (W5)
+- [ ] 18-14-PLAN.md — `--issue` upsert, `make verify-registry`, weekly workflow outside the PR gate (W6)
+- [ ] 18-15-PLAN.md — Template pins, live bump + clean rerun, container e2e proof (W7)
 
 ### Phase 19: One tool state with health plus receipts
 
