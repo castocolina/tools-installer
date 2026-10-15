@@ -3,6 +3,7 @@ import shutil
 import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 from rich.console import Console
@@ -21,6 +22,7 @@ from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError, Runner
 from installer.selection import Choice
 from installer.session import Install, MismatchChoice, SensitiveInstall, Summary
+from installer.tweaks import TweakBundle
 from installer.uninstall import SweepResult
 from installer.versions import TagResolver
 
@@ -3460,9 +3462,22 @@ def test_run_wizard_never_asks_sensitive_question_without_login_shell_action(
     assert "chsh -s" not in buf.getvalue()
 
 
+class _UninstallKwargs(TypedDict):
+    """Keyword arguments for run_uninstall, typed so the splat checks exactly."""
+
+    default_bin_dir: Path
+    myshellrc_path: Path
+    rc_paths: list[Path]
+    confirm: Callable[[str], bool]
+    bundles: tuple[TweakBundle, ...]
+    zshrc_path: Path
+    daemon_policy: Policy | None
+    extra_policies: tuple[Policy, ...]
+
+
 def _uninstall_kwargs(
     tmp_path: Path, bin_dir: Path, confirm: Callable[[str], bool]
-) -> dict[str, object]:
+) -> _UninstallKwargs:
     from installer.shellrc import write_myshellrc
 
     myshellrc = tmp_path / ".myshellrc"
@@ -3489,7 +3504,7 @@ def test_run_uninstall_deletes_only_proven_artifacts(
     tools = plant_removal_fixtures(tmp_path)
     bin_dir = tmp_path / ".local" / "bin"
     console, buf = _console()
-    removed = run_uninstall(tools, console, **_uninstall_kwargs(tmp_path, bin_dir, lambda _m: True))  # type: ignore[arg-type]
+    removed = run_uninstall(tools, console, **_uninstall_kwargs(tmp_path, bin_dir, lambda _m: True))
     opt_fd = tmp_path / ".local" / "opt" / "fd"
     assert set(removed) == {bin_dir / "fd", opt_fd}
     assert not (bin_dir / "fd").is_symlink()
@@ -3518,7 +3533,7 @@ def test_run_uninstall_with_only_unproven_matches_still_lists_them(
         raise AssertionError("confirm must not be called with nothing proven")
 
     console, buf = _console()
-    removed = run_uninstall(tools, console, **_uninstall_kwargs(tmp_path, bin_dir, fail_confirm))  # type: ignore[arg-type]
+    removed = run_uninstall(tools, console, **_uninstall_kwargs(tmp_path, bin_dir, fail_confirm))
     assert removed == []
     text = buf.getvalue()
     assert "Nothing to uninstall" in text
@@ -3535,7 +3550,7 @@ def test_second_yes_run_deletes_nothing(tmp_path: Path, monkeypatch: pytest.Monk
     bin_dir = tmp_path / ".local" / "bin"
     kwargs = _uninstall_kwargs(tmp_path, bin_dir, lambda _m: True)
     console, _buf = _console()
-    first = run_uninstall(tools, console, **kwargs)  # type: ignore[arg-type]
+    first = run_uninstall(tools, console, **kwargs)
     assert first
 
     def snapshot() -> dict[Path, bytes]:
@@ -3557,7 +3572,7 @@ def test_second_yes_run_deletes_nothing(tmp_path: Path, monkeypatch: pytest.Monk
     second = run_uninstall(
         tools,
         console2,
-        **kwargs,  # type: ignore[arg-type]
+        **kwargs,
     )
     assert second == []
     assert snapshot() == before_files
@@ -3581,7 +3596,7 @@ def test_run_uninstall_survives_a_looping_link(
     removed = run_uninstall(
         [tool],
         console,
-        **_uninstall_kwargs(tmp_path, bin_dir, lambda _m: True),  # type: ignore[arg-type]
+        **_uninstall_kwargs(tmp_path, bin_dir, lambda _m: True),
     )
     assert removed == []
     assert (bin_dir / "foo").is_symlink()  # untouched
@@ -3614,7 +3629,7 @@ def test_run_uninstall_refuses_paths_changed_since_the_preview(
     removed = run_uninstall(
         [tool],
         console,
-        **_uninstall_kwargs(tmp_path, bin_dir, swap_then_confirm),  # type: ignore[arg-type]
+        **_uninstall_kwargs(tmp_path, bin_dir, swap_then_confirm),
     )
     assert removed == []
     assert (bin_dir / "fd").read_text() == "foreign file"  # the replacement survives
