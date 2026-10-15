@@ -18,7 +18,12 @@ from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import DaemonState, Severity
-from installer.execute_screen import ExecuteInputs, ExecuteScreen
+from installer.execute_screen import (
+    ExecuteInputs,
+    ExecuteScreen,
+    InstallRunFinished,
+    InstallRunStarted,
+)
 from installer.guidance import (
     GUARD_ENTER_HINT,
     SAFE_FIX_ENTER_HINT,
@@ -3192,6 +3197,76 @@ async def test_ctrl_c_hard_aborts_even_while_palette_open() -> None:
         await pilot.press("ctrl+c")
         assert not app.is_running
     assert app.return_value is None
+
+
+def test_run_in_flight_flag_lifecycle() -> None:
+    """WR-06: UnifiedApp records that a run is in flight from the moment
+    ExecuteScreen starts it, and clears the flag when the run finishes."""
+    app = _app()
+    assert app.run_in_flight is False
+    app.on_install_run_started(InstallRunStarted())
+    assert app.run_in_flight is True
+    app.on_install_run_finished(
+        InstallRunFinished(
+            Summary(installed=(), already=(), failed=(), no_method=()),
+            [],
+            [],
+            "",
+            "",
+            None,
+        )
+    )
+    assert app.run_in_flight is False
+
+
+async def test_ctrl_c_while_a_run_is_in_flight_leaves_the_flag_set() -> None:
+    """WR-06: a hard abort while a run is in flight exits before
+    InstallRunFinished can arrive, so the flag stays set and every exit-code
+    reader can see the run was interrupted."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        started.set()
+        assert release.wait(10.0)
+        return InstallOutcome(tool.id, "installed")
+
+    app = _app(execute=_execute_inputs(install=install))
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.catalog.selected.add("rg")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if app.run_in_flight:
+                break
+            await pilot.pause()
+        assert app.run_in_flight is True
+        await pilot.press("ctrl+c")
+        assert not app.is_running
+        assert app.install_summary is None
+        assert app.run_in_flight is True
+        release.set()
+
+
+async def test_ctrl_c_with_no_run_in_flight_keeps_the_clean_abort() -> None:
+    """WR-06 keeps today's code for an abort with no run in flight: the flag
+    is False, so the wizard's 'Aborted.' path stays exit 0."""
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("ctrl+c")
+        assert not app.is_running
+        assert app.run_in_flight is False
 
 
 async def test_rapid_view_switching_keeps_stack_one_deep() -> None:

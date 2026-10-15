@@ -1263,7 +1263,9 @@ def _run_interactive_wizard(
     summary = app.install_summary
     if summary is None:
         console.print("Aborted.")
-        return 0
+        # WR-06: a hard abort while a run was in flight interrupted a real
+        # run; that is a failure, not a clean abort.
+        return 1 if app.run_in_flight else 0
     # run_doctor is deliberately NOT re-run here: the app already rendered
     # the read-only audit inside the execute screen. clean_rc_duplicates
     # stays on the console per 13-RESEARCH.md assumption A1 — it is a
@@ -1289,7 +1291,10 @@ def _settings_store(link_mode_option: str | None) -> tuple[SettingsStore, bool]:
 
 def _session_exit_code(app: UnifiedApp) -> int:
     """The one exit rule for every TUI route (SAFE-05): a run that reported a
-    failure on its Summary exits 1, everything else exits 0."""
+    failure on its Summary exits 1, and a run interrupted by a hard abort
+    mid-flight (WR-06) exits 1 too; everything else exits 0."""
+    if app.run_in_flight:
+        return 1
     summary = app.install_summary
     if summary is not None and summary.has_failure:
         return 1

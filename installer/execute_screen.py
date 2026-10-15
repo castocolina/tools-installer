@@ -388,6 +388,15 @@ class InstallRunFinished(Message):
         super().__init__()
 
 
+class InstallRunStarted(Message):
+    """The user confirmed; the run is now in flight (WR-06).
+
+    Posted from action_start so UnifiedApp can record the in-flight window:
+    a hard abort inside it exits before InstallRunFinished can arrive, and
+    the exit-code readers must see the run was interrupted, not clean.
+    """
+
+
 @dataclass(frozen=True)
 class ExecuteInputs:
     """Everything ExecuteScreen needs, bound by the composition root.
@@ -569,6 +578,7 @@ class ExecuteScreen(ModalScreen[None]):
         if self.started:
             return
         self.started = True
+        self.post_message(InstallRunStarted())
         self.status.set(_CANCEL_AVAILABLE, "ok")
         self._last_output_at = self._inputs.now()
         self._arm_silence_timer(SILENCE_SECONDS)

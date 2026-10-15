@@ -58,6 +58,7 @@ _darwin_select_based_asyncio = (
 
 class _DummyApp:
     install_summary: Summary | None = None
+    run_in_flight = False
 
     def run(self) -> None:
         return None
@@ -442,6 +443,7 @@ def _capture_app(
 
     class _App:
         install_summary: Summary | None = None
+        run_in_flight = False
 
         def __init__(self, *_args: object, **kwargs: object) -> None:
             if install_summary is not None:
@@ -2177,6 +2179,8 @@ def test_interactive_none_summary_prints_aborted_and_returns_zero(
 
 
 class _SummaryApp:
+    run_in_flight = False
+
     def __init__(self, summary: Summary | None) -> None:
         self.install_summary = summary
 
@@ -2464,6 +2468,7 @@ def test_interactive_wizard_prints_warnings_before_the_abort_return(
 
     class _Aborting:
         install_summary = None
+        run_in_flight = False
 
         def run(self) -> None:
             collector.append("another timer is still running")
@@ -2506,6 +2511,7 @@ def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_w
     collector = DaemonDefaultWarnings()
 
     class _Done:
+        run_in_flight = False
         install_summary = Summary(installed=("rg",), already=(), failed=(), no_method=())
 
         def run(self) -> None:
@@ -2527,6 +2533,7 @@ def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_w
     monkeypatch.setattr(setup, "Console", lambda: Console(file=quiet, width=120, no_color=True))
 
     class _Quiet:
+        run_in_flight = False
         install_summary = Summary(installed=("rg",), already=(), failed=(), no_method=())
 
         def run(self) -> None:
@@ -2553,6 +2560,7 @@ def test_interactive_wizard_labels_a_timed_out_background_apply(
 
     class _Aborting:
         install_summary = None
+        run_in_flight = False
 
         def run(self) -> None:
             collector.append("partial")
@@ -3293,6 +3301,34 @@ def test_interactive_wizard_exits_1_when_the_session_has_a_failure(
         Summary(installed=(), already=(), failed=(), no_method=(), crash_error="boom"),
     )
     assert setup.main([]) == 1
+
+
+def test_ctrl_c_mid_run_exits_1(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """WR-06: a hard abort (ctrl+c) while a run is in flight leaves
+    install_summary None, so the abort must not read as a clean exit 0."""
+    _sandbox(monkeypatch, tmp_path)
+    _capture_app(monkeypatch)
+    app = setup.UnifiedApp
+    assert app is not None
+    monkeypatch.setattr(app, "install_summary", None)
+    monkeypatch.setattr(app, "run_in_flight", True)
+    assert setup.main([]) == 1
+
+
+def test_doctor_route_interrupted_mid_run_exits_1(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """WR-06: _session_exit_code is the one exit rule for every TUI route, so
+    a run interrupted by ctrl+c is a failure on the doctor route too."""
+    _sandbox(monkeypatch, tmp_path)
+    _capture_app(monkeypatch)
+    app = setup.UnifiedApp
+    assert app is not None
+    monkeypatch.setattr(
+        app, "install_summary", Summary(installed=(), already=(), failed=(), no_method=())
+    )
+    monkeypatch.setattr(app, "run_in_flight", True)
+    assert setup.main(["--doctor"]) == 1
 
 
 def test_interactive_wizard_exits_0_when_the_session_is_clean(

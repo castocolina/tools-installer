@@ -32,7 +32,12 @@ from installer.catalog_tui import CatalogScreen, OwnershipRefreshed, ToolUpdated
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.enums import Tier, UninstallState
-from installer.execute_screen import ExecuteInputs, ExecuteScreen, InstallRunFinished
+from installer.execute_screen import (
+    ExecuteInputs,
+    ExecuteScreen,
+    InstallRunFinished,
+    InstallRunStarted,
+)
 from installer.guidance import (
     GUARD_ENTER_HINT,
     SAFE_FIX_ENTER_HINT,
@@ -2486,6 +2491,12 @@ class UnifiedApp(App[list[str] | None]):
         # The exit code answers "did everything this session asked for succeed",
         # not "did the last thing succeed" — merge each run field-wise in order.
         self.install_summary: Summary | None = None
+        # WR-06: set by InstallRunStarted (ExecuteScreen.action_start),
+        # cleared by on_install_run_finished. A hard abort inside the window
+        # exits before the finish message can arrive, so the flag is the only
+        # witness that the session was interrupted mid-run -- and the exit
+        # code must treat that as a failure, never a clean abort.
+        self.run_in_flight: bool = False
         self._version_refresh = version_refresh
         self._updates = updates
         # D-01/15.6-06: the SAME composition-root closure Plans 04/05 wired for
@@ -2984,7 +2995,12 @@ class UnifiedApp(App[list[str] | None]):
         screen = self.screen
         return screen if isinstance(screen, AppScreen) else None
 
+    def on_install_run_started(self, message: InstallRunStarted) -> None:
+        del message  # its arrival is its whole meaning
+        self.run_in_flight = True
+
     def on_install_run_finished(self, message: InstallRunFinished) -> None:
+        self.run_in_flight = False
         # Every mutation this app performs calls invalidate
         # (installer/version_status.py:26-30's own invariant); the install
         # path was the one mutation that skipped it, so a tool the run just
