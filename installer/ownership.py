@@ -1432,6 +1432,39 @@ _NO_REMOVAL_HINT: frozenset[Owner] = frozenset({"unknown", "installer"})
 # just do not share a substring.
 _LABEL_AGREEMENT_EXEMPT: frozenset[Owner] = frozenset({"cask"})
 
+_KIND_PACKAGE_PARAM: dict[str, str] = {
+    "brew": "formula",
+    "cask": "cask",
+    "node": "npm_pkg",
+    "uv-tool": "pypi_pkg",
+    "sdkman": "candidate",
+    "dnf": "package",
+    "apt": "package",
+    "pacman": "package",
+    "rpm_ostree": "package",
+}
+_NATIVE_KIND_TO_OWNER: dict[str, Owner] = {
+    "dnf": "dnf",
+    "apt": "apt",
+    "pacman": "pacman",
+    "rpm_ostree": "rpm-ostree",
+}
+
+
+def method_removal_command(method: Method, fallback: str) -> str | None:
+    """Return the exact removal command for a method kind, or None for vendor scripts."""
+    owner = _KIND_TO_OWNER.get(method.kind) or _NATIVE_KIND_TO_OWNER.get(method.kind)
+    if owner is None:
+        return None
+    param = _KIND_PACKAGE_PARAM.get(method.kind)
+    if param is None:
+        return None
+    template = _REMOVAL_COMMANDS.get(owner)
+    if template is None:
+        return None
+    package = manager_name(method, param, fallback)
+    return template.format(package=package)
+
 
 def _own_script_install(ownership: ManagerOwnership) -> bool:
     """A vendor-script install: `installer`-owned, yet nothing the Uninstall

@@ -2657,3 +2657,21 @@ def test_script_location_without_active_path_stays_by_elimination(tmp_path: Path
     assert result.owner == "installer"
     assert result.confidence == "by-elimination"
     assert result.shadowed is False
+
+
+@pytest.mark.parametrize(
+    ("method", "expected"),
+    [
+        (Method(kind="brew", params={"formula": "ripgrep"}), "brew uninstall ripgrep"),
+        (Method(kind="uv-tool", params={"pypi_pkg": "graphifyy"}), "uv tool uninstall graphifyy"),
+        (
+            Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),
+            "pnpm remove --global @mermaid-js/mermaid-cli",
+        ),
+        (Method(kind="dnf", params={"package": "glab"}), "dnf remove glab"),
+        (Method(kind="sdkman", params={"candidate": "java"}), "sdk uninstall java <version>"),
+        (Method(kind="script", params={"url": "u"}), None),
+    ],
+)
+def test_method_removal_command_uses_the_shared_table(method: Method, expected: str | None) -> None:
+    assert ownership.method_removal_command(method, "fallback") == expected
