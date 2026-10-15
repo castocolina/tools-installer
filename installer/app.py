@@ -11,6 +11,7 @@ from pathlib import Path
 from rich.console import Console
 
 from installer import shellrc
+from installer.atomic import atomic_write_text
 from installer.audit import audit
 from installer.cli import Options
 from installer.deps import resolve_dependencies
@@ -430,23 +431,32 @@ def clean_rc_duplicates(
     Returns the removed lines per file ({} if none found or the user declined).
     """
     found: dict[Path, list[str]] = {}
-    indices_by_file: dict[Path, list[int]] = {}
+    previewed: dict[Path, tuple[bytes, str, list[int]]] = {}
     for rc_path in rc_paths:
         if not rc_path.exists():
             continue
-        text = rc_path.read_text()
+        before_bytes = rc_path.read_bytes()
+        text = before_bytes.decode("utf-8")
         indices = find_duplicate_path_lines(text, managed_dirs, env)
         if indices:
             lines = text.split("\n")
             found[rc_path] = [lines[index] for index in indices]
-            indices_by_file[rc_path] = indices
+            previewed[rc_path] = (before_bytes, text, indices)
     render_rc_duplicates(found, console)
     if not found:
         return {}
     if not confirm("Remove these duplicate PATH lines?"):
         return {}
-    for rc_path, indices in indices_by_file.items():
-        rc_path.write_text(strip_lines(rc_path.read_text(), indices))
+    for rc_path, (before_bytes, text, indices) in previewed.items():
+        try:
+            after = rc_path.read_bytes()
+        except OSError:
+            after = None
+        if after != before_bytes:
+            console.print(f"{rc_path} changed since the preview; left untouched.", style="yellow")
+            found.pop(rc_path, None)
+            continue
+        atomic_write_text(rc_path, strip_lines(text, indices))
     return found
 
 

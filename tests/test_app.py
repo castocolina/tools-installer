@@ -1043,6 +1043,148 @@ def test_clean_rc_duplicates_skips_absent_rc_files(tmp_path: Path):
     assert removed == {}
 
 
+def _dup_rc(tmp_path: Path, name: str = ".zshrc") -> tuple[Path, str]:
+    rc = tmp_path / name
+    original = 'export BUN_INSTALL="$HOME/.bun"\nexport PATH="$BUN_INSTALL/bin:$PATH"\n'
+    rc.write_text(original)
+    return rc, original
+
+
+def test_clean_rc_duplicates_refuses_a_file_edited_between_preview_and_confirm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """D-06: the confirm recheck compares bytes; a file edited while the user
+    reads the prompt is refused, left byte-identical, and absent from the
+    returned removed-lines dict."""
+    from installer.app import clean_rc_duplicates
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rc, original = _dup_rc(tmp_path)
+    console, buf = _console()
+
+    def edit_then_confirm(_message: str) -> bool:
+        rc.write_text(original + 'export PATH="/usr/local/bin:$PATH"\n')
+        return True
+
+    removed = clean_rc_duplicates(
+        [rc],
+        {tmp_path / ".bun" / "bin"},
+        {"HOME": str(tmp_path)},
+        console,
+        confirm=edit_then_confirm,
+    )
+    assert rc.read_text() == original + 'export PATH="/usr/local/bin:$PATH"\n'
+    assert rc not in removed
+    assert "changed since the preview" in " ".join(buf.getvalue().split())
+    assert "left untouched" in " ".join(buf.getvalue().split())
+
+
+def test_clean_rc_duplicates_treats_a_trailing_newline_change_as_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from installer.app import clean_rc_duplicates
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rc, original = _dup_rc(tmp_path)
+    console, _buf = _console()
+
+    def drop_final_newline(_message: str) -> bool:
+        rc.write_bytes(original[:-1].encode())
+        return True
+
+    removed = clean_rc_duplicates(
+        [rc],
+        {tmp_path / ".bun" / "bin"},
+        {"HOME": str(tmp_path)},
+        console,
+        confirm=drop_final_newline,
+    )
+    assert rc.read_bytes() == original[:-1].encode()
+    assert rc not in removed
+
+
+def test_clean_rc_duplicates_strips_an_unchanged_file_atomically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from installer.app import clean_rc_duplicates
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rc, original = _dup_rc(tmp_path)
+    console, _buf = _console()
+
+    def boom(src: object, dst: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("os.replace", boom)
+    with pytest.raises(OSError, match="disk full"):
+        clean_rc_duplicates(
+            [rc],
+            {tmp_path / ".bun" / "bin"},
+            {"HOME": str(tmp_path)},
+            console,
+            confirm=lambda _m: True,
+        )
+    assert rc.read_bytes() == original.encode()
+    assert list(tmp_path.glob("*.tools-installer.tmp")) == []
+
+
+def test_clean_rc_duplicates_writes_through_a_symlinked_rc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from installer.app import clean_rc_duplicates
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    target = dotfiles / "zshrc"
+    _dup_rc(dotfiles, "zshrc")
+    rc = tmp_path / ".zshrc"
+    rc.symlink_to(target)
+    console, _buf = _console()
+    removed = clean_rc_duplicates(
+        [rc],
+        {tmp_path / ".bun" / "bin"},
+        {"HOME": str(tmp_path)},
+        console,
+        confirm=lambda _m: True,
+    )
+    assert rc.is_symlink()
+    stripped = target.read_text()
+    assert 'export PATH="$BUN_INSTALL/bin:$PATH"' not in stripped
+    assert 'export BUN_INSTALL="$HOME/.bun"' in stripped
+    assert rc in removed
+
+
+def test_clean_rc_duplicates_refuses_a_file_deleted_since_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Review 17-06 LOW: a file deleted between preview and confirm must be
+    treated as changed (never recreated); the other files still get stripped."""
+    from installer.app import clean_rc_duplicates
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    first, _ = _dup_rc(tmp_path, ".zshrc")
+    second, _ = _dup_rc(tmp_path, ".bashrc")
+    console, buf = _console()
+
+    def delete_then_confirm(_message: str) -> bool:
+        first.unlink()
+        return True
+
+    removed = clean_rc_duplicates(
+        [first, second],
+        {tmp_path / ".bun" / "bin"},
+        {"HOME": str(tmp_path)},
+        console,
+        confirm=delete_then_confirm,
+    )
+    assert not first.exists()  # not recreated
+    assert first not in removed
+    assert "changed since the preview" in " ".join(buf.getvalue().split())
+    assert second in removed
+    assert 'export PATH="$BUN_INSTALL/bin:$PATH"' not in second.read_text()
+
+
 def test_run_uninstall_nothing_to_remove_skips_confirm(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
