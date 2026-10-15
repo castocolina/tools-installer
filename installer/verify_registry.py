@@ -243,29 +243,16 @@ def _not_checkable_tool_ids(tools: Sequence[Tool]) -> tuple[str, ...]:
     return tuple(sorted(out))
 
 
-def _header_get(headers: object, name: str) -> str | None:
-    if headers is None:
-        return None
-    getter = getattr(headers, "get", None)
-    if callable(getter):
-        value = getter(name)
-        if value is not None:
-            return str(value)
-        value = getter(name.lower())
-        if value is not None:
-            return str(value)
-    return None
-
-
 def _is_github_rate_limit(error: HTTPError) -> bool:
     if error.code == 429:
         return True
     if error.code != 403:
         return False
-    remaining = _header_get(error.headers, "X-RateLimit-Remaining")
+    headers = error.headers
+    remaining = headers.get("X-RateLimit-Remaining") if headers else None
     if remaining == "0":
         return True
-    return _header_get(error.headers, "Retry-After") is not None
+    return headers.get("Retry-After") is not None if headers else False
 
 
 def _release_read_finding(tool_id: str, repo: str, exc: VersionError) -> Finding:
@@ -432,20 +419,9 @@ def _collect_targets(
                     if key in grouped:
                         existing = grouped[key]
                         if plat not in existing.platforms:
-                            grouped[key] = _TargetIdentity(
-                                tool_id=existing.tool_id,
-                                url=existing.url,
-                                member=existing.member,
-                                asset=existing.asset,
-                                archive=existing.archive,
-                                strip=existing.strip,
-                                raw=existing.raw,
+                            grouped[key] = replace(
+                                existing,
                                 platforms=tuple(sorted((*existing.platforms, plat))),
-                                checksum=existing.checksum,
-                                expected_sha256=existing.expected_sha256,
-                                registry_pin=existing.registry_pin,
-                                repo=existing.repo,
-                                release_tag=existing.release_tag,
                             )
                     else:
                         grouped[key] = _TargetIdentity(
@@ -474,6 +450,46 @@ def _head_error_reason(exc: BaseException) -> str:
 
 def _asset_missing_reason(code: int, asset: str) -> str:
     return f"asset missing (HTTP {code}): {asset}"
+
+
+def _target_finding(
+    target: _TargetIdentity,
+    status: FindingStatus,
+    reason: str,
+    *,
+    sha256: str | None = None,
+) -> Finding:
+    return Finding(
+        tool_id=target.tool_id,
+        url=target.url,
+        status=status,
+        reason=reason,
+        member=target.member,
+        platforms=target.platforms,
+        sha256=sha256,
+    )
+
+
+def _transport_finding(target: _TargetIdentity, exc: BaseException, name: str) -> Finding:
+    if isinstance(exc, HTTPError):
+        if exc.code in (404, 410):
+            return _target_finding(
+                target,
+                "drift",
+                _asset_missing_reason(exc.code, name),
+            )
+        return _target_finding(target, "inconclusive", _head_error_reason(exc))
+    return _target_finding(target, "inconclusive", str(exc))
+
+
+def _identity_finding(wide: Finding, target: _TargetIdentity) -> Finding:
+    return replace(
+        wide,
+        tool_id=target.tool_id,
+        member=target.member,
+        platforms=target.platforms,
+        sha256=None,
+    )
 
 
 def _tar_member_names(path: Path, archive: str) -> list[str]:
@@ -678,47 +694,16 @@ def check_registry(
         except VersionError:
             pin_drift = None
         if pin_drift is not None:
-            findings[key] = Finding(
-                tool_id=target.tool_id,
-                url=target.url,
-                status="drift",
-                reason=pin_drift,
-                member=target.member,
-                platforms=target.platforms,
-            )
+            findings[key] = _target_finding(target, "drift", pin_drift)
             continue
 
         try:
             head_fp = head_once(target.url)
         except HTTPError as exc:
-            if exc.code in (404, 410):
-                findings[key] = Finding(
-                    tool_id=target.tool_id,
-                    url=target.url,
-                    status="drift",
-                    reason=_asset_missing_reason(exc.code, target.asset),
-                    member=target.member,
-                    platforms=target.platforms,
-                )
-            else:
-                findings[key] = Finding(
-                    tool_id=target.tool_id,
-                    url=target.url,
-                    status="inconclusive",
-                    reason=_head_error_reason(exc),
-                    member=target.member,
-                    platforms=target.platforms,
-                )
+            findings[key] = _transport_finding(target, exc, target.asset)
             continue
         except _TRANSPORT_ERRORS as exc:
-            findings[key] = Finding(
-                tool_id=target.tool_id,
-                url=target.url,
-                status="inconclusive",
-                reason=str(exc),
-                member=target.member,
-                platforms=target.platforms,
-            )
+            findings[key] = _transport_finding(target, exc, target.asset)
             continue
 
         checksum_text: str | None = None
@@ -730,57 +715,23 @@ def check_registry(
                     tracked_download(checksum_url, sidecar)
                     checksum_text = sidecar.read_text(encoding="utf-8", errors="replace")
             except HTTPError as exc:
-                if exc.code in (404, 410):
-                    findings[key] = Finding(
-                        tool_id=target.tool_id,
-                        url=target.url,
-                        status="drift",
-                        reason=_asset_missing_reason(exc.code, PurePosixPath(checksum_url).name),
-                        member=target.member,
-                        platforms=target.platforms,
-                    )
-                else:
-                    findings[key] = Finding(
-                        tool_id=target.tool_id,
-                        url=target.url,
-                        status="inconclusive",
-                        reason=_head_error_reason(exc),
-                        member=target.member,
-                        platforms=target.platforms,
-                    )
+                findings[key] = _transport_finding(target, exc, PurePosixPath(checksum_url).name)
                 continue
             except _TRANSPORT_ERRORS as exc:
-                findings[key] = Finding(
-                    tool_id=target.tool_id,
-                    url=target.url,
-                    status="inconclusive",
-                    reason=str(exc),
-                    member=target.member,
-                    platforms=target.platforms,
-                )
+                findings[key] = _transport_finding(target, exc, PurePosixPath(checksum_url).name)
                 continue
 
         expected, checksum_hash, digest_hash = _expected_hash(
             target, tracked_release, checksum_text
         )
         if expected == "__disagree__":
-            findings[key] = Finding(
-                tool_id=target.tool_id,
-                url=target.url,
-                status="drift",
-                reason="checksum file disagrees with the GitHub digest",
-                member=target.member,
-                platforms=target.platforms,
+            findings[key] = _target_finding(
+                target, "drift", "checksum file disagrees with the GitHub digest"
             )
             continue
         if checksum_text is not None and expected is None:
-            findings[key] = Finding(
-                tool_id=target.tool_id,
-                url=target.url,
-                status="drift",
-                reason=f"checksum file missing entry for {target.asset}",
-                member=target.member,
-                platforms=target.platforms,
+            findings[key] = _target_finding(
+                target, "drift", f"checksum file missing entry for {target.asset}"
             )
             continue
 
@@ -794,24 +745,11 @@ def check_registry(
             raw=target.raw,
         )
         if state.get(state_k) == fingerprint:
-            findings[key] = Finding(
-                tool_id=target.tool_id,
-                url=target.url,
-                status="ok",
-                reason="ok",
-                member=target.member,
-                platforms=target.platforms,
-            )
+            findings[key] = _target_finding(target, "ok", "ok")
             continue
 
         if target.url in url_wide:
-            findings[key] = replace(
-                url_wide[target.url],
-                tool_id=target.tool_id,
-                member=target.member,
-                platforms=target.platforms,
-                sha256=None,
-            )
+            findings[key] = _identity_finding(url_wide[target.url], target)
             continue
 
         if target.url not in url_download_cache:
@@ -832,48 +770,21 @@ def check_registry(
                             listings[target.archive] = exc
                     url_download_cache[target.url] = (actual_hash, listings)
             except HTTPError as exc:
-                if exc.code in (404, 410):
-                    drift = Finding(
-                        tool_id=target.tool_id,
-                        url=target.url,
-                        status="drift",
-                        reason=_asset_missing_reason(exc.code, target.asset),
-                        member=target.member,
-                        platforms=target.platforms,
-                    )
-                    url_wide[target.url] = drift
-                    findings[key] = drift
-                else:
-                    findings[key] = Finding(
-                        tool_id=target.tool_id,
-                        url=target.url,
-                        status="inconclusive",
-                        reason=_head_error_reason(exc),
-                        member=target.member,
-                        platforms=target.platforms,
-                    )
+                finding = _transport_finding(target, exc, target.asset)
+                if finding.status == "drift":
+                    url_wide[target.url] = finding
+                findings[key] = finding
                 continue
             except _TRANSPORT_ERRORS as exc:
-                findings[key] = Finding(
-                    tool_id=target.tool_id,
-                    url=target.url,
-                    status="inconclusive",
-                    reason=str(exc),
-                    member=target.member,
-                    platforms=target.platforms,
-                )
+                finding = _transport_finding(target, exc, target.asset)
+                if finding.status == "drift":
+                    url_wide[target.url] = finding
+                findings[key] = finding
                 continue
 
         actual_hash, listings = url_download_cache[target.url]
         if expected is not None and actual_hash.lower() != expected.lower():
-            drift = Finding(
-                tool_id=target.tool_id,
-                url=target.url,
-                status="drift",
-                reason="checksum mismatch",
-                member=target.member,
-                platforms=target.platforms,
-            )
+            drift = _target_finding(target, "drift", "checksum mismatch")
             url_wide[target.url] = drift
             findings[key] = drift
             continue
@@ -882,22 +793,13 @@ def check_registry(
             listing = listings.get(target.archive)
             mode_key = (target.url, target.archive)
             if mode_key in url_mode_wide:
-                findings[key] = replace(
-                    url_mode_wide[mode_key],
-                    tool_id=target.tool_id,
-                    member=target.member,
-                    platforms=target.platforms,
-                    sha256=None,
-                )
+                findings[key] = _identity_finding(url_mode_wide[mode_key], target)
                 continue
             if isinstance(listing, BaseException):
-                drift = Finding(
-                    tool_id=target.tool_id,
-                    url=target.url,
-                    status="drift",
-                    reason=(f"archive unreadable as {target.archive}: {target.asset} ({listing})"),
-                    member=target.member,
-                    platforms=target.platforms,
+                drift = _target_finding(
+                    target,
+                    "drift",
+                    f"archive unreadable as {target.archive}: {target.asset} ({listing})",
                 )
                 url_mode_wide[mode_key] = drift
                 findings[key] = drift
@@ -906,25 +808,14 @@ def check_registry(
             if target.member is not None and not _member_present(
                 names, target.member, target.strip, target.archive
             ):
-                findings[key] = Finding(
-                    tool_id=target.tool_id,
-                    url=target.url,
-                    status="drift",
-                    reason=f"member {target.member} missing from {target.asset}",
-                    member=target.member,
-                    platforms=target.platforms,
+                findings[key] = _target_finding(
+                    target,
+                    "drift",
+                    f"member {target.member} missing from {target.asset}",
                 )
                 continue
 
-        findings[key] = Finding(
-            tool_id=target.tool_id,
-            url=target.url,
-            status="ok",
-            reason="ok",
-            member=target.member,
-            platforms=target.platforms,
-            sha256=actual_hash.lower(),
-        )
+        findings[key] = _target_finding(target, "ok", "ok", sha256=actual_hash.lower())
         state[state_k] = fingerprint
         if on_verified is not None:
             on_verified(state)

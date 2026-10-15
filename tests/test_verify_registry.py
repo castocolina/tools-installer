@@ -17,6 +17,7 @@ from datetime import date
 from email.message import Message
 from pathlib import Path
 from shutil import copyfile
+from typing import Literal
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -735,6 +736,100 @@ strip = 0
     probe = Probe(release=probe.release, head=probe.head, download=download)
     report = check_registry(load_tools(registry), probe, state={})
     assert report.findings[0].status == "inconclusive"
+
+
+_FailureSpec = (
+    tuple[Literal["http"], int]
+    | tuple[Literal["url"], str]
+    | tuple[Literal["timeout"], str]
+    | tuple[Literal["os"], str]
+    | Literal["incomplete"]
+)
+
+_GITHUB_CHECKSUM_REGISTRY = """
+[[tool]]
+id = "t1"
+name = "t1"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "a-{ver}.tar.gz"
+member = "bin/x"
+checksum = "SHA256SUMS"
+strip = 0
+"""
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(("http", 404), id="404"),
+        pytest.param(("http", 410), id="410"),
+        pytest.param(("http", 503), id="503"),
+        pytest.param(("url", "down"), id="url"),
+        pytest.param(("timeout", "slow"), id="timeout"),
+        pytest.param(("os", "reset"), id="os"),
+        pytest.param("incomplete", id="incomplete"),
+    ],
+)
+@pytest.mark.parametrize("site", ["head", "checksum", "download"])
+def test_every_request_site_classifies_a_failure_the_same_way(
+    tmp_path: Path, site: str, failure: _FailureSpec
+) -> None:
+    tar = _gz_tar_bytes({"bin/x": b"x"})
+    digest = hashlib.sha256(tar).hexdigest()
+    registry = _write_registry(tmp_path, _GITHUB_CHECKSUM_REGISTRY)
+    release = _release(tag="1.0.0", assets={"a-1.0.0.tar.gz": digest})
+    asset_url = "https://github.com/o/r/releases/download/1.0.0/a-1.0.0.tar.gz"
+    checksum_url = "https://github.com/o/r/releases/download/1.0.0/SHA256SUMS"
+    checksum_text = f"{digest}  a-1.0.0.tar.gz\n".encode()
+
+    def make_exc(url: str) -> BaseException:
+        if failure == "incomplete":
+            return http.client.IncompleteRead(b"")
+        if failure[0] == "http":
+            return _http_error(url, failure[1])
+        if failure[0] == "url":
+            return URLError(failure[1])
+        if failure[0] == "timeout":
+            return TimeoutError(failure[1])
+        if failure[0] == "os":
+            return OSError(failure[1])
+        raise AssertionError(f"unknown failure {failure!r}")
+
+    def head(url: str) -> str:
+        if site == "head" and url == asset_url:
+            raise make_exc(url)
+        return 'etag:"1"'
+
+    def download(url: str, dest: Path) -> None:
+        if site == "checksum" and (url == checksum_url or url.endswith("SHA256SUMS")):
+            raise make_exc(url)
+        if site == "download" and (url == asset_url or url.endswith("a-1.0.0.tar.gz")):
+            raise make_exc(url)
+        if url.endswith("SHA256SUMS"):
+            dest.write_bytes(checksum_text)
+            return
+        dest.write_bytes(tar)
+
+    probe, _ = _map_probe(
+        release,
+        payloads={"a-1.0.0.tar.gz": tar, "SHA256SUMS": checksum_text},
+        head=head,
+    )
+    probe = Probe(release=probe.release, head=head, download=download)
+    report = check_registry(load_tools(registry), probe, state={})
+    finding = report.findings[0]
+    if failure != "incomplete" and failure[0] == "http" and failure[1] in (404, 410):
+        assert finding.status == "drift"
+        assert f"HTTP {failure[1]}" in finding.reason
+    else:
+        assert finding.status == "inconclusive"
 
 
 def test_asset_get_404_after_a_passing_head_is_drift(tmp_path: Path) -> None:
