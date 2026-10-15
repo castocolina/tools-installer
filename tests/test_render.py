@@ -1,6 +1,8 @@
 import io
+from collections.abc import Callable
 from pathlib import Path
 
+import pytest
 from rich.console import Console
 
 from installer.audit import ToolStatus
@@ -18,8 +20,10 @@ from installer.render import (
     render_node_globals,
     render_post_install_handoff,
     render_postinstall_warnings,
+    render_remove_yourself,
     render_skipped,
     render_summary,
+    render_uninstall,
     render_verification,
 )
 from installer.session import Summary
@@ -234,6 +238,26 @@ def test_render_uninstall_lists_paths() -> None:
     text = buf.getvalue()
     assert "/x/opt/fd" in text
     assert "/x/bin/fd" in text
+
+
+@pytest.mark.parametrize(
+    "render",
+    [render_uninstall, render_remove_yourself],
+    ids=["render_uninstall", "render_remove_yourself"],
+)
+def test_uninstall_path_lines_print_unwrapped_and_literal(
+    render: Callable[..., None], tmp_path: Path
+) -> None:
+    """Paths print verbatim at any console width and with markup disabled."""
+    long_path = tmp_path / ("a" * 60) / "bin" / "ruff"
+    markup_path = tmp_path / "[bold]dir" / "bin" / "ruff"
+    buf = io.StringIO()
+    console = Console(file=buf, width=40, no_color=True)
+    render([long_path, markup_path], console)
+    text = buf.getvalue()
+    assert str(long_path) in text
+    assert str(markup_path) in text
+    assert "[bold]" in text
 
 
 def test_render_uninstall_reports_nothing_to_do() -> None:

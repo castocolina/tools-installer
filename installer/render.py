@@ -172,7 +172,7 @@ def render_uninstall(paths: list[Path], console: Console) -> None:
         return
     console.print("The following will be removed:")
     for path in paths:
-        console.print(f"  {path}")
+        console.print(f"  {path}", soft_wrap=True, markup=False)
 
 
 def render_remove_yourself(paths: Sequence[Path], console: Console) -> None:
@@ -188,7 +188,7 @@ def render_remove_yourself(paths: Sequence[Path], console: Console) -> None:
         "remove them yourself if you want them gone:"
     )
     for path in paths:
-        console.print(f"  {path}")
+        console.print(f"  {path}", soft_wrap=True, markup=False)
 
 
 def render_rc_duplicates(found: dict[Path, list[str]], console: Console) -> None:
