@@ -1,3 +1,5 @@
+import json
+import os
 import typing
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
@@ -9,6 +11,7 @@ import installer.executors as executors
 import installer.update as update
 from installer.apps import UpdateExecResult as AppUpdateExecResult
 from installer.checksums import ChecksumMismatch
+from installer.download import ExecContext
 from installer.download import UpdateExecResult as DownloadUpdateExecResult
 from installer.executors import ExecutorError
 from installer.model import Method, Tool
@@ -37,7 +40,22 @@ from installer.update import (
     resolve_update_argv,
     should_replay_node_globals,
 )
-from installer.versions import TagResolver, VersionError
+from installer.versions import TagResolver, VersionError, release_resolver, resolve_github_tag
+from tests.test_download import fixture_runner
+
+
+def _plant_rg_install(tmp_path: Path) -> tuple[Path, Path]:
+    opt = tmp_path / ".local" / "opt" / "rg"
+    opt.mkdir(parents=True)
+    binary = opt / "rg"
+    binary.write_bytes(b"old-binary")
+    binary.chmod(0o755)
+    (opt / "marker").write_text("original")
+    bindir = tmp_path / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    link = bindir / "rg"
+    os.symlink(str(binary), link)
+    return opt, link
 
 
 def _platform(*, os: str = "macos", has_brew: bool = True) -> Platform:
@@ -490,6 +508,111 @@ def test_no_postinstall_never_calls_hook() -> None:
     )
     assert outcome.status == "updated"
     assert calls == []
+
+
+def test_installer_owned_update_passes_the_release_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[TagResolver] = []
+    real = release_resolver
+
+    def recording_resolver(resolve_tag: TagResolver):
+        recorded.append(resolve_tag)
+        return real(resolve_tag)
+
+    monkeypatch.setattr(update, "release_resolver", recording_resolver)
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "BurntSushi/ripgrep",
+            "asset": "ripgrep-{ver}-{arch.machine}-unknown-linux-musl.tar.gz",
+            "member": "rg",
+            "strip": 1,
+        },
+    )
+    tool = _tool("rg", method, cmd="rg")
+
+    def fake_update(method: Method, ctx: ExecContext) -> DownloadUpdateExecResult:
+        assert ctx.resolve_release is not None
+        return DownloadUpdateExecResult(verified=True)
+
+    monkeypatch.setattr(update.download, "update_download", fake_update)
+
+    def tag(_repo: str) -> str:
+        return "v15.1.0"
+
+    _perform(_target(tool, "installer", method=method), lambda _cmd: None, resolve_tag=tag)
+    assert recorded == [tag]
+
+
+def test_installer_owned_update_rejects_a_wrong_api_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    workdir = tmp_path / "update-staging"
+    workdir.mkdir()
+
+    def fake_mkdtemp(prefix: str) -> str:
+        return str(workdir)
+
+    monkeypatch.setattr(update.download.tempfile, "mkdtemp", fake_mkdtemp)
+    asset = "ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz"
+    payload = b"fresh-archive-bytes"
+    api_digest = "f" * 64
+    opt, link = _plant_rg_install(tmp_path)
+    before_opt = (opt / "marker").read_text()
+    before_binary = (opt / "rg").read_bytes()
+    before_link = os.readlink(link)
+
+    release_json = json.dumps(
+        {
+            "tag_name": "15.1.0",
+            "assets": [{"name": asset, "digest": f"sha256:{api_digest}"}],
+        }
+    ).encode()
+
+    class _FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def read(self) -> bytes:
+            return self._body
+
+        def __enter__(self) -> "_FakeResponse":
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+    def fake_urlopen(req: object, timeout: float = 10) -> _FakeResponse:
+        return _FakeResponse(release_json)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    calls, runner = fixture_runner(workdir, {asset: payload}, member=opt / "rg")
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "BurntSushi/ripgrep",
+            "asset": "ripgrep-{ver}-{arch.machine}-unknown-linux-musl.tar.gz",
+            "member": "rg",
+            "strip": 1,
+            "bin_dir": str(tmp_path / "bin"),
+        },
+    )
+    tool = _tool("rg", method, cmd="rg")
+    outcome = _perform(
+        _target(tool, "installer", method=method),
+        runner,
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        resolve_tag=resolve_github_tag,
+    )
+    assert outcome.status == "failed"
+    assert outcome.errors
+    assert isinstance(outcome.errors[0], ChecksumMismatch)
+    assert (opt / "marker").read_text() == before_opt
+    assert (opt / "rg").read_bytes() == before_binary
+    assert os.readlink(link) == before_link
+    assert calls  # runner saw the staged fetch
 
 
 def test_installer_download_cleanup_warnings_copied(monkeypatch: pytest.MonkeyPatch) -> None:

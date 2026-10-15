@@ -98,7 +98,7 @@ from installer.pnpm_globals import PnpmUnavailable
 from installer.postinstall import run_postinstall
 from installer.run import CommandError, Runner, run_captured
 from installer.terminal_shell import terminal_sync_warning
-from installer.versions import TagResolver, VersionError, resolve_github_tag
+from installer.versions import TagResolver, VersionError, release_resolver, resolve_github_tag
 
 PostinstallFn = Callable[[str, Method, Runner, Mapping[str, Tool]], str | None]
 
@@ -328,7 +328,13 @@ def _update_installer_owned(
         raise UpdateError("installer-owned update requires a resolved method")
     if method.kind in download.DOWNLOAD_KINDS:
         result = download.update_download(
-            method, ExecContext(runner=runner, platform=platform, resolve_tag=resolve_tag)
+            method,
+            ExecContext(
+                runner=runner,
+                platform=platform,
+                resolve_tag=resolve_tag,
+                resolve_release=release_resolver(resolve_tag),
+            ),
         )
         return result.warnings
     if method.kind in apps.APP_KINDS:

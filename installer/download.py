@@ -1,7 +1,6 @@
 """Download-based executors: github_release and tarball binaries into a bin dir."""
 
 import os
-import shlex
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -183,59 +182,18 @@ def install_download(method: Method, ctx: ExecContext) -> str | None:
     except OSError as exc:
         raise ExecutorError(f"cannot create bin dir: {exc}") from exc
     link = dest / binname
-    if target.checksum is not None or target.sha256 is not None:
-        workdir = Path(tempfile.mkdtemp(prefix="tools-installer-"))
-        try:
-            asset_path = _fetch_verified(method, ctx, target, workdir)
-            _place_verified(method, ctx, target, link, asset_path)
-            return None
-        finally:
-            shutil.rmtree(workdir, ignore_errors=True)
-    _install_unverified(method, ctx, target, link)
-    return target.unverified_reason
-
-
-def _install_unverified(
-    method: Method, ctx: ExecContext, target: DownloadTarget, link: Path
-) -> None:
-    """The pre-checksum flow: curl|extract via a shell-side mktemp. Argv unchanged."""
-    quoted_url = shlex.quote(target.url)
-    if method.params.get("raw") is True:
-        # WR-04: curl -o would follow an existing symlink at <link> and write
-        # through it. Fetch to a sibling temp path, then land the asset via
-        # _replace_raw (sibling temp + os.replace), which replaces the link
-        # itself and leaves any target untouched.
-        staged = staged_sibling(link, ".download")
-        quoted_staged = shlex.quote(str(staged))
-        try:
-            ctx.runner(["sh", "-c", f"curl -fsSL -o {quoted_staged} -- {quoted_url}"])
-            _replace_raw(link, staged)
-        finally:
-            staged.unlink(missing_ok=True)
-        return
-    strip = _opt_int(method, "strip", 0)
+    workdir = Path(tempfile.mkdtemp(prefix="tools-installer-"))
     try:
-        opt = ensure_dir(opt_dir(link.name))
-    except OSError as exc:
-        raise ExecutorError(f"cannot create opt dir: {exc}") from exc
-    binary = opt / target.member
-    quoted_opt = shlex.quote(str(opt))
-    quoted_member = shlex.quote(target.member)
-    if _opt_str(method, "archive") == "zip":
-        extract = (
-            "tmp=$(mktemp) && trap 'rm -f \"$tmp\"' EXIT"
-            f' && curl -fsSL -o "$tmp" -- {quoted_url}'
-            f' && unzip -q -o "$tmp" {quoted_member} -d {quoted_opt}'
-        )
-    else:
-        extract = (
-            "tmp=$(mktemp) && trap 'rm -f \"$tmp\"' EXIT"
-            f' && curl -fsSL -o "$tmp" -- {quoted_url}'
-            f' && tar -x{_tar_flag(method)}f "$tmp" -C {quoted_opt}'
-            f" --strip-components={strip}"
-        )
-    ctx.runner(["sh", "-c", extract])
-    link_executable(binary, link, target.member)
+        asset_path = _fetch_verified(method, ctx, target, workdir)
+        if method.params.get("raw") is True:
+            _replace_raw(link, asset_path)
+        else:
+            _place_verified(method, ctx, target, link, asset_path)
+        if target.checksum is not None or target.sha256 is not None:
+            return None
+        return target.unverified_reason
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def update_download(method: Method, ctx: ExecContext) -> UpdateExecResult:

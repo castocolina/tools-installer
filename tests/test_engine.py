@@ -171,9 +171,19 @@ def test_github_release_routes_to_download(monkeypatch: pytest.MonkeyPatch, tmp_
         return False
 
     monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+    import installer.download as download_mod
+
+    workdir = tmp_path / "dl"
+    workdir.mkdir()
+
+    def fake_mkdtemp(prefix: str) -> str:
+        return str(workdir)
+
+    monkeypatch.setattr(download_mod.tempfile, "mkdtemp", fake_mkdtemp)
     bin_dir = tmp_path / "bin"
     member = tmp_path / ".local" / "opt" / "rg" / "rg"
-    calls, runner = fixture_runner(None, {}, member=member)
+    asset = "rg-14.1.0-x86_64.tar.gz"
+    calls, runner = fixture_runner(workdir, {asset: b"archive"}, member=member)
     method = Method(
         kind="github_release",
         params={
@@ -195,7 +205,7 @@ def test_github_release_routes_to_download(monkeypatch: pytest.MonkeyPatch, tmp_
     )
     assert outcome.status == "installed"
     assert outcome.method_kind == "github_release"
-    assert calls[0][0] == "sh" and "rg-14.1.0-x86_64.tar.gz" in calls[0][2]
+    assert calls[0][0] == "curl" and asset in calls[0][3]
     link = bin_dir / "rg"
     assert link.is_symlink()
     assert os.readlink(link) == str(member)
@@ -231,7 +241,7 @@ def test_github_release_directory_member_falls_through_the_ladder(
 
     def plant_directory(cmd: list[str]) -> None:
         runner(cmd)
-        if cmd and cmd[0] == "sh" and " tar " in cmd[-1] and member.exists():
+        if cmd and cmd[0] == "tar" and member.exists():
             member.unlink()
             member.mkdir()
 
