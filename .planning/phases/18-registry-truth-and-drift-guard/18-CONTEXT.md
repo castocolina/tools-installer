@@ -97,6 +97,12 @@ Out of scope: receipts and health (19); script `paths`/`remove`/`update`/`writab
 - **Ledger L-18-06 (D-02 reading, jev):** "reject future values" allows a one-day tolerance (accept up to today + 1 day, reject later) to absorb UTC vs local-clock skew between the CI writer and maintainers (Laya tolerance low conf -> TypeSafe tolerance p=0.98).
 
 - **Ledger L-18-07 (D-08 / L-18-04 cache survival, jev):** the drift check stays weekly (`17 5 * * 1`); a second cron (`47 5 * * 4`) only restores and re-saves the `actions/cache` state (no check, no issue), because GitHub evicts entries not accessed for 7 days and delayed weekly runs would otherwise lose the state (Laya accept_loss low conf -> TypeSafe thursday_refresh p=0.91).
+- **Ledger L-18-08 (D-11 / REG-06 reading, jev + orchestrator):** "launched without the dev venv on PATH" also covers a shell where the project venv is activated: the setup.py `__main__` block (not `main()`) drops PATH entries inside `<repo>/.venv` before the wizard starts, in addition to `uv run --isolated --no-dev` (Laya low conf -> TypeSafe strip_at_entry p=0.79 below floor -> orchestrator).
+- **Ledger L-18-09 (D-06 manager smoke target, jev):** when the method declares `bin_dir` the smoke runs `<bin_dir>/<cmd>`; otherwise it runs `shutil.which(tool.cmd)` and the claim is "the command the user's PATH runs" (TypeSafe p=0.98).
+- **Ledger L-18-10 (D-07 / L-18-05 outage definition, verifiable):** a rate limit is HTTP 429, or 403 with `X-RateLimit-Remaining: 0` or `Retry-After`; any other 403 is an inconclusive finding for that repo only. A run with no release reads where every HEAD or download failed is a whole-run outage.
+- **Ledger L-18-11 (D-07 / L-18-04 granularity, verifiable):** state and findings are kept per tool/URL/member; HEAD and downloads are de-duplicated per URL per run.
+- **Ledger L-18-12 (D-09 `--write` verdict, jev + orchestrator):** a `--write` run's report and exit code describe the registry as written (applied bump = ok + `bumped` note; unapplied = drift, exit 1). Plan 18-15's read-only rerun stays the acceptance gate (Laya/TypeSafe below floor -> orchestrator).
+- **Ledger L-18-13 (R3/R11 ordering, D-14 quotes, verifiable):** "newer stable" is ranked with `versions.is_outdated`; an incomparable tag is an inconclusive finding, never drift. The version normalizer strips one leading and one trailing quote independently.
 
 ### Claude's Discretion
 - Plan and wave order. Suggested:
