@@ -880,5 +880,145 @@ anything cannot sit there as a blanket allowance. The emitter itself,
 `path_export_guard`, carries no exemption: it assembles its assignment
 through an intermediate local, so the reconstruction yields no hit for
 it, and an entry would therefore cover whatever that function might
+later build. Its runtime guarantee is carried instead by the real-shell
+repeated-source tests, which observe actual PATH contents rather than
+source shape. An AST scan is structurally blind to shell scripts,
+and two live instances of this same defect were found in
+`scripts/container-e2e-verify.sh` writing plain exports into a
+container's rc files, so a second text-level scan covers `install.sh`
+and every script under `scripts/`, sharing one definition of a PATH
+expansion with the Python needle. The surviving PATH assignments there
+are classified by a stated property rather than silenced by a bare
+allowlist: each is evaluated once per process and never re-sourced by a
+nested shell — the same property that puts `installer/executors.py`'s
+command prefix outside the Python needle.
 
-[Showing lines 1-871 of 878 (50.0KB limit). Use offset=872 to continue.]
+The boundary of the deletion claim is exactly this wide and no wider:
+the deletion removed no PATH behavior. It is NOT true that it removed no
+user-visible behavior. The deleted function also emitted a `PNPM_HOME`
+assignment, and nothing else in the repo emits that variable. That is a
+PRE-EXISTING gap, opened when the only caller was retired rather than by
+this deletion, with `installer/ownership.py` reading the variable
+opportunistically from the environment when pnpm's own installer has set
+it. Whether anything SHOULD write it is an open question for a later
+phase, recorded here as open rather than settled.
+
+`~/.shellrc` is foreign by construction. It is only ever read as opaque
+bytes — never sourced, never evaluated, not even to inspect it. Its
+content is copied forward, and the original is backed up to
+`~/.shellrc.tools-installer.old` through `atomic.py`'s existing
+staged-sibling convention BEFORE the file is replaced by a marked stub —
+in that order, so no crash ordering can lose it and the only write that
+removes a copy of the content comes last.
+
+The backup has its own rules, each for a reason. The raw bytes are
+preserved with the original's permission bits, because reading as text
+would normalize CRLF and a restored file would not be the original. It
+is created no-clobber. A pre-existing backup whose bytes differ from the
+current original REFUSES the whole operation, because a backup from
+another tool or from an older original makes "reversible with one `mv`"
+false. And — the part a bytes comparison alone would have missed — an
+existing backup must be a REGULAR FILE, checked with `lstat` so the link
+itself is seen, and must match on permission bits as well as bytes: a
+symlink at the backup path pointing at the original compares byte-equal,
+is accepted as a resumed run, and then resolves to the stub the moment
+the stub is written, so the original bytes are gone and the promised
+`mv` points a link at itself; and a byte-matching backup with different
+bits cannot keep a byte-AND-mode restoration promise.
+
+The preconditions are refusals rather than best-effort handling. This
+project's atomic writer resolves a symlinked target rather than
+replacing the symlink — correct for a dotfile-manager's `~/.zshrc`, and
+content-destroying for a foreign file about to be replaced, because a
+`~/.shellrc` linked to `~/.myshellrc` would have the stub write replace
+the canonical file with a stub that sources itself. Either path being a
+symlink, or the two resolving to one file, refuses. A `~/.shellrc` whose
+bytes are not valid UTF-8 refuses too, before any write and as a typed
+outcome rather than an escaping decode error — the same call
+`installer/omz.py` already makes for the same reason.
+
+The original is read through a snapshot bound to the file's identity,
+and that identity and those bytes are revalidated immediately before the
+file is replaced, so an edit landing between the read and the
+replacement is refused rather than destroyed. That refusal undoes
+exactly the two writes that call made, which does not contradict the
+no-rollback-needed reasoning above: a crash leaves the content in more
+than one place with no process left to undo anything, while this path is
+a live process that knows precisely what it wrote.
+
+Exactly one source-line shape is rewritten automatically — a simple
+logical line that is nothing but a statically resolved source of the
+target, disabled by commenting with its original text preserved. Every
+other live mention in command position, whether compound, reserved-word,
+negated, continued, assignment-prefixed, a `case` arm, or indirect,
+refuses the operation. Refusing is the only move that is wrong in
+neither direction: a missed line ships a self-sourcing file, and a
+wholesale comment-out of a compound line silently deletes the commands
+sharing it.
+
+The rule behind that rule is the load-bearing decision, and a future
+reader will be tempted to undo it: this project does NOT parse shell.
+Detection is widened by normalization — all quote characters removed
+before expansion, comparison through `realpath` so two spellings of one
+file match — and anything not provably simple is REFUSED rather than
+handled. A file containing any here-document, any live `eval`, or any
+source command whose argument does not statically resolve is left
+untouched, with a reason naming the line. This follows two existing
+precedents, so it reads as house doctrine rather than one function's
+timidity: `installer/omz.py`'s multi-line plugin array, which the
+matcher is deliberately built to fail on rather than half-parse, and
+`installer/daemon.py::install_wrapper`'s refusal to clobber an
+unsentineled file. The cost is plain — such a `~/.shellrc` is never
+auto-consolidated, and the user is told exactly what to do by hand.
+
+After consolidation an rc file reaches `~/.myshellrc` by exactly one
+route. A generic `~/.shellrc` exists precisely so that `.bashrc` can
+source it, and adding our own source block on top of that stub would
+execute the canonical file twice on every startup, duplicating every
+unmanaged export it carries. Two residuals are accepted. The detector
+answers "is there a live source command", not "will it run", so an rc
+that sources `~/.shellrc` only under a condition that never holds ends
+up with no route. And the detector has a third answer, `unprovable`, for
+a source command whose argument it cannot resolve; that answer takes the
+ORDINARY route and prints a diagnostic, because a shell-environment
+`eval` in a real `.bashrc` is commonplace and treating it as "already
+wired" would leave PATH unwired for most users — trading a
+duplicate-execution risk for a total-failure certainty. Both residuals
+are made diagnosable by a console line and by Doctor's own audit, and
+that visibility is why they are acceptable.
+
+`~/.myshellrc` is the only file this project edits freely. A foreign
+file carrying tools-installer markers, or a `~/.myshellrc` that already
+sources `~/.shellrc`, is refused rather than merged. Split link mode
+skips consolidation entirely, because it maintains no `~/.myshellrc`.
+One residual is deliberately not fixed: foreign PATH exports copied
+forward keep their original accumulating behavior, because rewriting a
+user's own lines would break the verbatim copy-forward promise, and
+`rcclean.py` is the separate, user-facing mechanism for other tools'
+plain exports.
+
+EVERY write in `installer/shellrc.py` goes through
+`installer/atomic.py`. A truncated `.bashrc`, `.zshrc` or `.myshellrc`
+is unrecoverable, and every one of these files is edited
+read-modify-write. The pre-existing PATH-block writers were converted in
+this phase alongside the new consolidation writes, so this is a rule
+with no exception left to hedge against. The one deliberate departure is
+the `~/.shellrc` backup, created with an `O_EXCL` open rather than an
+atomic write, because no-clobber CREATION is the property that matters
+there and the atomic writers replace by design.
+
+A refusal is never reported as success. Consolidation returns a typed
+outcome, and the one route whose console is a discarded sink — Doctor's
+apply — raises a typed refusal that the shared `run_live` maps to the
+screen's error, so the screen cannot render a green success line over a
+refusal. A return value was not enough on that route because the apply
+action discards `run_live`'s result and derives success purely from the
+absence of an exception.
+
+The coverage boundary, stated honestly: the guard idiom is proven live
+under bash, zsh and this host's `/bin/sh` (which is bash invoked as
+`sh`). `dash` could not be installed here, so pure-POSIX-shell behavior
+rests on `case`/`esac` being core POSIX grammar and on pnpm shipping the
+same idiom in production — a reasoned residual, never a completed proof.
+The `~/.shellrc` cases are proven against synthetic fixtures, because no
+such file exists on this host.
