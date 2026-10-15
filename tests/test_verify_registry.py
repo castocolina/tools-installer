@@ -1351,6 +1351,114 @@ def test_incomparable_latest_tag_is_reported_separately(tmp_path: Path) -> None:
     assert not any(f.status == "drift" and "newer stable" in f.reason for f in report.findings)
 
 
+def test_pinned_release_read_failure_is_reported_not_raised(tmp_path: Path) -> None:
+    tar = _gz_tar_bytes({"bin/x": b"x"})
+    pin = hashlib.sha256(tar).hexdigest()
+    content = f"""
+[[tool]]
+id = "helm"
+name = "helm"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://github.com/o/r/releases/download/{{ver}}/a-{{ver}}.tar.gz"
+version = "31.0.2"
+member = "bin/x"
+strip = 0
+sha256 = "{pin}"
+"""
+    registry = _write_registry(tmp_path, content)
+    rendered = "https://github.com/o/r/releases/download/31.0.2/a-31.0.2.tar.gz"
+    api = "https://api.github.com/repos/o/r/releases/latest"
+
+    def rel(_repo: str) -> Release:
+        raise _version_error_from_http(api, 503)
+
+    probe, _ = _map_probe(_release(), payloads={rendered: tar})
+    probe = Probe(release=rel, head=probe.head, download=probe.download)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.exit_code == 2
+    assert "helm" not in report.passed_tools()
+    api_findings = [f for f in report.findings if f.url == api]
+    assert len(api_findings) == 1
+    assert api_findings[0].status == "inconclusive"
+    ok_asset = [f for f in report.findings if f.url == rendered and f.status == "ok"]
+    assert len(ok_asset) == 1
+
+
+def test_pinned_release_not_found_is_drift(tmp_path: Path) -> None:
+    tar = _gz_tar_bytes({"bin/x": b"x"})
+    pin = hashlib.sha256(tar).hexdigest()
+    content = f"""
+[[tool]]
+id = "helm"
+name = "helm"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://github.com/o/r/releases/download/{{ver}}/a-{{ver}}.tar.gz"
+version = "31.0.2"
+member = "bin/x"
+strip = 0
+sha256 = "{pin}"
+"""
+    registry = _write_registry(tmp_path, content)
+    rendered = "https://github.com/o/r/releases/download/31.0.2/a-31.0.2.tar.gz"
+    api = "https://api.github.com/repos/o/r/releases/latest"
+
+    def rel(_repo: str) -> Release:
+        raise _version_error_from_http(api, 404)
+
+    probe, _ = _map_probe(_release(), payloads={rendered: tar})
+    probe = Probe(release=rel, head=probe.head, download=probe.download)
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.exit_code == 1
+    assert "helm" not in report.passed_tools()
+    api_findings = [f for f in report.findings if f.url == api]
+    assert len(api_findings) == 1
+    assert api_findings[0].status == "drift"
+    assert api_findings[0].reason == "release not found"
+
+
+def test_failed_release_read_is_attempted_once_per_repo(tmp_path: Path) -> None:
+    content = """
+[[tool]]
+id = "wide"
+name = "wide"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "a-{ver}.tar.gz"
+member = "bin/x"
+strip = 0
+"""
+    registry = _write_registry(tmp_path, content)
+    calls = 0
+
+    def rel(_repo: str) -> Release:
+        nonlocal calls
+        calls += 1
+        raise _version_error_from_transport(URLError("down"))
+
+    probe, _ = _map_probe(_release(), payloads={})
+    probe = Probe(release=rel, head=probe.head, download=probe.download)
+    check_registry(load_tools(registry), probe, state={})
+    assert calls == 1
+
+
 def test_pinned_url_without_a_release_source_is_noted(tmp_path: Path) -> None:
     pin = "a" * 64
     content = f"""

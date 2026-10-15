@@ -1,5 +1,6 @@
 """Resolve the latest release tag of a GitHub repository."""
 
+import http.client
 import json
 import os
 import re
@@ -359,7 +360,7 @@ def urlopen_fetch(url: str, *, token: str | None = None) -> bytes:
         token if token is not None else os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     )
     if auth and urllib.parse.urlsplit(url).hostname == "api.github.com":
-        req.add_header("Authorization", f"Bearer {auth}")
+        req.add_unredirected_header("Authorization", f"Bearer {auth}")
     with urllib.request.urlopen(req, timeout=10) as resp:
         return resp.read()
 
@@ -389,12 +390,15 @@ def resolve_github_release(repo: str, fetch: Fetch = urlopen_fetch) -> Release:
     try:
         raw = fetch(f"https://api.github.com/repos/{repo}/releases/latest")
         data = json.loads(raw)
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, http.client.HTTPException, ValueError) as exc:
         raise VersionError(f"failed to resolve tag for {repo}: {exc}") from exc
-    tag = str(data.get("tag_name", ""))
+    if not isinstance(data, dict):
+        raise VersionError(f"unexpected release payload for {repo}")
+    payload = cast(dict[str, object], data)
+    tag = str(payload.get("tag_name", ""))
     if not tag:
         raise VersionError(f"no release tag for {repo}")
-    return Release(tag=tag, digests=_asset_digests_from_release(data))
+    return Release(tag=tag, digests=_asset_digests_from_release(payload))
 
 
 def resolve_github_tag(repo: str, fetch: Fetch = urlopen_fetch) -> str:

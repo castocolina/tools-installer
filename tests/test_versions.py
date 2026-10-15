@@ -1,9 +1,13 @@
 import ast
 import dataclasses
+import http.client
 import inspect
+import io
 import json
 import urllib.request
+from email.message import Message
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -210,6 +214,65 @@ def test_urlopen_fetch_sends_github_token_to_the_github_api(
     seen = _capture_urlopen(monkeypatch)
     versions.urlopen_fetch("https://api.github.com/repos/a/b/releases/latest")
     assert seen[0].get_header("Authorization") == "Bearer tok123"
+
+
+@pytest.mark.parametrize(
+    "fetch_behavior",
+    ["incomplete", "binary", "not_a_dict"],
+)
+def test_resolve_github_release_wraps_every_read_failure(fetch_behavior: str) -> None:
+    if fetch_behavior == "incomplete":
+
+        def fetch(url: str) -> bytes:
+            raise http.client.IncompleteRead(b"")
+
+    elif fetch_behavior == "binary":
+
+        def fetch(url: str) -> bytes:
+            return b"\xff\xfe"
+
+    else:
+
+        def fetch(url: str) -> bytes:
+            return b"[]"
+
+    with pytest.raises(VersionError):
+        resolve_github_release("o/r", fetch)
+
+
+def test_github_token_is_not_forwarded_on_a_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.versions as versions
+
+    seen: list[urllib.request.Request] = []
+
+    class FakeResp:
+        def __enter__(self) -> "FakeResp":
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def read(self) -> bytes:
+            return b"{}"
+
+    def fake_urlopen(req: urllib.request.Request, timeout: int) -> FakeResp:
+        seen.append(req)
+        return FakeResp()
+
+    monkeypatch.setattr(versions.urllib.request, "urlopen", fake_urlopen)
+    versions.urlopen_fetch("https://api.github.com/repos/a/b/releases/latest", token="t")
+    req = seen[0]
+    redirected = urllib.request.HTTPRedirectHandler().redirect_request(
+        req,
+        io.BytesIO(),
+        302,
+        "Found",
+        cast(http.client.HTTPMessage, Message()),
+        "https://evil.example/x",
+    )
+    assert req.get_header("Authorization") == "Bearer t"
+    assert redirected is not None
+    assert redirected.get_header("Authorization") is None
 
 
 def test_urlopen_fetch_never_sends_the_token_to_another_host(

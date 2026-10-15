@@ -304,7 +304,8 @@ def _newer_stable_findings(
             repo = match.group(1)
             try:
                 tag = release(repo).tag
-            except VersionError:
+            except VersionError as exc:
+                findings.append(_release_read_finding(tool.id, repo, exc))
                 continue
             outdated = is_outdated(version, tag)
             if outdated is True:
@@ -587,12 +588,20 @@ def check_registry(
     download_attempted = 0
     download_http = 0
 
+    release_memo: dict[str, Release | VersionError] = {}
+
     def tracked_release(repo: str) -> Release:
         nonlocal release_reads_attempted, release_reads_http, rate_limit_code
+        if repo in release_memo:
+            stored = release_memo[repo]
+            if isinstance(stored, VersionError):
+                raise stored
+            return stored
         release_reads_attempted += 1
         try:
             rel = probe.release(repo)
             release_reads_http += 1
+            release_memo[repo] = rel
             return rel
         except VersionError as exc:
             cause = exc.__cause__
@@ -600,6 +609,7 @@ def check_registry(
                 release_reads_http += 1
                 if _is_github_rate_limit(cause):
                     rate_limit_code = cause.code
+            release_memo[repo] = exc
             raise
 
     targets = _collect_targets(
@@ -652,7 +662,10 @@ def check_registry(
 
     for target in targets:
         key = identity_key(target)
-        pin_drift = _github_pin_mismatch(target, tracked_release)
+        try:
+            pin_drift = _github_pin_mismatch(target, tracked_release)
+        except VersionError:
+            pin_drift = None
         if pin_drift is not None:
             findings[key] = Finding(
                 tool_id=target.tool_id,
