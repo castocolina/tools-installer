@@ -1,3 +1,6 @@
+import ast
+import dataclasses
+import inspect
 import json
 import urllib.request
 from pathlib import Path
@@ -16,6 +19,8 @@ from installer.versions import (
     parse_version,
     probe_version,
     probe_version_output,
+    release_resolver,
+    resolve_github_release,
     resolve_github_tag,
 )
 
@@ -54,6 +59,99 @@ def test_resolve_raises_on_network_error():
 
     with pytest.raises(VersionError, match="failed to resolve tag"):
         resolve_github_tag("a/b", fetch)
+
+
+def test_resolve_github_release_reads_one_snapshot() -> None:
+    good = "a" * 64
+    upper = "B" * 64
+    short = "c" * 63
+    calls = 0
+
+    def fetch(url: str) -> bytes:
+        nonlocal calls
+        calls += 1
+        return json.dumps(
+            {
+                "tag_name": "v1.2.0",
+                "assets": [
+                    {"name": "good.tar.gz", "digest": f"sha256:{good}"},
+                    {"name": "upper.tar.gz", "digest": f"sha256:{upper}"},
+                    {"name": "no-digest.tar.gz"},
+                    {"name": "md5.tar.gz", "digest": "md5:deadbeef"},
+                    {"name": "short.tar.gz", "digest": f"sha256:{short}"},
+                ],
+            }
+        ).encode()
+
+    release = resolve_github_release("org/tool", fetch)
+    assert calls == 1
+    assert release.tag == "v1.2.0"
+    assert release.digests == {"good.tar.gz": good, "upper.tar.gz": upper.lower()}
+
+
+def test_resolve_github_tag_delegates_to_the_release() -> None:
+    def fetch(url: str) -> bytes:
+        return json.dumps({"tag_name": "v9.9.9", "assets": []}).encode()
+
+    assert resolve_github_tag("org/tool", fetch) == "v9.9.9"
+
+    def broken_fetch(url: str) -> bytes:
+        raise OSError("network down")
+
+    with pytest.raises(VersionError, match="failed to resolve tag") as excinfo:
+        resolve_github_tag("org/tool", broken_fetch)
+    assert isinstance(excinfo.value.__cause__, OSError)
+
+
+def test_release_resolver_selects_the_real_resolver_only_for_the_production_tag_resolver() -> None:
+    assert release_resolver(resolve_github_tag) is resolve_github_release
+    resolver = release_resolver(lambda repo: "v1.0.0")
+    release = resolver("org/tool")
+    assert release.tag == "v1.0.0"
+    assert release.digests == {}
+
+
+def test_production_paths_select_the_real_release_resolver() -> None:
+    import installer.app as app_module
+    import installer.engine as engine_module
+    import installer.execute_screen as execute_screen_module
+    import installer.session as session_module
+    import installer.update as update_module
+
+    for module, name in (
+        (app_module, "run_wizard"),
+        (execute_screen_module, "ExecuteInputs"),
+        (session_module, "run_installs"),
+        (engine_module, "install_tool"),
+        (update_module, "UpdateService"),
+    ):
+        if name == "ExecuteInputs":
+            default = next(
+                field.default
+                for field in dataclasses.fields(execute_screen_module.ExecuteInputs)
+                if field.name == "resolve_tag"
+            )
+        elif name == "UpdateService":
+            default = (
+                inspect.signature(update_module.UpdateService.__init__)
+                .parameters["resolve_tag"]
+                .default
+            )
+        else:
+            default = inspect.signature(getattr(module, name)).parameters["resolve_tag"].default
+        assert default is resolve_github_tag
+
+    setup_source = Path("setup.py").read_text(encoding="utf-8")
+    tree = ast.parse(setup_source)
+    resolve_tag_keywords: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "resolve_tag" and isinstance(keyword.value, ast.Name):
+                resolve_tag_keywords.append(keyword.value.id)
+    assert resolve_tag_keywords
+    assert all(name == "resolve_github_tag" for name in resolve_tag_keywords)
 
 
 def test_urlopen_fetch_reads_body(monkeypatch: pytest.MonkeyPatch) -> None:

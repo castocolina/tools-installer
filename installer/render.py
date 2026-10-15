@@ -301,8 +301,14 @@ def render_verification(outcomes: list[InstallOutcome], console: Console) -> Non
         if outcome.method_kind not in DOWNLOAD_KINDS:
             continue
         if outcome.status == InstallStatus.INSTALLED:
-            marker = "sha256 ✓" if outcome.verified else "unverified"
-            console.print(f"  {outcome.tool_id}: {marker}")
+            if outcome.verified:
+                console.print(f"  {outcome.tool_id}: sha256 ✓")
+            elif outcome.unverified_reason:
+                console.print(
+                    f"  {outcome.tool_id}: unverified ({escape(outcome.unverified_reason)})"
+                )
+            else:
+                console.print(f"  {outcome.tool_id}: unverified")
         elif outcome.status == InstallStatus.CHECKSUM_MISMATCH:
             # The engine always carries the ChecksumMismatch in errors[0] for
             # this status; a malformed outcome should fail loudly here rather

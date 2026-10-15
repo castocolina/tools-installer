@@ -300,6 +300,25 @@ def test_render_verification_marks_download_outcomes():
     assert "jq" not in text  # brew does its own integrity checks
 
 
+def test_render_verification_prints_the_unverified_reason() -> None:
+    console = Console(record=True)
+    reason = "no checksum file and no GitHub sha256 digest for x.tar.gz"
+    outcomes = [
+        InstallOutcome(
+            "rg",
+            "installed",
+            method_kind="github_release",
+            verified=False,
+            unverified_reason=reason,
+        ),
+        InstallOutcome("fd", "installed", method_kind="github_release", verified=True),
+    ]
+    render_verification(outcomes, console)
+    text = console.export_text()
+    assert f"  rg: unverified ({reason})" in text
+    assert "fd: sha256 ✓" in text
+
+
 def test_render_verification_prints_mismatch_error():
     console = Console(record=True)
     exc = ChecksumMismatch("a.tar.gz", "12345678" + "a" * 56, "fedcba98" + "b" * 56)
