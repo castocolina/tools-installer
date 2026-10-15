@@ -386,12 +386,10 @@ def install_redirect_shims(
         had = target.exists()
         resolved = real_binary(spec.target, shim_dir=shim_dir, path_value=path_value, lookup=lookup)
         if resolved is None:
-            target.write_text(shim_script(name))
-            target.chmod(0o755)
+            atomic_write_text(target, shim_script(name), mode=0o755)
             results[name] = "blocked (pnpm not found)"
             continue
-        target.write_text(redirect_shim_script(name, resolved))
-        target.chmod(0o755)
+        atomic_write_text(target, redirect_shim_script(name, resolved), mode=0o755)
         results[name] = "refreshed" if had else "created"
     return results
 
@@ -423,8 +421,7 @@ def install_global_redirect_shims(
                 # and reporting a block that is not on disk is a lie. The body is
                 # byte-identical to install_shims', so writing it twice is
                 # idempotent.
-                target.write_text(shim_script(name))
-                target.chmod(0o755)
+                atomic_write_text(target, shim_script(name), mode=0o755)
                 results[name] = "blocked (volta not found)"
                 continue
             if target.exists() and is_our_shim(target):
@@ -446,12 +443,13 @@ def install_global_redirect_shims(
                     results[name] = "skipped (real pnpm not found)"
                 continue
         had = target.exists()
-        target.write_text(
+        atomic_write_text(
+            target,
             global_redirect_shim_script(
                 name, volta_path=volta_path, passthrough_path=passthrough_path
-            )
+            ),
+            mode=0o755,
         )
-        target.chmod(0o755)
         results[name] = "refreshed" if had else "created"
     return results
 
@@ -470,8 +468,7 @@ def install_shims(shim_dir: Path) -> dict[str, str]:
             results[name] = "skipped (real binary here)"
             continue
         had = target.exists()
-        target.write_text(shim_script(name))
-        target.chmod(0o755)
+        atomic_write_text(target, shim_script(name), mode=0o755)
         results[name] = "refreshed" if had else "created"
     return results
 

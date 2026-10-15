@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
+from installer.atomic import atomic_write_text
 from installer.platform import Platform
 from installer.shellrc import apply_block, strip_block
 
@@ -251,8 +252,7 @@ def install_tweak_executables(bundle: TweakBundle, bin_dir: Path) -> tuple[Path,
         if target.exists() and not _is_our_executable(target, executable.sentinel):
             raise OSError(f"{target} exists and is not managed by tools-installer")
         source = package_files.joinpath(executable.asset).read_text()
-        target.write_text(source)
-        target.chmod(0o755)
+        atomic_write_text(target, source, mode=0o755)
         written.append(target)
     return tuple(written)
 
@@ -294,7 +294,9 @@ def write_tweak(bundle: TweakBundle, rc_path: Path, bin_dir: Path | None = None)
     """Idempotently write the bundle's block into rc_path, preserving the rest."""
     begin, end = _markers(bundle.id)
     existing = rc_path.read_text() if rc_path.exists() else ""
-    rc_path.write_text(apply_block(existing, tweak_block(bundle, bin_dir), begin=begin, end=end))
+    atomic_write_text(
+        rc_path, apply_block(existing, tweak_block(bundle, bin_dir), begin=begin, end=end)
+    )
 
 
 def remove_tweak(bundle: TweakBundle, rc_path: Path) -> None:
@@ -305,7 +307,7 @@ def remove_tweak(bundle: TweakBundle, rc_path: Path) -> None:
     original = rc_path.read_text()
     stripped = strip_block(original, begin, end)
     if stripped != original:
-        rc_path.write_text(stripped)
+        atomic_write_text(rc_path, stripped)
 
 
 def tweak_present(bundle: TweakBundle, rc_path: Path) -> bool:

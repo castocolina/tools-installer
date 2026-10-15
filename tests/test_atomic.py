@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -70,6 +71,30 @@ def test_atomic_write_bytes_oserror_leaves_the_original_and_no_temp(
         atomic_write_text(target, "partial")
     assert target.read_text() == "original"
     assert list(tmp_path.glob("*.tools-installer.tmp")) == []
+
+
+def test_rc_reader_never_sees_a_partial_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Concurrency edge: the target holds the old bytes until os.replace and
+    the new bytes after it, so a concurrent reader can never observe a
+    partially written rc. Proven once here on atomic_write_text, which every
+    rc and shim writer routes through."""
+    target = tmp_path / ".zshrc"
+    target.write_text("old-bytes")
+    observed_before: list[str] = []
+
+    real_replace = os.replace
+
+    def spy_replace(src: str | Path, dst: str | Path) -> None:
+        observed_before.append(Path(dst).read_text())
+        real_replace(src, dst)
+
+    monkeypatch.setattr("os.replace", spy_replace)
+    atomic_write_text(target, "new-bytes")
+
+    assert observed_before == ["old-bytes"]
+    assert target.read_text() == "new-bytes"
 
 
 def test_recover_update_remnants_never_deletes_old_when_live_also_exists(
