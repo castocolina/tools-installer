@@ -1,16 +1,16 @@
 ---
 phase: 18
-cycle: 2
+cycle: 3
 reviewers: [opencode-plan-review]
-reviewed_at: 2026-10-15T13:02:33Z
-plans_reviewed: [18-01-PLAN.md, 18-02-PLAN.md, 18-03-PLAN.md, 18-04-PLAN.md, 18-05-PLAN.md, 18-06-PLAN.md, 18-07-PLAN.md, 18-08-PLAN.md, 18-09-PLAN.md, 18-10-PLAN.md, 18-11-PLAN.md, 18-12-PLAN.md, 18-13-PLAN.md, 18-14-PLAN.md, 18-15-PLAN.md, 18-16-PLAN.md, 18-17-PLAN.md, 18-18-PLAN.md, 18-19-PLAN.md]
+reviewed_at: 2026-10-15T13:46:42Z
+plans_reviewed: [18-01-PLAN.md, 18-02-PLAN.md, 18-03-PLAN.md, 18-04-PLAN.md, 18-05-PLAN.md, 18-06-PLAN.md, 18-07-PLAN.md, 18-08-PLAN.md, 18-09-PLAN.md, 18-10-PLAN.md, 18-11-PLAN.md, 18-12-PLAN.md, 18-13-PLAN.md, 18-14-PLAN.md, 18-15-PLAN.md, 18-16-PLAN.md, 18-17-PLAN.md, 18-18-PLAN.md, 18-19-PLAN.md, 18-20-PLAN.md]
 models:
   opencode-plan-review: "router-env/my-plan-review"
 model_sources:
   opencode-plan-review: "pinned"
 ---
 
-# Cross-AI Plan Review — Phase 18 (convergence cycle 2)
+# Cross-AI Plan Review — Phase 18 (convergence cycle 3 of 3, final)
 
 <!-- gsd:plan-revision-conflicts:begin -->
 ## Plan-Revision Conflicts
@@ -18,329 +18,366 @@ model_sources:
 
 ## OpenCode Review (opencode-plan-review)
 
-Baseline confirmed: `load_tools` at `installer/model.py:639` has no `today`/`METHOD_PARAMS`/`verified` yet — plans describe future work against this state. Now dispatching four parallel source-verification agents.
-While the four verification agents run, I'll check the cycle-1 review record for disposition fidelity.
-**Document type:** GSD execution plans · convergence cycle 2  
-**Coverage:** 19/19 plans reviewed against repository source and revised plan text.  
-**Citation shorthand:** `18-NN-PLAN.md` refers to `.planning/phases/18-registry-truth-and-drift-guard/18-NN-PLAN.md`.
+# Phase 18 — Final Convergence Review
+
+**Document type:** GSD implementation plans  
+**Coverage:** All **20/20** plans reviewed against on-disk plans and relevant source.  
+**Citation convention:** `18-xx-PLAN.md` refers to `.planning/phases/18-registry-truth-and-drift-guard/18-xx-PLAN.md`.
+
+“Resolved” below means **resolved in the implementation instructions and planned tests**, not implemented or proven passing.
 
 ## 18-01
 
-**Summary:** Closing method parameters and validating structured dates address the actual pass-through at `installer/model.py:666–667`.
+**Summary:** The schema change is cohesive: closed keys, required dates, registry seeding, fixtures and authoring guidance land together.
 
-- **Strengths:** The structural-key regression at `18-01-PLAN.md:119` preserves the existing `os`/`arch` checks (`installer/model.py:656–665`).
-- **Concerns — MEDIUM:** The fixture helper unconditionally inserts `verified`, while the new validation fixtures supply explicit values (`18-01-PLAN.md:158–170`). Unless those fixtures disable seeding, duplicate TOML keys fail before loader validation; the valid timezone-tolerance case also fails.
-- **Suggestions:** Explicitly disable seeding for every fixture supplying `verified`, or seed only tool tables lacking that key.
-- **Risk Assessment: MEDIUM** — Production scope is bounded, but the fixture contract needs clarification before execution.
+- **Strength:** The closed-key check follows existing structural validation rather than accidentally treating `os` and `arch` as method parameters. Source: `installer/model.py:656–666`.
+- **Cycle-2 MEDIUM — FULLY RESOLVED:** The revised helper seeds only tool tables without their own `verified` key (`18-01-PLAN.md:170`). Explicit invalid-date fixtures therefore reach the loader instead of failing as duplicate TOML keys; the loader currently reads each parsed tool row at `installer/model.py:644–650`.
+- **Concerns:** No additional blocking concern identified.
+- **Suggestion:** Keep the missing-date fixture explicitly opted out of helper seeding, as specified.
+- **Risk:** **LOW** — broad fixture impact, but the plan addresses that impact directly.
 
 ## 18-02
 
-**Summary:** The revised test migration now matches the intended parser behavior.
+**Summary:** The parser changes have useful real-output fixtures and preserve the shared parsing path.
 
-- **Cycle-1 H1 — FULLY RESOLVED:** Task 2 explicitly migrates the conflicting assertions (`18-02-PLAN.md:134–139`), which currently reject `version=` and procs output (`tests/test_versions.py:313,424–425`).
-- **Strengths:** The unbalanced procs quote matches the actual audit evidence (`.planning/research/audit-2026-10-13/E-registry-user-part2.md:75`), rather than an easier balanced fixture.
-- **Concerns — LOW:** Quote removal precedes punctuation and `version=` removal (`18-02-PLAN.md:139`), so combinations such as `version="1.2.3",` remain unhandled. This is outside the named acceptance fixtures.
-- **Suggestions:** Add one combined-form fixture or explicitly document that normalization supports only the audited forms.
-- **Risk Assessment: LOW** — The required behavior and conflicting tests are now accounted for.
+- **Strength:** The change targets the actual empty-prefix fallback at `installer/versions.py:56–68`, rather than introducing a second parser.
+- **Cycle-2 LOW — FULLY RESOLVED:** Normalization is now punctuation → `version=` → independent quotes, with the combined `version="1.2.3",` case (`18-02-PLAN.md:131,140`).
+- **Concern — MEDIUM:** Task 1’s instruction to rewrite “the comment block above the boundary” to six lines is ambiguous. The existing block includes audit evidence required by `tests/test_versions.py:402–414`; migration of that contract belongs to Task 2. See `18-02-PLAN.md:97–110` versus `:135–140`, and `installer/versions.py:33–55`.
+- **Suggestion:** Restrict Task 1’s rewrite explicitly to the boundary explanation at source lines 49–55, preserving the preceding audit paragraphs until Task 2.
+- **Risk:** **MEDIUM** — possible failure of the intermediate green-commit gate, not a parser-design blocker.
 
 ## 18-03
 
-**Summary:** The stub checks fit the current PATH-first detection flow without preventing detection through alternate declared paths.
+**Summary:** The stub rule remains localized, preserves alternate installation evidence and exposes a user-visible reason without overriding injected state.
 
-- **Strengths:** `is_installed` already checks PATH, `detect_path`, `bin_dir`, then bundles (`installer/status.py:40–66`); the plan preserves that fallback structure.
-- **Concerns — LOW:** The threat model calls the probe table absolute-path-only, but the git entry executes bare `xcode-select` (`18-03-PLAN.md`, Task 1). Its resolution remains PATH-dependent.
-- **Suggestions:** Use `/usr/bin/xcode-select`, or correct the threat-model claim. The explicitly tested two-read audit behavior is otherwise acceptable.
-- **Risk Assessment: LOW** — Clear platform guards and injected probes keep the change contained.
+- **Strength:** Continuing through `detect_path` and `bin_dir` preserves the existing union semantics at `installer/status.py:40–53`.
+- **Cycle-2 LOW — FULLY RESOLVED:** The git probe is explicitly `("/usr/bin/xcode-select", "-p")`, with an argv assertion and absolute-path test (`18-03-PLAN.md:119,147–148,168`). This removes the PATH-dependent probe.
+- **Concerns:** No additional blocking concern identified. The documented second reason lookup is a bounded, explicitly accepted trade-off.
+- **Suggestion:** Retain the test proving the injected installed check controls the row even when the subsequent probe changes.
+- **Risk:** **LOW** — macOS runtime evidence remains a backstop.
 
 ## 18-04
 
-**Summary:** The naming fix is correctly concentrated in the existing shared CLI specification.
+**Summary:** This is an appropriately small fix in the shared naming function.
 
-- **Strengths:** Install, update, and uninstall already consume `cli_spec` (`installer/apps.py:80,116`; `installer/uninstall.py:48`). Validation now lands with the behavior change (`18-04-PLAN.md:93–99`).
-- **Concerns:** No new blocking concern. The earlier unsafe intermediate-commit issue is resolved.
-- **Suggestions:** Retain the install-side zero-runner-call assertion, not just direct `cli_spec` rejection tests.
-- **Risk Assessment: LOW** — One shared function fixes both creation and removal naming.
+- **Strength:** `install_app` already calls `cli_spec` before side effects (`installer/apps.py:75–82`), so validation and use can safely land together as required by `18-04-PLAN.md:95–100`.
+- **Concerns:** No additional actionable concern identified.
+- **Suggestion:** Keep install, update and removal dependent on `cli_spec`; avoid additional `cli_name` readers.
+- **Risk:** **LOW** — narrow production change with install/removal regression coverage.
 
 ## 18-05
 
-**Summary:** The revised plan covers both uv-added PATH entries and an inherited activated project venv.
+**Summary:** The final design covers both uv-added and inherited project-venv PATH entries, but one verification command contradicts the supported activated-venv scenario.
 
-- **Cycle-1 H2 — FULLY RESOLVED:** The entry-point filter and activated-venv control/filtered probes are explicit (`18-05-PLAN.md:199–206`). The real entry point is shared by launchers (`setup.py:1549–1556`).
-- **Strengths:** All six actual Makefile launchers are covered while validation/test commands remain separate (`Makefile:15–51`; `install.sh:88`).
-- **Concerns — LOW:** The guarantee deliberately targets `<repo>/.venv`; other virtual environments remain searchable.
-- **Suggestions:** Keep that project-specific scope explicit rather than describing the change as removing every development environment.
-- **Risk Assessment: LOW** — The original ownership-shadowing case now has a meaningful regression check.
+- **Strength:** The entry-point filter complements isolation rather than mutating the development environment.
+- **Concern — MEDIUM:** Task 1 requires standalone isolated Python to find no `.venv` ruff (`18-05-PLAN.md:139–140`). Task 3 deliberately demonstrates that the same command inherits an activated project venv (`:211–212`). The filter runs only through `setup.py`, so it cannot affect Task 1’s standalone `python -c`.
+- **Suggestion:** Label Task 1’s probe a **non-activated-environment control** and remove project-venv PATH entries from that probe’s environment. Keep Task 3’s activated-PATH control/filter pair.
+- **Risk:** **MEDIUM** — the final implementation can work, but the current verification sequence is environment-dependent.
 
 ## 18-06
 
-**Summary:** Duplicate-row removal, dead-probe removal, and the first audit ledger form a coherent data cleanup.
+**Summary:** Deletion and data changes are well scoped, with explicit catalog-count and stale-cache consequences.
 
-- **Strengths:** The removed probe really executes a PATH-resolved helper (`installer/install_ownership.py:83–89`); removing its model, dispatch, and registry references closes that path.
-- **Concerns:** No new blocking concern. The ruff ordering is now intentional and tested: equal-rank release/uv-tool methods precede brew (`installer/resolve.py:13–29,83–84`; `18-06-PLAN.md`, Task 3).
-- **Suggestions:** Preserve conditional D7 evidence as conditional; do not record a future live pass as completed evidence.
-- **Risk Assessment: LOW** — Registry count changes and stale-cache behavior are explicitly included.
+- **Strength:** The ruff ladder is intentionally pinned to release → uv-tool → brew (`18-06-PLAN.md:198`), matching ranks 20, 20 and 40 plus stable ordering in `installer/resolve.py:13–28,81–84`.
+- **Concerns:** No new blocking concern identified.
+- **Suggestion:** Preserve the ledger distinction between actual applied fixes and optional sub-bullets not applied.
+- **Risk:** **LOW–MEDIUM** — mostly data edits, with upstream-layout evidence deferred explicitly.
 
 ## 18-07
 
-**Summary:** One release snapshot plus the existing checksum exception is a sound verification design.
+**Summary:** The single-release-snapshot and production-composition tests are strong, but the changed return contract introduces false verification for tarballs.
 
-- **Strengths:** The behavioral default-resolver test now exercises actual composition (`18-07-PLAN.md:124,135`); the current engine already hard-fails checksum mismatches (`installer/engine.py:146–151`).
-- **Concerns — MEDIUM:** Function identity remains a fragile production/test discriminator. The new tests detect regressions, but a legitimate wrapper still changes verification semantics (`18-07-PLAN.md:129–135`).
-- **Suggestions:** Keep the behavioral test load-bearing; any future resolver wrapper must preserve release metadata explicitly.
-- **Risk Assessment: MEDIUM** — Hash checking is straightforward; resolver selection remains unusually sensitive to wiring.
+- **Strength:** The engine’s existing checksum branch already distinguishes hard integrity failure from ordinary fall-through (`installer/engine.py:144–153`).
+- **Concern — HIGH:** `None` now means “verified,” but the plan sets `unverified_reason` only for `github_release` targets (`18-07-PLAN.md:131–133`). Existing tarball construction supplies only URL/member/asset (`installer/download.py:122–126`), leaving the new reason default as `None`. A no-hash tarball would therefore produce `verified=True`.
+- **Execution impact:** The required migration of `test_install_download_returns_false_when_unverified` cannot assert a reason without adding tarball behavior: that existing fixture is specifically a tarball (`tests/test_download.py:516–526`; plan migration at `18-07-PLAN.md:137`).
+- **Suggestion:** Assign the no-hash tarball reason in this task, not later in 18-16, and assert the engine outcome is unverified.
+- **Risk:** **HIGH** — contradicts the phase’s central truthful-status requirement and the plan’s own green-commit gate.
 
 ## 18-08
 
-**Summary:** The revised ladder expectations now match the resolver rather than registry declaration order.
+**Summary:** Audit E/F edits have explicit application conditions and a complete evidence ledger.
 
-- **Cycle-1 H3 — FULLY RESOLVED:** The three glab platform expectations are corrected (`18-08-PLAN.md:99`); native rank 30 precedes brew rank 40 (`installer/resolve.py:23–28,83–84`).
-- **Strengths:** The final ledger distinguishes applied, already-done, optional, and precondition-dependent changes instead of blindly applying audit suggestions.
-- **Concerns — LOW:** F4 allows a loader-rejected probe to be recorded as not applied, while the final verification still requires eight F tests (`18-08-PLAN.md`, Task 2). That fallback needs a corresponding test disposition.
-- **Suggestions:** State how F4’s test and minimum count behave if its allowed fallback occurs.
-- **Risk Assessment: LOW** — The previous executable ordering contradiction is removed.
+- **Strength:** The corrected glab ordering follows native rank 30 before brew rank 40 (`installer/resolve.py:23–28`).
+- **Cycle-2 LOW — FULLY RESOLVED:** F4 keeps its test in both application and rejection branches, preserving eight passing F tests (`18-08-PLAN.md:139,148,151–158`). Current source supports the intended probe: `installer/registry.toml:2862`, `installer/model.py:132,389–391,438`.
+- **Concerns:** No new blocker identified.
+- **Suggestion:** Record the actual branch taken, rather than retaining the hypothetical fallback as evidence.
+- **Risk:** **MEDIUM** — vendor-script and platform behavior still require the named backstops.
 
 ## 18-09
 
-**Summary:** Staging cleanup and executable-member containment are substantially improved, but the smoke contract still has an observation gap.
+**Summary:** The revised smoke path closes the exit-zero stderr gap and adds important pre-swap containment and cleanup.
 
-- **Cycle-1 H4/H5 — FULLY RESOLVED:** Extraction now enters the cleanup region, and resolved members must remain inside staging (`18-09-PLAN.md:154–166`), correcting `installer/download.py:322–329` and the following file check at `installer/executors.py:57`.
-- **Strengths:** Hash-before-smoke and smoke-before-swap preserve the existing good installation.
-- **Concerns — HIGH:** Loader text is checked only when `run_output` raises (`18-09-PLAN.md:162–164`). On exit 0, that helper returns stdout and discards captured stderr (`installer/run.py:93–108`), so a wrapper can print a loader failure to stderr and still pass the promised loader-error check.
-- **Suggestions:** Inspect stderr regardless of exit status; add an exit-0/loader-stderr fixture. Also explicitly reject or normalize absolute links into `.new`, which become broken after relocation.
-- **Risk Assessment: HIGH** — The stated smoke guarantee is stronger than the information its proposed helper exposes.
+- **Cycle-2 N1 — FULLY RESOLVED:** The plan moves the existing subprocess implementation into `run_output_with_stderr` and checks stderr on successful exits (`18-09-PLAN.md:132–150`). This directly addresses `installer/run.py:102–108`, where successful stderr is currently discarded.
+- **Strength:** Extraction, containment, chmod and smoke now share a cleanup boundary (`18-09-PLAN.md:152`), addressing the extraction currently outside cleanup at `installer/download.py:323–329`.
+- **Concern — MEDIUM:** Reusing the update rollback unchanged for fresh installs leaves a gap after relinking. `_undo_archive_swap` restores a link only when an original target exists (`installer/download.py:381–390`). If a fresh install creates its link and post-swap validation fails, rollback can remove the tree but leave a dangling new link.
+- **Suggestion:** Add a fresh-install post-relink failure test and require rollback to remove a newly created link when there was no prior link.
+- **Risk:** **MEDIUM** — normal smoke failures are handled correctly; post-swap failure recovery needs one more case.
 
 ## 18-10
 
-**Summary:** The cache format is appropriate, but the task boundary prevents the first required commit from passing.
+**Summary:** Encoding and decoding now land together, with compatibility and per-entry hardening separated sensibly.
 
-- **Strengths:** Per-entry malformed-digest handling now avoids `_str_map`’s whole-map rejection (`installer/version_cache.py:251–256`; `18-10-PLAN.md:136`).
-- **Concerns — HIGH:** Task 1 requires a digest save/load round trip and an encode/decode acceptance check (`18-10-PLAN.md:99,115`), but implements only encoding (`:105`). Decoding is deferred to Task 2 (`:136`); the current decoder constructs entries without digests (`installer/version_cache.py:104–117`).
-- **Suggestions:** Move basic decoding into Task 1. Keep malformed-input hardening and mixed-map coverage in Task 2.
-- **Risk Assessment: HIGH** — Correctly following Task 1 cannot satisfy its own green-before-commit gate.
+- **Cycle-2 N2 — FULLY RESOLVED:** Task 1 explicitly implements both cache encoding and basic decoding (`18-10-PLAN.md:105`), satisfying its round-trip test before committing. The existing decoder currently returns only version/time fields (`installer/version_cache.py:104–117`).
+- **Strength:** Failed refreshes preserve previous digests alongside the previous version; this follows the existing failure-entry mechanism at `installer/version_status.py:185–191`.
+- **Concern — LOW:** Task 2 says `_as_object(raw)` where the intended object is the digest submapping (`18-10-PLAN.md:136`). Source `_entry_from_raw(raw)` uses `raw` for the entire cache entry.
+- **Suggestion:** Name the digest mapping explicitly and decode from `mapping.get("digests")`; avoid a literal implementation that scans the outer entry.
+- **Risk:** **LOW–MEDIUM** — tests should catch the naming ambiguity.
 
 ## 18-11
 
-**Summary:** Sharing the existing staged app update flow is preferable to maintaining separate install and update mechanisms.
+**Summary:** Shared staged app installation, pre-swap executable checks and hash-before-smoke ordering are sound.
 
-- **Strengths:** The revised pre-swap executable and containment checks (`18-11-PLAN.md:130`) address validation currently delayed until after replacement (`installer/apps.py:155–162,186–194`).
-- **Concerns — MEDIUM:** Internal symlinks require relocation-aware handling here too. A CLI resolving inside the staged bundle can still contain an absolute reference to its temporary location.
-- **Suggestions:** Reuse the explicit absolute-link policy established in 18-09 and test it before bundle replacement.
-- **Risk Assessment: MEDIUM** — The previous executability gap is fixed; relocation semantics remain an edge to define.
+- **Cycle-2 absolute-link concern — FULLY RESOLVED by recorded rejection:** The rejection is explicit at `18-11-PLAN.md:224`. Its claimed fallback is real: post-swap validation checks the CLI at `installer/apps.py:186–194` and invokes rollback at `:160–166`.
+- **Strength:** Pre-swap containment and executability checks avoid unnecessarily disturbing a working bundle (`18-11-PLAN.md:126–133`).
+- **Concern — MEDIUM:** As with downloads, the existing rollback restores only a previous symlink (`installer/apps.py:197–206`). A fresh install failing after creating its link can leave a dangling link when the new bundle is removed.
+- **Suggestion:** Cover fresh-install relink/validation failure and removal of a newly created CLI link, while retaining restoration of an existing link.
+- **Risk:** **MEDIUM** — fixture coverage is strong, but real macOS smoke remains unproven.
 
 ## 18-12
 
-**Summary:** Per-member findings fix the original shared-archive omission, but cached verification still omits part of the install contract.
+**Summary:** Target identity and evidence reporting are substantially improved. Two checker semantics still need tightening.
 
-- **Cycle-1 H6 — FULLY RESOLVED:** Shared URLs now feed separate member checks and findings (`18-12-PLAN.md:154–160`), matching broot’s actual distinct members (`installer/registry.toml:2127–2135`).
-- **Strengths:** Reuses the install resolver and lists archives without extracting them.
-- **Concerns — HIGH:** State identity is only URL/member plus content fingerprint (`18-12-PLAN.md:160`). Changing `strip` can therefore return cached `ok` although installation can no longer locate the member; extraction actually applies `strip` (`installer/download.py:412–419`).
-- **Concerns — MEDIUM:** Archive-parser failures are not classified, and pinned GitHub hashes are compared with latest-release metadata rather than necessarily the URL’s tag (`18-12-PLAN.md:160`; `installer/versions.py:329`).
-- **Suggestions:** Include extraction settings in verification identity; classify corrupt archives; separate requested-tag integrity from latest-version discovery.
-- **Risk Assessment: HIGH** — A cached pass can certify a registry entry that no longer installs correctly.
+- **Cycle-2 N3 — FULLY RESOLVED:** State identity includes tool, URL, member, archive, strip and raw, with changed-strip tests (`18-12-PLAN.md:161–168`).
+- **Cycle-2 corrupt-archive MEDIUM — FULLY RESOLVED:** Tar/zip parser failures become drift without state writes (`:163,168`).
+- **Cycle-2 pinned/latest-hash MEDIUM — FULLY RESOLVED:** API digest comparison is restricted to the URL’s own latest tag (`:155,168`).
+- **Concern — MEDIUM:** `tarfile.open(..., "r:*")` autodetects compression (`:168`), but installation selects gzip or xz from the registry (`installer/download.py:63–72,369–377`). A wrongly declared compression can pass verification yet fail installation.
+- **Concern — MEDIUM:** A target matching cached state is immediately accepted, while a later target on the same URL can force a download that discovers a URL-wide hash/archive failure (`:168`). The plan does not define overriding earlier cached successes or invalidating their state.
+- **Suggestions:** Match declared compression during checking; make fresh URL-wide failures override all cache hits irrespective of target order.
+- **Risk:** **MEDIUM** — both gaps can produce misleading “Passed” evidence.
 
 ## 18-13
 
-**Summary:** The guarded writer is well bounded, but the revised post-write report is not yet consistently the registry-as-written report.
+**Summary:** Rejected-candidate dating is fixed, but the revised bump eligibility contradicts the preserved-unpinned-drift test.
 
-- **Cycle-1 H7 — PARTIALLY RESOLVED:** The ordinary successful-bump verdict is now specified (`18-13-PLAN.md:135,144`), but failure and replacement cases remain contradictory.
-- **Strengths:** The semantic guard and per-tool all-or-nothing pin edits protect registry integrity (`18-13-PLAN.md:106,142`).
-- **Concerns — HIGH:** A failed explicit Sublime candidate retains the healthy old findings plus only a report line (`:142–144`). It can therefore remain in `passed_tools()` and receive a new date, violating the unchanged-date test (`:133`).
-- **Concerns — HIGH:** Successful bumps remove only “newer stable” findings (`:144`); obsolete 404/member drift from replaced pinned targets survives and falsely fails the final report.
-- **Suggestions:** Represent rejected candidates in verdict/dating eligibility; replace findings for superseded pinned targets while retaining unrelated findings.
-- **Risk Assessment: HIGH** — Both paths can misreport or misdate the registry.
+- **Cycle-2 N4 — FULLY RESOLVED:** Rejected candidates add drift before computing date edits (`18-13-PLAN.md:134,147`).
+- **Cycle-2 H7b — PARTIALLY RESOLVED:** Superseded pinned-URL findings are replaced explicitly (`:137,147`), but the eligibility problem below prevents one required scenario.
+- **Concern — HIGH:** Candidate checking runs on a copy of the **whole tool** and requires every finding to be ok (`:145`). Yet `test_bump_keeps_the_findings_of_the_tools_unpinned_methods` requires an applied pin bump while an unchanged unpinned method returns 404 (`:138`). That unpinned method fails the candidate check too, so the bump cannot apply.
+- **Suggestion:** Check candidate **pinned methods only** for bump eligibility. Preserve original unpinned findings when building the final report, and compute `verified` exclusively from that final report.
+- **Risk:** **HIGH** — the action and required acceptance test cannot both hold as written.
 
 ## 18-14
 
-**Summary:** The workflow correctly separates reporting permissions, PR gates, and incremental verification state.
+**Summary:** Issue formatting and state persistence now have good explicit contracts.
 
-- **Strengths:** Split cache restore/save and per-target atomic saves address interrupted checks (`18-14-PLAN.md:202–212`); existing CI remains a separate install/validate/test workflow (`.github/workflows/ci.yml:29–34`).
-- **Concerns — LOW:** Backticks alone do not safely quote arbitrary upstream text containing backticks or newlines; the issue-body safety claim is broader than the formatting rule.
-- **Suggestions:** Escape embedded delimiters/control characters or use a code-span renderer that selects a safe delimiter.
-- **Risk Assessment: LOW** locally — The larger reporting risk comes from 18-17’s verdict logic, not workflow wiring.
+- **Cycle-2 LOW — FULLY RESOLVED:** Variable-length code-span delimiters and control-character replacement address backtick/newline injection (`18-14-PLAN.md:138–144`).
+- **Strength:** The issue body excludes the large Passed section, and incremental state persistence uses the existing atomic writer (`installer/atomic.py:34–58`).
+- **Concern — LOW:** “Zero gh calls” for clean or blocked runs is broader than production behavior: authentication can first call `gh auth token` (`18-17-PLAN.md:200`). Injected-probe tests bypass that path.
+- **Suggestion:** Specify **zero issue/label calls**, allowing the credential lookup. The workflow supplies `GH_TOKEN`, so its scheduled path remains unaffected.
+- **Risk:** **LOW–MEDIUM** — primary remaining dependencies are checker correctness and first real workflow execution.
 
 ## 18-15
 
-**Summary:** Saved logs and a separate read-only rerun provide a useful final data gate.
+**Summary:** Saved evidence and a separate read-only acceptance run are appropriate safeguards.
 
-- **Cycle-1 H6 — FULLY RESOLVED** for the live-run precondition; **H7 — PARTIALLY RESOLVED** because it still inherits 18-13’s report contradictions (`18-15-PLAN.md:159–175`).
-- **Strengths:** The source really contains the five literal pins targeted here (`installer/registry.toml:2262,2282,2290,2756,2764`), and acceptance does not rely solely on the write run.
-- **Concerns — MEDIUM:** The procedure assumes per-target passing evidence appears in the saved report, while 18-12’s formatter primarily specifies drift/inconclusive sections.
-- **Suggestions:** Explicitly require successful target lines, including member and platform identity, before relying on them for ledger citations.
-- **Risk Assessment: MEDIUM** — Execution should wait for verifier/writer corrections; the final read-only gate itself is sound.
+- **Cycle-2 per-target-evidence MEDIUM — FULLY RESOLVED:** The checker now emits Passed targets with platforms, and this plan requires those exact citations (`18-12-PLAN.md:118,123`; `18-15-PLAN.md:174`).
+- **Cycle-2 H7b — PARTIALLY RESOLVED:** The precondition covers superseded-target replacement, but the 18-13 whole-tool eligibility contradiction remains.
+- **Concern — MEDIUM:** The final run reuses state (`18-15-PLAN.md:163–174`), so its evidence depends on resolving 18-12’s cache-hit versus fresh URL-failure precedence.
+- **Suggestion:** Add the mixed pinned/unpinned bump test and order-independent URL-failure test to the preconditions before the live write.
+- **Risk:** **MEDIUM–HIGH** until those checker/writer contracts are corrected.
 
 ## 18-16
 
-**Summary:** Consolidating staged fetches and updating through the same verification sources reduces duplicated security-sensitive behavior.
+**Summary:** The staged plain-argv fetch unification is appropriately scoped and reuses existing update machinery.
 
-- **Strengths:** The production-composition update test covers the actual context construction currently lacking a release resolver (`installer/update.py:329–333`; `18-16-PLAN.md`, Task 1).
-- **Concerns:** No new blocking concern. Declared hashes are explicitly honored even for directly constructed methods (`18-16-PLAN.md`, Task 2).
-- **Suggestions:** Retain the existing live-tree preservation assertions alongside the new digest assertions; checking only the failed outcome would be insufficient.
-- **Risk Assessment: LOW** — Clear reuse and deletion, with relevant failure-path tests.
+- **Strength:** The production-composition wrong-digest update test verifies more than resolver invocation (`18-16-PLAN.md:105–114`). Existing download placement and rollback are available at `installer/download.py:304–358`.
+- **Concern:** Its no-hash tarball reason is correct (`18-16-PLAN.md:147`), but it arrives too late to repair 18-07’s independently committed false-verification contract.
+- **Suggestion:** Move the basic unverified tarball reason into 18-07; leave pin rendering and supplied-hash verification here.
+- **Risk:** **LOW** locally, **MEDIUM** for integration ordering.
 
 ## 18-17
 
-**Summary:** Version ranking and rate-limit evidence are improved, but the run-wide outage rule contradicts the new per-repo behavior.
+**Summary:** HTTP error classification is corrected, but transport-outage blocking still overreaches.
 
-- **Cycle-1 H8 — FULLY RESOLVED:** Uses the existing comparator (`18-17-PLAN.md:125`; `installer/versions.py:213–236`).
-- **Cycle-1 H9 — PARTIALLY RESOLVED:** Header-based classification is correct (`18-17-PLAN.md:127`), but the blanket zero-success rule (`:129`) can still block a plain-403 repo.
-- **Strengths:** Explicitly separates incomparable tags from newer releases.
-- **Concerns — HIGH:** The required plain-403-plus-HEAD-drift test expects exit 1 (`:116`), yet its only release read fails, compelling exit 2 under `:129`. All-404 runs similarly become “outages,” suppressing genuine drift issues.
-- **Suggestions:** Distinguish transport outage from received HTTP evidence; do not infer whole-run network failure merely from zero successful release reads.
-- **Risk Assessment: HIGH** — Correct execution currently conflicts with an explicit acceptance test and can silence drift reporting.
+- **Cycle-2 H9b — FULLY RESOLVED:** Received 403/404/503 responses count as responses, with explicit all-error-response tests (`18-17-PLAN.md:116–117,128–130`). Source preserves underlying fetch causes through the release resolver (`installer/versions.py:326–337`).
+- **Concern — HIGH:** The executable verdict still blocks when every attempted **release read** fails at transport level, even if another vendor’s HEAD returns a real 404 (`18-17-PLAN.md:130`). That is not a whole-run outage: real drift exists elsewhere, but the issue would be suppressed.
+- **Suggestion:** For non-rate-limit outage detection, count responses across **both release reads and HEAD/download requests**. Add one API transport failure plus one vendor 404 regression. Preserve the explicit rate-limit override.
+- **Risk:** **HIGH** — can silence the weekly report despite known drift.
 
 ## 18-18
 
-**Summary:** Fresh-container retries and specific ruff artifacts make the acceptance evidence substantially more credible.
+**Summary:** Fresh-container retries, exact ruff evidence and explicit identity recording make this a much stronger acceptance procedure.
 
-- **Cycle-1 H10 — FULLY RESOLVED / previously refuted:** Cleanup remains required at every stop; successful pass2 already removes the container (`scripts/container-e2e-verify.sh:477–478`).
-- **Cycle-1 H11 — FULLY RESOLVED:** Retries require bootstrap replacement (`18-18-PLAN.md:96,127`), rather than `resync`, which only streams and syncs the workspace (`scripts/container-e2e-verify.sh:225–230`).
-- **Strengths:** Exact preview and verification rows replace an uninformative “ruff appeared somewhere” check.
-- **Concerns — LOW:** Timestamp ordering is supporting evidence, not proof of container identity.
-- **Suggestions:** Record the final container ID with the transcripts if readily available; retain the exact artifact assertions.
-- **Risk Assessment: LOW** — Runtime availability remains an execution precondition, not something this review established.
+- **Cycle-2 LOW — FULLY RESOLVED:** Container IDs are recorded at bootstrap, probes, pass1 and pass2, then checked for equality (`18-18-PLAN.md:95,112–113,132–144`).
+- **Strength:** The plan correctly uses the pass2 transcript, where the harness actually writes its markers (`scripts/container-e2e-verify.sh:420–478`).
+- **Concerns:** No new blocking concern identified in the procedure.
+- **Suggestion:** Retain the stop-and-report rules for installer defects; do not turn container accommodations into weaker production smoke.
+- **Risk:** **MEDIUM** — expensive live upstream behavior and Linux-only coverage remain inherent.
 
 ## 18-19
 
-**Summary:** PATH restoration and narrowed smoke attribution address the two original manager-smoke concerns.
+**Summary:** Manager leftovers are now honestly reported without unsafe automatic removal, and the sourced SDKMAN exception is explicit.
 
-- **Cycle-1 H12/H13 — FULLY RESOLVED:** Failed smoke restores PATH; declared directories select their binary, while no-directory claims are explicitly limited (`18-19-PLAN.md:150–158`). This corrects the current persistent prepend (`installer/engine.py:162–164`; `installer/locations.py:103–108`).
-- **Strengths:** The test sandbox includes indirect default-install callers, which genuinely reach the engine (`installer/app.py:139`; `installer/session.py:73,173`).
-- **Concerns — MEDIUM:** A failed manager smoke restores PATH but not installed artifacts. The broad SPEC promise of no remaining linked binary is therefore not guaranteed for manager methods (`18-SPEC.md:48–49`).
-- **Suggestions:** Explicitly scope that guarantee to staged download/app methods, or define safe manager-specific cleanup. Do not add generic deletion without ownership proof.
-- **Risk Assessment: MEDIUM** — The revised attribution is honest, but failure-artifact semantics need reconciliation.
+- **Cycle-2 MEDIUM — FULLY RESOLVED:** Task 3 reports leftovers in errors and later successful warnings (`18-19-PLAN.md:202–212`), using the existing removal table at `installer/ownership.py:1368–1382`, consistent with ledger L-18-16.
+- **Concern — MEDIUM:** The broken-manager test specifies “brew then script” and expects brew to fail before script succeeds (`18-19-PLAN.md:118,204`). Actual resolution always places script rank 10 before brew rank 40 (`installer/resolve.py:13–28,81–84`), regardless of file order.
+- **Suggestion:** Use two same-ranked, deterministically ordered manager methods for this scenario, or explicitly inject an ordered ladder if that is the intended unit-test seam.
+- **Risk:** **MEDIUM** — the production hook is plausible, but these required tests cannot exercise their stated sequence with normal resolution.
 
-## Overall assessment
+## 18-20
 
-**Status: Issues Found — revise before execution.**
+**Summary:** The split reduces file contention and keeps the registry trust boundary separate from execution.
 
-Most cycle-1 concerns are resolved. **H7 and H9 remain partially resolved**; the strongest new blockers are:
+- **Strength:** Shape validation reuses the existing script-argument convention and keeps node’s closed `smoke` dispatch distinct (`18-20-PLAN.md:99–107`; current node validation at `installer/model.py:713–717`).
+- **Concern — LOW:** Authoring guidance says every binary is smoked “before it is linked” while also describing manager smoke after installation (`18-20-PLAN.md:142`). Managers may already have created their links, and some installs intentionally have nothing runnable to smoke.
+- **Suggestion:** State the two guarantees separately: staged smoke before installer-created links; post-install manager smoke when a runnable target exists.
+- **Risk:** **LOW** — wording consistency, not a new execution blocker.
 
-1. **18-10:** Task 1 requires decoding before implementing it.
-2. **18-12:** Cached verification ignores changed extraction settings.
-3. **18-13:** Candidate failure/dating and superseded-target reporting conflict.
-4. **18-17:** Zero-success outage detection contradicts per-repo error handling.
-5. **18-09:** Successful stderr is unavailable to the promised loader-error check.
+## Cross-plan assessment
 
-The plan set is substantially stronger, but these are contract corrections, not optional polish.
+### Overall summary
 
-Skipped tests, live upstream checks, and container execution; no files were changed. Runtime success and current upstream digest availability remain unverified.
+The revisions resolve the specific cycle-2 defects substantially better than the previous plans: stderr is retained, cache identity includes extraction settings, rejected candidates cannot be re-dated, HTTP error responses are not mistaken for network absence, and live evidence is much more precise. The declared wave file sets are sensibly separated. However, **approval should remain withheld** because four concrete issues affect truthful results or executable acceptance:
+
+1. **18-07:** No-hash tarballs become falsely verified before 18-16.
+2. **18-13:** Whole-tool candidate eligibility contradicts applying a pin bump while preserving unpinned drift.
+3. **18-17:** API-only transport failure can suppress real vendor drift.
+4. **18-19:** Required brew-before-script scenarios contradict actual method ranking.
+
+### Recommended disposition
+
+**Status: Issues Found — targeted fixes required.**
+
+Fix those four issues first, then address the medium checker/rollback cases without another broad redesign. In particular, the checker should prove that its declared extraction mode matches installation and that fresh URL failures override cached success.
+
+### Overall risk: HIGH
+
+The risk is concentrated in **truth claims and failure paths**, not missing feature coverage. The plans cover the phase requirements comprehensively, but several instructions can currently report verification inaccurately, suppress actionable drift, or require tests whose execution order is impossible.
+
+**Not checked:** No tests, live downloads, workflow dispatches or container installs were run; no files were edited.  
+**Residual risk:** Real macOS smoke behavior and upstream changes remain execution-time backstops, not established review evidence.
 
 ---
 
 ## Consensus Summary
 
-One reviewer ran (`opencode-plan-review`, the only entry in `review.default_reviewers`), so there is no cross-reviewer consensus and the consensus gate does not apply: every HIGH that this reviewer raised and the orchestrator confirmed in the source counts. The review is source-grounded. It cites about 40 `file:line` locations, carries no discount marker, and covers all 19 plan ids (coverage check: complete). The reviewer was also given the cycle-1 HIGH table and asked for a verdict on each. The orchestrator checked those verdicts and every new HIGH against the revised plans (89ac279) and the source at `7fecef2`.
+One reviewer ran (`opencode-plan-review`, the only entry in `review.default_reviewers`). There is no cross-reviewer consensus, and the consensus gate does not apply. Every HIGH that this reviewer raised and that the orchestrator confirmed in the source counts. The review is source-grounded: it cites about 60 `file:line` locations and carries no discount marker. It covers all 20 plan ids (coverage check: complete, 20/20). The reviewer was given the cycle-2 HIGH and actionable tables and asked for a verdict on each. The orchestrator checked those verdicts and every new finding against the revised plans (8d6f30a, ledger 5569f17) and the source at `5569f17`.
 
 ### Agreed Strengths
-- (single reviewer) Ten of the 13 cycle-1 HIGHs are fully resolved by the revisions: H1, H2, H3, H4, H5, H6, H8, H11, H12 and H13. H10 was already refuted in cycle 1. The fixes reuse existing seams: `versions.is_outdated`, `staged_member` containment, `prepend_path` restore, and the setup.py `__main__` PATH filter.
+- (single reviewer) All six cycle-2 HIGHs are fixed as they were stated: N1, N2, N3, N4, H7b (superseded-target replacement) and H9b. All eleven cycle-2 actionable MEDIUM/LOW findings are incorporated, or explicitly rejected in the plan (18-11's absolute-link rejection). The 18-09 split into 18-20 is safe: the two plans share wave 4 but no file, and 18-19 depends on 18-20.
 
 ### Agreed Concerns
-- None (single reviewer). The highest-priority single-reviewer concerns are 18-13's post-write verdict, which still misdates or misreports in two cases (H7 is partial), 18-17's zero-success outage rule (H9 is partial), 18-12's cached state that ignores `strip`/`archive`, and 18-10 Task 1, which requires a decode it does not implement.
+- None (single reviewer). The highest-priority single-reviewer concerns, both confirmed:
+  - 18-07 reports a no-hash tarball as verified until 18-16 lands.
+  - 18-13 checks bump eligibility on the whole tool, which contradicts its own unpinned-drift test.
 
 ### Divergent Views
-- None (single reviewer).
+- None (single reviewer). The orchestrator rejected one reviewer HIGH (18-17's API-only transport outage) because it contradicts locked Ledger L-18-05.
 
-### Cycle-1 HIGH resolution (orchestrator, source-checked)
+### Cycle-2 HIGH resolution (orchestrator, source-checked)
 
-| # | Plan | Cycle-1 HIGH | Revised plan / source evidence | Status |
+| # | Plan | Cycle-2 HIGH | Revised plan / source evidence | Status |
 |---|------|--------------|-------------------------------|--------|
-| H1 | 18-02 | Pinned negative assertions conflict with the new parser | 18-02-PLAN.md Task 2 names the four tests and migrates them. Acceptance greps forbid the two old negatives. `tests/test_versions.py:313,424-425` are the lines that get migrated. Live check: the lazygit date tokens (`date=2025-07-19T11:51:45Z,`) do not parse today, so the fixture row with the full string is sound | FULLY RESOLVED |
-| H2 | 18-05 | An activated venv keeps `.venv/bin` on PATH | Task 3 adds `drop_project_venv_from_path` and calls it first in the `__main__` block. `setup.py` ends with that block, and the Makefile launchers and `install.sh:88` all run `setup.py`. An AST test plus a control/filtered probe pair cover it. Ledger L-18-08 records the reading | FULLY RESOLVED |
-| H3 | 18-08 | glab natives are expected after brew | 18-08-PLAN.md:99 now expects `["dnf","brew"]`, `["brew"]` (immutable) and `["apt"]` (no brew). This matches `installer/resolve.py:13-29` (native 30 before brew 40, natives skipped on immutable), `:65` (`brew` needs `has_brew`) and `installer/platform.py:20-24` (field order `os, arch, immutable, has_brew`) | FULLY RESOLVED |
-| H4 | 18-09 | A failed extraction leaves a partial `.new` | One cleanup `try` now runs from `_extract_into` through the pre-swap checks. Today `_extract_into` sits before the first `try` (`installer/download.py:323`). `test_failed_extraction_leaves_no_staged_tree` covers it | FULLY RESOLVED |
-| H5 | 18-09 | A symlinked member is followed out of staging | `staged_member` uses `resolve(strict=True)`, then `is_relative_to(root)` and a regular-file check before chmod and smoke. There is an outside-symlink test and an inside-symlink test, and 18-11 reuses the helper. Zip extraction lists only the member (`installer/download.py:366`), so an internal-link zip member fails closed instead of escaping | FULLY RESOLVED |
-| H6 | 18-12 (+18-15) | Per-url dedup skips per-member checks | Findings and state are now per (tool, url, member). HEAD and download are de-duplicated per url. There is a broot shared-zip test (`installer/registry.toml:2123-2136`), and 18-15's precondition runs it. Ledger L-18-11 records the change | FULLY RESOLVED |
-| H7 | 18-13 (+18-15) | The `--write` verdict is undefined | The ordinary bump path is now defined (18-13-PLAN.md:144, `test_write_run_after_a_bump_reports_the_registry_as_written`). Two gaps remain. (a) A rejected candidate keeps the tool's original all-ok findings, so the tool stays in `passed_tools()` and gets dated. That contradicts `test_one_failing_method_blocks_the_whole_tool_bump` ("`verified` is unchanged", :133). (b) An applied bump drops only the `newer stable release` findings, so any drift on the superseded old-pin targets (for example, a 404 on the old asset) survives in the "registry as written" report | PARTIALLY RESOLVED (two HIGHs below) |
-| H8 | 18-17 | Inequality is labelled "newer" | `is_outdated(version, tag)` (`installer/versions.py:213-236`) handles True/False/None. An incomparable tag is a separate inconclusive finding. Acceptance grep and tests cover it. Ledger L-18-13 records it | FULLY RESOLVED |
-| H9 | 18-17 | Every 403 blocks the run | Header evidence (429, or 403 with `X-RateLimit-Remaining: 0`/`Retry-After`) is now required for a rate limit. A plain 403 is a per-repo inconclusive finding. A gap remains: `blocked = "no GitHub release read succeeded"` (18-17-PLAN.md:129) counts a received 403/404 response as a failed read. So a run where every attempted release read got an HTTP answer (a plain 403 or a 404 "release not found" drift) is still reported as a whole-run outage and suppresses the issue. Whether `test_forbidden_without_rate_limit_evidence_does_not_block` (:116) passes depends on how its fixture is built | PARTIALLY RESOLVED (HIGH below) |
-| H10 | 18-18 | No teardown at a Task 1 stop | Refuted in cycle 1. The executor rules remove the container at any stop, and `cmd_pass2` removes it on success (`scripts/container-e2e-verify.sh:477`) | FULLY RESOLVED (refuted) |
-| H11 | 18-18 | A `resync` retry is not a clean install | Every retry restarts from `bootstrap --replace`. Task 1's verify requires the pass1 and probe logs to be newer than the bootstrap log. `cmd_resync` is unchanged (`scripts/container-e2e-verify.sh:225-230`). The exact ruff rows match `render_verification`/`render_uninstall` (`installer/render.py:173-175,299-300`) | FULLY RESOLVED |
-| H12 | 18-19 | PATH is not restored after a failed smoke | `path_before` is recorded before the prepend and restored on `ExecutorError`. `test_failed_smoke_restores_path_before_the_next_method` and an acceptance grep cover it | FULLY RESOLVED |
-| H13 | 18-19 | `which(cmd)` can smoke a pre-existing binary | A declared `bin_dir/<cmd>` is smoked first. Without a `bin_dir`, the claim is narrowed to "the command PATH runs" (Ledger L-18-09) and pinned by two tests | FULLY RESOLVED |
+| N1 | 18-09 | Loader errors were checked only when `run_output` raised | 18-09-PLAN.md:148-150: `run_output_with_stderr` holds today's `run_output` body (`installer/run.py:93-108`) and returns both streams, and `run_output` delegates to it. `smoke_binary` checks `_LOADER_ERROR` in stderr on exit 0, and in `CommandError.detail` (which carries stderr, `installer/run.py:104-105`) otherwise. Tests `..._loader_error_even_on_exit_0` and `..._other_stderr_on_exit_0` cover this. The strict fake in `tests/test_run.py:117-127` is extended for `env`, and the other `subprocess.run` fakes take `**kwargs` (`tests/test_install_ownership.py:53`, `tests/test_setup.py:1897`) | FULLY RESOLVED |
+| N2 | 18-10 | Task 1 required a digest round trip but only encoded | 18-10-PLAN.md:105: basic decoding `_as_object(raw.get("digests"))` keeps `str -> str` pairs in Task 1, next to the encode. The round-trip test and the two-occurrence grep pass in that commit. Task 2 keeps the 64-hex hardening | FULLY RESOLVED |
+| N3 | 18-12 | Cached `ok` ignored the extraction settings | 18-12-PLAN.md:23,62,168: `state_key` = `<tool_id>\|<url>#<member>\|archive=\|strip=\|raw=`. Tests `test_a_strip_change_invalidates_the_cached_ok` and `test_targets_differing_only_in_strip_are_checked_separately` cover it. Extraction applies `strip` (`installer/download.py:361-377`) | FULLY RESOLVED |
+| N4 | 18-13 | A rejected `--candidate` was still dated | 18-13-PLAN.md:27,134,147: an unapplied bump adds drift `bump to <v> not applied`, and the `verified` edits are built from the final report. The test asserts the line is unchanged, the tool is not in `passed_tools()`, and the exit code is 1 | FULLY RESOLVED |
+| H7b | 18-13 (+18-15) | Superseded old-pin drift survived an applied bump | 18-13-PLAN.md:30,137,147: every finding on the bumped tool's old pinned urls is replaced, and findings on its other urls are kept. Superseded-target replacement is fixed. A new eligibility contradiction in the same flow is tracked separately as C3-H2 | FULLY RESOLVED (replacement); see C3-H2 |
+| H9b | 18-17 | Received 403/404 answers counted as an outage | 18-17-PLAN.md:25,128-130: only transport failures with no HTTP response, and recognized rate limits, block a run (Ledger L-18-15). `HTTPError` is an `OSError` and stays the `__cause__` of `VersionError` (`installer/versions.py:329-332`). The rebuilt `test_forbidden_without_rate_limit_evidence_does_not_block` (the 403 is the only release read) and `test_http_answers_never_block_the_run` cover it | FULLY RESOLVED |
+
+### Cycle-2 actionable non-HIGH resolution
+
+| Plan | Finding | Evidence | Status |
+|------|---------|----------|--------|
+| 18-01 | Seeding duplicated `verified` keys | 18-01-PLAN.md:170: a tool table is seeded only when it has no `verified` line | FULLY RESOLVED |
+| 18-02 | Normalizer order | 18-02-PLAN.md:131,140: punctuation, then `version=`, then quotes. Fixture row `version="1.2.3",` | FULLY RESOLVED |
+| 18-03 | Bare `xcode-select` | 18-03-PLAN.md:119,147,168: `("/usr/bin/xcode-select", "-p")`, with an absolute-path test | FULLY RESOLVED |
+| 18-08 | F4 fallback vs eight tests | 18-08-PLAN.md:139,158: the F4 test exists in both branches | FULLY RESOLVED |
+| 18-11 | Absolute link after relocation | 18-11-PLAN.md:224: explicit rejection with its rationale | FULLY RESOLVED (rejected in plan) |
+| 18-12 | Corrupt archives | 18-12-PLAN.md:25,168,216: `TarError`/`BadZipFile` are drift with no state entry, and there is a corrupt-archive test | FULLY RESOLVED |
+| 18-12 | Pin vs latest-release digest | 18-12-PLAN.md:25,168,217: the pin is compared only when the url's tag is the latest tag, and there is an older-tag test | FULLY RESOLVED |
+| 18-14 | Code-span escaping | 18-14-PLAN.md:30,139,270: `code_span` maps control characters to spaces and uses a longer backtick run. Break-out test | FULLY RESOLVED |
+| 18-15 | Per-target `ok` evidence | 18-12-PLAN.md:26,118: `Passed` section with platforms. 18-15-PLAN.md:35,174 cites it | FULLY RESOLVED |
+| 18-18 | Container identity | 18-18-PLAN.md:24,95,132: `18-18-container-id.log` is truncated at each bootstrap, and the ids are checked for equality | FULLY RESOLVED |
+| 18-19 | SPEC "no linked binary" for manager kinds | 18-19-PLAN.md:27,191-225 + Ledger L-18-16: leftovers are reported with the `_REMOVAL_COMMANDS` command (`installer/ownership.py:1368-1382`) and never uninstalled | FULLY RESOLVED |
 
 ### New HIGHs this cycle (orchestrator, source-checked)
 
 | # | Plan | HIGH | Source check | Status |
 |---|------|------|--------------|--------|
-| N1 | 18-09 | Loader errors are checked only when `run_output` raises; a loader message on an exit-0 run passes | Confirmed: `installer/run.py:93-108` returns `completed.stdout` and drops stderr on success. 18-09-PLAN.md:30 says that a loader error in stderr fails and that exit 0 passes, without saying which rule wins when both hold. D-06 says "a `GLIBC_`/loader error in stderr" fails. Real impact is limited: the dynamic loader itself exits 127, so only a wrapper that swallows the exit code is affected. It still counts (single reviewer) | Open |
-| N2 | 18-10 | Task 1 requires a digest round trip, but its action only encodes | Confirmed. 18-10-PLAN.md Task 1 requires `test_digests_round_trip_through_the_cache_file` and the acceptance check `grep -c '"digests"' ... >= 2 (encode and decode)`. Its action changes only `VersionCacheEntry` and `save_version_cache`; decoding is Task 2. The current `_entry_from_raw` (`installer/version_cache.py:104-117`) builds entries without digests | Open |
-| N3 | 18-12 | Cached `ok` ignores the extraction settings | Confirmed. The state key is `<url>#<member>`, and the fingerprint covers only the content (18-12-PLAN.md:60,160). A registry edit to `strip` (or to `archive`/`raw`) on an unchanged asset hits the cache and stays `ok`, but extraction applies `strip` (`installer/download.py:361-377`). verify-registry is not in the PR gate, so nothing else catches it | Open |
-| N4 | 18-13 | A rejected `--candidate` still gets a new `verified` date | Confirmed. See H7(a). The final report keeps the old all-ok findings, `passed_tools()` includes the tool, and Task 1 writes `verified`. This contradicts the plan's own test at 18-13-PLAN.md:133 | Open |
-| H7b | 18-13 | An applied bump leaves superseded old-pin drift in the as-written report | Confirmed. See H7(b) | Open (partial) |
-| H9b | 18-17 | The zero-success rule treats received HTTP 403/404 answers as an outage | Confirmed. See H9 | Open (partial) |
+| C3-H1 | 18-07 | A no-hash tarball becomes `verified=True` | Confirmed. 18-07-PLAN.md:131 sets `unverified_reason` only in the github_release branch. The tarball branch (`installer/download.py:122-126`) builds `DownloadTarget` with the new default `unverified_reason=None`. `install_download` returns `target.unverified_reason` and the engine maps `reason is None` to verified (18-07-PLAN.md:133). So between 18-07 (wave 2) and 18-16 (wave 3, which adds `unpinned url; no sha256 to verify against`, 18-16-PLAN.md:25), every tarball install is shown as verified. 18-07's own migration of `test_install_download_returns_false_when_unverified` to "an assertion on the returned reason" (18-07-PLAN.md:137) uses a tarball fixture (`tests/test_download.py:516-526`) whose reason is None. This is the same green-commit contradiction class as cycle-2 N2 | Open |
+| C3-H2 | 18-13 | Whole-tool candidate eligibility contradicts the unpinned-drift test | Confirmed. 18-13-PLAN.md:145 runs `check_registry` on a copy of the whole tool and applies the bump "only when every finding of that tool copy is ok". The copy keeps the unpinned methods, so `test_bump_keeps_the_findings_of_the_tools_unpinned_methods` (:138, an unpinned asset HEADs 404 and the bump is expected to apply) cannot pass. :147 also says the candidate findings are "for its pinned methods (all ok by construction)", which only holds if eligibility is limited to the pinned methods' findings | Open |
 
-18-15's "H7 partial" restates H7b/N4 and resolves with them. It is not counted twice.
+Rejected reviewer HIGH (not counted):
+- **18-17: an API-only transport failure blocks the run although a vendor HEAD returned 404.** The mechanism is real (18-17-PLAN.md:130). But locked Ledger L-18-05 (18-CONTEXT.md:96) names "release API unreachable" as a whole-run outage, and L-18-10 and L-18-15 refine only what counts as a failed read. The plan implements the locked decision literally. Any change belongs in a new ledger amendment, not in this plan. The impact is limited to one weekly run in which api.github.com is unreachable while vendor hosts answer, and the next run reports the drift.
+
+18-15's "H7b partial" and 18-16's "tarball reason arrives too late" restate C3-H2 and C3-H1. They resolve with those fixes and are not counted twice.
 
 ### Non-HIGH findings this cycle (orchestrator disposition)
 
 | Plan | Sev | Finding | Disposition |
 |------|-----|---------|-------------|
-| 18-01 | MEDIUM | `_write(seed_verified=True)` inserts `verified` into fixtures that also set it (string, integer, datetime, future and method-table cases). A duplicate key raises `TOMLDecodeError` before the loader runs, and the `2026-10-16 loads` case fails | Confirmed (18-01-PLAN.md:158-172). Actionable |
-| 18-02 | LOW | Quotes are stripped before punctuation and `version=`, so `version="1.2.3",` is not normalized | Confirmed by tracing the order (18-02-PLAN.md:139). Actionable (reorder or document) |
-| 18-03 | LOW | The git probe argv is bare `xcode-select`, while T-18-05 claims "absolute paths" | Confirmed (18-03-PLAN.md:116,202). Actionable |
-| 18-05 | LOW | Only `<repo>/.venv` is filtered | Already explicit in the plan (the test keeps `<other>/.venv/bin`). Not actionable |
-| 18-07 | MEDIUM | Function identity selects the digest path | Cycle-1 MEDIUM, already incorporated through the behavioural default-resolver test and the ledger. Not actionable |
-| 18-08 | LOW | F4's allowed "not applied" fallback conflicts with "eight tests pass" | Confirmed (18-08-PLAN.md:148,152,158). Actionable |
-| 18-11 | MEDIUM | An absolute link inside the staged bundle breaks after relocation | Orchestrator: not a real path. An upstream archive cannot hold an absolute link into a per-host `.new` path that did not exist when it was built, and any other absolute target resolves outside staging and is rejected by `staged_member`. Actionable only as a rejection to record in the 18-11 ledger |
-| 18-12 | MEDIUM | Corrupt archives (`tarfile.ReadError`, `zipfile.BadZipFile`) are not classified | Confirmed: no classification in 18-12-PLAN.md. Actionable |
-| 18-12 | MEDIUM | A pinned GitHub hash is compared with latest-release metadata | Orchestrator: benign. The comparison runs only "when present", and the versioned asset name exists in the latest release only when pin == latest. Actionable only as a clarification or rejection to record |
-| 18-14 | LOW | Backticks alone do not escape values that contain backticks or newlines (error-reason text) | Actionable (strip or escape, or pick a delimiter) |
-| 18-15 | MEDIUM | 18-15 must cite `ok` findings per method/arch, but 18-12's `format_report` lists only drift, inconclusive, not-checkable and notes | Confirmed (18-12-PLAN.md:120 vs 18-15-PLAN.md:35,172). Actionable (print ok targets, or a passed section with tool/url/member) |
-| 18-18 | LOW | mtime ordering is not proof of container identity | Actionable (record the container ID with the transcripts) |
-| 18-19 | MEDIUM | SPEC acceptance "a single failing method leaves no linked binary" (18-SPEC.md:115) cannot hold for manager kinds | Confirmed. Actionable (scope the guarantee to download/app kinds in 18-19, or define manager cleanup) |
+| 18-19 | MEDIUM | `test_manager_install_with_a_broken_binary_falls_through` and `test_leftover_package_is_reported_on_a_later_install` expect brew to fail before script succeeds | Confirmed. `install_tool` orders methods through `resolve_methods` (`installer/engine.py:135`), and `_RANK` puts script at 10, before brew at 40 (`installer/resolve.py:13-29`). Brew also needs `has_brew`. Actionable: use two methods of equal rank in declared order (for example uv-tool then node, both rank 20), or a brew method followed by a cask |
+| 18-12 | MEDIUM | `tarfile.open(path, "r:*")` autodetects compression, while install uses the declared `archive` (`installer/download.py:63-72`) | Confirmed (18-12-PLAN.md:168). A wrong or missing `archive = "xz"` would be certified as `ok` (the kitty-type gap). Actionable: list with the declared mode (`r:gz`/`r:xz`) and report a mismatch as drift, with one test |
+| 18-09 | MEDIUM | Fresh-install rollback after relink leaves a dangling link | Confirmed. `_undo_archive_swap` restores the link only when `original_target is not None` (`installer/download.py:381-390`). On a fresh install a post-relink failure removes the tree but keeps the new link, which contradicts SPEC R5's "`~/.local/bin/<bin>` does not exist". The window is narrow because `staged_member` and the smoke run before the swap. Actionable: unlink a newly created link when there was no original, plus one test |
+| 18-11 | MEDIUM | Same as 18-09 for `_undo_app_swap` | Confirmed (`installer/apps.py:197-206`). Actionable: same fix, with a fresh-install test |
+| 18-05 | LOW | Task 1's probe `uv run --isolated --no-dev python -c ... which('ruff')` inherits the caller's PATH, so it fails from an activated venv, the case Task 3 handles | Confirmed (18-05-PLAN.md:139 vs :211). Actionable: label it a non-activated control, or drop `<repo>/.venv/bin` from that probe's PATH |
+| 18-02 | LOW | "Rewrite the comment block above the boundary" could swallow the `Verified` / `Not covered:` paragraphs pinned by `test_versions_module_records_the_registry_wide_audit_finding` | Partly confirmed. `installer/versions.py:33-55` is one contiguous comment block, and `tests/test_versions.py:401-414` pins its first paragraphs. Task 1's whole-file verify would catch a wrong rewrite. Actionable: scope the rewrite to the boundary paragraph (`installer/versions.py:49-55`) |
+| 18-12 | LOW | A target with a cached `ok` stays `ok` when a later target on the same url downloads it in the same run and finds a url-wide failure | Confirmed (18-12-PLAN.md:168: a cache hit returns before the per-run url cache). This is reachable only when the bytes change under an unchanged expected hash (a stale checksum file). Actionable: after the per-run download of a url, override every cached `ok` on that url |
+| 18-20 | LOW | The architecture.md sentence says every binary is smoked "before it is linked", but manager kinds are smoked after the manager installs (and links) | Confirmed (18-20-PLAN.md:142). Actionable: word the two guarantees separately |
+| 18-10 | LOW | Task 2 says `_as_object(raw)` | Not actionable. Task 2 "hardens Task 1's decode", and Task 1 states the exact expression `_as_object(raw.get("digests"))` (18-10-PLAN.md:105). `test_mixed_digests_keep_the_valid_entries` catches a wrong target |
+| 18-14 | LOW | "zero `gh` calls" while 18-17 may call `gh auth token` | Not actionable. `github_token` runs only when `probe is None` (18-17-PLAN.md:200), so the injected-probe tests see zero calls, and the workflow supplies `GH_TOKEN`. The SPEC R3 intent (no issue call) holds |
+| 18-15 | MEDIUM | The final run reuses state, so its evidence depends on the 18-12 cache precedence | Restates the 18-12 LOW above. Not counted twice |
 
 ## Verification coverage
 
-Source-grounding pass (`plan_review.source_grounding: true`). It ran on 2026-10-15 over all 19 revised plans at `7fecef2`.
+Source-grounding pass (`plan_review.source_grounding: true`). It ran on 2026-10-15 over all 20 revised plans at `5569f17`.
 
-**Authority.** `drift-guard authority --raw` returned `intel` (config `grep`, upgraded by `intel.enabled: true`). `.planning/intel/` lists only 6 CLI entry points, so under that authority every Python symbol, registry key and shell function is **UNCHECKABLE** (severity INFO). They were not treated as verified or missing on that basis. Supplementary grep evidence was collected over `git ls-files` outside `.planning/`. `drift-guard severity` under `intel` gives: VERIFIED -> none, MISSING -> needs-acknowledgement (no hardBlock), AMBIGUOUS -> MEDIUM, UNCHECKABLE -> INFO. No verdict produced a hardBlock.
+**Authority.** `drift-guard authority --raw` returned `intel` (config `grep`, upgraded by `intel.enabled: true`). `.planning/intel/` lists only CLI entry points, so under that authority every Python symbol, registry key and shell function is **UNCHECKABLE** (severity INFO). It is not treated as verified or missing on that basis. Supplementary grep evidence was collected over `git ls-files` outside `.planning/`. `drift-guard severity` under `intel` gives VERIFIED -> none, MISSING -> needs-acknowledgement (no hardBlock), AMBIGUOUS -> MEDIUM and UNCHECKABLE -> INFO. No verdict produced a hardBlock.
 
-**Enumeration.** Every backticked token in the 19 PLAN.md files with a symbol shape (`module.func`, `Class.attr`, `path::name`, `name(...)`, identifiers with `_`/`.`/camelCase), a path shape or a `--flag` shape was enumerated, then de-duplicated per kind and name. Names in any plan's "Artifacts this phase produces" section were excluded (they are new by design). Result: 280 distinct cited tokens. 226 have grep evidence (a declaration or reference in the source, or an existing path or flag), and 54 were not found.
+**Enumeration.** Every backticked token in the 20 PLAN.md files was enumerated if it had a symbol shape (`module.func`, `Class.attr`, `path::name`, `name()`, snake/camel identifiers), a path shape or a `--flag` shape, and was de-duplicated per name. That gave 699 distinct tokens. 297 sit in a plan's artifact/interface lists and were excluded as new by design. Of the remaining 402, 317 have grep evidence (a declaration or reference in the source, or an existing path or flag) and 85 were not found.
 
-Spot-verified declarations added by the revisions: `_as_object` (`installer/version_cache.py:89`), `_str_map` (`:246`), `is_outdated` (`installer/versions.py:213`), `perform_update` (`installer/update.py:193`), `installed_for_order` (`installer/execute_screen.py:503`), `_not_present` (`tests/test_app.py:3347`), `cmd_resync` (`scripts/container-e2e-verify.sh:225`), `sync_workspace` (`:192`), `_validate_app` (`installer/apps.py:186`), `staged_sibling` (`installer/atomic.py:65`), `atomic_write_text` (`:56`), `expected_sha256`/`sha256_file` (`installer/checksums.py:23,55`), `attributed_install` (`installer/execute_screen.py:201`), `with_sensitive_confirm`/`run_installs` (`installer/session.py:71,168`), `render_uninstall`/`render_verification` (`installer/render.py:168,285`), and `Platform` field order (`installer/platform.py:20-24`).
+Spot-verified declarations that the revisions rely on:
+- `run_output` and its `CommandError` mapping (`installer/run.py:93-108`, `:32-43`).
+- `_as_object` and `_entry_from_raw` (`installer/version_cache.py:89,104`).
+- `_replace_archive`, `_extract_into`, `_undo_archive_swap` and `_tar_flag` (`installer/download.py:311,360,381,63`).
+- `_undo_app_swap` and `_validate_app` (`installer/apps.py:197,186`).
+- `_KIND_TO_OWNER` and `_REMOVAL_COMMANDS` (`installer/ownership.py:143,1368`), and `manager_name` (`installer/uninstall.py:225`).
+- `InstallOutcome.postinstall_warning` (`installer/engine.py:40`), `_RANK` (`installer/resolve.py:13`), and `resolve_github_tag` with `OSError` wrapping (`installer/versions.py:326-332`).
+- The kitty comment naming `_install_unverified/_place_verified` (`installer/registry.toml:2539,2623`), and `test_kitty_entry_records_the_txz_extraction_gap` (`tests/test_registry.py:1513`).
+- `cmd = "sdkman-init.sh"` (`installer/registry.toml:1748`).
 
-Not-found tokens and their acknowledgement (needs-acknowledgement; none is a hallucinated reference to existing code):
+Not-found tokens and their acknowledgement (needs-acknowledgement). None is a hallucinated reference to existing code:
 
 | Cited at | Token | Why absent |
 |---|---|---|
-| each plan's `<output>` | `18-NN-SUMMARY.md` (19) | execution output created by each plan |
-| 18-01:63, 18-06:237 | `model.py`, `resolve.py` | bare filenames of `installer/model.py` and `installer/resolve.py` (exist) |
-| 18-02:67 | `D-registry-user-part1.md`, `E-registry-user-part2.md` | exist under `.planning/research/audit-2026-10-13/` (outside the grep corpus) |
-| 18-18:78 | `detect-container-runtime.sh` | exists as `scripts/detect-container-runtime.sh` |
-| 18-05:99 | `UV_PROJECT_ENVIRONMENT` | plan asserts that it is set nowhere (correct) |
-| 18-12:53, 18-14:32, 18-14:101 | `installer/verify_registry.py`, `.github/workflows/verify-registry.yml`, `tests/test_makefile.py` | created by 18-12, 18-14 and 18-05 |
-| 18-12:56, 18-13:68 | `--write`, `--candidate`, `--issue`, `--state` | verify-registry flags created by 18-12, 18-13 and 18-14 |
-| 18-05:31, 18-05:259 | `--isolated`, `--no-dev`, `--exact` | uv CLI flags (external) |
-| 18-01:94, 18-08:66, 18-14:30 | `--no-verify`, `--no-modify-path`, `--body-file` | git, opencode-installer and gh flags (external) |
-| 18-09:152 | `--custom` | fixture argv in a new test |
-| 18-03:215 | `java_home` | macOS `/usr/libexec/java_home` (external) |
+| each plan's `<output>` | `18-NN-SUMMARY.md` (20) | execution output created by each plan |
+| 18-07, 18-09, 18-10, 18-11, 18-12, 18-13, 18-14, 18-16, 18-17, 18-19 | `release_resolver`, `ExecContext.resolve_release`, `resolve_release`, `DownloadTarget.unverified_reason`, `unverified_reason`, `run_output_with_stderr`, `smoke_binary`, `method_smoke_argv`, `staged_member`, `_stage_and_swap_app`, `download.pinned_url`, `check_registry`, `state_key`, `include_passed`, `RegistryEdit`, `apply_registry_edits`, `method_index`, `Report.passed_tools()`, `report.not_checkable`, `code_span`, `on_verified`, `ownership.method_removal_command`, `verify_registry`, `_normalize_version_token`, `drop_project_venv_from_path`, `macos_stub_reason`, `stub_reason`, `seed_verified` | created by plans of this phase (18-07, 18-09, 18-11, 18-12, 18-13, 18-14, 18-16, 18-17, 18-19, 18-02, 18-05, 18-03, 18-01). Each consumer depends on its creator through `depends_on` or wave order |
+| 18-16:147 | `installer/assets.py::render_pinned_url` | the plan records it as a deviation: the renderer is `download.pinned_url`, created by 18-16 |
 | 18-05:128 | `_recipes()` | private helper in the new `tests/test_makefile.py` |
-| 18-08:90 | `test_audit_fix_` | test-name prefix |
-| 18-09:30, 18-09:164 | `GLIBC_`, `WAYLAND_DISPLAY` | loader string literal and environment variable name |
-| 18-12:78,120,147,160; 18-14:140 | `urllib.error.HTTPError`, `TimeoutError`, `namelist()`, `getnames()`, `zipfile.ZipFile(...).namelist()`, `tempfile.TemporaryDirectory`, `tempfile.NamedTemporaryFile` | stdlib |
-| 18-12:83 | `tests/fixtures/` | plan asserts that it does not exist (correct) |
+| 18-02:67 | `D-registry-user-part1.md`, `E-registry-user-part2.md` | exist under `.planning/research/audit-2026-10-13/` (outside the grep corpus) |
+| 18-08:68 | `resolve.py::_RANK` | bare filename; `installer/resolve.py:13` |
+| 18-18:71 | `sdkman-init.sh` | registry value (`installer/registry.toml:1748`); the checker missed it only because of the path shape |
+| 18-05, 18-01, 18-08, 18-14 | `--isolated`, `--no-dev`, `--exact`, `--no-verify`, `--no-modify-path`, `--body-file` | external uv, git, installer and gh flags |
+| 18-12, 18-13 | `--candidate`, `--state` | verify-registry flags created by 18-12 and 18-13 |
+| 18-09:139 | `--custom` | fixture argv in a new test |
+| 18-03:30 | `java_home` | macOS `/usr/libexec/java_home` (external) |
+| 18-12, 18-14 | `tarfile.ReadError`, `tarfile.TarError`, `zipfile.BadZipFile`, `urllib.error.HTTPError`, `TimeoutError`, `getnames()`, `namelist()`, `tempfile.TemporaryDirectory`, `tempfile.NamedTemporaryFile` | stdlib |
 | 18-14:32 | `workflow_dispatch` | GitHub Actions trigger key (external) |
-| 18-16:147 | `installer/assets.py::render_pinned_url` | plan records the deviation: the renderer is `download.pinned_url` (correctly absent) |
+| 18-08:90 | `test_audit_fix_` | test-name prefix |
 
 **UNCHECKABLE / skipped.**
 - Signatures (argument lists, return types) cannot be asserted under `intel`/`grep`. Names only were checked.
 - External surfaces are not in the repo: uv/gh/git flags, GitHub REST rate-limit headers, Actions semantics, upstream asset names and digests, and macOS binaries.
-- Behaviour claims were spot-checked against the tree. `extract_observed_version` on the full lazygit line returns None today, and no date/commit token in it parses. `run_output` maps OSError to exit 127 and drops stderr on success (`installer/run.py:106-108`). `_replace_archive` extracts outside any cleanup `try` (`installer/download.py:323`). `cmd_pass1` cats the setup output to stdout. `render_uninstall` prints `  <path>` with `soft_wrap=True`.
-- Live network counts (18-RESEARCH.md digests 153/171) were not re-probed.
+- Behaviour claims were spot-checked against the tree:
+  - `run_output` drops stderr on success and raises with `detail=stderr` otherwise.
+  - `_undo_archive_swap`/`_undo_app_swap` restore a link only when one existed.
+  - `install_tool` orders methods by `resolve_methods`.
+  - The tarball branch of `_resolve_target` carries no reason.
+- Live network counts (18-RESEARCH.md digests) were not re-probed, and no tests, containers or live runs were executed.
+- Wave/file-overlap check: no two plans in one wave share a `files_modified` entry. In wave 4, 18-09 and 18-20 are disjoint; in wave 5, 18-12 and 18-19; in wave 6, 18-11 and 18-17.
 
 ## Cross-artifact fact-drift findings
 
-- **Phase status** (`drift-guard phase-status --phase 18`): verdict `lag`. STATE.md says "Ready to execute" (rank 1), ROADMAP.md says "Not started" (rank 0), and STATE.md is the authority. One non-terminal step apart, so this is not a finding.
-- **Success criteria ↔ must_haves.truths** (ROADMAP.md authority): no contradiction. 18-05 adds an activated-venv truth beyond SC4, which is sanctioned (plans may add truths). The ROADMAP plan list line for 18-05 was updated in 89ac279 to match.
-- **Requirement IDs** (ROADMAP.md authority): REG-01..REG-10 each appear in at least one plan's `requirements:`. No plan cites an ID outside the roadmap.
-- **CONTEXT.md decisions ↔ plan usage** (CONTEXT.md authority): no contradiction. Each new revision maps to an amendment recorded inside CONTEXT.md:
-  - L-18-08: 18-05's entry-point filter.
-  - L-18-09: 18-19's bin_dir smoke target (amends D-06's `which`).
-  - L-18-10: 18-17's rate-limit evidence.
-  - L-18-11: 18-12's per-target state.
-  - L-18-12: 18-13's as-written verdict.
-  - L-18-13: `is_outdated` in 18-17 and the independent quote strip in 18-02.
-- One near-miss, noted but not flagged: D-06 says that a "`GLIBC_`/loader error in stderr" fails a smoke, while 18-09's truth says that exit 0 passes. This is the N1 review finding, a gap in the plan's mechanism, and not a CONTEXT ↔ PLAN contradiction about one defined term, because 18-09 also lists the loader-error rule.
+- **Phase status** (`drift-guard phase-status --phase 18`): verdict `lag`. STATE.md says "Ready to execute" (rank 1), ROADMAP.md says "Not started" (rank 0), and STATE.md is the authority. The two are one non-terminal step apart, so this is not a finding.
+- **Success criteria ↔ must_haves.truths** (ROADMAP.md authority): no contradiction. ROADMAP lists 20 plans with waves that match each plan's frontmatter (18-09 W4, 18-20 W4, 18-19 W5, and so on). 18-08's "35-row ledger" in ROADMAP matches 18-08-PLAN.md:26 (16 rows from 18-06 + 19).
+- **Requirement IDs** (ROADMAP.md authority): REG-01..REG-10 each appear in at least one plan's `requirements:` (REG-07, REG-08 and REG-10 once each; REG-04 six times). No plan cites an ID outside the roadmap.
+- **CONTEXT.md decisions ↔ plan usage** (CONTEXT.md authority): no contradiction. L-18-17's refinements each match the plans:
+  - `run.run_output_with_stderr`: 18-09.
+  - `/usr/bin/xcode-select -p`: 18-03.
+  - The normalizer order: 18-02.
+  - The pin compared only on the latest tag, an unlistable archive as drift, and exit 64: 18-12 and 18-13.
+  - `format_report(include_passed=False)` with code spans: 18-14.
+  - The leftover command in the error and the warning: 18-19.
+- L-18-15 (transport-only outage) is implemented by 18-17 together with L-18-05's "release API unreachable" whole-run outage. The reviewer's 18-17 HIGH argues against that locked combination; it is recorded above as a rejected finding, not as drift.
 - Coverage: STATE.md, ROADMAP.md and CONTEXT.md were all present, so no axis was skipped.
 
 Advisory only. These findings set no hardBlock and count toward neither HIGH_COUNT nor ACTIONABLE_COUNT.
