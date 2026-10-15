@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v0.50.0
 milestone_name: Truthful lifecycle
 current_phase: 18
-current_phase_name: registry-truth-and-drift-guard
+current_phase_name: Registry truth and drift guard
 status: executing
 stopped_at: "Phase 17: all 20 plans executed; final gates + CI oracle green; e2e re-run pending"
-last_updated: "2026-10-15T12:08:28.439Z"
+last_updated: "2026-10-15T16:49:13.638Z"
 last_activity: 2026-10-14
 last_activity_desc: Phase 17 execution started
-state_head: 0705725b852858f677efab21d65ada1716f92895
+state_head: 9da4505001a0d212d587b997b5f850d72cd37371
 progress:
   total_phases: 10
   completed_phases: 0
-  total_plans: 40
+  total_plans: 41
   completed_plans: 20
   percent: 0
 ---
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-10-13)
 
 ## Current Position
 
-Phase: 18 (registry-truth-and-drift-guard) — READY TO EXECUTE
+Phase: 18 (Registry truth and drift guard) — READY TO EXECUTE
 Plan: 1 of 13
 Status: Ready to execute
 Last activity: 2026-10-14 — Phase 17 execution started
@@ -65,6 +65,7 @@ Recent decisions affecting current work:
 - [Roadmap, 2026-10-13]: Receipts are the only removal proof (Phase 19 format and writer, Phase 22 removal); UI-04 "delete config too" moved from TA P5 to Phase 22, where `config_paths` exists
 
 ### Pending Todos
+
 - [2026-09-16] [doctor] Detect dangling pnpm global bin shims in Doctor — [todo file](.planning/todos/pending/2026-09-16-detect-dangling-pnpm-global-bin-shims-in-doctor.md)
 - [2026-10-13] [tweaks] Point Playwright MCP at the Flatpak Chrome (shell tweak + Cursor MCP env) — [todo file](.planning/todos/pending/2026-10-13-playwright-mcp-flatpak-chrome.md)
 - [2026-10-13] [pi] Repair pi's install leftovers and ship the pi model/MCP sync — [todo file](.planning/todos/pending/2026-10-13-repair-pi-install-and-sync-models.md)
