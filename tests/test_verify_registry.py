@@ -3000,3 +3000,122 @@ archive = "zip"
     code2 = main(["--registry", str(registry), "--state", str(state_path)], probe=probe2)
     assert code2 == 0
     assert sum(downloads2.values()) == 0
+
+
+def test_dot_prefixed_tar_strips_like_tar(tmp_path: Path) -> None:
+    tar = _gz_tar_bytes({"./top/bin/tool": b"x"})
+    digest = hashlib.sha256(tar).hexdigest()
+    url_tpl = "https://example.test/pkg-{ver}.tar.gz"
+    rendered = "https://example.test/pkg-1.0.tar.gz"
+    content = f"""
+[[tool]]
+id = "good"
+name = "good"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "{url_tpl}"
+version = "1.0"
+member = "top/bin/tool"
+strip = 1
+sha256 = "{digest}"
+[[tool]]
+id = "bad"
+name = "bad"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "{url_tpl}"
+version = "1.0"
+member = "bin/tool"
+strip = 1
+sha256 = "{digest}"
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="0", assets={})
+    probe, _ = _map_probe(release, payloads={rendered: tar})
+    report = check_registry(load_tools(registry), probe, state={})
+    by_tool = {f.tool_id: f for f in report.findings}
+    assert by_tool["good"].status == "ok"
+    assert by_tool["bad"].status == "drift"
+    assert "member bin/tool missing" in by_tool["bad"].reason
+
+
+def test_dot_prefixed_tar_without_strip_matches_the_normalized_name(tmp_path: Path) -> None:
+    tar = _gz_tar_bytes({"./top/bin/tool": b"x"})
+    digest = hashlib.sha256(tar).hexdigest()
+    url_tpl = "https://example.test/pkg-{ver}.tar.gz"
+    rendered = "https://example.test/pkg-1.0.tar.gz"
+    content = f"""
+[[tool]]
+id = "t1"
+name = "t1"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "{url_tpl}"
+version = "1.0"
+member = "top/bin/tool"
+strip = 0
+sha256 = "{digest}"
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="0", assets={})
+    probe, _ = _map_probe(release, payloads={rendered: tar})
+    report = check_registry(load_tools(registry), probe, state={})
+    assert report.findings[0].status == "ok"
+
+
+def test_zip_member_must_match_the_stored_name(tmp_path: Path) -> None:
+    zip_body = _zip_bytes({"gh_1.0.0_macOS_amd64/bin/gh": b"x"})
+    digest = hashlib.sha256(zip_body).hexdigest()
+    content = """
+[[tool]]
+id = "full"
+name = "full"
+category = "git"
+cmd = "gh"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "cli/cli"
+asset = "gh_{ver}_macOS_amd64.zip"
+archive = "zip"
+member = "gh_1.0.0_macOS_amd64/bin/gh"
+[[tool]]
+id = "short"
+name = "short"
+category = "git"
+cmd = "gh"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "cli/cli"
+asset = "gh_{ver}_macOS_amd64.zip"
+archive = "zip"
+member = "bin/gh"
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="1.0.0", assets={"gh_1.0.0_macOS_amd64.zip": digest})
+    probe, _ = _map_probe(release, payloads={"gh_1.0.0_macOS_amd64.zip": zip_body})
+    report = check_registry(load_tools(registry), probe, state={})
+    by_tool = {f.tool_id: f for f in report.findings}
+    assert by_tool["full"].status == "ok"
+    assert by_tool["short"].status == "drift"
+    assert "member bin/gh missing" in by_tool["short"].reason

@@ -470,17 +470,30 @@ def _tar_member_names(path: Path, archive: str) -> list[str]:
         return tf.getnames()
 
 
-def _member_present(names: list[str], member: str, strip: int) -> bool:
+def _member_present(names: list[str], member: str, strip: int, archive: str) -> bool:
+    """Mirror `download._extract_into`: tar `--strip-components` counts `./`; zip is exact."""
+    if archive == "zip":
+        return member in names
     want = PurePosixPath(member).parts
     for name in names:
-        parts = PurePosixPath(name).parts
-        if parts[:1] == (".",):
-            parts = parts[1:]
-        if strip and len(parts) > strip:
-            parts = parts[strip:]
-        elif strip:
-            parts = ()
-        if parts == want:
+        if not name:
+            continue
+        components = name.split("/")
+        if name.startswith("/") and components[0] == "":
+            components = components[1:]
+        if len(components) < strip + 1:
+            continue
+        remainder = name
+        for _ in range(strip):
+            slash = remainder.find("/")
+            if slash < 0:
+                remainder = ""
+                break
+            remainder = remainder[slash + 1 :]
+        remainder = remainder.lstrip("/")
+        if not remainder:
+            continue
+        if PurePosixPath(remainder).parts == want:
             return True
     return False
 
@@ -868,7 +881,7 @@ def check_registry(
                 continue
             names = listing if isinstance(listing, list) else []
             if target.member is not None and not _member_present(
-                names, target.member, target.strip
+                names, target.member, target.strip, target.archive
             ):
                 findings[key] = Finding(
                     tool_id=target.tool_id,
