@@ -1269,10 +1269,10 @@ def _run_interactive_wizard(
     managed = set(collect_bin_dirs(tools, platform, _DEFAULT_BIN_DIR))
     confirm = (lambda _message: True) if options.yes else _ask_confirm
     clean_rc_duplicates(_RC_PATHS, managed, os.environ, console, confirm=confirm)
-    if summary.has_failure:
+    code = _session_exit_code(app)
+    if code:
         render_troubleshooting(console)
-        return 1
-    return 0
+    return code
 
 
 def _settings_store(link_mode_option: str | None) -> tuple[SettingsStore, bool]:
@@ -1283,14 +1283,24 @@ def _settings_store(link_mode_option: str | None) -> tuple[SettingsStore, bool]:
     return SettingsStore(path, link_mode=mode), needs_choice
 
 
+def _session_exit_code(app: UnifiedApp) -> int:
+    """The one exit rule for every TUI route (SAFE-05): a run that reported a
+    failure on its Summary exits 1, everything else exits 0."""
+    summary = app.install_summary
+    if summary is not None and summary.has_failure:
+        return 1
+    return 0
+
+
 def _run_doctor(console: Console) -> int:
     tools = load_tools(_REGISTRY)
     platform = detect()
     store, _needs_choice = _settings_store(None)
     if _has_controlling_tty():
         with _stdin_on_tty():
-            _build_app(tools, platform, initial_view="doctor", settings=store).run()
-        return 0
+            app = _build_app(tools, platform, initial_view="doctor", settings=store)
+            app.run()
+        return _session_exit_code(app)
     cache = _timer_state_cache(
         platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
     )
@@ -1318,15 +1328,16 @@ def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
     store, needs_choice = _settings_store(link_mode_option)
     if _has_controlling_tty() and link_mode_option is None:
         with _stdin_on_tty():
-            _build_app(
+            app = _build_app(
                 tools,
                 platform,
                 initial_view="doctor",
                 link_mode=store.link_mode,
                 settings=store,
                 prompt_link_mode=needs_choice,
-            ).run()
-        return 0
+            )
+            app.run()
+        return _session_exit_code(app)
     configure_path(
         tools,
         console,
@@ -1345,13 +1356,14 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
     if _has_controlling_tty() and not assume_yes:
         store, _needs_choice = _settings_store(None)
         with _stdin_on_tty():
-            _build_app(
+            app = _build_app(
                 load_tools(_REGISTRY),
                 platform,
                 initial_view="uninstall",
                 settings=store,
-            ).run()
-        return 0
+            )
+            app.run()
+        return _session_exit_code(app)
     confirm = (lambda _message: True) if assume_yes else _ask_confirm
     tools = load_tools(_REGISTRY)
     # Mirrors _build_app's own installed computation, so the non-interactive
@@ -1435,14 +1447,15 @@ def main(argv: list[str]) -> int:
             # rc files as the rest of the wiring; default stays centralized.
             store, _needs_choice = _settings_store(options.link_mode)
             with _stdin_on_tty():
-                _build_app(
+                app = _build_app(
                     load_tools(_REGISTRY),
                     detect(),
                     initial_view="policies",
                     link_mode=store.link_mode,
                     settings=store,
-                ).run()
-            return 0
+                )
+                app.run()
+            return _session_exit_code(app)
         if options.guard:
             store, _needs_choice = _settings_store(options.link_mode)
             return _run_guard(

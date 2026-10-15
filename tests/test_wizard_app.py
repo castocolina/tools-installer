@@ -7199,12 +7199,32 @@ async def test_accepting_the_catalog_with_execute_pushes_the_screen_and_keeps_ru
         assert screen.started is False
 
 
-async def test_accepting_the_catalog_without_execute_still_exits_with_ids() -> None:
-    app = _app()
+async def test_enter_with_nothing_selected_runs_nothing() -> None:
+    """SPEC R9 empty edge: Enter with an empty selection warns and runs
+    nothing (existing catalog_tui behaviour, test only)."""
+    installed: list[str] = []
+
+    def spy_install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        installed.append(tool.id)
+        return InstallOutcome(tool.id, "installed")
+
+    app = _app(execute=_execute_inputs(install=spy_install))
     async with app.run_test(size=(100, 30)) as pilot:
-        app.catalog.selected.add("rg")
         await pilot.press("enter")
-    assert app.return_value == ["rg"]
+        await pilot.pause()
+        assert app.catalog.status_text == "Select at least one tool, or press q to quit."
+        assert not isinstance(app.screen, ExecuteScreen)
+        assert installed == []
 
 
 async def test_escape_after_completion_returns_to_an_empty_catalog() -> None:

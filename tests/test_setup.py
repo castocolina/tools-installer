@@ -55,6 +55,8 @@ _darwin_select_based_asyncio = (
 
 
 class _DummyApp:
+    install_summary: Summary | None = None
+
     def run(self) -> None:
         return None
 
@@ -416,7 +418,9 @@ def test_main_fix_interactive_without_link_mode_opens_doctor(
 # entry point is the only guard it has.
 
 
-def _capture_app(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+def _capture_app(
+    monkeypatch: pytest.MonkeyPatch, install_summary: Summary | None = None
+) -> list[dict[str, object]]:
     """Stand in for UnifiedApp so _build_app runs for real without a terminal.
 
     The captured kwargs are the wire under test: what the composition root
@@ -425,9 +429,11 @@ def _capture_app(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
     seen: list[dict[str, object]] = []
 
     class _App:
-        install_summary = None
+        install_summary: Summary | None = None
 
         def __init__(self, *_args: object, **kwargs: object) -> None:
+            if install_summary is not None:
+                self.install_summary = install_summary
             seen.append(dict(kwargs))
 
         def run(self) -> None:
@@ -506,7 +512,7 @@ def _hermetic_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str
     network or HOME is ever reached."""
     _sandbox(monkeypatch, tmp_path)
     empty_bin = tmp_path / "empty-bin"
-    empty_bin.mkdir()
+    empty_bin.mkdir(exist_ok=True)
     monkeypatch.setenv("PATH", str(empty_bin))
 
     def _no_systemd(**_k: object) -> bool:
@@ -1736,11 +1742,25 @@ async def _pilot_accepts_the_selection(
     assert recorded == ["rg"]
 
 
-async def test_doctor_route_executes_the_accepted_selection(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("route_id", "argv"),
+    [
+        ("setup", []),
+        ("doctor", ["--doctor"]),
+        ("fix", ["--fix"]),
+        ("uninstall", ["--uninstall"]),
+        ("guard", ["--guard"]),
+    ],
+)
+async def test_every_tui_route_executes_the_accepted_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    route_id: str,
+    argv: list[str],
 ) -> None:
-    """F2 tracer: Enter on a catalog selection in the doctor route runs it,
-    never exits with the ids."""
+    """SPEC R9: Enter on a catalog selection executes it on every TUI route
+    (setup, doctor, fix, uninstall, guard)."""
+    del route_id
     recorded = _hermetic_route(monkeypatch, tmp_path)
     apps: list[UnifiedApp] = []
 
@@ -1748,10 +1768,34 @@ async def test_doctor_route_executes_the_accepted_selection(
         apps.append(self)
 
     monkeypatch.setattr(UnifiedApp, "run", recording_run)
-    assert setup.main(["--doctor"]) == 0
+    assert setup.main(argv) == 0
     app = apps[0]
     async with app.run_test(size=(100, 30)) as pilot:
         await _pilot_accepts_the_selection(app, pilot, recorded)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--doctor"],
+        ["--fix"],
+        ["--uninstall"],
+        ["--guard"],
+    ],
+)
+def test_tui_routes_exit_1_when_the_session_failed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, argv: list[str]
+) -> None:
+    """SAFE-05: every non-setup TUI route reports a failed session in its exit
+    code through the one rule, Summary.has_failure."""
+    for summary, expected in (
+        (Summary(installed=(), already=(), failed=("rg",), no_method=()), 1),
+        (Summary(installed=("rg",), already=(), failed=(), no_method=()), 0),
+        (None, 0),
+    ):
+        _hermetic_route(monkeypatch, tmp_path)
+        _capture_app(monkeypatch, install_summary=summary)
+        assert setup.main(argv) == expected
 
 
 def test_build_app_reresolve_reads_live_inventory_not_cache(
