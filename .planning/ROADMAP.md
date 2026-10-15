@@ -99,7 +99,7 @@ Plans:
   4. Launched without the dev venv on PATH, ruff resolves its real owner under `make setup` (container); `/usr/bin/java` alone never counts as installed; `parse_version('-1') is None`, and quoted or `version=` output never yields a fabricated version.
   5. Every C/D/E/F audit data fix is applied, the `managed-download` owner probe is gone, and `drawio-cli` is removed with `drawio-desktop` serving both audiences.
 
-**Plans:** 20 plans
+**Plans:** 27 plans
 
 Plans (numbered in creation order; W = execution wave):
 - [ ] 18-01-PLAN.md — Closed METHOD_PARAMS keys, required `verified` date (seeded), pinned app/tarball rule (W1)
@@ -122,6 +122,13 @@ Plans (numbered in creation order; W = execution wave):
 - [ ] 18-14-PLAN.md — `--issue` upsert, `make verify-registry`, weekly workflow outside the PR gate (W8)
 - [ ] 18-15-PLAN.md — Template pins, live bump + clean rerun, measured SC3 residual set (W9)
 - [ ] 18-18-PLAN.md — Container e2e proof on the final registry; ruff's owner under the launch form (W10)
+- [ ] 18-21-PLAN.md — Gap: restore architecture.md Phase 15.8 doctrine; rule-doc truncation guard (W11)
+- [ ] 18-22-PLAN.md — Gap: install ownership proof (opt tree + app bundle), app finalize, per-method OSError (W12)
+- [ ] 18-23-PLAN.md — Gap: smoke reasons and failure report; undecodable output (W13)
+- [ ] 18-24-PLAN.md — Gap: `strip`/member semantics shared by loader, checker and install (W14)
+- [ ] 18-25-PLAN.md — Gap: check_registry robustness: shared-URL identity, release-read memo, transports (W15)
+- [ ] 18-26-PLAN.md — Gap: verify-registry main: snapshot-bound write, exit codes, usage before network, writer tests (W16)
+- [ ] 18-27-PLAN.md — Gap: lean pass (M4/M5 and cheap LOWs) + Deferred to Phase 25 (W17)
 
 ### Phase 19: One tool state with health plus receipts
 
