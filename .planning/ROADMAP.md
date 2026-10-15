@@ -105,7 +105,7 @@ Plans (numbered in creation order; W = execution wave):
 - [ ] 18-02-PLAN.md — Version parser fixes: `-1`, `version=`, quoted output (W1)
 - [ ] 18-03-PLAN.md — macOS java/git stubs never count as installed (W1)
 - [ ] 18-04-PLAN.md — `cli_name` honored only through `apps.cli_spec` (W1)
-- [ ] 18-05-PLAN.md — Launchers run `uv run --isolated --no-dev` (Makefile, install.sh, e2e harness) (W1)
+- [ ] 18-05-PLAN.md — Launchers run `uv run --isolated --no-dev` (Makefile, install.sh, e2e harness); an activated venv is dropped from PATH at the entry point (W1)
 - [ ] 18-06-PLAN.md — Remove drawio-cli and the managed-download probe; audit C/D data fixes (W2)
 - [ ] 18-07-PLAN.md — One release read gives tag + digests; digest-verified install; unverified reason on the outcome and screen (W2)
 - [ ] 18-08-PLAN.md — Audit E/F data fixes and the 35-row ledger (W3)
