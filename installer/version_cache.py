@@ -28,6 +28,7 @@ A save that omits `skills` preserves that key, the same way `managers=None` does
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -97,6 +98,21 @@ def _as_object(value: object) -> dict[str, object] | None:
     return cast(dict[str, object], value)
 
 
+_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _digests_from_raw(raw: object) -> dict[str, str]:
+    """Decode digests pair-by-pair; a bad pair drops alone, never the whole entry."""
+    mapping = _as_object(raw)
+    if mapping is None:
+        return {}
+    digests: dict[str, str] = {}
+    for key, value in mapping.items():
+        if isinstance(value, str) and _SHA256_HEX.fullmatch(value) is not None:
+            digests[key] = value
+    return digests
+
+
 def _str_field(mapping: dict[str, object], key: str) -> str | None | object:
     if key not in mapping:
         return None
@@ -119,12 +135,7 @@ def _entry_from_raw(raw: object) -> VersionCacheEntry | None:
         return None
     if not isinstance(failed, (str, type(None))):
         return None
-    digests_raw = _as_object(mapping.get("digests"))
-    digests: dict[str, str] = {}
-    if digests_raw is not None:
-        for key, value in digests_raw.items():
-            if isinstance(value, str):
-                digests[key] = value
+    digests = _digests_from_raw(mapping.get("digests"))
     return VersionCacheEntry(
         latest_version=latest,
         checked_at=checked,

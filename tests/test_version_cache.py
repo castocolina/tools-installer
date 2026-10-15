@@ -41,6 +41,92 @@ def test_round_trip_through_the_versioned_envelope(tmp_path: Path) -> None:
     assert loaded["codegraph"] == entry
 
 
+_GOOD_DIGEST = "c" * 64
+_UPPER_DIGEST = "D" * 64
+
+
+def test_cache_without_digests_loads_with_empty_digests(tmp_path: Path) -> None:
+    path = tmp_path / "versions.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tools": {
+                    "codegraph": {
+                        "latest_version": "v1.6.0",
+                        "checked_at": "2026-09-01T00:00:00+00:00",
+                        "failed_at": None,
+                    }
+                },
+                "managers": {},
+            }
+        )
+    )
+    loaded = load_version_cache(path)
+    assert loaded["codegraph"].latest_version == "v1.6.0"
+    assert loaded["codegraph"].digests == {}
+
+
+@pytest.mark.parametrize(
+    "digests_value",
+    [
+        "x",
+        ["a"],
+        {"a": 1},
+        {"a": "not-hex"},
+    ],
+)
+def test_malformed_digests_are_dropped_not_fatal(tmp_path: Path, digests_value: object) -> None:
+    path = tmp_path / "versions.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tools": {
+                    "codegraph": {
+                        "latest_version": "v1.6.0",
+                        "checked_at": "2026-09-01T00:00:00+00:00",
+                        "failed_at": None,
+                        "digests": digests_value,
+                    }
+                },
+                "managers": {},
+            }
+        )
+    )
+    loaded = load_version_cache(path)
+    assert loaded["codegraph"].latest_version == "v1.6.0"
+    assert loaded["codegraph"].digests == {}
+
+
+def test_mixed_digests_keep_the_valid_entries(tmp_path: Path) -> None:
+    path = tmp_path / "versions.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tools": {
+                    "codegraph": {
+                        "latest_version": "v1.6.0",
+                        "checked_at": "2026-09-01T00:00:00+00:00",
+                        "failed_at": None,
+                        "digests": {
+                            "good.tar.gz": _GOOD_DIGEST,
+                            "bad": 1,
+                            "worse": "not-hex",
+                            "upper": _UPPER_DIGEST,
+                        },
+                    }
+                },
+                "managers": {},
+            }
+        )
+    )
+    loaded = load_version_cache(path)
+    assert loaded["codegraph"].latest_version == "v1.6.0"
+    assert loaded["codegraph"].digests == {"good.tar.gz": _GOOD_DIGEST}
+
+
 def test_digests_round_trip_through_the_cache_file(tmp_path: Path) -> None:
     path = tmp_path / "versions.json"
     digest = "b" * 64
