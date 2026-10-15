@@ -105,7 +105,7 @@ Resume file: None
 
 | Phase | State | Resume |
 |-------|-------|--------|
-| *(none; phase 16 UAT closed 2026-10-13)* | | |
+| 17 | verification_deferred_human (only CI-02 branch protection, a user action; main pushed e412b03, CI run 38710819886 green on both OSes) | /gsd-verify-work 17 |
 
 ## Operator Next Steps
 

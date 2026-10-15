@@ -88,7 +88,12 @@ CI-02 open: protection not applied; the user runs the command above.
 
 ## Post-verification main push
 
-pending: orchestrator (after /gsd-verify-work)
+main sha: e412b03c9848166f22e09fbcded17f3910091892
+push: 72c9047..e412b03 main -> main (fast-forward, no force)
+run id: 38710819886
+run url: https://github.com/castocolina/tools-installer/actions/runs/38710819886
+validate & test on ubuntu-latest=success
+validate & test on macos-latest=success
 
 ## Deviations from Plan
 
