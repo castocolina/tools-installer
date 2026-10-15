@@ -115,6 +115,7 @@ class _TargetIdentity:
     platforms: tuple[str, ...]
     checksum: tuple[str, str] | None
     expected_sha256: str | None
+    registry_pin: str | None
     repo: str | None
     release_tag: str | None
 
@@ -191,6 +192,11 @@ def _collect_targets(tools: Sequence[Tool], probe: Probe) -> list[_TargetIdentit
                     platform = Platform(os=os_name, arch=arch, immutable=False, has_brew=False)
                     if not _method_applies(method, platform):
                         continue
+                    registry_pin: str | None = None
+                    if method.kind in ("app", "tarball"):
+                        pin_val = method.params.get("sha256")
+                        if isinstance(pin_val, str) and pin_val:
+                            registry_pin = pin_val.lower()
                     try:
                         if method.kind == "app":
                             target = _resolve_app_target(method)
@@ -237,6 +243,7 @@ def _collect_targets(tools: Sequence[Tool], probe: Probe) -> list[_TargetIdentit
                                 platforms=tuple(sorted((*existing.platforms, plat))),
                                 checksum=existing.checksum,
                                 expected_sha256=existing.expected_sha256,
+                                registry_pin=existing.registry_pin,
                                 repo=existing.repo,
                                 release_tag=existing.release_tag,
                             )
@@ -252,6 +259,7 @@ def _collect_targets(tools: Sequence[Tool], probe: Probe) -> list[_TargetIdentit
                             platforms=(plat,),
                             checksum=target.checksum,
                             expected_sha256=target.sha256,
+                            registry_pin=registry_pin,
                             repo=repo,
                             release_tag=tag,
                         )
@@ -293,21 +301,19 @@ def _member_present(names: list[str], member: str, strip: int) -> bool:
 
 
 def _github_pin_mismatch(target: _TargetIdentity, probe: Probe) -> str | None:
-    if target.expected_sha256 is None or target.repo is None or target.release_tag is None:
+    if target.registry_pin is None:
         return None
     match = _GITHUB_RELEASE_PATH.match(target.url)
     if match is None:
         return None
     repo, url_tag, _asset = match.groups()
-    if repo != target.repo:
-        return None
     release = probe.release(repo)
     if url_tag != release.tag:
         return None
     digest = release.digests.get(target.asset)
     if digest is None:
         return None
-    if digest.lower() != target.expected_sha256.lower():
+    if digest.lower() != target.registry_pin.lower():
         return (
             f"pinned sha256 differs from GitHub digest for {target.asset} "
             f"on latest release {release.tag}"
@@ -367,7 +373,7 @@ def check_registry(
     probe: Probe,
     state: MutableMapping[str, str],
     *,
-    _full_verify: bool = False,
+    _full_verify: bool = True,
 ) -> Report:
     targets = _collect_targets(tools, probe)
     findings: dict[tuple[str, str, str | None, str, int, bool], Finding] = {}
@@ -762,7 +768,7 @@ def main(argv: Sequence[str] | None = None, *, probe: Probe | None = None) -> in
     tools = load_tools(args.registry)
     state = _load_state(state_path)
     active_probe = probe if probe is not None else default_probe()
-    report = check_registry(tools, active_probe, state, _full_verify=False)
+    report = check_registry(tools, active_probe, state)
     print(format_report(report), end="")
     _save_state(state_path, state)
     return report.exit_code
