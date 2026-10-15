@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import installer.locations
+from installer.atomic import atomic_write_text
 from installer.shellrc import apply_block, strip_block
 
 BANNED: dict[str, str] = {
@@ -551,7 +552,9 @@ def ban_alias_block() -> str:
 def write_ban_aliases(rc_path: Path) -> None:
     """Idempotently write the alias block into rc_path, preserving the rest."""
     existing = rc_path.read_text() if rc_path.exists() else ""
-    rc_path.write_text(apply_block(existing, ban_alias_block(), begin=BAN_BEGIN, end=BAN_END))
+    atomic_write_text(
+        rc_path, apply_block(existing, ban_alias_block(), begin=BAN_BEGIN, end=BAN_END)
+    )
 
 
 def remove_ban_aliases(rc_path: Path) -> None:
@@ -561,7 +564,7 @@ def remove_ban_aliases(rc_path: Path) -> None:
     original = rc_path.read_text()
     stripped = strip_block(original, BAN_BEGIN, BAN_END)
     if stripped != original:
-        rc_path.write_text(stripped)
+        atomic_write_text(rc_path, stripped)
 
 
 def guard_path_warning(

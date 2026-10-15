@@ -187,6 +187,43 @@ def test_remove_ban_aliases_no_block_is_noop(tmp_path: Path):
     assert rc.read_text() == "# user content\n"
 
 
+def test_ban_aliases_write_failure_leaves_the_rc_byte_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """SAFE-04 / D-05: a failed atomic write (disk full, crash) must leave the
+    original rc untouched, byte for byte, with no temp file left behind."""
+    rc = tmp_path / ".zshrc"
+    original = b"export PATH=$HOME/bin:$PATH\n# user bytes\r\n"
+    rc.write_bytes(original)
+
+    def boom(src: object, dst: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("os.replace", boom)
+    with pytest.raises(OSError, match="disk full"):
+        write_ban_aliases(rc)
+    assert rc.read_bytes() == original
+    assert list(tmp_path.glob("*.tools-installer.tmp")) == []
+
+
+def test_ban_aliases_write_through_a_symlinked_rc(tmp_path: Path):
+    """SAFE-04 / D-05: a symlinked rc (dotfiles-manager setup) stays a symlink;
+    the write lands in its target and preserves the user's bytes."""
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    target = dotfiles / "zshrc"
+    target.write_text("# user\nexport A=1\n")
+    rc = tmp_path / ".zshrc"
+    rc.symlink_to(target)
+
+    write_ban_aliases(rc)
+
+    assert rc.is_symlink()
+    new_text = target.read_text()
+    assert BAN_BEGIN in new_text
+    assert new_text.startswith("# user\nexport A=1\n")
+
+
 def test_guard_path_warning_when_shim_dir_not_on_path(tmp_path: Path):
     warning = guard_path_warning(tmp_path, path_value="/usr/bin:/bin", which=lambda _n: None)
     assert warning is not None
