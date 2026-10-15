@@ -3344,23 +3344,27 @@ def _login_shell_tool() -> Tool:
     )
 
 
-def _not_present(monkeypatch: pytest.MonkeyPatch) -> None:
+def _not_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import installer.engine as engine
 
     def fake_not_installed(tool: Tool) -> bool:
         return False
 
     monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+    sandbox = tmp_path / "path-sandbox"
+    sandbox.mkdir()
+    monkeypatch.setenv("PATH", str(sandbox))
 
 
 def test_run_wizard_prints_login_shell_instructions_when_sensitive_confirmed(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     def fake_which(cmd: str) -> str | None:
         return "/usr/bin/chsh" if cmd == "chsh" else None
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
-    _not_present(monkeypatch)
+    _not_present(monkeypatch, tmp_path)
     prompter = FakePrompter(categories=[], tools=[], confirm=True)
     console, buf = _console()
     summary = run_wizard(
@@ -3391,12 +3395,13 @@ def test_run_wizard_prints_login_shell_instructions_when_sensitive_confirmed(
 
 def test_run_wizard_skips_login_shell_instructions_when_sensitive_refused(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     def fake_which(cmd: str) -> str | None:
         return "/usr/bin/chsh" if cmd == "chsh" else None
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
-    _not_present(monkeypatch)
+    _not_present(monkeypatch, tmp_path)
     prompter = FakePrompter(categories=[], tools=[], confirm=True, sensitive_confirm=False)
     console, buf = _console()
     summary = run_wizard(
@@ -3416,12 +3421,13 @@ def test_run_wizard_skips_login_shell_instructions_when_sensitive_refused(
 
 def test_run_wizard_sensitive_unattended_never_asks_and_prints_no_instructions(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     def fake_which(cmd: str) -> str | None:
         return "/usr/bin/chsh" if cmd == "chsh" else None
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
-    _not_present(monkeypatch)
+    _not_present(monkeypatch, tmp_path)
     prompter = FakePrompter(categories=[], tools=[], confirm=True)
     console, buf = _console()
     summary = run_wizard(
@@ -3442,8 +3448,9 @@ def test_run_wizard_sensitive_unattended_never_asks_and_prints_no_instructions(
 
 def test_run_wizard_never_asks_sensitive_question_without_login_shell_action(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    _not_present(monkeypatch)
+    _not_present(monkeypatch, tmp_path)
     prompter = FakePrompter(categories=[], tools=[], confirm=True)
     console, buf = _console()
     summary = run_wizard(

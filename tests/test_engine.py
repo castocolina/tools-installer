@@ -42,6 +42,32 @@ def _tool(
     )
 
 
+@pytest.fixture(autouse=True)
+def scratch_path_for_manager_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    sandbox = tmp_path / "path-sandbox"
+    sandbox.mkdir()
+    monkeypatch.setenv("PATH", str(sandbox))
+    return sandbox
+
+
+def _macos_with_brew() -> Platform:
+    return Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+
+
+def _write_cmd(scratch: Path, name: str, exit_code: int) -> None:
+    script = scratch / name
+    script.write_text(f"#!/bin/sh\nexit {exit_code}\n", encoding="utf-8")
+    script.chmod(0o755)
+
+
+def _patch_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(engine, "is_installed", _always_not_installed)
+
+
+def _always_not_installed(_tool: Tool) -> bool:
+    return False
+
+
 def test_already_installed_short_circuits(monkeypatch: pytest.MonkeyPatch):
     def fake_installed(tool: Tool) -> bool:
         return True
@@ -92,7 +118,9 @@ def test_install_tool_prepends_declared_bin_dir(
         return False
 
     monkeypatch.setattr(engine, "is_installed", fake_not_installed)
-    monkeypatch.setenv("PATH", "/usr/bin")
+    scratch = tmp_path / "path-minimal"
+    scratch.mkdir()
+    monkeypatch.setenv("PATH", str(scratch))
     dest = tmp_path / "pnpm-bin"
     dest.mkdir()
     outcome = install_tool(
@@ -606,7 +634,9 @@ def test_postinstall_hook_sees_the_same_tools_freshly_prepended_bin_dir(
     postinstall dispatch, not after.
     """
     _not_installed(monkeypatch)
-    monkeypatch.setenv("PATH", "/usr/bin")
+    scratch = tmp_path / "path-minimal"
+    scratch.mkdir()
+    monkeypatch.setenv("PATH", str(scratch))
     dest = tmp_path / "tool-bin"
     dest.mkdir()
     seen_path: list[str] = []
@@ -1184,3 +1214,353 @@ def test_default_resolver_verifies_against_the_api_digest(
         assert outcome.status == InstallStatus.INSTALLED
         assert outcome.verified is True
         assert outcome.unverified_reason is None
+
+
+def test_manager_install_with_a_broken_binary_falls_through(
+    monkeypatch: pytest.MonkeyPatch, scratch_path_for_manager_smoke: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    scratch = scratch_path_for_manager_smoke
+    stages: list[str] = []
+
+    def runner(cmd: list[str]) -> None:
+        if cmd[:2] == ["brew", "install"] and "--cask" not in cmd:
+            _write_cmd(scratch, "rg", 127)
+            stages.append("brew")
+        elif cmd[:2] == ["brew", "install"] and "--cask" in cmd:
+            _write_cmd(scratch, "rg", 0)
+            stages.append("cask")
+
+    tool = _tool(
+        Method(kind="brew", params={"formula": "ripgrep"}),
+        Method(kind="cask", params={"cask": "ripgrep"}),
+    )
+    outcome = install_tool(tool, _macos_with_brew(), runner=runner)
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.method_kind == "cask"
+    assert stages == ["brew", "cask"]
+
+    stages.clear()
+
+    def broken_runner(cmd: list[str]) -> None:
+        _write_cmd(scratch, "rg", 127)
+        stages.append(cmd[0])
+
+    outcome = install_tool(
+        _tool(Method(kind="brew", params={"formula": "ripgrep"})),
+        _macos_with_brew(),
+        runner=broken_runner,
+    )
+    assert outcome.status == InstallStatus.FAILED
+    assert stages == ["brew"]
+    assert outcome.errors
+
+
+def test_manager_install_with_a_working_binary_is_installed(
+    monkeypatch: pytest.MonkeyPatch, scratch_path_for_manager_smoke: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    scratch = scratch_path_for_manager_smoke
+
+    def runner(_cmd: list[str]) -> None:
+        _write_cmd(scratch, "rg", 0)
+
+    outcome = install_tool(
+        _tool(Method(kind="brew", params={"formula": "ripgrep"})),
+        _macos_with_brew(),
+        runner=runner,
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.method_kind == "brew"
+
+
+def test_manager_install_without_a_resolvable_cmd_skips_smoke(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_not_installed(monkeypatch)
+    calls: list[Path] = []
+
+    def recording_smoke(
+        path: Path,
+        argv: tuple[str, ...] = ("--version",),
+        **_ignored: object,
+    ) -> None:
+        calls.append(path)
+
+    monkeypatch.setattr(executors, "smoke_binary", recording_smoke)
+    outcome = install_tool(
+        _tool(Method(kind="brew", params={"formula": "ripgrep"})),
+        _macos_with_brew(),
+        runner=lambda _cmd: None,
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    assert calls == []
+
+
+def test_handoff_kinds_are_never_smoked(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_not_installed(monkeypatch)
+    calls: list[Path] = []
+
+    def fail_if_smoked(
+        path: Path,
+        argv: tuple[str, ...] = ("--version",),
+        **_ignored: object,
+    ) -> None:
+        calls.append(path)
+        raise AssertionError("handoff methods must not be smoked")
+
+    monkeypatch.setattr(executors, "smoke_binary", fail_if_smoked)
+    method = Method(kind="host_setup", params={"setup_id": "pi"})
+    outcome = install_tool(_tool(method), _platform(), runner=lambda _cmd: None)
+    assert outcome.status == InstallStatus.MANUAL_REQUIRED
+    assert calls == []
+
+
+def test_declared_bin_dir_is_searchable_before_the_smoke(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    dest = tmp_path / "vendor-bin"
+    dest.mkdir()
+
+    def runner(_cmd: list[str]) -> None:
+        script = dest / "rg"
+        script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        script.chmod(0o755)
+
+    tool = _tool(Method(kind="script", params={"url": "u", "shell": "sh", "bin_dir": str(dest)}))
+    outcome = install_tool(tool, _platform(), runner=runner)
+    assert outcome.status == InstallStatus.INSTALLED
+
+    def runner_broken(_cmd: list[str]) -> None:
+        script = dest / "rg"
+        script.write_text("#!/bin/sh\nexit 127\n", encoding="utf-8")
+        script.chmod(0o755)
+
+    outcome = install_tool(tool, _platform(), runner=runner_broken)
+    assert outcome.status == InstallStatus.FAILED
+
+
+def test_failed_smoke_restores_path_before_the_next_method(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    dir_a = tmp_path / "bin-a"
+    dir_b = tmp_path / "bin-b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    calls = 0
+
+    def runner(_cmd: list[str]) -> None:
+        nonlocal calls
+        calls += 1
+        target = dir_a if calls == 1 else dir_b
+        script = target / "rg"
+        code = 127 if calls == 1 else 0
+        script.write_text(f"#!/bin/sh\nexit {code}\n", encoding="utf-8")
+        script.chmod(0o755)
+
+    tool = _tool(
+        Method(kind="script", params={"url": "u1", "shell": "sh", "bin_dir": str(dir_a)}),
+        Method(kind="script", params={"url": "u2", "shell": "sh", "bin_dir": str(dir_b)}),
+    )
+    outcome = install_tool(tool, _platform(), runner=runner)
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.method_kind == "script"
+    path_entries = os.environ["PATH"].split(os.pathsep)
+    assert str(dir_a) not in path_entries
+    assert path_entries[0] == str(dir_b)
+
+
+def test_declared_bin_dir_binary_is_smoked_not_an_earlier_path_hit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    _write_cmd(scratch_path_for_manager_smoke, "rg", 0)
+    dest = tmp_path / "declared"
+    dest.mkdir()
+
+    def runner(_cmd: list[str]) -> None:
+        script = dest / "rg"
+        script.write_text("#!/bin/sh\nexit 127\n", encoding="utf-8")
+        script.chmod(0o755)
+
+    tool = _tool(Method(kind="script", params={"url": "u", "shell": "sh", "bin_dir": str(dest)}))
+    outcome = install_tool(tool, _platform(), runner=runner, repair=True)
+    assert outcome.status == InstallStatus.FAILED
+
+
+def test_without_a_bin_dir_the_path_hit_is_smoked(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    _write_cmd(first, "rg", 0)
+    _write_cmd(second, "rg", 127)
+    monkeypatch.setenv("PATH", f"{first}{os.pathsep}{second}")
+    outcome = install_tool(
+        _tool(Method(kind="brew", params={"formula": "ripgrep"})),
+        _macos_with_brew(),
+        runner=lambda _cmd: None,
+        repair=True,
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+
+
+def test_manager_smoke_uses_the_declared_argv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    manifest = tmp_path / "registry.toml"
+    manifest.write_text(
+        """
+[[tool]]
+id = "demo"
+name = "Demo"
+category = "search"
+cmd = "demo"
+tier = "user"
+verified = 2026-10-13
+[[tool.method]]
+kind = "brew"
+formula = "demo"
+os = ["macos"]
+smoke_argv = ["--custom"]
+""",
+        encoding="utf-8",
+    )
+    tool = load_tools(manifest)[0]
+    scratch = scratch_path_for_manager_smoke
+
+    def runner(_cmd: list[str]) -> None:
+        script = scratch / "demo"
+        script.write_text(
+            '#!/bin/sh\nif [ "$1" = "--custom" ]; then exit 0; fi\nexit 127\n',
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+
+    outcome = install_tool(tool, _macos_with_brew(), runner=runner)
+    assert outcome.status == InstallStatus.INSTALLED
+
+
+def test_non_executable_declared_bin_dir_file_is_not_smoked(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    declared = tmp_path / ".sdkman" / "bin"
+    declared.mkdir(parents=True)
+    init_script = declared / "sdkman-init.sh"
+    init_script.write_text("# sourced\n", encoding="utf-8")
+    init_script.chmod(0o644)
+    marker = tmp_path / "marker"
+    trap = scratch_path_for_manager_smoke / "sdkman-init.sh"
+    trap.write_text(f'#!/bin/sh\n: > "{marker}"\nexit 127\n', encoding="utf-8")
+    trap.chmod(0o755)
+
+    def runner(_cmd: list[str]) -> None:
+        return None
+
+    tool = Tool(
+        id="sdkman-init",
+        name="SDKMAN init",
+        category="shell",
+        cmd="sdkman-init.sh",
+        methods=(
+            Method(
+                kind="script",
+                params={"url": "u", "shell": "sh", "bin_dir": str(declared)},
+            ),
+        ),
+    )
+    outcome = install_tool(tool, _platform(), runner=runner)
+    assert outcome.status == InstallStatus.INSTALLED
+    assert not marker.exists()
+
+
+def test_missing_declared_bin_dir_file_falls_back_to_which(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    dest = tmp_path / "empty-bin"
+    dest.mkdir()
+    scratch = scratch_path_for_manager_smoke
+    tool = _tool(Method(kind="script", params={"url": "u", "shell": "sh", "bin_dir": str(dest)}))
+
+    def runner_ok(_cmd: list[str]) -> None:
+        _write_cmd(scratch, "rg", 0)
+
+    assert install_tool(tool, _platform(), runner=runner_ok).status == InstallStatus.INSTALLED
+
+    def runner_broken(_cmd: list[str]) -> None:
+        _write_cmd(scratch, "rg", 127)
+
+    outcome = install_tool(tool, _platform(), runner=runner_broken)
+    assert outcome.status == InstallStatus.FAILED
+
+
+def test_failed_manager_smoke_reports_the_removal_command_and_never_uninstalls(
+    monkeypatch: pytest.MonkeyPatch, scratch_path_for_manager_smoke: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    recorded: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        recorded.append(cmd)
+        _write_cmd(scratch_path_for_manager_smoke, "rg", 127)
+
+    outcome = install_tool(
+        _tool(Method(kind="brew", params={"formula": "ripgrep"})),
+        _macos_with_brew(),
+        runner=runner,
+    )
+    assert outcome.status == InstallStatus.FAILED
+    last = str(outcome.errors[-1])
+    assert "brew uninstall ripgrep" in last
+    assert not any("uninstall" in arg or "remove" in arg for cmd in recorded for arg in cmd)
+
+
+def test_leftover_package_is_reported_on_a_later_install(
+    monkeypatch: pytest.MonkeyPatch, scratch_path_for_manager_smoke: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    scratch = scratch_path_for_manager_smoke
+    stage = 0
+
+    def runner(cmd: list[str]) -> None:
+        nonlocal stage
+        stage += 1
+        if stage == 1:
+            _write_cmd(scratch, "rg", 127)
+        else:
+            _write_cmd(scratch, "rg", 0)
+
+    tool = _tool(
+        Method(kind="brew", params={"formula": "ripgrep"}),
+        Method(kind="cask", params={"cask": "ripgrep"}),
+    )
+    outcome = install_tool(tool, _macos_with_brew(), runner=runner)
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.postinstall_warning is not None
+    assert "brew uninstall ripgrep" in outcome.postinstall_warning
+
+
+def test_failed_vendor_script_smoke_names_its_own_uninstaller(
+    monkeypatch: pytest.MonkeyPatch, scratch_path_for_manager_smoke: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+
+    def runner(_cmd: list[str]) -> None:
+        _write_cmd(scratch_path_for_manager_smoke, "rg", 127)
+
+    outcome = install_tool(
+        _tool(Method(kind="script", params={"url": "u", "shell": "sh"})),
+        _platform(),
+        runner=runner,
+    )
+    assert outcome.status == InstallStatus.FAILED
+    last = str(outcome.errors[-1])
+    assert "that installer's own uninstaller" in last

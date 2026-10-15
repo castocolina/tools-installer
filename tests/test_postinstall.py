@@ -548,6 +548,9 @@ def test_installing_graphify_runs_no_host_registration(
     cwd.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(cwd)
+    path_sandbox = tmp_path / "path-sandbox"
+    path_sandbox.mkdir()
+    monkeypatch.setenv("PATH", str(path_sandbox))
     calls: list[list[str]] = []
     outcome = install_tool(
         graphify,

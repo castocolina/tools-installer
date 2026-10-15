@@ -1,6 +1,7 @@
 import inspect
 from collections.abc import Mapping
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -592,11 +593,15 @@ def _mutable_platform() -> Platform:
 
 def test_with_sensitive_confirm_reaches_post_install_gate(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     def fake_which(cmd: str) -> str | None:
         return "/usr/bin/chsh" if cmd == "chsh" else None
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
+    sandbox = tmp_path / "path-sandbox"
+    sandbox.mkdir()
+    monkeypatch.setenv("PATH", str(sandbox))
 
     def fake_not_installed(tool: Tool) -> bool:
         return False
@@ -646,11 +651,15 @@ def test_with_sensitive_confirm_forwards_bound_confirmation_and_unchanged_kwargs
 
 def test_with_sensitive_confirm_none_is_callable_and_produces_no_instructions(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     def fake_which(cmd: str) -> str | None:
         return "/usr/bin/chsh" if cmd == "chsh" else None
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
+    sandbox = tmp_path / "path-sandbox"
+    sandbox.mkdir()
+    monkeypatch.setenv("PATH", str(sandbox))
 
     def fake_not_installed(tool: Tool) -> bool:
         return False
