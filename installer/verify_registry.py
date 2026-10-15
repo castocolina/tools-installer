@@ -46,12 +46,14 @@ from installer.versions import (
 )
 
 EXIT_USAGE = 64
+EXIT_WRITE_REFUSED = 73
 
 EditKey = Literal["verified", "version", "sha256"]
 
 __all__ = [
     "CHECKABLE_KINDS",
     "EXIT_USAGE",
+    "EXIT_WRITE_REFUSED",
     "Finding",
     "Probe",
     "RegistryEdit",
@@ -1674,6 +1676,7 @@ def main(
     args = parser.parse_args(list(argv) if argv is not None else None)
     write_day = today if today is not None else date.today()
     state_path = args.state if args.state is not None else default_state_path()
+    registry_text = args.registry.read_text(encoding="utf-8")
     tools = load_tools(args.registry)
     state = _load_state(state_path)
     gh_runner = gh if gh is not None else functools.partial(run_output, timeout=60)
@@ -1705,20 +1708,24 @@ def main(
     else:
         explicit = {}
     if args.write:
-        bumps = _plan_bumps(tools, initial_report, active_probe, explicit)
-        tools_by_id = {tool.id: tool for tool in tools}
-        report = _finalize_report_after_bumps(initial_report, tools_by_id, bumps)
-        registry_text = args.registry.read_text()
-        edits = _registry_edits_for_write(report, bumps, write_day)
-        if edits:
-            try:
+        try:
+            bumps = _plan_bumps(tools, initial_report, active_probe, explicit)
+            tools_by_id = {tool.id: tool for tool in tools}
+            report = _finalize_report_after_bumps(initial_report, tools_by_id, bumps)
+            edits = _registry_edits_for_write(report, bumps, write_day)
+            if edits:
+                current_text = args.registry.read_text(encoding="utf-8")
+                if current_text != registry_text:
+                    raise RegistryWriteError(
+                        "registry changed during the run; rerun verify-registry"
+                    )
                 updated = apply_registry_edits(registry_text, edits)
-            except RegistryWriteError as exc:
-                print(str(exc), file=sys.stderr)
-                return EXIT_USAGE
-            atomic_write_text(args.registry, updated)
-            for tool_id in report.passed_tools():
-                print(f"dated {tool_id}", file=sys.stderr)
+                atomic_write_text(args.registry, updated)
+                for tool_id in report.passed_tools():
+                    print(f"dated {tool_id}", file=sys.stderr)
+        except RegistryWriteError as exc:
+            print(str(exc), file=sys.stderr)
+            return EXIT_WRITE_REFUSED
     elif explicit:
         print("--candidate requires --write", file=sys.stderr)
         return EXIT_USAGE

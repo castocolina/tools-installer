@@ -24,6 +24,7 @@ from installer.model import load_tools
 from installer.run import CommandError
 from installer.verify_registry import (
     EXIT_USAGE,
+    EXIT_WRITE_REFUSED,
     Finding,
     Probe,
     RegistryEdit,
@@ -2487,6 +2488,110 @@ def test_write_dates_only_passing_tools(tmp_path: Path, monkeypatch: pytest.Monk
     b_block = text.split('id = "tool_b"')[1].split("[[tool]]")[0]
     assert "verified = 2026-10-01" in b_block
     assert code == 1
+
+
+def test_write_refuses_when_the_registry_changed_during_the_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from installer import verify_registry as vr
+
+    registry = _two_tool_write_fixture(tmp_path)
+    tar_a = _gz_tar_bytes({"bin/a": b"x"})
+    tar_b = _gz_tar_bytes({"bin/b": b"y"})
+    url_a = "https://example.com/a-1.0.0.tar.gz"
+    url_b = "https://example.com/b-1.0.0.tar.gz"
+    release = Release(tag="v1.0.0", digests={})
+    head_calls = 0
+
+    def head(url: str) -> str:
+        nonlocal head_calls
+        if head_calls == 0:
+            head_calls += 1
+            modified = registry.read_text()
+            modified = modified.replace('member = "bin/b"', 'member = "bin/b2"')
+            if not modified.endswith("\n"):
+                modified += "\n"
+            modified += "# touched during verify\n"
+            registry.write_text(modified)
+        if url in (url_a, url_b):
+            return 'etag:"1"'
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    def download(url: str, dest: Path) -> None:
+        if url == url_a:
+            dest.write_bytes(tar_a)
+        elif url == url_b:
+            dest.write_bytes(tar_b)
+        else:
+            raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    probe = Probe(release=lambda _r: release, head=head, download=download)
+    state_path = tmp_path / "state.json"
+    code = vr.main(
+        ["--registry", str(registry), "--state", str(state_path), "--write"],
+        probe=probe,
+        today=date(2026, 10, 15),
+    )
+    expected_bytes = registry.read_bytes()
+    captured = capsys.readouterr()
+    assert code == EXIT_WRITE_REFUSED
+    assert "registry changed during the run" in captured.err
+    assert registry.read_bytes() == expected_bytes
+    assert "verified = 2026-10-15" not in registry.read_text()
+
+
+def test_refused_write_leaves_the_registry_untouched_and_exits_73(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from installer import verify_registry as vr
+
+    tar = _gz_tar_bytes({"bin/solo": b"x"})
+    digest = hashlib.sha256(tar).hexdigest()
+    content = f"""
+[[tool]]
+id = "solo"
+name = "solo"
+category = "git"
+cmd = "solo"
+priority = "P2"
+audience = "both"
+tier = "user"
+verified=2026-10-01
+[[tool.method]]
+kind = "tarball"
+url = "https://example.com/solo-{{ver}}.tar.gz"
+version = "1.0.0"
+member = "bin/solo"
+strip = 0
+sha256 = "{digest}"
+"""
+    registry = _write_registry(tmp_path, content)
+    before = registry.read_bytes()
+    url = "https://example.com/solo-1.0.0.tar.gz"
+    release = Release(tag="v1.0.0", digests={})
+
+    def head(u: str) -> str:
+        if u == url:
+            return 'etag:"1"'
+        raise HTTPError(u, 404, "missing", Message(), fp=io.BytesIO())
+
+    def download(u: str, dest: Path) -> None:
+        if u == url:
+            dest.write_bytes(tar)
+        else:
+            raise HTTPError(u, 404, "missing", Message(), fp=io.BytesIO())
+
+    probe = Probe(release=lambda _r: release, head=head, download=download)
+    state_path = tmp_path / "state.json"
+    code = vr.main(
+        ["--registry", str(registry), "--state", str(state_path), "--write"],
+        probe=probe,
+        today=date(2026, 10, 15),
+    )
+    captured = capsys.readouterr()
+    assert code == EXIT_WRITE_REFUSED
+    assert registry.read_bytes() == before
+    assert captured.err
 
 
 def test_writer_keeps_every_other_byte(tmp_path: Path) -> None:
