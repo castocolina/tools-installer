@@ -11,10 +11,10 @@ with no screen changes.
 import contextlib
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from installer import daemon, env_redirect, systemd_daemon
 from installer.agent_env import AgentAdapter
@@ -156,12 +156,58 @@ class Policy:
     # it at the next login. None means is_active/active already answers the
     # footprint question for this policy.
     owned: Callable[[], bool] | None = None
+    # 17-08 D-09 (RUN-LEDGER Q2 refinement): only link-mode-dependent policies
+    # move on a link-mode change — the ones whose blocks land in files the mode
+    # selects. The daemon, omz-plugins and the Linux environment.d cache
+    # redirect never depend on the mode, so re-applying them would re-bootstrap
+    # services and rewrite .zshrc for nothing.
+    link_mode_aware: bool = False
 
     def missing_requirements(self) -> tuple[str, ...]:
         """Read prerequisites at the point a policy is rendered or applied."""
         if self.missing_requires_now is not None:
             return self.missing_requires_now()
         return self.missing_requires
+
+
+@dataclass(frozen=True)
+class PolicyMove:
+    """One policy's outcome in a link-mode move (17-08 D-09).
+
+    New on purpose: `uninstall.SweepResult` cannot be imported here because
+    installer/uninstall.py already imports installer/policy.py, and
+    `PolicyResult` is one apply/remove's layers, not a per-policy moved/failed
+    status.
+    """
+
+    policy_id: str
+    status: Literal["moved", "failed"]
+    detail: str
+
+
+def move_link_mode(
+    policies: Sequence[Policy],
+    new_mode: str,
+    set_link_mode: Callable[[str], None],
+    *,
+    old_mode: str,
+) -> tuple[PolicyMove, ...]:
+    """Move active link-mode-aware policies from `old_mode` to `new_mode` (D-09).
+
+    Removes each policy while the old mode is still live, saves the new mode,
+    then applies each in the new mode, returning one entry per policy. Callers
+    pass only link-mode-aware, active policies; the function trusts that (no
+    second active filter). With an empty list it only saves the mode.
+    """
+    for policy in policies:
+        policy.remove()
+    set_link_mode(new_mode)
+    for policy in policies:
+        policy.apply()
+    return tuple(
+        PolicyMove(policy.id, "moved", f"moved from {old_mode} to {new_mode}")
+        for policy in policies
+    )
 
 
 @dataclass(frozen=True)
@@ -345,6 +391,7 @@ def ban_policy(
         active=any(guard_status(shim_dir).values()),
         apply=_apply,
         remove=_remove,
+        link_mode_aware=True,
     )
 
 
@@ -451,6 +498,7 @@ def tweak_policy(
         remove=_remove,
         requires=bundle.requires,
         missing_requires=missing_requires,
+        link_mode_aware=True,
     )
 
 
@@ -577,6 +625,7 @@ def cache_redirect_policy(
         apply=_apply,
         remove=_remove,
         is_active=_is_active,
+        link_mode_aware=(platform_os == "macos"),
     )
 
 

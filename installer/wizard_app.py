@@ -45,7 +45,7 @@ from installer.guidance import (
 )
 from installer.model import Tool
 from installer.pnpm_globals import NodeGlobalsReport, reinstall_preview
-from installer.policy import Policy, PolicyResult
+from installer.policy import Policy, PolicyMove, PolicyResult, move_link_mode
 from installer.rcclean import PathWriterLine, group_writer_lines
 from installer.render import guidance_text
 from installer.resolve import UnavailableReason
@@ -2186,12 +2186,42 @@ class PoliciesScreen(AppScreen):
         setter = self._set_link_mode
         if setter is None:
             return
-        _, error = run_live(lambda: setter(value))
+        aware_active = self.link_mode_aware_active()
+        old = self._link_mode() if self._link_mode is not None else "centralized"
+        report, error = run_live(lambda: move_link_mode(aware_active, value, setter, old_mode=old))
         if error is not None:
             self.status.set(error, "error")
             return
-        self.status.set(f"Link mode saved: {value}.", "ok")
+        text, severity = _link_mode_status(value, report or ())
+        self.status.set(text, severity)
         self._refresh_link_mode_line()
+
+    def link_mode_aware_active(self) -> list[Policy]:
+        """The active, link-mode-aware policies: the ones a mode change moves.
+
+        The live truth is this screen's own active_state (refreshed by every
+        toggle), never uninstall.active_policies, which rebuilds its own policy
+        objects from bundles and cannot see the ban (17-08 D-09).
+        """
+        return [
+            policy
+            for policy in self._policies
+            if policy.link_mode_aware and self.active_state.get(policy.id, False)
+        ]
+
+
+def _link_mode_status(value: str, report: Sequence[PolicyMove]) -> tuple[str, str]:
+    """(text, severity) both link-mode pickers show after a move: the saved
+    mode, the policies moved, and every failure named. Severity is warn when
+    any entry failed (the mode itself was still saved), ok otherwise."""
+    parts = [f"Link mode saved: {value}."]
+    moved = [entry.policy_id for entry in report if entry.status == "moved"]
+    failed = [entry for entry in report if entry.status == "failed"]
+    if moved:
+        parts.append(f" Moved: {', '.join(moved)}.")
+    for entry in failed:
+        parts.append(f" Failed: {entry.policy_id} ({entry.detail}).")
+    return "".join(parts), ("warn" if failed else "ok")
 
 
 class ConfirmGuardFile(ModalScreen[bool]):

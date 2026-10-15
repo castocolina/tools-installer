@@ -5,12 +5,22 @@ from pathlib import Path
 import pytest
 
 from installer.guards import (
+    BAN_BEGIN,
+    BAN_END,
     REDIRECT_SENTINEL,
     SHIM_SENTINEL,
     guard_status,
     install_shims,
 )
-from installer.policy import Policy, PolicyLayer, PolicyResult, ban_policy
+from installer.policy import (
+    Policy,
+    PolicyLayer,
+    PolicyResult,
+    ban_policy,
+    move_link_mode,
+    tweak_policy,
+)
+from installer.tweaks import BUNDLES, tweak_block
 
 
 def _ban(
@@ -230,3 +240,87 @@ def test_ban_policy_still_accepts_a_plain_list(tmp_path: Path) -> None:
     rc = tmp_path / ".myshellrc"
     result = _ban(tmp_path, apply_to=[rc]).apply()
     assert str(rc) in result.layers[1].detail
+
+
+# --- link-mode move (17-08) -------------------------------------------------
+
+
+def _mode_policies(home: Path, mode: dict[str, str]) -> tuple[Policy, Policy]:
+    """A ban and a tweak whose closures read the live mode from `mode["v"]`."""
+    myshellrc = home / ".myshellrc"
+    zshrc = home / ".zshrc"
+    bashrc = home / ".bashrc"
+    shim_dir = home / ".local" / "bin"
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    ban = ban_policy(
+        shim_dir=shim_dir,
+        apply_rc_paths=lambda: [myshellrc] if mode["v"] == "centralized" else [zshrc, bashrc],
+        remove_rc_paths=[myshellrc, zshrc, bashrc],
+        path_value=str(shim_dir),
+        which=lambda _name: None,
+    )
+    bundle = next(b for b in BUNDLES if b.id == "claude-skip")
+    tweak = tweak_policy(
+        bundle,
+        rc_path=myshellrc,
+        ensure_sourced_from=lambda: (zshrc, bashrc) if mode["v"] == "split" else (),
+    )
+    return ban, tweak
+
+
+def _setter(mode: dict[str, str]) -> Callable[[str], None]:
+    def set_mode(value: str) -> None:
+        mode["v"] = value
+
+    return set_mode
+
+
+def test_move_link_mode_moves_ban_and_tweak_to_split(tmp_path: Path) -> None:
+    mode = {"v": "centralized"}
+    ban, tweak = _mode_policies(tmp_path, mode)
+    ban.apply()
+    tweak.apply()
+    myshellrc = tmp_path / ".myshellrc"
+    zshrc = tmp_path / ".zshrc"
+    bashrc = tmp_path / ".bashrc"
+
+    report = move_link_mode([ban, tweak], "split", _setter(mode), old_mode="centralized")
+
+    # ban aliases: gone from ~/.myshellrc, present in each rc split sources
+    assert "tools-installer ban" not in myshellrc.read_text()
+    assert "tools-installer ban" in zshrc.read_text()
+    assert "tools-installer ban" in bashrc.read_text()
+    # tweak block stays in ~/.myshellrc, now sourced from each rc
+    assert "tools-installer tweak:claude-skip" in myshellrc.read_text()
+    for rc in (zshrc, bashrc):
+        assert f'. "{myshellrc}"' in rc.read_text()
+    assert mode["v"] == "split"
+    assert [entry.policy_id for entry in report] == ["ban", "tweak:claude-skip"]
+    assert all(entry.status == "moved" for entry in report)
+
+
+def test_link_mode_move_keeps_foreign_rc_bytes_identical(tmp_path: Path) -> None:
+    from installer.shellrc import remove_source_block, strip_block
+
+    mode = {"v": "centralized"}
+    ban, tweak = _mode_policies(tmp_path, mode)
+    foreign = "export EDITOR=vi\n# my own config\n"
+    for rc in (tmp_path / ".myshellrc", tmp_path / ".zshrc", tmp_path / ".bashrc"):
+        rc.write_text(foreign)
+    ban.apply()
+    tweak.apply()
+
+    move_link_mode([ban, tweak], "split", _setter(mode), old_mode="centralized")
+
+    begin, rest = tweak_block(next(b for b in BUNDLES if b.id == "claude-skip")).split("\n", 1)
+    tweak_begin, tweak_end = begin, rest.rsplit("\n", 1)[1]
+    checked = tmp_path / "check"
+    checked.mkdir()
+    for rc in (tmp_path / ".myshellrc", tmp_path / ".zshrc", tmp_path / ".bashrc"):
+        text = rc.read_text()
+        text = strip_block(text, BAN_BEGIN, BAN_END)
+        text = strip_block(text, tweak_begin, tweak_end)
+        copy = checked / rc.name
+        copy.write_text(text)
+        remove_source_block(copy)
+        assert copy.read_text().rstrip("\n") == foreign.rstrip("\n")

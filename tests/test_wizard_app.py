@@ -4730,7 +4730,7 @@ def test_policy_appends_decided_closures_after_every_existing_field() -> None:
 
     names = [field.name for field in dataclasses.fields(Policy)]
     # Later optional fields are appended after them, never inserted before.
-    assert names[-3:] == ["decided", "clear_decided", "owned"]
+    assert names[-4:] == ["decided", "clear_decided", "owned", "link_mode_aware"]
 
 
 def test_unarmed_collector_wait_returns_immediately() -> None:

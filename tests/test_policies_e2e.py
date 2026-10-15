@@ -709,3 +709,73 @@ async def test_daemon_policy_time_picker_rewrites_the_real_plist_and_updates_det
         await pilot.press("l")
         assert "=== 2026-09-01T03:00:00+00:00 ===" in screen.detail_text
         assert "deleted: 2" in screen.detail_text
+
+
+async def test_policies_screen_link_mode_change_moves_active_policies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home = Path.home()
+    real_dir = _plant_volta_and_pnpm(home)
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    rc = home / ".myshellrc"
+    zshrc = home / ".zshrc"
+    bashrc = home / ".bashrc"
+    mode = {"v": "centralized"}
+    ban = ban_policy(
+        shim_dir=bin_dir,
+        apply_rc_paths=lambda: [rc] if mode["v"] == "centralized" else [zshrc, bashrc],
+        remove_rc_paths=[rc, zshrc, bashrc],
+        path_value=f"{bin_dir}:{real_dir}",
+        which=lambda _name: None,
+    )
+    bundle = next(b for b in BUNDLES if b.id == "claude-skip")
+    tweak = tweak_policy(
+        bundle,
+        rc_path=rc,
+        ensure_sourced_from=lambda: (zshrc, bashrc) if mode["v"] == "split" else (),
+    )
+    app = UnifiedApp(
+        [_tool()],
+        {"rg": True},
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: (guard_status(bin_dir), None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=UninstallInputs(
+            rows=list,
+            ban_names=list,
+            has_path_block=lambda: False,
+            remove=lambda _d: SweepResult(),
+        ),
+        policies=PolicyInputs(
+            policies=[ban, tweak],
+            link_mode=lambda: mode["v"],
+            set_link_mode=lambda value: mode.__setitem__("v", value),
+        ),
+        initial_view="policies",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        await pilot.press("space")  # enable the ban (row 0)
+        await _settle_toggle(screen, pilot)
+        await pilot.press("down", "space")  # enable the tweak (row 1)
+        await _settle_toggle(screen, pilot)
+        assert "tools-installer ban" in rc.read_text()
+        await pilot.press("m")
+        await pilot.press("down", "down", "enter")  # pick split
+        await pilot.pause()
+
+        assert mode["v"] == "split"
+        assert "tools-installer ban" not in rc.read_text()
+        assert "tools-installer ban" in zshrc.read_text()
+        assert "tools-installer ban" in bashrc.read_text()
+        assert "tools-installer tweak:claude-skip" in rc.read_text()
+        for split_rc in (zshrc, bashrc):
+            assert f'. "{rc}"' in split_rc.read_text()
+        assert "Link mode saved: split" in screen.status.text
+        assert "Moved: ban" in screen.status.text
+        assert screen.status.severity == "ok"
