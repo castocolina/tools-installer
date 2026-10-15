@@ -103,6 +103,10 @@ Out of scope: receipts and health (19); script `paths`/`remove`/`update`/`writab
 - **Ledger L-18-11 (D-07 / L-18-04 granularity, verifiable):** state and findings are kept per tool/URL/member; HEAD and downloads are de-duplicated per URL per run.
 - **Ledger L-18-12 (D-09 `--write` verdict, jev + orchestrator):** a `--write` run's report and exit code describe the registry as written (applied bump = ok + `bumped` note; unapplied = drift, exit 1). Plan 18-15's read-only rerun stays the acceptance gate (Laya/TypeSafe below floor -> orchestrator).
 - **Ledger L-18-13 (R3/R11 ordering, D-14 quotes, verifiable):** "newer stable" is ranked with `versions.is_outdated`; an incomparable tag is an inconclusive finding, never drift. The version normalizer strips one leading and one trailing quote independently.
+- **Ledger L-18-14 (refines L-18-09, verifiable):** with a declared `bin_dir`: an executable `<bin_dir>/<cmd>` is smoked; a present but non-executable one (e.g. sourced `sdkman-init.sh`, mode 0644) means nothing to smoke and the method stays INSTALLED (RESEARCH Pitfall 8); a missing one falls back to `which(cmd)` with the narrowed L-18-09 claim.
+- **Ledger L-18-15 (refines L-18-10, verifiable):** for the whole-run outage only transport failures (no HTTP response) and rate limits count as failed reads; any HTTP response (403 without rate-limit evidence, 404) reached GitHub and is a per-repo finding, never a whole-run block.
+- **Ledger L-18-16 (SPEC REG-05 "no linked binary" for manager kinds, jev):** the guarantee covers installer-created links. A package-manager package left installed by a failed smoke is reported in the result with the exact manager removal command; the installer never auto-uninstalls it (TypeSafe installer_links_only p=0.99).
+- **Note (cycle 2, literal readings):** D-06 loader-error detection also applies to stderr on exit 0; L-18-11 state keys include the tool id and the extraction settings (archive/strip/raw).
 
 ### Claude's Discretion
 - Plan and wave order. Suggested:
