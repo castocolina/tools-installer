@@ -1,6 +1,6 @@
+import hashlib
 import inspect
 import os
-import shlex
 from pathlib import Path
 
 import pytest
@@ -8,6 +8,8 @@ import pytest
 import installer.apps as apps_mod
 from installer import atomic
 from installer.apps import APP_KINDS, cli_spec, install_app, update_app
+from installer.atomic import NEW_SUFFIX, OLD_SUFFIX
+from installer.checksums import ChecksumMismatch
 from installer.executors import ExecutorError
 from installer.model import Method, load_tools
 from installer.run import Runner
@@ -49,19 +51,20 @@ def test_shipped_app_cli_links_match_the_tool_cmd() -> None:
             )
 
 
-def test_install_app_builds_curl_ditto_mv_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_install_app_uses_plain_curl_and_ditto_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    calls, runner = _record()
+    member = Path("Demo App.app/Contents/SharedSupport/bin/demo")
+    calls, runner = fixture_runner(None, {"app.zip": b"zip"}, member=member)
     install_app(_method(), runner)
     apps = tmp_path / "Applications"
-    assert apps.is_dir()  # created before the pipeline runs
-    expected = (
-        "tmp=$(mktemp -d) && trap 'rm -rf \"$tmp\"' EXIT"
-        ' && curl -fsSL -o "$tmp/app.zip" -- https://example.test/app.zip'
-        ' && ditto -x -k "$tmp/app.zip" "$tmp/x"'
-        f" && mv \"$tmp/x/\"'Demo App.app' {shlex.quote(str(apps))}/"
-    )
-    assert calls == [["sh", "-c", expected]]
+    assert apps.is_dir()
+    assert (apps / "Demo App.app").exists()
+    assert calls[0][0] == "curl"
+    assert calls[0][calls[0].index("--") + 1] == "https://example.test/app.zip"
+    assert calls[1][:3] == ["ditto", "-x", "-k"]
+    assert not any(cmd and cmd[0] == "sh" for cmd in calls)
 
 
 def test_install_app_links_the_cli_under_cli_name(
@@ -69,18 +72,15 @@ def test_install_app_links_the_cli_under_cli_name(
 ) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     cli = "Contents/MacOS/draw.io"
-    member = tmp_path / "Applications" / "draw.io.app" / cli
-    member.parent.mkdir(parents=True)
-    member.write_bytes(b"drawio-cli")
-    member.chmod(0o755)
-    calls, runner = fixture_runner(None, {}, member=member)
+    member = Path("draw.io.app") / cli
+    calls, runner = fixture_runner(None, {"app.zip": b"zip"}, member=member)
     install_app(
         _method(app="draw.io.app", cli=cli, cli_name="drawio"),
         runner,
     )
     link = tmp_path / ".local" / "bin" / "drawio"
     assert link.is_symlink()
-    assert os.readlink(link) == str(member)
+    assert os.readlink(link) == str(tmp_path / "Applications" / "draw.io.app" / cli)
     assert not (tmp_path / ".local" / "bin" / "draw.io").exists()
     assert not any(cmd and cmd[0] in SHELLED_LINKERS for cmd in calls)
 
@@ -115,16 +115,14 @@ def test_install_app_rejects_bad_cli_name_before_side_effects(
 def test_install_app_symlinks_declared_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     cli = "Contents/SharedSupport/bin/demo"
-    member = tmp_path / "Applications" / "Demo App.app" / cli
-    member.parent.mkdir(parents=True)
-    member.write_bytes(b"bundle-cli")
-    member.chmod(0o644)
-    calls, runner = fixture_runner(None, {}, member=member)
+    member = Path("Demo App.app") / cli
+    calls, runner = fixture_runner(None, {"app.zip": b"zip"}, member=member)
     install_app(_method(cli=cli), runner)
     link = tmp_path / ".local" / "bin" / "demo"
     assert link.is_symlink()
-    assert os.readlink(link) == str(member)
-    assert member.stat().st_mode & 0o777 == 0o644  # a bundle CLI keeps its own mode
+    live_cli = tmp_path / "Applications" / "Demo App.app" / cli
+    assert os.readlink(link) == str(live_cli)
+    assert live_cli.stat().st_mode & 0o777 == 0o755  # staged CLI must be executable before link
     assert not any(cmd and cmd[0] in SHELLED_LINKERS for cmd in calls)
     assert (tmp_path / ".local" / "bin").is_dir()
 
@@ -135,31 +133,37 @@ def test_install_app_cli_that_is_a_directory_links_nothing(
     """A bundle CLI path that is a directory is not linked."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     cli = "Contents/SharedSupport/bin/demo"
-    member = tmp_path / "Applications" / "Demo App.app" / cli
-    calls, runner = fixture_runner(None, {}, member=member)
+    member = Path("Demo App.app") / cli
+    calls, runner = fixture_runner(None, {"app.zip": b"zip"}, member=member)
 
     def plant_directory(cmd: list[str]) -> None:
         runner(cmd)
-        if cmd and cmd[0] == "sh" and "ditto " in cmd[-1]:
-            member.unlink()
-            member.mkdir()
+        if cmd and cmd[0] == "ditto":
+            extract_root = Path(cmd[-1])
+            live_cli = extract_root / member
+            if live_cli.is_file():
+                live_cli.unlink()
+            live_cli.mkdir(parents=True)
 
-    with pytest.raises(ExecutorError, match="demo"):
+    with pytest.raises(ExecutorError, match="regular file"):
         install_app(_method(cli=cli), plant_directory)
-    assert member.is_dir()
     link = tmp_path / ".local" / "bin" / "demo"
+    assert not (tmp_path / "Applications" / "Demo App.app").exists()
     assert not link.exists()
     assert not link.is_symlink()
     assert not any(cmd and cmd[0] in SHELLED_LINKERS for cmd in calls)
 
 
-def test_install_app_without_cli_runs_only_the_pipeline(
+def test_install_app_without_cli_runs_curl_and_ditto(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    calls, runner = _record()
+    member = Path("Demo App.app/Contents/PkgInfo")
+    calls, runner = fixture_runner(None, {"app.zip": b"zip"}, member=member)
     install_app(_method(), runner)
-    assert len(calls) == 1
+    assert len(calls) == 2
+    assert calls[0][0] == "curl"
+    assert calls[1][0] == "ditto"
 
 
 def test_install_app_requires_url_and_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -224,7 +228,7 @@ def test_install_app_wraps_bin_dir_oserror(tmp_path: Path, monkeypatch: pytest.M
     calls, runner = _record()
     with pytest.raises(ExecutorError, match="bin dir"):
         install_app(_method(cli="Contents/bin/demo"), runner)
-    assert len(calls) == 1  # the pipeline ran; only the symlink step failed
+    assert calls == []  # bin dir is prepared before any network fetch
 
 
 def _plant_bundle(tmp_path: Path, *, app: str = "Demo App.app", cli: str | None = None) -> Path:
@@ -380,7 +384,7 @@ def test_update_app_source_uses_os_replace_not_mv() -> None:
     assert "shutil.move" not in source
     assert " mv " not in source
     install_source = inspect.getsource(install_app)
-    assert " mv " in install_source
+    assert "sh" not in install_source or '"sh"' not in install_source
 
 
 def test_update_app_cleanup_failure_is_warning(
@@ -425,7 +429,174 @@ def test_update_app_directory_cli_rolls_back(
         else:
             runner(cmd)
 
-    with pytest.raises(ExecutorError, match="restored"):
+    with pytest.raises(ExecutorError, match="regular file"):
         update_app(_method(cli="Contents/SharedSupport/bin/demo"), dir_cli_runner)
     assert (bundle / "marker").read_text() == "original"
     assert os.readlink(tmp_path / ".local" / "bin" / "demo") == original
+
+
+def _drawio_method(**extra: object) -> Method:
+    params: dict[str, object] = {
+        "url": (
+            "https://github.com/jgraph/drawio-desktop/releases/download/v{ver}/"
+            "draw.io-arm64-{ver}.zip"
+        ),
+        "version": "32.4.1",
+        "app": "draw.io.app",
+        "cli": "Contents/MacOS/draw.io",
+        "cli_name": "drawio",
+    }
+    params.update(extra)
+    return Method(kind="app", params=params)
+
+
+def test_pinned_app_is_verified_and_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    payload = b"drawio-zip-bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+    member = Path("draw.io.app/Contents/MacOS/draw.io")
+    calls, runner = fixture_runner(None, {"app.zip": payload}, member=member)
+    reason = install_app(_drawio_method(sha256=digest), runner)
+    assert reason is None
+    assert (tmp_path / "Applications" / "draw.io.app").is_dir()
+    link = tmp_path / ".local" / "bin" / "drawio"
+    assert link.is_symlink()
+    url = calls[0][calls[0].index("--") + 1]
+    assert url == (
+        "https://github.com/jgraph/drawio-desktop/releases/download/v32.4.1/"
+        "draw.io-arm64-32.4.1.zip"
+    )
+
+
+def test_unpinned_app_installs_unverified_with_a_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    member = Path("Visual Studio Code.app/Contents/Resources/app/bin/code")
+    _, runner = fixture_runner(None, {"app.zip": b"vscode"}, member=member)
+    method = Method(
+        kind="app",
+        params={
+            "url": "https://update.code.visualstudio.com/latest/darwin-arm64/stable",
+            "app": "Visual Studio Code.app",
+        },
+    )
+    reason = install_app(method, runner)
+    assert reason == "unpinned url; no sha256 to verify against"
+    assert (tmp_path / "Applications" / "Visual Studio Code.app").exists()
+
+
+def test_non_executable_staged_cli_moves_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _plant_bundle(tmp_path, app="draw.io.app", cli="Contents/MacOS/draw.io")
+    link = tmp_path / ".local" / "bin" / "drawio"
+    if link.exists() or link.is_symlink():
+        link.unlink()
+    os.symlink(str(bundle / "Contents/MacOS/draw.io"), link)
+    original_bytes = (bundle / "Contents/MacOS/draw.io").read_bytes()
+    original_target = os.readlink(link)
+    payload = b"reinstall"
+    digest = hashlib.sha256(payload).hexdigest()
+    member = Path("draw.io.app/Contents/MacOS/draw.io")
+
+    def non_exec_runner(cmd: list[str]) -> None:
+        if cmd and cmd[0] == "curl" and "-o" in cmd:
+            dest = Path(cmd[cmd.index("-o") + 1])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(payload)
+        elif cmd and cmd[0] == "ditto":
+            dest = Path(cmd[-1])
+            target = dest / member
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"not-executable")
+            target.chmod(0o644)
+        else:
+            raise AssertionError(cmd)
+
+    with pytest.raises(ExecutorError, match="not executable"):
+        install_app(_drawio_method(sha256=digest), non_exec_runner)
+    assert (bundle / "Contents/MacOS/draw.io").read_bytes() == original_bytes
+    assert os.readlink(link) == original_target
+    assert not Path(str(bundle) + NEW_SUFFIX).exists()
+    assert not Path(str(bundle) + OLD_SUFFIX).exists()
+
+
+def test_staged_cli_symlink_outside_the_bundle_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    marker = tmp_path / "outside-ran.marker"
+    outside = tmp_path / "outside-cli.sh"
+    outside.write_text(f"#!/bin/sh\n: > {marker}\n", encoding="utf-8")
+    outside.chmod(0o755)
+    payload = b"zip"
+    digest = hashlib.sha256(payload).hexdigest()
+    member = Path("draw.io.app/Contents/MacOS/draw.io")
+
+    def symlink_runner(cmd: list[str]) -> None:
+        if cmd and cmd[0] == "curl" and "-o" in cmd:
+            dest = Path(cmd[cmd.index("-o") + 1])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(payload)
+        elif cmd and cmd[0] == "ditto":
+            dest = Path(cmd[-1])
+            cli = dest / member
+            cli.parent.mkdir(parents=True, exist_ok=True)
+            cli.symlink_to(outside)
+        else:
+            raise AssertionError(cmd)
+
+    with pytest.raises(ExecutorError, match="regular file"):
+        install_app(_drawio_method(sha256=digest), symlink_runner)
+    assert not marker.exists()
+    assert not (tmp_path / "Applications" / "draw.io.app").exists()
+
+
+def test_declared_sha256_is_checked_on_an_unpinned_app_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    payload = b"zip-bytes"
+    member = Path("App.app/Contents/MacOS/app")
+    calls, runner = fixture_runner(None, {"app.zip": payload}, member=member)
+    method = Method(
+        kind="app",
+        params={
+            "url": "https://example.test/latest/App.zip",
+            "app": "App.app",
+            "sha256": "0" * 64,
+        },
+    )
+    with pytest.raises(ChecksumMismatch):
+        install_app(method, runner)
+    assert not (tmp_path / "Applications" / "App.app").exists()
+    assert calls[0][0] == "curl"
+    assert not any(cmd and cmd[0] == "ditto" for cmd in calls)
+
+
+def test_fresh_app_install_failure_after_relink_leaves_no_cli_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    payload = b"zip"
+    digest = hashlib.sha256(payload).hexdigest()
+    member = Path("draw.io.app/Contents/MacOS/draw.io")
+    _, runner = fixture_runner(None, {"app.zip": payload}, member=member)
+    real_replace = atomic.replace_symlink
+
+    def fail_after_relink(link: Path, target: str) -> None:
+        real_replace(link, target)
+        raise OSError("relink failed")
+
+    monkeypatch.setattr(apps_mod, "replace_symlink", fail_after_relink)
+    with pytest.raises(ExecutorError):
+        install_app(_drawio_method(sha256=digest), runner)
+    assert not (tmp_path / ".local" / "bin" / "drawio").exists()
+    assert not (tmp_path / "Applications" / "draw.io.app").exists()
+    apps = tmp_path / "Applications"
+    bad_suffix = (NEW_SUFFIX, OLD_SUFFIX)
+    assert not any(p.name.endswith(bad_suffix) for p in apps.iterdir())

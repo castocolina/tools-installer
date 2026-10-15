@@ -560,8 +560,9 @@ def test_app_kind_routes_to_app_executor(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(engine, "is_installed", fake_not_installed)
     seen: list[str] = []
 
-    def fake_install_app(method: Method, runner: object) -> None:
+    def fake_install_app(method: Method, runner: object) -> str | None:
         seen.append(method.kind)
+        return "unpinned url; no sha256 to verify against"
 
     monkeypatch.setattr(engine.apps, "install_app", fake_install_app)
     outcome = install_tool(
@@ -1058,6 +1059,51 @@ def test_digest_mismatch_fails_with_nothing_linked(
     assert not (bindir / "rg").exists()
     assert not (tmp_path / ".local" / "opt" / "rg").exists()
     assert len(calls) >= 1
+
+
+def test_pinned_app_mismatch_moves_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _patch_not_installed(monkeypatch)
+    payload = b"drawio-zip"
+    marker = tmp_path / "cli-ran.marker"
+    cli_script = f'#!/bin/sh\n: > {marker}\nif [ "$1" = "--version" ]; then exit 0; fi\nexit 0\n'
+    member = Path("draw.io.app/Contents/MacOS/draw.io")
+
+    def app_runner(cmd: list[str]) -> None:
+        if cmd and cmd[0] == "curl" and "-o" in cmd:
+            dest = Path(cmd[cmd.index("-o") + 1])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(payload)
+        elif cmd and cmd[0] == "ditto":
+            dest = Path(cmd[-1])
+            target = dest / member
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(cli_script, encoding="utf-8")
+            target.chmod(0o755)
+
+    method = Method(
+        kind="app",
+        params={
+            "url": (
+                "https://github.com/jgraph/drawio-desktop/releases/download/v{ver}/"
+                "draw.io-arm64-{ver}.zip"
+            ),
+            "version": "32.4.1",
+            "app": "draw.io.app",
+            "cli": "Contents/MacOS/draw.io",
+            "cli_name": "drawio",
+            "sha256": "0" * 64,
+        },
+    )
+    outcome = install_tool(
+        _tool(method, tool_id="drawio-desktop"),
+        Platform(os="macos", arch="arm64", immutable=False, has_brew=False),
+        runner=app_runner,
+    )
+    assert outcome.status == InstallStatus.CHECKSUM_MISMATCH
+    assert not (tmp_path / "Applications" / "draw.io.app").exists()
+    assert not (tmp_path / ".local" / "bin" / "drawio").exists()
+    assert not marker.exists()
 
 
 @pytest.mark.parametrize(

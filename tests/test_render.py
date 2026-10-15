@@ -356,6 +356,24 @@ def test_render_summary_includes_mismatch_bucket():
     assert "checksum mismatch: fd" in text
 
 
+def test_render_verification_covers_app_outcomes() -> None:
+    console = Console(record=True)
+    outcomes = [
+        InstallOutcome("drawio", "installed", method_kind="app", verified=True),
+        InstallOutcome(
+            "vscode",
+            "installed",
+            method_kind="app",
+            verified=False,
+            unverified_reason="unpinned url; no sha256 to verify against",
+        ),
+    ]
+    render_verification(outcomes, console)
+    text = console.export_text()
+    assert "drawio: sha256 ✓" in text
+    assert "vscode: unverified (unpinned url; no sha256 to verify against)" in text
+
+
 def test_render_verification_ignores_failed_download_outcome():
     # A download outcome with status "failed" should produce no output.
     console = Console(record=True)

@@ -616,7 +616,7 @@ def _is_extraction(cmd: list[str]) -> bool:
     """True when this recorded call is the archive extraction step."""
     if not cmd:
         return False
-    if cmd[0] in {"tar", "unzip"}:
+    if cmd[0] in {"tar", "unzip", "ditto"}:
         return True
     if cmd[0] != "sh" or len(cmd) < 3:
         return False
@@ -632,6 +632,8 @@ def _extract_dest(cmd: list[str]) -> Path:
         return Path(cmd[cmd.index("-C") + 1])
     if cmd[0] == "unzip":
         return Path(cmd[cmd.index("-d") + 1])
+    if cmd[0] == "ditto":
+        return Path(cmd[-1])
     raise AssertionError(f"not an extraction argv: {cmd}")
 
 
@@ -664,10 +666,13 @@ def fixture_runner(
             for name, content in files.items():
                 (workdir / name).write_bytes(content)
         if member is not None and _is_extraction(cmd):
-            if cmd[0] in {"tar", "unzip"}:
+            if cmd[0] in {"tar", "unzip", "ditto"}:
                 dest = _extract_dest(cmd)
-                live_opt = _live_opt_from_extract_dest(dest)
-                target = dest / member.relative_to(live_opt)
+                if cmd[0] == "ditto":
+                    target = dest / member if not member.is_absolute() else member
+                else:
+                    live_opt = _live_opt_from_extract_dest(dest)
+                    target = dest / member.relative_to(live_opt)
             else:
                 target = member
             target.parent.mkdir(parents=True, exist_ok=True)

@@ -122,8 +122,8 @@ def _perform(
         reason = download.install_download(method, ctx)
         return reason is None, reason, ()
     if method.kind in apps.APP_KINDS:
-        apps.install_app(method, ctx.runner)
-        return False, None, ()
+        reason = apps.install_app(method, ctx.runner)
+        return reason is None, reason, ()
     if method.kind == "skill_pack":
         outcome = perform_action(tool, "install", ctx.runner)
         return False, None, outcome.instructions

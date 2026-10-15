@@ -8,6 +8,7 @@ from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
+from installer.apps import APP_KINDS
 from installer.audit import ToolStatus
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
@@ -288,7 +289,7 @@ def render_competing_mechanisms(units: tuple[CompetingUnit, ...], console: Conso
 
 
 def render_verification(outcomes: list[InstallOutcome], console: Console) -> None:
-    """One line per download-based install: sha256-verified, unverified, or mismatched.
+    """One line per verified download or app zip: sha256-verified, unverified, or mismatched.
 
     brew/native/script installs are omitted — those channels run their own
     integrity checks, so an 'unverified' label there would mislead. Outcomes
@@ -297,8 +298,9 @@ def render_verification(outcomes: list[InstallOutcome], console: Console) -> Non
     dependency-failed among them, are omitted because no verification step ran
     for them.
     """
+    verified_kinds = DOWNLOAD_KINDS + APP_KINDS
     for outcome in outcomes:
-        if outcome.method_kind not in DOWNLOAD_KINDS:
+        if outcome.method_kind not in verified_kinds:
             continue
         if outcome.status == InstallStatus.INSTALLED:
             if outcome.verified:

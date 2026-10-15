@@ -10,9 +10,9 @@ com.apple.quarantine, so installed apps launch without the Gatekeeper
 """
 
 import os
-import shlex
 import shutil
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -24,21 +24,30 @@ from installer.atomic import (
     replace_symlink,
     staged_sibling,
 )
-from installer.executors import ExecutorError, link_executable, require_str
+from installer.checksums import ChecksumMismatch, sha256_file
+from installer.download import pinned_url
+from installer.executors import (
+    ExecutorError,
+    method_smoke_argv,
+    require_str,
+    staged_member,
+)
 from installer.locations import applications_dir, bin_dir, ensure_dir
 from installer.model import Method
 from installer.run import Runner
 
 APP_KINDS = ("app",)
 
+_UNVERIFIED_REASON = "unpinned url; no sha256 to verify against"
+
 
 @dataclass(frozen=True)
 class UpdateExecResult:
     """Result of an update-safe app-bundle replacement.
 
-    App zips have no published checksum, so this type has no `verified` field.
-    `warnings` carries non-fatal cleanup failures (a leftover `.old` bundle
-    that did not fail the update).
+    Pinned app zips are sha256-verified before extraction; this type carries
+    only non-fatal cleanup warnings (a leftover `.old` bundle that did not
+    fail the update).
     """
 
     warnings: tuple[str, ...] = ()
@@ -79,39 +88,22 @@ def cli_spec(method: Method) -> tuple[str, str] | None:
     return cli, name
 
 
-def install_app(method: Method, runner: Runner) -> None:
-    """Download the app zip, extract in a temp dir, move the .app into place.
+def _declared_sha256(method: Method) -> str | None:
+    raw = method.params.get("sha256")
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw:
+        raise ExecutorError("method 'app' param 'sha256' must be a non-empty string")
+    return raw
 
-    Extract-then-move keeps ~/Applications free of partial bundles on any
-    failure; a non-zero exit anywhere breaks the && chain (CommandError),
-    which falls through to the next applicable ladder method, if any.
+
+def install_app(method: Method, runner: Runner) -> str | None:
+    """Download the app zip, verify when pinned, stage, smoke, and install.
+
+    Returns None when the zip was sha256-verified. Otherwise returns the
+    unverified reason after a successful install.
     """
-    url = require_str(method, "url")
-    app = require_str(method, "app")
-    if PurePosixPath(app).name != app or app in (".", ".."):
-        # A nested or traversal bundle name would move/symlink outside ~/Applications.
-        raise ExecutorError(f"invalid app bundle name '{app}'")
-    spec = cli_spec(method)  # validate every param before any side effect
-    try:
-        apps = ensure_dir(applications_dir())
-    except OSError as exc:
-        raise ExecutorError(f"cannot create Applications dir: {exc}") from exc
-    pipeline = (
-        "tmp=$(mktemp -d) && trap 'rm -rf \"$tmp\"' EXIT"
-        f' && curl -fsSL -o "$tmp/app.zip" -- {shlex.quote(url)}'
-        ' && ditto -x -k "$tmp/app.zip" "$tmp/x"'
-        # Adjacent quoting: "$tmp/x/" expands in the shell, the bundle name stays literal.
-        f' && mv "$tmp/x/"{shlex.quote(app)} {shlex.quote(str(apps))}/'
-    )
-    runner(["sh", "-c", pipeline])
-    if spec is None:
-        return
-    cli, name = spec
-    try:
-        dest = ensure_dir(bin_dir(None))
-    except OSError as exc:
-        raise ExecutorError(f"cannot create bin dir: {exc}") from exc
-    link_executable(apps / app / cli, dest / name, cli, chmod=False)
+    return _stage_and_swap_app(method, runner, smoke_argv=method_smoke_argv(method))
 
 
 def update_app(method: Method, runner: Runner) -> UpdateExecResult:
@@ -121,17 +113,37 @@ def update_app(method: Method, runner: Runner) -> UpdateExecResult:
     original CLI symlink target, recover remnants, extract into `.new`,
     aside-move the live bundle, swap, recreate the CLI symlink via
     `os.symlink`+`os.replace`, validate, then remove `.old`. Never shells
-    `mv` or `ln`. `install_app`'s existing `mv` stays install-only.
+    `mv` or `ln`. Updates never smoke the staged CLI (D-06).
     """
-    url = require_str(method, "url")
+    _stage_and_swap_app(method, runner, smoke_argv=None)
+    app = require_str(method, "app")
+    live = ensure_dir(applications_dir()) / app
+    old = staged_sibling(live, OLD_SUFFIX)
+    warnings: list[str] = []
+    if old.exists():
+        try:
+            shutil.rmtree(old)
+        except OSError as extra:
+            warnings.append(str(extra))
+    return UpdateExecResult(warnings=tuple(warnings))
+
+
+def _stage_and_swap_app(
+    method: Method,
+    runner: Runner,
+    *,
+    smoke_argv: Sequence[str] | None,
+) -> str | None:
+    url = pinned_url(method)
     app = require_str(method, "app")
     if PurePosixPath(app).name != app or app in (".", ".."):
         raise ExecutorError(f"invalid app bundle name '{app}'")
     spec = cli_spec(method)
+    expected_sha256 = _declared_sha256(method)
     try:
         apps = ensure_dir(applications_dir())
-    except OSError as extra:
-        raise ExecutorError(f"cannot create Applications dir: {extra}") from extra
+    except OSError as exc:
+        raise ExecutorError(f"cannot create Applications dir: {exc}") from exc
     live = apps / app
     original_target: str | None = None
     link: Path | None = None
@@ -139,23 +151,38 @@ def update_app(method: Method, runner: Runner) -> UpdateExecResult:
         _cli, name = spec
         try:
             dest = ensure_dir(bin_dir(None))
-        except OSError as extra:
-            raise ExecutorError(f"cannot create bin dir: {extra}") from extra
+        except OSError as exc:
+            raise ExecutorError(f"cannot create bin dir: {exc}") from exc
         link = dest / name
         original_target = capture_symlink_target(link)
     recover_update_remnants(live)
     staging = Path(tempfile.mkdtemp(prefix="tools-installer-update-"))
     new = staged_sibling(live, NEW_SUFFIX)
     old = staged_sibling(live, OLD_SUFFIX)
+    verified = expected_sha256 is not None
     try:
         zip_path = staging / "app.zip"
         extract_root = staging / "x"
         runner(["curl", "-fsSL", "-o", str(zip_path), "--", url])
+        if expected_sha256 is not None:
+            try:
+                actual = sha256_file(zip_path)
+            except OSError as extra:
+                raise ExecutorError(
+                    f"cannot hash downloaded asset '{PurePosixPath(url).name}': {extra}"
+                ) from extra
+            if actual != expected_sha256:
+                raise ChecksumMismatch(PurePosixPath(url).name, expected_sha256, actual)
         extract_root.mkdir(parents=True, exist_ok=True)
         runner(["ditto", "-x", "-k", str(zip_path), str(extract_root)])
         staged_bundle = extract_root / app
         if not staged_bundle.exists():
             raise ExecutorError(f"extracted zip did not contain '{app}'")
+        if spec is not None:
+            cli, _name = spec
+            cli_path = staged_member(staged_bundle, cli)
+            if not os.access(cli_path, os.X_OK):
+                raise ExecutorError(f"staged CLI at {cli_path} is missing or not executable")
         if new.exists():
             shutil.rmtree(new)
         os.replace(staged_bundle, new)
@@ -179,13 +206,7 @@ def update_app(method: Method, runner: Runner) -> UpdateExecResult:
             raise ExecutorError(
                 f"update failed after swap; prior installation restored: {extra}"
             ) from extra
-        warnings: list[str] = []
-        if old.exists():
-            try:
-                shutil.rmtree(old)
-            except OSError as extra:
-                warnings.append(str(extra))
-        return UpdateExecResult(warnings=tuple(warnings))
+        return None if verified else _UNVERIFIED_REASON
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
@@ -217,6 +238,8 @@ def _undo_app_swap(
         os.replace(old, live)
     if link is not None and original_target is not None:
         replace_symlink(link, original_target)
+    elif link is not None and link.is_symlink():
+        link.unlink()
     shutil.rmtree(new, ignore_errors=True)
     if old.exists():
         shutil.rmtree(old, ignore_errors=True)
