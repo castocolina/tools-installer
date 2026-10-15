@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from installer.download import link_name
 from installer.model import Method, Tool, load_tools
 from installer.policy import Policy, daemon_policy, omz_plugins_policy, tweak_policy
 from installer.run import CommandError
@@ -11,6 +12,7 @@ from installer.uninstall import (
     SweepResult,
     active_tweak_ids,
     manager_name,
+    plan_removal,
     plan_uninstall,
     remove_paths,
     sweep_tweaks,
@@ -20,6 +22,224 @@ from installer.uninstall import (
 def _tool(method: Method, *, tool_id: str = "t", cmd: str = "t") -> Tool:
     # methods is tuple[Method, ...]; priority/audience/desc use their defaults.
     return Tool(id=tool_id, name=tool_id, category="dev", cmd=cmd, methods=(method,))
+
+
+def _dl_tool(tool_id: str, member: str) -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="dev",
+        cmd=tool_id,
+        methods=(
+            Method(
+                kind="github_release",
+                params={"repo": f"a/{tool_id}", "asset": "x", "member": member},
+            ),
+        ),
+    )
+
+
+def plant_removal_fixtures(home: Path) -> list[Tool]:
+    """Plant the H3 hazard tree under ``home`` and return its tools.
+
+    Public on purpose: tests/test_app.py imports it so the TUI rows and the
+    `--yes` CLI comparison run on identical trees. The tree holds one
+    proven-removable archive tool (fd) beside the foreign files the old
+    name-match removal would have deleted: a uv-installed ruff symlink, a
+    pip-installed yq plain file, and a drawio file shared by two registry
+    tools. Everything lives under ``home``; callers monkeypatch Path.home.
+    """
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    opt_fd = home / ".local" / "opt" / "fd"
+    opt_fd.mkdir(parents=True, exist_ok=True)
+    (opt_fd / "fd").write_text("archive binary")
+    (bin_dir / "fd").symlink_to(opt_fd / "fd")
+    uv_ruff = home / ".local" / "share" / "uv" / "tools" / "ruff" / "bin" / "ruff"
+    uv_ruff.parent.mkdir(parents=True, exist_ok=True)
+    uv_ruff.write_text("uv-installed ruff")
+    (bin_dir / "ruff").symlink_to(uv_ruff)
+    (bin_dir / "yq").write_text("pip-installed yq")
+    (bin_dir / "drawio").write_text("shared drawio")
+    return [
+        _dl_tool("fd", "fd"),
+        _dl_tool("ruff", "ruff"),
+        _dl_tool("yq", "yq"),
+        _dl_tool("drawio-desktop", "drawio"),
+        _dl_tool("drawio-cli", "drawio"),
+    ]
+
+
+def test_link_name_prefers_bin_name() -> None:
+    method = Method(
+        kind="tarball",
+        params={
+            "url": "https://x.tgz",
+            "member": "sublime_text/sublime_text",
+            "bin_name": "subl",
+        },
+    )
+    assert link_name(method, "sublime_text/sublime_text") == "subl"
+    plain = Method(kind="tarball", params={"url": "https://x.tgz", "member": "a/b"})
+    assert link_name(plain, "a/b") == "b"
+
+
+def test_plan_uninstall_names_the_link_like_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sublime ships member sublime_text/sublime_text with bin_name subl;
+    install names the link subl, so uninstall must look for bin/subl too."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    opt = tmp_path / ".local" / "opt" / "subl"
+    opt.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (opt / "subl").write_text("binary")
+    (bin_dir / "subl").symlink_to(opt / "subl")
+    tool = Tool(
+        id="sublime",
+        name="sublime",
+        category="dev",
+        cmd="subl",
+        methods=(
+            Method(
+                kind="tarball",
+                params={
+                    "url": "https://x/sublime.tgz",
+                    "member": "sublime_text/sublime_text",
+                    "bin_name": "subl",
+                },
+            ),
+        ),
+    )
+    assert plan_uninstall([tool], bin_dir) == [opt, bin_dir / "subl"]
+
+
+@pytest.mark.parametrize(
+    ("tool_id", "removable_paths", "yourself_paths"),
+    [
+        pytest.param(
+            "fd",
+            ["{bin}/fd", "{opt}"],
+            [],
+            id="archive-layout",
+        ),
+        pytest.param("ruff", [], ["{bin}/ruff"], id="uv-ruff-symlink"),
+        pytest.param("yq", [], ["{bin}/yq"], id="pip-yq-file"),
+        pytest.param("drawio-desktop", [], ["{bin}/drawio"], id="shared-drawio"),
+    ],
+)
+def test_plan_removal_proves_only_the_archive_layout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tool_id: str,
+    removable_paths: list[str],
+    yourself_paths: list[str],
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tools = plant_removal_fixtures(tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    opt_fd = tmp_path / ".local" / "opt" / "fd"
+    plan = plan_removal([next(t for t in tools if t.id == tool_id)], bin_dir)
+    assert plan.removable == tuple(
+        Path(str(p).format(bin=bin_dir, opt=opt_fd)) for p in removable_paths
+    )
+    assert plan.yourself == tuple(
+        Path(str(p).format(bin=bin_dir, opt=opt_fd)) for p in yourself_paths
+    )
+    # A path is never in both lists.
+    assert not set(plan.removable) & set(plan.yourself)
+
+
+def test_plan_removal_lists_the_shared_drawio_file_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tools = plant_removal_fixtures(tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    plan = plan_removal([t for t in tools if t.id.startswith("drawio")], bin_dir)
+    assert plan.yourself.count(bin_dir / "drawio") == 1
+    assert plan.removable == ()
+
+
+def test_plan_removal_rejects_a_link_into_another_tools_opt_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    foreign = tmp_path / ".local" / "opt" / "rg"
+    foreign.mkdir(parents=True)
+    (foreign / "rg").write_text("rg binary")
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "fd").symlink_to(foreign / "rg")
+    tool = _dl_tool("fd", "fd")
+    plan = plan_removal([tool], bin_dir)
+    assert plan.removable == ()
+    assert bin_dir / "fd" in plan.yourself
+
+
+def test_plan_removal_app_bundles_are_remove_it_yourself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bundle = tmp_path / "Applications" / "Demo App.app"
+    bundle.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "demo").symlink_to(bundle / "Contents/bin/demo")
+    tool = Tool(
+        id="demo",
+        name="demo",
+        category="dev",
+        cmd="demo",
+        methods=(
+            Method(
+                kind="app",
+                params={
+                    "url": "https://example.test/a.zip",
+                    "app": "Demo App.app",
+                    "cli": "Contents/bin/demo",
+                },
+            ),
+        ),
+    )
+    plan = plan_removal([tool], bin_dir)
+    assert plan.removable == ()
+    assert set(plan.yourself) == {bundle, bin_dir / "demo"}
+
+
+def test_plan_removal_with_no_matches_is_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    empty = plan_removal([], bin_dir)
+    assert plan_removal([_dl_tool("fd", "fd")], bin_dir) == empty
+    assert empty.removable == ()
+    assert empty.yourself == ()
+
+
+def test_classify_rows_follow_the_removal_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tools = plant_removal_fixtures(tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    rows = classify_tools(tools, bin_dir, installed={t.id: True for t in tools}, platform=_LINUX)
+    by_id = {row.tool.id: row for row in rows}
+    fd = by_id["fd"]
+    assert fd.state == "removable"
+    assert fd.paths == [bin_dir / "fd", tmp_path / ".local" / "opt" / "fd"]
+    assert fd.selectable is True
+    assert "removable" in fd.hint
+    for tool_id in ("ruff", "yq", "drawio-desktop"):
+        row = by_id[tool_id]
+        assert row.state == "managed", tool_id
+        assert row.selectable is False, tool_id
+        assert row.paths == [], tool_id
+        assert "remove it yourself:" in row.hint, tool_id
+    assert str(bin_dir / "ruff") in by_id["ruff"].hint
+    assert str(bin_dir / "drawio") in by_id["drawio-desktop"].hint
 
 
 def test_manager_name_is_a_public_export() -> None:
@@ -340,8 +560,11 @@ def test_classify_removable_when_artifacts_on_disk(
 ) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    (bin_dir / "fd").write_text("x")
+    opt = tmp_path / ".local" / "opt" / "fd"
+    opt.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (opt / "fd").write_text("x")
+    (bin_dir / "fd").symlink_to(opt / "fd")
     rows = classify_tools([_dl("fd")], bin_dir, installed={"fd": True}, platform=_LINUX)
     row = rows[0]
     assert row.state == "removable"
@@ -447,8 +670,11 @@ def test_classify_managed_seam_only_consulted_for_managed_rows(
     """Removable, absent and unavailable rows never consult the seam."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    (bin_dir / "fd").write_text("x")
+    opt = tmp_path / ".local" / "opt" / "fd"
+    opt.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (opt / "fd").write_text("x")
+    (bin_dir / "fd").symlink_to(opt / "fd")
     called: list[str] = []
 
     def seam(tool: Tool) -> str | None:

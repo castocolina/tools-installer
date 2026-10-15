@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 from installer.apps import APP_KINDS, cli_spec
-from installer.download import DOWNLOAD_KINDS
+from installer.download import DOWNLOAD_KINDS, link_name
 from installer.enums import UninstallState
 from installer.executors import ExecutorError
 from installer.locations import applications_dir, opt_dir
@@ -53,6 +53,32 @@ def _plan_app(method: Method, default_bin_dir: Path, add: Callable[[Path], None]
     add(default_bin_dir / spec[1])
 
 
+def _download_link(method: Method, default_bin_dir: Path) -> tuple[Path, str] | None:
+    """The (link path, link name) a download method creates, or None.
+
+    The one lookup `plan_uninstall` (lenient evidence) and `plan_removal`
+    (strict proof) both use, so the two can never disagree about where a
+    link lives or what it is called: `bin_name` first, else `member`'s
+    basename — the same rule `download.link_name` gives install and update.
+    """
+    if method.kind not in DOWNLOAD_KINDS:
+        return None
+    member = method.params.get("member")
+    if not isinstance(member, str) or not member:
+        return None
+    name = link_name(method, member)
+    if name in ("", ".", ".."):
+        # Defensive: a traversal/empty basename would resolve opt_dir/bin
+        # paths up to ~/.local and risk deleting far more than one tool.
+        # Members come from the trusted registry, but this code deletes files.
+        return None
+    declared = method.params.get("bin_dir")
+    base = (
+        Path(declared).expanduser() if isinstance(declared, str) and declared else default_bin_dir
+    )
+    return base / name, name
+
+
 def plan_uninstall(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
     """Existing artifacts the download/raw/app executors would have created.
 
@@ -75,26 +101,61 @@ def plan_uninstall(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
             if method.kind in APP_KINDS:
                 _plan_app(method, default_bin_dir, add)
                 continue
-            if method.kind not in DOWNLOAD_KINDS:
+            hit = _download_link(method, default_bin_dir)
+            if hit is None:
                 continue
-            member = method.params.get("member")
-            if not isinstance(member, str) or not member:
-                continue
-            binname = PurePosixPath(member).name
-            if binname in ("", ".", ".."):
-                # Defensive: a traversal/empty basename would resolve opt_dir/bin
-                # paths up to ~/.local and risk deleting far more than one tool.
-                # Members come from the trusted registry, but this code deletes files.
-                continue
-            declared = method.params.get("bin_dir")
-            base = (
-                Path(declared).expanduser()
-                if isinstance(declared, str) and declared
-                else default_bin_dir
-            )
-            add(opt_dir(binname))
-            add(base / binname)
+            link, name = hit
+            add(opt_dir(name))
+            add(link)
     return found
+
+
+@dataclass(frozen=True)
+class RemovalPlan:
+    """The strict split of a tool set's on-disk matches (CONTEXT D-04).
+
+    `removable` holds only proven artifacts: a bin link that is a symlink
+    resolving to a regular file inside the same tool's opt dir, plus that
+    opt dir. Everything else `plan_uninstall` still matches by name —
+    uv/pip files, foreign symlinks, shared files, app bundles — lands in
+    `yourself`: listed for the user, never deleted by this installer.
+    """
+
+    removable: tuple[Path, ...]
+    yourself: tuple[Path, ...]
+
+
+def plan_removal(tools: list[Tool], default_bin_dir: Path) -> RemovalPlan:
+    """Prove removability by the archive layout only; name the rest.
+
+    A download method is proven when its link (per `_download_link`, the
+    same name install creates) is a symlink whose target is a regular file
+    inside this tool's own opt_dir(<link name>) — so a uv/pip file at a
+    matching name, or a link into another tool's opt dir, is never proven.
+    Unproven matches keep the lenient `plan_uninstall` list as `yourself`.
+    """
+    removable: list[Path] = []
+    seen: set[Path] = set()
+    for tool in tools:
+        for method in tool.methods:
+            hit = _download_link(method, default_bin_dir)
+            if hit is None:
+                continue
+            link, name = hit
+            opt = opt_dir(name)
+            if not link.is_symlink():
+                continue
+            resolved = link.resolve()
+            if not resolved.is_file():
+                continue
+            if not resolved.is_relative_to(opt.resolve()):
+                continue
+            for path in (link, opt):
+                if path not in seen:
+                    seen.add(path)
+                    removable.append(path)
+    yourself = tuple(p for p in plan_uninstall(tools, default_bin_dir) if p not in seen)
+    return RemovalPlan(tuple(removable), yourself)
 
 
 @dataclass(frozen=True, init=False)
@@ -270,10 +331,13 @@ def classify_tools(
 ) -> list[ToolRow]:
     """Classify every tool by removability, one ToolRow per tool in input order.
 
-    Reuses plan_uninstall (userspace artifacts), the installed map, the platform
-    resolver, and `which` (to resolve where a managed tool lives) so the Uninstall
-    view shows full catalog parity: removable-here vs managed-elsewhere vs
-    not-installed vs unavailable.
+    Uses plan_removal's proof (CONTEXT D-04): a tool is removable only when
+    its bin link is a symlink resolving to a regular file inside its own
+    opt dir; every other name match is listed as "remove it yourself" and
+    the row is inert. The installed map, the platform resolver and `which`
+    still resolve where a managed tool lives, so the Uninstall view keeps
+    full catalog parity: removable-here vs managed-elsewhere vs not-installed
+    vs unavailable.
 
     When ``reverse_deps`` is provided, any tool that other tools depend on gets a
     "required by …" note appended to its hint — warn-but-allow, no cascade or
@@ -296,17 +360,19 @@ def classify_tools(
     verified fact."""
     rows: list[ToolRow] = []
     for tool in tools:
-        paths = plan_uninstall([tool], default_bin_dir)
-        if paths:
-            rows.append(
-                ToolRow(
-                    tool,
-                    UninstallState.REMOVABLE,
-                    paths,
-                    "installed in userspace — removable here",
-                    True,
+        plan = plan_removal([tool], default_bin_dir)
+        if plan.removable:
+            hint = "installed in userspace — removable here"
+            if plan.yourself:
+                hint += f" · remove it yourself: {', '.join(str(p) for p in plan.yourself)}"
+            rows.append(ToolRow(tool, UninstallState.REMOVABLE, list(plan.removable), hint, True))
+        elif plan.yourself:
+            youself_hint = f"remove it yourself: {', '.join(str(p) for p in plan.yourself)}"
+            if installed.get(tool.id, False):
+                youself_hint = (
+                    f"{_managed_hint(tool, which, platform, owner_hint)} · {youself_hint}"
                 )
-            )
+            rows.append(ToolRow(tool, UninstallState.MANAGED, [], youself_hint, False))
         elif installed.get(tool.id, False):
             rows.append(
                 ToolRow(

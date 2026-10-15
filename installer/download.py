@@ -127,6 +127,13 @@ def _resolve_target(method: Method, ctx: ExecContext) -> DownloadTarget:
     raise ExecutorError(f"no download executor for kind '{method.kind}'")
 
 
+def link_name(method: Method, member: str) -> str:
+    """The bin link name a download method creates: `bin_name` when set, else
+    the basename of `member`. The one rule for install, update and uninstall,
+    so the uninstaller looks for the link under the name install gave it."""
+    return _opt_str(method, "bin_name") or PurePosixPath(member).name
+
+
 def install_download(method: Method, ctx: ExecContext) -> bool:
     """Install a release binary into ~/.local/bin (userspace, no sudo).
 
@@ -141,7 +148,7 @@ def install_download(method: Method, ctx: ExecContext) -> bool:
     alongside it the way its macOS bundle provides one).
     """
     target = _resolve_target(method, ctx)
-    binname = _opt_str(method, "bin_name") or PurePosixPath(target.member).name
+    binname = link_name(method, target.member)
     try:
         dest = ensure_dir(bin_dir(_opt_str(method, "bin_dir")))
     except OSError as exc:
@@ -238,7 +245,7 @@ def update_download(method: Method, ctx: ExecContext) -> UpdateExecResult:
     any of those steps restores the prior tree AND the captured symlink.
     """
     target = _resolve_target(method, ctx)
-    binname = _opt_str(method, "bin_name") or PurePosixPath(target.member).name
+    binname = link_name(method, target.member)
     try:
         dest = ensure_dir(bin_dir(_opt_str(method, "bin_dir")))
     except OSError as exc:
