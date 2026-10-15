@@ -43,7 +43,13 @@ from installer.diskusage import DiskPressure
 from installer.enums import DaemonState
 from installer.execute_screen import ExecuteInputs
 from installer.install_ownership import run_probe
-from installer.locations import all_ban_rc_paths, ban_rc_paths, rc_paths_for_mode, zshrc_path
+from installer.locations import (
+    all_ban_rc_paths,
+    ban_rc_paths,
+    drop_project_venv_from_path,
+    rc_paths_for_mode,
+    zshrc_path,
+)
 from installer.model import Tool, load_categories, load_tools
 from installer.omz import omz_present
 from installer.ownership import (
@@ -1549,6 +1555,7 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    drop_project_venv_from_path(Path(__file__).resolve().parent)
     try:
         raise SystemExit(main(sys.argv[1:]))
     except KeyboardInterrupt:

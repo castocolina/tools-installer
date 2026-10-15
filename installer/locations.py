@@ -108,6 +108,34 @@ def prepend_path(directory: Path) -> None:
     os.environ["PATH"] = os.pathsep.join([entry, *parts])
 
 
+def drop_project_venv_from_path(project_root: Path) -> None:
+    """Drop inherited PATH entries inside the project's dev venv.
+
+    An activated venv, direnv, or an IDE terminal can put the dev venv on the
+    inherited PATH, and ``uv run --isolated --no-dev`` does not remove it
+    (REG-06, review H2).
+    """
+    venv = (project_root / ".venv").resolve()
+    parts = os.environ.get("PATH", "").split(os.pathsep)
+    kept: list[str] = []
+    removed = False
+    for entry in parts:
+        if not entry:
+            kept.append(entry)
+            continue
+        try:
+            resolved = Path(entry).resolve()
+        except OSError:
+            kept.append(entry)
+            continue
+        if resolved == venv or resolved.is_relative_to(venv):
+            removed = True
+            continue
+        kept.append(entry)
+    if removed:
+        os.environ["PATH"] = os.pathsep.join(kept)
+
+
 def path_scan_rc_paths() -> list[Path]:
     """Every startup file a login or interactive shell may read that could add
     to PATH. READ-ONLY: this is the diagnostic set the Doctor scans to explain a

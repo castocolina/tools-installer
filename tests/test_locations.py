@@ -1,3 +1,4 @@
+import ast
 import os
 from pathlib import Path
 
@@ -7,11 +8,15 @@ from installer import env_redirect, systemd_daemon
 from installer.locations import (
     applications_dir,
     bin_dir,
+    drop_project_venv_from_path,
     ensure_dir,
     opt_dir,
     prepend_path,
     xdg_config_base,
 )
+
+ROOT = Path(__file__).resolve().parent.parent
+SETUP_PY = ROOT / "setup.py"
 
 # --- xdg_config_base (lane-2 MEDIUM-01) --------------------------------------
 
@@ -321,3 +326,66 @@ def test_path_scan_bashrc_d_order_unchanged_without_a_failing_entry(
     (snippets / "nested").mkdir()
     scanned = path_scan_rc_paths()
     assert [p.name for p in scanned if p.parent == snippets] == ["a.sh", "b.sh"]
+
+
+def test_drop_project_venv_from_path_removes_only_the_project_venv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "project"
+    other = tmp_path / "other-project"
+    root.mkdir()
+    other.mkdir()
+    (root / ".venv" / "bin").mkdir(parents=True)
+    (root / ".venv" / "lib" / "x").mkdir(parents=True)
+    (other / ".venv" / "bin").mkdir(parents=True)
+    (root / "bin").mkdir()
+    original = os.pathsep.join(
+        [
+            str(root / ".venv" / "bin"),
+            "/usr/local/bin",
+            str(root / ".venv" / "lib" / "x"),
+            str(other / ".venv" / "bin"),
+            str(root / "bin"),
+        ]
+    )
+    monkeypatch.setenv("PATH", original)
+    drop_project_venv_from_path(root)
+    assert os.environ["PATH"] == os.pathsep.join(
+        ["/usr/local/bin", str(other / ".venv" / "bin"), str(root / "bin")]
+    )
+
+
+def test_drop_project_venv_from_path_leaves_path_unchanged_without_a_match(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    original = os.pathsep.join(["", "/usr/local/bin", ""])
+    monkeypatch.setenv("PATH", original)
+    drop_project_venv_from_path(root)
+    assert os.environ["PATH"] == original
+
+
+def test_setup_entry_point_drops_the_project_venv_before_main() -> None:
+    tree = ast.parse(SETUP_PY.read_text())
+    main_block: ast.If | None = None
+    main_func: ast.FunctionDef | None = None
+    for node in tree.body:
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Compare):
+            left = node.test.left
+            if isinstance(left, ast.Name) and left.id == "__name__":
+                main_block = node
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            main_func = node
+    assert main_block is not None
+    assert main_func is not None
+    first = main_block.body[0]
+    assert isinstance(first, ast.Expr) and isinstance(first.value, ast.Call)
+    call = first.value
+    assert isinstance(call.func, ast.Name) and call.func.id == "drop_project_venv_from_path"
+    assert len(call.args) == 1
+    source = ast.unparse(call.args[0])
+    assert "__file__" in source
+    for node in ast.walk(main_func):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            assert node.func.id != "drop_project_venv_from_path"
