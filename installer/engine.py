@@ -1,7 +1,10 @@
 """Install a tool by walking its resolved priority ladder until one method works."""
 
+import os
+import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from installer import apps, download, executors
@@ -10,6 +13,7 @@ from installer.download import ExecContext
 from installer.enums import InstallStatus
 from installer.locations import bin_dir, prepend_path
 from installer.model import Method, Tool
+from installer.ownership import method_removal_command
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction, run_post_install
 from installer.postinstall import run_postinstall
@@ -21,6 +25,36 @@ from installer.versions import TagResolver, VersionError, release_resolver, reso
 
 Status = InstallStatus
 ChecksumPolicy = Literal["fail", "continue"]
+_HANDOFF_KINDS = frozenset({"host_setup", "skill_pack"})
+
+
+def _manager_method(method: Method) -> bool:
+    if method.kind in download.DOWNLOAD_KINDS or method.kind in apps.APP_KINDS:
+        return False
+    return method.kind not in _HANDOFF_KINDS
+
+
+def _manager_smoke_target(method: Method, cmd: str) -> Path | None:
+    raw_bin_dir = method.params.get("bin_dir")
+    if isinstance(raw_bin_dir, str) and raw_bin_dir:
+        declared = bin_dir(raw_bin_dir) / cmd
+        if declared.is_file():
+            if os.access(declared, os.X_OK):
+                return declared
+            return None
+    resolved = shutil.which(cmd)
+    if resolved is None:
+        return None
+    return Path(resolved)
+
+
+def _run_manager_smoke(method: Method, tool: Tool) -> None:
+    if not _manager_method(method):
+        return
+    target = _manager_smoke_target(method, tool.cmd)
+    if target is None:
+        return
+    executors.smoke_binary(target, executors.method_smoke_argv(method))
 
 
 @dataclass(frozen=True, init=False)
@@ -36,8 +70,9 @@ class InstallOutcome:
     blocked_by: tuple[str, ...] = ()
     # Populated only when the tool declares a `postinstall` hook AND that
     # hook returned a non-None warning, or raised an exception that was
-    # converted to a warning string. Never changes `status` away from
-    # INSTALLED — the tool's own binary is on PATH and usable regardless.
+    # converted to a warning string, or when an earlier method's failed smoke
+    # left a package installed (Ledger L-18-16). Never changes `status` away
+    # from INSTALLED — the tool's own binary is on PATH and usable regardless.
     postinstall_warning: str | None = None
     # Only on MANUAL_REQUIRED (a host_setup or skill_pack method): reviewed
     # console instructions to run after the installer releases the terminal.
@@ -134,6 +169,14 @@ def install_tool(
     `repair` exists for D-18's broken state. It takes the identical ladder a
     fresh install takes, and is only ever set for a tool the user explicitly
     selected while it read broken.
+
+    Manager kinds are smoke-run once after a successful install when a runnable
+    target exists: an executable ``<bin_dir>/<cmd>`` names the method's own
+    binary; a present but non-executable file there means nothing to smoke; a
+    missing one falls back to ``shutil.which(tool.cmd)`` (in a repair run,
+    possibly an older copy on PATH). A failed smoke falls through; the package
+    stays installed and is reported with its removal command, never removed
+    (SPEC REG-05 covers installer-created links only; Ledger L-18-16).
     """
     if is_installed(tool) and not repair:
         return InstallOutcome(tool.id, InstallStatus.ALREADY_INSTALLED)
@@ -149,20 +192,13 @@ def install_tool(
         resolve_release=release_resolver(resolve_tag),
     )
     errors: list[Exception] = []
+    leftovers: list[str] = []
     for method in methods:
         if isinstance(runner, MethodAwareRunner):
             runner.method_started(method.kind)
+        path_before = os.environ.get("PATH", "")
         try:
             verified, unverified_reason, handoff = _perform(tool, method, ctx)
-        except ChecksumMismatch as exc:
-            if checksum_policy == "fail":
-                return InstallOutcome(
-                    tool.id, InstallStatus.CHECKSUM_MISMATCH, method_kind=method.kind, errors=(exc,)
-                )
-            errors.append(exc)
-        except (CommandError, executors.ExecutorError, VersionError) as exc:
-            errors.append(exc)
-        else:
             if handoff:
                 return InstallOutcome(
                     tool.id,
@@ -173,6 +209,32 @@ def install_tool(
             raw_bin_dir = method.params.get("bin_dir")
             if isinstance(raw_bin_dir, str) and raw_bin_dir:
                 prepend_path(bin_dir(raw_bin_dir))
+            try:
+                _run_manager_smoke(method, tool)
+            except executors.ExecutorError as exc:
+                os.environ["PATH"] = path_before
+                removal = method_removal_command(method, tool.cmd)
+                if removal is None:
+                    leftover = (
+                        f"{method.kind} left {tool.cmd} installed after its smoke run failed; "
+                        "remove it with that installer's own uninstaller"
+                    )
+                else:
+                    leftover = (
+                        f"{method.kind} left {tool.cmd} installed after its smoke run failed; "
+                        f"remove it with `{removal}`"
+                    )
+                leftovers.append(leftover)
+                raise executors.ExecutorError(f"{exc}; {leftover}") from exc
+        except ChecksumMismatch as exc:
+            if checksum_policy == "fail":
+                return InstallOutcome(
+                    tool.id, InstallStatus.CHECKSUM_MISMATCH, method_kind=method.kind, errors=(exc,)
+                )
+            errors.append(exc)
+        except (CommandError, executors.ExecutorError, VersionError) as exc:
+            errors.append(exc)
+        else:
             warning = None
             if tool.postinstall:
                 try:
@@ -184,6 +246,9 @@ def install_tool(
             )
             if crash:
                 warning = f"{warning}; {crash}" if warning else crash
+            if leftovers:
+                joined = "; ".join(leftovers)
+                warning = f"{warning}; {joined}" if warning else joined
             return InstallOutcome(
                 tool.id,
                 InstallStatus.INSTALLED,
