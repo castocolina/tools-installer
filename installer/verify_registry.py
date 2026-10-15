@@ -791,6 +791,16 @@ def check_registry(
             )
             continue
 
+        if target.url in url_wide:
+            findings[key] = replace(
+                url_wide[target.url],
+                tool_id=target.tool_id,
+                member=target.member,
+                platforms=target.platforms,
+                sha256=None,
+            )
+            continue
+
         if target.url not in url_download_cache:
             try:
                 with tempfile.TemporaryDirectory() as tmp:
@@ -840,12 +850,6 @@ def check_registry(
                     platforms=target.platforms,
                 )
                 continue
-        else:
-            actual_hash, listings = url_download_cache[target.url]
-
-        if target.url in url_wide:
-            findings[key] = url_wide[target.url]
-            continue
 
         actual_hash, listings = url_download_cache[target.url]
         if expected is not None and actual_hash.lower() != expected.lower():
@@ -865,7 +869,13 @@ def check_registry(
             listing = listings.get(target.archive)
             mode_key = (target.url, target.archive)
             if mode_key in url_mode_wide:
-                findings[key] = url_mode_wide[mode_key]
+                findings[key] = replace(
+                    url_mode_wide[mode_key],
+                    tool_id=target.tool_id,
+                    member=target.member,
+                    platforms=target.platforms,
+                    sha256=None,
+                )
                 continue
             if isinstance(listing, BaseException):
                 drift = Finding(
@@ -909,14 +919,26 @@ def check_registry(
     for key, finding in list(findings.items()):
         url = finding.url
         if url in url_wide:
-            findings[key] = url_wide[url]
+            findings[key] = replace(
+                url_wide[url],
+                tool_id=finding.tool_id,
+                member=finding.member,
+                platforms=finding.platforms,
+                sha256=None,
+            )
             state.pop(
                 state_key(key[0], key[1], key[2], archive=key[3], strip=key[4], raw=key[5]),
                 None,
             )
         mode_key = (url, key[3])
         if mode_key in url_mode_wide:
-            findings[key] = url_mode_wide[mode_key]
+            findings[key] = replace(
+                url_mode_wide[mode_key],
+                tool_id=finding.tool_id,
+                member=finding.member,
+                platforms=finding.platforms,
+                sha256=None,
+            )
             state.pop(
                 state_key(key[0], key[1], key[2], archive=key[3], strip=key[4], raw=key[5]),
                 None,

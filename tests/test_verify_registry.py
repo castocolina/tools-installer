@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import json
 import tarfile
+import time
 import zipfile
 from collections import Counter, defaultdict
 from collections.abc import Callable
@@ -50,12 +52,12 @@ def _release(
 
 def _difft_tar_bytes() -> bytes:
     buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+    with tarfile.open(fileobj=buf, mode="w") as tf:
         data = b"x"
         info = tarfile.TarInfo("difft")
         info.size = len(data)
         tf.addfile(info, io.BytesIO(data))
-    return buf.getvalue()
+    return gzip.compress(buf.getvalue(), mtime=0)
 
 
 def _write_difft_tar(dest: Path) -> None:
@@ -300,12 +302,12 @@ def _write_registry(tmp_path: Path, content: str) -> Path:
 
 def _gz_tar_bytes(members: dict[str, bytes]) -> bytes:
     buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+    with tarfile.open(fileobj=buf, mode="w") as tf:
         for name, data in members.items():
             info = tarfile.TarInfo(name)
             info.size = len(data)
             tf.addfile(info, io.BytesIO(data))
-    return buf.getvalue()
+    return gzip.compress(buf.getvalue(), mtime=0)
 
 
 def _xz_tar_bytes(members: dict[str, bytes]) -> bytes:
@@ -848,6 +850,144 @@ sha256 = "{digest}"
     keys = list(state_out)
     assert len(keys) == 1
     assert keys[0].startswith("a|")
+
+
+def test_gzip_fixtures_do_not_depend_on_the_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(time, "time", lambda: 1_000_000.0)
+    gz_a = _gz_tar_bytes({"bin/x": b"x"})
+    dif_a = _difft_tar_bytes()
+    monkeypatch.setattr(time, "time", lambda: 2_000_000.0)
+    gz_b = _gz_tar_bytes({"bin/x": b"x"})
+    dif_b = _difft_tar_bytes()
+    assert gz_a == gz_b
+    assert dif_a == dif_b
+
+
+@pytest.mark.parametrize(
+    "failure_mode",
+    ["checksum_mismatch", "unreadable_archive"],
+)
+def test_a_shared_url_failure_keeps_every_target_identity(
+    tmp_path: Path, failure_mode: str
+) -> None:
+    url_tpl = "https://example.test/shared-{ver}.tar.gz"
+    rendered_x = "https://example.test/shared-1.0.tar.gz"
+    url_y_tpl = "https://example.test/ok-{ver}.tar.gz"
+    rendered_y = "https://example.test/ok-1.0.tar.gz"
+    if failure_mode == "checksum_mismatch":
+        tar_x = _gz_tar_bytes({"bin/a": b"a", "bin/b": b"b"})
+        pin_x = "0" * 64
+        payloads = {rendered_x: tar_x}
+    else:
+        bad = b"not-a-tarball"
+        pin_x = hashlib.sha256(bad).hexdigest()
+        payloads = {rendered_x: bad}
+    tar_y = _gz_tar_bytes({"bin/y": b"y"})
+    pin_y = hashlib.sha256(tar_y).hexdigest()
+    payloads[rendered_y] = tar_y
+    content = f"""
+[[tool]]
+id = "a"
+name = "a"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "{url_tpl}"
+version = "1.0"
+member = "bin/a"
+strip = 0
+sha256 = "{pin_x}"
+[[tool]]
+id = "b"
+name = "b"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "{url_tpl}"
+version = "1.0"
+member = "bin/b"
+strip = 0
+sha256 = "{pin_x}"
+[[tool.method]]
+kind = "tarball"
+url = "{url_y_tpl}"
+version = "1.0"
+member = "bin/y"
+strip = 0
+sha256 = "{pin_y}"
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="0", assets={})
+    probe, _ = _map_probe(release, payloads=payloads)
+    report = check_registry(load_tools(registry), probe, state={})
+    shared = [f for f in report.findings if f.url == rendered_x and f.status == "drift"]
+    assert {f.tool_id for f in shared} == {"a", "b"}
+    assert {f.member for f in shared} == {"bin/a", "bin/b"}
+    assert "b" not in report.passed_tools()
+
+
+def test_a_url_that_404s_on_download_is_fetched_once(tmp_path: Path) -> None:
+    url_tpl = "https://example.test/shared-{ver}.tar.gz"
+    rendered = "https://example.test/shared-1.0.tar.gz"
+    pin = "0" * 64
+    content = f"""
+[[tool]]
+id = "a"
+name = "a"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "{url_tpl}"
+version = "1.0"
+member = "bin/a"
+strip = 0
+sha256 = "{pin}"
+[[tool]]
+id = "b"
+name = "b"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "{url_tpl}"
+version = "1.0"
+member = "bin/b"
+strip = 0
+sha256 = "{pin}"
+"""
+    registry = _write_registry(tmp_path, content)
+    release = _release(tag="0", assets={})
+    downloads: dict[str, int] = defaultdict(int)
+
+    def download_fn(url: str, dest: Path) -> None:
+        downloads[url] += 1
+        if url == rendered:
+            raise _http_error(url, 404)
+
+    probe = Probe(
+        release=lambda _repo: release,
+        head=lambda _url: 'etag:"1"',
+        download=download_fn,
+    )
+    report = check_registry(load_tools(registry), probe, state={})
+    assert downloads[rendered] == 1
+    drift = [f for f in report.findings if f.status == "drift" and f.url == rendered]
+    assert {f.tool_id for f in drift} == {"a", "b"}
 
 
 def test_a_strip_change_invalidates_the_cached_ok(tmp_path: Path) -> None:
