@@ -4068,3 +4068,189 @@ async def test_worker_exception_marks_the_run_failed_and_keeps_done_rows(exc: Ex
         assert summary.crash_error is not None
         assert "boom" in summary.crash_error or "disk full" in summary.crash_error
         assert summary.has_failure is True
+
+
+class _FailingUpdateService(_RecordingUpdateService):
+    def run(self, target: UpdateTarget) -> UpdateOutcome:
+        self.recorded.append(target)
+        return UpdateOutcome(
+            tool_id=target.tool.id,
+            status="failed",
+            owner=target.ownership.owner,
+        )
+
+
+class _CommandErrorUpdateService(_RecordingUpdateService):
+    def run(self, target: UpdateTarget) -> UpdateOutcome:
+        self.recorded.append(target)
+        raise CommandError(["brew", "upgrade", target.tool.id], 1, detail="boom")
+
+
+def _capture_run_finished(monkeypatch: pytest.MonkeyPatch, app: UnifiedApp) -> list[object]:
+    """Record every InstallRunFinished that bubbles to the app."""
+    seen: list[object] = []
+    original = type(app).on_install_run_finished
+
+    def spy(self: UnifiedApp, message: object) -> None:
+        seen.append(message)
+        assert callable(original)
+        original(self, message)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(type(app), "on_install_run_finished", spy)
+    return seen
+
+
+async def test_failed_update_status_marks_the_run_failed(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _FailingUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda _tool: True,
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert screen.finished
+        assert screen.status.text.startswith("Failed")
+        assert screen.status.severity == "error"
+        assert app.install_summary is not None
+        assert app.install_summary.update_failed == ("rg",)
+        assert app.install_summary.has_failure is True
+
+
+async def test_raised_update_error_marks_the_run_failed(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _CommandErrorUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda _tool: True,
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert screen.status.text.startswith("Failed")
+        assert screen.status.severity == "error"
+        assert app.install_summary is not None
+        assert "rg" in app.install_summary.update_failed
+        assert app.install_summary.has_failure is True
+
+
+async def test_completed_updates_survive_a_later_crash(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    rg = _tool("rg")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _RecordingUpdateService()
+
+    def wire_path() -> str:
+        raise RuntimeError("boom")
+
+    inputs = _inputs(
+        tools=[rg, fd],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+        wire_path=wire_path,
+    )
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        seen = _capture_run_finished(monkeypatch, app)
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        await pilot.press("enter")
+        await _settle_execute(screen=app.screen, pilot=pilot)  # type: ignore[arg-type]
+        assert updates.recorded and updates.recorded[0].tool.id == "rg"
+        posted = [m for m in seen if isinstance(m, InstallRunFinished)]
+        assert [o.tool_id for o in posted[-1].update_outcomes] == ["rg"]
+        assert app.install_summary is not None
+        assert app.install_summary.crash_error is not None
+        assert "boom" in app.install_summary.crash_error
+
+
+async def test_cancel_mid_updates_keeps_completed_updates_and_reports_the_rest_not_attempted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    first_started = threading.Event()
+    first_release = threading.Event()
+    rg = _tool("rg")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    _seed_refresh(refresh, fd, outdated=True)
+
+    class _GatedUpdateService(_RecordingUpdateService):
+        def run(self, target: UpdateTarget) -> UpdateOutcome:
+            if target.tool.id == "rg":
+                first_started.set()
+                assert first_release.wait(timeout=5)
+            return super().run(target)
+
+    updates = _GatedUpdateService()
+    inputs = _inputs(
+        tools=[rg, fd],
+        installed=lambda _tool: True,
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        seen = _capture_run_finished(monkeypatch, app)
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        await pilot.press("enter")
+        for _ in range(400):
+            if first_started.is_set():
+                break
+            await pilot.pause()
+        assert first_started.is_set()
+        await pilot.press("c")
+        await pilot.pause()
+        first_release.set()
+        await _settle_execute(screen=app.screen, pilot=pilot)  # type: ignore[arg-type]
+        posted = [m for m in seen if isinstance(m, InstallRunFinished)]
+        assert [o.tool_id for o in posted[-1].update_outcomes] == ["rg"]
+        assert posted[-1].update_outcomes[0].status == "updated"
+        summary = app.install_summary
+        assert summary is not None
+        assert "fd" in summary.not_attempted
+        assert "rg" not in summary.not_attempted
+        assert summary.update_failed == ()
+        assert summary.crash_error is None
+        assert summary.has_failure is True
+
+
+async def test_all_skipped_run_is_done_and_green() -> None:
+    inputs = _inputs(tools=[_tool("rg")], installed=lambda _tool: True)
+    app = _host(inputs, [_tool("rg")])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert screen.finished
+        assert screen.status.text.startswith("Done")
+        assert screen.status.severity == "ok"
+        assert app.install_summary is not None
+        assert app.install_summary.has_failure is False

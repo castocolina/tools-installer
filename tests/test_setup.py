@@ -3073,3 +3073,43 @@ def test_interactive_wizard_exits_0_when_the_session_is_clean(
         app, "install_summary", Summary(installed=("rg",), already=(), failed=(), no_method=())
     )
     assert setup.main([]) == 0
+
+
+def test_failed_update_exits_1(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    _capture_app(monkeypatch)
+    app = setup.UnifiedApp
+    assert app is not None
+    monkeypatch.setattr(
+        app,
+        "install_summary",
+        Summary(installed=(), already=(), failed=(), no_method=(), update_failed=("rg",)),
+    )
+    assert setup.main([]) == 1
+
+
+def test_all_skipped_run_exits_0(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    _capture_app(monkeypatch)
+    app = setup.UnifiedApp
+    assert app is not None
+    monkeypatch.setattr(
+        app, "install_summary", Summary(installed=(), already=("rg",), failed=(), no_method=())
+    )
+    assert setup.main([]) == 0
+
+
+def test_headless_run_exits_1_on_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _sandbox(monkeypatch, tmp_path)
+
+    def fake_run_wizard(*_args: object, **_kwargs: object) -> Summary:
+        return Summary(installed=(), already=(), failed=("rg",), no_method=())
+
+    def noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(setup, "run_wizard", fake_run_wizard)
+    monkeypatch.setattr(setup, "configure_path", noop)
+    monkeypatch.setattr(setup, "_verify_and_clean", noop)
+    monkeypatch.setattr(setup, "_sync_terminals_and_report", noop)
+    assert setup.main(["--all", "--yes"]) == 1

@@ -610,6 +610,7 @@ class ExecuteScreen(ModalScreen[None]):
         update_errors: list[tuple[str, str]] = []
         update_skips: list[str] = []
         update_versions: dict[str, str | None] = {}
+        update_attempted: set[str] = set()
         try:
 
             def emit(tool_id: str, line: str) -> None:
@@ -652,7 +653,9 @@ class ExecuteScreen(ModalScreen[None]):
                 summary = summarize(outcomes)
                 seen = {outcome.tool_id for outcome in outcomes}
                 not_attempted = [tool.id for tool in self._ordered if tool.id not in seen]
-                update_outcomes, update_errors, update_skips, update_versions = self._run_updates()
+                self._run_updates(
+                    update_outcomes, update_errors, update_skips, update_versions, update_attempted
+                )
                 reapplied: list[InstallOutcome] = []
                 for tool in self._reapply:
                     if not self._should_continue():
@@ -684,6 +687,12 @@ class ExecuteScreen(ModalScreen[None]):
                 outcomes, summary, not_attempted = _partial_run(self._ordered, collected)
             error = error or f"run stopped: {exc}"
         finally:
+            # Updates that never ran (a crash or a cancel mid-update phase)
+            # count as not attempted, so both handlers' fold_run reports them;
+            # a tool that produced an outcome, an error or a skip did run.
+            not_attempted.extend(
+                tool.id for tool in self._to_update if tool.id not in update_attempted
+            )
             self.post_message(
                 InstallRunFinished(
                     summary,
@@ -703,18 +712,27 @@ class ExecuteScreen(ModalScreen[None]):
 
     def _run_updates(
         self,
-    ) -> tuple[list[UpdateOutcome], list[tuple[str, str]], list[str], dict[str, str | None]]:
-        outcomes: list[UpdateOutcome] = []
-        errors: list[tuple[str, str]] = []
-        skips: list[str] = []
-        versions: dict[str, str | None] = {}
+        outcomes: list[UpdateOutcome],
+        errors: list[tuple[str, str]],
+        skips: list[str],
+        versions: dict[str, str | None],
+        attempted: set[str],
+    ) -> None:
+        """Write into caller-owned accumulators, not fresh collections.
+
+        Completed updates stay visible to the worker's finally block even
+        when a later step raises, and `attempted` records every _to_update
+        id that produced an outcome, an error or a skip, so the worker can
+        report the rest as not attempted (D-07/D-08).
+        """
         refresh = self._inputs.version_refresh
         updates = self._inputs.updates
         if refresh is None or updates is None:
-            return outcomes, errors, skips, versions
+            return
         for tool in self._to_update:
             if not self._should_continue():
-                return outcomes, errors, skips, versions
+                return
+            attempted.add(tool.id)
             ownership = refresh.ownership_of(tool.id)
             if ownership is None:
                 _refreshed, refresh_fail = run_live(partial(refresh.refresh, [tool]))
@@ -755,7 +773,6 @@ class ExecuteScreen(ModalScreen[None]):
                 self.post_message(UpdateToolFinished(tool.id, state))
             finally:
                 updates.end()
-        return outcomes, errors, skips, versions
 
     def _should_continue(self) -> bool:
         return not self.cancel_event.is_set()
