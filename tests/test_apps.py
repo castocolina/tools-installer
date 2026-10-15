@@ -9,11 +9,12 @@ import installer.apps as apps_mod
 from installer import atomic
 from installer.apps import APP_KINDS, cli_spec, install_app, update_app
 from installer.executors import ExecutorError
-from installer.model import Method
+from installer.model import Method, load_tools
 from installer.run import Runner
 from tests.test_download import fixture_runner
 
 SHELLED_LINKERS = frozenset({"ln", "chmod"})
+REGISTRY = Path("installer/registry.toml")
 
 
 def _record() -> tuple[list[list[str]], Runner]:
@@ -33,6 +34,19 @@ def _method(**extra: object) -> Method:
 
 def test_app_kinds_inventory():
     assert APP_KINDS == ("app",)
+
+
+def test_shipped_app_cli_links_match_the_tool_cmd() -> None:
+    for tool in load_tools(REGISTRY):
+        for method in tool.methods:
+            if method.kind != "app" or method.params.get("cli") is None:
+                continue
+            spec = cli_spec(method)
+            assert spec is not None
+            link_name = spec[1]
+            assert link_name == tool.cmd, (
+                f"{tool.id}: app CLI link {link_name!r} must match tool cmd {tool.cmd!r}"
+            )
 
 
 def test_install_app_builds_curl_ditto_mv_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
