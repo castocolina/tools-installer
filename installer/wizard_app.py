@@ -3033,7 +3033,12 @@ class UnifiedApp(App[list[str] | None]):
             return
         # Exit code answers "did everything this session asked for succeed",
         # not "did the last thing succeed" — do not simplify this back to an
-        # assignment.
+        # assignment. ponytail #6: a later run that actually handled a tool
+        # (installed, or confirmed already present) clears it from an earlier
+        # run's not_attempted, so cancel-then-retry does not leak a stale
+        # failure into the exit code (Phase 20 replaces the fold with plan
+        # outcomes).
+        covered = set(incoming.installed) | set(incoming.already)
         self.install_summary = Summary(
             installed=existing.installed + incoming.installed,
             already=existing.already + incoming.already,
@@ -3042,7 +3047,13 @@ class UnifiedApp(App[list[str] | None]):
             mismatched=existing.mismatched + incoming.mismatched,
             dependency_failed=existing.dependency_failed + incoming.dependency_failed,
             manual_required=existing.manual_required + incoming.manual_required,
-            not_attempted=existing.not_attempted + incoming.not_attempted,
+            not_attempted=tuple(
+                dict.fromkeys(
+                    tool_id
+                    for tool_id in existing.not_attempted + incoming.not_attempted
+                    if tool_id not in covered
+                )
+            ),
             update_failed=existing.update_failed + incoming.update_failed,
             crash_error=existing.crash_error or incoming.crash_error,
         )

@@ -7272,6 +7272,64 @@ async def test_escape_after_completion_returns_to_an_empty_catalog() -> None:
         assert app.catalog.selected == set()
 
 
+async def test_a_cancelled_run_then_a_successful_rerun_is_not_a_failure() -> None:
+    """ponytail #6: not_attempted must not leak across runs. A run cancelled
+    after its first tool reports the rest not attempted; a re-run that then
+    installs those tools clears them from the session fold, so the session --
+    and the process exit code -- is clean."""
+    started = threading.Event()
+    release = threading.Event()
+    mode = {"block": True}
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        if mode["block"]:
+            started.set()
+            assert release.wait(10.0)
+        return InstallOutcome(tool.id, "installed")
+
+    app = _app(execute=_execute_inputs(install=install))
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.catalog.selected.update({"rg", "fd"})
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        await pilot.press("c")  # soft cancel: stop after the current tool
+        release.set()
+        await _settle_execute_screen(app, pilot)
+        first = app.install_summary
+        assert first is not None
+        assert first.not_attempted == ("fd",)
+        assert first.has_failure is True
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, CatalogScreen)
+        mode["block"] = False
+        app.catalog.selected.add("fd")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        merged = app.install_summary
+        assert merged is not None
+        assert merged.not_attempted == ()
+        assert merged.installed == ("rg", "fd")
+        assert merged.has_failure is False
+
+
 async def test_two_runs_accumulate_failures_into_install_summary() -> None:
     outcomes: list[str] = ["failed", "installed"]
 

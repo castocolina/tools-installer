@@ -1745,6 +1745,119 @@ async def test_in_flight_latch_skips_outdated_update_and_keeps_the_holder(tmp_pa
     assert captured == ["fd"]
 
 
+async def test_in_flight_latch_skip_is_a_failure_on_neither_signal(tmp_path: Path) -> None:
+    """WR-01/ponytail #1: a skipped update (the in-flight latch posts no
+    UpdateToolFinished, so the row stays pending) is a skip, not a failure.
+    The screen's fold_run must fold the SAME `not_attempted` list UnifiedApp
+    folds -- the worker's message, not the screen's own pending-row sweep --
+    so the status colour and the process exit code agree."""
+    rg = _tool("rg")
+    fd = _tool("fd")
+    captured: list[str] = []
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _RecordingUpdateService()
+    assert updates.begin("other") is True
+    inputs = _inputs(
+        tools=[rg, fd],
+        install=_install_with_output(captured),
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, list(inputs.catalog))
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert screen.finished is True
+        assert screen.summary is not None
+        assert screen.summary.has_failure is False
+        assert screen.status.text == "Done. enter or esc returns to the catalog."
+        assert app.install_summary is not None
+        assert app.install_summary.has_failure is False
+
+
+async def test_a_completed_update_stays_done_when_the_version_refresh_crashes(
+    tmp_path: Path,
+) -> None:
+    """opencode M3: the update ran and produced an `updated` outcome, then the
+    post-update version refresh raised before UpdateToolFinished could be
+    posted. The row must reconcile to done from the accumulated outcomes
+    before unreached rows are swept -- the run is red only because of the
+    crash, never as a not-attempted skip."""
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+
+    def crash_refresh(tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+        raise RuntimeError("refresh exploded")
+
+    refresh.refresh = crash_refresh  # type: ignore[method-assign]
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, list(inputs.catalog))
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        recorded = updates
+        assert recorded is not None
+        assert [target.tool.id for target in recorded.recorded] == ["rg"]
+        assert screen.summary is not None
+        assert "rg" not in screen.summary.not_attempted
+        assert screen.summary.crash_error is not None
+        assert "refresh exploded" in screen.summary.crash_error
+        assert screen.summary.has_failure is True
+        assert screen._progress["rg"] == "done"  # pyright: ignore[reportPrivateUsage]
+        assert "Not attempted: rg" not in _log_text(screen)
+
+
+async def test_a_crash_after_a_path_wiring_failure_keeps_both_texts_in_the_log(
+    tmp_path: Path,
+) -> None:
+    """IN-07: the crash text must be APPENDED to an earlier PATH-wiring error,
+    never replace it -- the log then carries both texts."""
+    rg = _tool("rg")
+
+    def wire_fail() -> str:
+        raise OSError("rc file unwritable")
+
+    def verify_crash() -> str:
+        # RuntimeError is NOT in run_live's catch list, so this is a real
+        # worker crash that happens AFTER the PATH-wiring failure.
+        raise RuntimeError("audit exploded")
+
+    inputs = _inputs(
+        tools=[rg],
+        install=_install_with_output([]),
+        wire_path=wire_fail,
+        verify=verify_crash,
+    )
+    app = _host(inputs, list(inputs.catalog))
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        text = _log_text(screen)
+        assert "rc file unwritable" in text
+        assert "run stopped: audit exploded" in text
+
+
 async def test_nothing_updates_before_the_confirm_keypress(tmp_path: Path) -> None:
     rg = _tool("rg")
     refresh = _RecordingRefreshService(tmp_path / "versions.json")

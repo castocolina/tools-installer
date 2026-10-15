@@ -683,9 +683,11 @@ class ExecuteScreen(ModalScreen[None]):
         except Exception as exc:  # noqa: BLE001 -- the run must report, not die
             # D-07: a crash mid-run keeps the rows that finished, marks the
             # rest not attempted, and reaches the exit code as a crash.
+            # IN-07: append the crash text, never replace an earlier PATH
+            # wiring/verify error with it -- both texts must reach the log.
             if result is None:
                 outcomes, summary, not_attempted = _partial_run(self._ordered, collected)
-            error = error or f"run stopped: {exc}"
+            error = f"{error}; run stopped: {exc}" if error else f"run stopped: {exc}"
         finally:
             # Updates that never ran (a crash or a cancel mid-update phase)
             # count as not attempted, so both handlers' fold_run reports them;
@@ -957,14 +959,26 @@ class ExecuteScreen(ModalScreen[None]):
             )
         for tool_id in message.not_attempted:
             self._progress[tool_id] = "skipped"
+        # opencode M3: reconcile rows from the accumulated update outcomes
+        # BEFORE sweeping unreached rows -- an `updated` outcome stays done
+        # even when a later version refresh crashed before UpdateToolFinished
+        # could be posted.
+        updated = {o.tool_id for o in message.update_outcomes if o.status == "updated"}
+        for tool_id in updated:
+            self._progress[tool_id] = "done"
         for tool in self._to_update:
+            if tool.id in updated:
+                continue
             if self._progress.get(tool.id) == "pending":
                 self._progress[tool.id] = "skipped"
                 if tool.id not in self.not_attempted:
                     self.not_attempted.append(tool.id)
         folded = fold_run(
             message.summary,
-            not_attempted=self.not_attempted,
+            # WR-01: fold the SAME list UnifiedApp folds -- the worker's
+            # message, never this screen's own pending-row sweep. `skip` is
+            # not a failure, and the two fold sites must not disagree.
+            not_attempted=message.not_attempted,
             update_outcomes=message.update_outcomes,
             update_errors=message.update_errors,
             error=message.error,
@@ -1002,7 +1016,11 @@ class ExecuteScreen(ModalScreen[None]):
             log.write(message.verify_text)
         elif message.verify_error:
             log.write(f"PATH audit could not be completed: {message.verify_error}")
-        if message.error and not message.path_error and not message.verify_error:
+        # IN-07: with the append fix, `error` differs from path_error exactly
+        # when a crash followed the wiring failure, so both texts get logged;
+        # without a crash, error IS the path/verify text and the dedicated
+        # line above already printed it -- writing it again would duplicate.
+        if message.error and message.error not in (message.path_error, message.verify_error):
             log.write(message.error)
         if folded.has_failure:
             self.status.set("Failed. enter or esc returns to the catalog.", "error")
