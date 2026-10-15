@@ -28,7 +28,7 @@ from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
 from installer import daemon, env_redirect
 from installer.app import UninstallDecision, path_writer_lines_for
-from installer.catalog_tui import CatalogScreen, OwnershipRefreshed
+from installer.catalog_tui import CatalogScreen, OwnershipRefreshed, ToolUpdated
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.enums import Tier, UninstallState
@@ -3027,6 +3027,34 @@ class UnifiedApp(App[list[str] | None]):
         # than once before closing it; any one of those runs installing
         # something is enough.
         self._install_state_changed = self._install_state_changed or bool(incoming.installed)
+        self._merge_summary(incoming)
+
+    def on_tool_updated(self, message: ToolUpdated) -> None:
+        """opencode H3: a failed DIRECT update (a `u` press on the catalog)
+        never reaches an ExecuteScreen, so nothing else would ever fold it
+        into the session summary and the process would exit 0 after a failed
+        update. The failure reaches install_summary here instead -- with the
+        same shape an ExecuteScreen run would have produced, so
+        _session_exit_code needs no second rule. Non-failed outcomes (and
+        unknown-owner/unsupported refusals, which are skips) are not
+        failures and change nothing."""
+        failed = message.error is not None or (
+            message.outcome is not None and message.outcome.status == "failed"
+        )
+        if not failed:
+            return
+        self._merge_summary(
+            Summary(
+                installed=(),
+                already=(),
+                failed=(),
+                no_method=(),
+                update_failed=(message.tool_id,),
+            )
+        )
+
+    def _merge_summary(self, incoming: Summary) -> None:
+        """The one field-wise session fold (D-08)."""
         existing = self.install_summary
         if existing is None:
             self.install_summary = incoming

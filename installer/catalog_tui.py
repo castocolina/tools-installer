@@ -1017,6 +1017,12 @@ class CatalogScreen(AppScreen):
                 line += f" — {outcome.detail}"
             self.status.set(line, "ok")
             return
+        if outcome.status == "failed":
+            # opencode H3: a failed update is an error, the same severity a
+            # raised worker error gets -- it must read as red, because it
+            # folds into the session exit code.
+            self.status.set(outcome.detail or f"update of {message.tool_id} failed", "error")
+            return
         self.status.set(outcome.detail or f"update {outcome.status}", "warn")
 
     def on_screen_resume(self) -> None:

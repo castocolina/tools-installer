@@ -17,6 +17,7 @@ from textual.pilot import Pilot
 import setup
 from installer import pnpm_globals, systemd_daemon
 from installer.app import UninstallDecision
+from installer.catalog_tui import ToolUpdated
 from installer.diskusage import DiskPressure
 from installer.engine import InstallOutcome
 from installer.enums import DaemonState, Severity
@@ -34,6 +35,7 @@ from installer.shellrc import ShellrcConsolidation, ShellrcRefusal, write_myshel
 from installer.terminal_shell import TerminalShellResult
 from installer.tweaks import BUNDLES
 from installer.uninstall import SweepResult
+from installer.update import UpdateOutcome
 from installer.wizard_app import (
     BASE_VIEW,
     DoctorScreen,
@@ -427,6 +429,16 @@ def _capture_app(
     actually handed the views, not what its source text says it did.
     """
     seen: list[dict[str, object]] = []
+    # opencode H3: a direct-update failure folds on the app itself (never
+    # through an ExecuteScreen), so the stand-in must install the real
+    # handler, captured before the patch below replaces the class attribute.
+    real_on_tool_updated = cast(
+        "Callable[[object, ToolUpdated], None]", setup.UnifiedApp.on_tool_updated
+    )
+    real_merge_summary = cast(
+        "Callable[[object, Summary], None]",
+        setup.UnifiedApp._merge_summary,  # pyright: ignore[reportPrivateUsage]
+    )
 
     class _App:
         install_summary: Summary | None = None
@@ -438,6 +450,12 @@ def _capture_app(
 
         def run(self) -> None:
             return None
+
+        def on_tool_updated(self, message: ToolUpdated) -> None:
+            real_on_tool_updated(self, message)
+
+        def _merge_summary(self, incoming: Summary) -> None:
+            real_merge_summary(self, incoming)
 
     monkeypatch.setattr(setup, "UnifiedApp", _App)
     return seen
@@ -3288,6 +3306,32 @@ def test_interactive_wizard_exits_0_when_the_session_is_clean(
         app, "install_summary", Summary(installed=("rg",), already=(), failed=(), no_method=())
     )
     assert setup.main([]) == 0
+
+
+def test_failed_direct_catalog_update_exits_1(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """opencode H3: a failed direct `u` update never reaches an ExecuteScreen
+    summary; the fold lives on the app, and the process must still exit 1 even
+    when the user quits without ever running an install."""
+    _sandbox(monkeypatch, tmp_path)
+    _capture_app(monkeypatch)
+    app_class = setup.UnifiedApp
+    assert app_class is not None
+    probe = app_class()  # pyright: ignore[reportCallIssue]
+    probe.on_tool_updated(
+        ToolUpdated(
+            "rg",
+            UpdateOutcome(tool_id="rg", status="failed", owner="brew", detail="brew exploded"),
+            None,
+            None,
+            0,
+        )
+    )
+    # The other tests in this file set the class attribute; the fold result
+    # reaches _build_app's own instance the same way.
+    monkeypatch.setattr(app_class, "install_summary", probe.install_summary)
+    assert setup.main([]) == 1
 
 
 def test_failed_update_exits_1(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

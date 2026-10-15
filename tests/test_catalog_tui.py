@@ -27,6 +27,7 @@ from installer.catalog_tui import (
     CatalogScreen,
     OwnershipRefreshed,
     SkillStatusRefreshed,
+    ToolUpdated,
     VersionStatusRefreshed,
     group_tools,
     sort_for_table,
@@ -58,7 +59,7 @@ from installer.resolve import UnavailableReason, platform_could_support, unavail
 from installer.run import CommandError
 from installer.selection import select_tools
 from installer.uninstall import SweepResult
-from installer.update import UpdateService
+from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_cache import VersionCacheEntry, save_version_cache
 from installer.version_status import SkillHostStatus, VersionRefreshService, VersionStatus
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
@@ -3900,3 +3901,68 @@ def test_skill_pack_with_probes_and_empty_hosts_stays_unknown(tmp_path: Path) ->
 def test_skill_pack_with_probes_present_host_stays_present(tmp_path: Path) -> None:
     screen, pack = _skill_screen(tmp_path, {"claude": "present"})
     assert screen._present(pack) is True  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a_failed_direct_update_renders_as_an_error_not_a_warning() -> None:
+    """opencode H3 (screen half): a `u` update whose outcome is `failed` is an
+    error, on the same severity as a raised worker error -- never a yellow
+    warning for something that must turn the session exit code red."""
+    screen = _screen([_tool("rg")], {"rg": True})
+    messages: list[tuple[str, str]] = []
+    screen.status.set = lambda text, severity: messages.append((text, severity))  # type: ignore[method-assign]
+    outcome = UpdateOutcome(tool_id="rg", status="failed", owner="brew", detail="brew exploded")
+    screen.on_tool_updated(ToolUpdated("rg", outcome, None, None, 0))
+    assert messages == [("brew exploded", "error")]
+
+
+class _FailingUpdateService(UpdateService):
+    """An UpdateService whose run reports a failed outcome, never raises."""
+
+    def run(self, target: UpdateTarget) -> UpdateOutcome:
+        return UpdateOutcome(
+            tool_id=target.tool.id,
+            status="failed",
+            owner=target.ownership.owner,
+            detail="brew exploded",
+        )
+
+
+async def test_a_failed_direct_update_folds_into_the_session_summary(
+    tmp_path: Path,
+) -> None:
+    """opencode H3 (app half): a failed direct `u` update never reaches an
+    ExecuteScreen summary, so the app itself must fold it into
+    install_summary -- the session then has_failure, and the process exits 1
+    even when the user quits without ever running an install."""
+    tool = _tool("rg")
+    ownership = _ownership(tool, owner="brew", package="rg")
+    service = _offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: "1.0",
+    )
+    app = _unified_app(
+        [tool],
+        {"rg": True},
+        _BLURBS,
+        version_refresh=service,
+        updates=_FailingUpdateService(
+            platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+            runner=lambda _cmd: None,
+            resolve_tag=lambda _repo: "v1",
+            tools={},
+            managed_packages=lambda: (),
+            replay_globals=lambda packages: tuple(packages),
+            reresolve_ownership=lambda _tool: ownership,
+        ),
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+        app.catalog._version_statuses = {"rg": _outdated_status("rg")}  # pyright: ignore[reportPrivateUsage]
+        await pilot.press("u")
+        await _wait_until(pilot, lambda: "brew exploded" in app.catalog.status_text)
+        summary = app.install_summary
+        assert summary is not None
+        assert "rg" in summary.update_failed
+        assert summary.has_failure is True
