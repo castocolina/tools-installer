@@ -96,6 +96,8 @@ Out of scope: receipts and health (19); script `paths`/`remove`/`update`/`writab
 - **Ledger L-18-05 (D-07 reading, jev + orchestrator):** "inconclusive, no issue call" applies to a whole-run outage (rate limit, release API unreachable, no network). A per-host network error alongside real drift does not suppress the issue: the run exits 1 and the issue lists the drift and the inconclusive hosts. (Laya whole_run p=0.57 low conf -> TypeSafe whole_run p=0.61 below floor -> orchestrator: the literal reading lets one transient 5xx hide real drift every week, defeating REG-03.)
 - **Ledger L-18-06 (D-02 reading, jev):** "reject future values" allows a one-day tolerance (accept up to today + 1 day, reject later) to absorb UTC vs local-clock skew between the CI writer and maintainers (Laya tolerance low conf -> TypeSafe tolerance p=0.98).
 
+- **Ledger L-18-07 (D-08 / L-18-04 cache survival, jev):** the drift check stays weekly (`17 5 * * 1`); a second cron (`47 5 * * 4`) only restores and re-saves the `actions/cache` state (no check, no issue), because GitHub evicts entries not accessed for 7 days and delayed weekly runs would otherwise lose the state (Laya accept_loss low conf -> TypeSafe thursday_refresh p=0.91).
+
 ### Claude's Discretion
 - Plan and wave order. Suggested:
   1. Schema (D-01..D-03), because the data must satisfy the new loader.

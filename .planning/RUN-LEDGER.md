@@ -57,6 +57,7 @@ Started 2026-10-14. Hourly resume cron: session job (deleted at run end).
 | 18 | Where the weekly verify-registry job keeps last-seen digests (D-07) | stateless p=0.49 (conf 0.05, fallback) | actions_cache p=0.95 | JSON state via actions/cache, never committed (L-18-04) | D-07 requires download-only-on-change; committing from CI widens permissions |
 | 18 | D-07 "inconclusive, no issue" scope: whole-run outage vs any per-host network error (plan-checker iter 1 W1) | whole_run p=0.57 (conf 0.01, fallback) | whole_run p=0.61 (conf 0.22, below floor) | Whole-run reading (CONTEXT L-18-05) | Orchestrator: literal reading lets one transient 5xx hide real drift weekly (REG-03); per-host errors are listed in the issue |
 | 18 | D-02 "reject future verified dates": strict vs one-day tolerance | tolerance p=0.56 (conf 0.01, fallback) | tolerance p=0.98 | Accept up to today + 1 day (CONTEXT L-18-06) | UTC CI writer vs local maintainer clocks |
+| 18 | Keeping the weekly verify-registry cache alive vs GitHub's 7-day eviction (plan-checker iter 2 I4; planner iter 3 proposal) | accept_loss p=0.52 (conf 0.07, fallback) | thursday_refresh p=0.91 | Second cron, cache refresh only; the check stays weekly (CONTEXT L-18-07) | SPEC R3 weekly check preserved; avoids repeated multi-GB re-downloads |
 
 ## Deferred questions / human verification
 
