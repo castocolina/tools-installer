@@ -55,6 +55,8 @@ Started 2026-10-14. Hourly resume cron: session job (deleted at run end).
 | 18 | R5 "50 -> 0 unverified" with live digest data | — (verifiable) | — | Assert "verified wherever a digest exists"; gron x2 + jless x2 listed as no-digest exceptions (L-18-02) | Upstream publishes no digest for those releases |
 | 18 | Seed value for ~62 undated `verified` keys | audit_date p=0.39 (conf 0.01, fallback) | audit_date p=0.72 | Seed 2026-10-13 (L-18-03) | The audit is the last confirmation of those entries |
 | 18 | Where the weekly verify-registry job keeps last-seen digests (D-07) | stateless p=0.49 (conf 0.05, fallback) | actions_cache p=0.95 | JSON state via actions/cache, never committed (L-18-04) | D-07 requires download-only-on-change; committing from CI widens permissions |
+| 18 | D-07 "inconclusive, no issue" scope: whole-run outage vs any per-host network error (plan-checker iter 1 W1) | whole_run p=0.57 (conf 0.01, fallback) | whole_run p=0.61 (conf 0.22, below floor) | Whole-run reading (CONTEXT L-18-05) | Orchestrator: literal reading lets one transient 5xx hide real drift weekly (REG-03); per-host errors are listed in the issue |
+| 18 | D-02 "reject future verified dates": strict vs one-day tolerance | tolerance p=0.56 (conf 0.01, fallback) | tolerance p=0.98 | Accept up to today + 1 day (CONTEXT L-18-06) | UTC CI writer vs local maintainer clocks |
 
 ## Deferred questions / human verification
 
