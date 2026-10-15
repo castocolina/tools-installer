@@ -9,6 +9,7 @@ from installer.model import (
     METHOD_PARAMS,
     POSTINSTALL_HOOK_NAMES,
     SKILL_HARNESSES,
+    SMOKE_CHECK_NAMES,
     Method,
     Tool,
     load_categories,
@@ -676,6 +677,100 @@ args = ["launch=n; rm -rf ~"]
     )
     with pytest.raises(ValueError, match="tool 'kitty': script 'args'"):
         load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    ("kind", "method_body"),
+    [
+        ("github_release", 'repo = "o/r"\nasset = "a.zip"\nmember = "bin/demo"'),
+        ("tarball", 'url = "https://x/y.tar.xz"\nmember = "bin/demo"'),
+        ("app", 'url = "https://x/y.zip"\napp = "Demo.app"'),
+        ("brew", 'formula = "rg"'),
+        ("script", 'url = "https://example.test/i.sh"\nshell = "sh"'),
+    ],
+)
+def test_smoke_argv_is_accepted_on_binary_installing_kinds(
+    tmp_path: Path, kind: str, method_body: str
+) -> None:
+    manifest = _write(
+        tmp_path,
+        f"""
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "{kind}"
+{method_body}
+smoke_argv = ["--appimage-version"]
+""",
+    )
+    tools = load_tools(manifest)
+    assert tools[0].methods[0].params["smoke_argv"] == ["--appimage-version"]
+
+
+@pytest.mark.parametrize(
+    "smoke_argv_toml",
+    [
+        '"--version"',
+        "[]",
+        "[1]",
+        '["a b"]',
+        '["a;b"]',
+    ],
+)
+def test_smoke_argv_shape_is_validated(tmp_path: Path, smoke_argv_toml: str) -> None:
+    manifest = _write(
+        tmp_path,
+        f"""
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "script"
+url = "https://example.test/i.sh"
+shell = "sh"
+smoke_argv = {smoke_argv_toml}
+""",
+    )
+    with pytest.raises(ValueError, match=r"tool 'demo'.*smoke_argv"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    ("kind", "method_body"),
+    [
+        ("host_setup", 'setup_id = "pi"'),
+        ("skill_pack", ""),
+    ],
+)
+def test_smoke_argv_is_rejected_where_nothing_is_installed(
+    tmp_path: Path, kind: str, method_body: str
+) -> None:
+    manifest = _write(
+        tmp_path,
+        f"""
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "{kind}"
+{method_body}
+smoke_argv = ["--version"]
+""",
+    )
+    with pytest.raises(ValueError, match=r"unknown key 'smoke_argv'"):
+        load_tools(manifest)
+
+
+def test_node_smoke_name_is_unchanged_by_smoke_argv(tmp_path: Path) -> None:
+    known = next(iter(SMOKE_CHECK_NAMES))
+    tools = load_tools(_node_registry(tmp_path, f'smoke = "{known}"'))
+    assert tools[0].methods[0].params["smoke"] == known
+    with pytest.raises(ValueError, match="smoke.*not-a-check"):
+        load_tools(_node_registry(tmp_path, 'smoke = "not-a-check"'))
 
 
 def test_sdkman_method_without_candidate_is_a_config_error(tmp_path: Path) -> None:

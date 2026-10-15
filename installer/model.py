@@ -40,10 +40,14 @@ METHOD_KINDS = (
 
 # Later phases extend a kind's keys by editing its entry (Phases 22 and 24).
 METHOD_PARAMS: dict[str, frozenset[str]] = {
-    "script": frozenset({"url", "shell", "bin_dir", "env", "detect_path", "version_file", "args"}),
-    "node": frozenset({"npm_pkg", "co_install", "allow_build", "min_node", "smoke", "versions"}),
-    "uv-tool": frozenset({"pypi_pkg"}),
-    "sdkman": frozenset({"candidate", "bin_dir", "version"}),
+    "script": frozenset(
+        {"url", "shell", "bin_dir", "env", "detect_path", "version_file", "args", "smoke_argv"}
+    ),
+    "node": frozenset(
+        {"npm_pkg", "co_install", "allow_build", "min_node", "smoke", "versions", "smoke_argv"}
+    ),
+    "uv-tool": frozenset({"pypi_pkg", "smoke_argv"}),
+    "sdkman": frozenset({"candidate", "bin_dir", "version", "smoke_argv"}),
     "host_setup": frozenset({"setup_id"}),
     "skill_pack": frozenset(),
     "github_release": frozenset(
@@ -57,18 +61,29 @@ METHOD_PARAMS: dict[str, frozenset[str]] = {
             "archive",
             "bin_name",
             "bin_dir",
+            "smoke_argv",
         }
     ),
     "tarball": frozenset(
-        {"url", "member", "strip", "bin_name", "archive", "bin_dir", "version", "sha256"}
+        {
+            "url",
+            "member",
+            "strip",
+            "bin_name",
+            "archive",
+            "bin_dir",
+            "version",
+            "sha256",
+            "smoke_argv",
+        }
     ),
-    "app": frozenset({"url", "app", "cli", "cli_name", "version", "sha256"}),
-    "dnf": frozenset({"package"}),
-    "apt": frozenset({"package"}),
-    "pacman": frozenset({"package"}),
+    "app": frozenset({"url", "app", "cli", "cli_name", "version", "sha256", "smoke_argv"}),
+    "dnf": frozenset({"package", "smoke_argv"}),
+    "apt": frozenset({"package", "smoke_argv"}),
+    "pacman": frozenset({"package", "smoke_argv"}),
     "rpm_ostree": frozenset({"package"}),
-    "brew": frozenset({"formula", "detect_path", "min_os_version", "bin_dir"}),
-    "cask": frozenset({"cask", "app", "min_os_version"}),
+    "brew": frozenset({"formula", "detect_path", "min_os_version", "bin_dir", "smoke_argv"}),
+    "cask": frozenset({"cask", "app", "min_os_version", "smoke_argv"}),
 }
 
 # Multi-hook post-install action names. Distinct from `Tool.postinstall` above:
@@ -810,6 +825,22 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
                 ):
                     raise ValueError(
                         f"tool '{row['id']}': script 'args' must be a list of strings "
+                        "matching ^[A-Za-z0-9=._:/+-]+$"
+                    )
+            if "smoke_argv" in params:
+                smoke_argv = params["smoke_argv"]
+                argv_items = cast(list[object], smoke_argv) if isinstance(smoke_argv, list) else ()
+                if (
+                    not isinstance(smoke_argv, list)
+                    or not smoke_argv
+                    or not all(isinstance(item, str) for item in argv_items)
+                    or any(
+                        _SCRIPT_ARG_RE.fullmatch(item) is None
+                        for item in cast(list[str], argv_items)
+                    )
+                ):
+                    raise ValueError(
+                        f"tool '{row['id']}': 'smoke_argv' must be a non-empty list of strings "
                         "matching ^[A-Za-z0-9=._:/+-]+$"
                     )
             if kind == "host_setup":
