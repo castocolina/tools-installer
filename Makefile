@@ -12,24 +12,24 @@ build:  ## Build the wheel + sdist
 	uv build
 
 setup:  ## Launch the setup wizard (pass flags via ARGS, e.g. ARGS="--all --yes")
-	uv run setup.py $(ARGS)
+	uv run --isolated --no-dev setup.py $(ARGS)
 
 run: setup  ## Alias for `setup`
 
 doctor:  ## Audit PATH (read-only report; `make fix` applies changes)
-	uv run setup.py --doctor
+	uv run --isolated --no-dev setup.py --doctor
 
 fix:  ## Wire PATH into your shell (~/.myshellrc + rc files)
-	uv run setup.py --fix
+	uv run --isolated --no-dev setup.py --fix
 
 uninstall:  ## Remove userspace artifacts: ~/.local/opt/* dirs, ~/.local/bin symlinks, and the managed ~/.myshellrc PATH block (previews, then asks to confirm)
-	uv run setup.py --uninstall
+	uv run --isolated --no-dev setup.py --uninstall
 
 guard:  ## Ban bare pip/npm (shims + aliases steering to uv/pnpm; opt-in, removable)
-	uv run setup.py --guard
+	uv run --isolated --no-dev setup.py --guard
 
 unguard:  ## Remove the pip/npm ban
-	uv run setup.py --unguard
+	uv run --isolated --no-dev setup.py --unguard
 
 validate:  ## Lint, format-check, type-check, security, dead-code
 	# setup.py (composition root) is lint/format-gated but stays out of pyright/coverage:

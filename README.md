@@ -291,7 +291,7 @@ workflow has a `make` target so local runs and CI are identical:
 | Command          | Does                                                            |
 | ---------------- | -------------------------------------------------------------- |
 | `make install`   | `uv sync` — create `.venv`, install runtime + dev deps          |
-| `make setup`     | launch the wizard (`uv run setup.py`; flags via `ARGS`; `make run` is an alias) |
+| `make setup`     | launch the wizard (`uv run --isolated --no-dev setup.py`, isolated, without dev dependencies, so the installer sees your real tools (dev ruff never shadows yours); flags via `ARGS`; `make run` is an alias) |
 | `make doctor`    | audit `PATH` (read-only report)                                 |
 | `make fix`       | wire `PATH` into your shell (`~/.myshellrc` + rc files)         |
 | `make validate`  | pre-commit gates: `ruff check`, `ruff format --check`, `pyright`, `bandit`, `vulture`, `shellcheck` |
