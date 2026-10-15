@@ -13,7 +13,7 @@ provides:
   - update paths require a regular executable live binary (download._replace_archive, apps._validate_app)
   - raw installs land via sibling temp + os.replace, never writing through an existing link
   - conditional doctor broken-link repair wording
-  - suppression-free, split-literal-free tests; two-generation race test
+  - suppression-free, split-literal-free tests; two-generation race test (two `type: ignore[arg-type]` added in ad63b1f were removed by 17-21, e63f983)
 affects: [17-19, 17-20, phase-18-data-fixes, phase-22-uninstall-sweep]
 
 actuals:
