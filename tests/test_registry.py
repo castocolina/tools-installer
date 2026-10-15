@@ -2047,3 +2047,13 @@ def test_codex_script_runs_non_interactive() -> None:
     executors.execute(script, calls.append)
     assert len(calls) == 1
     assert "CODEX_NON_INTERACTIVE=1" in calls[0][-1]
+
+
+def test_every_shipped_tool_declares_a_verified_date() -> None:
+    import re
+
+    text = REGISTRY.read_text()
+    tool_headers = len(re.findall(r"^\[\[tool\]\]$", text, re.MULTILINE))
+    verified_lines = len(re.findall(r"^verified = \d{4}-\d{2}-\d{2}$", text, re.MULTILINE))
+    load_tools(REGISTRY)
+    assert verified_lines == tool_headers

@@ -67,6 +67,7 @@ cmd = "uv"
 priority = "P0"
 audience = "both"
 tier = "system"
+verified = 2026-10-13
 desc = "Fast Python package and venv manager"
 [[tool.method]]
 kind = "script"
@@ -85,6 +86,7 @@ cmd = "rg"
 priority = "P0"
 audience = "ai"
 tier = "ai"
+verified = 2026-10-13
 desc = "Replaces recursive grep with faster code search, .gitignore awareness, and focused output for agents."
 # rpm-ostree is listed FIRST on every dnf/apt/pacman-capable row below: on an
 # ostree host the rpm database still answers `rpm -q`, so probing dnf first
@@ -132,6 +134,7 @@ cmd = "jq"
 priority = "P0"
 audience = "ai"
 tier = "user"
+verified = 2026-10-13
 desc = "Turns JSON into precise filters so agents inspect only the fields they need."
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
@@ -155,6 +158,7 @@ cmd = "brew"
 priority = "P0"
 audience = "both"
 tier = "system"
+verified = 2026-10-13
 desc = "Homebrew supplies user-space packages on macOS and immutable Linux when native writes are unsafe."
 # bin_dir assumes Apple Silicon (/opt/homebrew/bin). Intel Macs use /usr/local/bin;
 # arch-aware wiring is a deferred refinement, so PATH may be wrong on Intel.
@@ -181,6 +185,7 @@ cmd = "fd"
 priority = "P0"
 audience = "ai"
 tier = "ai"
+verified = 2026-10-13
 desc = "Replaces most find usage with faster defaults, .gitignore awareness, and simpler paths."
 [[tool.method]]
 kind = "github_release"
@@ -208,6 +213,7 @@ cmd = "bat"
 priority = "P0"
 audience = "both"
 tier = "ai"
+verified = 2026-10-13
 desc = "Replaces cat for code review with syntax highlighting, paging, and Git-aware context."
 [[tool.method]]
 kind = "github_release"
@@ -235,6 +241,7 @@ cmd = "sd"
 priority = "P0"
 audience = "ai"
 tier = "ai"
+verified = 2026-10-13
 desc = "Replaces common sed substitutions with clearer syntax and safer literal defaults."
 [[tool.method]]
 kind = "github_release"
@@ -262,6 +269,7 @@ cmd = "git"
 priority = "P0"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "Core version control for users and agents; replaces manual file snapshots with auditable history."
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
@@ -285,6 +293,7 @@ cmd = "delta"
 priority = "P2"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "A syntax-highlighting pager for git, diff, and grep output"
 [[tool.method]]
 kind = "github_release"
@@ -313,6 +322,7 @@ cmd = "eza"
 priority = "P0"
 audience = "both"
 tier = "ai"
+verified = 2026-10-13
 desc = "Replaces ls with clearer file metadata, Git status, and readable defaults."
 # eza publishes no macOS asset; mac installs via brew.
 [[tool.method]]
@@ -334,6 +344,7 @@ cmd = "zoxide"
 priority = "P2"
 audience = "human"
 tier = "user"
+verified = 2026-10-13
 desc = "A smarter cd command with frecency-based jumping"
 [[tool.method]]
 kind = "github_release"
@@ -361,6 +372,7 @@ cmd = "fzf"
 priority = "P1"
 audience = "human"
 tier = "user"
+verified = 2026-10-13
 desc = "A general-purpose command-line fuzzy finder"
 [[tool.method]]
 kind = "github_release"
@@ -390,6 +402,7 @@ cmd = "lazygit"
 priority = "P2"
 audience = "human"
 tier = "user"
+verified = 2026-10-13
 desc = "A simple terminal UI for git commands"
 [[tool.method]]
 kind = "github_release"
@@ -419,6 +432,7 @@ cmd = "gh"
 priority = "P0"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "Uses GitHub from the terminal so agents and users can inspect PRs, issues, and auth state."
 # gh ships macOS only as .zip/.pkg; mac installs via brew.
 [[tool.method]]
@@ -441,6 +455,7 @@ cmd = "yq"
 priority = "P0"
 audience = "ai"
 tier = "user"
+verified = 2026-10-13
 desc = "Queries YAML and JSON without ad hoc parsing, reducing noisy config inspection."
 [[tool.method]]
 kind = "github_release"
@@ -468,6 +483,7 @@ cmd = "starship"
 priority = "P1"
 audience = "human"
 tier = "system"
+verified = 2026-09-06
 desc = "The minimal, blazing-fast, customizable prompt for any shell"
 [[tool.method]]
 kind = "github_release"
@@ -507,6 +523,7 @@ cmd = "zsh"
 priority = "P1"
 audience = "human"
 tier = "system"
+verified = 2026-09-06
 desc = "Feature-rich shell; prerequisite for Oh-My-Zsh."
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
@@ -544,6 +561,7 @@ cmd = "omz"
 priority = "P2"
 audience = "human"
 tier = "system"
+verified = 2026-09-06
 requires = ["zsh", "git"]
 post_install = ["set_login_shell"]
 desc = "Zsh configuration framework; installs into ~/.oh-my-zsh and edits .zshrc, preserving it via KEEP_ZSHRC."
@@ -585,6 +603,7 @@ cmd = "gnu-bash"
 priority = "P2"
 audience = "human"
 tier = "system"
+verified = 2026-09-06
 desc = "Modern GNU Bash (5.x) installed alongside macOS's SIP-protected system bash 3.2, never replacing it."
 [[tool.method]]
 kind = "brew"
@@ -607,6 +626,7 @@ cmd = "direnv"
 priority = "P1"
 audience = "human"
 tier = "system"
+verified = 2026-10-13
 desc = "Per-directory environment variables, loaded on cd"
 [[tool.method]]
 kind = "github_release"
@@ -634,6 +654,7 @@ cmd = "just"
 priority = "P1"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "A handy command runner for project-specific tasks"
 [[tool.method]]
 kind = "github_release"
@@ -663,6 +684,7 @@ cmd = "ruff"
 priority = "P1"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "An extremely fast Python linter and formatter"
 [[tool.method]]
 kind = "github_release"
@@ -692,6 +714,7 @@ cmd = "dust"
 priority = "P2"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "A more intuitive version of du (disk usage)"
 [[tool.method]]
 kind = "github_release"
@@ -719,6 +742,7 @@ cmd = "hyperfine"
 priority = "P2"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "A command-line benchmarking tool"
 [[tool.method]]
 kind = "github_release"
@@ -746,6 +770,7 @@ cmd = "btm"
 priority = "P2"
 audience = "human"
 tier = "user"
+verified = 2026-10-13
 desc = "A customizable cross-platform graphical process/system monitor"
 [[tool.method]]
 kind = "github_release"
@@ -773,6 +798,7 @@ cmd = "gum"
 priority = "P2"
 audience = "human"
 tier = "system"
+verified = 2026-10-13
 desc = "A tool for glamorous shell scripts"
 [[tool.method]]
 kind = "github_release"
@@ -802,6 +828,7 @@ cmd = "glow"
 priority = "P2"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "Render markdown on the command line"
 [[tool.method]]
 kind = "github_release"
@@ -831,6 +858,7 @@ cmd = "xh"
 priority = "P2"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "A friendly and fast tool for sending HTTP requests"
 [[tool.method]]
 kind = "github_release"
@@ -858,6 +886,7 @@ cmd = "difft"
 priority = "P2"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "A structural diff that understands syntax"
 [[tool.method]]
 kind = "github_release"
@@ -885,6 +914,7 @@ cmd = "gitui"
 priority = "P2"
 audience = "human"
 tier = "user"
+verified = 2026-10-13
 desc = "Blazing-fast terminal UI for git"
 # gitui's macOS assets don't use our arch tokens, so install via brew on a Mac.
 [[tool.method]]
@@ -906,6 +936,7 @@ cmd = "lazydocker"
 priority = "P2"
 audience = "both"
 tier = "system"
+verified = 2026-10-13
 desc = "A simple terminal UI for docker and docker-compose"
 [[tool.method]]
 kind = "github_release"
@@ -935,6 +966,7 @@ cmd = "watch"
 priority = "P1"
 audience = "human"
 tier = "system"
+verified = 2026-10-13
 desc = "Repeats commands on an interval for live terminal checks; required by the Docker shortcuts policy."
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
@@ -958,6 +990,7 @@ cmd = "docker"
 priority = "P1"
 audience = "both"
 tier = "system"
+verified = 2026-10-13
 desc = "Controls Docker engines and contexts; agents use it to inspect containers without parsing desktop UI state."
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
@@ -981,6 +1014,7 @@ cmd = "podman"
 priority = "P1"
 audience = "both"
 tier = "system"
+verified = 2026-10-13
 desc = "Rootless container engine often safer on Linux and immutable desktops than daemon-first workflows."
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
@@ -1004,6 +1038,7 @@ cmd = "colima"
 priority = "P1"
 audience = "both"
 tier = "system"
+verified = 2026-09-06
 desc = "Runs container runtimes in a lightweight VM, giving macOS and Linux users a Docker-compatible engine."
 [[tool.method]]
 kind = "brew"
@@ -1039,6 +1074,7 @@ cmd = "container"
 priority = "P2"
 audience = "both"
 tier = "system"
+verified = 2026-09-06
 desc = "Apple's native container runtime; requires macOS 26+ and Apple Silicon, enforced by Homebrew's own formula requirements."
 [[tool.method]]
 kind = "brew"
@@ -1055,6 +1091,7 @@ cmd = "dive"
 priority = "P2"
 audience = "human"
 tier = "system"
+verified = 2026-10-13
 desc = "A tool for exploring each layer in a docker image"
 [[tool.method]]
 kind = "github_release"
@@ -1084,6 +1121,7 @@ cmd = "duf"
 priority = "P2"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "Disk Usage/Free utility with a friendly table view"
 [[tool.method]]
 kind = "github_release"
@@ -1113,6 +1151,7 @@ cmd = "hexyl"
 priority = "P2"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "A command-line hex viewer"
 [[tool.method]]
 kind = "github_release"
@@ -1140,6 +1179,7 @@ cmd = "mlr"
 priority = "P2"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "Like awk/sed/cut/join/sort for CSV, TSV, and JSON"
 [[tool.method]]
 kind = "github_release"
@@ -1169,6 +1209,7 @@ cmd = "shfmt"
 priority = "P2"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "A shell parser, formatter, and interpreter (sh/bash/mksh)"
 [[tool.method]]
 kind = "github_release"
@@ -1196,6 +1237,7 @@ cmd = "tldr"
 priority = "P2"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "A fast tldr client — simplified, community-driven man pages"
 [[tool.method]]
 kind = "github_release"
@@ -1225,6 +1267,7 @@ cmd = "fx"
 priority = "P2"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "A terminal JSON viewer and processor"
 [[tool.method]]
 kind = "github_release"
@@ -1252,6 +1295,7 @@ cmd = "dasel"
 priority = "P2"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "Query and modify JSON, YAML, TOML, XML, and CSV with one tool"
 [[tool.method]]
 kind = "github_release"
@@ -1279,6 +1323,7 @@ cmd = "gron"
 priority = "P2"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "Make JSON greppable by flattening it into discrete assignments"
 [[tool.method]]
 kind = "github_release"
@@ -1306,6 +1351,7 @@ cmd = "aichat"
 priority = "P1"
 audience = "ai"
 tier = "user"
+verified = 2026-10-13
 desc = "All-in-one LLM CLI tool (chat REPL, shell assistant, RAG)"
 [[tool.method]]
 kind = "github_release"
@@ -1333,6 +1379,7 @@ cmd = "codex"
 priority = "P0"
 audience = "human"
 tier = "user"
+verified = 2026-10-10
 desc = "OpenAI coding agent for the user; coordinates local coding sessions rather than serving as an agent subtool."
 # real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
@@ -1372,6 +1419,7 @@ cmd = "claude"
 priority = "P0"
 audience = "human"
 tier = "user"
+verified = 2026-10-10
 desc = "Anthropic coding agent for the user; complements Codex and needs clear install ownership."
 # real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
@@ -1396,6 +1444,7 @@ cmd = "opencode"
 priority = "P0"
 audience = "human"
 tier = "user"
+verified = 2026-10-10
 desc = "Open source coding agent for the user, useful when teams want provider-flexible terminal workflows."
 # real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
@@ -1449,6 +1498,7 @@ cmd = "cursor-agent"
 priority = "P0"
 audience = "human"
 tier = "user"
+verified = 2026-10-10
 desc = "Cursor's terminal coding agent; installs via its own official curl|bash script, no brew/cask CLI equivalent exists."
 # real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
@@ -1490,6 +1540,7 @@ cmd = "agy"
 priority = "P1"
 audience = "human"
 tier = "user"
+verified = 2026-09-06
 desc = "Google's terminal-based Antigravity agent CLI; installs via its own official curl|bash script, self-verifying the download's SHA-512 against a signed manifest."
 [[tool.method]]
 kind = "script"
@@ -1522,6 +1573,7 @@ cmd = "codegraph"
 priority = "P1"
 audience = "ai"
 tier = "ai"
+verified = 2026-09-06
 desc = "Local code-intelligence knowledge graph CLI and MCP server; ships its own Node runtime"
 # Verified 2026-09-06 (Phase 9, REQ-codegraph-mcp-postinstall): codegraph's real
 # `install --help` (v1.2.0) accepts `--target <ids>` (comma-separated real target ids
@@ -1591,6 +1643,7 @@ cmd = "graphify"
 priority = "P1"
 audience = "ai"
 tier = "ai"
+verified = 2026-10-14
 requires = ["uv"]
 desc = "Turns a codebase (plus docs, SQL schemas, configs, PDFs) into a queryable local knowledge graph for AI agents."
 # Verified 2026-10-14: postinstall removed (Phase 17, SAFE-02). Every graphify
@@ -1649,6 +1702,7 @@ cmd = "rtk"
 priority = "P1"
 audience = "ai"
 tier = "ai"
+verified = 2026-09-11
 desc = "CLI proxy that rewrites/compresses common dev-command output to cut LLM-visible token usage 60-90%."
 postinstall = "rtk-register"
 # Verified 2026-09-11: rtk v0.49.0's `claude` host registration
@@ -1703,6 +1757,7 @@ cmd = "deno"
 priority = "P2"
 audience = "both"
 tier = "system"
+verified = 2026-09-06
 desc = "Secure runtime for JavaScript and TypeScript"
 [[tool.method]]
 kind = "github_release"
@@ -1749,6 +1804,7 @@ cmd = "sdkman-init.sh"
 priority = "P1"
 audience = "both"
 tier = "system"
+verified = 2026-10-10
 desc = "User-space manager for Java and JVM tools; after sourcing sdkman-init.sh it exposes the sdk shell function."
 [[tool.method]]
 kind = "script"
@@ -1789,6 +1845,7 @@ cmd = "java"
 priority = "P1"
 audience = "both"
 tier = "system"
+verified = 2026-09-06
 desc = "JVM runtime required by Gradle, Maven, Groovy, and many enterprise projects; installed and version-managed exclusively through SDKMAN, never a native/brew package."
 requires = ["sdkman"]
 [[tool.method]]
@@ -1804,6 +1861,7 @@ cmd = "groovy"
 priority = "P2"
 audience = "both"
 tier = "system"
+verified = 2026-10-13
 desc = "JVM scripting language for build and automation scripts; installed and version-managed exclusively through SDKMAN, never a native/brew package."
 requires = ["sdkman"]
 [[tool.method]]
@@ -1819,6 +1877,7 @@ cmd = "spring"
 priority = "P2"
 audience = "both"
 tier = "system"
+verified = 2026-10-13
 desc = "Bootstraps and runs Spring projects from the terminal; installed and version-managed exclusively through SDKMAN (candidate 'springboot'), never a native/brew package."
 requires = ["sdkman"]
 [[tool.method]]
@@ -1834,6 +1893,7 @@ cmd = "gradle"
 priority = "P1"
 audience = "both"
 tier = "system"
+verified = 2026-10-13
 desc = "Build tool for JVM projects; installed and version-managed exclusively through SDKMAN, never a native/brew package."
 requires = ["sdkman"]
 [[tool.method]]
@@ -1849,6 +1909,7 @@ cmd = "mvn"
 priority = "P1"
 audience = "both"
 tier = "system"
+verified = 2026-10-13
 desc = "Standard Java build tool; installed and version-managed exclusively through SDKMAN, never a native/brew package."
 requires = ["sdkman"]
 [[tool.method]]
@@ -1864,6 +1925,7 @@ cmd = "procs"
 priority = "P3"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "A modern replacement for ps written in Rust"
 [[tool.method]]
 kind = "github_release"
@@ -1893,6 +1955,7 @@ audience = "both"
 # Same category = "search" family as rg/fd, both already tier = "ai": a
 # structural-search tool an agent invokes, not one the human types (D-07).
 tier = "ai"
+verified = 2026-10-13
 desc = "Fast structural search, lint, and rewrite tool for code"
 # The zip bundles both `sg` and `ast-grep`; we install `ast-grep` (the `sg`
 # short alias collides with the system setgroups tool).
@@ -1922,6 +1985,7 @@ cmd = "jless"
 priority = "P3"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "A command-line JSON viewer"
 # No aarch64-linux asset upstream; arm64 Linux falls through to brew.
 [[tool.method]]
@@ -1950,6 +2014,7 @@ cmd = "bun"
 priority = "P2"
 audience = "both"
 tier = "system"
+verified = 2026-10-13
 desc = "Fast all-in-one JavaScript runtime and toolkit"
 [[tool.method]]
 kind = "script"
@@ -1968,6 +2033,7 @@ cmd = "pnpm"
 priority = "P2"
 audience = "both"
 tier = "system"
+verified = 2026-10-13
 desc = "Fast, disk-space-efficient Node.js package manager"
 [[tool.method]]
 kind = "script"
@@ -2009,6 +2075,7 @@ cmd = "volta"
 priority = "P2"
 audience = "both"
 tier = "system"
+verified = 2026-10-13
 desc = "Node toolchain manager; owns globally installed Node CLIs in its own shim dir"
 # No macOS script fallback: volta's published macOS path is Homebrew only.
 # A Mac with no Homebrew cannot install the redirect target; plan 04-03 gates
@@ -2039,6 +2106,7 @@ cmd = "fnm"
 priority = "P2"
 audience = "both"
 tier = "system"
+verified = 2026-10-13
 desc = "Fast and simple Node.js version manager"
 # macOS: the official installer delegates to Homebrew, so install via brew there.
 [[tool.method]]
@@ -2059,6 +2127,7 @@ cmd = "gitleaks"
 priority = "P3"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "Detect hardcoded secrets in git repos and files"
 [[tool.method]]
 kind = "github_release"
@@ -2088,6 +2157,7 @@ cmd = "vale"
 priority = "P3"
 audience = "both"
 tier = "user"
+verified = 2026-10-13
 desc = "Syntax-aware linter for prose and documentation"
 [[tool.method]]
 kind = "github_release"
@@ -2117,6 +2187,7 @@ cmd = "broot"
 priority = "P3"
 audience = "human"
 tier = "user"
+verified = 2026-10-13
 desc = "Interactive tree view and fuzzy file navigator"
 # One combined multi-platform zip; we extract only this platform's binary (selective unzip).
 # No x86_64-apple-darwin in the archive -> Intel Macs fall through to brew.
@@ -2146,6 +2217,7 @@ cmd = "code"
 priority = "P1"
 audience = "human"
 tier = "user"
+verified = 2026-09-17
 desc = "GUI editor with a `code` CLI; on Linux this installs the official tarball to ~/.local/opt (userspace, safe on immutable distros like Bazzite)."
 # Arch-split `latest` aliases (each 302s to the current build's CDN zip); the
 # universal zip is ~120 MB larger per download and ~2x on disk -> not used.
@@ -2210,6 +2282,7 @@ cmd = "jetbrains-toolbox"
 priority = "P2"
 audience = "human"
 tier = "user"
+verified = 2026-10-14
 desc = "Manages JetBrains IDEs such as IntelliJ IDEA and PyCharm without modeling each IDE separately."
 [[tool.method]]
 kind = "cask"
@@ -2253,6 +2326,7 @@ cmd = "subl"
 priority = "P3"
 audience = "human"
 tier = "user"
+verified = 2026-10-14
 desc = "Fast proprietary text editor"
 # One universal mac zip. The build number is pinned (no `latest` URL exists);
 # the app self-updates after first launch, so the pin only affects first install.
@@ -2375,6 +2449,7 @@ cmd = "mmdc"
 priority = "P2"
 audience = "both"
 tier = "user"
+verified = 2026-09-05
 desc = "Render Mermaid diagrams to SVG/PNG/PDF from the command line"
 requires = ["pnpm", "puppeteer"]
 [[tool.method]]
@@ -2496,6 +2571,7 @@ audience = "both"
 # Runtime dependency of mmdc, never launched by the human directly — its own
 # desc above already says so (D-08).
 tier = "ai"
+verified = 2026-10-10
 desc = "Headless-Chrome automation library; downloads its own Chrome and chrome-headless-shell. Required at runtime by mmdc."
 requires = ["pnpm"]
 [[tool.method]]
@@ -2560,6 +2636,7 @@ cmd = "kitty"
 priority = "P3"
 audience = "human"
 tier = "user"
+verified = 2026-10-10
 desc = "GPU-accelerated terminal emulator"
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
@@ -2632,6 +2709,7 @@ cmd = "wezterm"
 priority = "P3"
 audience = "human"
 tier = "user"
+verified = 2026-10-09
 desc = "GPU-accelerated, cross-platform terminal emulator with multiplexing"
 owner_probes = ["pacman"]
 [[tool.method]]
@@ -2672,6 +2750,7 @@ cmd = "alacritty"
 priority = "P3"
 audience = "human"
 tier = "user"
+verified = 2026-10-09
 desc = "Cross-platform OpenGL terminal emulator"
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 [[tool.method]]
@@ -2693,6 +2772,7 @@ priority = "P0"
 audience = "both"
 desc = "Uses GitLab from the terminal to work with merge requests, issues, pipelines, and authentication."
 tier = "user"
+verified = 2026-10-13
 # GitLab officially supports Homebrew on macOS and Linux.
 [[tool.method]]
 kind = "brew"
@@ -2709,6 +2789,7 @@ priority = "P1"
 audience = "human"
 desc = "Minimal coding-agent harness; setup remains interactive, and uninstall uses pnpm remove."
 tier = "user"
+verified = 2026-10-13
 requires = ["pnpm"]
 source = "https://github.com/earendil-works/pi"
 owner = "pnpm"
@@ -2729,6 +2810,7 @@ priority = "P2"
 audience = "human"
 desc = "Official draw.io Desktop release with export CLI; uninstall removes its managed app or AppImage."
 tier = "user"
+verified = 2026-10-13
 source = "https://github.com/jgraph/drawio-desktop"
 owner = "tools-installer managed release"
 owner_probes = ["managed-download"]
@@ -2777,6 +2859,7 @@ priority = "P2"
 audience = "both"
 desc = "Export CLI shipped by draw.io Desktop; uninstall it with the managed desktop release."
 tier = "user"
+verified = 2026-10-13
 requires = ["drawio-desktop"]
 source = "https://github.com/jgraph/drawio-desktop"
 owner = "tools-installer managed release"
@@ -2826,6 +2909,7 @@ priority = "P3"
 audience = "human"
 desc = "Codex plugin whose lifecycle hooks require review; uninstall through Codex."
 tier = "ai"
+verified = 2026-10-10
 [[tool.method]]
 kind = "skill_pack"
 # Verified 2026-10-10: https://github.com/DietrichGebert/ponytail/blob/main/INSTALL.md
@@ -2963,6 +3047,7 @@ priority = "P2"
 audience = "human"
 desc = "Guided spec workflow; discloses anonymous telemetry and OPENSPEC_TELEMETRY=0; uninstall with pnpm."
 tier = "ai"
+verified = 2026-10-10
 requires = ["pnpm"]
 [[tool.method]]
 kind = "skill_pack"
@@ -3062,6 +3147,7 @@ priority = "P3"
 audience = "human"
 desc = "Workflow plugin for Claude Code, Codex, Cursor, Pi, and the other hosts its README names; install per host."
 tier = "ai"
+verified = 2026-10-10
 [[tool.method]]
 kind = "skill_pack"
 # Verified 2026-10-10: https://github.com/obra/superpowers/blob/main/README.md
@@ -3164,6 +3250,7 @@ priority = "P3"
 audience = "human"
 desc = "Selected host-aware agent skills installed by the official skills CLI; uninstall with npx skills remove."
 tier = "ai"
+verified = 2026-10-10
 [[tool.method]]
 kind = "skill_pack"
 # Verified 2026-10-10: https://github.com/softaworks/agent-toolkit/blob/main/README.md
@@ -3218,6 +3305,7 @@ priority = "P3"
 audience = "human"
 desc = "Interactive host-aware skills collection installed by skills; uninstall selected skills with npx skills remove."
 tier = "ai"
+verified = 2026-10-10
 [[tool.method]]
 kind = "skill_pack"
 # Verified 2026-10-10: https://github.com/mattpocock/skills/blob/main/README.md
@@ -3310,6 +3398,7 @@ priority = "P3"
 audience = "human"
 desc = "Guided cross-runtime workflow installer; uninstall with its runtime, scope, and --uninstall flags."
 tier = "ai"
+verified = 2026-10-10
 [[tool.method]]
 kind = "skill_pack"
 # Verified 2026-10-10: https://github.com/open-gsd/gsd-core/blob/main/README.md
@@ -3380,6 +3469,7 @@ priority = "P2"
 audience = "human"
 desc = "Official Specify CLI plus guided project integration; uninstall the CLI with uv tool uninstall."
 tier = "ai"
+verified = 2026-10-10
 requires = ["uv"]
 [[tool.method]]
 kind = "skill_pack"

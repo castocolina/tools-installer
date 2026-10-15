@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -15,9 +16,39 @@ from installer.model import (
 )
 
 
-def _write(tmp_path: Path, content: str) -> Path:
+def _seed_verified_in_content(content: str) -> str:
+    lines = content.splitlines(keepends=True)
+    result: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        if lines[i].rstrip("\n") != "[[tool]]":
+            result.append(lines[i])
+            i += 1
+            continue
+        result.append(lines[i])
+        i += 1
+        tool_lines: list[str] = []
+        while i < n and not lines[i].startswith("["):
+            tool_lines.append(lines[i])
+            i += 1
+        has_verified = any(tl.lstrip().startswith("verified") for tl in tool_lines)
+        if has_verified:
+            result.extend(tool_lines)
+            continue
+        inserted = False
+        for tl in tool_lines:
+            result.append(tl)
+            if not inserted and tl.startswith("tier = "):
+                result.append("verified = 2026-10-13\n")
+                inserted = True
+    return "".join(result)
+
+
+def _write(tmp_path: Path, content: str, *, seed_verified: bool = True) -> Path:
     p = tmp_path / "registry.toml"
-    p.write_text(content)
+    text = _seed_verified_in_content(content) if seed_verified else content
+    p.write_text(text)
     return p
 
 
@@ -176,16 +207,19 @@ package = "weird"
 
 
 def test_load_tools_reads_method_os_targets(tmp_path: Path) -> None:
-    manifest = tmp_path / "registry.toml"
-    manifest.write_text(
-        "[[tool]]\n"
-        'id = "demo"\n'
-        'category = "search"\n'
-        'tier = "user"\n'
-        "[[tool.method]]\n"
-        'kind = "script"\n'
-        'os = ["macos"]\n'
-        'url = "https://example.test/i.sh"\n'
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "script"
+os = ["macos"]
+url = "https://example.test/i.sh"
+shell = "sh"
+""",
     )
     method = load_tools(manifest)[0].methods[0]
     assert method.os == ("macos",)
@@ -194,33 +228,39 @@ def test_load_tools_reads_method_os_targets(tmp_path: Path) -> None:
 
 
 def test_load_tools_rejects_os_as_a_string(tmp_path: Path) -> None:
-    manifest = tmp_path / "registry.toml"
-    manifest.write_text(
-        "[[tool]]\n"
-        'id = "demo"\n'
-        'category = "search"\n'
-        'tier = "user"\n'
-        "[[tool.method]]\n"
-        'kind = "script"\n'
-        'os = "macos"\n'  # must be a list, not a string
-        'url = "https://example.test/i.sh"\n'
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "script"
+os = "macos"
+url = "https://example.test/i.sh"
+shell = "sh"
+""",
     )
     with pytest.raises(ValueError, match="must be a list"):
         load_tools(manifest)
 
 
 def test_load_tools_reads_method_arch_targets(tmp_path: Path) -> None:
-    manifest = tmp_path / "registry.toml"
-    manifest.write_text(
-        "[[tool]]\n"
-        'id = "demo"\n'
-        'category = "search"\n'
-        'tier = "user"\n'
-        "[[tool.method]]\n"
-        'kind = "script"\n'
-        'os = ["macos"]\n'
-        'arch = ["arm64"]\n'
-        'url = "https://example.test/i.sh"\n'
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "script"
+os = ["macos"]
+arch = ["arm64"]
+url = "https://example.test/i.sh"
+shell = "sh"
+""",
     )
     method = load_tools(manifest)[0].methods[0]
     assert method.os == ("macos",)
@@ -230,48 +270,57 @@ def test_load_tools_reads_method_arch_targets(tmp_path: Path) -> None:
 
 
 def test_load_tools_rejects_arch_as_a_string(tmp_path: Path) -> None:
-    manifest = tmp_path / "registry.toml"
-    manifest.write_text(
-        "[[tool]]\n"
-        'id = "demo"\n'
-        'category = "search"\n'
-        'tier = "user"\n'
-        "[[tool.method]]\n"
-        'kind = "script"\n'
-        'arch = "arm64"\n'  # must be a list, not a string
-        'url = "https://example.test/i.sh"\n'
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "script"
+arch = "arm64"
+url = "https://example.test/i.sh"
+shell = "sh"
+""",
     )
     with pytest.raises(ValueError, match="'arch' must be a list"):
         load_tools(manifest)
 
 
 def test_load_tools_rejects_requires_as_a_string(tmp_path: Path) -> None:
-    manifest = tmp_path / "registry.toml"
-    manifest.write_text(
-        "[[tool]]\n"
-        'id = "demo"\n'
-        'category = "search"\n'
-        'tier = "user"\n'
-        'requires = "pnpm"\n'  # must be a list, not a string
-        "[[tool.method]]\n"
-        'kind = "script"\n'
-        'url = "https://example.test/i.sh"\n'
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+requires = "pnpm"
+[[tool.method]]
+kind = "script"
+url = "https://example.test/i.sh"
+shell = "sh"
+""",
     )
     with pytest.raises(ValueError, match="'requires' must be a list"):
         load_tools(manifest)
 
 
 def test_load_tools_rejects_recommends_as_a_string(tmp_path: Path) -> None:
-    manifest = tmp_path / "registry.toml"
-    manifest.write_text(
-        "[[tool]]\n"
-        'id = "demo"\n'
-        'category = "search"\n'
-        'tier = "user"\n'
-        'recommends = "rg"\n'  # must be a list, not a string
-        "[[tool.method]]\n"
-        'kind = "script"\n'
-        'url = "https://example.test/i.sh"\n'
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+recommends = "rg"
+[[tool.method]]
+kind = "script"
+url = "https://example.test/i.sh"
+shell = "sh"
+""",
     )
     with pytest.raises(ValueError, match="'recommends' must be a list"):
         load_tools(manifest)
@@ -281,32 +330,38 @@ def test_load_tools_rejects_a_non_string_recommends_element(tmp_path: Path) -> N
     """tomllib returns `Any`, so a list of non-ids would otherwise be stored
     behind the declared `tuple[str, ...]` and only fail later, as a TypeError
     inside the TUI's detail bar on cursor movement."""
-    manifest = tmp_path / "registry.toml"
-    manifest.write_text(
-        "[[tool]]\n"
-        'id = "demo"\n'
-        'category = "search"\n'
-        'tier = "user"\n'
-        "recommends = [1, 2]\n"  # ids, not integers
-        "[[tool.method]]\n"
-        'kind = "script"\n'
-        'url = "https://example.test/i.sh"\n'
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+recommends = [1, 2]
+[[tool.method]]
+kind = "script"
+url = "https://example.test/i.sh"
+shell = "sh"
+""",
     )
     with pytest.raises(ValueError, match="'recommends' must be a list of tool ids"):
         load_tools(manifest)
 
 
 def test_load_tools_rejects_a_non_string_requires_element(tmp_path: Path) -> None:
-    manifest = tmp_path / "registry.toml"
-    manifest.write_text(
-        "[[tool]]\n"
-        'id = "demo"\n'
-        'category = "search"\n'
-        'tier = "user"\n'
-        'requires = [["pnpm"]]\n'  # a nested list, not an id
-        "[[tool.method]]\n"
-        'kind = "script"\n'
-        'url = "https://example.test/i.sh"\n'
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+requires = [["pnpm"]]
+[[tool.method]]
+kind = "script"
+url = "https://example.test/i.sh"
+shell = "sh"
+""",
     )
     with pytest.raises(ValueError, match="'requires' must be a list of tool ids"):
         load_tools(manifest)
@@ -319,6 +374,7 @@ def test_load_tools_rejects_unknown_category(tmp_path: Path) -> None:
 [[tool]]
 id = "demo"
 category = "misc"
+tier = "user"
 [[tool.method]]
 kind = "brew"
 formula = "demo"
@@ -428,6 +484,7 @@ desc = "Query and transform JSON, YAML and CSV"
 [[tool]]
 id = "rg"
 category = "search"
+tier = "user"
 [[tool.method]]
 kind = "brew"
 formula = "ripgrep"
@@ -446,6 +503,7 @@ def test_load_categories_empty_when_no_sections(tmp_path: Path) -> None:
 [[tool]]
 id = "rg"
 category = "search"
+tier = "user"
 [[tool.method]]
 kind = "brew"
 formula = "ripgrep"
@@ -800,6 +858,129 @@ def test_node_method_rejects_smoke_non_string(tmp_path: Path) -> None:
 def test_node_method_rejects_smoke_empty_string(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="smoke"):
         load_tools(_node_registry(tmp_path, 'smoke = ""'))
+
+
+def test_missing_verified_is_rejected(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "x"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "brew"
+formula = "rg"
+""",
+        seed_verified=False,
+    )
+    with pytest.raises(ValueError, match=r"tool 'x': missing required 'verified'"):
+        load_tools(manifest)
+
+
+def test_string_verified_is_rejected(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "x"
+category = "search"
+tier = "user"
+verified = "2026-10-13"
+[[tool.method]]
+kind = "brew"
+formula = "rg"
+""",
+    )
+    with pytest.raises(ValueError, match=r"tool 'x'.*TOML date"):
+        load_tools(manifest)
+
+
+def test_integer_verified_is_rejected(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "x"
+category = "search"
+tier = "user"
+verified = 20261013
+[[tool.method]]
+kind = "brew"
+formula = "rg"
+""",
+    )
+    with pytest.raises(ValueError, match=r"tool 'x'.*TOML date"):
+        load_tools(manifest)
+
+
+def test_datetime_verified_is_rejected(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "x"
+category = "search"
+tier = "user"
+verified = 2026-10-13T00:00:00Z
+[[tool.method]]
+kind = "brew"
+formula = "rg"
+""",
+    )
+    with pytest.raises(ValueError, match=r"tool 'x'.*TOML date"):
+        load_tools(manifest)
+
+
+def test_future_verified_is_rejected(tmp_path: Path) -> None:
+    today = date(2026, 10, 15)
+    manifest_far = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "x"
+category = "search"
+tier = "user"
+verified = 2026-10-17
+[[tool.method]]
+kind = "brew"
+formula = "rg"
+""",
+    )
+    with pytest.raises(ValueError, match=r"tool 'x'.*in the future"):
+        load_tools(manifest_far, today=today)
+    manifest_tol = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "x"
+category = "search"
+tier = "user"
+verified = 2026-10-16
+[[tool.method]]
+kind = "brew"
+formula = "rg"
+""",
+    )
+    load_tools(manifest_tol, today=today)
+
+
+def test_verified_on_a_method_table_is_rejected(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "x"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "brew"
+formula = "rg"
+verified = 2026-10-13
+""",
+    )
+    with pytest.raises(ValueError, match=r"has unknown key 'verified'"):
+        load_tools(manifest)
 
 
 def test_unknown_method_key_names_the_tool_and_key(tmp_path: Path) -> None:

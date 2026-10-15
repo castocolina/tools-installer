@@ -3,6 +3,7 @@
 import re
 import tomllib
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal, TypeVar, cast
 
@@ -669,7 +670,7 @@ def _parse_skill_lifecycle(raw: object, *, tool_id: object) -> SkillLifecycle:
     )
 
 
-def load_tools(manifest_path: str | Path) -> list[Tool]:
+def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[Tool]:
     """Parse the registry TOML into validated Tool objects."""
     with open(manifest_path, "rb") as fh:
         data = tomllib.load(fh)
@@ -681,6 +682,16 @@ def load_tools(manifest_path: str | Path) -> list[Tool]:
         _parse_enum(Category, row["category"], "category", f"tool '{row['id']}'")
         if "tier" not in row:
             raise ValueError(f"tool '{row['id']}': missing required 'tier'")
+        verified = row.get("verified")
+        if verified is None:
+            raise ValueError(
+                f"tool '{row['id']}': missing required 'verified' (a TOML date, YYYY-MM-DD)"
+            )
+        if type(verified) is not date:
+            raise ValueError(f"tool '{row['id']}': 'verified' must be a TOML date (YYYY-MM-DD)")
+        limit = (today or date.today()) + timedelta(days=1)
+        if verified > limit:
+            raise ValueError(f"tool '{row['id']}': 'verified' {verified} is in the future")
         methods: list[Method] = []
         for entry in raw_methods:
             kind = entry["kind"]

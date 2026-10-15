@@ -73,6 +73,7 @@ instructions = ["Review and run the official {operation} flow."]
 id = "demo-skills"
 category = "ai"
 tier = "user"
+verified = 2026-10-13
 [[tool.method]]
 kind = "skill_pack"
 
