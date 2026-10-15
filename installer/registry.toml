@@ -459,7 +459,6 @@ asset = "gh_{ver}_macOS_{arch.deb}.zip"
 archive = "zip"
 member = "gh_{ver}_macOS_{arch.deb}/bin/gh"
 checksum = "gh_{ver}_checksums.txt"
-strip = 0
 [[tool.method]]
 kind = "brew"
 formula = "gh"

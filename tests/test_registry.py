@@ -2295,7 +2295,7 @@ def test_audit_fix_d3_gh_has_a_macos_release() -> None:
     assert release.params["archive"] == "zip"
     assert release.params["member"] == "gh_{ver}_macOS_{arch.deb}/bin/gh"
     assert release.params["checksum"] == "gh_{ver}_checksums.txt"
-    assert release.params["strip"] == 0
+    assert "strip" not in release.params
     assert methods.index(release) < next(i for i, m in enumerate(methods) if m.kind == "brew")
 
 

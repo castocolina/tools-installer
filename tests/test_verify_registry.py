@@ -405,7 +405,6 @@ repo = "o/r"
 asset = "z-{ver}.zip"
 member = "My.app/Contents/MacOS/cli"
 archive = "zip"
-strip = 0
 [[tool]]
 id = "apper"
 name = "apper"
@@ -725,7 +724,6 @@ repo = "Canop/broot"
 asset = "broot_{ver}.zip"
 member = "{arch.machine}-unknown-linux-gnu/broot"
 archive = "zip"
-strip = 0
 [[tool.method]]
 kind = "github_release"
 os = ["macos"]
@@ -733,7 +731,6 @@ repo = "Canop/broot"
 asset = "broot_{ver}.zip"
 member = "{arch.machine}-apple-darwin/broot"
 archive = "zip"
-strip = 0
 """
     registry = _write_registry(tmp_path, content)
     release = _release(tag="1.44.0", assets={"broot_1.44.0.zip": digest})
@@ -775,7 +772,6 @@ repo = "Canop/broot"
 asset = "broot_{ver}.zip"
 member = "{arch.machine}-unknown-linux-gnu/broot"
 archive = "zip"
-strip = 0
 """
     full = (
         linux_only
@@ -787,7 +783,6 @@ repo = "Canop/broot"
 asset = "broot_{ver}.zip"
 member = "{arch.machine}-apple-darwin/broot"
 archive = "zip"
-strip = 0
 """
     )
     reg1 = _write_registry(tmp_path, linux_only)
@@ -932,10 +927,11 @@ kind = "github_release"
 repo = "o/r"
 asset = "a-{{ver}}.{"zip" if archive == "zip" else "tar.gz"}"
 member = "bin/x"
-strip = 0
 """
     if archive == "zip":
         content += 'archive = "zip"\n'
+    else:
+        content += "strip = 0\n"
     registry = _write_registry(tmp_path, content)
     asset_name = "a-1.0.0.zip" if archive == "zip" else "a-1.0.0.tar.gz"
     release = _release(tag="1.0.0", assets={})
@@ -2959,7 +2955,6 @@ repo = "o/shared"
 asset = "pkg-{ver}.zip"
 member = "x86_64-unknown-linux-gnu/bin/a"
 archive = "zip"
-strip = 0
 [[tool]]
 id = "two"
 name = "two"
@@ -2975,7 +2970,6 @@ repo = "o/shared"
 asset = "pkg-{ver}.zip"
 member = "aarch64-unknown-linux-gnu/bin/b"
 archive = "zip"
-strip = 0
 [[tool]]
 id = "three"
 name = "three"
@@ -2991,7 +2985,6 @@ repo = "o/shared"
 asset = "pkg-{ver}.zip"
 member = "x86_64-apple-darwin/bin/c"
 archive = "zip"
-strip = 0
 """
     registry = _write_registry(tmp_path, content)
     release = _release(tag="1.0.0", assets={"pkg-1.0.0.zip": digest})

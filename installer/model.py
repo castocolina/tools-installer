@@ -748,6 +748,15 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
                             raise ValueError(
                                 f"tool '{row['id']}': '{key}' needs a url templated with {{ver}}"
                             )
+            if "strip" in params:
+                strip = params["strip"]
+                if params.get("archive") == "zip" or params.get("raw") is True:
+                    raise ValueError(
+                        f"tool '{row['id']}': 'strip' does not apply to a zip archive "
+                        "or a raw asset"
+                    )
+                if isinstance(strip, bool) or not isinstance(strip, int) or strip < 0:
+                    raise ValueError(f"tool '{row['id']}': 'strip' must be a non-negative integer")
             if kind == "node":
                 npm_pkg = params.get("npm_pkg")
                 if not isinstance(npm_pkg, str) or not npm_pkg:

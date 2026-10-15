@@ -1523,3 +1523,79 @@ def test_shipped_status_probes_do_not_repeat_a_harness() -> None:
             continue
         harnesses = [probe.harness for probe in lifecycle.status_probes]
         assert len(harnesses) == len(set(harnesses)), tool.id
+
+
+@pytest.mark.parametrize(
+    "strip_line",
+    [
+        "strip = true",
+        "strip = -1",
+        'strip = "1"',
+    ],
+)
+def test_strip_must_be_a_non_negative_integer(tmp_path: Path, strip_line: str) -> None:
+    manifest = _write(
+        tmp_path,
+        f"""
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "a.tar.gz"
+member = "bin/demo"
+{strip_line}
+""",
+    )
+    with pytest.raises(ValueError, match="demo") as exc_info:
+        load_tools(manifest)
+    assert "strip" in str(exc_info.value)
+
+
+def test_strip_positive_integer_on_tarball_loads(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://example.test/y.tar.gz"
+member = "bin/demo"
+strip = 2
+""",
+    )
+    tools = load_tools(manifest)
+    assert tools[0].methods[0].params["strip"] == 2
+
+
+@pytest.mark.parametrize(
+    ("extra",),
+    [
+        ('archive = "zip"\nstrip = 0',),
+        ("raw = true\nstrip = 1",),
+    ],
+)
+def test_strip_is_rejected_where_install_ignores_it(tmp_path: Path, extra: str) -> None:
+    manifest = _write(
+        tmp_path,
+        f"""
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "a.zip"
+member = "bin/demo"
+{extra}
+""",
+    )
+    with pytest.raises(ValueError, match="demo") as exc_info:
+        load_tools(manifest)
+    assert "strip" in str(exc_info.value)
