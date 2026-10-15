@@ -795,6 +795,7 @@ def _mode_app(
     policies: list[Policy],
     *,
     prompt_link_mode: bool = False,
+    set_link_mode: Callable[[str], None] | None = None,
 ) -> UnifiedApp:
     bin_dir = home / ".local" / "bin"
     return UnifiedApp(
@@ -814,7 +815,11 @@ def _mode_app(
         policies=PolicyInputs(
             policies=policies,
             link_mode=lambda: mode["v"],
-            set_link_mode=lambda value: mode.__setitem__("v", value),
+            set_link_mode=(
+                set_link_mode
+                if set_link_mode is not None
+                else (lambda value: mode.__setitem__("v", value))
+            ),
         ),
         initial_view="policies",
         prompt_link_mode=prompt_link_mode,
@@ -987,3 +992,39 @@ def _test_tweak_with_failing_split_apply(home: Path, mode: dict[str, str]) -> Po
         remove=base.remove,
         link_mode_aware=True,
     )
+
+
+async def test_policies_screen_shows_lost_policies_off_after_a_failed_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WR-02: when a move ends with a policy absent from both modes, the
+    screen names it in the error and flips its row OFF instead of leaving a
+    checkbox that claims a policy that is no longer on disk."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home = Path.home()
+    _plant_volta_and_pnpm(home)
+    mode = {"v": "centralized"}
+    saves: list[str] = []
+
+    def set_mode(value: str) -> None:
+        saves.append(value)
+        if len(saves) == 2:  # the restore's set_link_mode(old_mode) save
+            raise OSError("settings.json unwritable")
+        mode["v"] = value
+
+    ban = _test_ban(home, mode)
+    tweak = _test_tweak_with_failing_split_apply(home, mode)
+    app = _mode_app(home, mode, [ban, tweak], set_link_mode=set_mode)
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        await pilot.press("space")  # enable the ban (row 0)
+        await _settle_toggle(screen, pilot)
+        await pilot.press("down", "space")  # enable the tweak (row 1)
+        await _settle_toggle(screen, pilot)
+        await pilot.press("m", "down", "down", "enter")  # pick split
+        await pilot.pause()
+
+        assert "not restored: tweak:claude-skip" in screen.status.text
+        assert screen.status.severity == "error"
+        assert screen.active_state["tweak:claude-skip"] is False

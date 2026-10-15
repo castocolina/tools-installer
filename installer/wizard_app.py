@@ -50,7 +50,13 @@ from installer.guidance import (
 )
 from installer.model import Tool
 from installer.pnpm_globals import NodeGlobalsReport, reinstall_preview
-from installer.policy import Policy, PolicyMove, PolicyResult, move_link_mode
+from installer.policy import (
+    Policy,
+    PolicyMove,
+    PolicyResult,
+    lost_policy_ids,
+    move_link_mode,
+)
 from installer.rcclean import PathWriterLine, group_writer_lines
 from installer.render import guidance_text
 from installer.resolve import UnavailableReason
@@ -2195,11 +2201,19 @@ class PoliciesScreen(AppScreen):
         old = self._link_mode() if self._link_mode is not None else "centralized"
         report, error = run_live(lambda: move_link_mode(aware_active, value, setter, old_mode=old))
         if error is not None:
+            self.mark_lost_policies_off(error)
             self.status.set(error, "error")
             return
         text, severity = _link_mode_status(value, report or ())
         self.status.set(text, severity)
         self._refresh_link_mode_line()
+
+    def mark_lost_policies_off(self, error: str) -> None:
+        """WR-02: a failed move whose error names policies gone from both
+        modes flips their rows OFF, so the table never claims a policy that
+        is no longer on disk."""
+        for policy_id in lost_policy_ids(error):
+            self.active_state[policy_id] = False
 
     def link_mode_aware_active(self) -> list[Policy]:
         """The active, link-mode-aware policies: the ones a mode change moves.
@@ -2856,6 +2870,9 @@ class UnifiedApp(App[list[str] | None]):
         old = self._read_link_mode() if self._read_link_mode is not None else "centralized"
         report, error = run_live(lambda: move_link_mode(aware_active, value, setter, old_mode=old))
         if error is not None:
+            policies_screen = self._views.get("policies")
+            if isinstance(policies_screen, PoliciesScreen):
+                policies_screen.mark_lost_policies_off(error)
             target.status.set(error, "error")
             return
         text, severity = _link_mode_status(value, report or ())

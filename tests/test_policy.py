@@ -509,3 +509,164 @@ def test_move_link_mode_rolls_back_when_re_saving_the_new_mode_fails(
     assert "tools-installer tweak:claude-skip" in myshellrc.read_text()
     assert "tools-installer ban" not in zshrc.read_text()
     assert "tools-installer ban" not in bashrc.read_text()
+
+
+def test_move_link_mode_clears_a_partial_new_mode_write_before_restoring(
+    tmp_path: Path,
+) -> None:
+    """WR-02 / ponytail #4: a new-mode apply that fails halfway (first rc
+    written, second not) must not leave the partial block behind while the
+    report says the old block was restored. The per-policy restore removes
+    before it re-applies."""
+    mode = {"v": "centralized"}
+    ban, _tweak = _mode_policies(tmp_path, mode)
+    ban.apply()
+    myshellrc = tmp_path / ".myshellrc"
+    zshrc = tmp_path / ".zshrc"
+
+    shim_dir = tmp_path / ".local" / "bin"
+
+    def central_apply() -> PolicyResult:
+        if mode["v"] == "split":
+            with zshrc.open("a") as fh:
+                fh.write(f"{BAN_BEGIN}\n{BAN_END}\n")
+            raise OSError("no space left on device")
+        return ban_policy(
+            shim_dir=shim_dir,
+            apply_rc_paths=lambda: [myshellrc],
+            remove_rc_paths=[myshellrc, zshrc],
+            path_value=str(shim_dir),
+            which=lambda _name: None,
+        ).apply()
+
+    partial_ban = Policy(
+        id="ban",
+        label="pip/npm ban",
+        description="ban",
+        active=True,
+        apply=central_apply,
+        remove=ban.remove,
+        link_mode_aware=True,
+    )
+
+    report = move_link_mode([partial_ban], "split", _setter(mode), old_mode="centralized")
+
+    assert [entry.status for entry in report] == ["failed"]
+    assert "no space left on device" in report[0].detail
+    # the partial split write is gone from ~/.zshrc ...
+    assert BAN_BEGIN not in zshrc.read_text()
+    # ... and the old block is back in ~/.myshellrc
+    assert BAN_BEGIN in myshellrc.read_text()
+
+
+def test_move_link_mode_names_the_ids_it_could_not_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WR-02: the new-mode apply fails AND saving the old mode fails too, so
+    the live mode stays the new one and the rollback re-apply of the failing
+    policy fails again. The raised error names that id instead of dropping it
+    silently."""
+    from installer.settings import SettingsStore, save_settings
+
+    state_path = tmp_path / "state" / "settings.json"
+    state_path.parent.mkdir(parents=True)
+    store = SettingsStore(state_path, link_mode="centralized")
+    myshellrc = tmp_path / ".myshellrc"
+    zshrc = tmp_path / ".zshrc"
+    bashrc = tmp_path / ".bashrc"
+    shim_dir = tmp_path / ".local" / "bin"
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    bundle = next(b for b in BUNDLES if b.id == "claude-skip")
+
+    def apply_rc_paths() -> list[Path]:
+        return [myshellrc] if store.link_mode == "centralized" else [zshrc, bashrc]
+
+    ban = ban_policy(
+        shim_dir=shim_dir,
+        apply_rc_paths=apply_rc_paths,
+        remove_rc_paths=[myshellrc, zshrc, bashrc],
+        path_value=str(shim_dir),
+        which=lambda _name: None,
+    )
+    tweak = tweak_policy(
+        bundle,
+        rc_path=myshellrc,
+        ensure_sourced_from=lambda: (zshrc, bashrc) if store.link_mode == "split" else (),
+    )
+    ban.apply()
+    tweak.apply()
+
+    def failing_apply() -> PolicyResult:
+        if store.link_mode == "split":
+            raise OSError("apply boom")
+        return tweak_policy(bundle, rc_path=myshellrc).apply()
+
+    moved_tweak = Policy(
+        id=tweak.id,
+        label=tweak.label,
+        description=tweak.description,
+        active=tweak.active,
+        apply=failing_apply,
+        remove=tweak.remove,
+        link_mode_aware=True,
+    )
+
+    real_save = save_settings
+
+    def flaky_save(path: Path, settings: object) -> None:
+        if settings.link_mode == "centralized":  # type: ignore[union-attr]
+            raise OSError("settings.json unwritable")
+        real_save(path, settings)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("installer.settings.save_settings", flaky_save)
+    with pytest.raises(
+        OSError, match=r"settings\.json unwritable; not restored: tweak:claude-skip"
+    ):
+        move_link_mode([ban, moved_tweak], "split", store.set_link_mode, old_mode="centralized")
+
+    # the live mode stayed split (the failed save never assigned), so the
+    # rollback left the ban's block in the split rcs
+    assert store.link_mode == "split"
+    assert "tools-installer ban" in zshrc.read_text()
+
+
+def test_move_link_mode_with_the_live_mode_is_a_no_op(tmp_path: Path) -> None:
+    """ponytail #5: picking the mode that is already live removes and
+    re-applies nothing."""
+    mode = {"v": "centralized"}
+    ban, tweak = _mode_policies(tmp_path, mode)
+    ban.apply()
+    tweak.apply()
+    before = {
+        rc: (rc.exists() and rc.read_text() or "")
+        for rc in (tmp_path / ".myshellrc", tmp_path / ".zshrc", tmp_path / ".bashrc")
+    }
+    calls: list[str] = []
+
+    def recorded(name: str, fn: Callable[[], PolicyResult]) -> Callable[[], PolicyResult]:
+        def wrapped() -> PolicyResult:
+            calls.append(name)
+            return fn()
+
+        return wrapped
+
+    watched = [
+        Policy(
+            id=policy.id,
+            label=policy.label,
+            description=policy.description,
+            active=policy.active,
+            apply=recorded(f"{policy.id}-apply", policy.apply),
+            remove=recorded(f"{policy.id}-remove", policy.remove),
+            link_mode_aware=True,
+        )
+        for policy in (ban, tweak)
+    ]
+
+    report = move_link_mode(watched, "centralized", _setter(mode), old_mode="centralized")
+
+    assert report == ()
+    assert calls == []
+    assert mode["v"] == "centralized"
+    for rc, text in before.items():
+        assert (rc.exists() and rc.read_text() or "") == text

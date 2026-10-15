@@ -185,20 +185,47 @@ class PolicyMove:
     detail: str
 
 
-def _rollback(policies: list[Policy], set_link_mode: Callable[[str], None]) -> None:
-    """Return every removed policy to the live (old) mode: remove() then
-    apply(), both closures reading the live mode. remove() is mode-independent
-    for the link-mode-aware policies (the ban strips the remove_rc_paths
-    union, the tweak its fixed rc_path), so it also takes an already-moved
-    block back out of the new mode's files, and it is a no-op for a policy
-    that is still removed. Each policy's rollback error is caught so it can
-    never replace the original exception the caller re-raises."""
+NOT_RESTORED_MARK = "; not restored: "
+
+
+class PolicyRestoreError(OSError):
+    """A link-mode move ended with at least one removed policy absent from
+    both modes (WR-02). The ids travel in the message (run_live hands screens
+    a str, and the text names them) and in `lost` for a caller that holds the
+    exception itself."""
+
+    def __init__(self, message: str, lost: Sequence[str]) -> None:
+        super().__init__(message)
+        self.lost = tuple(lost)
+
+
+def lost_policy_ids(message: str) -> tuple[str, ...]:
+    """The ids a PolicyRestoreError named in its message, for a caller that
+    only received the flattened text (installer.ui_common.run_live)."""
+    if NOT_RESTORED_MARK not in message:
+        return ()
+    tail = message.rpartition(NOT_RESTORED_MARK)[2]
+    return tuple(part.strip() for part in tail.split(",") if part.strip())
+
+
+def _rollback(policies: list[Policy]) -> tuple[str, ...]:
+    """Re-apply every removed policy in the LIVE mode: remove() then apply(),
+    both closures reading the live mode. remove() is mode-independent for the
+    link-mode-aware policies (the ban strips the remove_rc_paths union, the
+    tweak its fixed rc_path), so it also takes an already-moved block back out
+    of the new mode's files, and it is a no-op for a policy that is still
+    removed. Each policy's rollback error is caught so it can never replace
+    the original exception the caller re-raises. Returns the ids whose
+    re-apply failed: those policies are gone from both modes and the caller
+    must say so."""
+    lost: list[str] = []
     for policy in policies:
         try:
             policy.remove()
             policy.apply()
         except (OSError, CommandError, ShellrcRefusal):
-            continue
+            lost.append(policy.id)
+    return tuple(lost)
 
 
 def move_link_mode(
@@ -211,9 +238,12 @@ def move_link_mode(
     """Move active link-mode-aware policies from `old_mode` to `new_mode` (D-09).
 
     Removes each policy while the old mode is still live, saves the new mode,
-    then applies each in the new mode, returning one entry per policy. A
-    policy whose new-mode apply fails has its old block restored (mode set
-    back, apply, mode set forward) and is reported `failed`; the others still
+    then applies each in the new mode, returning one entry per policy. Picking
+    the mode that is already live is a no-op (ponytail #5): the mode is only
+    saved (which also clears SettingsStore's invalid-on-disk flag) and no
+    policy is touched. A policy whose new-mode apply fails is restored by
+    remove() (which clears any partial new-mode write, ponytail #4) followed
+    by an apply in the old mode, and is reported `failed`; the others still
     move. Callers pass only link-mode-aware, active policies; the function
     trusts that (no second active filter). With an empty list it only saves
     the mode.
@@ -223,8 +253,17 @@ def move_link_mode(
     fails, the live mode is the old one (SettingsStore.set_link_mode saves
     before it assigns) and every removed policy is rolled back to it via
     _rollback, then the original error propagates so run_live shows it.
+
+    When the live mode is NOT the old one — the restore's own save failed, so
+    SettingsStore kept the new mode — the rollback runs in the new mode, and
+    a policy whose re-apply fails there is gone from both modes. That must
+    never be silent (WR-02): the raised PolicyRestoreError names every such
+    id after `"; not restored: "`, so a screen can flip its row OFF.
     """
     expected = (OSError, CommandError, ShellrcRefusal)
+    if new_mode == old_mode:
+        set_link_mode(new_mode)
+        return ()
     removed: list[Policy] = []
     report: list[PolicyMove] = []
     for policy in policies:
@@ -236,8 +275,12 @@ def move_link_mode(
         removed.append(policy)
     try:
         set_link_mode(new_mode)
-    except expected:
-        _rollback(removed, set_link_mode)
+    except expected as save_exc:
+        lost = _rollback(removed)
+        if lost:
+            raise PolicyRestoreError(
+                f"{save_exc}; not restored: {', '.join(lost)}", lost
+            ) from save_exc
         raise
     for policy in removed:
         try:
@@ -245,10 +288,15 @@ def move_link_mode(
         except expected as exc:
             try:
                 set_link_mode(old_mode)
+                policy.remove()
                 policy.apply()
                 set_link_mode(new_mode)
             except expected as restore_exc:
-                _rollback(removed, set_link_mode)
+                lost = _rollback(removed)
+                if lost:
+                    raise PolicyRestoreError(
+                        f"{restore_exc}; not restored: {', '.join(lost)}", lost
+                    ) from restore_exc
                 raise restore_exc
             report.append(PolicyMove(policy.id, "failed", f"{exc}; old block restored"))
             continue
