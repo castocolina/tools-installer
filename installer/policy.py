@@ -485,6 +485,10 @@ def ban_policy(
         active=any(guard_status(shim_dir).values()),
         apply=_apply,
         remove=_remove,
+        # Live re-probe (17-20, opencode H2): a construction-time snapshot goes
+        # stale the moment another view (Uninstall) sweeps the shims, and a
+        # stale snapshot would make a link-mode change resurrect the ban.
+        is_active=lambda: any(guard_status(shim_dir).values()),
         link_mode_aware=True,
     )
 
@@ -590,6 +594,10 @@ def tweak_policy(
         active=tweak_present(bundle, rc_path),
         apply=_apply,
         remove=_remove,
+        # Live re-probe (17-20, opencode H2): the frozen snapshot goes stale
+        # after a toggle or another view's sweep, and a link-mode change that
+        # trusted it would move the wrong set.
+        is_active=lambda: tweak_present(bundle, rc_path),
         requires=bundle.requires,
         missing_requires=missing_requires,
         link_mode_aware=True,

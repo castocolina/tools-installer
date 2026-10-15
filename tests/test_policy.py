@@ -670,3 +670,22 @@ def test_move_link_mode_with_the_live_mode_is_a_no_op(tmp_path: Path) -> None:
     assert mode["v"] == "centralized"
     for rc, text in before.items():
         assert (rc.exists() and rc.read_text() or "") == text
+
+
+def test_ban_policy_is_active_reprobes_the_shims_live(tmp_path: Path) -> None:
+    """opencode H2 groundwork: the ban's activity predicate re-probes the shim
+    dir instead of freezing the construction-time snapshot, so a policy another
+    view removed no longer counts as active."""
+    shim_dir = tmp_path / ".local" / "bin"
+    shim_dir.mkdir(parents=True)
+    ban = ban_policy(
+        shim_dir=shim_dir,
+        apply_rc_paths=[tmp_path / ".myshellrc"],
+        remove_rc_paths=[tmp_path / ".myshellrc"],
+        path_value=str(shim_dir),
+        which=lambda _name: None,
+    )
+    assert ban.is_active is not None
+    assert ban.is_active() is False
+    install_shims(shim_dir)
+    assert ban.is_active() is True

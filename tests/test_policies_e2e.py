@@ -990,6 +990,7 @@ def _test_tweak_with_failing_split_apply(home: Path, mode: dict[str, str]) -> Po
         active=base.active,
         apply=apply,
         remove=base.remove,
+        is_active=base.is_active,
         link_mode_aware=True,
     )
 
@@ -1028,3 +1029,62 @@ async def test_policies_screen_shows_lost_policies_off_after_a_failed_restore(
         assert "not restored: tweak:claude-skip" in screen.status.text
         assert screen.status.severity == "error"
         assert screen.active_state["tweak:claude-skip"] is False
+
+
+async def test_link_mode_change_after_an_uninstall_does_not_resurrect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """opencode H2: the migration set is read from the policies' own on-disk
+    activity at the moment of the change, so a ban another view (Uninstall)
+    removed is not recreated by a link-mode change."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home = Path.home()
+    _plant_volta_and_pnpm(home)
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    rc = home / ".myshellrc"
+    zshrc = home / ".zshrc"
+    bashrc = home / ".bashrc"
+    mode = {"v": "centralized"}
+    ban = _test_ban(home, mode)
+    app = _mode_app(home, mode, [ban])
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        await pilot.press("space")  # enable the ban
+        await _settle_toggle(screen, pilot)
+        # what the Uninstall view's sweep leaves on disk, without touching
+        # this screen's cached active_state:
+        ban.remove()
+        await pilot.press("m", "down", "down", "enter")  # pick split
+        await pilot.pause()
+
+        assert mode["v"] == "split"
+        assert "tools-installer ban" not in (rc.read_text() if rc.exists() else "")
+        assert "tools-installer ban" not in (zshrc.read_text() if zshrc.exists() else "")
+        assert "tools-installer ban" not in (bashrc.read_text() if bashrc.exists() else "")
+        assert "Moved" not in screen.status.text
+
+
+async def test_split_to_centralized_move_reports_the_path_wiring_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """opencode M1: moving the ban from split (aliases in each rc) to
+    centralized (aliases in ~/.myshellrc) leaves the aliases unsourced until
+    the PATH wiring is refreshed, so the report names the exact action."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home = Path.home()
+    _plant_volta_and_pnpm(home)
+    mode = {"v": "split"}
+    ban = _test_ban(home, mode)
+    app = _mode_app(home, mode, [ban])
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        await pilot.press("space")  # enable the ban
+        await _settle_toggle(screen, pilot)
+        await pilot.press("m", "enter")  # pick centralized
+        await pilot.pause()
+
+        assert mode["v"] == "centralized"
+        assert 'make fix ARGS="--link-mode centralized"' in screen.status.text

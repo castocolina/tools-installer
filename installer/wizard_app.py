@@ -77,7 +77,7 @@ from installer.ui_common import (
     multiline_summary,
     run_live,
 )
-from installer.uninstall import SweepResult, ToolRow
+from installer.uninstall import SweepResult, ToolRow, policy_owned
 from installer.update import UpdateService
 from installer.version_status import VersionRefreshService
 
@@ -2204,7 +2204,7 @@ class PoliciesScreen(AppScreen):
             self.mark_lost_policies_off(error)
             self.status.set(error, "error")
             return
-        text, severity = _link_mode_status(value, report or ())
+        text, severity = _link_mode_status(value, report or (), old_mode=old)
         self.status.set(text, severity)
         self._refresh_link_mode_line()
 
@@ -2218,26 +2218,37 @@ class PoliciesScreen(AppScreen):
     def link_mode_aware_active(self) -> list[Policy]:
         """The active, link-mode-aware policies: the ones a mode change moves.
 
-        The live truth is this screen's own active_state (refreshed by every
-        toggle), never uninstall.active_policies, which rebuilds its own policy
-        objects from bundles and cannot see the ban (17-08 D-09).
+        The live truth is each policy's own on-disk activity, re-probed at the
+        moment of the change through the same predicate the uninstall sweep
+        uses (installer.uninstall.policy_owned; 17-20, opencode H2). The
+        cached active_state is only the table's last paint: another view can
+        remove a policy without this screen ever hearing about it, and moving
+        on a stale cache would resurrect it.
         """
         return [
-            policy
-            for policy in self._policies
-            if policy.link_mode_aware and self.active_state.get(policy.id, False)
+            policy for policy in self._policies if policy.link_mode_aware and policy_owned(policy)
         ]
 
 
-def _link_mode_status(value: str, report: Sequence[PolicyMove]) -> tuple[str, str]:
+def _link_mode_status(
+    value: str, report: Sequence[PolicyMove], *, old_mode: str
+) -> tuple[str, str]:
     """(text, severity) both link-mode pickers show after a move: the saved
-    mode, the policies moved, and every failure named. Severity is warn when
-    any entry failed (the mode itself was still saved), ok otherwise."""
+    mode, the policies moved, every failure named, and — when the move left
+    split mode, whose aliases live in the rc files themselves — the exact
+    action that refreshes the PATH wiring so the shells source ~/.myshellrc
+    (17-20, opencode M1). Severity is warn when any entry failed (the mode
+    itself was still saved), ok otherwise."""
     parts = [f"Link mode saved: {value}."]
     moved = [entry.policy_id for entry in report if entry.status == "moved"]
     failed = [entry for entry in report if entry.status == "failed"]
     if moved:
         parts.append(f" Moved: {', '.join(moved)}.")
+    if old_mode == "split" and value != "split" and moved:
+        parts.append(
+            " The moved aliases now live in ~/.myshellrc, which the shells may not"
+            f' source yet; refresh the PATH wiring: make fix ARGS="--link-mode {value}".'
+        )
     for entry in failed:
         parts.append(f" Failed: {entry.policy_id} ({entry.detail}).")
     return "".join(parts), ("warn" if failed else "ok")
@@ -2875,7 +2886,7 @@ class UnifiedApp(App[list[str] | None]):
                 policies_screen.mark_lost_policies_off(error)
             target.status.set(error, "error")
             return
-        text, severity = _link_mode_status(value, report or ())
+        text, severity = _link_mode_status(value, report or (), old_mode=old)
         target.status.set(text, severity)
 
     def on_catalog_screen_decided(self, message: CatalogScreen.Decided) -> None:
