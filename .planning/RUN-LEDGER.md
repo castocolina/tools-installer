@@ -38,6 +38,7 @@ Started 2026-10-14. Hourly resume cron: session job (deleted at run end).
 | 17 | Branching: config `branching_strategy: phase` (gsd/phase-17-…) vs work on main | — (playbook rule) | — | Execute on main | The phase branch forks off origin/main and would drop the 7 unpushed planning commits; the playbook pushes main after verification |
 | 17 | Wave 1 executed cross-AI (pi router-env/my-coding), sequential: 17-01, 17-02, 17-03, 17-04, 17-05, 17-12 | — | — | All 6 SUMMARY present; gate `make validate` rc 0, `make test` 3467 passed / 4 skipped, coverage 95.87% | No fallback to gsd-executor needed |
 | 17 | Foreign commit 71eb54f (todo capture from another session) dropped STATE.md Blockers/Concerns and truncated one todo line | — (verifiable) | — | Orchestrator restored the section after wave 1 | Concurrent session on main; content only, no code |
+| 17 | W5 wave-1 CI oracle: macOS red 3 times (tests ran on macOS for the first time once 17-01 fixed pyright) | — (verifiable) | — | Gap plans 17-14 (dot-dot /tmp → /usr), 17-15 (race test writer waits for reader inside each window), 17-16 (daemon in-flight test gated by an Event), all via pi; attempt 4 run 38657359355 green on both jobs; PR #1 closed, branch deleted | Root-cause test fixes only, no skips; Q3 race reproduced on macOS so it was fixed |
 
 ## Deferred questions / human verification
 

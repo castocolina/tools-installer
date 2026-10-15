@@ -258,7 +258,11 @@ oracle sha: 1bdc07f94f8a5089eacaf6095caed1c845082daa
 validate & test on ubuntu-latest: success
 validate & test on macos-latest: failure (race test fixed; new timing failure: test_manual_toggle_of_the_daemon_is_refused_while_the_worker_is_in_flight)
 
-pending: orchestrator (re-run after 17-16)
+Attempt 4 (after 17-16; green, wave 2 unblocked):
+run 38657359355 https://github.com/castocolina/tools-installer/actions/runs/38657359355
+oracle sha: 2617d97d3e3283c89351d1e49ace02b5280c15f6
+validate & test on ubuntu-latest=success
+validate & test on macos-latest=success
 
 ---
 *Phase: 17-stop-the-bleeding*
