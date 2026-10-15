@@ -2,18 +2,18 @@
 gsd_state_version: "1.0"
 milestone: v0.50.0
 milestone_name: Truthful lifecycle
-current_phase: 17
-current_phase_name: Stop the bleeding
+current_phase: 18
+current_phase_name: registry-truth-and-drift-guard
 status: executing
 stopped_at: "Phase 17: all 20 plans executed; final gates + CI oracle green; e2e re-run pending"
-last_updated: "2026-10-15T08:03:57.865Z"
+last_updated: "2026-10-15T12:08:28.439Z"
 last_activity: 2026-10-14
 last_activity_desc: Phase 17 execution started
-state_head: 91952ddb5f5c602cbe9d7c3c5faabc3ff30490ee
+state_head: 0705725b852858f677efab21d65ada1716f92895
 progress:
   total_phases: 10
   completed_phases: 0
-  total_plans: 20
+  total_plans: 40
   completed_plans: 20
   percent: 0
 ---
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-10-13)
 
 ## Current Position
 
-Phase: 17 (Stop the bleeding) — EXECUTING
+Phase: 18 (registry-truth-and-drift-guard) — READY TO EXECUTE
 Plan: 1 of 13
-Status: Executing Phase 17
+Status: Ready to execute
 Last activity: 2026-10-14 — Phase 17 execution started
 
 Progress: [░░░░░░░░░░] 0%
