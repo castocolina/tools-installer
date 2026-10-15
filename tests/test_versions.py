@@ -199,6 +199,51 @@ def test_glued_name_versions_still_parse() -> None:
     assert extract_observed_version("jq-1.8.1") == "jq-1.8.1"
 
 
+_LAZYGIT_VERSION_LINE = (
+    "commit=6b1a1a1, build date=2025-07-19T11:51:45Z, build source=binaryRelease, "
+    "version=0.63.1, os=linux, arch=amd64, git version=2.47.0"
+)
+_PROCS_VERSION_LINE = 'procs "0.14.12 (\u2026'
+
+
+@pytest.mark.parametrize(
+    ("text", "parse_expected", "extract_expected"),
+    [
+        ("-1", None, None),
+        ('"0.20.0"', (0, 20, 0, 1), "0.20.0"),
+        (_PROCS_VERSION_LINE, None, "0.14.12"),
+        ("'1.2.3'", (1, 2, 3, 1), "1.2.3"),
+        (_LAZYGIT_VERSION_LINE, None, "0.63.1"),
+        ("version=0.44.1, os=linux", (0, 44, 1, 1), "0.44.1"),
+        ('version="1.2.3",', (1, 2, 3, 1), "1.2.3"),
+        ("jq-1.8.1", (1, 8, 1, 1), "jq-1.8.1"),
+        ("1.2.3", (1, 2, 3, 1), "1.2.3"),
+    ],
+    ids=[
+        "bare-flag",
+        "balanced-double-quotes",
+        "procs-unbalanced-quote",
+        "single-quotes",
+        "lazygit-version-equals",
+        "version-equals-comma",
+        "version-equals-quoted-comma",
+        "jq-glued",
+        "plain-semver",
+    ],
+)
+def test_observed_version_fixture_table(
+    text: str,
+    parse_expected: tuple[int, int, int, int] | None,
+    extract_expected: str | None,
+) -> None:
+    assert parse_version(text) == parse_expected
+    assert extract_observed_version(text) == extract_expected
+
+
+def test_parse_status_version_reads_a_quoted_token() -> None:
+    assert parse_status_version('"v1.2.3"') == parse_status_version("1.2.3")
+
+
 def test_parse_declared_version_accepts_one_to_three_numeric_groups() -> None:
     assert parse_declared_version("22.12.0") == (22, 12, 0)
     assert parse_declared_version("v22.12.0") == (22, 12, 0)
@@ -327,7 +372,7 @@ def test_extract_observed_version_finds_the_first_parseable_token() -> None:
     assert extract_observed_version(eza) == "v0.23.5"
     assert extract_observed_version("Usage: dasel <command>") is None
     assert extract_observed_version("gron version dev") is None
-    assert extract_observed_version("commit=, build date=, version=0.64.1, os=darwin") is None
+    assert extract_observed_version("commit=, build date=, version=0.64.1, os=darwin") == "0.64.1"
     assert extract_observed_version("") is None
 
 
@@ -341,9 +386,8 @@ def test_parse_version_reads_a_hyphenated_name_prefix_via_fallback() -> None:
 
 
 def test_extract_observed_version_returns_a_name_prefixed_token_verbatim() -> None:
-    """The fallback widens which tokens PARSE; it does not change what is
-    DISPLAYED. `extract_observed_version`'s contract is verbatim, so the name
-    prefix stays intact in the returned string, exactly as `jq` printed it.
+    """The fallback widens which tokens PARSE; the returned token is normalized
+    (quotes and `version=` stripped) but a glued name prefix is never removed.
     """
     assert extract_observed_version("jq-1.8.1") == "jq-1.8.1"
 
@@ -427,16 +471,15 @@ def test_versions_module_records_the_registry_wide_audit_finding() -> None:
     text = Path(versions.__file__).read_text(encoding="utf-8")
     assert "Verified" in text
     assert "Not covered:" in text
-    assert "procs" in text
     assert "5.3.9(1)-release" in text
+    not_covered = text.split("Not covered:", 1)[1].split("\n# Finds the LAST", 1)[0]
+    assert "bash" in not_covered
+    assert "procs" not in not_covered
 
 
 def test_extract_observed_version_still_refuses_the_known_residual_shapes() -> None:
-    """`procs` and `bash` fail to parse for reasons D-03's mechanism does not
-    address: `procs` glues its version to a leading double quote (not `-` or
-    whitespace), and `bash`'s extra characters follow the numeric core rather
-    than precede it. Widening the boundary class to catch either would
-    reintroduce the free-substring-search false-positive risk D-03 rejected.
+    """`bash`'s extra characters follow the numeric core rather than precede it,
+    so no leading-prefix strip can reach them. Procs' leading quote is handled
+    by `_normalize_version_token`; this test keeps the bash residual pinned.
     """
-    assert extract_observed_version('procs "0.14.12') is None
     assert extract_observed_version("GNU bash, version 5.3.9(1)-release") is None

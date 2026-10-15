@@ -36,15 +36,13 @@ _OBSERVED_VERSION = re.compile(r"^[vV]?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\
 # hyphen and no separating whitespace (`jq-1.8.1`) — the exact shape the
 # `_match_observed_version` fallback below exists for.
 #
-# Not covered: two other tools fail to parse for DIFFERENT reasons this
-# mechanism deliberately leaves alone. `procs`'s numeric core is preceded by
-# a double quote rather than a hyphen or whitespace, so
-# `_NAME_PREFIX_BOUNDARY`'s boundary character class never matches it.
-# `bash`'s extra characters follow the numeric core instead of preceding it
-# (`GNU bash, version 5.3.9(1)-release (...)`), so no leading-prefix strip
-# can reach them. Widening the boundary character class to catch either one
-# would reintroduce the free-substring-search false-positive risk this
-# mechanism was chosen over instead.
+# Not covered: one tool fails to parse for a reason this mechanism deliberately
+# leaves alone. `bash`'s extra characters follow the numeric core instead of
+# preceding it (`GNU bash, version 5.3.9(1)-release (...)`), so no leading-prefix
+# strip can reach them. Widening the boundary character class to catch it would
+# reintroduce the free-substring-search false-positive risk this mechanism was
+# chosen over instead. Procs' leading double quote on its version token is handled
+# by `_normalize_version_token` (audit E line 75), not by this boundary.
 #
 # Finds the LAST '-' or whitespace character immediately followed by a digit
 # or v/V. Greedy `.*` backtracks from the right, so it naturally prefers the
@@ -56,6 +54,22 @@ _OBSERVED_VERSION = re.compile(r"^[vV]?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\
 # must start with an ASCII letter and be at least two characters (audit B WR-02:
 # bare flags like `-1` and one-letter names like `a-1` must not strip).
 _NAME_PREFIX_BOUNDARY = re.compile(r".*[-\s](?=[vV]?\d)")
+
+
+def _normalize_version_token(token: str) -> str:
+    """Strip trailing punctuation, a lazygit-style `version=` prefix, then one
+    leading and one trailing quote independently (quotes need not be paired).
+    """
+    cleaned = token
+    while cleaned and cleaned[-1] in ",;":
+        cleaned = cleaned[:-1]
+    if cleaned.startswith("version="):
+        cleaned = cleaned[len("version=") :]
+    if cleaned[:1] in {'"', "'"}:
+        cleaned = cleaned[1:]
+    if cleaned[-1:] in {'"', "'"}:
+        cleaned = cleaned[:-1]
+    return cleaned
 
 
 def _strip_name_prefix(token: str) -> str:
@@ -85,6 +99,7 @@ def _match_observed_version(token: str) -> re.Match[str] | None:
     pattern) so the two named capture groups (core, prerelease) every
     caller already reads by index stay exactly the same shape either way.
     """
+    token = _normalize_version_token(token)
     match = _OBSERVED_VERSION.fullmatch(token)
     if match is not None:
         return match
@@ -177,15 +192,19 @@ StatusVersion = tuple[tuple[int, ...], tuple[tuple[int, int | str], ...] | None]
 
 
 def extract_observed_version(text: str) -> str | None:
-    """Return the first parseable version token across ALL of `text`, verbatim.
+    """Return the first parseable version token across ALL of `text`, normalized.
+
+    Normalization removes one leading and one trailing quote, trailing
+    punctuation, and a `version=` prefix. A glued tool name prefix is kept.
 
     `parse_version` only inspects the first whitespace-delimited token of a
     single line. Tools such as eza put the version on a later line; this walks
     every token so the caller can both compare and display what was found.
     """
     for token in text.split():
-        if parse_version(token) is not None:
-            return token
+        normalized = _normalize_version_token(token)
+        if parse_version(normalized) is not None:
+            return normalized
     return None
 
 
