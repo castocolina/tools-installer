@@ -75,3 +75,19 @@ def test_gate_targets_keep_dev_dependencies() -> None:
         joined = "\n".join(recipes[name][1])
         assert "--no-dev" not in joined
         assert "--isolated" not in joined
+
+
+def test_verify_registry_target_is_read_only_by_default() -> None:
+    recipes = _recipes()
+    assert "verify-registry" in recipes
+    _, lines = recipes["verify-registry"]
+    joined = "\n".join(lines)
+    assert "uv run --isolated --no-dev python -m installer.verify_registry" in joined
+    assert "$(ARGS)" in joined
+    assert "--write" not in joined
+    assert "--issue" not in joined
+    makefile = MAKEFILE.read_text()
+    assert "verify-registry" in makefile.split(".PHONY:")[1].split("\n")[0]
+    assert re.search(r"^verify-registry:.*?## .+$", makefile, re.MULTILINE), (
+        "verify-registry needs a ## help comment"
+    )

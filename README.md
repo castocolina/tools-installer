@@ -294,6 +294,7 @@ workflow has a `make` target so local runs and CI are identical:
 | `make setup`     | launch the wizard (`uv run --isolated --no-dev setup.py`, isolated, without dev dependencies, so the installer sees your real tools (dev ruff never shadows yours); flags via `ARGS`; `make run` is an alias) |
 | `make doctor`    | audit `PATH` (read-only report)                                 |
 | `make fix`       | wire `PATH` into your shell (`~/.myshellrc` + rc files)         |
+| `make verify-registry` | check every release asset, archive member, checksum and pin against upstream; read-only; needs network; uses your gh login for the API rate limit; `ARGS="--write"` is the maintainer bump mode |
 | `make validate`  | pre-commit gates: `ruff check`, `ruff format --check`, `pyright`, `bandit`, `vulture`, `shellcheck` |
 | `make test`      | `pytest` with coverage                                          |
 | `make build`     | build the distributable                                         |
