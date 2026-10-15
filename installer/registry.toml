@@ -2386,20 +2386,24 @@ audience = "human"
 tier = "user"
 verified = 2026-10-14
 desc = "Fast proprietary text editor"
-# One universal mac zip. The build number is pinned (no `latest` URL exists);
-# the app self-updates after first launch, so the pin only affects first install.
+# One universal mac zip. `version` is the single pin shared by the mac zip and both
+# Linux tarballs; Sublime publishes no latest url, so a maintainer bumps it with
+# `make verify-registry ARGS="--write --candidate sublime=<build>"`, which writes
+# `version`, `sha256` and `verified` only after the candidate passes. The app
+# self-updates after first launch, so the pin only affects first install.
 [[tool.method]]
 kind = "app"
 os = ["macos"]
-url = "https://download.sublimetext.com/sublime_text_build_4200_mac.zip"
+url = "https://download.sublimetext.com/sublime_text_build_{ver}_mac.zip"
+version = "4200"
+sha256 = "4835eb2a5d3f2b223ce93a27149f360ef158af9f8dd708b6f501d708c081d319"
 app = "Sublime Text.app"
 cli = "Contents/SharedSupport/bin/subl"
 [[tool.method]]
 kind = "cask"
 os = ["macos"]
 cask = "sublime-text"
-# Official Linux build (pinned to the same 4200 build as the mac zip above;
-# no `latest` URL exists here either). Upstream ships only .tar.xz for Linux
+# Official Linux build (same `version` pin as the mac zip above). Upstream ships only .tar.xz for Linux
 # -- archive = "xz" is required, tar's default gzip flag would fail to read
 # it. The archive's own binary is named sublime_text, with no `subl`
 # alongside it the way the macOS bundle provides -- bin_name renames the
@@ -2411,7 +2415,9 @@ cask = "sublime-text"
 kind = "tarball"
 os = ["debian", "arch", "fedora"]
 arch = ["amd64"]
-url = "https://download.sublimetext.com/sublime_text_build_4200_x64.tar.xz"
+url = "https://download.sublimetext.com/sublime_text_build_{ver}_x64.tar.xz"
+version = "4200"
+sha256 = "36f69c551ad18ee46002be4d9c523fe545d93b67fea67beea731e724044b469f"
 member = "sublime_text/sublime_text"
 bin_name = "subl"
 archive = "xz"
@@ -2419,7 +2425,9 @@ archive = "xz"
 kind = "tarball"
 os = ["debian", "arch", "fedora"]
 arch = ["arm64"]
-url = "https://download.sublimetext.com/sublime_text_build_4200_arm64.tar.xz"
+url = "https://download.sublimetext.com/sublime_text_build_{ver}_arm64.tar.xz"
+version = "4200"
+sha256 = "cf4b6aa74ea2a2aab02e144599cf9e4a423cbb9543c221f7da1095a95495566a"
 member = "sublime_text/sublime_text"
 bin_name = "subl"
 archive = "xz"
@@ -2907,11 +2915,14 @@ asset = "drawio-arm64-{ver}.AppImage"
 member = "drawio"
 checksum = "Files-SHA256-Hashes.txt"
 raw = true
+# macOS app pins are bumped by `make verify-registry ARGS="--write"` when GitHub has a newer release.
 [[tool.method]]
 kind = "app"
 os = ["macos"]
 arch = ["arm64"]
-url = "https://github.com/jgraph/drawio-desktop/releases/download/v31.0.2/draw.io-arm64-31.0.2.zip"
+url = "https://github.com/jgraph/drawio-desktop/releases/download/v{ver}/draw.io-arm64-{ver}.zip"
+version = "31.0.2"
+sha256 = "79fedd48f80f67eef4b4f98f1bbb2e7b133f1d9c82aa9453572be2f9bf6927f4"
 app = "draw.io.app"
 cli = "Contents/MacOS/draw.io"
 cli_name = "drawio"
@@ -2919,7 +2930,9 @@ cli_name = "drawio"
 kind = "app"
 os = ["macos"]
 arch = ["amd64"]
-url = "https://github.com/jgraph/drawio-desktop/releases/download/v31.0.2/draw.io-x64-31.0.2.zip"
+url = "https://github.com/jgraph/drawio-desktop/releases/download/v{ver}/draw.io-x64-{ver}.zip"
+version = "31.0.2"
+sha256 = "ba8fb0dbb595f65aa3aa45d9b8903bdd06922772bc99e3b3c198a86d4cb2931b"
 app = "draw.io.app"
 cli = "Contents/MacOS/draw.io"
 cli_name = "drawio"

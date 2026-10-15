@@ -1,3 +1,4 @@
+import re
 from collections import Counter
 from pathlib import Path
 from typing import cast
@@ -5,7 +6,8 @@ from typing import cast
 import pytest
 
 from installer.deps import requires_integrity_errors, resolve_dependencies
-from installer.model import Tool, load_categories, load_tools
+from installer.download import pinned_url
+from installer.model import Method, Tool, load_categories, load_tools
 from installer.platform import Platform
 from installer.resolve import resolve_methods
 
@@ -1839,6 +1841,95 @@ def test_vscode_linux_cask_row_records_dated_verification() -> None:
     assert "OWNERSHIP EVIDENCE ONLY" in block
 
 
+_PINNED_LITERAL_DOT = re.compile(r"\d+\.\d+")
+_PINNED_LITERAL_BUILD = re.compile(r"\d{3,}")
+_ARCH_TOKENS_IN_URL = ("x86_64", "arm64", "amd64", "x64")
+
+
+def _scrub_arch_tokens_from_url(url: str) -> str:
+    scrubbed = url
+    for token in _ARCH_TOKENS_IN_URL:
+        scrubbed = scrubbed.replace(token, "")
+    return scrubbed
+
+
+def _app_tarball_methods() -> list[tuple[Tool, Method]]:
+    return [
+        (tool, method)
+        for tool in load_tools(REGISTRY)
+        for method in tool.methods
+        if method.kind in ("app", "tarball")
+    ]
+
+
+def test_no_pinned_url_carries_a_literal_version() -> None:
+    violations: list[str] = []
+    for tool, method in _app_tarball_methods():
+        url = str(method.params["url"])
+        if "{ver}" in url:
+            version = method.params.get("version")
+            sha256 = method.params.get("sha256")
+            if not isinstance(version, str) or not version:
+                violations.append(f"{tool.id}: pinned url missing version")
+            if not isinstance(sha256, str) or len(sha256) != 64:
+                violations.append(f"{tool.id}: pinned url missing sha256")
+            continue
+        scrubbed = _scrub_arch_tokens_from_url(url)
+        if _PINNED_LITERAL_DOT.search(scrubbed) or _PINNED_LITERAL_BUILD.search(scrubbed):
+            violations.append(f"{tool.id}: unpinned url carries a literal version: {url}")
+    assert violations == []
+
+
+def test_pinned_methods_render_their_upstream_asset_names() -> None:
+    tools = _tools_by_id()
+    drawio = tools["drawio-desktop"]
+    for method in drawio.methods:
+        if method.kind != "app" or method.os != ("macos",):
+            continue
+        ver = str(method.params["version"])
+        rendered = pinned_url(method)
+        if method.arch == ("arm64",):
+            assert rendered == (
+                f"https://github.com/jgraph/drawio-desktop/releases/download/v{ver}/"
+                f"draw.io-arm64-{ver}.zip"
+            )
+        else:
+            assert rendered == (
+                f"https://github.com/jgraph/drawio-desktop/releases/download/v{ver}/"
+                f"draw.io-x64-{ver}.zip"
+            )
+
+    sublime = tools["sublime"]
+    for method in sublime.methods:
+        if method.kind not in ("app", "tarball"):
+            continue
+        ver = str(method.params["version"])
+        rendered = pinned_url(method)
+        if method.kind == "app":
+            assert rendered == f"https://download.sublimetext.com/sublime_text_build_{ver}_mac.zip"
+        elif method.arch == ("amd64",):
+            assert rendered == (
+                f"https://download.sublimetext.com/sublime_text_build_{ver}_x64.tar.xz"
+            )
+        else:
+            assert rendered == (
+                f"https://download.sublimetext.com/sublime_text_build_{ver}_arm64.tar.xz"
+            )
+
+
+def test_a_tools_pinned_methods_share_one_version() -> None:
+    by_tool: dict[str, set[str]] = {}
+    for tool, method in _app_tarball_methods():
+        url = str(method.params["url"])
+        if "{ver}" not in url:
+            continue
+        version = method.params.get("version")
+        assert isinstance(version, str) and version
+        by_tool.setdefault(tool.id, set()).add(version)
+    multi = {tid: versions for tid, versions in by_tool.items() if len(versions) > 1}
+    assert multi == {}
+
+
 def test_sublime_is_single_universal_app_with_cask_fallback() -> None:
     sublime = next(t for t in load_tools(REGISTRY) if t.id == "sublime")
     assert sublime.cmd == "subl"
@@ -1847,9 +1938,10 @@ def test_sublime_is_single_universal_app_with_cask_fallback() -> None:
         mac = Platform(os="macos", arch=arch, immutable=False, has_brew=True)
         methods = resolve_methods(sublime, mac)
         assert [m.kind for m in methods] == ["app", "cask"]
-        assert (
-            methods[0].params["url"]
-            == "https://download.sublimetext.com/sublime_text_build_4200_mac.zip"
+        assert "{ver}" in str(methods[0].params["url"])
+        assert pinned_url(methods[0]) == (
+            f"https://download.sublimetext.com/sublime_text_build_"
+            f"{methods[0].params['version']}_mac.zip"
         )
         assert methods[0].params["app"] == "Sublime Text.app"
         assert methods[0].params["cli"] == "Contents/SharedSupport/bin/subl"
