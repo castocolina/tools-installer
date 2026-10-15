@@ -186,12 +186,14 @@ copy (`rg` the registry, do not rely on memory).
 
 ### 9. Write the entry
 
-`id`, `name`, `category`, `cmd`, `priority`, `audience`, `tier`, `desc`,
-`requires`, optional `postinstall`, one `[[tool.method]]` per real
-platform/arch path from steps 3-4, and the dated `# Verified` comment (what
-was checked, what was knowingly left out, which customizations were offered
-and the user's answers). Then validate with the repo's gates and add tests for
-any new hook; sandbox every real install.
+`id`, `name`, `category`, `cmd`, `priority`, `audience`, `tier`, `verified =
+YYYY-MM-DD`, `desc`, `requires`, optional `postinstall`, one `[[tool.method]]`
+per real platform/arch path from steps 3-4, and the dated `# Verified` comment
+(what was checked, what was knowingly left out, which customizations were
+offered and the user's answers). Use only keys allowed for each method kind
+(`METHOD_PARAMS` in `installer/model.py`); for `app`/`tarball` urls with
+`{ver}`, set `version` and `sha256` together. Then validate with the repo's
+gates and add tests for any new hook; sandbox every real install.
 
 ## Common Mistakes
 

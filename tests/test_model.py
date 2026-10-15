@@ -860,6 +860,140 @@ def test_node_method_rejects_smoke_empty_string(tmp_path: Path) -> None:
         load_tools(_node_registry(tmp_path, 'smoke = ""'))
 
 
+_VALID_SHA256 = "a" * 64
+
+
+def test_pinned_url_requires_version_and_sha256(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://x/y_{ver}.tar.xz"
+member = "bin/demo"
+""",
+    )
+    with pytest.raises(ValueError, match=r"tool 'demo'.*'version'"):
+        load_tools(manifest)
+    manifest2 = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://x/y_{ver}.tar.xz"
+member = "bin/demo"
+version = "4215"
+""",
+    )
+    with pytest.raises(ValueError, match=r"tool 'demo'.*sha256"):
+        load_tools(manifest2)
+
+
+def test_pinned_sha256_must_be_64_lowercase_hex(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://x/y_{ver}.tar.xz"
+member = "bin/demo"
+version = "1"
+sha256 = "ABC"
+""",
+    )
+    with pytest.raises(ValueError, match=r"64 lowercase hex"):
+        load_tools(manifest)
+
+
+def test_pinned_app_method_loads(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        f"""
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "app"
+url = "https://github.com/o/r/releases/download/v{{ver}}/a-{{ver}}.zip"
+app = "Demo.app"
+version = "32.4.1"
+sha256 = "{_VALID_SHA256}"
+""",
+    )
+    tools = load_tools(manifest)
+    params = tools[0].methods[0].params
+    assert params["version"] == "32.4.1"
+    assert params["sha256"] == _VALID_SHA256
+
+
+def test_version_without_a_templated_url_is_rejected(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://x/y.tar.xz"
+member = "bin/demo"
+version = "1"
+""",
+    )
+    with pytest.raises(ValueError, match=r"'version' needs a url templated"):
+        load_tools(manifest)
+    manifest2 = _write(
+        tmp_path,
+        f"""
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://x/y.tar.xz"
+member = "bin/demo"
+sha256 = "{_VALID_SHA256}"
+""",
+    )
+    with pytest.raises(ValueError, match=r"'sha256' needs a url templated"):
+        load_tools(manifest2)
+
+
+def test_github_release_is_never_pinned(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "a.zip"
+member = "bin/demo"
+version = "1.0"
+""",
+    )
+    with pytest.raises(ValueError, match=r"has unknown key 'version'"):
+        load_tools(manifest)
+
+
 def test_missing_verified_is_rejected(tmp_path: Path) -> None:
     manifest = _write(
         tmp_path,

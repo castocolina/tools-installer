@@ -165,6 +165,7 @@ SKILL_OPERATION_MODES = ("manual-required",)
 SKILL_STATUS_SOURCES = ("plugin-cli", "skills-lock", "install-state")
 _SKILL_MATCH_RE = re.compile(r"^[A-Za-z0-9@/._-]+$")
 _SCRIPT_ARG_RE = re.compile(r"^[A-Za-z0-9=._:/+-]+$")
+_PINNED_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SkillStatusVia = Literal["plugin-cli", "skills-lock", "install-state"]
 
 EnumValue = TypeVar("EnumValue", Audience, Category, Priority, Tier)
@@ -712,6 +713,27 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
             if unknown:
                 key = sorted(unknown)[0]
                 raise ValueError(f"tool '{row['id']}': method '{kind}' has unknown key '{key}'")
+            if kind in ("app", "tarball"):
+                url = params.get("url")
+                pinned = isinstance(url, str) and "{ver}" in url
+                if pinned:
+                    version = params.get("version")
+                    if not isinstance(version, str) or not version:
+                        raise ValueError(
+                            f"tool '{row['id']}': pinned {kind} url needs a non-empty 'version'"
+                        )
+                    sha256 = params.get("sha256")
+                    if not isinstance(sha256, str) or _PINNED_SHA256_RE.fullmatch(sha256) is None:
+                        raise ValueError(
+                            f"tool '{row['id']}': pinned {kind} url needs "
+                            "'sha256' as 64 lowercase hex"
+                        )
+                else:
+                    for key in ("version", "sha256"):
+                        if key in params:
+                            raise ValueError(
+                                f"tool '{row['id']}': '{key}' needs a url templated with {{ver}}"
+                            )
             if kind == "node":
                 npm_pkg = params.get("npm_pkg")
                 if not isinstance(npm_pkg, str) or not npm_pkg:
