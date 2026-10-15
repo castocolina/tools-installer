@@ -1,3 +1,4 @@
+import errno
 import hashlib
 import inspect
 import os
@@ -604,6 +605,134 @@ def test_fresh_app_install_failure_after_relink_leaves_no_cli_link(
 
 def _cli_script_exits_127_unless(argv0: str) -> str:
     return f'#!/bin/sh\nif [ "$1" = "{argv0}" ]; then exit 0; fi\nexit 127\n'
+
+
+def test_install_over_a_proven_bundle_leaves_no_old_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _plant_bundle(tmp_path, app="draw.io.app", cli="Contents/MacOS/draw.io")
+    link = tmp_path / ".local" / "bin" / "drawio"
+    if link.exists() or link.is_symlink():
+        link.unlink()
+    os.symlink(str(bundle / "Contents/MacOS/draw.io"), link)
+    payload = b"reinstall-zip"
+    digest = hashlib.sha256(payload).hexdigest()
+    member = Path("draw.io.app/Contents/MacOS/draw.io")
+
+    script = "#!/bin/sh\nexit 0\n"
+
+    def runner(cmd: list[str]) -> None:
+        if cmd and cmd[0] == "curl" and "-o" in cmd:
+            dest = Path(cmd[cmd.index("-o") + 1])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(payload)
+        elif cmd and cmd[0] == "ditto":
+            dest = Path(cmd[-1])
+            target = dest / member
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(script, encoding="utf-8")
+            target.chmod(0o755)
+
+    install_app(_drawio_method(sha256=digest), runner)
+    apps = tmp_path / "Applications"
+    assert (apps / "draw.io.app").exists()
+    assert link.is_symlink()
+    assert Path(os.readlink(link)).is_relative_to(apps / "draw.io.app")
+    assert not (apps / "draw.io.app.tools-installer.old").exists()
+    assert not (apps / "draw.io.app.tools-installer.new").exists()
+
+
+@pytest.mark.parametrize(
+    "plant",
+    [
+        "directory_without_cli",
+        "plain_file",
+    ],
+)
+def test_install_refuses_an_unproven_bundle_before_any_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, plant: str
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    apps = tmp_path / "Applications"
+    apps.mkdir(parents=True)
+    live = apps / "draw.io.app"
+    original = b"planted-bytes"
+    if plant == "directory_without_cli":
+        live.mkdir()
+        (live / "marker").write_bytes(original)
+    else:
+        live.write_bytes(original)
+    calls, runner = _record()
+    with pytest.raises(ExecutorError, match="not proven"):
+        install_app(_drawio_method(sha256="0" * 64), runner)
+    assert calls == []
+    if plant == "directory_without_cli":
+        assert (live / "marker").read_bytes() == original
+    else:
+        assert live.read_bytes() == original
+    assert not (apps / "draw.io.app.tools-installer.old").exists()
+    assert not (apps / "draw.io.app.tools-installer.new").exists()
+
+
+def test_app_staging_stays_on_the_applications_filesystem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    payload = b"zip"
+    digest = hashlib.sha256(payload).hexdigest()
+    member = Path("draw.io.app/Contents/MacOS/draw.io")
+    calls, runner = fixture_runner(None, {"app.zip": payload}, member=member)
+    real_replace = os.replace
+    apps_root = tmp_path / "Applications"
+
+    def guard_replace(src: str | os.PathLike[str], dst: str | os.PathLike[str]) -> None:
+        src_p = Path(src)
+        dst_p = Path(dst)
+        if not src_p.is_relative_to(apps_root) and dst_p.is_relative_to(apps_root):
+            raise OSError(errno.EXDEV, "cross-device link")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(apps_mod.os, "replace", guard_replace)
+    install_app(_drawio_method(sha256=digest), runner)
+    assert (apps_root / "draw.io.app").exists()
+    assert calls
+
+
+def test_app_rollback_failure_reports_both_errors_and_the_old_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _plant_bundle(tmp_path, app="draw.io.app", cli="Contents/MacOS/draw.io")
+    link = tmp_path / ".local" / "bin" / "drawio"
+    if link.exists() or link.is_symlink():
+        link.unlink()
+    os.symlink(str(bundle / "Contents/MacOS/draw.io"), link)
+    payload = b"zip"
+    digest = hashlib.sha256(payload).hexdigest()
+    member = Path("draw.io.app/Contents/MacOS/draw.io")
+    _, runner = fixture_runner(None, {"app.zip": payload}, member=member)
+    real_replace = os.replace
+    old_path = Path(str(bundle) + OLD_SUFFIX)
+    calls = {"swap": 0}
+
+    def fail_swap(src: str | os.PathLike[str], dst: str | os.PathLike[str]) -> None:
+        src_p = Path(src)
+        dst_p = Path(dst)
+        if dst_p == bundle and src_p.name.endswith(NEW_SUFFIX.lstrip(".")):
+            calls["swap"] += 1
+            raise OSError("swap failed")
+        if dst_p == bundle and src_p == old_path:
+            raise OSError("rollback failed")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(apps_mod.os, "replace", fail_swap)
+    with pytest.raises(ExecutorError) as excinfo:
+        install_app(_drawio_method(sha256=digest), runner)
+    msg = str(excinfo.value)
+    assert "swap failed" in msg
+    assert "rollback failed" in msg
+    assert str(old_path) in msg
 
 
 def test_broken_app_cli_fails_and_keeps_the_existing_bundle(

@@ -12,7 +12,6 @@ com.apple.quarantine, so installed apps launch without the Gatekeeper
 import os
 import shutil
 import tempfile
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -25,7 +24,7 @@ from installer.atomic import (
     staged_sibling,
 )
 from installer.checksums import ChecksumMismatch, sha256_file
-from installer.download import pinned_url
+from installer.download import is_still_proven, pinned_url
 from installer.executors import (
     ExecutorError,
     method_smoke_argv,
@@ -104,7 +103,8 @@ def install_app(method: Method, runner: Runner) -> str | None:
     Returns None when the zip was sha256-verified. Otherwise returns the
     unverified reason after a successful install.
     """
-    return _stage_and_swap_app(method, runner, smoke_argv=method_smoke_argv(method))
+    reason, _warnings = _stage_and_swap_app(method, runner, install=True)
+    return reason
 
 
 def update_app(method: Method, runner: Runner) -> UpdateExecResult:
@@ -116,25 +116,16 @@ def update_app(method: Method, runner: Runner) -> UpdateExecResult:
     `os.symlink`+`os.replace`, validate, then remove `.old`. Never shells
     `mv` or `ln`. Updates never smoke the staged CLI (D-06).
     """
-    _stage_and_swap_app(method, runner, smoke_argv=None)
-    app = require_str(method, "app")
-    live = ensure_dir(applications_dir()) / app
-    old = staged_sibling(live, OLD_SUFFIX)
-    warnings: list[str] = []
-    if old.exists():
-        try:
-            shutil.rmtree(old)
-        except OSError as extra:
-            warnings.append(str(extra))
-    return UpdateExecResult(warnings=tuple(warnings))
+    _reason, warnings = _stage_and_swap_app(method, runner, install=False)
+    return UpdateExecResult(warnings=warnings)
 
 
 def _stage_and_swap_app(
     method: Method,
     runner: Runner,
     *,
-    smoke_argv: Sequence[str] | None,
-) -> str | None:
+    install: bool,
+) -> tuple[str | None, tuple[str, ...]]:
     url = pinned_url(method)
     app = require_str(method, "app")
     if PurePosixPath(app).name != app or app in (".", ".."):
@@ -156,8 +147,17 @@ def _stage_and_swap_app(
             raise ExecutorError(f"cannot create bin dir: {exc}") from exc
         link = dest / name
         original_target = capture_symlink_target(link)
+    if (
+        install
+        and (live.exists() or live.is_symlink())
+        and not (link is not None and is_still_proven(link, live))
+    ):
+        raise ExecutorError(
+            f"{live} already exists but its CLI link is not proven to be from this "
+            "installer; move it aside or remove it, then retry"
+        )
     recover_update_remnants(live)
-    staging = Path(tempfile.mkdtemp(prefix="tools-installer-update-"))
+    staging = Path(tempfile.mkdtemp(prefix=".tools-installer-", dir=apps))
     new = staged_sibling(live, NEW_SUFFIX)
     old = staged_sibling(live, OLD_SUFFIX)
     verified = expected_sha256 is not None
@@ -184,8 +184,8 @@ def _stage_and_swap_app(
             cli_path = staged_member(staged_bundle, cli)
             if not os.access(cli_path, os.X_OK):
                 raise ExecutorError(f"staged CLI at {cli_path} is missing or not executable")
-            if smoke_argv is not None:
-                smoke_binary(cli_path, smoke_argv)
+            if install:
+                smoke_binary(cli_path, method_smoke_argv(method))
         if new.exists():
             shutil.rmtree(new)
         os.replace(staged_bundle, new)
@@ -198,18 +198,36 @@ def _stage_and_swap_app(
         try:
             os.replace(new, live)
         except OSError as extra:
-            if old.exists():
-                os.replace(old, live)
+            try:
+                if old.exists():
+                    os.replace(old, live)
+            except OSError as rollback_extra:
+                raise ExecutorError(
+                    f"swap failed ({extra}); rollback failed ({rollback_extra}); "
+                    f"prior bundle is at {old}"
+                ) from extra
             raise ExecutorError(f"swap failed; prior installation restored: {extra}") from extra
         try:
             _relink_app_cli(spec, live, link)
             _validate_app(live, spec)
         except (OSError, ExecutorError) as extra:
-            _undo_app_swap(live, new, old, link, original_target)
+            try:
+                _undo_app_swap(live, new, old, link, original_target)
+            except OSError as rollback_extra:
+                raise ExecutorError(
+                    f"update failed after swap ({extra}); rollback failed "
+                    f"({rollback_extra}); prior bundle is at {old}"
+                ) from extra
             raise ExecutorError(
                 f"update failed after swap; prior installation restored: {extra}"
             ) from extra
-        return None if verified else _UNVERIFIED_REASON
+        warnings: list[str] = []
+        if old.exists():
+            try:
+                shutil.rmtree(old)
+            except OSError as extra:
+                warnings.append(str(extra))
+        return (None if verified else _UNVERIFIED_REASON, tuple(warnings))
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
