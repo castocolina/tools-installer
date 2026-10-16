@@ -15,6 +15,13 @@ set -euo pipefail
 CONTAINER_NAME="tools-installer-e2e"
 IMAGE="fedora:latest"
 
+# The first registry tool whose first applicable method on Fedora amd64 is a
+# raw github_release (category data). A constant: never interpolated from input.
+RECEIPT_PROBE_TOOL=yq
+RECEIPT_PROBE_CATEGORY=data
+# The checkout run_setup_as_tester already cds into; the host test overrides it.
+TESTER_WORKSPACE=/home/tester/workspace
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Transcripts are run evidence, not source: .e2e-artifacts/ is gitignored.
@@ -244,6 +251,82 @@ parse_summary_line() {
   [[ -n "$PARSE_INSTALLED" && -n "$PARSE_FAILED" ]]
 }
 
+# True for a full run, or when one trimmed --categories element is the probe's.
+receipt_check_applies() {
+  local categories="$1" element
+  [[ -z "$categories" ]] && return 0
+  local IFS=','
+  for element in $categories; do
+    element="${element#"${element%%[![:space:]]*}"}"
+    element="${element%"${element##*[![:space:]]}"}"
+    [[ "$element" == "$RECEIPT_PROBE_CATEGORY" ]] && return 0
+  done
+  return 1
+}
+
+# $1 is the run's categories value. A chunked run without the probe category
+# skips; a full run (empty) and a run that includes it must find the receipt.
+assert_receipt_present() {
+  if ! receipt_check_applies "$1"; then
+    printf 'TRACER_RECEIPT_SKIPPED tool=%s category=%s\n' \
+      "$RECEIPT_PROBE_TOOL" "$RECEIPT_PROBE_CATEGORY"
+    return 0
+  fi
+  local receipt="\$HOME/.local/state/tools-installer/receipts/${RECEIPT_PROBE_TOOL}.json"
+  if exec_tester "test -f ${receipt}"; then
+    printf 'TRACER_RECEIPT_OK tool=%s\n' "$RECEIPT_PROBE_TOOL"
+    return 0
+  fi
+  printf 'TRACER_RECEIPT_MISSING tool=%s\n' "$RECEIPT_PROBE_TOOL"
+  return 1
+}
+
+# Both the probe binary and its receipt are gone. Names whatever is left.
+assert_receipt_removed() {
+  local binary="\$HOME/.local/bin/${RECEIPT_PROBE_TOOL}"
+  local receipt="\$HOME/.local/state/tools-installer/receipts/${RECEIPT_PROBE_TOOL}.json"
+  local left=""
+  exec_tester "test ! -e ${binary} && test ! -L ${binary}" || left="${left} binary=${binary}"
+  exec_tester "test ! -e ${receipt} && test ! -L ${receipt}" || left="${left} receipt=${receipt}"
+  if [[ -z "$left" ]]; then
+    printf 'TRACER_RECEIPT_REMOVAL_OK tool=%s\n' "$RECEIPT_PROBE_TOOL"
+    return 0
+  fi
+  printf 'TRACER_RECEIPT_REMOVAL_INCOMPLETE tool=%s left:%s\n' "$RECEIPT_PROBE_TOOL" "$left"
+  return 1
+}
+
+# Right before uninstall: the binary exists and the installer's own receipt
+# parser accepts the file. A text match is not validation (review C2-L2).
+assert_receipt_ready_for_removal() {
+  local binary="\$HOME/.local/bin/${RECEIPT_PROBE_TOOL}"
+  local receipt="\$HOME/.local/state/tools-installer/receipts/${RECEIPT_PROBE_TOOL}.json"
+  if ! exec_tester "test -e ${binary} || test -L ${binary}"; then
+    printf 'TRACER_RECEIPT_PRE_UNINSTALL_MISSING tool=%s missing=binary %s\n' \
+      "$RECEIPT_PROBE_TOOL" "$binary"
+    return 1
+  fi
+  if ! exec_tester "test -f ${receipt}"; then
+    printf 'TRACER_RECEIPT_PRE_UNINSTALL_MISSING tool=%s missing=receipt %s\n' \
+      "$RECEIPT_PROBE_TOOL" "$receipt"
+    return 1
+  fi
+  local parser_status=0
+  exec_tester "set -euo pipefail
+eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"
+export PATH=\"\$HOME/.local/bin:\$PATH\"
+cd ${TESTER_WORKSPACE}
+uv run --isolated --no-dev python -c 'import sys; from installer import receipts; sys.exit(0 if receipts.read(sys.argv[1]) is not None else 1)' ${RECEIPT_PROBE_TOOL}
+" || parser_status=$?
+  if [[ "$parser_status" -eq 0 ]]; then
+    printf 'TRACER_RECEIPT_PRE_UNINSTALL_OK tool=%s\n' "$RECEIPT_PROBE_TOOL"
+    return 0
+  fi
+  printf 'TRACER_RECEIPT_PRE_UNINSTALL_MISSING tool=%s missing=valid receipt (parser exit %s)\n' \
+    "$RECEIPT_PROBE_TOOL" "$parser_status"
+  return 1
+}
+
 run_setup_as_tester() {
   local args="$1"
   # COLUMNS is forced wide so Rich's non-tty Console (default width 80) never
@@ -394,6 +477,7 @@ cmd_pass1() {
         "$ACC_INSTALLED" "$ACC_FAILED" "$ACC_NO_METHOD" "$ACC_MANUAL"
     fi
     rm -f "$tmp" "$ACC_SKIPPED_FILE" "$ACC_MANUAL_NAMES_FILE"
+    assert_receipt_present "$categories"
     return 0
   fi
   printf 'TRACER_CLEAN_INSTALL_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s\n' \
@@ -446,6 +530,12 @@ cmd_pass2() {
   printf 'TRACER_RERUN_OK installed=%s already=%s failed=%s dependency_failed=%s\n' \
     "$ACC_INSTALLED" "$ACC_ALREADY" "$ACC_FAILED" "$ACC_DEP_FAILED" >> "$log"
 
+  # An absence check after uninstall proves nothing if the probe was never
+  # installed. Require the binary and a receipt the parser accepts first.
+  if ! assert_receipt_ready_for_removal >> "$log"; then
+    return 1
+  fi
+
   # Step 2: the full uninstall sweep. --uninstall has no render_summary line,
   # so only the exit code (and the transcript itself) is evidence here.
   run_pass2_step "--uninstall --yes" "$log"
@@ -454,6 +544,9 @@ cmd_pass2() {
     return 1
   fi
   printf 'TRACER_UNINSTALL_OK\n' >> "$log"
+  if ! assert_receipt_removed >> "$log"; then
+    return 1
+  fi
 
   # Step 3: reinstall — catches state the uninstall sweep left stray.
   ACC_INSTALLED=0; ACC_ALREADY=0; ACC_FAILED=0; ACC_DEP_FAILED=0
