@@ -54,12 +54,14 @@ from typing import Literal, cast
 
 import installer.locations
 from installer.guards import look_through_shim, real_pnpm
-from installer.install_ownership import ProbeRunner
+from installer.install_ownership import ProbeRunner, native_index
 from installer.manager_versions import OutdatedReport, read_outdated
 from installer.model import ConfigStep, Method, Tool
 from installer.ownership import (
     ManagerInventory,
     ManagerOwnership,
+    attribute_path,
+    owner_dirs,
     query_uv_tool_dir,
     read_inventory,
     resolve_ownership,
@@ -348,6 +350,17 @@ def _probed_version(
         return from_file
     output = probe_output(_version_argv(tool, ownership))
     return extract_observed_version(output) if output else None
+
+
+def _resolved_hit(found: str | None) -> Path | None:
+    """The active path exactly as `resolve_ownership` resolves it, so the native
+    index is keyed by the strings its per-path lookups ask about."""
+    if not found:
+        return None
+    try:
+        return Path(found).resolve()
+    except OSError:
+        return Path(found)
 
 
 def _sdkman_current_version(ownership: ManagerOwnership) -> str | None:
@@ -1029,6 +1042,20 @@ class VersionRefreshService:
         )
         inventory = snapshot.inventory if snapshot is not None else _EMPTY_INVENTORY
         outdated = snapshot.outdated if snapshot is not None else _EMPTY_OUTDATED
+        which = self._looked_through
+        native = self._native_probe
+        if native is not None and platform.os != "macos":
+            # D-11: ONE batched path query per pass, over the live paths no tracked
+            # owner claims; the index also memoizes every other native argv.
+            dirs = owner_dirs(
+                inventory=inventory,
+                managed_bin_dir=self._managed_bin_dir,
+                platform=platform,
+                uv_tool_dir=uv_tool_dir,
+            )
+            hits = (_resolved_hit(which(tool.cmd)) for tool in tools)
+            paths = [str(hit) for hit in hits if hit is not None and not attribute_path(hit, dirs)]
+            native = native_index(platform.os, paths, native)
         produced: dict[str, VersionCacheEntry] = {}
         statuses: dict[str, VersionStatus] = {}
         ownerships: dict[str, ManagerOwnership] = {}
@@ -1041,9 +1068,9 @@ class VersionRefreshService:
                 platform=platform,
                 inventory=inventory,
                 artifacts=self._artifacts(tool),
-                which=self._looked_through,
+                which=which,
                 managed_bin_dir=self._managed_bin_dir,
-                native_probe=self._native_probe,
+                native_probe=native,
                 uv_tool_dir=uv_tool_dir,
             )
             ownerships[tool.id] = ownership

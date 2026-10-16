@@ -1217,7 +1217,10 @@ def _git_shaped_tool() -> Tool:
 def test_owner_column_and_detail_paint_the_os_package_case_end_to_end(tmp_path: Path) -> None:
     tool = _git_shaped_tool()
 
-    def native_probe(_command: list[str]) -> str:
+    def native_probe(command: list[str]) -> str:
+        # The pass asks rpm once, batched: one "<path>\t<name>" line per path (D-11).
+        if "[%{FILENAMES}\\t%{=NAME}\\n]" in command:
+            return "".join(f"{path}\tgit-core\n" for path in command[4:])
         return "git-core\n"
 
     def which(cmd: str) -> str | None:

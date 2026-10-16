@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import threading
 import time
 import urllib.request
@@ -1481,8 +1482,11 @@ def test_native_probe_service_resolves_owner_and_status_stays_on_final_branch(
         probe_calls.append(command)
         # Two legitimate rpm questions reach this seam: `rpm -q` proves the
         # package is installed, and `rpm -qf` (CR-01) proves that package owns
-        # the live /usr/bin/jq rather than some copy earlier in PATH.
+        # the live /usr/bin/jq rather than some copy earlier in PATH -- asked
+        # once per pass in its batched form (D-11).
         assert command[:2] in (["rpm", "-q"], ["rpm", "-qf"])
+        if command[:4] == _RPM_BATCH:
+            return "".join(f"{path}\tjq\n" for path in command[4:])
         return "jq\n"
 
     service = _native_owned_service(
@@ -3174,3 +3178,157 @@ def test_shim_only_managed_bin_path_is_missing(tmp_path: Path) -> None:
     state = service.state_of("pnpm")
     assert state is not None
     assert state.present is True
+
+
+# -- 19-12 Task 2: one batched native path query per pass (D-11). --
+
+_RPM_BATCH = ["rpm", "-qf", "--qf", "[%{FILENAMES}\\t%{=NAME}\\n]"]
+_RPM_PER_PATH = ["rpm", "-qf", "--qf", "%{NAME}\\n"]
+_RPM_OSTREE_STATUS = ["rpm-ostree", "status", "--json"]
+
+
+def _dnf_tool(cmd: str, package: str | None = None) -> Tool:
+    return Tool(
+        id=cmd,
+        name=cmd,
+        category="data",
+        cmd=cmd,
+        methods=(Method(kind="dnf", params={"package": package or cmd}),),
+        owner_probes=("rpm-ostree", "dnf"),
+    )
+
+
+def _rpm_host(
+    owners: Mapping[str, str], *, layered: tuple[str, ...] = ()
+) -> tuple[Callable[[list[str]], str], list[list[str]]]:
+    """A recording rpm database: `owners` maps a file path to its package."""
+    calls: list[list[str]] = []
+    installed = set(owners.values())
+
+    def probe(command: list[str]) -> str:
+        calls.append(list(command))
+        if command[:4] == _RPM_BATCH:
+            return "".join(f"{path}\t{owners[path]}\n" for path in command[4:] if path in owners)
+        if command[:4] == _RPM_PER_PATH and command[4] in owners:
+            return f"{owners[command[4]]}\n"
+        if command[:2] == ["rpm", "-q"] and command[-1] in installed:
+            return f"{command[-1]}\n"
+        if command == _RPM_OSTREE_STATUS:
+            booted = {"booted": True, "requested-packages": list(layered)}
+            return json.dumps({"deployments": [booted]})
+        raise subprocess.CalledProcessError(1, command, output="")
+
+    return probe, calls
+
+
+def _system_bin(tmp_path: Path) -> Path:
+    system = tmp_path / "usr" / "bin"
+    system.mkdir(parents=True)
+    return system
+
+
+def test_pass_makes_one_rpm_path_query_for_many_native_tools(tmp_path: Path) -> None:
+    system = _system_bin(tmp_path)
+    tools = [_dnf_tool(f"native{n}") for n in range(5)]
+    probe, calls = _rpm_host({str(system / tool.cmd): tool.cmd for tool in tools})
+    service = _owner_pass_service(
+        tmp_path,
+        which=lambda cmd: str(system / cmd) if cmd.startswith("native") else None,
+        managed=tmp_path / "managed",
+        native_probe=probe,
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+    )
+    service.refresh(tools)
+    assert [call for call in calls if call[:4] == _RPM_BATCH] == [
+        [*_RPM_BATCH, *(str(system / tool.cmd) for tool in tools)]
+    ]
+    assert [call for call in calls if call[:4] == _RPM_PER_PATH] == []
+    for tool in tools:
+        state = service.state_of(tool.id)
+        assert state is not None
+        assert state.ownership.owner == "dnf"
+
+
+def test_pass_excludes_tracked_paths_from_the_batch(tmp_path: Path) -> None:
+    system = _system_bin(tmp_path)
+    managed = tmp_path / "managed"
+    brew_prefix = tmp_path / "brew"
+    hits = {
+        "native0": str(system / "native0"),
+        "brewed": str(brew_prefix / "bin" / "brewed"),
+        "managedtool": str(managed / "managedtool"),
+    }
+    probe, calls = _rpm_host({hits["native0"]: "native0"})
+    service = _owner_pass_service(
+        tmp_path,
+        which=lambda cmd: hits.get(cmd),
+        managed=managed,
+        native_probe=probe,
+        inventory=replace(_empty_inventory(), brew_prefix=brew_prefix),
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+    )
+    service.refresh([_dnf_tool(name) for name in hits])
+    batches = [call for call in calls if call[:4] == _RPM_BATCH]
+    assert batches == [[*_RPM_BATCH, hits["native0"]]]
+
+
+def test_pass_without_native_probe_makes_no_native_query(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(*_args: object) -> object:
+        raise AssertionError("a pass without a native probe built a native index")
+
+    monkeypatch.setattr(version_status, "native_index", refuse)
+    system = _system_bin(tmp_path)
+    service = _owner_pass_service(
+        tmp_path,
+        which=lambda cmd: str(system / cmd),
+        managed=tmp_path / "managed",
+        native_probe=None,
+    )
+    service.refresh([_dnf_tool("native0")])
+    state = service.state_of("native0")
+    assert state is not None
+    assert state.ownership.owner == "unknown"
+
+
+def test_pass_reads_rpm_ostree_status_once(tmp_path: Path) -> None:
+    system = _system_bin(tmp_path)
+    tools = [_dnf_tool(f"layered{n}") for n in range(3)]
+    probe, calls = _rpm_host(
+        {str(system / tool.cmd): tool.cmd for tool in tools},
+        layered=tuple(tool.cmd for tool in tools),
+    )
+    service = _owner_pass_service(
+        tmp_path,
+        which=lambda cmd: str(system / cmd) if cmd.startswith("layered") else None,
+        managed=tmp_path / "managed",
+        native_probe=probe,
+        platform=Platform(os="fedora", arch="amd64", immutable=True, has_brew=False),
+    )
+    service.refresh(tools)
+    assert calls.count(_RPM_OSTREE_STATUS) == 1
+    for tool in tools:
+        state = service.state_of(tool.id)
+        assert state is not None
+        assert state.ownership.owner == "rpm-ostree"
+
+
+def test_pass_memoizes_declared_package_queries(tmp_path: Path) -> None:
+    """checker I2: one query per distinct declared package per pass, and the
+    memo never outlives the pass."""
+    system = _system_bin(tmp_path)
+    tools = [_dnf_tool("first", "shared"), _dnf_tool("second", "shared")]
+    probe, calls = _rpm_host({str(system / "first"): "shared", str(system / "second"): "shared"})
+    service = _owner_pass_service(
+        tmp_path,
+        which=lambda cmd: str(system / cmd),
+        managed=tmp_path / "managed",
+        native_probe=probe,
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+    )
+    declared = ["rpm", "-q", "--qf", "%{NAME}\\n", "shared"]
+    service.refresh(tools)
+    assert calls.count(declared) == 1
+    service.refresh(tools)
+    assert calls.count(declared) == 2
