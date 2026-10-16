@@ -52,12 +52,17 @@
       "number": "25",
       "name": "Lean",
       "status": "pending"
+    },
+    {
+      "number": "26",
+      "name": "Commit and push quality hooks",
+      "status": "pending"
     }
   ],
   "next": {
     "command": "/gsd:progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 18 of 10 · 0% · executing"
+    "reason": "Phase 19 of 11 · 0% · executing"
   },
-  "updated_at": "2026-10-15T21:00:57.873Z"
+  "updated_at": "2026-10-16T09:37:41.812Z"
 }
