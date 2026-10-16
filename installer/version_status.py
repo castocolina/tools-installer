@@ -48,6 +48,7 @@ import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal, cast
 
@@ -137,6 +138,73 @@ class VersionStatus:
     stale: bool
     source: str
     pinned_spec: str | None = None
+
+
+class Health(StrEnum):
+    """One mark per tool; declaration order IS precedence for a present tool.
+
+    MISSING and UNAVAILABLE are the two absent states.
+    """
+
+    CHECKING = "checking"
+    BROKEN = "broken"
+    MISCONFIGURED = "misconfigured"
+    OUTDATED = "outdated"
+    OK = "ok"
+    MISSING = "missing"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """Per-tool facts collected by the refresh pass, never stored (D-01).
+
+    Each fact is one sentence. Shadowing, off-policy state, unknown owner
+    and unreadable versions are notes, never states.
+    """
+
+    present: bool
+    available: bool
+    checking: tuple[str, ...] = ()
+    broken: tuple[str, ...] = ()
+    misconfigured: tuple[str, ...] = ()
+    outdated: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()
+    absent_reason: str | None = None
+
+
+def tool_health(ev: Evidence) -> tuple[Health, tuple[str, ...]]:
+    """Map one Evidence to exactly one Health plus ordered reasons.
+
+    A present tool takes the first non-empty of checking > broken >
+    misconfigured > outdated, else OK; reasons put the winner's facts
+    first, then the other states' facts in precedence order, then notes.
+    An absent tool is MISSING when a method applies, else UNAVAILABLE; its
+    present-only facts are dropped, its notes survive in the given order
+    (the 19-08 builder passes configuration facts as the first notes).
+    """
+    if not ev.present:
+        reasons: tuple[str, ...] = ()
+        if ev.available:
+            state = Health.MISSING
+        else:
+            state = Health.UNAVAILABLE
+            if ev.absent_reason is not None:
+                reasons = (ev.absent_reason,)
+        return state, tuple(dict.fromkeys(reasons + ev.notes))
+
+    groups = (
+        (Health.CHECKING, ev.checking),
+        (Health.BROKEN, ev.broken),
+        (Health.MISCONFIGURED, ev.misconfigured),
+        (Health.OUTDATED, ev.outdated),
+    )
+    winner = next(((s, f) for s, f in groups if f), (Health.OK, ()))
+    reasons = winner[1]
+    for _state, facts in groups:
+        if facts is not winner[1]:
+            reasons = reasons + facts
+    return winner[0], tuple(dict.fromkeys(reasons + ev.notes))
 
 
 def github_repo(tool: Tool, platform: Platform) -> tuple[Method, str] | None:
