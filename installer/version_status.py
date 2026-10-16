@@ -561,6 +561,8 @@ SKILL_SEEDED_NOTE = "host status from the previous run, re-checking"
 CHANGED_SINCE_INSTALL = "changed since install"
 RECEIPT_UNREADABLE_NOTE = "install receipt unreadable — treated as unproven"
 ADOPTED_NOTE = "adopted: the file matches the release checksum"
+# SPEC-locked text; this phase adds no `r` binding (Phase 20 does).
+UNPROVEN_NOTE = "not proven: reinstall with r to adopt"
 
 
 def _run_nothing(cmd: list[str]) -> None:
@@ -1298,6 +1300,15 @@ class VersionRefreshService:
                     entry=new_entry if new_entry is not None else entry,
                     platform=platform,
                 )
+                removable = plan_removal([tool], self._managed_bin_dir)
+                if (
+                    present
+                    and ownership.owner == "installer"
+                    and (receipt is None or broken)
+                    and not removable.removable
+                ):
+                    # No receipt, adoption or layout proves it (review C2-M2).
+                    receipt_notes += (UNPROVEN_NOTE,)
                 states[tool.id] = tool_state(
                     tool,
                     generation=started_epoch,
@@ -1306,7 +1317,7 @@ class VersionRefreshService:
                     present=present,
                     ownership=ownership,
                     version=status,
-                    removable=plan_removal([tool], self._managed_bin_dir),
+                    removable=removable,
                     receipt=receipt,
                     broken=broken,
                     notes=ownership_notes(tool, ownership, platform)

@@ -3947,3 +3947,92 @@ def test_archive_and_non_raw_methods_are_never_digest_adopted(
     state = _settled(_receipt_service(tmp_path, bin_dir, resolve_tag=_offline([])), tool)
     assert not receipts.receipt_path(tool.id).exists()
     assert _ADOPTED not in state.reasons
+
+
+# -- 19-14 Task 3: an installer-owned tool with no proof says how to get one. --
+
+_UNPROVEN = "not proven: reinstall with r to adopt"
+
+
+def test_unproven_installer_tool_gets_the_reinstall_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    (bin_dir / "yq").write_bytes(_YQ_BYTES)
+    state = _settled(_receipt_service(tmp_path, bin_dir), _yq())
+    assert state.ownership.owner == "installer"
+    assert state.removable.removable == ()
+    assert _UNPROVEN in state.reasons
+    assert state.reasons.count(_UNPROVEN) == 1
+
+
+def test_layout_proven_archive_tool_has_no_unproven_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    real = tmp_path / ".local" / "opt" / "rg" / "rg-x" / "rg"
+    real.parent.mkdir(parents=True)
+    real.write_bytes(b"#!/bin/sh\n")
+    (bin_dir / "rg").symlink_to(real)
+    state = _settled(_receipt_service(tmp_path, bin_dir), _rg_archive())
+    assert state.ownership.owner == "installer"
+    assert state.receipt is None
+    assert state.removable.removable == (bin_dir / "rg", tmp_path / ".local" / "opt" / "rg")
+    assert _UNPROVEN not in state.reasons
+
+
+@pytest.mark.parametrize("owner", ["brew", "uv", "dnf"])
+def test_manager_owned_tool_has_no_unproven_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner: Owner
+) -> None:
+    """The same unproven yq file, claimed by a manager: the manager owns proof."""
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    (bin_dir / "yq").write_bytes(_YQ_BYTES)
+    owned = _owned(_yq(), owner, package="yq")
+
+    def claimed(_tool: Tool, **_kwargs: object) -> ManagerOwnership:
+        return owned
+
+    monkeypatch.setattr(version_status, "resolve_ownership", claimed)
+    state = _settled(_receipt_service(tmp_path, bin_dir), _yq())
+    assert state.ownership.owner == owner
+    assert state.present
+    assert _UNPROVEN not in state.reasons
+
+
+def test_adopted_tool_has_no_unproven_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    service, _placed = _adoption_service(tmp_path, bin_dir, {"yq_linux_amd64": _YQ_SHA})
+    state = _settled(service, _yq())
+    assert _ADOPTED in state.reasons
+    assert _UNPROVEN not in state.reasons
+
+
+def _read_only_write(_receipt: receipts.Receipt) -> None:
+    raise OSError("read-only")
+
+
+@pytest.mark.parametrize("tool_id", ["rg", "yq"])
+def test_failed_rewrite_leaves_an_archive_layout_proven_and_a_raw_binary_unproven(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool_id: str
+) -> None:
+    """Review C2-M2: after 19-09 removed the receipt, only the layout proves."""
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    tool = _rg_archive() if tool_id == "rg" else _yq()
+    first = _install(tool, tmp_path, monkeypatch)
+    assert first.status == InstallStatus.INSTALLED
+    assert receipts.read(tool_id) is not None
+    monkeypatch.setattr(receipts, "write", _read_only_write)
+    again = _install(tool, tmp_path, monkeypatch, payload=_YQ_BYTES + b"# v2\n", repair=True)
+    assert again.status == InstallStatus.INSTALLED
+    assert again.postinstall_warning is not None
+    assert "the previous receipt was removed" in again.postinstall_warning
+    assert not receipts.receipt_path(tool_id).exists()
+    state = _settled(_receipt_service(tmp_path, bin_dir), tool)
+    assert state.receipt is None
+    if tool_id == "rg":
+        assert _UNPROVEN not in state.reasons
+        assert state.removable.removable
+    else:
+        assert _UNPROVEN in state.reasons
+        assert state.removable.removable == ()
