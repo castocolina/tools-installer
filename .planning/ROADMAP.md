@@ -144,7 +144,7 @@ Plans (numbered in creation order; W = execution wave):
   4. graphify (uv) resolves owner uv, and Volta, redirect shims, the implicit `~/.local/bin`, `host_setup` tools and native packages resolve their real owner with the native probe run once per pass; installing brew in-session makes colima installable without restarting the app.
   5. Skill packs show partial or duplicate installs per harness.
 
-**Plans:** 21 plans
+**Plans:** 31 plans
 
 Plans (W = execution wave):
 - [ ] 19-01-PLAN.md — receipts module and Wave-0 test sandbox for the receipts dir (W1)
@@ -168,6 +168,16 @@ Plans (W = execution wave):
 - [ ] 19-17-PLAN.md — 80x20 layout: legend and health detail visible on every tier and chrome screen; every mark on every tier (W6)
 - [ ] 19-18-PLAN.md — execute screen, composition root and update service read state; transitional readers deleted (W7)
 - [ ] 19-19-PLAN.md — container e2e receipt assertions and Phase 19 architecture record (W8)
+- [ ] 19-22-PLAN.md — gap: dir receipts carry their identity, per-type reader, fail-closed artifact paths, digest-keyed re-hash memo (W9)
+- [ ] 19-23-PLAN.md — gap: symlinked `.planning` rejected, unreadable install dirs not checked, surplus canonical entries, dead projection deleted (W9)
+- [ ] 19-24-PLAN.md — gap: installer shim on PATH is never presence; app smoke recorded only with a CLI (W9)
+- [ ] 19-25-PLAN.md — gap: suite-wide scratch HOME; quoted container e2e paths; receipt check fails the pass (W9)
+- [ ] 19-26-PLAN.md — gap: removal carries each artifact's type to its delete and re-checks it (W10)
+- [ ] 19-27-PLAN.md — gap: one skill-presence rule, sequence-safe skill worker, terminal warnings as notes, explicit health precedence (W10)
+- [ ] 19-28-PLAN.md — gap: one non-blocking capped reader for plugin, hook and receipt files (W10)
+- [ ] 19-29-PLAN.md — gap: guarded receipt existence check; the pass retires all-gone receipts (W11)
+- [ ] 19-30-PLAN.md — gap: one health read per tool and one state snapshot per catalog rebuild (W11)
+- [ ] 19-31-PLAN.md — gap: drift refusal at the update gate, installer receipts kept by manager updates, reviewed pnpm hint (W12)
 
 **UI hint**: yes
 
