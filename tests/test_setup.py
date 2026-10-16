@@ -540,12 +540,14 @@ def _hermetic_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str
 
     monkeypatch.setattr(setup.systemd_daemon, "systemd_available", _no_systemd)
     monkeypatch.setattr(setup, "detect", _linux_platform)
+    # Not brew: the empty PATH has no brew, and the tool state reads a brew-only
+    # tool as unavailable there (19-13, R8), which would block the selection.
     tool = Tool(
         id="rg",
         name="rg",
         category="search",
         cmd="rg",
-        methods=(Method(kind="brew", params={"formula": "ripgrep"}),),
+        methods=(Method(kind="script", params={"url": "https://example.invalid/rg.sh"}),),
         tier="system",
     )
 

@@ -52,6 +52,7 @@ def offline_service(
     artifacts_for: Callable[[Tool], list[Path]] | None = None,
     skill_probe: Callable[[list[str]], str] | None = None,
     read_inventory_fn: Callable[..., ManagerInventory] = empty_inventory,
+    read_outdated_fn: Callable[..., OutdatedReport] = empty_outdated,
     present: Callable[[Tool], bool] | None = None,
 ) -> VersionRefreshService:
     """A service with no first pass. By default every command resolves into
@@ -67,7 +68,7 @@ def offline_service(
         which=which or (lambda cmd: str(managed / cmd)),
         artifacts_for=artifacts_for or (lambda tool: [managed / tool.cmd]),
         read_inventory_fn=read_inventory_fn,
-        read_outdated_fn=empty_outdated,
+        read_outdated_fn=read_outdated_fn,
         pnpm_packages=lambda: (),
         query=lambda *_a, **_k: "",
         native_probe=native_probe,
@@ -84,26 +85,34 @@ def seeded_service(
     home: Path,
     present: Collection[str] = frozenset(),
     platform: Platform | None = None,
-    which: Callable[[str], str | None] = lambda _cmd: None,
+    which: Callable[[str], str | None] | None = None,
     resolve_tag: Callable[[str], str] = _no_release,
     probe_output: Callable[[list[str]], str | None] = _no_version,
     artifacts_for: Callable[[Tool], list[Path]] = lambda _tool: [],
     read_inventory_fn: Callable[..., ManagerInventory] = empty_inventory,
+    read_outdated_fn: Callable[..., OutdatedReport] = empty_outdated,
     skill_probe: Callable[[list[str]], str] | None = None,
 ) -> VersionRefreshService:
     """A service after one completed `refresh(tools)`: the ids in `present`
-    read present, nothing is on PATH unless `which` says so, and skill packs
-    are probed when `skill_probe` is given."""
+    read present, and skill packs are probed when `skill_probe` is given. By
+    default only brew is on PATH (under `home`), so brew-method tools can
+    install and no tool binary is found."""
     ids = frozenset(present)
+    brew = str(home / "homebrew" / "bin" / "brew")
+
+    def brew_only(cmd: str) -> str | None:
+        return brew if cmd == "brew" else None
+
     service = offline_service(
         cache_path,
         skill_home=home,
         resolve_tag=resolve_tag,
         probe_output=probe_output,
         platform=platform,
-        which=which,
+        which=which or brew_only,
         artifacts_for=artifacts_for,
         read_inventory_fn=read_inventory_fn,
+        read_outdated_fn=read_outdated_fn,
         skill_probe=skill_probe,
         present=lambda tool: tool.id in ids,
     )

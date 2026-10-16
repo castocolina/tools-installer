@@ -36,7 +36,8 @@ from installer.catalog_tui import (
 )
 from installer.deps import resolve_dependencies
 from installer.doctor import DoctorReport
-from installer.enums import Audience
+from installer.enums import Audience, Severity
+from installer.manager_versions import ManagerVersion, OutdatedReport
 from installer.model import (
     Method,
     SkillLifecycle,
@@ -59,6 +60,7 @@ from installer.platform import Platform
 from installer.resolve import UnavailableReason, platform_could_support, unavailable_reason
 from installer.run import CommandError
 from installer.selection import select_tools
+from installer.ui_common import highlighted_key
 from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_cache import VersionCacheEntry, save_version_cache
@@ -137,13 +139,14 @@ def _tool(
     tier: str = "system",
     requires: tuple[str, ...] = (),
     recommends: tuple[str, ...] = (),
+    method_os: tuple[str, ...] = (),
 ) -> Tool:
     return Tool(
         id=tool_id,
         name=tool_id,
         category=category,
         cmd=tool_id,
-        methods=(Method(kind="brew", params={"formula": tool_id}),),
+        methods=(Method(kind="brew", params={"formula": tool_id}, os=method_os),),
         priority=priority,
         audience=audience,
         desc=desc,
@@ -154,6 +157,10 @@ def _tool(
 
 
 _BLURBS = {"search": "Find files and code at speed"}
+
+
+def _health_from(installed: Mapping[str, bool]) -> Callable[[Tool], Health | None]:
+    return lambda tool: Health.OK if installed[tool.id] else Health.MISSING
 
 
 def _catalog() -> tuple[list[Tool], dict[str, bool]]:
@@ -168,7 +175,7 @@ def _catalog() -> tuple[list[Tool], dict[str, bool]]:
 
 def test_group_by_priority_orders_tiers_and_drops_empty():
     tools, installed = _catalog()
-    groups = group_tools(tools, installed, "priority", _BLURBS)
+    groups = group_tools(tools, _health_from(installed), "priority", _BLURBS)
     assert [title for title, _, _ in groups] == ["P0", "P1", "P2"]  # no P3 tools -> dropped
     assert [detail for _, detail, _ in groups] == [
         "P0 · essential",
@@ -180,7 +187,7 @@ def test_group_by_priority_orders_tiers_and_drops_empty():
 
 def test_group_by_audience_uses_labels():
     tools, installed = _catalog()
-    groups = group_tools(tools, installed, "audience", _BLURBS)
+    groups = group_tools(tools, _health_from(installed), "audience", _BLURBS)
     assert [title for title, _, _ in groups] == ["for AI", "for both", "for human"]
     assert all(detail == title for title, detail, _ in groups)
     assert [t.id for _, _, members in groups for t in members] == ["rg", "fd", "lazygit"]
@@ -191,18 +198,19 @@ def test_audience_labels_keep_domain_names():
     assert "you" not in AUDIENCE_LABEL.values()
 
 
-def test_group_by_status_splits_missing_then_installed():
+def test_group_by_status_orders_health_groups_and_drops_empty():
     tools, installed = _catalog()
-    groups = group_tools(tools, installed, "status", _BLURBS)
-    assert groups[0][:2] == ("missing", "missing")
-    assert [t.id for t in groups[0][2]] == ["fd", "lazygit"]
-    assert groups[1][:2] == ("installed", "installed")
-    assert [t.id for t in groups[1][2]] == ["rg"]
+    groups = group_tools(tools, _health_from(installed), "status", _BLURBS)
+    assert groups[0][:2] == ("✓ ok", "ok")
+    assert [t.id for t in groups[0][2]] == ["rg"]
+    assert groups[1][:2] == ("○ missing", "not installed")
+    assert [t.id for t in groups[1][2]] == ["fd", "lazygit"]
+    assert len(groups) == 2
 
 
 def test_group_by_category_keeps_titles_short_and_blurbs_in_detail():
     tools, installed = _catalog()
-    groups = group_tools(tools, installed, "category", _BLURBS)
+    groups = group_tools(tools, _health_from(installed), "category", _BLURBS)
     # "git" has no blurb -> detail is the plain name; "search" has one -> appended.
     assert [(title, detail) for title, detail, _ in groups] == [
         ("git", "git"),
@@ -214,33 +222,37 @@ def test_group_by_category_keeps_titles_short_and_blurbs_in_detail():
 
 def test_sort_for_table_by_each_key():
     tools, installed = _catalog()
-    assert [t.id for t in sort_for_table(tools, installed, "id")] == ["fd", "lazygit", "rg"]
-    assert [t.id for t in sort_for_table(tools, installed, "priority")] == [
+    assert [t.id for t in sort_for_table(tools, _health_from(installed), "id")] == [
+        "fd",
+        "lazygit",
+        "rg",
+    ]
+    assert [t.id for t in sort_for_table(tools, _health_from(installed), "priority")] == [
         "rg",
         "fd",
         "lazygit",
     ]
-    assert [t.id for t in sort_for_table(tools, installed, "category")] == [
+    assert [t.id for t in sort_for_table(tools, _health_from(installed), "category")] == [
         "lazygit",
         "rg",
         "fd",
     ]
-    assert [t.id for t in sort_for_table(tools, installed, "audience")] == [
+    assert [t.id for t in sort_for_table(tools, _health_from(installed), "audience")] == [
         "rg",
         "fd",
         "lazygit",
     ]  # ai < both < human alphabetically
-    assert [t.id for t in sort_for_table(tools, installed, "health")] == [
+    assert [t.id for t in sort_for_table(tools, _health_from(installed), "health")] == [
+        "rg",
         "fd",
         "lazygit",
-        "rg",
-    ]  # missing first, then installed
+    ]  # Health precedence: ok before missing
 
 
 def test_group_tools_rejects_unknown_view():
     tools, installed = _catalog()
     with pytest.raises(ValueError, match="unknown view"):
-        group_tools(tools, installed, "table", _BLURBS)
+        group_tools(tools, _health_from(installed), "table", _BLURBS)
 
 
 def _app() -> UnifiedApp:
@@ -863,7 +875,7 @@ async def test_detail_bar_shows_recommends_when_declared() -> None:
 
 
 async def test_unavailable_catalog_rows_are_inert_under_select_all() -> None:
-    tools = [_tool("rg"), _tool("container")]
+    tools = [_tool("rg"), _tool("container", method_os=("linux",))]
     installed = {"rg": False, "container": False}
     app = _unified_app(tools, installed, _BLURBS, unavailable={"container": True})
     async with app.run_test(size=(100, 30)) as pilot:
@@ -911,7 +923,7 @@ def test_bare_true_unavailable_keeps_generic_copy() -> None:
 
 
 async def test_unavailable_catalog_row_is_dimmed_with_blank_sel_cell() -> None:
-    tools = [_tool("container", desc="Apple's native container runtime")]
+    tools = [_tool("container", desc="Apple's native container runtime", method_os=("linux",))]
     app = _unified_app(tools, {"container": False}, _BLURBS, unavailable={"container": True})
     async with app.run_test(size=(100, 30)):
         table = app.catalog.query_one(DataTable[Any])
@@ -938,7 +950,7 @@ def test_real_apple_containers_unavailable_only_for_genuine_incompatibility() ->
 async def test_unavailable_recommendation_is_not_staged_or_emitted() -> None:
     tools = [
         _tool("agent", category="ai", priority="P0", recommends=("jq",)),
-        _tool("jq", category="data", priority="P1"),
+        _tool("jq", category="data", priority="P1", method_os=("linux",)),
     ]
     installed = {tool.id: False for tool in tools}
     app = _unified_app(tools, installed, _BLURBS, unavailable={"jq": True})
@@ -1010,7 +1022,7 @@ def test_zsh_is_audience_human_in_the_real_catalog() -> None:
     tools = load_tools(REGISTRY)
     installed = {tool.id: False for tool in tools}
 
-    groups = group_tools(tools, installed, "audience", _BLURBS)
+    groups = group_tools(tools, _health_from(installed), "audience", _BLURBS)
     members_by_title = {title: {t.id for t in members} for title, _, members in groups}
     # group_tools drops empty groups before returning, so this title-list
     # equality IS the "all three groups are still populated" guard -- a group
@@ -1658,12 +1670,12 @@ def test_ver_cell_dim_stale_suffix_scoped_to_colored_branches_only() -> None:
         assert colored.endswith(" ~"), colored
 
 
-async def test_ver_cell_dim_checking_marker_reaches_the_rendered_table(tmp_path: Path) -> None:
-    """The checking marker must be observed in a PAINTED `DataTable` cell
-    while a version-refresh worker is provably blocked, not only through a
-    direct `_ver_cell` call with `version_refreshing` forced True -- that
-    would pass against the pre-fix code, which never repaints the table when
-    a refresh starts."""
+async def test_checking_mark_reaches_the_rendered_table_while_a_pass_is_blocked(
+    tmp_path: Path,
+) -> None:
+    """The checking mark must be observed in a PAINTED `DataTable` cell
+    while a refresh worker is provably blocked, after a first pass that
+    crashed and published nothing."""
     tool = _gh_tool("dasel")
     started = threading.Event()
     release = threading.Event()
@@ -1673,9 +1685,7 @@ async def test_ver_cell_dim_checking_marker_reaches_the_rendered_table(tmp_path:
         del repo
         calls["n"] += 1
         if calls["n"] == 1:
-            # First pass crashes -- the worker-crash shape already used
-            # elsewhere in this file: an empty status map is posted, so the
-            # cell starts on the no-version marker, never the real version.
+            # First pass crashes: nothing is published, so the row stays `…`.
             raise RuntimeError("simulated domain failure")
         started.set()
         assert release.wait(timeout=5)
@@ -1695,7 +1705,8 @@ async def test_ver_cell_dim_checking_marker_reaches_the_rendered_table(tmp_path:
             await pilot.pause()
         await pilot.pause()
         table = app.catalog.query_one(DataTable[Any])
-        assert table.get_cell("dasel", "ver").plain == "no version"
+        assert table.get_cell("dasel", "health").plain == "…"
+        assert table.get_cell("dasel", "ver").plain == ""
         app.catalog.enter_view()
         # A blocking Event.wait() here would starve the asyncio loop of the
         # tick it needs to actually dispatch the thread-worker submission --
@@ -1706,13 +1717,14 @@ async def test_ver_cell_dim_checking_marker_reaches_the_rendered_table(tmp_path:
                 break
             await pilot.pause()
         assert started.is_set()
-        assert table.get_cell("dasel", "ver").plain == "checking…"
+        assert table.get_cell("dasel", "health").plain == "…"
         release.set()
         for _ in range(400):
             if not app.catalog.version_refreshing:
                 break
             await pilot.pause()
         await pilot.pause()
+        assert table.get_cell("dasel", "health").plain != "…"
         assert "v2.8.0" in table.get_cell("dasel", "ver").plain
 
 
@@ -2566,6 +2578,7 @@ def test_unknown_owner_detail_contains_unknown_reason(tmp_path: Path) -> None:
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
+    service.refresh([tool])
     service._ownership = {  # pyright: ignore[reportPrivateUsage]
         "rg": (service.epoch, _ownership(tool, owner="unknown", unknown_reason=reason))
     }
@@ -2699,6 +2712,7 @@ def test_stale_latest_has_marker_and_detail_explanation(tmp_path: Path) -> None:
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
+    service.refresh([tool])
     service._ownership = {"rg": (service.epoch, _ownership(tool, owner="brew"))}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([tool], {"rg": True}, version_refresh=service)
     stale_status = VersionStatus(
@@ -3192,7 +3206,7 @@ def test_a_single_tool_refresh_after_invalidate_strands_every_other_record(
     assert service.ownership_of("alpha") is not None
     assert service.ownership_of("beta") is not None
     service.invalidate(reason="updated alpha")  # what UpdateService.run does
-    service.refresh([alpha])  # what _update_tool_worker does
+    service.refresh([alpha])  # a single-tool pass after the invalidate
     assert service.ownership_of("alpha") is not None
     assert service.ownership_of("beta") is None
 
@@ -3961,29 +3975,48 @@ def _probe_less_pack_screen(tmp_path: Path, *, installed: bool) -> tuple[Catalog
 
 def test_skill_pack_with_no_status_probes_uses_path_presence(tmp_path: Path) -> None:
     screen, pack = _probe_less_pack_screen(tmp_path, installed=True)
-    assert screen._present(pack) is True  # pyright: ignore[reportPrivateUsage]
-    assert screen._presence()[pack.id] is True  # pyright: ignore[reportPrivateUsage]
     assert screen._ver_cell(pack).plain == "1.2.3"  # pyright: ignore[reportPrivateUsage]
     assert screen._row_cells(pack)[5].plain == "✓"  # pyright: ignore[reportPrivateUsage]
-    groups = screen._groups("status")  # pyright: ignore[reportPrivateUsage]
-    installed_members = next(members for title, _detail, members in groups if title == "installed")
-    assert pack in installed_members
+    groups = group_tools([pack], screen._health_of, "status", _BLURBS)  # pyright: ignore[reportPrivateUsage]
+    assert [(title, [t.id for t in members]) for title, _detail, members in groups] == [
+        ("✓ ok", ["openspec"])
+    ]
 
 
 def test_skill_pack_with_no_status_probes_is_absent_when_not_on_path(tmp_path: Path) -> None:
     screen, pack = _probe_less_pack_screen(tmp_path, installed=False)
-    assert screen._present(pack) is False  # pyright: ignore[reportPrivateUsage]
     assert screen._row_cells(pack)[5].plain == "○"  # pyright: ignore[reportPrivateUsage]
+    assert screen._ver_cell(pack).plain == ""  # pyright: ignore[reportPrivateUsage]
 
 
 def test_skill_pack_with_probes_and_empty_hosts_stays_unknown(tmp_path: Path) -> None:
-    screen, pack = _skill_screen(tmp_path, {})
-    assert screen._present(pack) is None  # pyright: ignore[reportPrivateUsage]
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
+    service = seeded_service(
+        [pack], cache_path=tmp_path / "versions.json", home=tmp_path, skill_probe=lambda _a: ""
+    )
+    state = service.state_of(pack.id)
+    assert state is not None
+    assert state.health is Health.CHECKING
+    assert state.present is False
 
 
 def test_skill_pack_with_probes_present_host_stays_present(tmp_path: Path) -> None:
-    screen, pack = _skill_screen(tmp_path, {"claude": "present"})
-    assert screen._present(pack) is True  # pyright: ignore[reportPrivateUsage]
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
+    service = seeded_service(
+        [pack],
+        cache_path=tmp_path / "versions.json",
+        home=tmp_path,
+        skill_probe=_claude_has_superpowers,
+    )
+    state = service.state_of(pack.id)
+    assert state is not None
+    assert state.present is True
 
 
 def test_a_failed_direct_update_renders_as_an_error_not_a_warning() -> None:
@@ -4205,3 +4238,419 @@ def test_state_doubles_never_use_the_real_home(tmp_path: Path) -> None:
     without_home: dict[str, Any] = {"resolve_tag": str, "probe_output": no_version}
     with pytest.raises(TypeError, match="skill_home"):
         offline_service(tmp_path / "missing.json", **without_home)
+
+
+# -- 19-13 Task 2: grouping, sort, selection and presence read the tool state
+
+
+def _tier_gh_tool(tool_id: str, tier: str) -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="search",
+        cmd=tool_id,
+        methods=(Method(kind="github_release", params={"repo": f"owner/{tool_id}"}),),
+        tier=tier,
+    )
+
+
+def _brew_on_path(home: Path) -> Callable[[str], str | None]:
+    """`which` that finds only brew itself, so brew-method tools can install."""
+    return lambda cmd: str(home / "homebrew" / "bin" / "brew") if cmd == "brew" else None
+
+
+def _shim_tool() -> Tool:
+    return Tool(
+        id="mmdc",
+        name="mmdc",
+        category="docs",
+        cmd="mmdc",
+        methods=(Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
+        tier="system",
+    )
+
+
+def _row_keys(table: DataTable[Any]) -> list[str]:
+    return [str(row.key.value) for row in table.ordered_rows]
+
+
+async def test_status_view_groups_by_health(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pnpm_home = tmp_path / "pnpm"
+    monkeypatch.setenv("PNPM_HOME", str(pnpm_home))
+    home = tmp_path / "home"
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
+    tools = [
+        _shim_tool(),
+        _tool("rg", priority="P0"),
+        _tool("fd"),
+        _tool("container", method_os=("linux",)),
+        pack,
+    ]
+    ids = [tool.id for tool in tools]
+
+    def which(cmd: str) -> str | None:
+        if cmd == "mmdc":
+            return str(pnpm_home / cmd)
+        return _brew_on_path(home)(cmd)
+
+    service = seeded_service(
+        tools,
+        cache_path=tmp_path / "versions.json",
+        home=home,
+        present={"mmdc", "rg"},
+        which=which,
+    )
+    health = {tool_id: state.health for tool_id in ids if (state := service.state_of(tool_id))}
+    assert health == {
+        "mmdc": Health.BROKEN,
+        "rg": Health.OK,
+        "fd": Health.MISSING,
+        "container": Health.UNAVAILABLE,
+        "superpowers": Health.CHECKING,
+    }
+    groups = group_tools(tools, lambda tool: health[tool.id], "status", _BLURBS)
+    assert [(title, detail, [t.id for t in members]) for title, detail, members in groups] == [
+        ("… checking", "checking…", ["superpowers"]),
+        ("! broken", "broken", ["mmdc"]),
+        ("✓ ok", "ok", ["rg"]),
+        ("○ missing", "not installed", ["fd"]),
+        ("– unavailable", "not available on this machine", ["container"]),
+    ]
+    app = _unified_app(tools, dict.fromkeys(ids, False), _BLURBS, version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        while app.catalog.view != "status":
+            await pilot.press("right")
+        table = app.catalog.query_one(DataTable[Any])
+        titles = [
+            table.get_cell(key, "tool").plain.strip() for key in _row_keys(table) if key not in ids
+        ]
+        assert titles == [
+            "── … checking (1)",
+            "── ! broken (1)",
+            "── ✓ ok (1)",
+            "── ○ missing (1)",
+            "── – unavailable (1)",
+        ]
+        table.move_cursor(row=table.get_row_index("fd"))
+        await pilot.pause()
+        app.catalog.enter_view()
+        await _mount_and_settle(app, pilot)
+        await pilot.pause()
+        assert highlighted_key(table) == "fd"
+
+
+def test_table_sorts_by_health_then_priority_then_id() -> None:
+    tools = [
+        _tool("b-ok", priority="P1"),
+        _tool("a-ok", priority="P1"),
+        _tool("z-ok", priority="P0"),
+        _tool("broken", priority="P3"),
+        _tool("missing", priority="P0"),
+        _tool("pending", priority="P2"),
+    ]
+    health: dict[str, Health | None] = {
+        "b-ok": Health.OK,
+        "a-ok": Health.OK,
+        "z-ok": Health.OK,
+        "broken": Health.BROKEN,
+        "missing": Health.MISSING,
+        "pending": None,
+    }
+    ordered = sort_for_table(tools, lambda tool: health[tool.id], "health")
+    assert [tool.id for tool in ordered] == [
+        "pending",
+        "broken",
+        "z-ok",
+        "a-ok",
+        "b-ok",
+        "missing",
+    ]
+
+
+async def test_unavailable_state_dims_and_blocks_selection(tmp_path: Path) -> None:
+    tool = _tool("x")
+    service = seeded_service(
+        [tool],
+        cache_path=tmp_path / "versions.json",
+        home=tmp_path / "home",
+        which=lambda _cmd: None,
+    )
+    state = service.state_of("x")
+    assert state is not None
+    assert state.health is Health.UNAVAILABLE
+    app = _unified_app([tool], {"x": False}, _BLURBS, version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        table = app.catalog.query_one(DataTable[Any])
+        assert table.get_cell("x", "health").plain == "–"
+        assert table.get_cell("x", "sel").plain == ""
+        assert "dim" in str(table.get_cell("x", "pri").style)
+        table.move_cursor(row=table.get_row_index("x"))
+        await pilot.press("space")
+        await pilot.press("a")
+        assert "x" not in app.catalog.selected
+
+
+async def test_brew_appearing_makes_the_row_selectable(tmp_path: Path) -> None:
+    tool = _tool("x")
+    home = tmp_path / "home"
+    service = seeded_service(
+        [tool],
+        cache_path=tmp_path / "versions.json",
+        home=home,
+        which=_brew_on_path(home),
+    )
+    state = service.state_of("x")
+    assert state is not None
+    assert state.health is Health.MISSING
+    # The launch-time map was computed before brew appeared.
+    app = _unified_app([tool], {"x": False}, _BLURBS, {"x": True}, version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        table = app.catalog.query_one(DataTable[Any])
+        assert table.get_cell("x", "sel").plain == "[ ]"
+        assert "dim" not in str(table.get_cell("x", "pri").style)
+        table.move_cursor(row=table.get_row_index("x"))
+        await pilot.press("space")
+        assert "x" in app.catalog.selected
+        await pilot.press("enter")
+    assert app.return_value == ["x"]
+
+
+async def test_requires_presence_comes_from_state(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    pnpm = _tool("pnpm", tier="system")
+    mmdc = _tool("mmdc", tier="ai", requires=("pnpm",))
+    service = seeded_service(
+        [pnpm, mmdc],
+        cache_path=tmp_path / "versions.json",
+        home=home,
+        present={"pnpm"},
+        which=_brew_on_path(home),
+    )
+    # The per-tier installed map is stale on purpose: the state must win.
+    app = _unified_app(
+        [pnpm, mmdc], {"pnpm": False, "mmdc": False}, _BLURBS, version_refresh=service
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.press("3")
+        ai = app.catalog_for("ai")
+        await _wait_until(pilot, lambda: not ai.version_refreshing)
+        await pilot.press("space")
+        await pilot.pause()
+        assert "mmdc" in ai.selected
+        assert "also needs" not in ai.status_text
+
+
+async def test_refresh_worker_covers_the_full_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tools = [_tool("rg", tier="system"), _tool("mmdc", tier="ai"), _tool("jq", tier="user")]
+    service = _seeded(tools, dict.fromkeys((tool.id for tool in tools), True))
+    calls: list[set[str]] = []
+    refresh = service.refresh
+
+    def recording(batch: typing.Sequence[Tool]) -> dict[str, VersionStatus]:
+        calls.append({tool.id for tool in batch})
+        return refresh(batch)
+
+    monkeypatch.setattr(service, "refresh", recording)
+    app = _unified_app(
+        tools, dict.fromkeys(("rg", "mmdc", "jq"), True), _BLURBS, version_refresh=service
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.press("3")
+        ai = app.catalog_for("ai")
+        await _wait_until(pilot, lambda: not ai.version_refreshing and len(calls) >= 2)
+    assert calls
+    assert all(batch == {"rg", "mmdc", "jq"} for batch in calls)
+
+
+async def test_refresh_error_shows_the_retry_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tools, installed = _catalog()
+    service = offline_service(
+        tmp_path / "versions.json",
+        skill_home=tmp_path / "home",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: None,
+    )
+
+    def failing(batch: typing.Sequence[Tool]) -> dict[str, VersionStatus]:
+        del batch
+        raise OSError("boom")
+
+    monkeypatch.setattr(service, "refresh", failing)
+    app = _unified_app(tools, installed, _BLURBS, version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        await pilot.pause()
+        assert app.catalog.status_text == (
+            "tool state check failed: boom — leave and re-enter this view to retry"
+        )
+        assert app.catalog.status.severity is Severity.WARN
+        assert set(_health_cells(app, [tool.id for tool in tools]).values()) == {"…"}
+
+
+def _brew_owned_service(
+    tmp_path: Path, tools: list[Tool], hold: dict[str, threading.Event | None]
+) -> VersionRefreshService:
+    brew = tmp_path / "brew"
+
+    def probe_output(argv: list[str]) -> str | None:
+        # Only a full pass probes fd: holding here holds the follow-up pass
+        # and never a single-tool pass over the updated rg.
+        gate = hold.get("gate")
+        if gate is not None and Path(argv[0]).name == "fd":
+            hold["started"] = gate
+            assert gate.wait(timeout=5)
+        return "1.0"
+
+    def inventory(**_kwargs: object) -> ManagerInventory:
+        return ManagerInventory(
+            brew_formulae={tool.id: "1.0" for tool in tools},
+            brew_casks={},
+            pnpm_globals=frozenset(),
+            uv_tools={},
+            brew_prefix=brew,
+        )
+
+    def outdated(**_kwargs: object) -> OutdatedReport:
+        return OutdatedReport(
+            brew={"rg": ManagerVersion(current="1.0", latest="1.1")}, cask={}, pnpm={}, uv={}
+        )
+
+    return seeded_service(
+        tools,
+        cache_path=tmp_path / "versions.json",
+        home=tmp_path / "home",
+        present={tool.id for tool in tools},
+        which=lambda cmd: str(brew / "bin" / cmd),
+        probe_output=probe_output,
+        read_inventory_fn=inventory,
+        read_outdated_fn=outdated,
+    )
+
+
+async def test_update_shows_checking_on_every_row_until_the_full_pass(tmp_path: Path) -> None:
+    tools, _installed = _catalog()
+    ids = [tool.id for tool in tools]
+    hold: dict[str, threading.Event | None] = {"gate": None}
+    service = _brew_owned_service(tmp_path, tools, hold)
+    updates = UpdateService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        runner=lambda _argv: None,
+        resolve_tag=lambda _repo: "v1",
+        tools={},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda tool: _ownership(tool, owner="brew", package=tool.id),
+        invalidate=service.invalidate,
+    )
+    app = _unified_app(
+        tools, dict.fromkeys(ids, True), _BLURBS, version_refresh=service, updates=updates
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        assert _health_cells(app, ids) == {"rg": "↑", "fd": "✓", "lazygit": "✓"}
+        table = app.catalog.query_one(DataTable[Any])
+        table.move_cursor(row=table.get_row_index("rg"))
+        await pilot.pause()
+        gate = threading.Event()
+        hold["gate"] = gate
+        await pilot.press("u")
+        await _wait_until(pilot, lambda: "updated rg" in app.catalog.status_text)
+        await _wait_until(pilot, lambda: hold.get("started") is not None)
+        assert _health_cells(app, ids) == dict.fromkeys(ids, "…")
+        hold["gate"] = None
+        gate.set()
+        await _wait_until(pilot, lambda: _health_cells(app, ids)["rg"] != "…")
+        assert _health_cells(app, ids) == {"rg": "↑", "fd": "✓", "lazygit": "✓"}
+
+
+async def test_cache_save_warning_reaches_the_status_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import version_status
+
+    tools, installed = _catalog()
+    ids = [tool.id for tool in tools]
+    fail = {"on": True}
+    original = version_status.save_version_cache
+
+    def save(path: Path, *args: Any, **kwargs: Any) -> None:
+        if fail["on"]:
+            raise OSError("disk full")
+        original(path, *args, **kwargs)
+
+    monkeypatch.setattr(version_status, "save_version_cache", save)
+    service = offline_service(
+        tmp_path / "versions.json",
+        skill_home=tmp_path / "home",
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: None,
+        present=lambda tool: installed[tool.id],
+    )
+    app = _unified_app(tools, installed, _BLURBS, version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        await pilot.pause()
+        assert app.catalog.status_text == (
+            "version cache not saved: disk full — marks are current; the next start checks again"
+        )
+        assert app.catalog.status.severity is Severity.WARN
+        assert _health_cells(app, ids) == {"rg": "✓", "fd": "○", "lazygit": "○"}
+        fail["on"] = False
+        app.catalog.enter_view()
+        await _mount_and_settle(app, pilot)
+        await pilot.pause()
+        assert service.warning is None
+        assert app.catalog.status_text == ""
+
+
+async def test_quick_tier_switching_runs_one_full_pass(tmp_path: Path) -> None:
+    tools = [
+        _tier_gh_tool("sys-tool", "system"),
+        _tier_gh_tool("usr-tool", "user"),
+        _tier_gh_tool("ai-tool", "ai"),
+    ]
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
+
+    def resolve_tag(repo: str) -> str:
+        calls.append(repo)
+        if len(calls) == 1:
+            started.set()
+            assert release.wait(timeout=5)
+        return "v1.0.0"
+
+    service = offline_service(
+        tmp_path / "versions.json",
+        skill_home=tmp_path / "home",
+        resolve_tag=resolve_tag,
+        probe_output=lambda argv: "1.0.0",
+    )
+    app = _unified_app(
+        tools, dict.fromkeys((tool.id for tool in tools), True), _BLURBS, version_refresh=service
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _wait_until(pilot, started.is_set)
+        await pilot.press("2")
+        await pilot.press("3")
+        await pilot.pause()
+        release.set()
+        screens = [app.catalog_for(tier) for tier in ("system", "user", "ai")]
+        await _wait_until(pilot, lambda: not any(s.version_refreshing for s in screens))
+        await pilot.pause()
+        for screen, tool in zip(screens, tools, strict=True):
+            cell = screen.query_one(DataTable[Any]).get_cell(tool.id, "health")
+            assert cell.plain != "…", tool.id
+    assert sorted(calls) == sorted(f"owner/{tool.id}" for tool in tools)

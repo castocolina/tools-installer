@@ -7,7 +7,7 @@ unit-tested without a terminal. The browsable-list mechanics live in the
 reusable `ToolBrowser` widget; this screen wires the catalog's data into it.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import ClassVar, Literal
 
 from rich.markup import escape
@@ -56,12 +56,20 @@ PRIORITY_LABEL = {
 AUDIENCE_LABEL = {Audience.AI: "AI", Audience.HUMAN: "human", Audience.BOTH: "both"}
 
 
-def sort_for_table(
-    tools: list[Tool], installed: Mapping[str, bool], key: TableSortKey
-) -> list[Tool]:
+HealthOf = Callable[[Tool], Health | None]
+# Declaration order IS precedence (Health's own docstring); a StrEnum sorts by value.
+_HEALTH_RANK = {health: rank for rank, health in enumerate(Health)}
+
+
+def _health(health_of: HealthOf, tool: Tool) -> Health:
+    """No state yet reads as CHECKING."""
+    return health_of(tool) or Health.CHECKING
+
+
+def sort_for_table(tools: list[Tool], health_of: HealthOf, key: TableSortKey) -> list[Tool]:
     """Flat-table order: by `key`, then priority, then id (deterministic)."""
     if key == "health":
-        return sorted(tools, key=lambda t: (installed[t.id], t.priority, t.id))
+        return sorted(tools, key=lambda t: (_HEALTH_RANK[_health(health_of, t)], t.priority, t.id))
     return sorted(tools, key=lambda t: (getattr(t, key), t.priority, t.id))
 
 
@@ -72,7 +80,7 @@ def _category_title(category: str, blurbs: Mapping[str, str]) -> str:
 
 def group_tools(
     tools: list[Tool],
-    installed: Mapping[str, bool],
+    health_of: HealthOf,
     view: str,
     blurbs: Mapping[str, str],
 ) -> list[tuple[str, str, list[Tool]]]:
@@ -98,8 +106,12 @@ def group_tools(
         ]
     elif view == "status":
         groups = [
-            ("missing", "missing", [t for t in ordered if not installed[t.id]]),
-            ("installed", "installed", [t for t in ordered if installed[t.id]]),
+            (
+                f"{_HEALTH_CELL[health][0]} {_HEALTH_WORD[health]}",
+                _HEALTH_DETAIL[health],
+                [t for t in ordered if _health(health_of, t) is health],
+            )
+            for health in Health
         ]
     elif view == "category":
         categories = sorted({t.category for t in ordered})
@@ -146,11 +158,21 @@ class VersionStatusRefreshed(Message):
     has since invalidated (Plan 12-03's update action calling invalidate).
     """
 
-    def __init__(self, statuses: dict[str, VersionStatus], generation: int, epoch: int) -> None:
+    def __init__(
+        self,
+        statuses: dict[str, VersionStatus],
+        generation: int,
+        epoch: int,
+        *,
+        error: str | None = None,
+        warning: str | None = None,
+    ) -> None:
         super().__init__()
         self.statuses = statuses
         self.generation = generation
         self.epoch = epoch
+        self.error = error
+        self.warning = warning
 
 
 class SkillStatusRefreshed(Message):
@@ -248,6 +270,25 @@ _HEALTH_CELL: dict[Health, tuple[str, str]] = {
     Health.OK: ("✓", "green"),
     Health.MISSING: ("○", ""),
     Health.UNAVAILABLE: ("–", "dim"),
+}
+# Two registers (19-UI-SPEC A11): the terse legend word and the prose detail label.
+_HEALTH_WORD = {
+    Health.CHECKING: "checking",
+    Health.BROKEN: "broken",
+    Health.MISCONFIGURED: "config",
+    Health.OUTDATED: "update",
+    Health.OK: "ok",
+    Health.MISSING: "missing",
+    Health.UNAVAILABLE: "unavailable",
+}
+_HEALTH_DETAIL = {
+    Health.CHECKING: "checking…",
+    Health.BROKEN: "broken",
+    Health.MISCONFIGURED: "needs configuration",
+    Health.OUTDATED: "update available",
+    Health.OK: "ok",
+    Health.MISSING: "not installed",
+    Health.UNAVAILABLE: "not available on this machine",
 }
 # Already this wide for one owner, so a host list truncates only if it would widen the column (D-13)
 _OWNER_CELL_MAX = max(len(label) for label in OWNER_LABELS.values())
@@ -376,6 +417,9 @@ class CatalogScreen(AppScreen):
         self._browser: ToolBrowser[Tool] = ToolBrowser(self._adapter(), selected=staged)
         self.recommends_line = StatusLine()
         self._pending_recommends: tuple[str, ...] = ()
+        # The refresh error or cache warning this screen last showed, so a clean
+        # pass clears only its own line, never an unrelated status message.
+        self._state_line: str | None = None
 
     def _adapter(self) -> BrowserAdapter[Tool]:
         return BrowserAdapter(
@@ -389,7 +433,7 @@ class CatalogScreen(AppScreen):
             legend=_LEGEND,
             on_sort=self._sort,
             sortable_in_views=frozenset({"table"}),
-            selectable=lambda tool: not self._unavailable.get(tool.id, False),
+            selectable=lambda tool: not self._is_unavailable(tool),
         )
 
     def compose_body(self) -> ComposeResult:
@@ -412,10 +456,10 @@ class CatalogScreen(AppScreen):
         version-readability are different questions with different answers
         (`installer/status.py:18-42` accepts a PATH command OR a `detect_path`
         marker OR an app/cask bundle; the version probe answers only the
-        first). A plain replacement, not a merge: `_row_cells` indexes this
-        map directly by every tool in `self.tools` (`:327`), so the map must
-        cover every one of them. No-ops when nothing changed, so the common
-        "nothing this run touched" close costs no rebuild.
+        first). No decision reads this map any more: every mark, group and
+        presence check reads the tool state (plan 19-20 deletes the map). No-ops
+        when nothing changed, so the common "nothing this run touched" close
+        costs no rebuild.
         """
         new = dict(installed)
         if new == self._installed:
@@ -447,15 +491,22 @@ class CatalogScreen(AppScreen):
     def _refresh_versions_worker(self, generation: int) -> None:
         statuses: dict[str, VersionStatus] = {}
         epoch = 0
+        error: str | None = None
+        warning: str | None = None
         service = self._version_refresh
         try:
             if service is not None:
                 epoch = service.epoch
-                result, _error = run_live(lambda: service.refresh(self.tools))
+                # The whole catalog, never the tier: every tier asks for the same
+                # set, so the service joins an in-flight pass instead of repeating it.
+                result, error = run_live(lambda: service.refresh(self._catalog))
                 if result is not None:
                     statuses = result
+                    warning = service.warning
         finally:
-            self.post_message(VersionStatusRefreshed(statuses, generation, epoch))
+            self.post_message(
+                VersionStatusRefreshed(statuses, generation, epoch, error=error, warning=warning)
+            )
 
     @work(thread=True, exclusive=True, group="skill-refresh", exit_on_error=False)
     def _refresh_skills_worker(self, generation: int) -> None:
@@ -486,10 +537,28 @@ class CatalogScreen(AppScreen):
             return
         self._version_statuses = dict(message.statuses)
         self._browser.reload(self._adapter())
+        if message.error is not None:
+            # Nothing was published: rows stay `…`, never a stale mark.
+            self._show_state_line(
+                f"tool state check failed: {message.error} — leave and re-enter this view to retry"
+            )
+            return
+        if message.warning is not None:
+            self._show_state_line(
+                f"{message.warning} — marks are current; the next start checks again"
+            )
+        elif self._state_line is not None and self.status.text == self._state_line:
+            self.status.clear()
+            self._state_line = None
         # Commit path only -- both early returns above already discarded a
         # superseded generation and a raced epoch, so this is the ONE point
         # where the shared ownership map is known to hold a current pass.
         self.post_message(OwnershipRefreshed())
+
+    def _show_state_line(self, line: str) -> None:
+        # Plain text through StatusLine.set, never markup (T-19-40).
+        self.status.set(line, "warn")
+        self._state_line = line
 
     def _skill_status(self, tool: Tool) -> SkillHostStatus | None:
         if tool.skill_lifecycle is None:
@@ -499,27 +568,36 @@ class CatalogScreen(AppScreen):
             return None
         return service.skill_status_of(tool.id)
 
-    def _present(self, tool: Tool) -> bool | None:
-        if tool.skill_lifecycle is None:
-            return self._installed[tool.id]
-        if not tool.skill_lifecycle.status_probes:
-            return self._installed[tool.id]
-        status = self._skill_status(tool)
-        if status is None or not status.hosts:
-            return None
-        values = status.hosts.values()
-        if any(value == "present" for value in values):
-            return True
-        if all(value == "absent" for value in values):
-            return False
-        return None
-
     def _state(self, tool: Tool) -> ToolState | None:
         service = self._version_refresh
         return service.state_of(tool.id) if service is not None else None
 
+    def _health_of(self, tool: Tool) -> Health | None:
+        state = self._state(tool)
+        return state.health if state is not None else None
+
+    def _is_present(self, tool: Tool) -> bool:
+        """Known presence only: no state, or a pending one, reads as absent."""
+        state = self._state(tool)
+        return state is not None and state.present
+
+    def _is_unavailable(self, tool: Tool) -> bool:
+        """The state decides once one exists (brew may appear mid-session, R8);
+        before the first pass, the launch-time map does."""
+        state = self._state(tool)
+        if state is not None:
+            return state.health is Health.UNAVAILABLE
+        return bool(self._unavailable.get(tool.id, False))
+
+    def _presence_map(self) -> dict[str, bool]:
+        """Presence over the full catalog, for the requires/recommends previews."""
+        return {tool.id: self._is_present(tool) for tool in self._catalog}
+
+    def _unavailable_map(self) -> dict[str, bool]:
+        return {tool.id: self._is_unavailable(tool) for tool in self._catalog}
+
     def _ver_cell(self, tool: Tool) -> Text:
-        if not bool(self._present(tool)):
+        if not self._is_present(tool):
             return Text("")
         status = self._version_statuses.get(tool.id)
         if status is None:
@@ -617,8 +695,8 @@ class CatalogScreen(AppScreen):
         health = health_cell(self._state(tool))
         desc = tool.desc or tool.name
         ver = self._ver_cell(tool)
-        unavailable = self._unavailable.get(tool.id, False)
-        if unavailable:
+        if self._is_unavailable(tool):
+            unavailable = self._unavailable.get(tool.id, False)
             if isinstance(unavailable, UnavailableReason):
                 desc = f"{desc} (not available: {unavailable.short})"
             else:
@@ -646,14 +724,10 @@ class CatalogScreen(AppScreen):
             Text(desc, style="dim"),
         ]
 
-    def _presence(self) -> dict[str, bool]:
-        return {tool.id: bool(self._present(tool)) for tool in self.tools}
-
     def _groups(self, view: str) -> list[Section[Tool]]:
-        presence = self._presence()
         if view == "table":
-            return [("", "", sort_for_table(self.tools, presence, self.table_sort))]
-        return group_tools(self.tools, presence, view, self._blurbs)
+            return [("", "", sort_for_table(self.tools, self._health_of, self.table_sort))]
+        return group_tools(self.tools, self._health_of, view, self._blurbs)
 
     def _detail_text(self, tool: Tool) -> str:
         detail = (
@@ -676,7 +750,7 @@ class CatalogScreen(AppScreen):
             detail += f"  |  {unavailable.detail}"
         elif unavailable:
             detail += "  |  (not available on this machine)"
-        if bool(self._present(tool)):
+        if self._is_present(tool):
             default_shell = is_default_shell(tool)
             if default_shell is True:
                 detail += "  |  this is your default shell"
@@ -840,7 +914,7 @@ class CatalogScreen(AppScreen):
 
     def _announce_requires(self, tool: Tool) -> None:
         missing = missing_requires(
-            tool, self._catalog, staged=self._staged, installed=self._installed
+            tool, self._catalog, staged=self._staged, installed=self._presence_map()
         )
         if missing:
             self.status.set(
@@ -855,8 +929,8 @@ class CatalogScreen(AppScreen):
             tool,
             self._catalog,
             staged=self._staged,
-            installed=self._installed,
-            unavailable=self._unavailable,
+            installed=self._presence_map(),
+            unavailable=self._unavailable_map(),
         )
         if not pending:
             return
@@ -882,7 +956,8 @@ class CatalogScreen(AppScreen):
         added = tuple(
             rec
             for rec in self._pending_recommends
-            if rec not in self._staged and not self._unavailable.get(rec, False)
+            # Pending ids come from unstaged_recommends, which keeps only catalog ids.
+            if rec not in self._staged and not self._is_unavailable(self._by_id[rec])
         )
         self._pending_recommends = ()
         self.recommends_line.clear()
@@ -972,9 +1047,8 @@ class CatalogScreen(AppScreen):
             target = UpdateTarget(tool=tool, ownership=cached)
             result, error = run_live(lambda: service.run(target))
             outcome = result
-            if outcome is not None and outcome.status == "updated":
-                refreshed = refresh.refresh([target.tool])
-                status = refreshed.get(tool_id)
+            # No single-tool pass here: it would publish the updated row ahead
+            # of the others. on_tool_updated starts the full pass instead.
             epoch = refresh.epoch
         finally:
             if self._updates is not None:
@@ -1042,7 +1116,7 @@ class CatalogScreen(AppScreen):
         ids = [
             tool.id
             for tool in select_tools(self._catalog, list(self._staged))
-            if not self._unavailable.get(tool.id, False)
+            if not self._is_unavailable(tool)
         ]
         if not ids:
             self.status.set("Select at least one tool, or press q to quit.", "warn")
