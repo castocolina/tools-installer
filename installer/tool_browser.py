@@ -11,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Generic, TypeVar
 
+from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -74,6 +75,33 @@ class BrowserAdapter(Generic[T]):
     # space is inert on them and select-all/invert skip them. The browser also
     # leaves a non-selectable row's sel cell as the adapter rendered it.
     selectable: Callable[[T], bool] = field(default_factory=lambda: lambda _item: True)
+    # The detail bar's text when the current view has no item rows (an empty tier).
+    empty_detail: str | None = None
+
+
+def _cut_rows(text: Text, rows: int, width: int, console: Console) -> Text:
+    """`text` word-wrapped to `width`, keeping `rows` lines; the last one kept
+    ends in `…` when anything was dropped. Wrapping first is what bounds the
+    rows: a cut by total cell length cannot (review H11)."""
+    lines = list(text.wrap(console, width))
+    if len(lines) > rows:
+        lines = lines[:rows]
+        lines[-1].append("…")
+        lines[-1].truncate(width, overflow="ellipsis")
+    cut = Text("\n").join(lines)
+    cut.no_wrap = True
+    return cut
+
+
+@dataclass(frozen=True)
+class _Rows:
+    """Renders `_cut_rows` at paint time, so a resize re-cuts it to the new width."""
+
+    text: Text
+    rows: int
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        yield _cut_rows(self.text, self.rows, options.max_width, console)
 
 
 class ToolBrowser(Widget, Generic[T]):
@@ -195,6 +223,9 @@ class ToolBrowser(Widget, Generic[T]):
             first = self._first_selectable_row()
             if first is not None:
                 table.move_cursor(row=first)
+        # No item row means no highlight event, so the empty copy is set here.
+        if self._first_selectable_row() is None and self._adapter.empty_detail is not None:
+            self._show_detail(self._adapter.empty_detail)
         # DataTable keeps serving render caches measured at the previous column
         # widths after clear(columns=True); a cell mutation arriving in a later
         # render cycle flushes them (textual 8.2.7), so re-mark every row once
@@ -335,14 +366,26 @@ class ToolBrowser(Widget, Generic[T]):
 
     # -- detail bar --------------------------------------------------------
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        detail = self.query_one("#browser-detail", Static)
         item = self._by_id.get(event.row_key.value)
         if item is None:  # a section row: show the group's detail line
             self.detail_text = self._section_detail.get(event.row_key.value, "")
+            detail = self.query_one("#browser-detail", Static)
             detail.update(Text(self.detail_text, style=self._adapter.section_detail_style))
             return
-        self.detail_text = self._adapter.detail_text(item)
-        if self._adapter.detail_is_markup:
-            detail.update(Text.from_markup(self.detail_text))
-        else:
-            detail.update(Text(self.detail_text))
+        self._show_detail(self._adapter.detail_text(item))
+
+    def _show_detail(self, text: str) -> None:
+        """The 3-row bar: the identity line (up to the first newline) on row 1,
+        never wrapped, and the rest cut to rows 2-3. Without a newline the whole
+        text gets all three rows. A plain-text adapter's text is never parsed as
+        markup (review H12)."""
+        self.detail_text = text
+        parse = Text.from_markup if self._adapter.detail_is_markup else Text
+        identity, newline, health = text.partition("\n")
+        content: RenderableType = _Rows(parse(identity), 3)
+        if newline:
+            head = parse(identity)
+            head.no_wrap = True
+            head.overflow = "ellipsis"
+            content = Group(head, _Rows(parse(health), 2))
+        self.query_one("#browser-detail", Static).update(content)

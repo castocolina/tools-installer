@@ -9,9 +9,11 @@ behavior stays pinned by tests/test_catalog_tui.py.
 
 import html
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
+import pytest
+from rich.console import ConsoleRenderable
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.widgets import DataTable, Static
@@ -463,3 +465,116 @@ async def test_selection_changed_carries_the_toggled_row() -> None:
         await pilot.press("i")
         await pilot.pause()
         assert app.changes[-1].item_id is None
+
+
+# -- 19-17: the fixed 3-row detail bar (identity row + two health rows) --------
+
+
+def _detail_adapter(detail: str, *, markup: bool = False) -> BrowserAdapter[_Item]:
+    def detail_text(_item: _Item) -> str:
+        return detail
+
+    return replace(_adapter(), detail_text=detail_text, detail_is_markup=markup)
+
+
+def _detail_rows(app: _Host) -> list[str]:
+    """The detail bar's painted rows, without the `padding: 0 1` gutter."""
+    detail = app.query_one("#browser-detail", Static)
+    return [
+        "".join(segment.text for segment in detail.render_line(y)).strip()
+        for y in range(detail.size.height)
+    ]
+
+
+def _rendered_line_count(app: _Host, width: int) -> int:
+    """How many lines the detail content renders to at `width`: a fourth would
+    be painted nowhere, so it must not exist."""
+    detail = app.query_one("#browser-detail", Static)
+    content = detail.content
+    assert isinstance(content, ConsoleRenderable)
+    return len(app.console.render_lines(content, app.console.options.update_width(width)))
+
+
+async def test_detail_identity_row_never_wraps() -> None:
+    app = _Host(_detail_adapter("identity " * 20 + "\nhealth line"))
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.pause()
+        rows = _detail_rows(app)
+        assert rows[0].startswith("identity identity")
+        assert rows[0].endswith("…")
+        assert rows[1] == "health line"
+        assert rows[2] == ""
+
+
+_WIDTH = 20  # the detail's content width in a 22-column terminal (`padding: 0 1`)
+
+
+@pytest.mark.parametrize(
+    "health",
+    [
+        "abcdefghijk " * 12,
+        "short\nsecond reason line\nthird reason line",
+        "x" * (_WIDTH * 3),
+    ],
+    ids=["word-boundary", "embedded-newline", "unbroken"],
+)
+async def test_detail_health_block_is_cut_at_two_rows(health: str) -> None:
+    app = _Host(_detail_adapter("id\n" + health))
+    async with app.run_test(size=(_WIDTH + 2, 20)) as pilot:
+        await pilot.pause()
+        rows = _detail_rows(app)
+        assert rows[0] == "id"
+        assert rows[1] and rows[2].endswith("…"), rows
+        assert all(len(row) <= _WIDTH for row in rows), rows
+        assert _rendered_line_count(app, _WIDTH) == 3
+
+
+async def test_detail_health_block_that_fits_is_not_ellipsized_and_recuts_on_resize() -> None:
+    app = _Host(_detail_adapter("id\nabcdefghijk abcdefghijk"))
+    async with app.run_test(size=(_WIDTH + 2, 20)) as pilot:
+        await pilot.pause()
+        assert _detail_rows(app) == ["id", "abcdefghijk", "abcdefghijk"]
+    app = _Host(_detail_adapter("id\n" + "abcdefghijk " * 12))
+    async with app.run_test(size=(_WIDTH + 2, 20)) as pilot:
+        await pilot.pause()
+        assert _detail_rows(app)[1] == "abcdefghijk"
+        await pilot.resize_terminal(42, 20)
+        await pilot.pause()
+        rows = _detail_rows(app)
+        assert rows[1] == "abcdefghijk abcdefghijk abcdefghijk"
+        assert rows[2].endswith("…")
+
+
+async def test_detail_of_a_plain_text_adapter_keeps_brackets_literal() -> None:
+    detail = "/home/u/[bold]x[/bold]/bin\nremoves [red]this[/red]"
+    app = _Host(_detail_adapter(detail, markup=False))
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.pause()
+        rows = _detail_rows(app)
+        assert "[bold]x[/bold]" in rows[0]
+        assert "[red]this[/red]" in rows[1]
+        await pilot.press("up")  # the "letters" section row keeps its single style
+        content = app.query_one("#browser-detail", Static).content
+        assert isinstance(content, Text)
+        assert content.plain == "group: letters"
+        assert content.style == "bold"
+    app = _Host(_detail_adapter(detail, markup=True))
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.pause()
+        assert _detail_rows(app)[:2] == ["/home/u/x/bin", "removes this"]
+
+
+async def test_detail_text_seam_keeps_the_plain_text() -> None:
+    detail = "id — desc\n[green]✓[/] ok — a reason"
+    app = _Host(_detail_adapter(detail, markup=True))
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.pause()
+        assert app.query_one(ToolBrowser[_Item]).detail_text == detail
+
+
+async def test_empty_view_shows_the_adapters_empty_detail() -> None:
+    adapter = replace(_adapter(items=[]), empty_detail="Nothing here.\nPress a key.")
+    app = _Host(adapter)
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.pause()
+        assert _detail_rows(app) == ["Nothing here.", "Press a key.", ""]

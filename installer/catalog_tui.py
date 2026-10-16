@@ -33,7 +33,7 @@ from installer.selection import select_tools, unstaged_recommends
 from installer.skill_lifecycle import SKILL_HARNESS_LABELS
 from installer.status import is_default_shell
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
-from installer.ui_common import AppScreen, StatusLine, mark, run_live
+from installer.ui_common import VIEW_BY_NAME, VIEW_ORDER, AppScreen, StatusLine, mark, run_live
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import (
     Health,
@@ -363,6 +363,10 @@ class CatalogScreen(AppScreen):
             on_sort=self._sort,
             sortable_in_views=frozenset({"table"}),
             selectable=lambda tool: not self._is_unavailable(tool),
+            empty_detail=(
+                f"No tools in the {VIEW_BY_NAME[self._view].label} tier.\n"
+                f"Press 1-{len(VIEW_ORDER)} or ^p to open another view."
+            ),
         )
 
     def compose_body(self) -> ComposeResult:
