@@ -144,7 +144,7 @@ Plans (numbered in creation order; W = execution wave):
   4. graphify (uv) resolves owner uv, and Volta, redirect shims, the implicit `~/.local/bin`, `host_setup` tools and native packages resolve their real owner with the native probe run once per pass; installing brew in-session makes colima installable without restarting the app.
   5. Skill packs show partial or duplicate installs per harness.
 
-**Plans:** 31 plans
+**Plans:** 37 plans
 
 Plans (W = execution wave):
 - [ ] 19-01-PLAN.md — receipts module and Wave-0 test sandbox for the receipts dir (W1)
@@ -178,6 +178,12 @@ Plans (W = execution wave):
 - [ ] 19-29-PLAN.md — gap: guarded receipt existence check; the pass retires all-gone receipts (W11)
 - [ ] 19-30-PLAN.md — gap: one health read per tool and one state snapshot per catalog rebuild (W11)
 - [ ] 19-31-PLAN.md — gap: drift refusal at the update gate, installer receipts kept by manager updates, reviewed pnpm hint (W12)
+- [ ] 19-32-PLAN.md — gap round 2: a dir receipt is proven by one key file; dir drift is unproven, never broken or update-refused (W13)
+- [ ] 19-33-PLAN.md — gap round 2: quarantine-then-verify dir removal; the final file check re-hashes (W14)
+- [ ] 19-34-PLAN.md — gap round 2: real pnpm behind the redirect shim is presence; inherited location overrides cleared in tests (W13)
+- [ ] 19-35-PLAN.md — gap round 2: FIFO-safe shim, terminal and skill-lock reads; one unreadable runtime never hides another's empty install (W13)
+- [ ] 19-36-PLAN.md — gap round 2: execute screen refuses a broken tool up front; dead `_health_of` deleted; spaced e2e workspace (W13)
+- [ ] 19-37-PLAN.md — gap round 2: skill cache failures publish and warn; per-pack scans; ambiguous Claude duplicates are never partial (W14)
 
 **UI hint**: yes
 
