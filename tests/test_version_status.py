@@ -14,7 +14,7 @@ from typing import Literal, cast
 
 import pytest
 
-from installer import download, receipts, uninstall, version_status
+from installer import download, executors, receipts, uninstall, version_status
 from installer.engine import InstallOutcome, install_tool
 from installer.enums import InstallStatus
 from installer.guards import REDIRECT_SENTINEL
@@ -27,6 +27,7 @@ from installer.model import (
     SkillStatusProbe,
     SkillTarget,
     Tool,
+    load_tools,
 )
 from installer.ownership import (
     ManagerInventory,
@@ -71,6 +72,7 @@ from installer.version_status import (
 )
 from installer.versions import Release, VersionError, resolve_github_tag
 from tests.test_download import fixture_runner
+from tests.test_registry import REGISTRY
 
 _MANAGED = Path("/tmp/tools-installer-bin")
 
@@ -4170,3 +4172,181 @@ def test_terminal_drift_failure_is_a_not_checked_note(tmp_path: Path) -> None:
 def test_no_terminal_drift_seam_adds_nothing(tmp_path: Path) -> None:
     states = _settled_states(_drift_service(tmp_path, None), _terminals())
     assert all(state.health is Health.OK for state in states.values())
+
+
+# -- 19-16 Task 2: incomplete pnpm co-install groups (D-19, review H10/M11, checker I6) --
+
+_MMDC_PKG = "@mermaid-js/mermaid-cli"
+_GROUP_REASON = "pnpm group incomplete: missing puppeteer"
+_GROUP_STEP = ConfigStep(text="install puppeteer with pnpm", kind="pnpm_group_install", argv=())
+_GROUP_UNREADABLE = "pnpm group not checked: the pnpm inventory is unreadable"
+
+
+def _node_pkg_tool(tool_id: str, npm_pkg: str, *co_install: str) -> Tool:
+    params: dict[str, object] = {"npm_pkg": npm_pkg}
+    if co_install:
+        params["co_install"] = list(co_install)
+        params["allow_build"] = list(co_install)
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="diagram",
+        cmd=tool_id,
+        methods=(Method(kind="node", params=params),),
+    )
+
+
+def _mmdc_group(*co_install: str) -> Tool:
+    return _node_pkg_tool("mmdc", _MMDC_PKG, *(co_install or ("puppeteer",)))
+
+
+def _group_service(
+    tmp_path: Path,
+    pnpm_globals: frozenset[str] | None,
+    *,
+    present: frozenset[str] = frozenset({"mmdc", "puppeteer", "prettier"}),
+) -> VersionRefreshService:
+    def inventory(**_kwargs: object) -> ManagerInventory:
+        return ManagerInventory(
+            brew_formulae={},
+            brew_casks={},
+            pnpm_globals=pnpm_globals,
+            uv_tools={},
+            brew_prefix=None,
+        )
+
+    return VersionRefreshService(
+        platform=_LINUX,
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "1.0.0",
+        probe_output=lambda _argv: "1.0.0",
+        now=lambda: _STATE_NOW,
+        managed_bin_dir=tmp_path / "managed",
+        which=lambda _cmd: None,
+        artifacts_for=lambda _tool: [],
+        read_inventory_fn=inventory,
+        read_outdated_fn=_empty_outdated,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        query=lambda *_args, **_kwargs: "",
+        present=lambda tool: tool.id in present,
+    )
+
+
+def test_incomplete_pnpm_group_is_misconfigured(tmp_path: Path) -> None:
+    tools = [_mmdc_group(), _node_pkg_tool("prettier", "prettier")]
+    states = _settled_states(_group_service(tmp_path, frozenset({_MMDC_PKG})), tools)
+    mmdc = states["mmdc"]
+    assert mmdc.health is Health.MISCONFIGURED
+    assert mmdc.reasons[0] == _GROUP_REASON
+    assert mmdc.unconfigured == (_GROUP_STEP,)
+    assert states["prettier"].unconfigured == ()
+    # Review H10: no step in the pass carries a standalone pnpm argv.
+    assert all(step.argv == () for state in states.values() for step in state.unconfigured)
+
+
+def test_group_step_repair_runs_the_grouped_node_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mmdc = next(tool for tool in load_tools(REGISTRY) if tool.id == "mmdc")
+    method = next(m for m in mmdc.methods if m.kind == "node")
+    npm_pkg = method.params["npm_pkg"]
+    assert isinstance(npm_pkg, str)
+    states = _settled_states(_group_service(tmp_path, frozenset({npm_pkg})), [mmdc])
+    assert _GROUP_STEP in states["mmdc"].unconfigured
+    co_install = cast(list[str], method.params["co_install"])
+    allow_build = cast(list[str], method.params["allow_build"])
+    versions = cast(dict[str, str], method.params.get("versions", {}))
+    smoke = method.params["smoke"]
+    assert isinstance(smoke, str)
+    monkeypatch.setattr(executors, "real_pnpm", lambda: "/fake/pnpm")
+
+    def floor_met(_binary: str, _argv: list[str], _minimum: str) -> None:
+        return None
+
+    monkeypatch.setattr(executors, "_require_minimum", floor_met)
+    smoked: list[str] = []
+    monkeypatch.setitem(executors.SMOKE_CHECKS, smoke, lambda: smoked.append(smoke))
+    calls: list[list[str]] = []
+    # The step's contract (review H10): Phase 20 runs the declaring tool's node method.
+    executors.execute(method, calls.append)
+    members = list(dict.fromkeys([npm_pkg, *co_install]))
+    group = ",".join(f"{name}@{versions[name]}" if name in versions else name for name in members)
+    allowances = [f"--allow-build={name}" for name in allow_build]
+    assert calls == [["/fake/pnpm", "add", "-g", *allowances, group]]
+    assert smoked == [smoke]
+
+
+def test_complete_group_is_quiet(tmp_path: Path) -> None:
+    service = _group_service(tmp_path, frozenset({_MMDC_PKG, "puppeteer"}))
+    mmdc = _settled_states(service, [_mmdc_group()])["mmdc"]
+    assert mmdc.health is Health.OK
+    assert mmdc.unconfigured == ()
+    assert not any("pnpm group" in reason for reason in mmdc.reasons)
+
+
+def test_unreadable_pnpm_inventory_is_a_not_checked_note(tmp_path: Path) -> None:
+    tools = [_mmdc_group(), _node_pkg_tool("prettier", "prettier")]
+    states = _settled_states(_group_service(tmp_path, None), tools)
+    assert states["mmdc"].health is Health.OK
+    assert _GROUP_UNREADABLE in states["mmdc"].reasons
+    assert states["mmdc"].unconfigured == ()
+    assert _GROUP_UNREADABLE not in states["prettier"].reasons
+    absent = _group_service(tmp_path / "absent", None, present=frozenset())
+    assert _GROUP_UNREADABLE not in _settled_states(absent, tools)["mmdc"].reasons
+
+
+def test_group_check_makes_no_extra_query(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    path = tmp_path / "versions.json"
+    stale_minutes = int(MANAGER_STALE_AFTER.total_seconds() / 60) + 1
+    snapshot = _fresh_manager_snapshot(minutes_ago=stale_minutes)
+    save_version_cache(path, {}, managers=encode_manager_snapshot(snapshot))
+    query, calls = _counting_query()
+    pnpm_calls = {"n": 0}
+
+    def pnpm_packages() -> tuple[str, ...] | None:
+        pnpm_calls["n"] += 1
+        return (_MMDC_PKG,)
+
+    service = VersionRefreshService(
+        platform=_platform(),
+        cache_path=path,
+        resolve_tag=lambda repo: "v0",
+        probe_output=lambda argv: "14.1.0",
+        now=lambda: now,
+        managed_bin_dir=_MANAGED,
+        which=_which_for_fixture,
+        artifacts_for=lambda _tool: [],
+        query=query,
+        pnpm_packages=pnpm_packages,
+        resolve_pnpm=lambda: "/opt/homebrew/bin/pnpm",
+        present=lambda _tool: True,
+    )
+    service.refresh([_brew_tool(), _cask_tool(), _mmdc_group(), _uv_tool()])
+    assert len(calls) == 7
+    assert pnpm_calls["n"] == 1
+    mmdc = service.state_of("mmdc")
+    assert mmdc is not None
+    assert mmdc.reasons[0] == _GROUP_REASON
+
+
+def test_group_step_rejects_unsafe_names(tmp_path: Path) -> None:
+    tool = _mmdc_group("evil;rm -rf")
+    mmdc = _settled_states(_group_service(tmp_path, frozenset({_MMDC_PKG})), [tool])["mmdc"]
+    assert mmdc.health is Health.MISCONFIGURED
+    assert mmdc.reasons[0] == "pnpm group incomplete: missing evil;rm -rf"
+    assert mmdc.unconfigured == ()
+
+
+def test_group_maps_to_the_declaring_tool(tmp_path: Path) -> None:
+    tools = [_mmdc_group(), _node_pkg_tool("puppeteer", "puppeteer")]
+    lone = _settled_states(_group_service(tmp_path / "lone", frozenset({"puppeteer"})), tools)
+    for state in lone.values():
+        assert not any("pnpm group" in reason for reason in state.reasons)
+        assert state.unconfigured == ()
+    split = _settled_states(_group_service(tmp_path / "split", frozenset({_MMDC_PKG})), tools)
+    assert split["mmdc"].reasons[0] == _GROUP_REASON
+    assert split["mmdc"].unconfigured == (_GROUP_STEP,)
+    assert not any("pnpm group" in reason for reason in split["puppeteer"].reasons)
+    assert split["puppeteer"].unconfigured == ()

@@ -43,6 +43,7 @@ ownership record report as unavailable until a fresh pass commits one.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -75,7 +76,11 @@ from installer.ownership import (
     resolve_ownership,
 )
 from installer.platform import Platform
-from installer.pnpm_globals import pnpm_global_packages
+from installer.pnpm_globals import (
+    incomplete_install_groups,
+    node_install_policy,
+    pnpm_global_packages,
+)
 from installer.receipts import Receipt
 from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError, run_query
@@ -601,6 +606,45 @@ def _merge_facts(*maps: Mapping[str, _ConfigFacts]) -> dict[str, _ConfigFacts]:
         for tool_id, fact in facts.items():
             merged[tool_id] = merged.get(tool_id, _NO_FACTS).plus(fact)
     return merged
+
+
+PNPM_GROUP_UNREADABLE_NOTE = "pnpm group not checked: the pnpm inventory is unreadable"
+# The missing names reach the step text, so only plain npm names get a step.
+_NPM_NAME_RE = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@._/-]*$")
+
+
+def _pnpm_group_facts(
+    tools: Sequence[Tool], packages: frozenset[str] | None
+) -> dict[str, _ConfigFacts]:
+    """D-19: each incomplete co-install group, on the tool that declares it.
+
+    The declaring tool's first `node` method names the group's first member,
+    which `incomplete_install_groups` only reports when present (checker I6).
+    """
+    declaring: dict[str, str] = {}
+    for tool in tools:
+        method = next((m for m in tool.methods if m.kind == "node"), None)
+        pkg = method.params.get("npm_pkg") if method is not None else None
+        if method is not None and isinstance(pkg, str) and method.params.get("co_install"):
+            declaring.setdefault(pkg, tool.id)
+    if packages is None:
+        note = (PNPM_GROUP_UNREADABLE_NOTE,)
+        return {tool_id: _ConfigFacts(unchecked=note) for tool_id in declaring.values()}
+    facts: dict[str, _ConfigFacts] = {}
+    for group in incomplete_install_groups(node_install_policy(tools), packages):
+        tool_id = declaring.get(group.present[0])
+        if tool_id is None:
+            continue
+        names = ", ".join(group.missing)
+        steps: tuple[ConfigStep, ...] = ()
+        if all(_NPM_NAME_RE.fullmatch(name) for name in group.missing):
+            # Empty argv (review H10): Phase 20 runs `executors.execute` on the
+            # declaring tool's first node method -- the same pinned group,
+            # --allow-build, real pnpm and smoke check as install and update.
+            steps = (ConfigStep(f"install {names} with pnpm", "pnpm_group_install"),)
+        fact = _ConfigFacts((f"pnpm group incomplete: missing {names}",), steps)
+        facts[tool_id] = facts.get(tool_id, _NO_FACTS).plus(fact)
+    return facts
 
 
 def _run_nothing(cmd: list[str]) -> None:
@@ -1298,7 +1342,9 @@ class VersionRefreshService:
         )
         inventory = snapshot.inventory if snapshot is not None else _EMPTY_INVENTORY
         outdated = snapshot.outdated if snapshot is not None else _EMPTY_OUTDATED
-        config = _merge_facts(self._terminal_facts(platform))
+        config = _merge_facts(
+            self._terminal_facts(platform), _pnpm_group_facts(tools, inventory.pnpm_globals)
+        )
         which = self._looked_through
         native = self._native_probe
         if native is not None and platform.os != "macos":
