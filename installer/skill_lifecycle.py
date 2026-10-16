@@ -1,6 +1,7 @@
 """Typed install, status, update, and removal behavior for skill packs."""
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -270,6 +271,106 @@ INSTALL_STATE_HARNESS_DIRS: dict[str, str] = {
     "opencode": ".config/opencode",
     "windsurf": ".codeium/windsurf",
 }
+
+# D-21: a project-scope pack's npm package; steps pin it to the registry `version`.
+PROJECT_PACK_PACKAGES: dict[str, str] = {"opengsd": "@opengsd/gsd-core"}
+# GSD runtime flag per harness id where the two differ.
+_GSD_RUNTIME_IDS: dict[str, str] = {"kimi": "kimi-code"}
+_GLOBAL_LEFTOVER_REASON = "installed globally; this pack is project-local"
+
+# HOME-relative dirs listed for `gsd-*` entries: D-21's skills/agents/commands/hooks
+# in every harness home, plus GSD 1.16.0's other global artifact dirs
+# (capability-registry.cjs artifactLayout.global, read 2026-10-16).
+_GSD_GLOBAL_EXTRA_DIRS: dict[str, tuple[str, ...]] = {
+    "antigravity": (".gemini/config/skills", ".gemini/config/agents"),
+    "codex": (".agents/skills",),
+    "kilo": (".config/kilo/command",),
+}
+PROJECT_GLOBAL_MACHINERY: dict[str, tuple[str, ...]] = {
+    harness: tuple(f"{home_dir}/{sub}" for sub in ("skills", "agents", "commands", "hooks"))
+    + _GSD_GLOBAL_EXTRA_DIRS.get(harness, ())
+    for harness, home_dir in INSTALL_STATE_HARNESS_DIRS.items()
+}
+# Dirs GSD writes for more than one runtime: GSD 1.16.0 also probes `~/.agents` as the
+# Kimi CLI `configHome` (read 2026-10-16), so the owning harness's uninstall may miss them.
+PROJECT_SHARED_GLOBAL_DIRS: dict[str, str] = {".agents/skills": "Kimi CLI"}
+
+
+@dataclass(frozen=True)
+class ProjectPackReport:
+    """Project-scope pack facts: repos with an install, global leftovers, D-21 fixes."""
+
+    repos: tuple[tuple[Path, tuple[str, ...]], ...] = ()
+    leftovers: tuple[str, ...] = ()
+    reasons: tuple[str, ...] = ()
+    steps: tuple[ConfigStep, ...] = ()
+
+
+def _is_dir(path: Path) -> bool | None:
+    """True/False, or None when the answer is unreadable (never raises)."""
+    try:
+        return path.is_dir()
+    except OSError:
+        return None
+
+
+def _has_gsd_entry(directory: Path) -> bool | None:
+    """Whether `directory` lists a `gsd-*` name; a missing dir has none; None: unlistable."""
+    try:
+        with os.scandir(directory) as entries:
+            return any(entry.name.startswith("gsd-") for entry in entries)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return None
+
+
+def _global_uninstall_step(tool_id: str, harness: str, package: str, version: str) -> ConfigStep:
+    label = SKILL_HARNESS_LABELS.get(harness, harness)
+    runtime = _GSD_RUNTIME_IDS.get(harness, harness)
+    argv = ("pnpm", "dlx", f"{package}@{version}", f"--{runtime}", "--global", "--uninstall")
+    text = f"uninstall the global {tool_id} install for {label}"
+    return ConfigStep(text, "project_pack_global_uninstall", harness, argv)
+
+
+def inspect_project_pack(tool: Tool, home: Path, present: Collection[str]) -> ProjectPackReport:
+    """D-21 global leftovers of a project-scope pack in every harness home; read-only.
+
+    A user-scope pack yields an empty report. Each leftover harness gets the pack's own
+    global uninstall as its step; nothing under HOME is ever deleted here. Leftovers are
+    files on disk, so they are reported whether or not their harness is in `present`
+    (which scopes the per-repo install steps).
+    """
+    lifecycle = tool.skill_lifecycle
+    package = PROJECT_PACK_PACKAGES.get(tool.id)
+    version = None if lifecycle is None or lifecycle.scope != "project" else lifecycle.version
+    if package is None or version is None:
+        return ProjectPackReport()
+    leftovers: list[str] = []
+    shared: dict[str, str] = {}
+    for harness, home_dir in INSTALL_STATE_HARNESS_DIRS.items():
+        found = _is_dir(home / home_dir / "gsd-core") is True
+        for directory in PROJECT_GLOBAL_MACHINERY[harness]:
+            if _has_gsd_entry(home / directory) is True:
+                found = True
+                if directory in PROJECT_SHARED_GLOBAL_DIRS:
+                    shared.setdefault(directory, harness)
+        if found:
+            leftovers.append(harness)
+    if not leftovers:
+        return ProjectPackReport()
+    reasons = [_GLOBAL_LEFTOVER_REASON]
+    for directory, harness in shared.items():
+        label = SKILL_HARNESS_LABELS.get(harness, harness)
+        other = PROJECT_SHARED_GLOBAL_DIRS[directory]
+        reasons.append(
+            f"gsd-* entries in ~/{directory}: GSD writes there for {label} and for {other}, "
+            f"so the {label} uninstall may not remove them"
+        )
+    steps = tuple(
+        _global_uninstall_step(tool.id, harness, package, version) for harness in leftovers
+    )
+    return ProjectPackReport(leftovers=tuple(leftovers), reasons=tuple(reasons), steps=steps)
 
 
 def _lifecycle(tool: Tool) -> SkillLifecycle:

@@ -3472,8 +3472,10 @@ status_probes = [
   { harness = "windsurf", via = "install-state", match = "gsd-core" },
 ]
 revision_policy = "package-manager-latest"
+# D-21: framework packs install per repo; the pin is the version verified on 2026-10-15.
+scope = "project"
+version = "1.16.0"
 targets = [
-  { scope = "global", path = "<selected-runtime-global-dir>" },
   { scope = "project", path = "<project>/<selected-runtime-dir>" },
 ]
 [tool.skill_lifecycle.install]

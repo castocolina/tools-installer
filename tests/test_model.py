@@ -1650,3 +1650,80 @@ def test_every_registry_tool_id_is_a_safe_filename() -> None:
     tools = load_tools(REGISTRY)
     assert tools
     assert all(TOOL_ID_RE.fullmatch(tool.id) for tool in tools)
+
+
+def _lifecycle_manifest(
+    lifecycle_keys: str = "",
+    targets: str = '[{ scope = "project", path = "<project>/<selected-runtime-dir>" }]',
+) -> str:
+    operations = "\n".join(
+        f'[tool.skill_lifecycle.{operation}]\nmode = "manual-required"\n'
+        f'instructions = ["Review and run the official {operation} flow."]\n'
+        for operation in ("install", "status", "update", "removal")
+    )
+    return f"""
+[[tool]]
+id = "demo-pack"
+category = "ai"
+tier = "user"
+[[tool.method]]
+kind = "skill_pack"
+
+[tool.skill_lifecycle]
+source = "https://github.com/example/skills"
+owner = "example"
+supported_harnesses = ["claude"]
+revision_policy = "upstream-latest"
+targets = {targets}
+{lifecycle_keys}
+
+{operations}
+"""
+
+
+def test_skill_lifecycle_scope_defaults_to_user(tmp_path: Path) -> None:
+    (tool,) = load_tools(_write(tmp_path, _lifecycle_manifest()))
+
+    assert tool.skill_lifecycle is not None
+    assert tool.skill_lifecycle.scope == "user"
+    assert tool.skill_lifecycle.version is None
+
+
+def test_skill_lifecycle_rejects_an_unknown_scope(tmp_path: Path) -> None:
+    manifest = _write(tmp_path, _lifecycle_manifest('scope = "global"'))
+
+    with pytest.raises(ValueError, match="demo-pack") as exc_info:
+        load_tools(manifest)
+    assert "scope 'global'" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("pin", ["", 'version = "latest"', 'version = "1.16"', "version = 1"])
+def test_project_pack_requires_a_semver_pin(tmp_path: Path, pin: str) -> None:
+    manifest = _write(tmp_path, _lifecycle_manifest(f'scope = "project"\n{pin}'))
+
+    with pytest.raises(ValueError, match="demo-pack") as exc_info:
+        load_tools(manifest)
+    assert "version" in str(exc_info.value)
+
+
+def test_project_pack_accepts_a_semver_pin(tmp_path: Path) -> None:
+    manifest = _write(tmp_path, _lifecycle_manifest('scope = "project"\nversion = "1.16.0"'))
+
+    (tool,) = load_tools(manifest)
+
+    assert tool.skill_lifecycle is not None
+    assert (tool.skill_lifecycle.scope, tool.skill_lifecycle.version) == ("project", "1.16.0")
+
+
+def test_project_pack_rejects_a_global_target(tmp_path: Path) -> None:
+    targets = (
+        '[{ scope = "global", path = "<selected-runtime-global-dir>" },'
+        ' { scope = "project", path = "<project>/<selected-runtime-dir>" }]'
+    )
+    manifest = _write(
+        tmp_path, _lifecycle_manifest('scope = "project"\nversion = "1.16.0"', targets)
+    )
+
+    with pytest.raises(ValueError, match="demo-pack") as exc_info:
+        load_tools(manifest)
+    assert "global" in str(exc_info.value)

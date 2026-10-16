@@ -175,6 +175,9 @@ SKILL_REVISION_POLICIES = (
     "upstream-latest",
 )
 SKILL_TARGET_SCOPES = ("global", "harness", "project")
+# Where a pack lives: user scope for the user's harness homes, project scope per repo (D-21).
+SKILL_PACK_SCOPES = ("user", "project")
+_PACK_PIN_RE = re.compile(r"\d+\.\d+\.\d+")
 SKILL_OPERATION_MODES = ("manual-required",)
 SKILL_STATUS_SOURCES = ("plugin-cli", "skills-lock", "install-state")
 _SKILL_MATCH_RE = re.compile(r"^[A-Za-z0-9@/._-]+$")
@@ -356,6 +359,8 @@ class SkillLifecycle:
     removal: SkillOperation
     approval_disclosures: tuple[str, ...] = ()
     status_probes: tuple[SkillStatusProbe, ...] = ()
+    scope: Literal["user", "project"] = "user"
+    version: str | None = None
 
 
 @dataclass(frozen=True, init=False)
@@ -621,6 +626,8 @@ def _parse_skill_lifecycle(raw: object, *, tool_id: object) -> SkillLifecycle:
         "removal",
         "approval_disclosures",
         "status_probes",
+        "scope",
+        "version",
     }
     if unknown := set(row).difference(allowed_fields):
         raise ValueError(f"tool '{tool_id}': unknown skill_lifecycle field '{sorted(unknown)[0]}'")
@@ -663,6 +670,20 @@ def _parse_skill_lifecycle(raw: object, *, tool_id: object) -> SkillLifecycle:
                 path=_required_skill_string(target, "path", tool_id=tool_id),
             )
         )
+    pack_scope = row.get("scope", "user")
+    if pack_scope not in SKILL_PACK_SCOPES:
+        raise ValueError(f"tool '{tool_id}': skill_lifecycle has unknown scope '{pack_scope}'")
+    version = row.get("version")
+    if version is not None and (
+        not isinstance(version, str) or _PACK_PIN_RE.fullmatch(version) is None
+    ):
+        raise ValueError(f"tool '{tool_id}': skill_lifecycle 'version' must be X.Y.Z")
+    if pack_scope == "project":
+        if version is None:
+            raise ValueError(f"tool '{tool_id}': a project-scope pack needs a 'version' pin")
+        # D-21: a project pack's machinery never goes into a harness's global dir.
+        if any(target.scope == "global" for target in targets):
+            raise ValueError(f"tool '{tool_id}': a project-scope pack cannot have a global target")
     disclosures_raw = row.get("approval_disclosures", [])
     approval_disclosures = (
         _skill_string_tuple(
@@ -709,6 +730,8 @@ def _parse_skill_lifecycle(raw: object, *, tool_id: object) -> SkillLifecycle:
             tool_id=tool_id,
             supported_harnesses=supported_harnesses,
         ),
+        scope=pack_scope,
+        version=version,
     )
 
 

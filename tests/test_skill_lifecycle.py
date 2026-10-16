@@ -21,10 +21,15 @@ from installer.model import (
 )
 from installer.platform import Platform
 from installer.skill_lifecycle import (
+    INSTALL_STATE_HARNESS_DIRS,
+    PROJECT_GLOBAL_MACHINERY,
+    PROJECT_PACK_PACKAGES,
     SKILL_HARNESS_LABELS,
     HarnessStatus,
+    ProjectPackReport,
     SkillPackReport,
     _install_state_status,  # pyright: ignore[reportPrivateUsage]
+    inspect_project_pack,
     inspect_skill_packs,
     inspect_skill_reports,
     inspect_status,
@@ -1364,3 +1369,157 @@ def test_partial_steps_text() -> None:
         ConfigStep(text="install superpowers for Codex", kind="skill_install", harness="codex"),
     )
     assert steps[0].argv == ()
+
+
+_GLOBAL_REASON = "installed globally; this pack is project-local"
+# One GSD 1.16.0 global leftover per harness home, each in a different kind of dir.
+_GSD_HOME_LEFTOVERS = {
+    "antigravity": ".gemini/config/skills/gsd-x",
+    "claude": ".claude/agents/gsd-x.md",
+    "codex": ".agents/skills/gsd-x",
+    "copilot": ".copilot/skills/gsd-x",
+    "cursor": ".cursor/gsd-core",
+    "kilo": ".config/kilo/command/gsd-x.md",
+    "kimi": ".kimi-code/skills/gsd-x",
+    "opencode": ".config/opencode/commands/gsd-x.md",
+    "windsurf": ".codeium/windsurf/hooks/gsd-check-update.js",
+}
+
+
+def _plant(home: Path, relative: str, content: str = "x") -> None:
+    path = home / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.suffix or path.name == "VERSION":
+        path.write_text(content, encoding="utf-8")
+    else:
+        path.mkdir()
+
+
+def _uninstall_step(harness: str) -> ConfigStep:
+    runtime = "kimi-code" if harness == "kimi" else harness
+    return ConfigStep(
+        text=f"uninstall the global opengsd install for {SKILL_HARNESS_LABELS[harness]}",
+        kind="project_pack_global_uninstall",
+        harness=harness,
+        argv=("pnpm", "dlx", "@opengsd/gsd-core@1.16.0", f"--{runtime}", "--global", "--uninstall"),
+    )
+
+
+def _home_fingerprint(home: Path) -> dict[str, tuple[bytes | None, int]]:
+    paths = [home, *sorted(home.rglob("*"))]
+    return {
+        str(path.relative_to(home)): (
+            path.read_bytes() if path.is_file() and not path.is_symlink() else None,
+            path.lstat().st_mtime_ns,
+        )
+        for path in paths
+    }
+
+
+def test_registry_opengsd_is_a_pinned_project_pack() -> None:
+    packs = {tool.id: tool.skill_lifecycle for tool in load_tools(REGISTRY) if tool.skill_lifecycle}
+    opengsd = packs["opengsd"]
+
+    assert (opengsd.scope, opengsd.version) == ("project", "1.16.0")
+    assert opengsd.targets
+    assert {target.scope for target in opengsd.targets} == {"project"}
+    assert {tool_id for tool_id, pack in packs.items() if pack.scope == "user"} == (
+        set(packs) - {"opengsd"}
+    )
+    assert {tool_id for tool_id, pack in packs.items() if pack.scope == "project"} <= set(
+        PROJECT_PACK_PACKAGES
+    )
+
+
+def test_global_leftover_yields_the_uninstall_step(tmp_path: Path) -> None:
+    _plant(tmp_path, ".claude/gsd-core/VERSION", "1.16.0\n")
+    _plant(tmp_path, ".claude/commands/gsd-plan.md")
+
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset({"claude"}))
+
+    assert report.reasons[0].startswith(_GLOBAL_REASON)
+    assert report.reasons == (_GLOBAL_REASON,)
+    assert report.leftovers == ("claude",)
+    assert report.steps == (
+        ConfigStep(
+            text="uninstall the global opengsd install for Claude Code",
+            kind="project_pack_global_uninstall",
+            harness="claude",
+            argv=("pnpm", "dlx", "@opengsd/gsd-core@1.16.0", "--claude", "--global", "--uninstall"),
+        ),
+    )
+
+
+@pytest.mark.parametrize("harness", sorted(_GSD_HOME_LEFTOVERS))
+def test_global_leftover_in_every_harness_home(tmp_path: Path, harness: str) -> None:
+    _plant(tmp_path, _GSD_HOME_LEFTOVERS[harness])
+
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset({harness}))
+
+    assert report.leftovers == (harness,)
+    assert report.reasons[0] == _GLOBAL_REASON
+    assert report.steps == (_uninstall_step(harness),)
+    if harness == "kimi":
+        assert "--kimi-code" in report.steps[0].argv
+
+
+def test_global_leftover_scan_covers_install_state_harness_dirs() -> None:
+    assert set(PROJECT_GLOBAL_MACHINERY) == set(INSTALL_STATE_HARNESS_DIRS)
+    assert set(_GSD_HOME_LEFTOVERS) == set(INSTALL_STATE_HARNESS_DIRS)
+    for harness, home_dir in INSTALL_STATE_HARNESS_DIRS.items():
+        for sub in ("skills", "agents", "commands", "hooks"):
+            assert f"{home_dir}/{sub}" in PROJECT_GLOBAL_MACHINERY[harness]
+
+
+def test_global_leftover_detection_writes_nothing(tmp_path: Path) -> None:
+    for relative in _GSD_HOME_LEFTOVERS.values():
+        _plant(tmp_path, relative)
+    _plant(tmp_path, ".claude/gsd-core/VERSION", "1.16.0\n")
+    before = _home_fingerprint(tmp_path)
+
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
+
+    assert report.leftovers == tuple(INSTALL_STATE_HARNESS_DIRS)
+    assert _home_fingerprint(tmp_path) == before
+
+
+def test_no_leftover_no_reason(tmp_path: Path) -> None:
+    tool = _tools()["opengsd"]
+    assert inspect_project_pack(tool, tmp_path, frozenset({"claude"})) == ProjectPackReport()
+
+    for relative in (
+        ".claude/skills/superpowers",
+        ".claude/skills/my-gsd-notes",
+        ".agents/skills/superpowers",
+        ".codex/agents/notes-gsd-x.md",
+    ):
+        _plant(tmp_path, relative)
+
+    assert inspect_project_pack(tool, tmp_path, frozenset({"claude"})) == ProjectPackReport()
+    # A user-scope pack has no project-pack facts at all.
+    _plant(tmp_path, ".claude/gsd-core/VERSION")
+    superpowers = _tools()["superpowers"]
+    assert inspect_project_pack(superpowers, tmp_path, frozenset({"claude"})) == (
+        ProjectPackReport()
+    )
+
+
+def test_shared_agents_skills_leftover_names_the_path(tmp_path: Path) -> None:
+    tool = _tools()["opengsd"]
+    _plant(tmp_path, ".agents/skills/gsd-plan")
+
+    report = inspect_project_pack(tool, tmp_path, frozenset({"codex"}))
+
+    assert report.leftovers == ("codex",)
+    assert report.steps == (_uninstall_step("codex"),)
+    assert report.reasons == (
+        _GLOBAL_REASON,
+        "gsd-* entries in ~/.agents/skills: GSD writes there for Codex and for Kimi CLI, "
+        "so the Codex uninstall may not remove them",
+    )
+
+    other = tmp_path / "other"
+    _plant(other, ".codex/agents/gsd-x.md")
+    only_codex_home = inspect_project_pack(tool, other, frozenset({"codex"}))
+    assert only_codex_home.leftovers == ("codex",)
+    assert only_codex_home.reasons == (_GLOBAL_REASON,)
