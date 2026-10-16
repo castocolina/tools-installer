@@ -4,13 +4,14 @@ slug: registry-truth-and-drift-guard
 status: verified
 # threats_open = count of OPEN threats at or above workflow.security_block_on severity (the blocking gate)
 threats_total: 99
-threats_closed: 97
+threats_closed: 99
 threats_open: 0
-threats_open_nonblocking: 2
+threats_open_nonblocking: 0
 asvs_level: 1
 block_on: high
 register_authored_at_plan_time: true
 audited_head: 344b8f5
+reverified_head: 342c7f1
 created: "2026-10-15"
 ---
 
@@ -18,7 +19,7 @@ created: "2026-10-15"
 
 > Per-phase security contract: threat register, accepted risks, and audit trail.
 
-The register comes from the `<threat_model>` blocks of 18-01..18-27-PLAN.md: T-18-01..T-18-98 plus T-18-SC, which appears in every plan and is counted once. Each `mitigate` threat was checked in the code at the cited line and against a named test. The cited tests were run on this tree: `uv run --frozen pytest --no-cov -n 4 -k <names>`, 214 selected items, all passed. The configured level is ASVS L1. The areas the orchestrator flagged got deeper traces (L2/L3): archive symlink escapes, the L-18-19 ownership proof, token handling, registry write integrity and the smoke run. Those traces found the two open items below.
+The register comes from the `<threat_model>` blocks of 18-01..18-27-PLAN.md: T-18-01..T-18-98 plus T-18-SC, which appears in every plan and is counted once. Each `mitigate` threat was checked in the code at the cited line and against a named test. The cited tests were run on this tree: `uv run --frozen pytest --no-cov -n 4 -k <names>`, 214 selected items, all passed. The configured level is ASVS L1. The areas the orchestrator flagged got deeper traces (L2/L3): archive symlink escapes, the L-18-19 ownership proof, token handling, registry write integrity and the smoke run. Those traces found two gaps, T-18-56 and T-18-69. Gap plan 18-28 closed both; the re-verification is below. Line numbers cite 344b8f5, except the T-18-56/T-18-69 evidence, which cites 342c7f1.
 
 ---
 
@@ -80,7 +81,7 @@ The register comes from the `<threat_model>` blocks of 18-01..18-27-PLAN.md: T-1
 | T-18-25 | Tampering | swapped app zip | high | mitigate | `apps.py:168-176` sha256 of the staged zip before `ditto` `:178`; `ChecksumMismatch`; nothing moved. `test_engine.py::test_pinned_app_mismatch_moves_nothing`, `test_apps.py::test_pinned_app_is_verified_and_installed` | closed |
 | T-18-26 | Elevation of Privilege | smoke of an unverified zip's CLI | medium | mitigate | smoke `apps.py:188` only after the hash check; unpinned -> `_UNVERIFIED_REASON` `:230`. `test_apps.py::test_unpinned_app_installs_unverified_with_a_reason`, `::test_app_smoke_uses_the_declared_argv` | closed |
 | T-18-27 | Tampering | `sh -c` url pipeline | low | mitigate | `apps.py:167`, `:178` plain argv; no `sh -c` in apps/download/verify_registry. `test_apps.py::test_install_app_uses_plain_curl_and_ditto_argv` | closed |
-| T-18-56 | Tampering | staged app CLI resolves outside the bundle | medium | mitigate | `apps.py:184-186` `staged_member` + `X_OK` before the aside-move. `test_apps.py::test_staged_cli_symlink_outside_the_bundle_is_rejected`, `::test_non_executable_staged_cli_moves_nothing`. **Bypass:** the root is `extract_root / app` (`:179`), which is archive content (see Open Threats) | open — below high threshold (non-blocking) |
+| T-18-56 | Tampering | staged app CLI resolves outside the bundle | medium | mitigate | `apps.py:182-183` refuses a staged bundle that is a symlink or not a real directory (58abaf9), before `staged_member` + `X_OK` (`:186-188`), smoke and swap. `test_apps.py::test_staged_bundle_escape_is_refused_and_moves_nothing` (4 cases), `::test_staged_cli_symlink_outside_the_bundle_is_rejected`, `::test_non_executable_staged_cli_moves_nothing` (see 18-28 re-verification) | closed |
 | T-18-79 | Tampering | dangling CLI link after a failed fresh app install | low | mitigate | `apps.py:260-263`. `test_apps.py::test_fresh_app_install_failure_after_relink_leaves_no_cli_link` | closed |
 | T-18-28 | Tampering | traversal during the member check | medium | mitigate | `vr:500-506` lists names only (`getnames`/`namelist`); `vr:718`, `:762` temp dir per download. `tvr::test_zip_and_app_members_are_listed_not_extracted` | closed |
 | T-18-30 | Tampering | stale or forged state file | low | mitigate | `vr:558-571` fingerprint (checksum, digest, pin+HEAD, HEAD); `vr:828-854` state pop on url-wide failure. `tvr::test_changed_bytes_under_an_unchanged_pin_are_downloaded_again`, `::test_changed_digest_triggers_a_download`, `::test_cache_miss_downloads_every_asset_once` | closed |
@@ -89,7 +90,7 @@ The register comes from the `<threat_model>` blocks of 18-01..18-27-PLAN.md: T-1
 | T-18-31 | Information Disclosure | token to download hosts | low | mitigate | `vr:1531-1544` HEAD/download build bare Requests (the token is not in their closure); `versions.py:362` host check. `tvr::test_explicit_token_is_sent_to_api_github_only`, `test_versions.py::test_urlopen_fetch_never_sends_the_token_to_another_host`. Test gap: `default_probe` head/download not exercised | closed (test gap) |
 | T-18-57 | Repudiation | shared url checked once | high | mitigate | `vr:415-446` per (tool, url, member, archive, strip, raw) target; `vr:760-790` one download per url feeds every target. `tvr::test_shared_url_with_different_members_checks_each_member`, `::test_a_new_member_on_a_known_url_is_downloaded` | closed |
 | T-18-68 | Repudiation | cached ok survives a strip/archive/raw edit | high | mitigate | `vr:209-220` `state_key` carries tool id + extraction settings. `tvr::test_a_strip_change_invalidates_the_cached_ok`, `::test_targets_differing_only_in_strip_are_checked_separately` | closed |
-| T-18-69 | Denial of Service | corrupt archive aborts the check | medium | mitigate | `vr:768-775` TarError/EOFError/BadZipFile -> drift, no state. `tvr::test_corrupt_archive_is_drift`, `::test_corrupt_archive_is_drift_truncated_tar`. **Gap:** a corrupt `.tar.xz` stream raises `_lzma.LZMAError`, which is not caught (see Open Threats) | open — below high threshold (non-blocking) |
+| T-18-69 | Denial of Service | corrupt archive aborts the check | medium | mitigate | `vr:772-779` TarError/EOFError/BadZipFile/`lzma.LZMAError`/`zlib.error` -> drift `archive unreadable`, no state (b4af643). `tvr::test_corrupt_archive_is_drift` (gz, zip, xz_corrupt_stream, gz_bad_deflate_block), `::test_corrupt_archive_is_drift_truncated_tar` (see 18-28 re-verification) | closed |
 | T-18-32 | Tampering | writer corrupts the registry | high | mitigate | `vr:1034-1051` scoped line rewrite + tomllib re-parse equality guard; `vr:1621` `atomic_write_text`. `tvr::test_writer_guard_refuses_an_edit_that_breaks_the_toml`, `::test_writer_guard_refuses_an_edit_that_changes_another_value`, `::test_writer_keeps_every_other_byte` | closed |
 | T-18-33 | Tampering | bump to a swapped/renamed asset | medium | mitigate | `vr:1311-1325` the candidate must pass the full check, else the old pin stays. `tvr::test_renamed_candidate_asset_keeps_the_old_pin` | closed |
 | T-18-34 | Repudiation | `verified` written for failing entries | medium | mitigate | `vr:1347-1348` dates only from `passed_tools()` (`vr:148-156`); the workflow never passes `--write`. `tvr::test_write_dates_only_passing_tools`, `tests/test_verify_registry_workflow.py::test_verify_registry_job_cannot_write_the_repo` | closed |
@@ -151,26 +152,22 @@ The register comes from the `<threat_model>` blocks of 18-01..18-27-PLAN.md: T-1
 
 ---
 
-## Open Threats (non-blocking, below the high threshold)
+## Gap Plan 18-28 Re-verification (T-18-56, T-18-69)
 
-### T-18-56 (medium): the app bundle root can itself be a symlink out of staging
+The first audit at 344b8f5 left these two threats open below the threshold. Gap plan 18-28 closed both (18-28-SUMMARY.md, 342c7f1). Each fix was re-verified in the code, by its tests on HEAD, and by a mutation run: only the fix's code hunk was reverted, in a scratch export of HEAD, and the new tests failed there.
 
-- **Evidence.** `apps.py:179` sets `staged_bundle = extract_root / app`, and `:184` calls `staged_member(staged_bundle, cli)`. `executors.py:71` resolves the root, so a bundle entry that is a symlink moves the containment root outside staging. An auditor probe against the real `staged_member` showed both cases:
-  - CLI symlink pointing outside (`A.app/Contents/MacOS/draw.io -> elsewhere/...`): rejected.
-  - Bundle directory itself a symlink (`B.app -> elsewhere`): accepted, returning `elsewhere/Contents/MacOS/draw.io`.
-- **What follows.** The outside file passes the `X_OK` check and is executed by the install smoke (`:188`). `os.replace` (`:191`, `:199`) then makes `~/Applications/<App>` that symlink, and the CLI link points through it.
-- **Reachability.** The zip bytes must carry a symlinked bundle entry. For pinned app zips those bytes are fixed by sha256; unpinned app URLs serve whatever the vendor ships. A party able to ship that zip can already ship arbitrary code inside the bundle. The extra capability is running or linking a pre-existing file outside staging.
-- **Suggested fix.** Contain against the installer-created root: `staged_member(extract_root, f"{app}/{cli}")`. Reject `staged_bundle.is_symlink()` (this also covers apps with no `cli`). Add a `ditto` fixture that creates the bundle as a symlink.
+### T-18-56: symlinked app bundle root (closed by 58abaf9)
 
-### T-18-69 (medium): a corrupt `.tar.xz` stream escapes the listing handler
+- **Code.** `apps.py:180-183` refuses the staged bundle if `staged_bundle.is_symlink() or not staged_bundle.is_dir()`. That runs before `staged_member` (`:186`), the `X_OK` check, the smoke (`:190`) and the swap. `app` is a bare name (`apps.py:131`), so `extract_root / app` has no intermediate components. `extract_root` is created by the installer under the staging dir, so the containment root is a proven directory. The refusal also covers apps with no `cli`.
+- **Tests.** `test_apps.py::test_staged_bundle_escape_is_refused_and_moves_nothing` covers `symlink_with_cli`, `symlink_without_cli`, `regular_file_without_cli` and `cli_resolving_to_a_zip_sibling`. Each case asserts: no marker, empty `~/Applications`, no CLI link, outside file unchanged. All pass on HEAD.
+- **Mutation.** With the hunk reverted, the three bundle cases fail. `cli_resolving_to_a_zip_sibling` still passes, as expected, because the existing `staged_member` check covers it.
 
-- **Evidence.** The listing handler at `vr:770-774` catches `tarfile.TarError`, `EOFError` and `zipfile.BadZipFile`. An auditor probe built a `w:xz` tar, flipped 64 mid-stream bytes, and called `getnames()`, which raised `_lzma.LZMAError: Corrupt input data`. That class subclasses only `Exception`, so it is caught neither there nor by `_TRANSPORT_ERRORS` (`vr:94`). It propagates out of `check_registry`, and `main` exits 70.
-- **Reachability.**
-  - The shipped weekly run cannot reach it. Both xz targets (Sublime Linux, `registry.toml:2414-2432`) carry a pinned sha256, and the hash compare (`vr:791`) runs before listing.
-  - A maintainer `--write --candidate sublime=<ver>` run can reach it. The candidate copy drops `sha256` for non-GitHub URLs (`vr:1150-1151`).
-  - The outcome is fail-safe: no write, and never exit 1 (T-18-95).
-- **Related, gz case.** A gz CRC error (`gzip.BadGzipFile`, an `OSError`) is reported inconclusive rather than drift. It does not abort the run.
-- **Suggested fix.** Add `lzma.LZMAError` (and `gzip.BadGzipFile`, for drift rather than inconclusive) to the listing `except`, and add a corrupt-xz fixture next to `test_corrupt_archive_is_drift`.
+### T-18-69: corrupt xz or gz stream during listing (closed by b4af643)
+
+- **Code.** `vr:772-779` adds `lzma.LZMAError` and `zlib.error` to the listing handler. A corrupt stream is stored as the listing error and becomes drift `archive unreadable as <mode>` (`vr:809-817`). It no longer escapes `check_registry`, and no state entry is written.
+- **Tests.** `tvr::test_corrupt_archive_is_drift` gained `xz_corrupt_stream` (64 flipped mid-stream bytes, the auditor's reproduction) and `gz_bad_deflate_block`. All pass on HEAD.
+- **Mutation.** With the hunk reverted, both new cases fail.
+- **Residual (not a crash).** A gz CRC or trailer error (`gzip.BadGzipFile`, an `OSError`) still reaches the outer transport handler. It is reported as inconclusive rather than drift.
 
 ---
 
@@ -195,11 +192,12 @@ The register comes from the `<threat_model>` blocks of 18-01..18-27-PLAN.md: T-1
 - **T-18-52.** The vendor script check is point in time (2026-10-15). The script can change upstream.
 - **T-18-21 / T-18-26.** The macOS GUI smoke is unverified (18-VERIFICATION human item 3).
 - **T-18-89.** The reason is bounded by line count (5), not by character length.
+- **T-18-69.** A gz CRC or trailer error (`gzip.BadGzipFile`) is reported inconclusive rather than drift. It does not abort the run.
 - **Documentation.** 18-15-SUMMARY says 57 `verified` line updates, but commit 429b383 changes 47. No security impact.
 
 ## Unregistered Flags
 
-None. No 18-NN-SUMMARY.md has a `## Threat Flags` section. Both new findings map to registered threats (T-18-56, T-18-69). Review items not fixed by gap plans are in the 18-27 "Deferred to Phase 25 (Lean)" table and carry rationale.
+None. No 18-NN-SUMMARY.md has a `## Threat Flags` section. Both audit findings map to registered threats (T-18-56, T-18-69). Gap plan 18-28 closed both. Review items not fixed by gap plans are in the 18-27 "Deferred to Phase 25 (Lean)" table and carry rationale.
 
 ---
 
@@ -208,6 +206,7 @@ None. No 18-NN-SUMMARY.md has a `## Threat Flags` section. Both new findings map
 | Audit Date | Threats Total | Closed | Open | Run By |
 |------------|---------------|--------|------|--------|
 | 2026-10-15 | 99 | 97 | 0 blocking (2 non-blocking: T-18-56, T-18-69) | gsd-security-auditor (Claude Opus 5.5), ASVS L1, block_on high, HEAD 344b8f5 |
+| 2026-10-15 | 99 | 99 | 0 | gsd-security-auditor (Claude Opus 5.5), re-verification of T-18-56/T-18-69 after gap plan 18-28, HEAD 342c7f1 |
 
 ---
 
@@ -215,7 +214,7 @@ None. No 18-NN-SUMMARY.md has a `## Threat Flags` section. Both new findings map
 
 - [x] All threats have a disposition (mitigate / accept / transfer)
 - [x] Accepted risks documented in Accepted Risks Log
-- [x] `threats_open: 0` confirmed (2 non-blocking medium items tracked above)
+- [x] `threats_open: 0` confirmed; no open threats remain (T-18-56 and T-18-69 closed by gap plan 18-28)
 - [x] `status: verified` set in frontmatter
 
 **Approval:** verified 2026-10-15
