@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -1806,3 +1807,216 @@ def test_archive_install_writes_a_receipt(monkeypatch: pytest.MonkeyPatch, tmp_p
         receipts.fingerprint(link, "link"),
     )
     assert written.artifacts[1].target == os.readlink(link)
+
+
+def _fake_perform(
+    monkeypatch: pytest.MonkeyPatch,
+    place: Callable[[], None] | None = None,
+    handoff: tuple[str, ...] = (),
+) -> None:
+    def fake(_tool: Tool, _method: Method, _ctx: ExecContext) -> tuple[bool, None, tuple[str, ...]]:
+        if place is not None:
+            place()
+        return False, None, handoff
+
+    monkeypatch.setattr(engine, "_perform", fake)
+
+
+_APP_METHOD = Method(
+    kind="app",
+    params={"url": "https://x/d.zip", "app": "Draw.app", "cli": "Contents/MacOS/draw"},
+)
+
+
+@pytest.mark.parametrize(
+    ("method", "package"),
+    [
+        (Method(kind="brew", params={"formula": "ripgrep"}), "ripgrep"),
+        (Method(kind="cask", params={"cask": "ripgrep-app"}), "ripgrep-app"),
+        (Method(kind="uv-tool", params={"pypi_pkg": "ripgrep-py"}), "ripgrep-py"),
+        (Method(kind="node", params={"npm_pkg": "@x/ripgrep"}), "@x/ripgrep"),
+        (Method(kind="script", params={"url": "u", "shell": "sh", "bin_dir": "~/.rg/bin"}), None),
+        (_APP_METHOD, None),
+    ],
+    ids=["brew", "cask", "uv-tool", "node", "test_script_receipt_has_no_artifacts", "app"],
+)
+def test_receipt_per_kind(
+    method: Method, package: str | None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bundle = tmp_path / "Applications" / "Draw.app"
+    link = tmp_path / ".local" / "bin" / "draw"
+
+    def place() -> None:
+        if method.kind == "app":
+            (bundle / "Contents" / "MacOS").mkdir(parents=True)
+            link.parent.mkdir(parents=True)
+            link.symlink_to(bundle / "Contents" / "MacOS" / "draw")
+        elif method.kind == "script":
+            # A script's own bin_dir/cmd is never recorded as an artifact.
+            script_bin = tmp_path / ".rg" / "bin"
+            script_bin.mkdir(parents=True)
+            (script_bin / "rg").write_text("not-executable", encoding="utf-8")
+
+    _fake_perform(monkeypatch, place)
+    outcome = install_tool(_tool(method), _macos_with_brew(), runner=lambda _cmd: None)
+    assert outcome.status == InstallStatus.INSTALLED
+    written = receipts.read("rg")
+    assert written is not None
+    assert written.package == package
+    assert written.method.kind == method.kind
+    if method.kind == "app":
+        assert written.artifacts == (
+            receipts.fingerprint(bundle, "dir"),
+            receipts.fingerprint(link, "link"),
+        )
+    else:
+        assert written.artifacts == ()
+
+
+@pytest.mark.parametrize("smoked", [True, False])
+def test_manager_smoke_status_is_recorded(
+    smoked: bool, monkeypatch: pytest.MonkeyPatch, scratch_path_for_manager_smoke: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+
+    def runner(_cmd: list[str]) -> None:
+        if smoked:
+            _write_cmd(scratch_path_for_manager_smoke, "rg", 0)
+
+    outcome = install_tool(
+        _tool(Method(kind="brew", params={"formula": "ripgrep"})),
+        _macos_with_brew(),
+        runner=runner,
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    written = receipts.read("rg")
+    assert written is not None
+    assert written.smoke == ("ok" if smoked else None)
+
+
+def _read_only_write(_receipt: receipts.Receipt) -> None:
+    raise OSError("read-only")
+
+
+def test_receipt_write_failure_keeps_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_not_installed(monkeypatch)
+    hooks: list[str] = []
+
+    def fake_run_postinstall(name: str, _method: Method, _runner: object, _tools: object) -> None:
+        hooks.append(name)
+
+    monkeypatch.setattr(engine, "run_postinstall", fake_run_postinstall)
+    monkeypatch.setattr(receipts, "write", _read_only_write)
+    outcome = install_tool(
+        _tool(
+            Method(kind="brew", params={"formula": "ripgrep"}), postinstall="codegraph-mcp-register"
+        ),
+        _macos_with_brew(),
+        runner=lambda _cmd: None,
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.postinstall_warning is not None
+    assert "install receipt not written: read-only" in outcome.postinstall_warning
+    assert hooks == ["codegraph-mcp-register"]
+    assert receipts.read("rg") is None
+
+
+def test_crash_between_method_and_receipt_leaves_no_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+
+    def crash(_method: Method, _bin_dir: Path) -> tuple[object, ...]:
+        raise OSError("crashed before the receipt")
+
+    monkeypatch.setattr(receipts, "artifact_paths", crash)
+    outcome, placed = _install_raw_yq(tmp_path, monkeypatch)
+    assert placed.is_file()
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.postinstall_warning == (
+        "install receipt not written: crashed before the receipt"
+    )
+    assert not receipts.receipt_path("yq").exists()
+
+
+def test_present_kwarg_drives_the_short_circuit(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    tool = _tool(Method(kind="brew", params={"formula": "ripgrep"}))
+    outcome = install_tool(tool, _macos_with_brew(), runner=calls.append, present=lambda _t: True)
+    assert outcome.status == InstallStatus.ALREADY_INSTALLED
+    assert calls == []
+
+    def always_installed(_tool: Tool) -> bool:
+        return True
+
+    monkeypatch.setattr(engine, "is_installed", always_installed)
+    outcome = install_tool(tool, _macos_with_brew(), runner=calls.append, present=lambda _t: False)
+    assert outcome.status == InstallStatus.INSTALLED
+    assert calls == [["brew", "install", "ripgrep"]]
+
+    calls.clear()
+    outcome = install_tool(tool, _macos_with_brew(), runner=calls.append)
+    assert outcome.status == InstallStatus.ALREADY_INSTALLED
+    assert calls == []
+
+
+def test_receiptless_install_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_not_installed(monkeypatch)
+    outcome = install_tool(
+        _tool(Method(kind="dnf", params={"package": "ripgrep"})),
+        _platform(),
+        runner=lambda _cmd: None,
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    _fake_perform(monkeypatch, handoff=("run the reviewed setup",))
+    outcome = install_tool(
+        _tool(Method(kind="skill_pack", params={})), _platform(), runner=lambda _cmd: None
+    )
+    assert outcome.status == InstallStatus.MANUAL_REQUIRED
+    assert receipts.read("rg") is None
+    sandbox = receipts.receipts_dir()
+    assert not sandbox.exists() or list(sandbox.iterdir()) == []
+
+
+def test_reinstall_rewrites_the_receipt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from datetime import datetime
+
+    _patch_not_installed(monkeypatch)
+    first, placed = _install_raw_yq(tmp_path, monkeypatch)
+    assert first.status == InstallStatus.INSTALLED
+    before = receipts.read("yq")
+    assert before is not None
+    new_payload = _RECEIPT_MEMBER_SCRIPT + b"# v2\n"
+    again, placed = _install_raw_yq(tmp_path, monkeypatch, new_payload, repair=True)
+    assert again.status == InstallStatus.INSTALLED
+    after = receipts.read("yq")
+    assert after is not None
+    assert after.artifacts[0].sha256 == hashlib.sha256(new_payload).hexdigest()
+    assert after.artifacts[0].size == len(new_payload)
+    assert after.artifacts[0].sha256 != before.artifacts[0].sha256
+    assert datetime.fromisoformat(after.at) > datetime.fromisoformat(before.at)
+    assert [p.name for p in receipts.receipts_dir().iterdir()] == ["yq.json"]
+    assert placed.read_bytes() == new_payload
+
+
+def test_repair_receipt_write_failure_leaves_no_stale_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    first, _placed = _install_raw_yq(tmp_path, monkeypatch)
+    assert first.status == InstallStatus.INSTALLED
+    assert receipts.read("yq") is not None
+    monkeypatch.setattr(receipts, "write", _read_only_write)
+    again, _placed = _install_raw_yq(
+        tmp_path, monkeypatch, _RECEIPT_MEMBER_SCRIPT + b"# v2\n", repair=True
+    )
+    assert again.status == InstallStatus.INSTALLED
+    assert again.postinstall_warning is not None
+    assert (
+        "install receipt not written: read-only; the previous receipt was removed"
+        in again.postinstall_warning
+    )
+    assert receipts.read("yq") is None

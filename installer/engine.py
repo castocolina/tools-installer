@@ -2,7 +2,7 @@
 
 import os
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -48,13 +48,15 @@ def _manager_smoke_target(method: Method, cmd: str) -> Path | None:
     return Path(resolved)
 
 
-def _run_manager_smoke(method: Method, tool: Tool) -> None:
+def _run_manager_smoke(method: Method, tool: Tool) -> bool:
+    """Smoke a manager install's binary; True only when a smoke actually ran."""
     if not _manager_method(method):
-        return
+        return False
     target = _manager_smoke_target(method, tool.cmd)
     if target is None:
-        return
+        return False
     executors.smoke_binary(target, executors.method_smoke_argv(method))
+    return True
 
 
 @dataclass(frozen=True, init=False)
@@ -143,6 +145,7 @@ def install_tool(
     tools: Mapping[str, Tool] | None = None,
     confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     repair: bool = False,
+    present: Callable[[Tool], bool] | None = None,
 ) -> InstallOutcome:
     """Try each applicable method in ladder order; stop at the first success.
 
@@ -177,8 +180,16 @@ def install_tool(
     possibly an older copy on PATH). A failed smoke falls through; the package
     stays installed and is reported with its removal command, never removed
     (SPEC REG-05 covers installer-created links only; Ledger L-18-16).
+
+    A success writes the tool's receipt (`receipts.record`) before any hook
+    runs; a failed write is a warning on `postinstall_warning`, never FAILED.
+
+    `present` decides the ALREADY_INSTALLED short-circuit: the composition
+    root passes the refresh service's presence (D-04, wired in plan 19-18);
+    `None` keeps `is_installed`, looked up at call time.
     """
-    if is_installed(tool) and not repair:
+    installed = present(tool) if present is not None else is_installed(tool)
+    if installed and not repair:
         return InstallOutcome(tool.id, InstallStatus.ALREADY_INSTALLED)
 
     methods = resolve_methods(tool, platform)
@@ -209,7 +220,7 @@ def install_tool(
             if isinstance(raw_bin_dir, str) and raw_bin_dir:
                 prepend_path(bin_dir(raw_bin_dir))
             try:
-                _run_manager_smoke(method, tool)
+                smoked = _run_manager_smoke(method, tool)
             except executors.ExecutorError as exc:
                 os.environ["PATH"] = path_before
                 removal = method_removal_command(method, tool.cmd)
@@ -233,9 +244,15 @@ def install_tool(
             errors.append(exc)
         else:
             downloaded = method.kind in download.DOWNLOAD_KINDS or method.kind in apps.APP_KINDS
-            receipts.record(
-                tool, method, package=method_package(method), smoke="ok" if downloaded else None
-            )
+            try:
+                receipts.record(
+                    tool,
+                    method,
+                    package=method_package(method),
+                    smoke="ok" if downloaded or smoked else None,
+                )
+            except OSError as exc:
+                leftovers.append(f"install receipt not written: {exc}")
             warning = None
             if tool.postinstall:
                 try:
