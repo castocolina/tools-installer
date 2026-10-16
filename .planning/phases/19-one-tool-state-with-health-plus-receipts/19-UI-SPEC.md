@@ -284,6 +284,10 @@ Yellow means "present and needs action" (update or configure), so missing tools 
 | Owner notes (existing copy, now reasons) | Same sentences as `_version_detail` today (`catalog_tui.py:715-772`): owner detail, off-policy, shadowed with live path, unknown-owner reason, active-path note, pinned spec |
 | Version unreadable (new reason) | `version unreadable` |
 | No comparison (new reason; replaces the cell markers) | `no latest version to compare against` |
+| Needs Homebrew (H5 review, new reason) | `needs Homebrew, which is not on PATH` |
+| Terminal check failed (M11 review, new note) | `terminal shell not checked: {error}` |
+| pnpm inventory unreadable (M11 review, new note) | `pnpm group not checked: the pnpm inventory is unreadable` |
+| Skill check failed (M11 review, new note) | `skill configuration not checked: {error}` |
 | Stale cache (existing sentence, `:768-772`) | Kept verbatim |
 | Empty state heading (a tier with zero tools) | Detail row 1: `No tools in the {Label} tier.` |
 | Empty state body | Detail row 2: `Press 1-6 or ^p to open another view.` The legend still renders; the table shows only its header |

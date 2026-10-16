@@ -221,4 +221,7 @@ None.
 - **Ledger L-19-23 (D-18):** for an absent pack the demoted configuration facts come first in the notes; skill packs get no owner or version notes.
 - **Ledger L-19-24:** `is_installed(..., default_bin_dir=)` is fed from the service's managed bin dir; an autouse `sandboxed_bin_dir` fixture (19-01) keeps tests off the real `~/.local/bin`.
 - **Ledger L-19-25 (D-02):** pass order is the public `ToolState.seq` field, used by the merge rule.
+- **Ledger L-19-27 (review cycle 1, 4c80be7):** all 12 HIGH + 15 MEDIUM incorporated, none rejected; threat IDs T-19-69..76. M14 tightens D-21's "non-empty" rule to "has a `gsd-*` entry" (still implies non-empty). M3/M4: any invalid Claude plugin entry (incl. an unknown scope) makes the whole listing unknown. M15: a symlinked configured repo root is skipped (symlinks are never followed).
+- **Ledger L-19-28 (D-20, H10):** the pnpm group repair step `pnpm_group_install` has an empty argv; it re-runs the declaring tool's node method (whole pinned group, `--allow-build`) through `executors.execute`. Phase 20 must dispatch this step kind to the node executor.
+- **Ledger L-19-29 (UI-SPEC sync):** four new reason/note strings added to the 19-UI-SPEC copy table (needs Homebrew; terminal / pnpm / skill "not checked").
 

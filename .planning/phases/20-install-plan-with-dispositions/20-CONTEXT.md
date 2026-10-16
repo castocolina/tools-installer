@@ -101,6 +101,9 @@ Out of scope:
 
 ### Folded Todos
 None.
+
+### Ledger amendments (from Phase 19 planning, 2026-10-16; RUN-LEDGER)
+- **Ledger L-19-28 (inbound):** Phase 19's `ConfigStep` kind `pnpm_group_install` carries an empty argv; Phase 20's plan/reconfigure execution must dispatch it to `executors.execute` on the declaring tool's first node method (the whole pinned group with `--allow-build`), like `terminal_sync` is dispatched by kind. Phase 20 also executes the per-repo skill install command Phase 19 builds (L-19-07).
 </decisions>
 
 <canonical_refs>
