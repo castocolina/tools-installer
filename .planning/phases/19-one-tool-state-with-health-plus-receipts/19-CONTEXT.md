@@ -211,4 +211,11 @@ None.
 - **Ledger L-19-13 (D-05, planner):** `ConfigStep` lives in `installer/model.py`; `version_status.py` would create an import cycle and D-05 forbids new modules.
 - **Ledger L-19-14 (D-08/D-10, planner):** a corrupt receipt leaves the tool unproven (no layout fallback); a valid receipt beats layout proof; one changed artifact makes the whole tool non-removable.
 - **Ledger L-19-15 (D-18/D-21, host check):** `claude plugin install -s user <id>` is valid (`-s, --scope user|project|local`); `projectPath` on project-scope records is unverified on this host, so without it the duplicate reason shows with no fix step.
+- **Ledger L-19-16 (planner):** context-budget splits 19-13 -> 19-20 and 19-11 -> 19-21; 21 plans in 8 waves.
+- **Ledger L-19-17 (D-21, verifiable):** detection surfaces follow the GSD 1.16.0 capability registry across all 9 harness homes (machinery dirs; hooks in settings.json / hooks.json / legacy config.toml / kimi hook block; copilot, kilo, opencode have no hooks); the repo walk covers claude and opencode project dirs only.
+- **Ledger L-19-18 (D-18):** an absent pack keeps its configuration facts as notes, so a 4-install superpowers reads MISSING with the D-18 reasons and steps.
+- **Ledger L-19-19 (D-02):** one refresh pass at a time; a request joins an in-flight pass with the same ids and epoch and never crosses an invalidate.
+- **Ledger L-19-20 (D-14):** `UpdateService` takes a `live_platform` callable.
+- **Ledger L-19-21:** `default_skill_home()` is sandboxed in every test by conftest.
+- **Ledger L-19-22:** `model.TOOL_ID_RE` is enforced at registry load and reused for receipt file names; declared-package probes are memoized per pass; the opengsd handoff text pins `pnpm dlx @opengsd/gsd-core@1.16.0 --<runtime> --local`.
 
