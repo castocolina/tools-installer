@@ -6,6 +6,7 @@ import re
 import shutil
 import stat
 import subprocess
+from collections import deque
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -314,6 +315,17 @@ _HOOK_WALK_MAX_NODES = 20000
 _GSD_HOOK_SCRIPT_RE = re.compile(r"(?:^|[/\\\s\"'])gsd-[A-Za-z0-9._-]+\.(?:js|cjs|mjs|sh)\b")
 _GSD_TOML_MARKER_RE = re.compile(r"^# GSD Hooks(?: BEGIN|\r?$)", re.MULTILINE)
 
+# D-21: HOME-relative roots walked for GSD repos (a dir holding `.planning/config.json`).
+PROJECT_ROOTS = ("git", "src", "code", "projects", "work", "dev")
+# Only the project dirs verified on this host (19-RESEARCH A3): a runtime outside this map
+# gets neither detection nor an install step, so Phase 20 never runs an unobservable install.
+PROJECT_RUNTIME_DIRS: dict[str, str] = {"claude": ".claude", "opencode": ".opencode"}
+_MAX_WALK_DEPTH = 4
+# The walk runs on the refresh worker every pass; the entry cap bounds the enumeration of
+# one huge directory, which the dir cap alone does not.
+_MAX_WALK_DIRS = 5000
+_MAX_WALK_ENTRIES = 50000
+
 
 @dataclass(frozen=True)
 class ProjectPackReport:
@@ -347,6 +359,69 @@ def _has_gsd_entry(directory: Path) -> bool | None:
         return False
     except OSError:
         return None
+
+
+def _lstat_mode(path: Path) -> int:
+    """The mode of `path` itself (a symlink is not followed); 0 when it cannot be read."""
+    try:
+        return path.lstat().st_mode
+    except OSError:
+        return 0
+
+
+def _find_project_repos(home: Path) -> tuple[Path, ...]:
+    """GSD repos under PROJECT_ROOTS, breadth-first and bounded; read-only.
+
+    Symlinks are never followed, a symlinked root included: a repo becomes the `cwd` of a
+    Phase 20 command, so it must stay under HOME. Every admission to the queue counts
+    against the dir cap and every entry read against the entry cap.
+    """
+    queue: deque[tuple[Path, int]] = deque()
+    admitted = 0
+    for name in PROJECT_ROOTS:
+        root = home / name
+        if admitted < _MAX_WALK_DIRS and stat.S_ISDIR(_lstat_mode(root)):
+            queue.append((root, 0))
+            admitted += 1
+    entries_left = _MAX_WALK_ENTRIES
+    repos: list[Path] = []
+    while queue:
+        directory, depth = queue.popleft()
+        if stat.S_ISREG(_lstat_mode(directory / ".planning" / "config.json")):
+            repos.append(directory)  # a repo is not descended
+            continue
+        if depth >= _MAX_WALK_DEPTH or entries_left <= 0 or admitted >= _MAX_WALK_DIRS:
+            continue
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    entries_left -= 1
+                    name = entry.name
+                    if (
+                        not name.startswith(".")  # hidden dirs, `.venv` included
+                        and name != "node_modules"
+                        and entry.is_dir(follow_symlinks=False)
+                    ):
+                        queue.append((Path(entry.path), depth + 1))
+                        admitted += 1
+                    if entries_left <= 0 or admitted >= _MAX_WALK_DIRS:
+                        break
+        except OSError:
+            continue
+    return tuple(repos)
+
+
+def _installed_runtimes(repo: Path) -> tuple[str, ...]:
+    """Runtimes with a real GSD install in `repo`: VERSION plus a `gsd-*` skill or command.
+
+    A stale VERSION beside empty dirs or another pack's skills is not an install.
+    """
+    return tuple(
+        runtime
+        for runtime, directory in PROJECT_RUNTIME_DIRS.items()
+        if stat.S_ISREG(_lstat_mode(repo / directory / "gsd-core" / "VERSION"))
+        and any(_has_gsd_entry(repo / directory / sub) for sub in ("skills", "commands"))
+    )
 
 
 def _gsd_hook_in(value: object) -> bool | None:
@@ -409,7 +484,7 @@ def _global_uninstall_step(tool_id: str, harness: str, package: str, version: st
 
 
 def inspect_project_pack(tool: Tool, home: Path, present: Collection[str]) -> ProjectPackReport:
-    """D-21 global leftovers of a project-scope pack in every harness home; read-only.
+    """D-21 facts of a project-scope pack: global leftovers and per-repo installs; read-only.
 
     A user-scope pack yields an empty report. Each leftover harness gets the pack's own
     global uninstall as its step; nothing under HOME is ever deleted here. Leftovers are
@@ -440,8 +515,9 @@ def inspect_project_pack(tool: Tool, home: Path, present: Collection[str]) -> Pr
         for directory in hits:
             if directory in PROJECT_SHARED_GLOBAL_DIRS:
                 shared.setdefault(directory, harness)
+    repos = tuple((repo, _installed_runtimes(repo)) for repo in _find_project_repos(home))
     if not leftovers:
-        return ProjectPackReport(unchecked=tuple(unchecked))
+        return ProjectPackReport(repos=repos, unchecked=tuple(unchecked))
     reasons = [_GLOBAL_LEFTOVER_REASON]
     for directory, harness in shared.items():
         label = SKILL_HARNESS_LABELS.get(harness, harness)
@@ -454,6 +530,7 @@ def inspect_project_pack(tool: Tool, home: Path, present: Collection[str]) -> Pr
         _global_uninstall_step(tool.id, harness, package, version) for harness in leftovers
     )
     return ProjectPackReport(
+        repos=repos,
         leftovers=tuple(leftovers),
         reasons=tuple(reasons),
         steps=steps,

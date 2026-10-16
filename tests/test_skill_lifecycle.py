@@ -1,7 +1,9 @@
+import contextlib
 import json
 import os
 import subprocess
-from collections.abc import Callable
+from collections import deque
+from collections.abc import Callable, Generator, Iterator
 from pathlib import Path
 from typing import IO, Any, Literal
 
@@ -1864,4 +1866,198 @@ def test_hook_scan_writes_nothing(tmp_path: Path) -> None:
     report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
 
     assert report.leftovers == ("antigravity", "claude", "codex", "cursor", "kimi", "windsurf")
+    assert _home_fingerprint(tmp_path) == before
+
+
+def _repo(home: Path, relative: str) -> Path:
+    _plant(home, f"{relative}/.planning/config.json", "{}")
+    return home / relative
+
+
+def _gsd_install(repo: Path, runtime_dir: str) -> None:
+    _plant(repo, f"{runtime_dir}/gsd-core/VERSION", "1.16.0\n")
+    _plant(repo, f"{runtime_dir}/commands/gsd-plan-phase.md")
+
+
+def _empty_install(repo: Path, runtime_dir: str = ".opencode") -> None:
+    """The 2026-10-14 case: install state and VERSION present, every content dir empty."""
+    _plant(repo, f"{runtime_dir}/gsd-install-state.json", "{}")
+    _plant(repo, f"{runtime_dir}/gsd-core/VERSION", "1.16.0\n")
+    for sub in ("skills", "commands", "agents"):
+        _plant(repo, f"{runtime_dir}/{sub}")
+
+
+def _repos(home: Path) -> dict[Path, tuple[str, ...]]:
+    return dict(inspect_project_pack(_tools()["opengsd"], home, frozenset()).repos)
+
+
+def _count_scandir(monkeypatch: pytest.MonkeyPatch) -> tuple[list[Path], list[Path]]:
+    """Record every `os.scandir` call and every entry it yields."""
+    calls: list[Path] = []
+    yielded: list[Path] = []
+    real_scandir = os.scandir
+
+    @contextlib.contextmanager
+    def counting(path: Path) -> Generator[Iterator[os.DirEntry[str]]]:
+        calls.append(Path(path))
+        with real_scandir(path) as entries:
+
+            def counted() -> Iterator[os.DirEntry[str]]:
+                for entry in entries:
+                    yielded.append(Path(entry.path))
+                    yield entry
+
+            yield counted()
+
+    monkeypatch.setattr(skill_lifecycle.os, "scandir", counting)
+    return calls, yielded
+
+
+def _record_deque(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Install a walk queue that records its length after every admission."""
+    lengths: list[int] = []
+
+    class RecordingDeque(deque[object]):
+        def append(self, x: object, /) -> None:
+            super().append(x)
+            lengths.append(len(self))
+
+    monkeypatch.setattr(skill_lifecycle, "deque", RecordingDeque)
+    return lengths
+
+
+def _under(paths: list[Path], root: Path) -> list[Path]:
+    return [path for path in paths if path.is_relative_to(root)]
+
+
+def test_repo_walk_finds_planning_configs(tmp_path: Path) -> None:
+    a = _repo(tmp_path, "git/a")
+    b = _repo(tmp_path, "src/org/b")
+    depth_four = _repo(tmp_path, "code/1/2/3/d4")
+    _repo(tmp_path, "code/1/2/3/4/d5")
+    _repo(tmp_path, "git/a/nested")  # a repo is not descended
+    _repo(tmp_path, "elsewhere/c")  # not a configured root
+
+    assert _repos(tmp_path) == {a: (), b: (), depth_four: ()}
+
+
+def test_repo_walk_skips_hidden_node_modules_and_venv(tmp_path: Path) -> None:
+    for relative in ("git/.cache/x", "git/a/node_modules/y", "git/a/.venv/z", "dev/.hidden"):
+        _repo(tmp_path, relative)
+
+    assert _repos(tmp_path) == {}
+
+
+def test_repo_walk_is_capped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "code"
+    for index in range(6000):
+        (root / f"d{index}").mkdir(parents=True)
+    lengths = _record_deque(monkeypatch)
+    calls, _ = _count_scandir(monkeypatch)
+
+    assert _repos(tmp_path) == {}
+    assert len(lengths) == 5000
+    assert len(_under(calls, root)) <= 5000
+
+
+def test_repo_walk_bounds_queue_and_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(skill_lifecycle, "_MAX_WALK_DIRS", 50)
+    root = tmp_path / "home" / "code"
+    for index in range(200):
+        (root / f"d{index}").mkdir(parents=True)
+    lengths = _record_deque(monkeypatch)
+    calls, yielded = _count_scandir(monkeypatch)
+
+    assert _repos(tmp_path / "home") == {}
+    assert 0 < len(lengths) <= 50
+    assert max(lengths) <= 50
+    assert 0 < len(_under(calls, root)) <= 50
+
+    monkeypatch.setattr(skill_lifecycle, "_MAX_WALK_ENTRIES", 100)
+    files = tmp_path / "files" / "git"
+    files.mkdir(parents=True)
+    for index in range(500):
+        (files / f"f{index}.txt").write_text("x")
+
+    assert _repos(tmp_path / "files") == {}
+    assert 0 < len(_under(yielded, files)) <= 100
+
+
+def test_repo_walk_rejects_a_symlinked_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    outside = tmp_path / "outside"
+    _repo(outside, "a")
+    home.mkdir()
+    (home / "git").symlink_to(outside, target_is_directory=True)
+    calls, _ = _count_scandir(monkeypatch)
+
+    assert _repos(home) == {}
+    assert _under(calls, home / "git") == []
+    assert _under(calls, outside) == []
+
+
+def test_repo_walk_never_follows_symlinks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "home"
+    outside = tmp_path / "outside"
+    _repo(outside, "x")
+    _plant(outside, ".planning/config.json", "{}")
+    real = _repo(home, "git/real")
+    (home / "git" / "link").symlink_to(outside, target_is_directory=True)
+    calls, _ = _count_scandir(monkeypatch)
+
+    assert _repos(home) == {real: ()}
+    assert _under(calls, home / "git" / "link") == []
+    assert _under(calls, outside) == []
+
+
+def test_real_install_counts(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "git/app")
+    _gsd_install(repo, ".claude")
+
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
+
+    assert report.repos == ((repo, ("claude",)),)
+
+
+def test_empty_dirs_install_is_not_installed(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "git/app")
+    _empty_install(repo)
+
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
+
+    assert report.repos == ((repo, ()),)
+
+
+def test_stale_version_beside_unrelated_skills_is_not_installed(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "git/app")
+    _plant(repo, ".claude/gsd-core/VERSION", "1.16.0\n")
+    _plant(repo, ".claude/skills/tool-onboarding")
+    _plant(repo, ".claude/skills/superpowers")
+
+    assert _repos(tmp_path) == {repo: ()}
+
+    _plant(repo, ".claude/commands/gsd-plan-phase.md")
+
+    assert _repos(tmp_path) == {repo: ("claude",)}
+
+
+def test_two_runtimes_in_one_repo(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "git/app")
+    _gsd_install(repo, ".opencode")
+    _gsd_install(repo, ".claude")
+
+    assert _repos(tmp_path) == {repo: ("claude", "opencode")}
+
+
+def test_repo_walk_writes_nothing(tmp_path: Path) -> None:
+    _gsd_install(_repo(tmp_path, "git/a"), ".claude")
+    _empty_install(_repo(tmp_path, "src/b"))
+    _repo(tmp_path, "work/c")
+    before = _home_fingerprint(tmp_path)
+
+    assert len(_repos(tmp_path)) == 3
     assert _home_fingerprint(tmp_path) == before
