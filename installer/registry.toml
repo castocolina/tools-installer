@@ -3001,7 +3001,7 @@ approval_disclosures = [
   "Ponytail documents no telemetry; its optional mode state remains under ~/.config/ponytail after host removal unless cleaned first.",
 ]
 status_probes = [
-  { harness = "claude", via = "plugin-cli", match = "ponytail" },
+  { harness = "claude", via = "plugin-cli", match = "ponytail@ponytail" },
   { harness = "codex", via = "plugin-cli", match = "ponytail" },
   { harness = "pi", via = "plugin-cli", match = "DietrichGebert/ponytail" },
 ]
@@ -3222,7 +3222,7 @@ supported_harnesses = [
 revision_policy = "upstream-default-branch"
 targets = [{ scope = "harness", path = "<host-plugin-dir>/superpowers" }]
 status_probes = [
-  { harness = "claude", via = "plugin-cli", match = "superpowers" },
+  { harness = "claude", via = "plugin-cli", match = "superpowers@claude-plugins-official" },
   { harness = "codex", via = "plugin-cli", match = "superpowers" },
   { harness = "pi", via = "plugin-cli", match = "obra/superpowers" },
 ]
@@ -3369,7 +3369,7 @@ supported_harnesses = [
 ]
 status_probes = [
   { harness = "amp", via = "skills-lock", match = "mattpocock/skills" },
-  { harness = "claude", via = "plugin-cli", match = "mattpocock-skills" },
+  { harness = "claude", via = "plugin-cli", match = "mattpocock-skills@claude-plugins-official" },
   { harness = "codex", via = "plugin-cli", match = "mattpocock-skills" },
   { harness = "cursor", via = "skills-lock", match = "mattpocock/skills" },
   { harness = "devin", via = "skills-lock", match = "mattpocock/skills" },

@@ -17,6 +17,11 @@ LifecycleStatus = Literal["completed", "manual-required", "present", "absent", "
 HarnessStatus = Literal["present", "absent", "unknown"]
 ProbeRunner = Callable[[list[str]], str]
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+# A Claude plugin id is `<plugin>@<marketplace>`; the leading alphanumeric keeps
+# `-s`-style values out of a later argv.
+_CLAUDE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*")
+CLAUDE_SCOPES = ("user", "project", "local")
+_CLAUDE_OUTPUT_CAP = 1 << 20
 
 
 @dataclass(frozen=True)
@@ -28,18 +33,61 @@ class LifecycleOutcome:
 @dataclass(frozen=True)
 class HarnessCli:
     argv: tuple[str, ...]
-    matches: Callable[[str, str], bool]
+    matches: Callable[[str, str], bool | None]  # None: the answer is unreadable
 
 
-def _claude_matches(output: str, match: str) -> bool:
-    prefix = f"{match}@"
-    for line in output.splitlines():
-        text = line.strip()
-        if text.startswith("❯"):
-            text = text[1:].lstrip()
-        if text.startswith(prefix):
-            return True
-    return False
+@dataclass(frozen=True)
+class ClaudeEntry:
+    id: str
+    plugin: str
+    marketplace: str
+    scope: str
+    enabled: bool
+    version: str
+
+
+def _claude_entries(output: str) -> tuple[ClaudeEntry, ...] | None:
+    """Every entry of `claude plugin list --json`, or None when any part is invalid.
+
+    An invalid entry is never skipped: skipping a malformed canonical entry
+    would fabricate "absent".
+    """
+    if len(output) > _CLAUDE_OUTPUT_CAP:
+        return None
+    try:
+        parsed: object = json.loads(output)
+    except (json.JSONDecodeError, RecursionError):
+        return None
+    if not isinstance(parsed, list):
+        return None
+    entries: list[ClaudeEntry] = []
+    for raw in cast(list[object], parsed):
+        if not isinstance(raw, dict):
+            return None
+        row = cast(dict[object, object], raw)
+        plugin_id, scope = row.get("id"), row.get("scope")
+        enabled, version = row.get("enabled"), row.get("version")
+        if (
+            not isinstance(plugin_id, str)
+            or _CLAUDE_ID_RE.fullmatch(plugin_id) is None
+            or not isinstance(scope, str)
+            or scope not in CLAUDE_SCOPES
+            or not isinstance(enabled, bool)
+            or not isinstance(version, str)
+        ):
+            return None
+        plugin, marketplace = plugin_id.split("@")
+        entries.append(ClaudeEntry(plugin_id, plugin, marketplace, scope, enabled, version))
+    return tuple(entries)
+
+
+def _claude_matches(output: str, match: str) -> bool | None:
+    """Present only for exactly one enabled user-scope entry with the canonical id (D-18)."""
+    entries = _claude_entries(output)
+    if entries is None:
+        return None
+    hits = [e for e in entries if e.id == match and e.scope == "user" and e.enabled]
+    return len(hits) == 1
 
 
 def _codex_matches(output: str, match: str) -> bool:
@@ -123,7 +171,7 @@ SKILL_HARNESS_LABELS: dict[str, str] = {
 }
 
 HARNESS_CLI_STATUS: dict[str, HarnessCli] = {
-    "claude": HarnessCli(("claude", "plugin", "list"), _claude_matches),
+    "claude": HarnessCli(("claude", "plugin", "list", "--json"), _claude_matches),
     "codex": HarnessCli(("codex", "plugin", "list"), _codex_matches),
     "pi": HarnessCli(("pi", "list"), _pi_matches),
 }
@@ -385,7 +433,10 @@ def _harness_status(
     output = outputs.get(cli.argv)
     if output is None:
         return "unknown"
-    return "present" if cli.matches(output, status_probe.match) else "absent"
+    found = cli.matches(output, status_probe.match)
+    if found is None:
+        return "unknown"
+    return "present" if found else "absent"
 
 
 def _pack_status(

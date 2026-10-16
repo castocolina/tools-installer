@@ -1855,16 +1855,25 @@ def _skill_pack(tool_id: str, probes: tuple[SkillStatusProbe, ...]) -> Tool:
     )
 
 
+_CLAUDE_SUPERPOWERS_JSON = (
+    '[{"id": "superpowers@claude-plugins-official", "scope": "user", '
+    '"enabled": true, "version": "6.4.1"}]'
+)
+
+
 def test_refresh_skills_persists_once_and_skips_the_second_call(tmp_path: Path) -> None:
     calls: list[list[str]] = []
 
     def skill_probe(argv: list[str]) -> str:
         calls.append(list(argv))
-        if argv == ["claude", "plugin", "list"]:
-            return "superpowers@claude-plugins-official\n"
+        if argv == ["claude", "plugin", "list", "--json"]:
+            return _CLAUDE_SUPERPOWERS_JSON
         return ""
 
-    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
     path = tmp_path / "versions.json"
     service = VersionRefreshService(
         platform=Platform(os="linux", arch="amd64", immutable=True, has_brew=False),
@@ -1891,7 +1900,10 @@ def test_refresh_skills_persists_once_and_skips_the_second_call(tmp_path: Path) 
 
 
 def _claude_pack() -> Tool:
-    return _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    return _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
 
 
 def _skill_service(
@@ -1919,7 +1931,7 @@ def test_skill_refresh_from_two_threads_probes_once(tmp_path: Path) -> None:
         calls["n"] += 1
         started.set()
         assert release.wait(timeout=5)
-        return "superpowers@claude-plugins-official\n"
+        return _CLAUDE_SUPERPOWERS_JSON
 
     service = _skill_service(tmp_path / "versions.json", skill_probe, tmp_path)
     pack = _claude_pack()
@@ -1950,7 +1962,7 @@ def test_skill_pass_superseded_by_invalidate_stores_nothing(tmp_path: Path) -> N
     def skill_probe(_argv: list[str]) -> str:
         calls["n"] += 1
         service.invalidate(reason="x")
-        return "superpowers@claude-plugins-official\n"
+        return _CLAUDE_SUPERPOWERS_JSON
 
     service._skill_probe = skill_probe  # pyright: ignore[reportPrivateUsage]
     pack = _claude_pack()
@@ -1964,7 +1976,7 @@ def test_skill_pass_superseded_by_invalidate_stores_nothing(tmp_path: Path) -> N
 
 def test_skill_invalidate_marks_every_held_entry_stale(tmp_path: Path) -> None:
     def skill_probe(_argv: list[str]) -> str:
-        return "superpowers@claude-plugins-official\n"
+        return _CLAUDE_SUPERPOWERS_JSON
 
     service = _skill_service(tmp_path / "versions.json", skill_probe, tmp_path)
     service.refresh_skills([_claude_pack()])
@@ -2003,7 +2015,7 @@ def test_second_skill_caller_waits_for_in_flight_pass(tmp_path: Path) -> None:
         calls["n"] += 1
         started.set()
         assert release.wait(timeout=5)
-        return "superpowers@claude-plugins-official\n"
+        return _CLAUDE_SUPERPOWERS_JSON
 
     service = _skill_service(tmp_path / "versions.json", skill_probe, tmp_path)
     pack = _claude_pack()

@@ -485,6 +485,8 @@ def test_every_shipped_skill_pack_status_is_probed_or_explicitly_manual(
 
     def probe(argv: list[str]) -> str:
         calls.append(argv)
+        if argv[0] == "claude":
+            return "[]"
         return "ponytail@ponytail  installed, enabled  5.1.0\ngit:github.com/obra/superpowers\n"
 
     outcome = inspect_status(_tools()[tool_id], probe, home=tmp_path)
@@ -509,7 +511,10 @@ def test_shipped_status_probes_select_closed_sources() -> None:
 
     assert SkillStatusProbe("codex", "plugin-cli", "ponytail") in ponytail.status_probes
     assert SkillStatusProbe("pi", "plugin-cli", "obra/superpowers") in superpowers.status_probes
-    assert SkillStatusProbe("claude", "plugin-cli", "superpowers") in superpowers.status_probes
+    assert (
+        SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official")
+        in superpowers.status_probes
+    )
     assert ponytail.status.mode == "manual-required"
     assert superpowers.status.mode == "manual-required"
     assert not hasattr(ponytail.status, "argv")
@@ -599,6 +604,35 @@ def test_shipped_skill_pack_contracts_use_only_documented_upstream_commands() ->
         assert any(removal_fragment in line for line in lifecycle.removal.instructions)
 
 
+_SUPERPOWERS_ID = "superpowers@claude-plugins-official"
+_FOUR_INSTALL = (
+    (_SUPERPOWERS_ID, "user", False, "6.4.1"),
+    (_SUPERPOWERS_ID, "project", True, "6.2.0"),
+    ("superpowers@superpowers-marketplace", "user", True, "6.2.0"),
+    ("superpowers@superpowers-marketplace", "project", True, "6.2.0"),
+)
+
+
+_CLAUDE_SUPERPOWERS_JSON = (
+    '[{"id": "superpowers@claude-plugins-official", "scope": "user", '
+    '"enabled": true, "version": "6.4.1"}]'
+)
+
+
+def _claude_json(*entries: tuple[str, str, bool, str]) -> str:
+    return json.dumps(
+        [
+            {"id": plugin_id, "scope": scope, "enabled": enabled, "version": version}
+            for plugin_id, scope, enabled, version in entries
+        ]
+    )
+
+
+def _claude_status(tmp_path: Path, output: str, match: str = _SUPERPOWERS_ID) -> str:
+    tool = _pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", match),))
+    return inspect_skill_packs([tool], lambda _argv: output, tmp_path)["superpowers"]["claude"]
+
+
 def _pack(tool_id: str, probes: tuple[SkillStatusProbe, ...]) -> Tool:
     manual = SkillOperation(
         mode="manual-required", instructions=("Review and run the official flow.",)
@@ -681,22 +715,19 @@ def test_plugin_cli_without_closed_row_is_unknown_and_unprobed(tmp_path: Path) -
 
 
 def test_claude_plugin_list_marker_row_is_present(tmp_path: Path) -> None:
-    tool = _pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    tool = _pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", _SUPERPOWERS_ID),))
 
     def probe(argv: list[str]) -> str:
-        assert argv == ["claude", "plugin", "list"]
-        return "❯ superpowers@claude-plugins-official\n"
+        assert argv == ["claude", "plugin", "list", "--json"]
+        return _claude_json((_SUPERPOWERS_ID, "user", True, "6.4.1"))
 
     assert inspect_skill_packs([tool], probe, tmp_path)["superpowers"]["claude"] == "present"
 
 
 def test_claude_match_stops_at_name_boundary(tmp_path: Path) -> None:
-    tool = _pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    listing = _claude_json(("superpowers-extra@m", "user", True, "1.0.0"))
 
-    def probe(_argv: list[str]) -> str:
-        return "❯ superpowers-lab@x\n"
-
-    assert inspect_skill_packs([tool], probe, tmp_path)["superpowers"]["claude"] == "absent"
+    assert _claude_status(tmp_path, listing, "superpowers@m") == "absent"
 
 
 def test_empty_cli_output_is_absent(tmp_path: Path) -> None:
@@ -844,18 +875,21 @@ def test_skills_lock_is_read_once_per_call(tmp_path: Path, monkeypatch: pytest.M
 
 def test_one_cli_call_per_harness_across_packs(tmp_path: Path) -> None:
     packs = [
-        _pack(f"pack-{index}", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+        _pack(
+            f"pack-{index}",
+            (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+        )
         for index in range(3)
     ]
     calls: list[list[str]] = []
 
     def probe(argv: list[str]) -> str:
         calls.append(argv)
-        return "❯ superpowers@claude-plugins-official\n"
+        return _CLAUDE_SUPERPOWERS_JSON
 
     inspect_skill_packs(packs, probe, tmp_path)
 
-    assert calls == [["claude", "plugin", "list"]]
+    assert calls == [["claude", "plugin", "list", "--json"]]
 
 
 def test_host_order_follows_skill_harnesses_not_declaration_order(tmp_path: Path) -> None:
@@ -863,7 +897,7 @@ def test_host_order_follows_skill_harnesses_not_declaration_order(tmp_path: Path
         "demo",
         (
             SkillStatusProbe("pi", "plugin-cli", "obra/superpowers"),
-            SkillStatusProbe("claude", "plugin-cli", "superpowers"),
+            SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),
             SkillStatusProbe("codex", "plugin-cli", "ponytail"),
         ),
     )
@@ -899,3 +933,107 @@ def test_skill_harness_labels_cover_every_harness() -> None:
     assert SKILL_HARNESS_LABELS["pi"] == "Pi"
     assert SKILL_HARNESS_LABELS["gemini-cli"] == "Gemini CLI"
     assert SKILL_HARNESS_LABELS["factory-droid"] == "Factory Droid"
+
+
+def test_claude_probe_uses_the_json_argv(tmp_path: Path) -> None:
+    packs = [
+        _pack(f"pack-{index}", (SkillStatusProbe("claude", "plugin-cli", _SUPERPOWERS_ID),))
+        for index in range(3)
+    ]
+    calls: list[list[str]] = []
+
+    def probe(argv: list[str]) -> str:
+        calls.append(argv)
+        return _claude_json((_SUPERPOWERS_ID, "user", True, "6.4.1"))
+
+    result = inspect_skill_packs(packs, probe, tmp_path)
+
+    assert calls == [["claude", "plugin", "list", "--json"]]
+    assert all(hosts == {"claude": "present"} for hosts in result.values())
+
+
+def test_claude_enabled_user_scope_canonical_is_present(tmp_path: Path) -> None:
+    listing = _claude_json((_SUPERPOWERS_ID, "user", True, "6.4.1"))
+
+    assert _claude_status(tmp_path, listing) == "present"
+
+
+def test_four_install_superpowers_state_is_not_present(tmp_path: Path) -> None:
+    assert _claude_status(tmp_path, _claude_json(*_FOUR_INSTALL)) == "absent"
+
+
+def test_claude_project_scope_only_is_absent(tmp_path: Path) -> None:
+    listing = _claude_json((_SUPERPOWERS_ID, "project", True, "6.4.1"))
+
+    assert _claude_status(tmp_path, listing) == "absent"
+
+
+def test_claude_other_marketplace_only_is_absent(tmp_path: Path) -> None:
+    listing = _claude_json(("superpowers@superpowers-marketplace", "user", True, "6.2.0"))
+
+    assert _claude_status(tmp_path, listing) == "absent"
+
+
+def test_claude_two_enabled_user_entries_for_the_canonical_id_is_absent(tmp_path: Path) -> None:
+    listing = _claude_json(
+        (_SUPERPOWERS_ID, "user", True, "6.4.1"), (_SUPERPOWERS_ID, "user", True, "6.2.0")
+    )
+
+    assert _claude_status(tmp_path, listing) == "absent"
+
+
+_CANONICAL_ENTRY = {"id": _SUPERPOWERS_ID, "scope": "user", "enabled": True, "version": "6.4.1"}
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "not json",
+        json.dumps(_CANONICAL_ENTRY),
+        json.dumps([{**_CANONICAL_ENTRY, "enabled": "true"}]),
+        json.dumps([_CANONICAL_ENTRY, {**_CANONICAL_ENTRY, "scope": "project", "enabled": 1}]),
+        json.dumps([_CANONICAL_ENTRY, "superpowers@superpowers-marketplace"]),
+        json.dumps([{**_CANONICAL_ENTRY, "version": 6}]),
+        json.dumps([_CANONICAL_ENTRY]) + " " * (1 << 20),
+    ],
+    ids=[
+        "not-json",
+        "object",
+        "canonical-enabled-str",
+        "other-enabled-int",
+        "non-object-entry",
+        "version-int",
+        "over-1-mib",
+    ],
+)
+def test_claude_unparseable_json_is_unknown(tmp_path: Path, output: str) -> None:
+    assert _claude_status(tmp_path, output) == "unknown"
+
+
+@pytest.mark.parametrize("scope", ["global", "-s", "User"])
+def test_claude_scope_outside_the_closed_set_is_unknown(tmp_path: Path, scope: str) -> None:
+    listing = json.dumps(
+        [
+            _CANONICAL_ENTRY,
+            {**_CANONICAL_ENTRY, "id": "superpowers@superpowers-marketplace", "scope": scope},
+        ]
+    )
+
+    assert _claude_status(tmp_path, listing) == "unknown"
+
+
+def test_registry_claude_plugin_probes_use_canonical_ids() -> None:
+    checked = 0
+    for tool in load_tools(REGISTRY):
+        lifecycle = tool.skill_lifecycle
+        if lifecycle is None:
+            continue
+        for probe in lifecycle.status_probes:
+            if (probe.harness, probe.via) != ("claude", "plugin-cli"):
+                continue
+            plugin, _, marketplace = probe.match.partition("@")
+            assert plugin and marketplace, tool.id
+            claude_lines = dict(lifecycle.install.by_harness)["claude"]
+            assert any(line.endswith(f"install {probe.match}") for line in claude_lines), tool.id
+            checked += 1
+    assert checked == 3

@@ -3531,6 +3531,12 @@ def _skill_pack(
     )
 
 
+_CLAUDE_SUPERPOWERS_JSON = (
+    '[{"id": "superpowers@claude-plugins-official", "scope": "user", '
+    '"enabled": true, "version": "6.4.1"}]'
+)
+
+
 async def test_skill_worker_paints_superpowers_installed_with_claude_code_owner(
     tmp_path: Path,
 ) -> None:
@@ -3538,11 +3544,14 @@ async def test_skill_worker_paints_superpowers_installed_with_claude_code_owner(
 
     def skill_probe(argv: list[str]) -> str:
         calls.append(list(argv))
-        if argv == ["claude", "plugin", "list"]:
-            return "superpowers@claude-plugins-official\n"
+        if argv == ["claude", "plugin", "list", "--json"]:
+            return _CLAUDE_SUPERPOWERS_JSON
         return ""
 
-    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
     service = _offline_service(
         tmp_path / "versions.json",
         resolve_tag=lambda _repo: "v1",
@@ -3576,7 +3585,10 @@ def _skill_screen(
     stale: bool = False,
     refreshing: bool = False,
 ) -> tuple[CatalogScreen, Tool]:
-    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
     service = _offline_service(
         tmp_path / "versions.json",
         resolve_tag=lambda _repo: "v1",
@@ -3597,7 +3609,10 @@ def test_skill_inst_cell_shows_persisted_answer_with_stale_mark(tmp_path: Path) 
 
     path = tmp_path / "versions.json"
     save_version_cache(path, {}, skills={"superpowers": {"claude": "present"}})
-    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
     service = _offline_service(
         path,
         resolve_tag=lambda _repo: "v1",
@@ -3705,8 +3720,8 @@ def test_skill_rendering_leaves_a_non_pack_row_unchanged(tmp_path: Path) -> None
 def _counting_skill_probe(calls: list[list[str]]) -> Callable[[list[str]], str]:
     def skill_probe(argv: list[str]) -> str:
         calls.append(list(argv))
-        if argv == ["claude", "plugin", "list"]:
-            return "superpowers@claude-plugins-official\n"
+        if argv == ["claude", "plugin", "list", "--json"]:
+            return _CLAUDE_SUPERPOWERS_JSON
         return ""
 
     return skill_probe
@@ -3714,7 +3729,10 @@ def _counting_skill_probe(calls: list[list[str]]) -> Callable[[list[str]], str]:
 
 async def test_skill_probe_runs_once_across_three_catalog_entries(tmp_path: Path) -> None:
     calls: list[list[str]] = []
-    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
     service = _offline_service(
         tmp_path / "versions.json",
         resolve_tag=lambda _repo: "v1",
@@ -3732,12 +3750,15 @@ async def test_skill_probe_runs_once_across_three_catalog_entries(tmp_path: Path
         app.catalog.enter_view()
         await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
         await pilot.pause()
-    assert calls.count(["claude", "plugin", "list"]) == 1
+    assert calls.count(["claude", "plugin", "list", "--json"]) == 1
 
 
 async def test_skill_probe_runs_again_after_invalidate(tmp_path: Path) -> None:
     calls: list[list[str]] = []
-    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
     service = _offline_service(
         tmp_path / "versions.json",
         resolve_tag=lambda _repo: "v1",
@@ -3749,19 +3770,22 @@ async def test_skill_probe_runs_again_after_invalidate(tmp_path: Path) -> None:
     async with app.run_test(size=(140, 30)) as pilot:
         await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
         await pilot.pause()
-        assert calls.count(["claude", "plugin", "list"]) == 1
+        assert calls.count(["claude", "plugin", "list", "--json"]) == 1
         service.invalidate(reason="x")
         app.catalog.enter_view()
         await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
         await pilot.pause()
-    assert calls.count(["claude", "plugin", "list"]) == 2
+    assert calls.count(["claude", "plugin", "list", "--json"]) == 2
 
 
 async def test_skill_probe_failure_paints_unknown_and_keeps_the_app_running(tmp_path: Path) -> None:
     def skill_probe(_argv: list[str]) -> str:
         raise RuntimeError("harness down")
 
-    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
     service = _offline_service(
         tmp_path / "versions.json",
         resolve_tag=lambda _repo: "v1",
@@ -3784,7 +3808,10 @@ async def test_skill_probe_failure_paints_unknown_and_keeps_the_app_running(tmp_
 def test_skill_status_refreshed_discards_a_superseded_epoch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", "superpowers"),))
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
     service = _offline_service(
         tmp_path / "versions.json",
         resolve_tag=lambda _repo: "v1",
@@ -3812,7 +3839,7 @@ async def test_skill_probe_covers_packs_when_system_view_mounts_first(tmp_path: 
     system = _tool("rg", tier="system")
     pack = _skill_pack(
         "superpowers",
-        (SkillStatusProbe("claude", "plugin-cli", "superpowers"),),
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
         tier="ai",
     )
     path = tmp_path / "versions.json"
@@ -3835,7 +3862,7 @@ async def test_skill_probe_covers_packs_when_system_view_mounts_first(tmp_path: 
         assert app.current_view == "system"
         await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
         await pilot.pause()
-        assert ["claude", "plugin", "list"] in calls
+        assert ["claude", "plugin", "list", "--json"] in calls
         status = service.skill_status_of("superpowers")
         assert status is not None
         assert status.stale is False
