@@ -1,3 +1,4 @@
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -811,3 +812,26 @@ def test_installer_shim_on_path_is_never_presence(
     monkeypatch.setattr(guards, "is_our_shim", refuse)
     (bin_dir / "yq").write_text(f"#!/bin/sh\n{sentinel}\n")
     assert is_installed(tool("yq"), which=which, default_bin_dir=bin_dir) is True
+
+
+def test_real_pnpm_behind_the_redirect_shim_is_presence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WR2-01 / D-13: the default lookup (no `which`) looks through this
+    installer's own pnpm redirect shim. A real pnpm further down PATH is
+    presence, so the engine does not install a second one; a shim with nothing
+    behind it is still not installed."""
+    shims = tmp_path / "shims"
+    brew = tmp_path / "brew" / "bin"
+    shims.mkdir()
+    brew.mkdir(parents=True)
+    (shims / "pnpm").write_text(f'#!/bin/sh\n{REDIRECT_SENTINEL}\nexec pnpm "$@"\n')
+    (shims / "pnpm").chmod(0o755)
+    (brew / "pnpm").write_text("#!/bin/sh\necho 10.0.0\n")
+    (brew / "pnpm").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shims}{os.pathsep}{brew}")
+    tool = _github_tool(cmd="pnpm", raw=True)
+
+    assert is_installed(tool, default_bin_dir=shims, darwin=False) is True
+    (brew / "pnpm").unlink()
+    assert is_installed(tool, default_bin_dir=shims, darwin=False) is False

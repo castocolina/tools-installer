@@ -117,9 +117,27 @@ def is_installed(
     All three file checks and the PATH hit skip this installer's own ban and
     redirect shims (review M9, G13): a shim on PATH is not the tool, so the
     hit falls through to the declared-bin_dir, implicit-bin and app checks.
+    The default PATH hit is first looked through this installer's shim (WR2-01,
+    D-13): the real binary behind the managed bin dir is presence, and only a
+    shim with nothing real behind it falls through. A caller that passes
+    `which` already looks through, as the refresh service's does.
     """
     lookup: Which = shutil.which if which is None else which
+    implicit = (
+        default_bin_dir
+        if default_bin_dir is not None
+        # Module-attribute read (the guards.py precedent): the conftest
+        # sandbox patches locations.bin_dir, so no test ever reads the
+        # developer's real ~/.local/bin (checker W2).
+        else installer.locations.bin_dir(None)
+    )
     resolved = lookup(tool.cmd)
+    if which is None and resolved is not None:
+        # On the default lookup, the real binary behind this installer's own
+        # shim in the managed bin dir is the presence (WR2-01, D-13).
+        resolved = installer.guards.look_through_shim(
+            resolved, tool.cmd, shim_dir=implicit, path_value=os.environ.get("PATH", "")
+        )
     if (
         resolved is not None
         and not _is_installer_shim(tool, Path(resolved))
@@ -142,14 +160,6 @@ def is_installed(
         candidate = Path(bin_dir).expanduser() / tool.cmd
         if candidate.is_file() and not _is_installer_shim(tool, candidate):
             return True
-    implicit = (
-        default_bin_dir
-        if default_bin_dir is not None
-        # Module-attribute read (the guards.py precedent): the conftest
-        # sandbox patches locations.bin_dir, so no test ever reads the
-        # developer's real ~/.local/bin (checker W2).
-        else installer.locations.bin_dir(None)
-    )
     for method in tool.methods:
         if method.kind not in DOWNLOAD_KINDS:
             continue
