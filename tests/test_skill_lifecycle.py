@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 from collections import deque
 from collections.abc import Callable, Generator, Iterator
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import IO, Any, Literal
 
 import pytest
 
+import installer.atomic as atomic
 import installer.engine as engine
 import installer.skill_lifecycle as skill_lifecycle
 from installer.engine import install_tool
@@ -1798,44 +1800,14 @@ def test_oversized_hook_config_bound_is_the_read(
     _plant(tmp_path, ".claude/settings.json", _claude_hook_settings(_GSD_HOOK_COMMAND))
     with settings.open("a", encoding="utf-8") as fh:
         fh.write(" " * (300 * 1024))
-    real_stat = Path.stat
-    real_open = Path.open
     reads: list[int] = []
+    real_read = os.read
 
-    def grown_after_stat(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
-        info = real_stat(self, follow_symlinks=follow_symlinks)
-        if self != settings:
-            return info
-        fields = (info.st_mode, info.st_ino, info.st_dev, info.st_nlink, info.st_uid, info.st_gid)
-        return os.stat_result((*fields, 100, 0, 0, 0))
+    def counting_read(fd: int, size: int) -> bytes:
+        reads.append(size)
+        return real_read(fd, size)
 
-    class CountingReader:
-        def __init__(self, handle: IO[Any]) -> None:
-            self._handle = handle
-
-        def __enter__(self) -> "CountingReader":
-            return self
-
-        def __exit__(self, *exc: object) -> None:
-            self._handle.close()
-
-        def read(self, size: int = -1) -> bytes:
-            reads.append(size)
-            return self._handle.read(size)
-
-    def counting_open(
-        self: Path,
-        mode: str = "r",
-        buffering: int = -1,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
-    ) -> object:
-        handle = real_open(self, mode, buffering, encoding, errors, newline)
-        return CountingReader(handle) if self == settings else handle
-
-    monkeypatch.setattr(Path, "stat", grown_after_stat)
-    monkeypatch.setattr(Path, "open", counting_open)
+    monkeypatch.setattr(atomic.os, "read", counting_read)
     report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
 
     assert report.leftovers == ()
@@ -2242,3 +2214,89 @@ def test_no_step_installs_globally(tmp_path: Path) -> None:
         assert "--global" not in step.argv
         assert step.cwd is not None and step.cwd.is_absolute()
         assert step.cwd in dict(report.repos)
+
+
+def _bounded_report(call: Callable[[], object]) -> tuple[threading.Thread, list[object]]:
+    """Run a probe on a daemon thread; five seconds is the stall budget.
+
+    A FIFO at a config used to block the skill worker while it held the
+    skill-pass lock. The caller releases any reader left blocked.
+    """
+    box: list[object] = []
+
+    def run() -> None:
+        box.append(call())
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(timeout=5)
+    return thread, box
+
+
+def _release_fifo(fifo: Path, thread: threading.Thread) -> None:
+    with contextlib.suppress(OSError):
+        os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+    thread.join(timeout=5)
+
+
+def test_installed_plugins_fifo_never_blocks(tmp_path: Path) -> None:
+    plugins = tmp_path / ".claude" / "plugins"
+    plugins.mkdir(parents=True)
+    fifo = plugins / "installed_plugins.json"
+    os.mkfifo(fifo)
+    listing = _claude_json(
+        (_SUPERPOWERS_ID, "user", True, "6.4.1"), (_SUPERPOWERS_ID, "project", True, "6.2.0")
+    )
+    thread = threading.Thread()
+    try:
+        thread, box = _bounded_report(lambda: _superpowers_report(tmp_path, listing))
+        assert not thread.is_alive()
+        report = box[0]
+        assert isinstance(report, SkillPackReport)
+        assert report.reasons == (
+            "duplicate: superpowers@claude-plugins-official in project scope (6.2.0)",
+        )
+        assert report.steps == ()
+    finally:
+        _release_fifo(fifo, thread)
+
+
+def test_hook_config_fifo_is_not_checked(tmp_path: Path) -> None:
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    fifo = claude / "settings.json"
+    os.mkfifo(fifo)
+    thread = threading.Thread()
+    try:
+        thread, box = _bounded_report(lambda: _gsd_pack(tmp_path, set()))
+        assert not thread.is_alive()
+        report = box[0]
+        assert isinstance(report, ProjectPackReport)
+        assert ".claude/settings.json" in report.unchecked
+    finally:
+        _release_fifo(fifo, thread)
+
+
+def test_capped_config_reads_use_read_capped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both configs are read through the shared helper, following a symlink."""
+    _installed_plugins(tmp_path, [(_SUPERPOWERS_ID, "project", str(tmp_path))])
+    _plant(tmp_path, ".claude/settings.json", "{}")
+    seen: list[tuple[Path, bool]] = []
+    real = skill_lifecycle.read_capped
+
+    def recording(path: Path, cap: int, *, follow_symlinks: bool) -> bytes | None:
+        seen.append((path, follow_symlinks))
+        return real(path, cap, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(skill_lifecycle, "read_capped", recording)
+    listing = _claude_json(
+        (_SUPERPOWERS_ID, "user", True, "6.4.1"), (_SUPERPOWERS_ID, "project", True, "6.2.0")
+    )
+    _superpowers_report(tmp_path, listing)
+    _gsd_pack(tmp_path, set())
+
+    followed = {path: follow for path, follow in seen}
+    assert followed[tmp_path / ".claude" / "plugins" / "installed_plugins.json"] is True
+    assert followed[tmp_path / ".claude" / "settings.json"] is True

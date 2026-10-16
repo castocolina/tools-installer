@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
+from installer.atomic import read_capped
 from installer.model import (
     SKILL_HARNESSES,
     ConfigStep,
@@ -470,22 +471,18 @@ def _gsd_hook_in(value: object) -> bool | None:
 def _gsd_hooks_registered(path: Path, fmt: HookConfigFormat) -> bool | None:
     """True: a GSD hook registration; False: none, or no config; None: inconclusive.
 
-    Pure read. The size cap is enforced by the read itself, so a config that grows or is
-    swapped after the stat is never read whole.
+    Pure read. The cap and the regular-file check are on the opened descriptor, so a
+    FIFO cannot stall the open and a swap after any earlier stat is still refused.
     """
     try:
-        info = path.stat()  # follows a dotfiles-manager symlink
+        data = read_capped(path, _HOOK_CONFIG_MAX_BYTES, follow_symlinks=True)
     except (FileNotFoundError, NotADirectoryError):
         return False
     except OSError:
         return None
-    if not stat.S_ISREG(info.st_mode) or info.st_size > _HOOK_CONFIG_MAX_BYTES:
+    if data is None:
         return None
     try:
-        with path.open("rb") as fh:
-            data = fh.read(_HOOK_CONFIG_MAX_BYTES + 1)
-        if len(data) > _HOOK_CONFIG_MAX_BYTES:
-            return None
         text = data.decode("utf-8")
         if fmt == "toml":
             return _GSD_TOML_MARKER_RE.search(text) is not None
@@ -827,11 +824,14 @@ class SkillPackReport:
 def _installed_project_paths(home: Path) -> dict[tuple[str, str], list[object]]:
     """`projectPath` values per (id, scope) from installed_plugins.json; {} when unreadable."""
     try:
-        with (home / ".claude" / "plugins" / "installed_plugins.json").open("rb") as fh:
-            raw = fh.read(_INSTALLED_PLUGINS_CAP + 1)
+        raw = read_capped(
+            home / ".claude" / "plugins" / "installed_plugins.json",
+            _INSTALLED_PLUGINS_CAP,
+            follow_symlinks=True,
+        )
     except OSError:
         return {}
-    if len(raw) > _INSTALLED_PLUGINS_CAP:
+    if raw is None:
         return {}
     try:
         parsed: object = json.loads(raw)
