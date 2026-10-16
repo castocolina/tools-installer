@@ -7,9 +7,13 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
+import installer.locations
+from installer.download import DOWNLOAD_KINDS, artifact_paths
 from installer.model import Tool
 from installer.run import CommandError, run_output
 from installer.versions import PROBE_VERSION_TIMEOUT
+
+Which = Callable[[str], str | None]
 
 MACOS_STUBS: Mapping[str, tuple[str, ...]] = {
     "/usr/bin/java": ("/usr/libexec/java_home",),
@@ -38,11 +42,18 @@ def macos_stub_reason(
     *,
     darwin: bool | None = None,
     probe: StubProbe | None = None,
+    which: Which | None = None,
 ) -> str | None:
-    """When `which` resolves to a macOS shim, return None if the real tool exists else a reason."""
+    """When `which` resolves to a macOS shim, return None if the real tool exists else a reason.
+
+    `which` is resolved INSIDE the body (review H2): a `= shutil.which`
+    default would bind at import time, so tests and callers that patch
+    `status.shutil.which` afterwards would silently read the host PATH.
+    """
     if not _is_darwin(darwin=darwin):
         return None
-    resolved = shutil.which(tool.cmd)
+    lookup: Which = shutil.which if which is None else which
+    resolved = lookup(tool.cmd)
     if resolved is None:
         return None
     argv = MACOS_STUBS.get(resolved)
@@ -66,6 +77,8 @@ def is_installed(
     *,
     darwin: bool | None = None,
     probe: StubProbe | None = None,
+    which: Which | None = None,
+    default_bin_dir: Path | None = None,
 ) -> bool:
     """True if the tool's command resolves on PATH, any app/cask bundle exists,
     or a declared detect_path is present.
@@ -87,9 +100,20 @@ def is_installed(
     where it actually is. groovy is declared SDKMAN-exclusive but is a brew
     formula on some hosts, so its declared bin_dir does not exist while the
     tool is plainly installed. Widening only ever turns False into True.
+
+    After the declared bin_dir loop, a download method that declares no
+    bin_dir counts as present when its binary exists under the IMPLICIT
+    location the installer itself uses (~/.local/bin, or the
+    `default_bin_dir` the caller passes, D-13) -- which PATH may not
+    include. `which` and the implicit bin dir are both resolved inside the
+    body so runtime patches (tests, the service's managed bin dir) win.
     """
-    resolved = shutil.which(tool.cmd)
-    if resolved is not None and macos_stub_reason(tool, darwin=darwin, probe=probe) is None:
+    lookup: Which = shutil.which if which is None else which
+    resolved = lookup(tool.cmd)
+    if (
+        resolved is not None
+        and macos_stub_reason(tool, darwin=darwin, probe=probe, which=which) is None
+    ):
         return True
     for method in tool.methods:
         detect_path = method.params.get("detect_path")
@@ -106,6 +130,24 @@ def is_installed(
         # on the lstat would still call a dangling link present.
         if (Path(bin_dir).expanduser() / tool.cmd).is_file():
             return True
+    implicit = (
+        default_bin_dir
+        if default_bin_dir is not None
+        # Module-attribute read (the guards.py precedent): the conftest
+        # sandbox patches locations.bin_dir, so no test ever reads the
+        # developer's real ~/.local/bin (checker W2).
+        else installer.locations.bin_dir(None)
+    )
+    for method in tool.methods:
+        if method.kind not in DOWNLOAD_KINDS:
+            continue
+        if method.params.get("bin_dir"):
+            continue  # declared bin_dir methods are answered by the loop above
+        for artifact in artifact_paths(method, implicit):
+            # is_file() follows symlinks, so a live link into opt counts; a
+            # dangling link does not -- fail-closed reads never call it present.
+            if artifact.kind in ("file", "link") and artifact.path.is_file():
+                return True
     roots = _default_app_roots() if app_roots is None else app_roots
     for method in tool.methods:
         if method.kind not in {"app", "cask"}:

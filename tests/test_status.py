@@ -606,3 +606,143 @@ def test_non_stub_path_on_macos_runs_no_probe(monkeypatch: pytest.MonkeyPatch) -
 
     assert is_installed(_git_tool(), darwin=True, probe=recording_probe) is True
     assert calls == []
+
+
+# --- 19-02: implicit ~/.local/bin presence, injected which and bin dir ---
+
+
+def _github_tool(bin_dir: str | None = None, cmd: str = "yq", raw: bool = False) -> Tool:
+    params: dict[str, object] = {
+        "repo": "a/yq",
+        "asset": "yq.tar.gz",
+        "member": "yq_linux_amd64",
+        "bin_name": cmd,
+    }
+    if bin_dir is not None:
+        params["bin_dir"] = bin_dir
+    if raw:
+        params["raw"] = True
+    return Tool(
+        id="yq",
+        name="yq",
+        category="dev",
+        cmd=cmd,
+        methods=(Method(kind="github_release", params=params),),
+    )
+
+
+def test_implicit_local_bin_file_counts_as_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raw binary the installer placed in its implicit ~/.local/bin reads as
+    present even when that dir is not on PATH (SPEC AC12)."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    local_bin = tmp_path / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    (local_bin / "yq").write_text("binary")
+    assert is_installed(_github_tool(raw=True), which=_which_none) is True
+
+
+def test_implicit_local_bin_link_into_opt_counts_as_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt = tmp_path / ".local" / "opt" / "rg"
+    opt.mkdir(parents=True)
+    (opt / "rg").write_text("binary")
+    local_bin = tmp_path / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    (local_bin / "rg").symlink_to(opt / "rg")
+    archive = Tool(
+        id="rg",
+        name="rg",
+        category="dev",
+        cmd="rg",
+        methods=(
+            Method(
+                kind="github_release",
+                params={"repo": "a/rg", "asset": "rg.tar.gz", "member": "rg"},
+            ),
+        ),
+    )
+    assert is_installed(archive, which=_which_none) is True
+
+
+def test_dangling_implicit_link_is_not_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    local_bin = tmp_path / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    (local_bin / "yq").symlink_to(tmp_path / "gone")
+    assert is_installed(_github_tool(raw=True), which=_which_none) is False
+
+
+def test_declared_bin_dir_methods_keep_their_own_rule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A method WITH a bin_dir is answered by the existing declared-bin_dir
+    loop, never by the implicit ~/.local/bin check."""
+    import installer.status as status
+
+    monkeypatch.setattr(status.shutil, "which", _which_none)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    declared = tmp_path / "sdkman" / "bin"
+    declared.mkdir(parents=True)
+    implicit = tmp_path / ".local" / "bin"
+    implicit.mkdir(parents=True)
+    (implicit / "spring").write_text("binary")
+    assert is_installed(_bin_dir_tool(str(declared))) is False
+    (declared / "spring").write_text("binary")
+    assert is_installed(_bin_dir_tool(str(declared))) is True
+
+
+def test_is_installed_uses_the_injected_which(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The injected `which` answers presence without touching the real PATH,
+    and macos_stub_reason reads the same lookup."""
+    monkeypatch.setattr(Path, "home", lambda: Path("/nonexistent-home"))
+    assert is_installed(_tool("jq"), which=lambda _cmd: "/usr/bin/jq") is True
+    reason = macos_stub_reason(
+        _tool("java"),
+        darwin=True,
+        probe=lambda _argv: False,
+        which=lambda _cmd: "/usr/bin/java",
+    )
+    assert reason is not None and "stub" in reason
+
+
+def test_default_which_is_resolved_at_call_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """review H2: no `= shutil.which` default is bound at definition time —
+    patching `status.shutil.which` AFTER the import must still be what the
+    functions read."""
+    import installer.status as status
+
+    seen: list[str] = []
+
+    def fake(cmd: str) -> str | None:
+        seen.append(cmd)
+        return None
+
+    monkeypatch.setattr(status.shutil, "which", fake)
+    monkeypatch.setattr(Path, "home", lambda: Path("/nonexistent-home"))
+    assert is_installed(_tool("jq")) is False
+    assert macos_stub_reason(_tool("jq"), darwin=True, probe=lambda _argv: True) is None
+    assert seen == ["jq", "jq"]
+
+
+def test_implicit_presence_reads_the_given_default_bin_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """checker W2: the implicit check reads the bin dir the caller passes (the
+    service passes its managed bin dir); the given dir REPLACES the default,
+    it is not added to it."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    (managed / "yq").write_text("binary")
+    assert is_installed(_github_tool(raw=True), which=_which_none, default_bin_dir=managed) is True
+    (tmp_path / ".local" / "bin").mkdir(parents=True)
+    (tmp_path / ".local" / "bin" / "yq").write_text("binary")
+    other = tmp_path / "other"
+    other.mkdir()
+    assert is_installed(_github_tool(raw=True), which=_which_none, default_bin_dir=other) is False
