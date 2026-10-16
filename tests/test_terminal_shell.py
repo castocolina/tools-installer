@@ -686,12 +686,13 @@ def test_dry_run_leaves_home_byte_identical(tmp_path: Path) -> None:
         "home": tmp_path,
         "environ": {},
         "platform": _platform(),
-        "lookup": _lookup(**_ALL_TERMINALS),
+        "lookup": _lookup(**_ALL_TERMINALS, konsole="/usr/bin/konsole"),
     }
     sync_terminal_shells(**args, write=True)
-    # kitty stays in sync; wezterm goes stale; .zshrc needs the omz repair.
+    # kitty stays in sync; wezterm and konsolerc go stale; .zshrc needs the omz repair.
     wezterm = tmp_path / ".config" / "wezterm" / "wezterm.lua"
     wezterm.write_text('local wezterm = require "wezterm"\nlocal config = {}\nreturn config\n')
+    (tmp_path / ".config" / "konsolerc").write_text("[Desktop Entry]\nDefaultProfile=Old.profile\n")
     (tmp_path / ".oh-my-zsh").mkdir()
     (tmp_path / ".zshrc").write_text("source $ZSH/oh-my-zsh.sh\nplugins=(git)\n")
     before = _fingerprint(tmp_path)
@@ -699,7 +700,7 @@ def test_dry_run_leaves_home_byte_identical(tmp_path: Path) -> None:
     result = sync_terminal_shells(**args, write=False)
 
     assert _fingerprint(tmp_path) == before
-    assert result.drifted == ("wezterm",)
+    assert result.drifted == ("wezterm", "konsole")
 
 
 def test_dry_run_zsh_absent_reverts_nothing(tmp_path: Path) -> None:
@@ -731,3 +732,55 @@ def test_write_true_default_unchanged(tmp_path: Path) -> None:
 
     assert result.configured == ("kitty",)
     assert "shell /usr/bin/zsh -l" in (tmp_path / ".config" / "kitty" / "kitty.conf").read_text()
+
+
+def test_dry_run_reports_konsole_drift(tmp_path: Path) -> None:
+    result = sync_terminal_shells(
+        home=tmp_path,
+        environ={},
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
+        write=False,
+    )
+
+    data_home = tmp_path / ".local" / "share"
+    assert "konsole" in result.drifted
+    assert not (data_home / "konsole" / "tools-installer-zsh.profile").exists()
+    assert not (tmp_path / ".config" / "konsolerc").exists()
+    assert not (data_home / "tools-installer" / "terminal-shell-konsole-default").exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_dry_run_konsole_in_sync_is_quiet(tmp_path: Path) -> None:
+    args: _SyncArgs = {
+        "home": tmp_path,
+        "environ": {},
+        "platform": _platform(),
+        "lookup": _lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
+    }
+    sync_terminal_shells(**args, write=True)
+    before = _fingerprint(tmp_path)
+
+    result = sync_terminal_shells(**args, write=False)
+
+    assert "konsole" not in result.drifted
+    assert _fingerprint(tmp_path) == before
+
+
+def test_dry_run_konsole_user_owned_profile_warns(tmp_path: Path) -> None:
+    profile = tmp_path / ".local" / "share" / "konsole" / "tools-installer-zsh.profile"
+    profile.parent.mkdir(parents=True)
+    profile.write_text("[General]\nName=mine\n")
+    before = _fingerprint(tmp_path)
+
+    result = sync_terminal_shells(
+        home=tmp_path,
+        environ={},
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
+        write=False,
+    )
+
+    assert result.warnings == ("konsole: installer profile path is already user-owned",)
+    assert "konsole" not in result.drifted
+    assert _fingerprint(tmp_path) == before

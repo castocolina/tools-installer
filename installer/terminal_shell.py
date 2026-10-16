@@ -276,11 +276,16 @@ def _write_if_changed(path: Path, content: str, *, write: bool = True) -> bool:
 
 
 def _sync_konsole(
-    *, home: Path, environ: Mapping[str, str], zsh_path: str, lookup: Lookup
-) -> tuple[bool, str | None]:
-    """Create the dedicated Konsole profile and select it without touching user profiles."""
+    *, home: Path, environ: Mapping[str, str], zsh_path: str, lookup: Lookup, write: bool = True
+) -> tuple[bool, str | None, bool]:
+    """Create the dedicated Konsole profile and select it without touching user profiles.
+
+    Returns (configured, warning, drifted); drifted means the profile or the
+    konsolerc selection differed. The state file only records the prior
+    default, so it is written only when `write` and never counts as drift.
+    """
     if _safe_executable(lookup("konsole")) is None:
-        return False, None
+        return False, None, False
 
     data_home = _xdg_data_home(home, environ)
     profile = data_home / "konsole" / "tools-installer-zsh.profile"
@@ -288,7 +293,7 @@ def _sync_konsole(
     konsolerc = _xdg_config_home(home, environ) / "konsolerc"
     profile_content = _read_text(profile)
     if profile_content and "tools-installer terminal-shell konsole-profile" not in profile_content:
-        return False, "konsole: installer profile path is already user-owned"
+        return False, "konsole: installer profile path is already user-owned", False
 
     original_konsolerc = _read_text(konsolerc)
     updated_profile = _replace_owned_region(
@@ -313,12 +318,12 @@ def _sync_konsole(
         "konsole",
         "[Desktop Entry]\nDefaultProfile=tools-installer-zsh.profile",
     )
-    if not state.exists():
+    if write and not state.exists():
         state.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(state, f"{_desktop_default(original_konsolerc) or ''}\n")
-    _write_if_changed(profile, updated_profile)
-    _write_if_changed(konsolerc, updated_konsolerc)
-    return True, None
+    profile_drifted = _write_if_changed(profile, updated_profile, write=write)
+    konsolerc_drifted = _write_if_changed(konsolerc, updated_konsolerc, write=write)
+    return True, None, profile_drifted or konsolerc_drifted
 
 
 def _revert_konsole(*, home: Path, environ: Mapping[str, str]) -> bool:
@@ -461,14 +466,15 @@ def sync_terminal_shells(
                 drifted.append("wezterm")
             configured.append("wezterm")
 
-    if write:
-        konsole_configured, konsole_warning = _sync_konsole(
-            home=home, environ=environ, zsh_path=zsh_path, lookup=lookup
-        )
-        if konsole_configured:
-            configured.append("konsole")
-        if konsole_warning is not None:
-            warnings.append(konsole_warning)
+    konsole_configured, konsole_warning, konsole_drifted = _sync_konsole(
+        home=home, environ=environ, zsh_path=zsh_path, lookup=lookup, write=write
+    )
+    if konsole_configured:
+        configured.append("konsole")
+    if konsole_drifted:
+        drifted.append("konsole")
+    if konsole_warning is not None:
+        warnings.append(konsole_warning)
     return TerminalShellResult(
         configured=tuple(configured),
         skipped=tuple(skipped),
