@@ -96,6 +96,24 @@ def test_reasons_put_the_winner_first_then_precedence_then_notes() -> None:
     assert tool_health(ev) == (Health.MISCONFIGURED, ("m", "o", "n1", "n2"))
 
 
+def test_reasons_follow_precedence_when_groups_share_a_tuple() -> None:
+    """Precedence is the Health, not the tuple's identity (G17).
+
+    One tuple object is both the broken and misconfigured facts. The winner's
+    fact stays first, then the other group's fact, then the note.
+    """
+    shared = ("fact",)
+    ev = Evidence(
+        present=True,
+        available=True,
+        broken=shared,
+        misconfigured=shared,
+        outdated=("outdated fact",),
+        notes=("note",),
+    )
+    assert tool_health(ev) == (Health.BROKEN, ("fact", "outdated fact", "note"))
+
+
 def test_unavailable_lists_its_reason_first() -> None:
     ev = Evidence(present=False, available=False, absent_reason="needs macOS", notes=("x",))
     assert tool_health(ev) == (Health.UNAVAILABLE, ("needs macOS", "x"))

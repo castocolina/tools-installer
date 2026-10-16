@@ -4275,6 +4275,50 @@ def test_terminal_drift_failure_is_a_not_checked_note(tmp_path: Path) -> None:
     assert note not in states["jqx"].reasons
 
 
+def _warned(*warnings: str) -> Callable[[Platform], TerminalShellResult]:
+    return lambda _platform: TerminalShellResult(warnings=warnings)
+
+
+def test_terminal_warning_is_a_not_checked_note(tmp_path: Path) -> None:
+    """A warning the sync cannot assess lands on its row as a note (G11).
+
+    No configuration step: the synchronizer cannot handle that shape.
+    """
+    states = _settled_states(
+        _drift_service(tmp_path, _warned("wezterm: unsupported return shape")), _terminals()
+    )
+    note = "terminal shell not checked: wezterm: unsupported return shape"
+    wezterm = states["wezterm"]
+    assert wezterm.health is Health.OK
+    assert note in wezterm.reasons
+    assert wezterm.unconfigured == ()
+    for other in ("kitty", "zsh", "jqx"):
+        assert note not in states[other].reasons
+
+
+def test_konsole_warning_lands_on_zsh(tmp_path: Path) -> None:
+    """Konsole has no catalog row; its warning rides the zsh row (G11, L-19-10)."""
+    warning = "konsole: installer profile path is already user-owned"
+    states = _settled_states(_drift_service(tmp_path, _warned(warning)), _terminals())
+    note = f"terminal shell not checked: {warning}"
+    assert note in states["zsh"].reasons
+    assert states["zsh"].unconfigured == ()
+    for other in ("kitty", "wezterm", "jqx"):
+        assert note not in states[other].reasons
+
+
+def test_unknown_terminal_warning_lands_on_every_terminal_row(tmp_path: Path) -> None:
+    """A warning naming no known terminal is a note on every terminal row (G11)."""
+    states = _settled_states(
+        _drift_service(tmp_path, _warned("sync: unexpected output")), _terminals()
+    )
+    note = "terminal shell not checked: sync: unexpected output"
+    for tool_id in ("kitty", "wezterm", "zsh"):
+        assert note in states[tool_id].reasons
+        assert states[tool_id].unconfigured == ()
+    assert note not in states["jqx"].reasons
+
+
 def test_no_terminal_drift_seam_adds_nothing(tmp_path: Path) -> None:
     states = _settled_states(_drift_service(tmp_path, None), _terminals())
     assert all(state.health is Health.OK for state in states.values())

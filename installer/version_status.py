@@ -231,8 +231,10 @@ def tool_health(ev: Evidence) -> tuple[Health, tuple[str, ...]]:
     )
     winner = next(((s, f) for s, f in groups if f), (Health.OK, ()))
     reasons = winner[1]
-    for _state, facts in groups:
-        if facts is not winner[1]:
+    for state, facts in groups:
+        # Compare the Health, not the tuple: two groups can hold one object
+        # (G17), and an identity check would drop the other's facts.
+        if state is not winner[0]:
             reasons = reasons + facts
     return winner[0], tuple(dict.fromkeys(reasons + ev.notes))
 
@@ -1291,17 +1293,22 @@ class VersionRefreshService:
             return None
 
     def _terminal_facts(self, platform: Platform) -> dict[str, _ConfigFacts]:
-        """D-16: ONE dry-run sync per pass; each drifted terminal is its row's fact."""
+        """D-16: ONE dry-run sync per pass; each drifted terminal is its row's fact.
+
+        A warning is a note, never a step (G11): the synchronizer cannot handle
+        that shape. Its prefix before the first colon names the terminal; an
+        unknown prefix lands on every terminal row.
+        """
         if self._terminal_drift is None:
             return {}
         try:
-            drifted = self._terminal_drift(platform).drifted
+            result = self._terminal_drift(platform)
         except Exception as exc:  # a read-only secondary fact must never fail the pass
             # Review M11: a drop without a note would let a drifted terminal read OK.
             note = (f"terminal shell not checked: {exc}",)
             return {row: _ConfigFacts(unchecked=note) for row, _label in _TERMINAL_ROWS.values()}
         facts: dict[str, _ConfigFacts] = {}
-        for name in drifted:
+        for name in result.drifted:
             if name not in _TERMINAL_ROWS:
                 continue
             row, label = _TERMINAL_ROWS[name]
@@ -1310,6 +1317,13 @@ class VersionRefreshService:
                 (ConfigStep(f"point {label} at zsh", "terminal_sync"),),
             )
             facts[row] = facts.get(row, _NO_FACTS).plus(fact)
+        rows = tuple(dict.fromkeys(row for row, _label in _TERMINAL_ROWS.values()))
+        for warning in result.warnings:
+            prefix = warning.split(":", 1)[0]
+            targets = (_TERMINAL_ROWS[prefix][0],) if prefix in _TERMINAL_ROWS else rows
+            note = _ConfigFacts(unchecked=(f"terminal shell not checked: {warning}",))
+            for row in targets:
+                facts[row] = facts.get(row, _NO_FACTS).plus(note)
         return facts
 
     def _artifacts(self, tool: Tool) -> Sequence[Path]:
