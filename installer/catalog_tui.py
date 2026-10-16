@@ -352,6 +352,8 @@ class CatalogScreen(AppScreen):
         # The refresh error or cache warning this screen last showed, so a clean
         # pass clears only its own line, never an unrelated status message.
         self._state_line: str | None = None
+        # The states the last rebuild painted from. Empty until the first one.
+        self._painted: dict[str, ToolState | None] = {}
 
     def _adapter(self) -> BrowserAdapter[Tool]:
         return BrowserAdapter(
@@ -472,7 +474,11 @@ class CatalogScreen(AppScreen):
         self.status.set(line, "warn")
         self._state_line = line
 
-    def _state(self, tool: Tool) -> ToolState | None:
+    def _state(
+        self, tool: Tool, painted: Mapping[str, ToolState | None] | None = None
+    ) -> ToolState | None:
+        if painted is not None and tool.id in painted:
+            return painted[tool.id]
         service = self._version_refresh
         return service.state_of(tool.id) if service is not None else None
 
@@ -485,10 +491,12 @@ class CatalogScreen(AppScreen):
         state = self._state(tool)
         return state is not None and state.present
 
-    def _is_unavailable(self, tool: Tool) -> bool:
+    def _is_unavailable(
+        self, tool: Tool, painted: Mapping[str, ToolState | None] | None = None
+    ) -> bool:
         """The state decides once one exists (brew may appear mid-session, R8);
         before the first pass, the launch-time map does."""
-        state = self._state(tool)
+        state = self._state(tool, painted)
         if state is not None:
             return state.health is Health.UNAVAILABLE
         return bool(self._unavailable.get(tool.id, False))
@@ -500,11 +508,11 @@ class CatalogScreen(AppScreen):
     def _unavailable_map(self) -> dict[str, bool]:
         return {tool.id: self._is_unavailable(tool) for tool in self._catalog}
 
-    def _ver_cell(self, tool: Tool) -> Text:
+    def _ver_cell(self, tool: Tool, painted: Mapping[str, ToolState | None] | None = None) -> Text:
         """Version facts only (19-UI-SPEC "Ver cell"): empty unless the tool is
         present with a readable version. The text carries no color; the Health
         mark is the row's only color carrier."""
-        state = self._state(tool)
+        state = self._state(tool, painted)
         version = state.version if state is not None and state.present else None
         if version is None or version.installed is None:
             return Text("")
@@ -530,12 +538,14 @@ class CatalogScreen(AppScreen):
             return Text(", ".join(labels))
         return Text(f"{labels[0]} +{len(labels) - 1}")
 
-    def _owner_cell(self, tool: Tool) -> Text:
+    def _owner_cell(
+        self, tool: Tool, painted: Mapping[str, ToolState | None] | None = None
+    ) -> Text:
         """The owner label, or the hosts for a skill pack, from the state. Empty
         without a state (the Health `…` already says checking) and for an
         unknown owner. Not gated on presence: ownership comes from the live
         binary path, so an absent-reading tool can still carry a real owner."""
-        state = self._state(tool)
+        state = self._state(tool, painted)
         if state is None:
             return Text("")
         if tool.skill_lifecycle is not None:
@@ -549,10 +559,11 @@ class CatalogScreen(AppScreen):
         return Text(label)
 
     def _row_cells(self, tool: Tool) -> list[Text]:
-        health = health_cell(self._state(tool))
+        painted = self._painted
+        health = health_cell(self._state(tool, painted))
         desc = tool.desc or tool.name
-        ver = self._ver_cell(tool)
-        if self._is_unavailable(tool):
+        ver = self._ver_cell(tool, painted)
+        if self._is_unavailable(tool, painted):
             unavailable = self._unavailable.get(tool.id, False)
             if isinstance(unavailable, UnavailableReason):
                 desc = f"{desc} (not available: {unavailable.short})"
@@ -566,7 +577,7 @@ class CatalogScreen(AppScreen):
                 Text(AUDIENCE_LABEL[tool.audience], style="dim"),
                 Text(health.plain, style="dim"),
                 Text(ver.plain, style="dim"),
-                Text(self._owner_cell(tool).plain, style="dim"),
+                Text(self._owner_cell(tool, painted).plain, style="dim"),
                 Text(desc, style="dim"),
             ]
         return [
@@ -577,14 +588,22 @@ class CatalogScreen(AppScreen):
             Text(AUDIENCE_LABEL[tool.audience], style=_AUDIENCE_STYLE[tool.audience]),
             health,
             ver,
-            self._owner_cell(tool),
+            self._owner_cell(tool, painted),
             Text(desc, style="dim"),
         ]
 
     def _groups(self, view: str) -> list[Section[Tool]]:
+        # One snapshot per rebuild, so grouping and cells agree even when a pass
+        # publishes mid-rebuild. Detail text, actions and previews read live state.
+        self._painted = {tool.id: self._state(tool) for tool in self.tools}
+
+        def painted_health(tool: Tool) -> Health | None:
+            state = self._painted.get(tool.id)
+            return state.health if state is not None else None
+
         if view == "table":
-            return [("", "", sort_for_table(self.tools, self._health_of, self.table_sort))]
-        return group_tools(self.tools, self._health_of, view, self._blurbs)
+            return [("", "", sort_for_table(self.tools, painted_health, self.table_sort))]
+        return group_tools(self.tools, painted_health, view, self._blurbs)
 
     def _detail_text(self, tool: Tool) -> str:
         detail = (

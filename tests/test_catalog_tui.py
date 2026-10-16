@@ -1905,10 +1905,10 @@ async def test_owner_column_starts_inside_the_viewport_at_the_minimum_size() -> 
     async with app.run_test(size=(80, 20)) as pilot:
         catalog = app.catalog
         # The widest Ver cell this phase renders (19-UI-SPEC "Columns").
-        catalog._ver_cell = lambda _tool: Text("1.22.3 -> 1.22.44 ~")  # type: ignore[method-assign]
+        catalog._ver_cell = lambda _tool, _painted=None: Text("1.22.3 -> 1.22.44 ~")  # type: ignore[method-assign]
         # The widest label `OWNER_LABELS` can produce, so the assertion is
         # made against the worst case rather than an empty column.
-        catalog._owner_cell = lambda _tool: Text("Homebrew cask")  # type: ignore[method-assign]
+        catalog._owner_cell = lambda _tool, _painted=None: Text("Homebrew cask")  # type: ignore[method-assign]
         catalog._browser.reload(catalog._adapter())  # pyright: ignore[reportPrivateUsage]
         await pilot.pause()
         table = app.query_one(DataTable[Any])
@@ -4797,3 +4797,61 @@ async def test_empty_tier_shows_the_empty_copy() -> None:
         assert rows[:2] == ["No tools in the User tier.", "Press 1-6 or ^p to open another view."]
         legend = catalog.query_one("#browser-legend", Static)
         assert "✓ ok" in _painted_legend(legend)
+
+
+async def test_status_view_survives_a_publication_mid_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One rebuild paints from one snapshot: a state published while the Status
+    view is being grouped cannot put a tool in two groups or paint a mark that
+    disagrees with its section (G7)."""
+    from installer import catalog_tui
+
+    tools, installed = _catalog()
+    service = _seeded(tools, installed)
+    app = _unified_app(tools, installed, _BLURBS, version_refresh=service)
+    real_group = catalog_tui.group_tools
+    real_state = service.state_of
+    grouping_status = False
+    rg_reads = 0
+
+    def group(
+        members: list[Tool],
+        health_of: Callable[[Tool], Health | None],
+        view: str,
+        blurbs: Mapping[str, str],
+    ) -> list[tuple[str, str, list[Tool]]]:
+        nonlocal grouping_status
+        if view == "status":
+            grouping_status = True
+        return real_group(members, health_of, view, blurbs)
+
+    def state_of(tool_id: str) -> ToolState | None:
+        nonlocal rg_reads
+        if grouping_status and tool_id == "rg":
+            rg_reads += 1
+            if rg_reads == 1:
+                return None
+        return real_state(tool_id)
+
+    monkeypatch.setattr(catalog_tui, "group_tools", group)
+    monkeypatch.setattr(service, "state_of", state_of)
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        for _ in range(3):
+            await pilot.press("right")
+        await pilot.pause()
+        table = app.catalog.query_one(DataTable[Any])
+        ids = [tool.id for tool in tools]
+        seen: list[str] = []
+        section = ""
+        for row in table.ordered_rows:
+            key = str(row.key.value)
+            if key.startswith("#"):
+                section = key.removeprefix("#")
+                continue
+            seen.append(key)
+            glyph = table.get_cell(key, "health").plain
+            assert glyph == section[:1], f"{key}: {glyph!r} under {section!r}"
+        assert sorted(seen) == sorted(ids)
+        assert len(seen) == len(set(seen))
