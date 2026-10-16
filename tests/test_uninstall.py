@@ -382,7 +382,15 @@ def test_remove_paths_deletes_dirs_files_and_symlinks(tmp_path: Path):
     dangling.symlink_to(tmp_path / "missing")
     plain = tmp_path / "plain"
     plain.write_text("y")
-    remove_paths([opt, link, dangling, plain])
+    artifacts = [
+        receipts.fingerprint(opt, "dir"),
+        receipts.fingerprint(link, "link"),
+        receipts.fingerprint(dangling, "link"),
+        receipts.fingerprint(plain, "file"),
+    ]
+    assert all(artifact is not None for artifact in artifacts)
+    refused = remove_paths([artifact for artifact in artifacts if artifact is not None])
+    assert refused == ()
     assert not opt.exists()
     assert not link.is_symlink()
     assert not dangling.is_symlink()
@@ -410,10 +418,15 @@ def test_plan_skips_method_with_non_str_member(tmp_path: Path, monkeypatch: pyte
     assert plan_uninstall([tool], bin_dir) == []
 
 
-def test_remove_paths_silently_skips_nonexistent_path(tmp_path: Path):
-    """remove_paths must not raise when a path neither exists nor is a symlink."""
+def test_remove_paths_refuses_a_missing_artifact(tmp_path: Path):
+    """An artifact whose path is gone is refused, never silently skipped.
+
+    The authorized artifact is the only thing that may be deleted, and a path
+    that no longer matches it (here: it is gone) is returned, not touched.
+    """
     absent = tmp_path / "never_created"
-    remove_paths([absent])  # must complete without error
+    artifact = receipts.ReceiptArtifact(path=absent, type="file")
+    assert remove_paths([artifact]) == (absent,)
 
 
 def test_plan_skips_traversal_binname(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -427,13 +440,85 @@ def test_plan_skips_traversal_binname(tmp_path: Path, monkeypatch: pytest.Monkey
     assert plan_uninstall([tool], bin_dir) == []
 
 
+def test_remove_paths_unlinks_only_what_its_type_authorizes(tmp_path: Path) -> None:
+    """The authorized type picks the operation, never what the path is now (G1).
+
+    A file, a link and a dir that no longer match their artifact are refused
+    with their contents intact; a still-matching file, link and dir are
+    removed, and a link's target survives.
+    """
+
+    def swap_for_dir(path: Path) -> Path:
+        sibling = path.with_name(path.name + ".new")
+        sibling.mkdir()
+        (sibling / "decoy").write_text("not ours")
+        if path.is_dir() and not path.is_symlink():
+            for child in path.iterdir():
+                child.rename(sibling / child.name)
+            path.rmdir()
+        else:
+            path.unlink()
+        sibling.rename(path)
+        decoy = path / "decoy"
+        decoy.write_text("not ours")
+        return decoy
+
+    file_path = tmp_path / "file"
+    file_path.write_text("plain")
+    file_artifact = receipts.fingerprint(file_path, "file")
+    file_decoy = swap_for_dir(file_path)
+
+    link_path = tmp_path / "link"
+    link_path.symlink_to(tmp_path / "nowhere")
+    link_artifact = receipts.fingerprint(link_path, "link")
+    link_decoy = swap_for_dir(link_path)
+
+    dir_path = tmp_path / "dir"
+    dir_path.mkdir()
+    (dir_path / "member").write_text("inside")
+    dir_artifact = receipts.fingerprint(dir_path, "dir")
+    dir_decoy = swap_for_dir(dir_path)
+
+    assert file_artifact is not None
+    assert link_artifact is not None
+    assert dir_artifact is not None
+    refused = remove_paths([file_artifact, link_artifact, dir_artifact])
+    assert set(refused) == {file_path, link_path, dir_path}
+    assert file_decoy.read_text() == "not ours"
+    assert link_decoy.read_text() == "not ours"
+    assert dir_decoy.read_text() == "not ours"
+
+    kept_file = tmp_path / "kept-file"
+    kept_file.write_text("keep me gone")
+    target = tmp_path / "target"
+    target.write_text("survives")
+    kept_link = tmp_path / "kept-link"
+    kept_link.symlink_to(target)
+    kept_dir = tmp_path / "kept-dir"
+    kept_dir.mkdir()
+    (kept_dir / "gone").write_text("inside")
+    kept = [
+        receipts.fingerprint(kept_file, "file"),
+        receipts.fingerprint(kept_link, "link"),
+        receipts.fingerprint(kept_dir, "dir"),
+    ]
+    assert all(artifact is not None for artifact in kept)
+    assert remove_paths([artifact for artifact in kept if artifact is not None]) == ()
+    assert not kept_file.exists()
+    assert not kept_link.is_symlink()
+    assert not kept_dir.exists()
+    assert target.read_text() == "survives"
+
+
 def test_remove_paths_unlinks_symlink_to_dir_without_deleting_target(tmp_path: Path):
     target_dir = tmp_path / "target"
     target_dir.mkdir()
     (target_dir / "keep").write_text("important")
     link = tmp_path / "link"
     link.symlink_to(target_dir)  # symlink to a DIRECTORY
-    remove_paths([link])
+    link_artifact = receipts.fingerprint(link, "link")
+    assert link_artifact is not None
+    assert remove_paths([link_artifact]) == ()
     assert not link.is_symlink()  # the link itself is gone
     assert target_dir.is_dir()  # the target dir survives
     assert (target_dir / "keep").read_text() == "important"  # contents preserved
@@ -1534,8 +1619,11 @@ def test_failed_opt_dir_delete_leaves_the_remainder_listed(
         real_rmtree(path)  # type: ignore[arg-type]
 
     monkeypatch.setattr(uninstall_module.shutil, "rmtree", failing_rmtree)
+    link_artifact = receipts.fingerprint(bin_dir / "fd", "link")
+    dir_artifact = receipts.fingerprint(opt, "dir")
+    assert link_artifact is not None and dir_artifact is not None
     with pytest.raises(OSError):
-        remove_paths([bin_dir / "fd", opt])
+        remove_paths([link_artifact, dir_artifact])
     monkeypatch.setattr(uninstall_module.shutil, "rmtree", real_rmtree)
 
     plan = plan_removal([tool], bin_dir)
@@ -1785,6 +1873,29 @@ def test_no_receipt_keeps_the_layout_proof(tmp_path: Path, monkeypatch: pytest.M
     assert plan.by_tool == {}
 
 
+def test_plan_removal_keeps_each_proven_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The type that proved a path travels with it (G1): a receipt-proven raw
+    file keeps its receipt artifact, and a layout-proven archive pair keeps
+    the link and the dir fingerprinted at proof time."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    yq, bin_dir = plant_raw_yq(tmp_path)
+    receipt = receipts.read("yq")
+    assert receipt is not None
+    plan = plan_removal([yq], bin_dir)
+    assert plan.artifacts == {bin_dir / "yq": receipt.artifacts[0]}
+    assert set(plan.artifacts) == set(plan.removable)
+
+    rg, rg_bin, opt = _plant_rg(tmp_path)
+    layout = plan_removal([rg], rg_bin)
+    link = receipts.fingerprint(rg_bin / "rg", "link")
+    directory = receipts.fingerprint(opt, "dir")
+    assert link is not None and directory is not None
+    assert layout.artifacts == {rg_bin / "rg": link, opt: directory}
+    assert set(layout.artifacts) == set(layout.removable)
+
+
 def test_receiptless_raw_binary_is_not_removable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1909,8 +2020,8 @@ def test_remove_proven_keeps_the_receipt_when_a_delete_fails(
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     yq, bin_dir = plant_raw_yq(tmp_path)
 
-    def boom(paths: list[Path]) -> None:
-        raise OSError(f"read-only: {paths[0]}")
+    def boom(artifacts: list[receipts.ReceiptArtifact]) -> None:
+        raise OSError(f"read-only: {artifacts[0].path}")
 
     monkeypatch.setattr("installer.uninstall.remove_paths", boom)
     with pytest.raises(OSError, match="read-only"):

@@ -5,7 +5,7 @@ path the Policies view uses (CONTEXT D-04). Cask/brew/native-managed artifacts
 are left alone."""
 
 import shutil
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -58,27 +58,37 @@ class RemovalPlan:
     `removable` holds only proven artifacts: receipt artifacts the registry
     formula agrees on (D-10), or — for a tool with no receipt file — a bin
     link that is a symlink resolving to a regular file inside the same tool's
-    opt dir, plus that opt dir. Everything else `plan_uninstall` still
-    matches by name — uv/pip files, foreign symlinks, shared files, app
-    bundles — lands in `yourself`: listed for the user, never deleted by
-    this installer. `by_tool` maps a tool id to its receipt-proven paths, so
-    the remover retires a receipt only once all of them are gone.
+    opt dir, plus that opt dir. `artifacts` carries the authorized artifact of
+    every path in `removable`, so the type that proved a path travels with it
+    to the delete instead of being rediscovered from the live path (G1).
+    Everything else `plan_uninstall` still matches by name — uv/pip files,
+    foreign symlinks, shared files, app bundles — lands in `yourself`: listed
+    for the user, never deleted by this installer. `by_tool` maps a tool id
+    to its receipt-proven paths, so the remover retires a receipt only once
+    all of them are gone.
     """
 
     removable: tuple[Path, ...]
     yourself: tuple[Path, ...]
     by_tool: Mapping[str, tuple[Path, ...]] = field(default_factory=dict[str, tuple[Path, ...]])
+    artifacts: Mapping[Path, receipts.ReceiptArtifact] = field(
+        default_factory=dict[Path, receipts.ReceiptArtifact]
+    )
 
 
-def _receipt_proof(tool: Tool, default_bin_dir: Path, *, verify: bool) -> tuple[Path, ...]:
-    """The paths a tool's receipt proves: receipt ∩ `artifact_paths` (L-19-06).
+def _receipt_proof(
+    tool: Tool, default_bin_dir: Path, *, verify: bool
+) -> tuple[receipts.ReceiptArtifact, ...]:
+    """The artifacts a tool's receipt proves: receipt ∩ `artifact_paths` (L-19-06).
 
     The receipt is user-writable JSON, so it is never the authority on its
     own: only an artifact whose (path, type) PAIR the registry formula names
     for one of the tool's methods of the receipt's kind is proven (19-RESEARCH
     Pitfall 8; the pair, not the path, so a receipt cannot retype a raw file
     into a recursive directory delete, review H6). A corrupt receipt, or any
-    drifted artifact — authorized or not (review H7) — proves nothing."""
+    drifted artifact — authorized or not (review H7) — proves nothing. The
+    proven artifact itself is returned, so the type that authorized a path
+    reaches the delete."""
     receipt = receipts.read(tool.id)
     if receipt is None or receipts.drifted(receipt, rehash=verify):
         return ()
@@ -88,7 +98,7 @@ def _receipt_proof(tool: Tool, default_bin_dir: Path, *, verify: bool) -> tuple[
         if method.kind == receipt.method.kind
         for artifact in artifact_paths(method, default_bin_dir)
     }
-    return tuple(a.path for a in receipt.artifacts if (a.path, a.type) in allowed)
+    return tuple(a for a in receipt.artifacts if (a.path, a.type) in allowed)
 
 
 def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = False) -> RemovalPlan:
@@ -111,30 +121,37 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
     removable: list[Path] = []
     seen: set[Path] = set()
     by_tool: dict[str, tuple[Path, ...]] = {}
+    artifacts: dict[Path, receipts.ReceiptArtifact] = {}
     for tool in tools:
         if _exists(receipts.receipt_path(tool.id)):
             proven = _receipt_proof(tool, default_bin_dir, verify=verify)
             if proven:
-                by_tool[tool.id] = proven
-            for path in proven:
-                if path not in seen:
-                    seen.add(path)
-                    removable.append(path)
+                by_tool[tool.id] = tuple(a.path for a in proven)
+            for artifact in proven:
+                if artifact.path not in seen:
+                    seen.add(artifact.path)
+                    removable.append(artifact.path)
+                    artifacts[artifact.path] = artifact
             continue
         for method in tool.methods:
             if method.kind not in DOWNLOAD_KINDS:
                 continue
-            artifacts = artifact_paths(method, default_bin_dir)
-            link = next((a.path for a in artifacts if a.kind == "link"), None)
-            opt = next((a.path for a in artifacts if a.kind == "dir"), None)
+            method_artifacts = artifact_paths(method, default_bin_dir)
+            link = next((a.path for a in method_artifacts if a.kind == "link"), None)
+            opt = next((a.path for a in method_artifacts if a.kind == "dir"), None)
             if link is None or opt is None or not is_still_proven(link):
                 continue
-            for path in (link, opt):
-                if path not in seen:
-                    seen.add(path)
-                    removable.append(path)
+            proven_link = receipts.fingerprint(link, "link")
+            proven_dir = receipts.fingerprint(opt, "dir")
+            if proven_link is None or proven_dir is None:
+                continue
+            for artifact in (proven_link, proven_dir):
+                if artifact.path not in seen:
+                    seen.add(artifact.path)
+                    removable.append(artifact.path)
+                    artifacts[artifact.path] = artifact
     yourself = tuple(p for p in plan_uninstall(tools, default_bin_dir) if p not in seen)
-    return RemovalPlan(tuple(removable), yourself, by_tool)
+    return RemovalPlan(tuple(removable), yourself, by_tool, artifacts)
 
 
 @dataclass(frozen=True, init=False)
@@ -384,16 +401,25 @@ def classify_tools(
     return rows
 
 
-def remove_paths(paths: list[Path]) -> None:
-    """Delete each path: a symlink is unlinked (target preserved), a dir is removed
-    recursively, a file is unlinked."""
-    for path in paths:
-        if path.is_symlink():
-            path.unlink()
-        elif path.is_dir():
-            shutil.rmtree(path)
-        elif path.exists():
-            path.unlink()
+def remove_paths(artifacts: Sequence[receipts.ReceiptArtifact]) -> tuple[Path, ...]:
+    """Delete each authorized artifact; return the paths it refused.
+
+    The authorized type picks the operation, never what the path is now: only
+    a `dir` artifact reaches `rmtree`, and a `file` or `link` is only ever
+    unlinked (G1). `receipts.matches` re-checks the artifact right before the
+    delete, so a path that changed since the proof is refused and never
+    touched. A failed delete still raises, before any receipt is touched.
+    """
+    refused: list[Path] = []
+    for artifact in artifacts:
+        if not receipts.matches(artifact):
+            refused.append(artifact.path)
+            continue
+        if artifact.type == "dir":
+            shutil.rmtree(artifact.path)
+        else:
+            artifact.path.unlink()
+    return tuple(refused)
 
 
 def remove_proven(
@@ -404,18 +430,20 @@ def remove_proven(
     The one remover for the CLI and the TUI (L-19-06). The preview is not a
     permission slip: the proof is recomputed at deletion time with a re-hash
     of every recorded file (`verify=True`), so bytes swapped in place since
-    the preview are refused even with size and mtime restored. A tool's
-    receipt is deleted only after every path it proved is gone (D-08); a
-    failed delete raises before any receipt is touched. Returns the removed
-    paths and one refusal line per path no longer proven."""
+    the preview are refused even with size and mtime restored. The type that
+    proved a path travels to its delete, and a path that changed after that
+    proof is refused too (G1). A tool's receipt is deleted only after every
+    path it proved is gone (D-08); a failed delete raises before any receipt
+    is touched. Returns the removed paths and one refusal line per path no
+    longer proven."""
     fresh = plan_removal(tools, bin_dir, verify=True)
     proven = set(fresh.removable)
-    kept = [path for path in paths if path in proven]
+    kept = [path for path in paths if path in proven and path in fresh.artifacts]
+    changed = remove_paths([fresh.artifacts[path] for path in kept])
+    removed = set(kept) - set(changed)
     refused = tuple(
-        f"changed since the preview; not removed: {path}" for path in paths if path not in proven
+        f"changed since the preview; not removed: {path}" for path in paths if path not in removed
     )
-    remove_paths(kept)
-    removed = set(kept)
     for tool_id, tool_paths in fresh.by_tool.items():
         if all(path in removed and not _exists(path) for path in tool_paths):
             receipts.delete(tool_id)
