@@ -1,3 +1,5 @@
+import typing
+from dataclasses import FrozenInstanceError
 from datetime import date
 from pathlib import Path
 
@@ -10,11 +12,15 @@ from installer.model import (
     POSTINSTALL_HOOK_NAMES,
     SKILL_HARNESSES,
     SMOKE_CHECK_NAMES,
+    TOOL_ID_RE,
+    ConfigStep,
+    ConfigStepKind,
     Method,
     Tool,
     load_categories,
     load_tools,
 )
+from tests.test_registry import REGISTRY
 
 
 def _seed_verified_in_content(content: str) -> str:
@@ -1599,3 +1605,48 @@ member = "bin/demo"
     with pytest.raises(ValueError, match="demo") as exc_info:
         load_tools(manifest)
     assert "strip" in str(exc_info.value)
+
+
+def test_config_step_is_frozen_with_closed_kinds() -> None:
+    step = ConfigStep(text="t", kind="plugin_enable")
+    assert (step.harness, step.argv, step.cwd) == (None, (), None)
+    field_name = "text"
+    with pytest.raises(FrozenInstanceError):
+        setattr(step, field_name, "u")
+    assert typing.get_args(ConfigStepKind) == (
+        "skill_install",
+        "plugin_enable",
+        "plugin_uninstall",
+        "marketplace_remove",
+        "terminal_sync",
+        "pnpm_group_install",
+        "project_pack_global_uninstall",
+        "project_pack_install",
+    )
+
+
+@pytest.mark.parametrize("tool_id", ["../x", "Yq", "a/b", "-x"])
+def test_load_tools_rejects_an_unsafe_tool_id(tmp_path: Path, tool_id: str) -> None:
+    manifest = _write(
+        tmp_path,
+        f"""
+[[tool]]
+id = "{tool_id}"
+name = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "uv-tool"
+package = "demo"
+""",
+    )
+    with pytest.raises(ValueError, match="id must match") as exc_info:
+        load_tools(manifest)
+    assert tool_id in str(exc_info.value)
+    assert "[a-z0-9][a-z0-9._-]*" in str(exc_info.value)
+
+
+def test_every_registry_tool_id_is_a_safe_filename() -> None:
+    tools = load_tools(REGISTRY)
+    assert tools
+    assert all(TOOL_ID_RE.fullmatch(tool.id) for tool in tools)

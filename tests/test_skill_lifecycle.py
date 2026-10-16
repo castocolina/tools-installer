@@ -9,6 +9,8 @@ import installer.engine as engine
 from installer.engine import install_tool
 from installer.model import (
     SKILL_HARNESSES,
+    ConfigStep,
+    ConfigStepKind,
     Method,
     SkillLifecycle,
     SkillOperation,
@@ -20,8 +22,10 @@ from installer.model import (
 from installer.platform import Platform
 from installer.skill_lifecycle import (
     SKILL_HARNESS_LABELS,
+    SkillPackReport,
     _install_state_status,  # pyright: ignore[reportPrivateUsage]
     inspect_skill_packs,
+    inspect_skill_reports,
     inspect_status,
     perform_action,
     present_harnesses,
@@ -1037,3 +1041,291 @@ def test_registry_claude_plugin_probes_use_canonical_ids() -> None:
             assert any(line.endswith(f"install {probe.match}") for line in claude_lines), tool.id
             checked += 1
     assert checked == 3
+
+
+_MARKETPLACE_ID = "superpowers@superpowers-marketplace"
+
+
+def _installed_plugins(home: Path, records: list[tuple[str, str, object]]) -> None:
+    plugins: dict[str, list[dict[str, object]]] = {}
+    for plugin_id, scope, project_path in records:
+        record: dict[str, object] = {"scope": scope, "version": "6.2.0"}
+        if project_path is not None:
+            record["projectPath"] = project_path
+        plugins.setdefault(plugin_id, []).append(record)
+    target = home / ".claude" / "plugins"
+    target.mkdir(parents=True, exist_ok=True)
+    payload = {"version": 2, "plugins": plugins}
+    (target / "installed_plugins.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _project_dirs(home: Path) -> tuple[Path, Path]:
+    official, market = home / "repo-official", home / "repo-market"
+    official.mkdir()
+    market.mkdir()
+    return official, market
+
+
+def _superpowers_report(home: Path, listing: str) -> SkillPackReport:
+    tool = _pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", _SUPERPOWERS_ID),))
+    return inspect_skill_reports([tool], lambda _argv: listing, home)["superpowers"]
+
+
+def _claude_step(
+    text: str, kind: ConfigStepKind, *argv: str, cwd: Path | None = None
+) -> ConfigStep:
+    return ConfigStep(
+        text=text,
+        kind=kind,
+        harness="claude",
+        argv=("claude", "plugin", *argv),
+        cwd=cwd,
+    )
+
+
+def test_four_install_state_reasons_and_ordered_steps(tmp_path: Path) -> None:
+    official, market = _project_dirs(tmp_path)
+    _installed_plugins(
+        tmp_path,
+        [
+            (_SUPERPOWERS_ID, "user", None),
+            (_SUPERPOWERS_ID, "project", str(official)),
+            (_MARKETPLACE_ID, "user", None),
+            (_MARKETPLACE_ID, "project", str(market)),
+        ],
+    )
+
+    report = _superpowers_report(tmp_path, _claude_json(*_FOUR_INSTALL))
+
+    assert report.hosts == {"claude": "absent"}
+    assert report.reasons == (
+        "disabled: superpowers@claude-plugins-official in user scope (6.4.1)",
+        "duplicate: superpowers@claude-plugins-official in project scope (6.2.0)",
+        "duplicate: superpowers@superpowers-marketplace in user scope (6.2.0)",
+        "duplicate: superpowers@superpowers-marketplace in project scope (6.2.0)",
+    )
+    assert report.steps == (
+        _claude_step(
+            "enable superpowers@claude-plugins-official in user scope",
+            "plugin_enable",
+            *("enable", "-s", "user", _SUPERPOWERS_ID),
+        ),
+        _claude_step(
+            "remove superpowers@claude-plugins-official from project scope",
+            "plugin_uninstall",
+            *("uninstall", "-s", "project", _SUPERPOWERS_ID),
+            cwd=official,
+        ),
+        _claude_step(
+            "remove superpowers@superpowers-marketplace from user scope",
+            "plugin_uninstall",
+            *("uninstall", "-s", "user", _MARKETPLACE_ID),
+        ),
+        _claude_step(
+            "remove superpowers@superpowers-marketplace from project scope",
+            "plugin_uninstall",
+            *("uninstall", "-s", "project", _MARKETPLACE_ID),
+            cwd=market,
+        ),
+        _claude_step(
+            "remove marketplace superpowers-marketplace",
+            "marketplace_remove",
+            *("marketplace", "remove", "superpowers-marketplace"),
+        ),
+    )
+
+
+def _four_install_home(tmp_path: Path, *, market_path: bool = True) -> None:
+    official, market = _project_dirs(tmp_path)
+    _installed_plugins(
+        tmp_path,
+        [
+            (_SUPERPOWERS_ID, "project", str(official)),
+            (_MARKETPLACE_ID, "project", str(market) if market_path else None),
+        ],
+    )
+
+
+def test_marketplace_is_kept_while_another_plugin_uses_it(tmp_path: Path) -> None:
+    _four_install_home(tmp_path)
+    listing = _claude_json(*_FOUR_INSTALL, ("other@superpowers-marketplace", "user", True, "1.0"))
+
+    report = _superpowers_report(tmp_path, listing)
+
+    assert [step.kind for step in report.steps] == [
+        "plugin_enable",
+        "plugin_uninstall",
+        "plugin_uninstall",
+        "plugin_uninstall",
+    ]
+
+
+def test_missing_canonical_installs_first(tmp_path: Path) -> None:
+    _four_install_home(tmp_path)
+
+    report = _superpowers_report(tmp_path, _claude_json(*_FOUR_INSTALL[2:]))
+
+    assert report.steps[0] == _claude_step(
+        "install superpowers@claude-plugins-official in user scope",
+        "skill_install",
+        *("install", "-s", "user", _SUPERPOWERS_ID),
+    )
+    assert [step.kind for step in report.steps[1:]] == [
+        "plugin_uninstall",
+        "plugin_uninstall",
+        "marketplace_remove",
+    ]
+    assert report.reasons == (
+        "duplicate: superpowers@superpowers-marketplace in user scope (6.2.0)",
+        "duplicate: superpowers@superpowers-marketplace in project scope (6.2.0)",
+    )
+
+
+@pytest.mark.parametrize("case", ["missing", "relative", "file", "nonexistent", "two-candidates"])
+def test_project_copy_without_a_valid_project_path_has_no_step(tmp_path: Path, case: str) -> None:
+    (tmp_path / "a-file").write_text("x", encoding="utf-8")
+    (tmp_path / "repo-1").mkdir()
+    (tmp_path / "repo-2").mkdir()
+    paths: dict[str, list[object]] = {
+        "missing": [None],
+        "relative": ["repo-1"],
+        "file": [str(tmp_path / "a-file")],
+        "nonexistent": [str(tmp_path / "gone")],
+        "two-candidates": [str(tmp_path / "repo-1"), str(tmp_path / "repo-2")],
+    }
+    _installed_plugins(tmp_path, [(_SUPERPOWERS_ID, "project", path) for path in paths[case]])
+    listing = _claude_json(
+        (_SUPERPOWERS_ID, "user", True, "6.4.1"), (_SUPERPOWERS_ID, "project", True, "6.2.0")
+    )
+
+    report = _superpowers_report(tmp_path, listing)
+
+    assert report.hosts == {"claude": "present"}
+    assert report.reasons == (
+        "duplicate: superpowers@claude-plugins-official in project scope (6.2.0)",
+    )
+    assert report.steps == ()
+
+
+@pytest.mark.parametrize("hostile", ["-s@x", "a b@c", "superpowers@claude-plugins-official;rm"])
+def test_hostile_ids_never_reach_argv(tmp_path: Path, hostile: str) -> None:
+    listing = _claude_json((_SUPERPOWERS_ID, "user", False, "6.4.1"), (hostile, "user", True, "1"))
+
+    report = _superpowers_report(tmp_path, listing)
+
+    assert report == SkillPackReport(hosts={"claude": "unknown"})
+    assert (report.reasons, report.steps) == ((), ())
+
+
+def test_marketplace_is_kept_when_a_copy_has_no_step(tmp_path: Path) -> None:
+    _four_install_home(tmp_path, market_path=False)
+
+    report = _superpowers_report(tmp_path, _claude_json(*_FOUR_INSTALL))
+
+    assert len(report.reasons) == 4
+    assert "duplicate: superpowers@superpowers-marketplace in project scope (6.2.0)" in (
+        report.reasons
+    )
+    assert [(step.kind, step.argv[-1]) for step in report.steps] == [
+        ("plugin_enable", _SUPERPOWERS_ID),
+        ("plugin_uninstall", _SUPERPOWERS_ID),
+        ("plugin_uninstall", _MARKETPLACE_ID),
+    ]
+    assert report.steps[2].argv[3:5] == ("-s", "user")
+
+
+def _raise_called_process_error(argv: list[str]) -> str:
+    raise subprocess.CalledProcessError(1, argv)
+
+
+@pytest.mark.parametrize("answer", ["raises", "not-json"])
+def test_four_install_pack_with_an_unreadable_listing_is_an_unknown_host(
+    tmp_path: Path, answer: str
+) -> None:
+    _four_install_home(tmp_path)
+    tool = _pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", _SUPERPOWERS_ID),))
+
+    def probe(argv: list[str]) -> str:
+        assert argv == ["claude", "plugin", "list", "--json"]
+        return _raise_called_process_error(argv) if answer == "raises" else "not json"
+
+    report = inspect_skill_reports([tool], probe, tmp_path)["superpowers"]
+
+    assert report.hosts["claude"] == "unknown"
+    assert report.reasons == ()
+    assert report.steps == ()
+
+
+def test_inspect_skill_packs_is_the_hosts_projection(tmp_path: Path) -> None:
+    _four_install_home(tmp_path)
+    tools = [
+        _pack(
+            "superpowers",
+            (
+                SkillStatusProbe("claude", "plugin-cli", _SUPERPOWERS_ID),
+                SkillStatusProbe("codex", "plugin-cli", "superpowers"),
+            ),
+        ),
+        _pack("ponytail", (SkillStatusProbe("codex", "plugin-cli", "ponytail"),)),
+    ]
+
+    def probe(argv: list[str]) -> str:
+        if argv[0] == "claude":
+            return _claude_json(*_FOUR_INSTALL)
+        return "ponytail@ponytail  installed\n"
+
+    reports = inspect_skill_reports(tools, probe, tmp_path)
+    packs = inspect_skill_packs(tools, probe, tmp_path)
+
+    assert packs == {tool_id: report.hosts for tool_id, report in reports.items()}
+    assert reports["superpowers"].steps
+
+
+def test_clean_canonical_install_has_no_reasons_or_steps(tmp_path: Path) -> None:
+    listing = _claude_json(
+        (_SUPERPOWERS_ID, "user", True, "6.4.1"), ("ponytail@ponytail", "user", True, "5.1.0")
+    )
+
+    report = _superpowers_report(tmp_path, listing)
+
+    assert report == SkillPackReport(hosts={"claude": "present"})
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,
+        b"x" * (64 * 1024 + 1),
+        b"not json",
+        b"[]",
+        b'{"plugins": []}',
+        b'{"plugins": {"superpowers@claude-plugins-official": {}}}',
+        b'{"plugins": {"superpowers@claude-plugins-official": ["x", {"scope": 1}]}}',
+    ],
+    ids=["missing", "over-64-kib", "not-json", "list", "plugins-list", "records-object", "bad"],
+)
+def test_unreadable_installed_plugins_keeps_the_reason_without_a_step(
+    tmp_path: Path, content: bytes | None
+) -> None:
+    if content is not None:
+        target = tmp_path / ".claude" / "plugins"
+        target.mkdir(parents=True)
+        (target / "installed_plugins.json").write_bytes(content)
+    listing = _claude_json(
+        (_SUPERPOWERS_ID, "user", True, "6.4.1"), (_SUPERPOWERS_ID, "local", True, "6.2.0")
+    )
+
+    report = _superpowers_report(tmp_path, listing)
+
+    assert report.reasons == (
+        "duplicate: superpowers@claude-plugins-official in local scope (6.2.0)",
+    )
+    assert report.steps == ()
+
+
+def test_a_tool_without_a_skill_lifecycle_reports_no_hosts(tmp_path: Path) -> None:
+    tool = Tool(id="rg", name="rg", category="search", cmd="rg", methods=(Method(kind="cargo"),))
+
+    assert inspect_skill_reports([tool], lambda _argv: "", tmp_path) == {
+        "rg": SkillPackReport(hosts={})
+    }

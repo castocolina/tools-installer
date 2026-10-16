@@ -9,7 +9,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
-from installer.model import SKILL_HARNESSES, SkillLifecycle, SkillOperation, SkillStatusProbe, Tool
+from installer.model import (
+    SKILL_HARNESSES,
+    ConfigStep,
+    SkillLifecycle,
+    SkillOperation,
+    SkillStatusProbe,
+    Tool,
+)
 from installer.run import Runner
 
 LifecycleAction = Literal["install", "update", "removal"]
@@ -22,6 +29,7 @@ _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _CLAUDE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*")
 CLAUDE_SCOPES = ("user", "project", "local")
 _CLAUDE_OUTPUT_CAP = 1 << 20
+_INSTALLED_PLUGINS_CAP = 64 << 10
 
 
 @dataclass(frozen=True)
@@ -461,19 +469,147 @@ def _needs_skill_lock(tools: Sequence[Tool]) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class SkillPackReport:
+    """Per-harness status of one pack plus its D-18 reasons and fix steps.
+
+    A host whose status is "unknown" was not checked (its probe failed or its
+    answer was unreadable), so its reasons and steps are missing, not absent;
+    consumers must surface that and never read it as "absent".
+    """
+
+    hosts: dict[str, HarnessStatus]
+    reasons: tuple[str, ...] = ()
+    steps: tuple[ConfigStep, ...] = ()
+
+
+def _installed_project_paths(home: Path) -> dict[tuple[str, str], list[object]]:
+    """`projectPath` values per (id, scope) from installed_plugins.json; {} when unreadable."""
+    try:
+        with (home / ".claude" / "plugins" / "installed_plugins.json").open("rb") as fh:
+            raw = fh.read(_INSTALLED_PLUGINS_CAP + 1)
+    except OSError:
+        return {}
+    if len(raw) > _INSTALLED_PLUGINS_CAP:
+        return {}
+    try:
+        parsed: object = json.loads(raw)
+    except (ValueError, RecursionError):
+        return {}
+    plugins = (
+        cast(dict[object, object], parsed).get("plugins") if isinstance(parsed, dict) else None
+    )
+    if not isinstance(plugins, dict):
+        return {}
+    paths: dict[tuple[str, str], list[object]] = {}
+    for plugin_id, records in cast(dict[object, object], plugins).items():
+        if not isinstance(plugin_id, str) or not isinstance(records, list):
+            continue
+        for record in cast(list[object], records):
+            if not isinstance(record, dict):
+                continue
+            row = cast(dict[object, object], record)
+            scope = row.get("scope")
+            if isinstance(scope, str):
+                paths.setdefault((plugin_id, scope), []).append(row.get("projectPath"))
+    return paths
+
+
+def _project_dir(entry: ClaudeEntry, paths: dict[tuple[str, str], list[object]]) -> Path | None:
+    candidates = paths.get((entry.id, entry.scope), [])
+    if len(candidates) != 1 or not isinstance(candidates[0], str):
+        return None
+    path = Path(candidates[0])
+    return path if path.is_absolute() and path.is_dir() else None
+
+
+def _claude_fixes(
+    canonical: str,
+    entries: tuple[ClaudeEntry, ...],
+    paths: dict[tuple[str, str], list[object]],
+) -> tuple[tuple[str, ...], tuple[ConfigStep, ...]]:
+    """D-18 reasons and ordered steps: keep a working canonical, then drop the copies."""
+    plugin, _, canonical_marketplace = canonical.partition("@")
+    family = [entry for entry in entries if entry.plugin == plugin]
+    users = [entry for entry in family if entry.id == canonical and entry.scope == "user"]
+    copies = [entry for entry in family if entry not in users]
+    reasons = [
+        f"disabled: {entry.id} in user scope ({entry.version})"
+        for entry in users
+        if not entry.enabled
+    ]
+    reasons += [f"duplicate: {e.id} in {e.scope} scope ({e.version})" for e in copies]
+    if not reasons:
+        return (), ()
+    steps: list[ConfigStep] = []
+    if not users:
+        argv = ("claude", "plugin", "install", "-s", "user", canonical)
+        steps.append(
+            ConfigStep(f"install {canonical} in user scope", "skill_install", "claude", argv)
+        )
+    elif not any(entry.enabled for entry in users):
+        argv = ("claude", "plugin", "enable", "-s", "user", canonical)
+        steps.append(
+            ConfigStep(f"enable {canonical} in user scope", "plugin_enable", "claude", argv)
+        )
+    removed: list[ClaudeEntry] = []
+    for entry in copies:
+        cwd = None if entry.scope == "user" else _project_dir(entry, paths)
+        if entry.scope != "user" and cwd is None:
+            continue
+        argv = ("claude", "plugin", "uninstall", "-s", entry.scope, entry.id)
+        text = f"remove {entry.id} from {entry.scope} scope"
+        steps.append(ConfigStep(text, "plugin_uninstall", "claude", argv, cwd))
+        removed.append(entry)
+    for marketplace in dict.fromkeys(entry.marketplace for entry in removed):
+        if marketplace == canonical_marketplace:
+            continue
+        # A copy whose uninstall was suppressed keeps its marketplace (review H4).
+        if all(entry in removed for entry in entries if entry.marketplace == marketplace):
+            argv = ("claude", "plugin", "marketplace", "remove", marketplace)
+            text = f"remove marketplace {marketplace}"
+            steps.append(ConfigStep(text, "marketplace_remove", "claude", argv))
+    return tuple(reasons), tuple(steps)
+
+
+def _claude_canonical(lifecycle: SkillLifecycle) -> str | None:
+    for status_probe in lifecycle.status_probes:
+        if (status_probe.harness, status_probe.via) == ("claude", "plugin-cli"):
+            return status_probe.match if _CLAUDE_ID_RE.fullmatch(status_probe.match) else None
+    return None
+
+
+def inspect_skill_reports(
+    tools: Sequence[Tool], probe: ProbeRunner, home: Path
+) -> dict[str, SkillPackReport]:
+    """Probe each distinct harness CLI once; per pack, host status plus D-18 fixes."""
+    outputs = _probe_outputs(_needed_argvs(tools), probe)
+    skills = _skills_lock_skills(home) if _needs_skill_lock(tools) else {}
+    claude_output = outputs.get(HARNESS_CLI_STATUS["claude"].argv)
+    entries = None if claude_output is None else _claude_entries(claude_output)
+    paths = _installed_project_paths(home) if entries else {}
+    reports: dict[str, SkillPackReport] = {}
+    for tool in tools:
+        lifecycle = tool.skill_lifecycle
+        if lifecycle is None:
+            reports[tool.id] = SkillPackReport({})
+            continue
+        hosts = _pack_status(lifecycle, outputs, home, skills)
+        canonical = _claude_canonical(lifecycle)
+        if canonical is None or entries is None:
+            reports[tool.id] = SkillPackReport(hosts)
+            continue
+        reports[tool.id] = SkillPackReport(hosts, *_claude_fixes(canonical, entries, paths))
+    return reports
+
+
 def inspect_skill_packs(
     tools: Sequence[Tool], probe: ProbeRunner, home: Path
 ) -> dict[str, dict[str, HarnessStatus]]:
     """Probe each distinct harness CLI once and report present, absent, or unknown."""
-    outputs = _probe_outputs(_needed_argvs(tools), probe)
-    skills = _skills_lock_skills(home) if _needs_skill_lock(tools) else {}
     return {
-        tool.id: (
-            {}
-            if tool.skill_lifecycle is None
-            else _pack_status(tool.skill_lifecycle, outputs, home, skills)
-        )
-        for tool in tools
+        tool_id: report.hosts
+        for tool_id, report in inspect_skill_reports(tools, probe, home).items()
     }
 
 

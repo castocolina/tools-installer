@@ -180,6 +180,8 @@ SKILL_STATUS_SOURCES = ("plugin-cli", "skills-lock", "install-state")
 _SKILL_MATCH_RE = re.compile(r"^[A-Za-z0-9@/._-]+$")
 _SCRIPT_ARG_RE = re.compile(r"^[A-Za-z0-9=._:/+-]+$")
 _PINNED_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+# A tool id names its receipt file, so it can never hold `/`, `..` or a leading `-`.
+TOOL_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
 SkillStatusVia = Literal["plugin-cli", "skills-lock", "install-state"]
 
 EnumValue = TypeVar("EnumValue", Audience, Category, Priority, Tier)
@@ -301,6 +303,31 @@ class SkillStatusProbe:
     harness: str
     via: SkillStatusVia
     match: str
+
+
+ConfigStepKind = Literal[
+    "skill_install",
+    "plugin_enable",
+    "plugin_uninstall",
+    "marketplace_remove",
+    "terminal_sync",
+    "pnpm_group_install",
+    "project_pack_global_uninstall",
+    "project_pack_install",
+]
+
+
+@dataclass(frozen=True)
+class ConfigStep:
+    """One D-20 configuration step: the text shown after "to configure:" and the
+    exact fix Phase 20 RECONFIGURE runs. Argv values taken from probe output are
+    validated by the builder that makes the step, never here."""
+
+    text: str
+    kind: ConfigStepKind
+    harness: str | None = None
+    argv: tuple[str, ...] = ()
+    cwd: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -691,6 +718,11 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
         data = tomllib.load(fh)
     tools: list[Tool] = []
     for row in data.get("tool", []):
+        tool_id = row.get("id")
+        if not isinstance(tool_id, str) or TOOL_ID_RE.fullmatch(tool_id) is None:
+            raise ValueError(
+                f"tool '{tool_id}': id must match [a-z0-9][a-z0-9._-]* (it names the receipt file)"
+            )
         raw_methods = row.get("method", [])
         if not raw_methods:
             raise ValueError(f"tool '{row['id']}' declares no install methods")
