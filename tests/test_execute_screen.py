@@ -48,6 +48,7 @@ from installer.model import Method, Tool
 from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
+from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner, StreamingRunner
 from installer.session import SensitiveInstall, summarize
 from installer.uninstall import SweepResult
@@ -55,6 +56,7 @@ from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import VersionRefreshService, VersionStatus
 from installer.versions import TagResolver
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
+from tests.state_doubles import FrozenStateService, frozen_service, offline_service, pass_state
 
 
 class _AskModal(ModalScreen[str | None]):
@@ -1473,7 +1475,7 @@ def _outdated_status(tool_id: str, *, outdated: bool | None) -> VersionStatus:
     )
 
 
-class _RecordingRefreshService(VersionRefreshService):
+class _RecordingRefreshService(FrozenStateService):
     def __init__(self, cache_path: Path) -> None:
         super().__init__(
             platform=_PLATFORM,
@@ -1494,12 +1496,8 @@ class _RecordingRefreshService(VersionRefreshService):
         statuses: dict[str, VersionStatus] = {}
         for tool in tools:
             self.asked.append(tool.id)
-            self._ownership[tool.id] = (  # pyright: ignore[reportPrivateUsage]
-                self.epoch,
-                _brew_ownership(tool),
-            )
             status = _outdated_status(tool.id, outdated=True)
-            self._statuses[tool.id] = status  # pyright: ignore[reportPrivateUsage]
+            _publish(self, tool, version=status)
             statuses[tool.id] = status
         return statuses
 
@@ -1526,22 +1524,29 @@ class _RecordingUpdateService(UpdateService):
         )
 
 
+def _publish(
+    refresh: FrozenStateService,
+    tool: Tool,
+    *,
+    version: VersionStatus | None,
+    broken: bool = False,
+) -> None:
+    ownership = replace(_brew_ownership(tool), broken=broken)
+    refresh.publish([pass_state(tool, platform=_PLATFORM, ownership=ownership, version=version)])
+
+
 def _seed_refresh(
-    refresh: VersionRefreshService,
+    refresh: FrozenStateService,
     tool: Tool,
     *,
     outdated: bool | None | object = ...,
-    ownership: bool = True,
 ) -> None:
-    if ownership:
-        refresh._ownership[tool.id] = (  # pyright: ignore[reportPrivateUsage]
-            refresh.epoch,
-            _brew_ownership(tool),
-        )
+    version = None
     if outdated is not ...:
-        refresh._statuses[tool.id] = _outdated_status(  # pyright: ignore[reportPrivateUsage]
+        version = _outdated_status(
             tool.id, outdated=outdated if isinstance(outdated, bool) or outdated is None else True
         )
+    _publish(refresh, tool, version=version)
 
 
 async def _run_execute(
@@ -1609,7 +1614,7 @@ async def test_missing_version_status_still_dispatches_an_outdated_update(tmp_pa
     fd = _tool("fd")
     captured: list[str] = []
     refresh = _RecordingRefreshService(tmp_path / "versions.json")
-    _seed_refresh(refresh, rg, ownership=True)
+    _seed_refresh(refresh, rg)
     updates = _RecordingUpdateService()
     inputs = _inputs(
         tools=[rg, fd],
@@ -1632,9 +1637,6 @@ async def test_missing_ownership_snapshot_refreshes_then_dispatches_outdated_upd
     fd = _tool("fd")
     captured: list[str] = []
     refresh = _RecordingRefreshService(tmp_path / "versions.json")
-    refresh._statuses[rg.id] = _outdated_status(  # pyright: ignore[reportPrivateUsage]
-        rg.id, outdated=True
-    )
     updates = _RecordingUpdateService()
     inputs = _inputs(
         tools=[rg, fd],
@@ -2091,7 +2093,7 @@ async def test_undisturbed_outdated_run_dispatches_exactly_the_disclosed_update_
     fd = _tool("fd")
     refresh = _RecordingRefreshService(tmp_path / "versions.json")
     _seed_refresh(refresh, rg, outdated=True)
-    _seed_refresh(refresh, fd, ownership=True)
+    _seed_refresh(refresh, fd)
     updates = _RecordingUpdateService()
     inputs = _inputs(
         tools=[rg, fd],
@@ -2479,10 +2481,6 @@ class _VersionedRefreshService(_RecordingRefreshService):
         statuses: dict[str, VersionStatus] = {}
         for tool in tools:
             self.asked.append(tool.id)
-            self._ownership[tool.id] = (  # pyright: ignore[reportPrivateUsage]
-                self.epoch,
-                _brew_ownership(tool),
-            )
             status = VersionStatus(
                 tool_id=tool.id,
                 installed=self._installed,
@@ -2491,7 +2489,7 @@ class _VersionedRefreshService(_RecordingRefreshService):
                 stale=False,
                 source="brew",
             )
-            self._statuses[tool.id] = status  # pyright: ignore[reportPrivateUsage]
+            _publish(self, tool, version=status)
             statuses[tool.id] = status
         return statuses
 
@@ -3993,11 +3991,9 @@ async def test_fresh_install_is_not_reapplied(monkeypatch: pytest.MonkeyPatch) -
     assert calls == []
 
 
-def _mark_broken(refresh: VersionRefreshService, tool: Tool) -> None:
-    refresh._ownership[tool.id] = (  # pyright: ignore[reportPrivateUsage]
-        refresh.epoch,
-        replace(_brew_ownership(tool), broken=True),
-    )
+def _mark_broken(refresh: FrozenStateService, tool: Tool) -> None:
+    state = refresh.state_of(tool.id)
+    _publish(refresh, tool, version=state.version if state else None, broken=True)
 
 
 def _repair_install(calls: list[tuple[str, bool]]) -> SensitiveInstall:
@@ -4365,3 +4361,170 @@ async def test_all_skipped_run_is_done_and_green() -> None:
         assert screen.status.severity == "ok"
         assert app.install_summary is not None
         assert app.install_summary.has_failure is False
+
+
+class _StateOnlyRefreshService(_RecordingRefreshService):
+    """Publishes the post-update state and returns nothing of its own."""
+
+    def refresh(self, tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+        for tool in tools:
+            self.asked.append(tool.id)
+            current = VersionStatus(
+                tool_id=tool.id,
+                installed="2.0.0",
+                latest="2.0.0",
+                outdated=False,
+                stale=False,
+                source="brew",
+            )
+            self.publish(
+                [
+                    pass_state(
+                        tool, platform=_PLATFORM, ownership=_brew_ownership(tool), version=current
+                    )
+                ]
+            )
+        return {}
+
+
+async def test_brew_appearing_mid_session_unblocks_colima(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC AC13 (D-14): a brew that appears mid-session makes a brew-only
+    dependency installable without a restart, and the install run gets the
+    live platform, not the launch-time one."""
+    colima = _tool("colima")
+    launch = replace(_PLATFORM, has_brew=False)
+    brew: list[str | None] = [None]
+
+    def which(cmd: str) -> str | None:
+        return brew[0] if cmd == "brew" else None
+
+    service = offline_service(
+        tmp_path / "versions.json",
+        skill_home=tmp_path,
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: None,
+        platform=launch,
+        which=which,
+        present=lambda _tool: False,
+    )
+    service.refresh([colima])
+    assert service.platform.has_brew is False
+    assert not resolve_methods(colima, service.platform)
+    brew[0] = str(tmp_path / "homebrew" / "bin" / "brew")
+    service.refresh([colima])
+    assert service.platform.has_brew is True
+    assert resolve_methods(colima, service.platform)
+    seen: list[Platform] = []
+
+    def fake_run_installs(
+        tools: list[Tool], platform: Platform, *_args: object, **_kwargs: object
+    ) -> list[InstallOutcome]:
+        seen.append(platform)
+        return [InstallOutcome(tool.id, "installed") for tool in tools]
+
+    monkeypatch.setattr(installer.execute_screen, "run_installs", fake_run_installs)
+    inputs = replace(_inputs(tools=[colima], version_refresh=service), platform=launch)
+    app = _host(inputs, [colima])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["colima"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert [tool.id for tool in screen._ordered] == ["colima"]  # pyright: ignore[reportPrivateUsage]
+        assert "not available" not in _head_text(screen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+    assert [platform.has_brew for platform in seen] == [True]
+
+
+async def test_classify_reads_the_state(tmp_path: Path) -> None:
+    """Repair is the pnpm-shim case only; a drifted (`changed since install`)
+    BROKEN state is not repaired (19-RESEARCH Pitfall 10)."""
+    shim, ok, old, drifted = (_tool(name) for name in ("shim", "ok", "old", "drifted"))
+    service = frozen_service(tmp_path)
+    service.publish(
+        [
+            pass_state(
+                shim,
+                platform=_PLATFORM,
+                ownership=replace(_brew_ownership(shim), broken=True),
+            ),
+            pass_state(
+                ok,
+                platform=_PLATFORM,
+                ownership=_brew_ownership(ok),
+                version=_outdated_status("ok", outdated=False),
+            ),
+            pass_state(
+                old,
+                platform=_PLATFORM,
+                ownership=_brew_ownership(old),
+                version=_outdated_status("old", outdated=True),
+            ),
+            pass_state(
+                drifted,
+                platform=_PLATFORM,
+                ownership=_brew_ownership(drifted),
+                broken=("changed since install",),
+            ),
+        ]
+    )
+    tools = [shim, ok, old, drifted]
+    inputs = _inputs(
+        tools=tools,
+        installed=lambda _tool: True,
+        version_refresh=service,
+        updates=_RecordingUpdateService(),
+    )
+    app = _host(inputs, tools)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen([tool.id for tool in tools], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        repair = [tool.id for tool in screen._repair]  # pyright: ignore[reportPrivateUsage]
+        current = [tool.id for tool in screen._current]  # pyright: ignore[reportPrivateUsage]
+        to_update = [tool.id for tool in screen._to_update]  # pyright: ignore[reportPrivateUsage]
+    assert repair == ["shim"]
+    assert current == ["ok"]
+    assert "old" in to_update
+    assert "ok" not in to_update
+    assert "drifted" not in repair
+
+
+async def test_run_updates_reads_ownership_and_version_from_state(tmp_path: Path) -> None:
+    """The update target's ownership is the state's, and the reported new
+    version is `state_of(id).version.installed` after the single-tool refresh."""
+    rg = _tool("rg")
+    refresh = _StateOnlyRefreshService(tmp_path / "versions.json")
+    refresh.publish(
+        [
+            pass_state(
+                rg,
+                platform=_PLATFORM,
+                ownership=replace(_brew_ownership(rg), package="from-state"),
+                version=_outdated_status("rg", outdated=True),
+            )
+        ]
+    )
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[rg],
+        installed=lambda tool: tool.id == "rg",
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+    assert [target.ownership.package for target in updates.recorded] == ["from-state"]
+    assert refresh.asked == ["rg"]
+    assert "updated rg now 2.0.0" in log

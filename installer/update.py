@@ -446,8 +446,11 @@ class UpdateService:
         reresolve_ownership: ReresolveFn,
         invalidate: InvalidateFn | None = None,
         terminal_follow_up: TerminalFollowUpFn | None = None,
+        live_platform: Callable[[], Platform] | None = None,
     ) -> None:
         self.platform = platform
+        # D-14: the refresh service's platform, read at run time (brew may appear mid-session).
+        self._live_platform = live_platform
         self._runner = runner
         self._resolve_tag = resolve_tag
         self._tools = tools
@@ -507,7 +510,7 @@ class UpdateService:
             snapshot = tuple(captured)
         outcome = perform_update(
             fresh_target,
-            platform=self.platform,
+            platform=self._live_platform() if self._live_platform is not None else self.platform,
             runner=self._runner,
             resolve_tag=self._resolve_tag,
             tools=self._tools,

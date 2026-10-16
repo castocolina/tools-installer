@@ -1393,3 +1393,39 @@ def test_unknown_and_refused_updates_write_nothing(owner: Owner) -> None:
     assert calls == []
     assert receipts.receipt_path("java").read_bytes() == old_bytes
     assert [p.name for p in receipts.receipts_dir().iterdir()] == ["java.json"]
+
+
+def test_update_service_reads_the_live_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D-14, checker W2: `run` reads the live platform at run time, so brew
+    appearing after construction reaches `perform_update`; without a provider
+    the construction platform is used."""
+    brew = Method(kind="brew", params={"formula": "ripgrep"})
+    tool = _tool("rg", brew, cmd="rg")
+    seen: list[Platform] = []
+
+    def fake_perform(
+        target: UpdateTarget, *, platform: Platform, **_kwargs: object
+    ) -> UpdateOutcome:
+        seen.append(platform)
+        return UpdateOutcome(tool_id=target.tool.id, status="updated", owner=target.ownership.owner)
+
+    def reresolve(_tool: Tool) -> ManagerOwnership:
+        return _ownership(tool, "brew", method=brew, package="ripgrep")
+
+    monkeypatch.setattr(update, "perform_update", fake_perform)
+    current = [_platform(has_brew=False)]
+    live = UpdateService(
+        platform=_platform(has_brew=False),
+        live_platform=lambda: current[0],
+        runner=lambda _cmd: None,
+        tools={},
+        managed_packages=lambda: (),
+        replay_globals=tuple,
+        reresolve_ownership=reresolve,
+    )
+    current[0] = _platform(has_brew=True)
+    live.run(_target(tool, "brew", method=brew, package="ripgrep"))
+    fixed = _service(reresolve=reresolve)
+    fixed.run(_target(tool, "brew", method=brew, package="ripgrep"))
+    assert [platform.has_brew for platform in seen] == [True, True]
+    assert seen[1] is fixed.platform

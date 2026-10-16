@@ -497,7 +497,7 @@ class ExecuteScreen(ModalScreen[None]):
 
     def on_mount(self) -> None:
         selected = select_tools(self._inputs.catalog, self._ids)
-        platform = self._inputs.platform
+        platform = self._platform()
         self._classify_selection(selected)
 
         def installed_for_order(tool: Tool) -> bool:
@@ -523,6 +523,11 @@ class ExecuteScreen(ModalScreen[None]):
         if self._inputs.unattended:
             self.action_start()
 
+    def _platform(self) -> Platform:
+        """The live platform when a service is bound (D-14), else the launch one."""
+        refresh = self._inputs.version_refresh
+        return refresh.platform if refresh is not None else self._inputs.platform
+
     def _classify_selection(self, selected: list[Tool]) -> None:
         refresh = self._inputs.version_refresh
         repair: list[Tool] = []
@@ -531,12 +536,13 @@ class ExecuteScreen(ModalScreen[None]):
             for tool in selected:
                 if not self._inputs.installed(tool):
                     continue
-                ownership = refresh.ownership_of(tool.id)
-                if ownership is not None and ownership.broken:
-                    repair.append(tool)
+                state = refresh.state_of(tool.id)
+                if state is None:
                     continue
-                status = refresh.statuses.get(tool.id)
-                if status is not None and status.outdated is False:
+                # Repair is the pnpm-shim case only, never receipt drift (Pitfall 10).
+                if state.ownership.broken:
+                    repair.append(tool)
+                elif state.version is not None and state.version.outdated is False:
                     current.append(tool)
         repair_ids = {tool.id for tool in repair}
         self._repair = repair
@@ -560,13 +566,12 @@ class ExecuteScreen(ModalScreen[None]):
         updates = self._inputs.updates
         if refresh is None or updates is None:
             return []
-        statuses = refresh.statuses
         targets: list[Tool] = []
         for tool in selected:
             if not self._inputs.installed(tool):
                 continue
-            status = statuses.get(tool.id)
-            if status is not None and status.outdated is False:
+            state = refresh.state_of(tool.id)
+            if state is not None and state.version is not None and state.version.outdated is False:
                 continue
             targets.append(tool)
         return targets
@@ -639,7 +644,7 @@ class ExecuteScreen(ModalScreen[None]):
             result, message = run_live(
                 lambda: run_installs(
                     self._ordered,
-                    self._inputs.platform,
+                    self._platform(),
                     runner,
                     self._inputs.resolve_tag,
                     attributed_install(
@@ -671,7 +676,7 @@ class ExecuteScreen(ModalScreen[None]):
                     if not self._should_continue():
                         break
                     applied, _fail = run_live(
-                        partial(reapply_post_install, tool, self._inputs.platform, on_confirm)
+                        partial(reapply_post_install, tool, self._platform(), on_confirm)
                     )
                     if applied is not None:
                         reapplied.append(applied)
@@ -745,13 +750,14 @@ class ExecuteScreen(ModalScreen[None]):
             if not self._should_continue():
                 return
             attempted.add(tool.id)
-            ownership = refresh.ownership_of(tool.id)
-            if ownership is None:
+            known = refresh.state_of(tool.id)
+            if known is None:
                 _refreshed, refresh_fail = run_live(partial(refresh.refresh, [tool]))
                 if refresh_fail is not None:
                     errors.append((tool.id, refresh_fail))
                     continue
-                ownership = refresh.ownership_of(tool.id)
+                known = refresh.state_of(tool.id)
+            ownership = known.ownership if known is not None else None
             if ownership is None:
                 skip = f"cannot update {tool.id}: ownership could not be resolved"
                 skips.append(skip)
@@ -777,11 +783,10 @@ class ExecuteScreen(ModalScreen[None]):
                     outcomes.append(result)
                     state = "done" if result.status == "updated" else "not-done"
                     if result.status == "updated":
-                        refreshed, _probe_fail = run_live(partial(refresh.refresh, [tool]))
-                        if refreshed is not None:
-                            status = refreshed.get(tool.id)
-                            if status is not None:
-                                versions[tool.id] = status.installed
+                        _refreshed, probe_fail = run_live(partial(refresh.refresh, [tool]))
+                        after = refresh.state_of(tool.id) if probe_fail is None else None
+                        if after is not None and after.version is not None:
+                            versions[tool.id] = after.version.installed
                 self.post_message(UpdateToolFinished(tool.id, state))
             finally:
                 updates.end()
