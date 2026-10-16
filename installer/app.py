@@ -89,9 +89,7 @@ from installer.uninstall import (
     active_policies,
     plan_removal,
     policy_owned,
-    remove_paths,
     remove_proven,
-    still_removable,
     sweep_policies,
     sweep_tweaks,
 )
@@ -665,8 +663,10 @@ def run_uninstall(
 class UninstallDecision:
     """The levers the in-app uninstall view collected: selected artifact paths,
     plus whether to also remove the pip/npm ban, the managed PATH block, and
-    the still-enabled shell tweaks."""
+    the still-enabled shell tweaks. `tools` are the selected tools, so
+    deletion re-proves per tool exactly like the CLI (L-19-06)."""
 
+    tools: tuple[Tool, ...]
     paths: tuple[Path, ...]
     remove_ban: bool
     remove_path_block: bool
@@ -699,17 +699,12 @@ def perform_uninstall(
     daemon is never constructed, or when the caller genuinely has none to
     offer. Dropping `extra_policies` leaves a cache-redirect file on disk
     while the uninstall reports success."""
-    # H1 (17-REVIEW-opencode.md): same deletion-time re-proof as run_uninstall.
-    # A path no longer proven (its link swapped for a foreign file, dangling,
-    # looping) is refused and reported through SweepResult.warnings, which the
-    # UninstallScreen already renders; the rest go ahead.
-    kept = [path for path in decision.paths if still_removable(path, bin_dir)]
-    refused = tuple(
-        f"changed since the preview; not removed: {path}"
-        for path in decision.paths
-        if path not in kept
-    )
-    remove_paths(kept)
+    # H1 (17-REVIEW-opencode.md): the same remover and deletion-time re-proof
+    # as run_uninstall. A path no longer proven (its link swapped for a foreign
+    # file, dangling, looping, a drifted receipt) is refused and reported
+    # through SweepResult.warnings, which the UninstallScreen already renders;
+    # the rest go ahead.
+    _removed, refused = remove_proven(list(decision.tools), list(decision.paths), bin_dir)
     if decision.remove_ban:
         remove_shims(bin_dir)
         remove_ban_aliases(myshellrc_path)

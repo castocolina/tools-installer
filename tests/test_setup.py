@@ -627,7 +627,9 @@ def test_the_uninstall_view_is_wired_to_a_total_teardown_of_the_real_zshrc(
     assert isinstance(inputs, UninstallInputs)
 
     inputs.remove(
-        UninstallDecision(paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True)
+        UninstallDecision(
+            tools=(), paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True
+        )
     )
     assert forwarded[0]["bundles"] is BUNDLES
     assert forwarded[0]["zshrc_path"] == tmp_path / ".zshrc"
@@ -1316,7 +1318,9 @@ def test_the_interactive_uninstall_view_forwards_the_same_daemon_instance(
     inputs = seen[0]["uninstall"]
     assert isinstance(inputs, UninstallInputs)
     inputs.remove(
-        UninstallDecision(paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True)
+        UninstallDecision(
+            tools=(), paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True
+        )
     )
     assert forwarded[0]["daemon_policy"] is daemon_in_list
 
@@ -2602,7 +2606,9 @@ def test_both_uninstall_routes_pass_the_same_cache_redirect_set(
     inputs = seen[-1]["uninstall"]
     assert isinstance(inputs, UninstallInputs)
     inputs.remove(
-        UninstallDecision(paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True)
+        UninstallDecision(
+            tools=(), paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True
+        )
     )
     policies = seen[-1]["policies"]
     assert isinstance(policies, PolicyInputs)
@@ -3458,3 +3464,94 @@ def test_non_tty_doctor_with_a_damaged_settings_json_warns_before_acting(
     assert "Ignoring invalid settings file" in err
     assert str(path) in err
     assert path.read_bytes() == b'{"link_mode": '
+
+
+def _offline_tag(repo: str) -> str:
+    raise OSError(f"offline in tests: {repo}")
+
+
+def _no_terminal_sync(_platform: Platform) -> str | None:
+    return None
+
+
+@pytest.mark.parametrize(
+    ("selection", "keys", "with_tool", "with_ban", "with_block"),
+    [
+        ("tool-only", ("space",), True, False, False),
+        ("env-only", ("space",), False, True, False),
+        ("mixed", ("a",), True, True, True),
+    ],
+)
+async def test_uninstall_screen_passes_the_selected_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    selection: str,
+    keys: tuple[str, ...],
+    with_tool: bool,
+    with_ban: bool,
+    with_block: bool,
+) -> None:
+    """Review H8: the view's decision carries exactly the selected tools, so
+    deletion re-proves per tool like the CLI. Environment rows have no tool:
+    an env-only selection passes `tools=()`, a mixed one only its tool."""
+    del selection
+    _hermetic_route(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "resolve_github_tag", _offline_tag)
+    monkeypatch.setattr(setup, "_sync_terminals", _no_terminal_sync)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    rg = Tool(
+        id="rg",
+        name="rg",
+        category="search",
+        cmd="rg",
+        methods=(
+            Method(kind="github_release", params={"repo": "a/rg", "asset": "x", "member": "rg"}),
+        ),
+        tier="system",
+    )
+
+    def _rg_only(_registry: object) -> list[Tool]:
+        return [rg]
+
+    if with_tool:
+        opt = tmp_path / ".local" / "opt" / "rg"
+        opt.mkdir(parents=True)
+        (opt / "rg").write_text("rg binary")
+        (bin_dir / "rg").symlink_to(opt / "rg")
+        monkeypatch.setattr(setup, "load_tools", _rg_only)
+    else:
+        monkeypatch.setattr(setup, "load_tools", _no_tools)
+    if with_ban:
+        install_shims(bin_dir)
+    if with_block:
+        write_myshellrc([bin_dir], tmp_path / ".myshellrc")
+    captured: list[UninstallDecision] = []
+
+    def fake_perform_uninstall(decision: UninstallDecision, **_kwargs: object) -> SweepResult:
+        captured.append(decision)
+        return SweepResult()
+
+    monkeypatch.setattr(setup, "perform_uninstall", fake_perform_uninstall)
+    apps: list[UnifiedApp] = []
+
+    def recording_run(self: UnifiedApp) -> None:
+        apps.append(self)
+
+    monkeypatch.setattr(UnifiedApp, "run", recording_run)
+    assert setup.main(["--uninstall"]) == 0
+    app = apps[0]
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        for key in keys:
+            await pilot.press(key)
+        await pilot.press("enter")  # accept -> confirmation modal
+        await pilot.press("enter")  # confirm
+        await pilot.pause()
+        assert screen.applied is True
+    (decision,) = captured
+    assert decision.tools == ((rg,) if with_tool else ())
+    assert decision.remove_ban is with_ban
+    assert decision.remove_path_block is with_block

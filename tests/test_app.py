@@ -2055,6 +2055,7 @@ def test_perform_uninstall_removes_only_chosen_levers(
 ) -> None:
     from installer.app import UninstallDecision, perform_uninstall
     from installer.shellrc import write_myshellrc
+    from tests.test_uninstall import loop_tool
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     bin_dir = tmp_path / ".local" / "bin"
@@ -2069,7 +2070,9 @@ def test_perform_uninstall_removes_only_chosen_levers(
     write_myshellrc([bin_dir], myshellrc)  # writes the managed PATH block
 
     # Only the tool's proven pair is selected; ban + path-block left intact.
-    decision = UninstallDecision(paths=(artifact, opt), remove_ban=False, remove_path_block=False)
+    decision = UninstallDecision(
+        tools=(loop_tool("fd"),), paths=(artifact, opt), remove_ban=False, remove_path_block=False
+    )
     perform_uninstall(
         decision,
         bin_dir=bin_dir,
@@ -2095,7 +2098,7 @@ def test_perform_uninstall_removes_path_block_when_chosen(tmp_path: Path) -> Non
     myshellrc = tmp_path / ".myshellrc"
     write_myshellrc([bin_dir], myshellrc)
 
-    decision = UninstallDecision(paths=(), remove_ban=True, remove_path_block=True)
+    decision = UninstallDecision(tools=(), paths=(), remove_ban=True, remove_path_block=True)
     perform_uninstall(
         decision,
         bin_dir=bin_dir,
@@ -2172,7 +2175,7 @@ def test_perform_uninstall_ban_lever_removes_shims_and_aliases(tmp_path: Path) -
     write_ban_aliases(rc)
     assert any(guard_status(bin_dir).values())  # precondition: ban is active
 
-    decision = UninstallDecision(paths=(), remove_ban=True, remove_path_block=False)
+    decision = UninstallDecision(tools=(), paths=(), remove_ban=True, remove_path_block=False)
     perform_uninstall(
         decision,
         bin_dir=bin_dir,
@@ -2646,7 +2649,7 @@ def test_perform_uninstall_forwards_daemon_policy_and_clears_the_marker(tmp_path
     assert plist_path.exists()
 
     decision = UninstallDecision(
-        paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True
+        tools=(), paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True
     )
     result = perform_uninstall(
         decision,
@@ -2679,7 +2682,7 @@ def test_perform_uninstall_clears_marker_for_disabled_daemon_with_no_tweaks_row(
     assert daemon.decided(state_path) is True
 
     decision = UninstallDecision(
-        paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=False
+        tools=(), paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=False
     )
     result = perform_uninstall(
         decision,
@@ -2713,7 +2716,7 @@ def test_perform_uninstall_preserves_the_decided_marker_for_an_active_daemon_lef
     assert daemon.decided(state_path) is True
 
     decision = UninstallDecision(
-        paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=False
+        tools=(), paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=False
     )
     result = perform_uninstall(
         decision,
@@ -2733,7 +2736,7 @@ def test_perform_uninstall_preserves_the_decided_marker_for_an_active_daemon_lef
 def test_perform_uninstall_requires_daemon_policy() -> None:
     from installer.app import UninstallDecision, perform_uninstall
 
-    decision = UninstallDecision(paths=(), remove_ban=False, remove_path_block=False)
+    decision = UninstallDecision(tools=(), paths=(), remove_ban=False, remove_path_block=False)
     with pytest.raises(TypeError):
         perform_uninstall(  # type: ignore[call-arg]
             decision,
@@ -3048,7 +3051,7 @@ def test_perform_uninstall_clears_the_linux_marker_for_an_already_inactive_daemo
     systemd_daemon.record_decided(state_path)
     daemon.record_decided(state_path)
     decision = UninstallDecision(
-        paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=False
+        tools=(), paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=False
     )
     perform_uninstall(
         decision,
@@ -3121,7 +3124,9 @@ def test_clear_decided_none_is_a_noop_at_every_uninstall_branch(tmp_path: Path) 
         extra_policies=(),
     )
     perform_uninstall(
-        UninstallDecision(paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=False),
+        UninstallDecision(
+            tools=(), paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=False
+        ),
         bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=state_path,
         rc_paths=[],
@@ -3151,7 +3156,9 @@ def test_clear_decided_none_is_a_noop_at_every_uninstall_branch(tmp_path: Path) 
         extra_policies=(),
     )
     perform_uninstall(
-        UninstallDecision(paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True),
+        UninstallDecision(
+            tools=(), paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True
+        ),
         bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=state_path,
         rc_paths=[],
@@ -3210,7 +3217,9 @@ def test_run_uninstall_and_perform_uninstall_sweep_and_name_an_extra_policy(
         is_active=lambda: True,
     )
     result = perform_uninstall(
-        UninstallDecision(paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True),
+        UninstallDecision(
+            tools=(), paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True
+        ),
         bin_dir=tmp_path / "bin",
         myshellrc_path=tmp_path / ".myshellrc",
         rc_paths=[],
@@ -3240,7 +3249,7 @@ def test_uninstall_entry_points_require_extra_policies(tmp_path: Path) -> None:
         )
     with pytest.raises(TypeError):
         perform_uninstall(  # type: ignore[call-arg]
-            UninstallDecision(paths=(), remove_ban=False, remove_path_block=False),
+            UninstallDecision(tools=(), paths=(), remove_ban=False, remove_path_block=False),
             bin_dir=tmp_path / "bin",
             myshellrc_path=tmp_path / ".myshellrc",
             rc_paths=[],
@@ -3666,6 +3675,48 @@ def test_run_uninstall_uses_receipt_proof(tmp_path: Path, monkeypatch: pytest.Mo
     assert receipts.read("yq") is None
 
 
+def test_perform_uninstall_reproves_per_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The TUI deletes through the same receipt-aware remover as the CLI
+    (L-19-06): a receipt-proven raw yq is removed and its receipt retired; a
+    drifted one is refused through SweepResult.warnings."""
+    from installer import receipts
+    from installer.app import UninstallDecision, perform_uninstall
+    from tests.test_uninstall import plant_raw_yq
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    myshellrc = tmp_path / ".myshellrc"
+    myshellrc.write_text("")
+
+    def apply(decision: UninstallDecision) -> SweepResult:
+        return perform_uninstall(
+            decision,
+            bin_dir=bin_dir,
+            myshellrc_path=myshellrc,
+            rc_paths=[],
+            bundles=(),
+            zshrc_path=tmp_path / ".zshrc",
+            daemon_policy=None,
+            extra_policies=(),
+        )
+
+    yq, bin_dir = plant_raw_yq(tmp_path)
+    decision = UninstallDecision(
+        tools=(yq,), paths=(bin_dir / "yq",), remove_ban=False, remove_path_block=False
+    )
+    assert apply(decision).warnings == ()
+    assert not (bin_dir / "yq").exists()
+    assert receipts.read("yq") is None
+
+    yq, bin_dir = plant_raw_yq(tmp_path)
+    (bin_dir / "yq").write_text("rewritten after install, a different size")
+    result = apply(decision)
+    assert result.warnings == (f"changed since the preview; not removed: {bin_dir / 'yq'}",)
+    assert (bin_dir / "yq").exists()
+    assert receipts.read("yq") is not None
+
+
 def test_perform_uninstall_refuses_paths_changed_since_the_preview(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3675,7 +3726,7 @@ def test_perform_uninstall_refuses_paths_changed_since_the_preview(
     from tests.test_uninstall import plant_removal_fixtures
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    plant_removal_fixtures(tmp_path)
+    fd = next(t for t in plant_removal_fixtures(tmp_path) if t.id == "fd")
     bin_dir = tmp_path / ".local" / "bin"
     opt_fd = tmp_path / ".local" / "opt" / "fd"
     myshellrc = tmp_path / ".myshellrc"
@@ -3686,7 +3737,7 @@ def test_perform_uninstall_refuses_paths_changed_since_the_preview(
     (bin_dir / "fd").write_text("foreign file")
 
     decision = UninstallDecision(
-        paths=(bin_dir / "fd", opt_fd), remove_ban=False, remove_path_block=False
+        tools=(fd,), paths=(bin_dir / "fd", opt_fd), remove_ban=False, remove_path_block=False
     )
     result = perform_uninstall(
         decision,
@@ -3708,7 +3759,7 @@ def test_perform_uninstall_refuses_paths_changed_since_the_preview(
     (bin_dir / "fd").unlink()
     (bin_dir / "fd").symlink_to(opt_fd / "fd")
     decision = UninstallDecision(
-        paths=(bin_dir / "fd", opt_fd), remove_ban=False, remove_path_block=False
+        tools=(fd,), paths=(bin_dir / "fd", opt_fd), remove_ban=False, remove_path_block=False
     )
     result = perform_uninstall(
         decision,

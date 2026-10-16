@@ -870,7 +870,8 @@ class _UninstallEntry:
     the env rows are selectable; managed/absent/unavailable tools are not).
     `detail` is the detail-bar line. `paths` are the tool's removable artifacts
     (empty for env rows). `is_ban`/`is_path_block`/`is_tweaks` flag the env rows
-    so a selection maps back to the UninstallDecision levers."""
+    so a selection maps back to the UninstallDecision levers. `tool` is the
+    tool for a tool row, None for an environment row."""
 
     key: str
     cells: list[Text]
@@ -880,6 +881,7 @@ class _UninstallEntry:
     is_ban: bool
     is_path_block: bool
     is_tweaks: bool = False
+    tool: Tool | None = None
 
 
 # Section titles per state, in display order. The "environment" section holds the
@@ -1056,6 +1058,7 @@ class UninstallScreen(AppScreen):
             paths=tuple(row.paths),
             is_ban=False,
             is_path_block=False,
+            tool=row.tool,
         )
 
     def _ban_entry(self) -> _UninstallEntry:
@@ -1467,9 +1470,14 @@ class UninstallScreen(AppScreen):
             self.status.set(_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE, "warn")
             return
         paths: list[Path] = []
+        tools: dict[str, Tool] = {}  # by id, in selection order; env rows carry no tool
         for key in ids:
-            paths.extend(self._by_key[key].paths)
+            entry = self._by_key[key]
+            paths.extend(entry.paths)
+            if entry.tool is not None:
+                tools.setdefault(entry.tool.id, entry.tool)
         decision = UninstallDecision(
+            tools=tuple(tools.values()),
             paths=tuple(paths),
             remove_ban=self.remove_ban,
             remove_path_block=self.remove_path_block,

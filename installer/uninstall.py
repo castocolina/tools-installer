@@ -12,7 +12,6 @@ from pathlib import Path
 from installer import receipts
 from installer.download import DOWNLOAD_KINDS, artifact_paths, is_still_proven
 from installer.enums import UninstallState
-from installer.locations import opt_dir
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.policy import Policy, omz_plugins_policy, tweak_policy
@@ -69,19 +68,6 @@ class RemovalPlan:
     removable: tuple[Path, ...]
     yourself: tuple[Path, ...]
     by_tool: Mapping[str, tuple[Path, ...]] = field(default_factory=dict[str, tuple[Path, ...]])
-
-
-def still_removable(path: Path, bin_dir: Path) -> bool:
-    """`path` is still proven at deletion time (opencode H1).
-
-    True for the bin link itself (`is_still_proven`) and for the opt dir of a
-    link that is still proven — the two members `plan_removal` puts in
-    `removable`. The opt-dir half is proven DERIVATIVELY: without its bin
-    link it is just a directory, and a preview that listed it must not
-    delete a tree whose proof has since lapsed."""
-    if is_still_proven(path):
-        return True
-    return path == opt_dir(path.name) and is_still_proven(bin_dir / path.name)
 
 
 def _receipt_proof(tool: Tool, default_bin_dir: Path, *, verify: bool) -> tuple[Path, ...]:
