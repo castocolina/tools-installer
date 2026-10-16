@@ -57,12 +57,18 @@ def terminal_sync_warning(sync: Callable[[], str | None] | None) -> str | None:
 
 @dataclass(frozen=True)
 class TerminalShellResult:
-    """Terminal synchronization outcomes, split by the action taken."""
+    """Terminal synchronization outcomes, split by the action taken.
+
+    `drifted` names the terminals whose owned region differed from what
+    synchronization writes (a write run then fixes it); the refresh pass reads
+    it from a dry run for `≈` (D-16).
+    """
 
     configured: tuple[str, ...] = ()
     skipped: tuple[str, ...] = ()
     reverted: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    drifted: tuple[str, ...] = ()
 
 
 def _marker(terminal: str, edge: str, *, comment: str = "#") -> str:
@@ -257,10 +263,13 @@ def _read_text(path: Path) -> str:
         raise TerminalShellError(f"{path} is not valid UTF-8; refusing to rewrite it") from exc
 
 
-def _write_if_changed(path: Path, content: str) -> bool:
+def _write_if_changed(path: Path, content: str, *, write: bool = True) -> bool:
+    """Report whether `content` differs from the file; write it only when `write`."""
     existing = _read_text(path)
     if content == existing:
         return False
+    if not write:
+        return True
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(path, content)
     return True
@@ -386,21 +395,26 @@ def sync_terminal_shells(
     environ: Mapping[str, str],
     platform: Platform,
     lookup: Lookup,
+    write: bool = True,
 ) -> TerminalShellResult:
     """Synchronize zsh into detected Linux terminal emulators.
 
     The caller injects every environment-dependent value so tests never consult or
-    mutate the developer's actual home directory.
+    mutate the developer's actual home directory. `write=False` is a dry run
+    (D-16, L-19-05): it reports `drifted` and writes, creates, renames and
+    deletes nothing -- no revert, no .zshrc repair, no terminal config.
     """
     if platform.os == "macos":
         return TerminalShellResult(skipped=("macos",))
 
     zsh_path = _safe_executable(lookup("zsh"))
     if zsh_path is None:
+        if not write:
+            return TerminalShellResult(skipped=("zsh unavailable",))
         return _revert_terminal_shells(home=home, environ=environ)
 
     root = omz_root(home, environ)
-    if root is not None:
+    if write and root is not None:
         # CR-01: pass the real install directory, mirroring omz_present's own
         # $ZSH-aware check -- omz_present being true guarantees root is not
         # None, so the repair never hardcodes $HOME/.oh-my-zsh for an install
@@ -414,6 +428,7 @@ def sync_terminal_shells(
     configured: list[str] = []
     skipped: list[str] = []
     warnings: list[str] = []
+    drifted: list[str] = []
     if _safe_executable(lookup("kitty")) is None:
         skipped.append("kitty unavailable")
     else:
@@ -421,7 +436,8 @@ def sync_terminal_shells(
         updated = _replace_owned_region(
             _read_text(config_path), "kitty", f"shell {shlex.join((zsh_path, '-l'))}"
         )
-        _write_if_changed(config_path, updated)
+        if _write_if_changed(config_path, updated, write=write):
+            drifted.append("kitty")
         configured.append("kitty")
 
     if _safe_executable(lookup("wezterm")) is None:
@@ -441,16 +457,21 @@ def sync_terminal_shells(
         if wezterm_content is None:
             warnings.append("wezterm: unsupported return shape")
         else:
-            _write_if_changed(wezterm_path, wezterm_content)
+            if _write_if_changed(wezterm_path, wezterm_content, write=write):
+                drifted.append("wezterm")
             configured.append("wezterm")
 
-    konsole_configured, konsole_warning = _sync_konsole(
-        home=home, environ=environ, zsh_path=zsh_path, lookup=lookup
-    )
-    if konsole_configured:
-        configured.append("konsole")
-    if konsole_warning is not None:
-        warnings.append(konsole_warning)
+    if write:
+        konsole_configured, konsole_warning = _sync_konsole(
+            home=home, environ=environ, zsh_path=zsh_path, lookup=lookup
+        )
+        if konsole_configured:
+            configured.append("konsole")
+        if konsole_warning is not None:
+            warnings.append(konsole_warning)
     return TerminalShellResult(
-        configured=tuple(configured), skipped=tuple(skipped), warnings=tuple(warnings)
+        configured=tuple(configured),
+        skipped=tuple(skipped),
+        warnings=tuple(warnings),
+        drifted=tuple(drifted),
     )

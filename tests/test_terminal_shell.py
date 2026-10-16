@@ -618,3 +618,116 @@ def test_terminal_sync_warning_is_the_one_total_failure_contract() -> None:
     assert terminal_sync_warning(raises_oserror) == (
         "Terminal shell synchronization failed: permission denied"
     )
+
+
+# D-16 / L-19-05: the refresh pass asks whether a terminal would change
+# without changing it, so a dry run must leave the whole HOME untouched.
+_ALL_TERMINALS = {"zsh": "/usr/bin/zsh", "kitty": "/usr/bin/kitty", "wezterm": "/usr/bin/wezterm"}
+
+
+def _fingerprint(home: Path) -> dict[str, tuple[bytes, int]]:
+    """Every path under HOME with its bytes (files) and mtime, files and dirs alike."""
+    return {
+        str(path.relative_to(home)): (
+            path.read_bytes() if path.is_file() else b"",
+            path.stat().st_mtime_ns,
+        )
+        for path in home.rglob("*")
+    }
+
+
+def test_dry_run_reports_kitty_drift_without_writing(tmp_path: Path) -> None:
+    result = sync_terminal_shells(
+        home=tmp_path,
+        environ={},
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+        write=False,
+    )
+
+    assert result.drifted == ("kitty",)
+    assert not (tmp_path / ".config").exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_dry_run_reports_no_drift_when_in_sync(tmp_path: Path) -> None:
+    args: _SyncArgs = {
+        "home": tmp_path,
+        "environ": {},
+        "platform": _platform(),
+        "lookup": _lookup(**_ALL_TERMINALS),
+    }
+    sync_terminal_shells(**args, write=True)
+
+    assert sync_terminal_shells(**args, write=False).drifted == ()
+
+
+def test_dry_run_reports_wezterm_drift(tmp_path: Path) -> None:
+    wezterm = tmp_path / ".config" / "wezterm" / "wezterm.lua"
+    wezterm.parent.mkdir(parents=True)
+    wezterm.write_text('local wezterm = require "wezterm"\nlocal config = {}\nreturn config\n')
+    args: _SyncArgs = {
+        "home": tmp_path,
+        "environ": {},
+        "platform": _platform(),
+        "lookup": _lookup(zsh="/usr/bin/zsh", wezterm="/usr/bin/wezterm"),
+    }
+
+    assert "wezterm" in sync_terminal_shells(**args, write=False).drifted
+
+    wezterm.write_text("return { default_prog = {} }\n")
+    unsupported = sync_terminal_shells(**args, write=False)
+    assert "wezterm" not in unsupported.drifted
+    assert unsupported.warnings == ("wezterm: unsupported return shape",)
+
+
+def test_dry_run_leaves_home_byte_identical(tmp_path: Path) -> None:
+    args: _SyncArgs = {
+        "home": tmp_path,
+        "environ": {},
+        "platform": _platform(),
+        "lookup": _lookup(**_ALL_TERMINALS),
+    }
+    sync_terminal_shells(**args, write=True)
+    # kitty stays in sync; wezterm goes stale; .zshrc needs the omz repair.
+    wezterm = tmp_path / ".config" / "wezterm" / "wezterm.lua"
+    wezterm.write_text('local wezterm = require "wezterm"\nlocal config = {}\nreturn config\n')
+    (tmp_path / ".oh-my-zsh").mkdir()
+    (tmp_path / ".zshrc").write_text("source $ZSH/oh-my-zsh.sh\nplugins=(git)\n")
+    before = _fingerprint(tmp_path)
+
+    result = sync_terminal_shells(**args, write=False)
+
+    assert _fingerprint(tmp_path) == before
+    assert result.drifted == ("wezterm",)
+
+
+def test_dry_run_zsh_absent_reverts_nothing(tmp_path: Path) -> None:
+    sync_terminal_shells(
+        home=tmp_path, environ={}, platform=_platform(), lookup=_lookup(**_ALL_TERMINALS)
+    )
+    before = _fingerprint(tmp_path)
+
+    result = sync_terminal_shells(
+        home=tmp_path,
+        environ={},
+        platform=_platform(),
+        lookup=_lookup(kitty="/usr/bin/kitty", wezterm="/usr/bin/wezterm"),
+        write=False,
+    )
+
+    assert _fingerprint(tmp_path) == before
+    assert result.drifted == ()
+    assert result.reverted == ()
+
+
+def test_write_true_default_unchanged(tmp_path: Path) -> None:
+    result = sync_terminal_shells(
+        home=tmp_path,
+        environ={},
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+    )
+
+    assert result.configured == ("kitty",)
+    assert "shell /usr/bin/zsh -l" in (tmp_path / ".config" / "kitty" / "kitty.conf").read_text()
