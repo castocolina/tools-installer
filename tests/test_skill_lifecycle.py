@@ -1,11 +1,14 @@
 import json
+import os
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import IO, Any, Literal
 
 import pytest
 
 import installer.engine as engine
+import installer.skill_lifecycle as skill_lifecycle
 from installer.engine import install_tool
 from installer.model import (
     SKILL_HARNESSES,
@@ -23,6 +26,7 @@ from installer.platform import Platform
 from installer.skill_lifecycle import (
     INSTALL_STATE_HARNESS_DIRS,
     PROJECT_GLOBAL_MACHINERY,
+    PROJECT_HOOK_CONFIGS,
     PROJECT_PACK_PACKAGES,
     SKILL_HARNESS_LABELS,
     HarnessStatus,
@@ -1523,3 +1527,341 @@ def test_shared_agents_skills_leftover_names_the_path(tmp_path: Path) -> None:
     only_codex_home = inspect_project_pack(tool, other, frozenset({"codex"}))
     assert only_codex_home.leftovers == ("codex",)
     assert only_codex_home.reasons == (_GLOBAL_REASON,)
+
+
+def _claude_hook_settings(command: str) -> str:
+    return json.dumps(
+        {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": command}]}]}}
+    )
+
+
+_GSD_HOOK_COMMAND = 'node "$HOME"/.claude/hooks/gsd-check-update.js'
+
+
+def _write_bytes(home: Path, relative: str, data: bytes) -> Path:
+    path = home / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+
+def test_claude_settings_hooks_are_a_leftover(tmp_path: Path) -> None:
+    _plant(tmp_path, ".claude/settings.json", _claude_hook_settings(_GSD_HOOK_COMMAND))
+
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset({"claude"}))
+
+    assert report.leftovers == ("claude",)
+    assert report.reasons == (_GLOBAL_REASON,)
+    assert report.steps == (_uninstall_step("claude"),)
+    assert report.unchecked == ()
+
+
+def test_antigravity_settings_hooks_are_a_leftover(tmp_path: Path) -> None:
+    command = "node ~/.gemini/antigravity/hooks/gsd-check-update.js"
+    _plant(tmp_path, ".gemini/antigravity/settings.json", _claude_hook_settings(command))
+
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
+
+    assert report.leftovers == ("antigravity",)
+    assert report.steps == (_uninstall_step("antigravity"),)
+
+
+@pytest.mark.parametrize(
+    ("harness", "relative", "document"),
+    [
+        (
+            "codex",
+            ".codex/hooks.json",
+            {
+                "hooks": {
+                    "PostToolUse": [{"command": "node /h/.codex/hooks/gsd-context-monitor.js"}]
+                }
+            },
+        ),
+        (
+            "cursor",
+            ".cursor/hooks.json",
+            {"version": 1, "hooks": {"stop": [{"command": "./hook.sh", "gsd-managed": True}]}},
+        ),
+        (
+            "windsurf",
+            ".codeium/windsurf/hooks.json",
+            {"hooks": {"post_cascade_response": [{"command": "x", "gsd-managed": True}]}},
+        ),
+    ],
+)
+def test_hooks_json_surfaces(
+    tmp_path: Path, harness: str, relative: str, document: dict[str, object]
+) -> None:
+    _plant(tmp_path, relative, json.dumps(document))
+
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
+
+    assert report.leftovers == (harness,)
+    assert report.steps == (_uninstall_step(harness),)
+
+
+@pytest.mark.parametrize(
+    ("harness", "relative", "block"),
+    [
+        (
+            "kimi",
+            ".kimi-code/config.toml",
+            "# GSD Hooks BEGIN — managed by GSD, do not edit between these markers\n"
+            '[[hooks]]\nevent = "SessionStart"\ncommand = "node gsd-check-update.js"\n'
+            "# GSD Hooks END\n",
+        ),
+        (
+            "codex",
+            ".codex/config.toml",
+            '# GSD Hooks\n[[hooks]]\nevent = "SessionStart"\ncommand = "node x.js"\n',
+        ),
+    ],
+)
+def test_toml_hook_blocks(tmp_path: Path, harness: str, relative: str, block: str) -> None:
+    _plant(tmp_path, relative, 'model = "x"\n\n' + block)
+
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
+
+    assert report.leftovers == (harness,)
+    assert report.steps == (_uninstall_step(harness),)
+    if harness == "kimi":
+        assert "--kimi-code" in report.steps[0].argv
+
+
+def test_user_hooks_are_not_a_leftover(tmp_path: Path) -> None:
+    _plant(tmp_path, ".claude/settings.json", _claude_hook_settings("bash ~/bin/my-linter.sh"))
+    _plant(
+        tmp_path,
+        ".gemini/antigravity/settings.json",
+        json.dumps({"env": {"X": "gsd-check-update.js"}, "hooks": {}}),
+    )
+    _plant(
+        tmp_path,
+        ".cursor/hooks.json",
+        json.dumps({"hooks": {"stop": [{"command": "./mine.sh", "gsd-managed": False}]}}),
+    )
+    _plant(tmp_path, ".kimi-code/config.toml", "# GSD Hooks notes\nmodel = 'x'\n")
+
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
+
+    assert report == ProjectPackReport()
+
+
+def _malformed(home: Path) -> str:
+    _write_bytes(home, ".claude/settings.json", b'{"hooks": ')
+    return ".claude/settings.json"
+
+
+def _non_utf8(home: Path) -> str:
+    _write_bytes(home, ".claude/settings.json", b'{"hooks": "\xff\xfe gsd-x.js"}')
+    return ".claude/settings.json"
+
+
+def _deep_nesting(home: Path) -> str:
+    _write_bytes(home, ".claude/settings.json", b"[" * 60000)
+    return ".claude/settings.json"
+
+
+def _array_settings(home: Path) -> str:
+    document = [json.loads(_claude_hook_settings("node gsd-check-update.js"))]
+    _write_bytes(home, ".claude/settings.json", json.dumps(document).encode())
+    return ".claude/settings.json"
+
+
+def _array_hooks_json(home: Path) -> str:
+    _write_bytes(home, ".cursor/hooks.json", b'[{"gsd-managed": true}]')
+    return ".cursor/hooks.json"
+
+
+def _directory_config(home: Path) -> str:
+    (home / ".claude" / "settings.json").mkdir(parents=True)
+    return ".claude/settings.json"
+
+
+def _dangling_symlink(home: Path) -> str:
+    (home / ".claude").mkdir()
+    (home / ".claude" / "settings.json").symlink_to(home / "dotfiles" / "settings.json")
+    return ""
+
+
+@pytest.mark.parametrize(
+    "make_config",
+    [
+        _malformed,
+        _non_utf8,
+        _deep_nesting,
+        _array_settings,
+        _array_hooks_json,
+        _directory_config,
+        _dangling_symlink,
+    ],
+    ids=lambda make_config: make_config.__name__.lstrip("_"),
+)
+def test_hook_config_fails_closed(tmp_path: Path, make_config: Callable[[Path], str]) -> None:
+    unchecked = make_config(tmp_path)
+    _plant(tmp_path, ".codex/hooks.json", json.dumps({"hooks": {"x": [{"command": "gsd-a.sh"}]}}))
+
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
+
+    assert report.leftovers == ("codex",)
+    assert report.steps == (_uninstall_step("codex"),)
+    assert report.unchecked == ((unchecked,) if unchecked else ())
+
+
+def test_hook_walk_bound_is_inconclusive(tmp_path: Path) -> None:
+    flat = {"hooks": [{"command": "x"} for _ in range(20000)]}
+    _plant(tmp_path, ".codex/hooks.json", json.dumps(flat))
+
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
+
+    assert report == ProjectPackReport(unchecked=(".codex/hooks.json",))
+
+
+def test_unlistable_machinery_dir_is_unchecked_not_a_leftover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blocked = tmp_path / ".claude" / "skills"
+    real_scandir = skill_lifecycle.os.scandir
+    tool = _tools()["opengsd"]
+
+    assert inspect_project_pack(tool, tmp_path, frozenset()).unchecked == ()
+
+    _plant(tmp_path, ".claude/skills/gsd-x")
+
+    def scandir(path: Path) -> object:
+        if Path(path) == blocked:
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_scandir(path)
+
+    monkeypatch.setattr(skill_lifecycle.os, "scandir", scandir)
+    report = inspect_project_pack(tool, tmp_path, frozenset())
+
+    assert report.leftovers == ()
+    assert report.unchecked == (".claude/skills",)
+
+
+def test_unreadable_gsd_core_is_unchecked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    blocked = tmp_path / ".claude" / "gsd-core"
+    real_stat = Path.stat
+
+    def stat(self: Path, *, follow_symlinks: bool = True) -> object:
+        if self == blocked:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_stat(self, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
+
+    assert report == ProjectPackReport(unchecked=(".claude/gsd-core",))
+
+
+def test_oversized_hook_config_is_never_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = tmp_path / ".claude" / "settings.json"
+    _plant(tmp_path, ".claude/settings.json", _claude_hook_settings(_GSD_HOOK_COMMAND))
+    with settings.open("a", encoding="utf-8") as fh:
+        fh.write(" " * (257 * 1024))
+    real_open = Path.open
+
+    def guarded_open(
+        self: Path,
+        mode: str = "r",
+        buffering: int = -1,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> IO[Any]:
+        if self == settings:
+            raise AssertionError("the oversized hook config was opened")
+        return real_open(self, mode, buffering, encoding, errors, newline)
+
+    monkeypatch.setattr(Path, "open", guarded_open)
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
+
+    assert report.leftovers == ()
+    assert report.unchecked == (".claude/settings.json",)
+
+
+def test_oversized_hook_config_bound_is_the_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = tmp_path / ".claude" / "settings.json"
+    _plant(tmp_path, ".claude/settings.json", _claude_hook_settings(_GSD_HOOK_COMMAND))
+    with settings.open("a", encoding="utf-8") as fh:
+        fh.write(" " * (300 * 1024))
+    real_stat = Path.stat
+    real_open = Path.open
+    reads: list[int] = []
+
+    def grown_after_stat(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        info = real_stat(self, follow_symlinks=follow_symlinks)
+        if self != settings:
+            return info
+        fields = (info.st_mode, info.st_ino, info.st_dev, info.st_nlink, info.st_uid, info.st_gid)
+        return os.stat_result((*fields, 100, 0, 0, 0))
+
+    class CountingReader:
+        def __init__(self, handle: IO[Any]) -> None:
+            self._handle = handle
+
+        def __enter__(self) -> "CountingReader":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self._handle.close()
+
+        def read(self, size: int = -1) -> bytes:
+            reads.append(size)
+            return self._handle.read(size)
+
+    def counting_open(
+        self: Path,
+        mode: str = "r",
+        buffering: int = -1,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> object:
+        handle = real_open(self, mode, buffering, encoding, errors, newline)
+        return CountingReader(handle) if self == settings else handle
+
+    monkeypatch.setattr(Path, "stat", grown_after_stat)
+    monkeypatch.setattr(Path, "open", counting_open)
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
+
+    assert report.leftovers == ()
+    assert report.unchecked == (".claude/settings.json",)
+    assert reads == [256 * 1024 + 1]
+
+
+def test_harnesses_without_hook_config_read_nothing(tmp_path: Path) -> None:
+    for home_dir in (".copilot", ".config/kilo", ".config/opencode"):
+        _plant(tmp_path, f"{home_dir}/settings.json", _claude_hook_settings(_GSD_HOOK_COMMAND))
+        _plant(tmp_path, f"{home_dir}/hooks.json", json.dumps({"x": {"gsd-managed": True}}))
+
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
+
+    assert report == ProjectPackReport()
+    assert not {"copilot", "kilo", "opencode"} & set(PROJECT_HOOK_CONFIGS)
+
+
+def test_hook_scan_writes_nothing(tmp_path: Path) -> None:
+    configs = {
+        ".claude/settings.json": _claude_hook_settings(_GSD_HOOK_COMMAND),
+        ".gemini/antigravity/settings.json": _claude_hook_settings(_GSD_HOOK_COMMAND),
+        ".codex/hooks.json": json.dumps({"hooks": {"x": [{"command": "gsd-a.sh"}]}}),
+        ".codex/config.toml": "# GSD Hooks\n",
+        ".cursor/hooks.json": json.dumps({"hooks": {"x": [{"gsd-managed": True}]}}),
+        ".codeium/windsurf/hooks.json": json.dumps({"hooks": {"x": [{"gsd-managed": True}]}}),
+        ".kimi-code/config.toml": "# GSD Hooks BEGIN — managed by GSD\n# GSD Hooks END\n",
+    }
+    for relative, content in configs.items():
+        _plant(tmp_path, relative, content)
+    before = _home_fingerprint(tmp_path)
+
+    report = inspect_project_pack(_tools()["opengsd"], tmp_path, frozenset())
+
+    assert report.leftovers == ("antigravity", "claude", "codex", "cursor", "kimi", "windsurf")
+    assert _home_fingerprint(tmp_path) == before

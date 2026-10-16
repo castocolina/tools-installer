@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
@@ -295,6 +296,24 @@ PROJECT_GLOBAL_MACHINERY: dict[str, tuple[str, ...]] = {
 # Kimi CLI `configHome` (read 2026-10-16), so the owning harness's uninstall may miss them.
 PROJECT_SHARED_GLOBAL_DIRS: dict[str, str] = {".agents/skills": "Kimi CLI"}
 
+HookConfigFormat = Literal["settings", "hooks-json", "toml"]
+# HOME-relative hook configs per GSD 1.16.0 `hooksSurface` (capability-registry.cjs, read
+# 2026-10-16). copilot (`copilot-inline`, no hook events), kilo and opencode (`none`) have
+# no hook config, so they have no entry.
+PROJECT_HOOK_CONFIGS: dict[str, tuple[tuple[str, HookConfigFormat], ...]] = {
+    "antigravity": ((".gemini/antigravity/settings.json", "settings"),),
+    "claude": ((".claude/settings.json", "settings"),),
+    "codex": ((".codex/hooks.json", "hooks-json"), (".codex/config.toml", "toml")),
+    "cursor": ((".cursor/hooks.json", "hooks-json"),),
+    "kimi": ((".kimi-code/config.toml", "toml"),),
+    "windsurf": ((".codeium/windsurf/hooks.json", "hooks-json"),),
+}
+# The scan runs on the refresh worker every pass; a hook config is never legitimately larger.
+_HOOK_CONFIG_MAX_BYTES = 256 * 1024
+_HOOK_WALK_MAX_NODES = 20000
+_GSD_HOOK_SCRIPT_RE = re.compile(r"(?:^|[/\\\s\"'])gsd-[A-Za-z0-9._-]+\.(?:js|cjs|mjs|sh)\b")
+_GSD_TOML_MARKER_RE = re.compile(r"^# GSD Hooks(?: BEGIN|\r?$)", re.MULTILINE)
+
 
 @dataclass(frozen=True)
 class ProjectPackReport:
@@ -304,12 +323,17 @@ class ProjectPackReport:
     leftovers: tuple[str, ...] = ()
     reasons: tuple[str, ...] = ()
     steps: tuple[ConfigStep, ...] = ()
+    # HOME-relative paths whose read was inconclusive: an unchecked path may hide a
+    # leftover, so consumers must say so rather than read it as clean.
+    unchecked: tuple[str, ...] = ()
 
 
 def _is_dir(path: Path) -> bool | None:
-    """True/False, or None when the answer is unreadable (never raises)."""
+    """Whether `path` is a directory; a missing path is not; None: unreadable."""
     try:
-        return path.is_dir()
+        return stat.S_ISDIR(path.stat().st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
     except OSError:
         return None
 
@@ -323,6 +347,57 @@ def _has_gsd_entry(directory: Path) -> bool | None:
         return False
     except OSError:
         return None
+
+
+def _gsd_hook_in(value: object) -> bool | None:
+    """Iterative walk: a `gsd-managed: true` entry or a GSD hook script; None past the bound."""
+    stack = [value]
+    for _ in range(_HOOK_WALK_MAX_NODES):
+        if not stack:
+            return False
+        node = stack.pop()
+        if isinstance(node, str):
+            if _GSD_HOOK_SCRIPT_RE.search(node):
+                return True
+        elif isinstance(node, dict):
+            row = cast(dict[object, object], node)
+            if row.get("gsd-managed") is True:
+                return True
+            stack.extend(row.values())
+        elif isinstance(node, list):
+            stack.extend(cast(list[object], node))
+    return False if not stack else None
+
+
+def _gsd_hooks_registered(path: Path, fmt: HookConfigFormat) -> bool | None:
+    """True: a GSD hook registration; False: none, or no config; None: inconclusive.
+
+    Pure read. The size cap is enforced by the read itself, so a config that grows or is
+    swapped after the stat is never read whole.
+    """
+    try:
+        info = path.stat()  # follows a dotfiles-manager symlink
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode) or info.st_size > _HOOK_CONFIG_MAX_BYTES:
+        return None
+    try:
+        with path.open("rb") as fh:
+            data = fh.read(_HOOK_CONFIG_MAX_BYTES + 1)
+        if len(data) > _HOOK_CONFIG_MAX_BYTES:
+            return None
+        text = data.decode("utf-8")
+        if fmt == "toml":
+            return _GSD_TOML_MARKER_RE.search(text) is not None
+        document: object = json.loads(text)
+    except (OSError, UnicodeDecodeError, ValueError, RecursionError):
+        return None
+    if not isinstance(document, dict):
+        return None  # a top-level array or scalar is not a hook config
+    root = cast(dict[object, object], document)
+    return _gsd_hook_in(root.get("hooks") if fmt == "settings" else root)
 
 
 def _global_uninstall_step(tool_id: str, harness: str, package: str, version: str) -> ConfigStep:
@@ -348,17 +423,25 @@ def inspect_project_pack(tool: Tool, home: Path, present: Collection[str]) -> Pr
         return ProjectPackReport()
     leftovers: list[str] = []
     shared: dict[str, str] = {}
+    unchecked: list[str] = []
     for harness, home_dir in INSTALL_STATE_HARNESS_DIRS.items():
-        found = _is_dir(home / home_dir / "gsd-core") is True
-        for directory in PROJECT_GLOBAL_MACHINERY[harness]:
-            if _has_gsd_entry(home / directory) is True:
-                found = True
-                if directory in PROJECT_SHARED_GLOBAL_DIRS:
-                    shared.setdefault(directory, harness)
-        if found:
+        answers: list[tuple[str, bool | None]] = [
+            (f"{home_dir}/gsd-core", _is_dir(home / home_dir / "gsd-core"))
+        ]
+        answers += [(d, _has_gsd_entry(home / d)) for d in PROJECT_GLOBAL_MACHINERY[harness]]
+        answers += [
+            (relative, _gsd_hooks_registered(home / relative, fmt))
+            for relative, fmt in PROJECT_HOOK_CONFIGS.get(harness, ())
+        ]
+        unchecked += [relative for relative, answer in answers if answer is None]
+        hits = [relative for relative, answer in answers if answer]
+        if hits:
             leftovers.append(harness)
+        for directory in hits:
+            if directory in PROJECT_SHARED_GLOBAL_DIRS:
+                shared.setdefault(directory, harness)
     if not leftovers:
-        return ProjectPackReport()
+        return ProjectPackReport(unchecked=tuple(unchecked))
     reasons = [_GLOBAL_LEFTOVER_REASON]
     for directory, harness in shared.items():
         label = SKILL_HARNESS_LABELS.get(harness, harness)
@@ -370,7 +453,12 @@ def inspect_project_pack(tool: Tool, home: Path, present: Collection[str]) -> Pr
     steps = tuple(
         _global_uninstall_step(tool.id, harness, package, version) for harness in leftovers
     )
-    return ProjectPackReport(leftovers=tuple(leftovers), reasons=tuple(reasons), steps=steps)
+    return ProjectPackReport(
+        leftovers=tuple(leftovers),
+        reasons=tuple(reasons),
+        steps=steps,
+        unchecked=tuple(unchecked),
+    )
 
 
 def _lifecycle(tool: Tool) -> SkillLifecycle:
