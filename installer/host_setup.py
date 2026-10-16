@@ -42,3 +42,15 @@ HOST_SETUPS: dict[str, HostSetup] = {
 }
 
 HOST_SETUP_IDS = tuple(HOST_SETUPS)
+
+
+def pnpm_add_command(setup_id: str) -> str | None:
+    """The one reviewed source for any pnpm hint about a host-setup tool (per G14).
+
+    The first handoff line that starts with ``pnpm add ``, or None for an unknown
+    setup id or a handoff that names no such command.
+    """
+    setup = HOST_SETUPS.get(setup_id)
+    if setup is None:
+        return None
+    return next((line for line in setup.handoff if line.startswith("pnpm add ")), None)

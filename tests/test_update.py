@@ -1234,7 +1234,7 @@ def test_update_refuses_host_setup_pnpm_cleanly() -> None:
     outcome = _perform(target, calls.append)
     assert outcome.status == "unsupported"
     assert outcome.owner == "pnpm"
-    assert "pnpm add --global @earendil-works/pi-coding-agent" in outcome.detail
+    assert "pnpm add --global --ignore-scripts @earendil-works/pi-coding-agent" in outcome.detail
     assert calls == []
 
 
@@ -1395,6 +1395,24 @@ def test_unknown_and_refused_updates_write_nothing(owner: Owner) -> None:
     assert [p.name for p in receipts.receipts_dir().iterdir()] == ["java.json"]
 
 
+def test_host_setup_update_hint_is_the_reviewed_handoff() -> None:
+    """G14: a host-setup tool's update hint quotes the reviewed handoff command."""
+    from installer.host_setup import HOST_SETUPS
+
+    tool = _tool("pi", Method(kind="host_setup", params={"setup_id": "pi"}))
+    ownership = replace(
+        _ownership(tool, "pnpm", package="@earendil-works/pi-coding-agent"),
+        method=None,
+    )
+    target = UpdateTarget(tool=tool, ownership=ownership)
+    assert target.ownership.method is None
+    calls: list[list[str]] = []
+    outcome = _perform(target, calls.append)
+    assert outcome.status == "unsupported"
+    assert f"`{HOST_SETUPS['pi'].handoff[1]}`" in outcome.detail
+    assert calls == []
+
+
 def test_update_service_reads_the_live_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     """D-14, checker W2: `run` reads the live platform at run time, so brew
     appearing after construction reaches `perform_update`; without a provider
@@ -1429,6 +1447,23 @@ def test_update_service_reads_the_live_platform(monkeypatch: pytest.MonkeyPatch)
     fixed.run(_target(tool, "brew", method=brew, package="ripgrep"))
     assert [platform.has_brew for platform in seen] == [True, True]
     assert seen[1] is fixed.platform
+
+
+def test_manager_update_keeps_an_installer_receipt(tmp_path: Path) -> None:
+    """G4: a brew update never rewrites an installer receipt, so the installer's
+    own files stay removal-proven."""
+    tool, method, _placed = _yq_with_old_bytes(tmp_path)
+    receipts.record(tool, method, package=None, smoke="ok")
+    receipt_bytes = receipts.receipt_path("yq").read_bytes()
+    brew = Method(kind="brew", params={"formula": "yq"})
+    calls: list[list[str]] = []
+    outcome = _perform(_target(tool, "brew", method=brew, package="yq"), calls.append)
+    assert outcome.status == "updated"
+    assert calls == [["brew", "upgrade", "yq"]]
+    assert receipts.receipt_path("yq").read_bytes() == receipt_bytes
+    kept = receipts.read("yq")
+    assert kept is not None
+    assert kept.method.kind == "github_release"
 
 
 def test_update_service_refuses_a_drifted_receipt(

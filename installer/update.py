@@ -83,6 +83,7 @@ from installer import ownership as ownership_mod
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.executors import ExecutorError
+from installer.host_setup import pnpm_add_command
 from installer.locations import applications_dir
 from installer.model import Method, Tool
 from installer.ownership import (
@@ -311,14 +312,24 @@ def _perform(
     elif owner == "pnpm":
         if method is None:
             # A host-setup tool (pi): pnpm owns it but no node method installs it.
+            # The hint quotes the reviewed handoff (G14); a tool without one gets
+            # the fallback, which still carries --ignore-scripts.
+            setup_ids = (
+                str(m.params.get("setup_id")) for m in target.tool.methods if m.kind == "host_setup"
+            )
+            command = next(
+                (
+                    quoted
+                    for setup_id in setup_ids
+                    if (quoted := pnpm_add_command(setup_id)) is not None
+                ),
+                f"pnpm add --global --ignore-scripts {ownership.package or target.tool.cmd}",
+            )
             return UpdateOutcome(
                 tool_id=target.tool.id,
                 status="unsupported",
                 owner="pnpm",
-                detail=(
-                    "managed by pnpm through its host setup — update it with "
-                    f"`pnpm add --global {ownership.package or target.tool.cmd}`"
-                ),
+                detail=(f"managed by pnpm through its host setup — update it with `{command}`"),
             )
         executors.execute(method, runner)
     elif owner == "installer":
@@ -328,14 +339,19 @@ def _perform(
     else:
         raise UpdateError(f"unsupported owner {owner!r}")
     # L-19-03: installer-owned updates always rewrite the receipt; a manager
-    # update only refreshes one that exists, so updating someone else's
-    # package never makes it ours. Updates run no smoke check.
-    if method is not None and (owner == "installer" or receipts.read(target.tool.id) is not None):
-        try:
-            receipts.record(target.tool, method, package=method_package(method), smoke=None)
-        except OSError as exc:
-            note = f"install receipt not written: {exc}"
-            detail = f"{detail}; {note}" if detail else note
+    # update refreshes only a receipt of the same method kind, so updating
+    # someone else's package never makes it ours and a manager update never
+    # replaces another kind's receipt (G4: the installer's files stay proven).
+    # Updates run no smoke check.
+    if method is not None:
+        existing = receipts.read(target.tool.id)
+        same_kind = existing is not None and existing.method.kind == method.kind
+        if owner == "installer" or same_kind:
+            try:
+                receipts.record(target.tool, method, package=method_package(method), smoke=None)
+            except OSError as exc:
+                note = f"install receipt not written: {exc}"
+                detail = f"{detail}; {note}" if detail else note
     warning = _run_postinstall(target, method, runner, tools, postinstall)
     return UpdateOutcome(
         tool_id=target.tool.id,
