@@ -477,7 +477,7 @@ cmd_pass1() {
         "$ACC_INSTALLED" "$ACC_FAILED" "$ACC_NO_METHOD" "$ACC_MANUAL"
     fi
     rm -f "$tmp" "$ACC_SKIPPED_FILE" "$ACC_MANUAL_NAMES_FILE"
-    assert_receipt_present "$categories"
+    assert_receipt_present "$categories" || return 1
     return 0
   fi
   printf 'TRACER_CLEAN_INSTALL_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s\n' \

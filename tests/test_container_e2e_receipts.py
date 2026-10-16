@@ -6,6 +6,7 @@ the extracted functions in bash with `exec_tester` pinned to a scratch HOME.
 """
 
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -175,7 +176,7 @@ def test_receipt_checks_are_wired_into_the_passes() -> None:
     text = _script_text()
     pass1 = _function("cmd_pass1", text)
     pass2 = _function("cmd_pass2", text)
-    assert 'assert_receipt_present "$categories"' in pass1
+    assert 'assert_receipt_present "$categories" || return 1' in pass1
     ready = pass2.index("assert_receipt_ready_for_removal")
     rerun = pass2.index("TRACER_RERUN_OK")
     uninstall = pass2.index('run_pass2_step "--uninstall --yes"')
@@ -219,9 +220,37 @@ def test_receipt_check_is_skipped_for_other_categories(tmp_path: Path) -> None:
     assert not calls.exists()
 
 
+def _assign(name: str, value: str) -> str:
+    """A shell assignment whose value survives spaces and shell metacharacters."""
+    return f"{name}={shlex.quote(value)}"
+
+
+def test_uv_stub_survives_a_spaced_interpreter_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A checkout path with a space must not split the interpreter into words (G19)."""
+    link = tmp_path / "py dir" / "python"
+    link.parent.mkdir()
+    link.symlink_to(sys.executable)
+    monkeypatch.setattr(sys, "executable", str(link))
+    result = _run(_uv_stub() + 'uv run python -c "print(42)"\n', tmp_path / "home")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == "42"
+
+
+def test_assignment_survives_a_spaced_workspace() -> None:
+    """A workspace path with a space stays one word in a generated assignment (G19)."""
+    result = _run(
+        _assign("TESTER_WORKSPACE", "/a b/c") + '\nprintf "%s" "$TESTER_WORKSPACE"\n',
+        Path("/unused"),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "/a b/c"
+
+
 def _uv_stub() -> str:
     """Drop argv through `python` and run the rest with this interpreter."""
-    exe = sys.executable
+    exe = shlex.quote(sys.executable)
     return (
         "uv() {\n"
         "  local arg\n"
@@ -267,7 +296,7 @@ def test_pre_uninstall_check_requires_binary_and_valid_receipt(
 
     script = "\n".join(
         [
-            f"TESTER_WORKSPACE={ROOT}",
+            _assign("TESTER_WORKSPACE", str(ROOT)),
             f"RECEIPT_PROBE_TOOL={_constant('RECEIPT_PROBE_TOOL')}",
             f"RECEIPT_PROBE_CATEGORY={_constant('RECEIPT_PROBE_CATEGORY')}",
             _function("assert_receipt_ready_for_removal"),
