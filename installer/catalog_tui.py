@@ -410,8 +410,8 @@ class CatalogScreen(AppScreen):
                 epoch = service.epoch
                 # The whole catalog, never the tier: every tier asks for the same
                 # set, so the service joins an in-flight pass instead of repeating it.
-                result, error = run_live(lambda: service.refresh(self._catalog))
-                if result is not None:
+                _result, error = run_live(lambda: service.refresh(self._catalog))
+                if error is None:
                     warning = service.warning
         finally:
             self.post_message(

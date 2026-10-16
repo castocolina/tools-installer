@@ -1,11 +1,12 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 import threading
 import time
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -90,6 +91,22 @@ def _empty_inventory(**_kwargs: object) -> ManagerInventory:
 
 def _empty_outdated(**_kwargs: object) -> OutdatedReport:
     return OutdatedReport(brew={}, cask={}, pnpm={}, uv={})
+
+
+def _versions(service: VersionRefreshService, tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+    """Run one pass and read each tool's version back through `state_of` (D-03)."""
+    service.refresh(tools)
+    states = {tool.id: service.state_of(tool.id) for tool in tools}
+    return {
+        tool_id: state.version
+        for tool_id, state in states.items()
+        if state is not None and state.version is not None
+    }
+
+
+def _held_skills(service: VersionRefreshService) -> dict[str, SkillHostStatus]:
+    """The held skill-host answers: `refresh_skills` over no pack probes nothing."""
+    return service.refresh_skills(())
 
 
 def _installer_owned_service(
@@ -205,7 +222,7 @@ def test_codegraph_status_is_outdated_and_not_stale_after_a_successful_fetch(
         probe_output=lambda argv: "1.2.0",
         now=lambda: now,
     )
-    statuses = service.refresh([_codegraph()])
+    statuses = _versions(service, [_codegraph()])
     assert statuses["codegraph"].outdated is True
     raw = json.loads((tmp_path / "versions.json").read_text())
     assert "checked_at" in raw["tools"]["codegraph"]
@@ -373,7 +390,7 @@ def test_fresh_cache_after_restart_reconstructs_status_without_fetching(tmp_path
         probe_output=lambda argv: "1.2.0",
         now=lambda: now,
     )
-    statuses = restarted.refresh([_codegraph()])
+    statuses = _versions(restarted, [_codegraph()])
     assert calls == []
     assert statuses["codegraph"].latest == "v1.6.0"
     assert statuses["codegraph"].stale is False
@@ -402,7 +419,7 @@ def test_version_error_preserves_latest_and_records_failed_at(tmp_path: Path) ->
         probe_output=lambda argv: "1.2.0",
         now=lambda: now,
     )
-    statuses = service.refresh([_codegraph()])
+    statuses = _versions(service, [_codegraph()])
     assert statuses["codegraph"].latest == "v1.5.0"
     assert statuses["codegraph"].outdated is True
     cached = load_version_cache(path)["codegraph"]
@@ -426,7 +443,7 @@ def test_fetch_budget_caps_resolve_tag_calls(tmp_path: Path) -> None:
         probe_output=lambda argv: "0.9.0",
         now=lambda: now,
     )
-    statuses = service.refresh(tools)
+    statuses = _versions(service, tools)
     assert len(calls) == MAX_FETCHES_PER_REFRESH
     assert len(statuses) == 25
     deferred = [tool.id for tool in tools[MAX_FETCHES_PER_REFRESH:]]
@@ -657,7 +674,7 @@ def test_fresh_manager_snapshot_issues_zero_queries(
         resolve_pnpm=lambda: "/opt/homebrew/bin/pnpm",
     )
     tools = [_brew_tool(), _cask_tool(), _node_tool(), _uv_tool()]
-    statuses = service.refresh(tools)
+    statuses = _versions(service, tools)
     assert calls == []
     assert pnpm_calls["n"] == 0
     assert inventory_calls["n"] == 0
@@ -1060,7 +1077,7 @@ def test_pinned_spec_populated_for_registry_pin() -> None:
     assert unpinned_status.pinned_spec is None
 
 
-def test_ownership_of_returns_last_pass_and_none_for_missing(tmp_path: Path) -> None:
+def test_state_of_returns_last_pass_and_none_for_missing(tmp_path: Path) -> None:
     now = datetime(2026, 9, 7, tzinfo=UTC)
     path = tmp_path / "versions.json"
     query, _calls = _counting_query()
@@ -1078,17 +1095,15 @@ def test_ownership_of_returns_last_pass_and_none_for_missing(tmp_path: Path) -> 
         resolve_pnpm=lambda: "/opt/homebrew/bin/pnpm",
     )
     service.refresh([_brew_tool()])
-    assert service.ownership_of("rg") is not None
-    assert service.ownership_of("missing") is None
+    assert service.state_of("rg") is not None
+    assert service.state_of("missing") is None
 
 
-def test_ownership_of_returns_none_for_a_record_older_than_the_current_epoch(
+def test_state_of_returns_none_for_a_state_older_than_the_current_epoch(
     tmp_path: Path,
 ) -> None:
-    """A single `invalidate` call makes every existing record report as
-    unavailable until a refresh commits new ones -- the branch the Round-1
-    review proved could never fire under the old two-map design, because
-    `_ownership` was written only inside `refresh`'s commit block."""
+    """A single `invalidate` call makes every existing state report as
+    unavailable until a refresh commits new ones."""
     now = datetime(2026, 9, 7, tzinfo=UTC)
     path = tmp_path / "versions.json"
     query, _calls = _counting_query()
@@ -1106,21 +1121,19 @@ def test_ownership_of_returns_none_for_a_record_older_than_the_current_epoch(
         resolve_pnpm=lambda: "/opt/homebrew/bin/pnpm",
     )
     service.refresh([_brew_tool()])
-    assert service.ownership_of("rg") is not None
+    assert service.state_of("rg") is not None
     service.invalidate(reason="update")
-    assert service.ownership_of("rg") is None
+    assert service.state_of("rg") is None
     service.refresh([_brew_tool()])
-    assert service.ownership_of("rg") is not None
+    assert service.state_of("rg") is not None
 
 
-def test_a_raced_refresh_publishes_no_ownership_record_or_epoch(tmp_path: Path) -> None:
-    """Round-3 review HIGH #1, asserted directly on the map's own contents
-    (not only through `ownership_of`, so "published under an old tag" and
-    "not published" cannot be confused): the raced branch --
-    `self._epoch != started_epoch` -- writes NEITHER a record nor an epoch
-    for any tool in the pass. Deterministic: the invalidate is triggered
-    from inside the manager-inventory read this pass makes before its
-    per-tool loop, never by sleeping."""
+def test_a_raced_refresh_publishes_no_state(tmp_path: Path) -> None:
+    """Round-3 review HIGH #1, public reads only (checker W5): the raced
+    branch -- `self._epoch != started_epoch` -- publishes no state and
+    writes no cache entry for any tool in the pass. Deterministic: the
+    invalidate is triggered from inside the manager-inventory read every pass
+    makes before its per-tool loop, never by sleeping."""
     now = datetime(2026, 9, 7, tzinfo=UTC)
     path = tmp_path / "versions.json"
     holder: dict[str, VersionRefreshService] = {}
@@ -1146,8 +1159,9 @@ def test_a_raced_refresh_publishes_no_ownership_record_or_epoch(tmp_path: Path) 
     )
     holder["svc"] = service
     service.refresh([_brew_tool()])
-    assert service._ownership == {}  # pyright: ignore[reportPrivateUsage]
-    assert service.ownership_of("rg") is None
+    assert service.state_of("rg") is None
+    assert "rg" not in load_version_cache(path)
+    assert service.epoch == 1
 
 
 def test_a_superseded_refresh_publishes_no_ownership_over_a_newer_pass(
@@ -1156,7 +1170,7 @@ def test_a_superseded_refresh_publishes_no_ownership_over_a_newer_pass(
     """THE OVERWRITE CASE (Round-3 review HIGH #1). Refresh A starts at
     epoch 0; `invalidate()` moves the service to epoch 1; refresh B starts
     and commits at epoch 1; refresh A then finishes and takes the raced
-    branch. `ownership_of` still returns B's record -- A's obsolete answer
+    branch. `state_of` still returns B's state -- A's obsolete answer
     neither replaces it nor pushes it back to `None`. The interleaving is
     driven deterministically by holding A inside its own per-tool resolve
     step (an injected `resolve_tag` hold, the established shape) until B
@@ -1209,60 +1223,71 @@ def test_a_superseded_refresh_publishes_no_ownership_over_a_newer_pass(
     thread_a.join(timeout=5)
     assert errors == []
 
-    assert service.ownership_of(tool.id) == b_ownership
-    tag, record = service._ownership[tool.id]  # pyright: ignore[reportPrivateUsage]
-    assert tag == service.epoch
-    assert record == b_ownership
+    state = service.state_of(tool.id)
+    assert state is not None
+    assert state.generation == service.epoch
+    assert state.ownership == b_ownership
 
 
-def test_the_service_holds_one_epoch_tagged_ownership_map_not_two(tmp_path: Path) -> None:
-    """WR-02 (15.4-REVIEW.md): the DETERMINISTIC gate for Round-3 review
-    HIGH #2's invariant -- one map of epoch-tagged records, never a plain
-    ownership map beside a parallel `dict[str, int]` of epochs.
-
-    This exists because the concurrency test below structurally CANNOT prove
-    it: the rejected two-parallel-maps design was restored by the reviewer
-    and passed that test, with the only thing in the whole suite noticing the
-    revert being an incidental `TypeError` from a different test's
-    private-attribute unpack -- a shape accident, not a semantic guard. The
-    invariant is a property of the DATA STRUCTURE (one key lookup returns
-    both halves of the pair or neither, which is atomic without a reader
-    lock), so it is asserted as one, not left to timing."""
-    now = datetime(2026, 9, 7, tzinfo=UTC)
-    service = _installer_owned_service(
-        tmp_path / "versions.json",
-        resolve_tag=lambda repo: "v1.0.0",
-        probe_output=lambda argv: "0.9.0",
-        now=lambda: now,
-    )
-    service.refresh([_gh_tool("alpha")])
-    ownership = service._ownership  # pyright: ignore[reportPrivateUsage]
-    assert set(ownership) == {"alpha"}
-    # The tag travels WITH the record: one lookup, one pair.
-    for key, value in ownership.items():
-        assert isinstance(value, tuple), (key, value)
-        epoch, record = value
-        assert isinstance(epoch, int), (key, value)
-        assert isinstance(record, ManagerOwnership), (key, value)
-    # ...and nothing else on the service is a second map keyed by the same
-    # tool ids holding those epochs, which is exactly the rejected design.
-    parallel: list[str] = []
-    for name, value in cast("dict[str, object]", vars(service)).items():
-        if name == "_ownership" or not isinstance(value, dict):
-            continue
-        other = cast("dict[object, object]", value)
-        if not other or not set(ownership) <= set(other):
-            continue
-        if all(isinstance(v, int) for v in other.values()):
-            parallel.append(name)
-    assert parallel == [], parallel
+def test_the_service_publishes_one_snapshot_of_tool_states(tmp_path: Path) -> None:
+    """D-03: after a pass, the only tool-keyed dict of `ToolState`s on the
+    service is the published snapshot, each state carrying its pass's `seq`;
+    the only other tool-keyed dict is the skill-probe input store, and no
+    `VersionStatus` or `ManagerOwnership` map remains. Read through `vars()`,
+    never a private attribute name."""
+    service = _skill_state_service(tmp_path, lambda _argv: _CLAUDE_SUPERPOWERS_JSON)
+    pack, alpha = _claude_pack(), _gh_tool("alpha")
+    service.refresh([pack, alpha])
+    service.refresh_skills([pack])
+    published = {tool_id: service.state_of(tool_id) for tool_id in (pack.id, alpha.id)}
+    held = cast("dict[str, object]", vars(service))
+    maps = [
+        cast("dict[object, object]", value) for value in held.values() if isinstance(value, dict)
+    ]
+    covered = {pack.id, alpha.id}
+    keyed = [mapping for mapping in maps if covered & set(mapping)]
+    snapshots = [m for m in keyed if all(isinstance(v, ToolState) for v in m.values())]
+    assert snapshots == [published]
+    for state in published.values():
+        assert state is not None
+        assert state.seq >= 1
+    others = [m for m in keyed if m is not snapshots[0]]
+    assert len(others) == 1
+    assert all(isinstance(v, SkillHostStatus) for v in others[0].values())
+    for mapping in maps:
+        for value in mapping.values():
+            parts = cast("tuple[object, ...]", value) if isinstance(value, tuple) else (value,)
+            assert not any(isinstance(part, VersionStatus | ManagerOwnership) for part in parts)
 
 
-def test_ownership_of_answers_fail_closed_across_commit_and_invalidate_boundaries(
+def test_service_has_no_transitional_readers() -> None:
+    """D-03: `state_of` is the only per-tool reader."""
+    for name in ("ownership_of", "statuses", "skill_status_of"):
+        assert not hasattr(VersionRefreshService, name), name
+
+
+def test_no_test_file_pokes_private_service_stores() -> None:
+    """Every test seeds state through the public doubles (tests/state_doubles.py),
+    never by assigning a service's private ownership, status, skill or state
+    store (the 19-15 scan, widened to every test file)."""
+    stores = "|".join(("_own" + "ership", "_stat" + "uses", "_sta" + "tes", "_sk" + "ills"))
+    poke = re.compile(r"\.(?:" + stores + r")\b(?:\[[^\]]*\])?\s*=(?!=)")
+    here = Path(__file__).parent
+    hits = [
+        f"{source.name}:{number}: {line.strip()}"
+        for source in sorted(here.glob("*.py"))
+        if source.name != "state_doubles.py"
+        for number, line in enumerate(source.read_text().splitlines(), 1)
+        if poke.search(line)
+    ]
+    assert hits == []
+
+
+def test_state_of_answers_fail_closed_across_commit_and_invalidate_boundaries(
     tmp_path: Path,
 ) -> None:
     """SEQUENCING case (Round-3 review HIGH #2). A reader samples
-    `ownership_of` immediately after each commit and immediately after each
+    `state_of` immediately after each commit and immediately after each
     invalidate, through two alternating gates that make the interleaving
     deterministic rather than racing on scheduler luck -- so a committed pass
     reads as a record and an invalidated one reads as `None`, on every pass,
@@ -1283,7 +1308,7 @@ def test_ownership_of_answers_fail_closed_across_commit_and_invalidate_boundarie
         path, resolve_tag=lambda repo: "v1.0.0", probe_output=lambda argv: "0.9.0", now=lambda: now
     )
 
-    observations: list[ManagerOwnership | None] = []
+    observations: list[ToolState | None] = []
     errors: list[BaseException] = []
     _PASSES = 15
     _READS_PER_PASS = 20
@@ -1316,12 +1341,12 @@ def test_ownership_of_answers_fail_closed_across_commit_and_invalidate_boundarie
                 assert committed.wait(timeout=5)
                 committed.clear()
                 for _ in range(_READS_PER_PASS):
-                    observations.append(service.ownership_of(tool.id))
+                    observations.append(service.state_of(tool.id))
                 sampled.set()
                 assert invalidated.wait(timeout=5)
                 invalidated.clear()
                 for _ in range(_READS_PER_PASS):
-                    observations.append(service.ownership_of(tool.id))
+                    observations.append(service.state_of(tool.id))
                 sampled.set()
         except BaseException as exc:  # noqa: BLE001 -- collected for the join
             errors.append(exc)
@@ -1339,7 +1364,7 @@ def test_ownership_of_answers_fail_closed_across_commit_and_invalidate_boundarie
     assert any(obs is None for obs in observations)  # and an invalidated gap between passes
 
 
-def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_record(
+def test_state_of_under_an_unsynchronized_reader_never_serves_a_superseded_state(
     tmp_path: Path,
 ) -> None:
     """WR-02 (15.4-REVIEW.md): the same reader/writer pair as the sequencing
@@ -1363,7 +1388,7 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
     the two points that matter, via a shared iteration counter -- after its
     commit (inside the committed window) and after its invalidate (inside the
     invalidated gap) -- so the reader is guaranteed to complete at least two
-    whole loop iterations, and therefore at least one whole `ownership_of`
+    whole loop iterations, and therefore at least one whole `state_of`
     call, inside each window. The reads themselves stay unsynchronized (no
     handshake on the read), which is exactly the race this test exists to
     catch. Bounded by iteration counts, never by wall-clock
@@ -1377,7 +1402,7 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
         now=lambda: now,
     )
     errors: list[BaseException] = []
-    committed_at: dict[int, ManagerOwnership] = {}
+    committed_at: dict[int, ToolState] = {}
     seen_record = False
     seen_none = False
     checked = 0
@@ -1396,7 +1421,7 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
 
     def _let_reader_run() -> None:
         # Wait until the reader has completed at least two more loop
-        # iterations (so at least one whole `ownership_of` call starts and
+        # iterations (so at least one whole `state_of` call starts and
         # ends inside whichever window the writer is in), capping the spin.
         # A GIL-yield spin, never a wall-clock sleep: on macOS `time.sleep(0)`
         # alone hands the GIL back to the same thread, so no pass count can
@@ -1420,7 +1445,7 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
                 # Published by `refresh` itself; this only records WHICH
                 # object landed, so the reader can name the expectation.
                 # The reader skips any epoch not yet recorded here.
-                record = service.ownership_of(tool.id)
+                record = service.state_of(tool.id)
                 if record is not None:
                     committed_at[service.epoch] = record
                 # Wait for the reader INSIDE the committed window: the few
@@ -1447,7 +1472,7 @@ def test_ownership_of_under_an_unsynchronized_reader_never_serves_a_superseded_r
             while not stop.is_set():
                 try:
                     before = service.epoch
-                    observed = service.ownership_of(tool.id)
+                    observed = service.state_of(tool.id)
                     after = service.epoch
                     if observed is None:
                         seen_none = True
@@ -1510,10 +1535,11 @@ def test_native_probe_service_resolves_owner_and_status_stays_on_final_branch(
         native_probe=native_probe,
     )
     tool = _jq_tool()
-    statuses = service.refresh([tool])
+    statuses = _versions(service, [tool])
 
-    ownership = service.ownership_of("jq")
-    assert ownership is not None
+    jq = service.state_of("jq")
+    assert jq is not None
+    ownership = jq.ownership
     assert ownership.owner == "dnf"
     assert ownership.confidence == "direct"
     assert probe_calls  # the injected probe was actually consulted
@@ -1550,8 +1576,9 @@ def test_no_probe_default_never_acquires_a_native_subprocess(tmp_path: Path) -> 
     )
     tool = _jq_tool()
     service.refresh([tool])
-    ownership = service.ownership_of("jq")
-    assert ownership is not None
+    jq = service.state_of("jq")
+    assert jq is not None
+    ownership = jq.ownership
     assert ownership.owner == "unknown"
 
 
@@ -1922,7 +1949,7 @@ def test_refresh_skills_persists_once_and_skips_the_second_call(tmp_path: Path) 
         read_outdated_fn=_empty_outdated,
     )
     landed = service.refresh_skills([pack])
-    status = service.skill_status_of("superpowers")
+    status = _held_skills(service).get("superpowers")
     assert isinstance(status, SkillHostStatus)
     assert status.hosts == {"claude": "present"}
     assert status.stale is False
@@ -2002,11 +2029,11 @@ def test_skill_pass_superseded_by_invalidate_stores_nothing(tmp_path: Path) -> N
     service._skill_probe = skill_probe  # pyright: ignore[reportPrivateUsage]
     pack = _claude_pack()
     service.refresh_skills([pack])
-    assert service.skill_status_of("superpowers") is None
+    assert _held_skills(service).get("superpowers") is None
     assert service._skills_probed is False  # pyright: ignore[reportPrivateUsage]
     service.refresh_skills([pack])
     assert calls["n"] == 2
-    assert service.skill_status_of("superpowers") is None
+    assert _held_skills(service).get("superpowers") is None
 
 
 def test_skill_invalidate_marks_every_held_entry_stale(tmp_path: Path) -> None:
@@ -2015,11 +2042,11 @@ def test_skill_invalidate_marks_every_held_entry_stale(tmp_path: Path) -> None:
 
     service = _skill_service(tmp_path / "versions.json", skill_probe, tmp_path)
     service.refresh_skills([_claude_pack()])
-    landed = service.skill_status_of("superpowers")
+    landed = _held_skills(service).get("superpowers")
     assert landed is not None
     assert landed.stale is False
     service.invalidate(reason="x")
-    held = service.skill_status_of("superpowers")
+    held = _held_skills(service).get("superpowers")
     assert held is not None
     assert held.stale is True
 
@@ -2034,7 +2061,7 @@ def test_refresh_skills_without_packs_keeps_seeded_answers(tmp_path: Path) -> No
     landed = service.refresh_skills([_tool("rg")])
     assert calls == []
     assert landed["superpowers"].stale is True
-    held = service.skill_status_of("superpowers")
+    held = _held_skills(service).get("superpowers")
     assert held is not None
     assert held.stale is True
     assert service._skills_probed is False  # pyright: ignore[reportPrivateUsage]
@@ -2155,7 +2182,7 @@ def test_refresh_publishes_one_tool_state_per_tool(tmp_path: Path) -> None:
         tmp_path,
         which=lambda cmd: str(managed / cmd) if cmd == "alpha" else None,
     )
-    statuses = service.refresh([alpha, beta])
+    service.refresh([alpha, beta])
     first = service.state_of("alpha")
     second = service.state_of("beta")
     assert first is not None
@@ -2167,9 +2194,9 @@ def test_refresh_publishes_one_tool_state_per_tool(tmp_path: Path) -> None:
     assert second.generation == service.epoch
     for state, tool in ((first, alpha), (second, beta)):
         assert state.tool_id == tool.id
-        assert state.ownership == service.ownership_of(tool.id)
-        assert state.version == service.statuses[tool.id]
-        assert state.version == statuses[tool.id]
+        assert state.ownership.tool_id == tool.id
+        assert state.version is not None
+        assert state.version.tool_id == tool.id
         assert state.removable == plan_removal([tool], service.managed_bin_dir)
 
 
@@ -2463,8 +2490,6 @@ def test_overtaken_pass_publishes_nothing(tmp_path: Path) -> None:
     assert hold.holding.wait(timeout=10)
     service.refresh([a, b, c])
     captured = {tool_id: service.state_of(tool_id) for tool_id in ("a", "b", "c")}
-    statuses = service.statuses
-    owners = {tool_id: service.ownership_of(tool_id) for tool_id in ("a", "b", "c")}
     hold.release.set()
     assert _join(run_a) is None
     seqs: set[int] = set()
@@ -2473,8 +2498,6 @@ def test_overtaken_pass_publishes_nothing(tmp_path: Path) -> None:
         assert service.state_of(tool_id) is state
         seqs.add(state.seq)
     assert len(seqs) == 1
-    assert service.statuses == statuses
-    assert {tool_id: service.ownership_of(tool_id) for tool_id in ("a", "b", "c")} == owners
     # The released pass A took a sequence BEFORE B, so B's records outrank it.
     service.refresh([_gh_tool("d")])
     later = service.state_of("d")
@@ -2508,8 +2531,6 @@ def test_overtaken_by_invalidate_publishes_nothing(tmp_path: Path) -> None:
     service.refresh([_gh_tool("a"), _brew_tool()])
     assert service.state_of("a") is None
     assert service.state_of("rg") is None
-    assert service.ownership_of("a") is None
-    assert service.statuses == {}
 
 
 def test_partial_pass_merges_into_the_full_snapshot(tmp_path: Path) -> None:
@@ -2582,13 +2603,15 @@ def test_identical_passes_share_one_flight(tmp_path: Path) -> None:
     hold = _Hold()
     service = _held_service(tmp_path, hold)
     a, b = _gh_tool("a"), _gh_tool("b")
-    results: dict[str, dict[str, VersionStatus]] = {}
+    finished: list[str] = []
 
     def first() -> None:
-        results["a"] = service.refresh([a, b])
+        service.refresh([a, b])
+        finished.append("a")
 
     def second() -> None:
-        results["b"] = service.refresh([b, a])
+        service.refresh([b, a])
+        finished.append("b")
 
     run_a = _start(first)
     assert hold.holding.wait(timeout=10)
@@ -2598,7 +2621,7 @@ def test_identical_passes_share_one_flight(tmp_path: Path) -> None:
     hold.release.set()
     assert _join(run_a) is None
     assert _join(run_b) is None
-    assert results["a"] == results["b"]
+    assert sorted(finished) == ["a", "b"]
     assert hold.calls == 2
     state_a = service.state_of("a")
     state_b = service.state_of("b")
@@ -2915,7 +2938,7 @@ def test_refresh_skills_superseded_rebuilds_nothing(tmp_path: Path) -> None:
     pack, alpha = _claude_pack(), _gh_tool("alpha")
     service.refresh([pack, alpha])
     service.refresh_skills([pack])
-    assert service.skill_status_of(pack.id) is None
+    assert _held_skills(service).get(pack.id) is None
     assert service.state_of(pack.id) is None
     assert service.state_of("alpha") is None
     service.refresh([pack])
@@ -2988,7 +3011,7 @@ def test_suite_sandbox_redirects_skill_home(tmp_path_factory: pytest.TempPathFac
         read_outdated_fn=_empty_outdated,
     )
     service.refresh_skills([pack])
-    status = service.skill_status_of("opengsd")
+    status = _held_skills(service).get("opengsd")
     assert status is not None
     assert status.hosts == {"claude": "present"}
 

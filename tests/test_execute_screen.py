@@ -1492,14 +1492,10 @@ class _RecordingRefreshService(FrozenStateService):
         )
         self.asked: list[str] = []
 
-    def refresh(self, tools: Sequence[Tool]) -> dict[str, VersionStatus]:
-        statuses: dict[str, VersionStatus] = {}
+    def refresh(self, tools: Sequence[Tool]) -> None:
         for tool in tools:
             self.asked.append(tool.id)
-            status = _outdated_status(tool.id, outdated=True)
-            _publish(self, tool, version=status)
-            statuses[tool.id] = status
-        return statuses
+            _publish(self, tool, version=_outdated_status(tool.id, outdated=True))
 
 
 class _RecordingUpdateService(UpdateService):
@@ -1662,7 +1658,7 @@ async def test_refresh_failure_on_missing_ownership_reports_error_not_a_clean_ru
     captured: list[str] = []
 
     class _RaisingRefreshService(_RecordingRefreshService):
-        def refresh(self, tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+        def refresh(self, tools: Sequence[Tool]) -> None:
             self.asked.extend(tool.id for tool in tools)
             raise OSError("disk full")
 
@@ -1793,7 +1789,7 @@ async def test_a_completed_update_stays_done_when_the_version_refresh_crashes(
     refresh = _RecordingRefreshService(tmp_path / "versions.json")
     _seed_refresh(refresh, rg, outdated=True)
 
-    def crash_refresh(tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+    def crash_refresh(tools: Sequence[Tool]) -> None:
         raise RuntimeError("refresh exploded")
 
     refresh.refresh = crash_refresh  # type: ignore[method-assign]
@@ -2474,11 +2470,10 @@ class _VersionedRefreshService(_RecordingRefreshService):
         self._installed = installed
         self._raise_error = raise_error
 
-    def refresh(self, tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+    def refresh(self, tools: Sequence[Tool]) -> None:
         if self._raise_error is not None:
             self.asked.extend(tool.id for tool in tools)
             raise self._raise_error
-        statuses: dict[str, VersionStatus] = {}
         for tool in tools:
             self.asked.append(tool.id)
             status = VersionStatus(
@@ -2490,8 +2485,6 @@ class _VersionedRefreshService(_RecordingRefreshService):
                 source="brew",
             )
             _publish(self, tool, version=status)
-            statuses[tool.id] = status
-        return statuses
 
 
 async def test_successful_outdated_update_is_named_in_the_post_run_log(tmp_path: Path) -> None:
@@ -4366,7 +4359,7 @@ async def test_all_skipped_run_is_done_and_green() -> None:
 class _StateOnlyRefreshService(_RecordingRefreshService):
     """Publishes the post-update state and returns nothing of its own."""
 
-    def refresh(self, tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+    def refresh(self, tools: Sequence[Tool]) -> None:
         for tool in tools:
             self.asked.append(tool.id)
             current = VersionStatus(
@@ -4384,7 +4377,6 @@ class _StateOnlyRefreshService(_RecordingRefreshService):
                     )
                 ]
             )
-        return {}
 
 
 async def test_brew_appearing_mid_session_unblocks_colima(

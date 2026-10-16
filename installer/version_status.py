@@ -33,11 +33,11 @@ A refresh that started before an `invalidate` can still finish after it.
 Immediately before persisting, under the same lock, the current epoch is
 compared against the epoch captured before the slow manager queries; a
 mismatch discards the write so a pre-update snapshot cannot resurrect the
-evidence the update just invalidated. Ownership is the second thing this
-epoch gates (15.4-04): a raced pass publishes no ownership record at all,
-and `ownership_of` answers `None` for any record whose own tag is not the
-CURRENT epoch, so a mutation this app performed makes every existing
-ownership record report as unavailable until a fresh pass commits one.
+evidence the update just invalidated. The published tool states are the
+second thing this epoch gates (D-02, D-03): a raced pass publishes no state
+at all, and `state_of` answers `None` for any state whose generation is not
+the CURRENT epoch, so a mutation this app performed makes every existing
+state report as unavailable until a fresh pass commits one.
 """
 
 from __future__ import annotations
@@ -851,9 +851,9 @@ def version_notes(
     return tuple(notes)
 
 
-# One in-flight refresh: (epoch, seq, done, outcome). The outcome list gets the
-# pass's statuses or its exception before `done` is set (checker W11).
-_Flight = tuple[int, int, threading.Event, list[dict[str, VersionStatus] | BaseException]]
+# One in-flight refresh: (epoch, seq, done, failure). The failure list gets the
+# pass's exception, if any, before `done` is set (checker W11).
+_Flight = tuple[int, int, threading.Event, list[BaseException]]
 
 
 class VersionRefreshService:
@@ -918,23 +918,11 @@ class VersionRefreshService:
         # D-16: a dry run only; production passes `sync_terminal_shells(write=False)`.
         self._terminal_drift = terminal_drift
         self._lock = threading.Lock()
-        self._statuses: dict[str, VersionStatus] = {}
-        # ONE map of epoch-tagged records, deliberately never a second
-        # parallel `dict[str, int]` epoch map beside a plain ownership map
-        # (Round-3 review HIGH #2): `ownership_of` below is a single
-        # unlocked `dict.get()` called once per rendered row per repaint
-        # from the UI thread, while every WRITER here takes `_lock`
-        # (`refresh`, below). Two parallel maps would let that unlocked
-        # reader observe one map updated and the other not yet -- a torn
-        # read. A single key lookup against one map returns both halves of
-        # the pair or neither, which is inherently atomic and costs no
-        # reader lock. Taking `_lock` in the reader was rejected: the
-        # worker holds it across a cache load, a merge and a
-        # `save_version_cache` write, and `ownership_of` must never block
-        # the UI thread on that.
-        self._ownership: dict[str, tuple[int, ManagerOwnership]] = {}
-        # Never mutated after assignment: each commit assigns a new dict, so
-        # an unlocked reader holds either the old snapshot or the new one.
+        # The one per-tool record (D-03): a seq-gated snapshot, never mutated
+        # after assignment. Each commit assigns a new dict under `_lock`, so
+        # `state_of`, an unlocked read from the UI thread, holds either the
+        # old snapshot or the new one, never a torn mix; each state carries
+        # its pass's epoch (`generation`) and sequence number (`seq`).
         self._states: dict[str, ToolState] = {}
         self._skills: dict[str, SkillHostStatus] = {}
         self._skills_probed = False
@@ -955,10 +943,6 @@ class VersionRefreshService:
         return self._epoch
 
     @property
-    def statuses(self) -> dict[str, VersionStatus]:
-        return dict(self._statuses)
-
-    @property
     def managed_bin_dir(self) -> Path:
         return self._managed_bin_dir
 
@@ -967,31 +951,12 @@ class VersionRefreshService:
         """Why the last committed pass could not save the cache, else None."""
         return self._warning
 
-    def ownership_of(self, tool_id: str) -> ManagerOwnership | None:
-        """A record, or `None` -- meaning either "no pass has ever covered
-        this tool" or "a mutation has happened since this record was
-        produced". Both `None` cases mean the same thing to a caller (do
-        not know), which is why they are one return value and not two.
-
-        Reads the RECORD first (the single dict lookup, returning both
-        halves of the epoch-tagged pair atomically or neither) and the
-        current epoch SECOND. An `invalidate` landing between the two reads
-        then makes the comparison fail and the call answer `None` -- the
-        fail-closed direction. Reading the epoch first would risk the
-        opposite: accepting a record the service had just superseded.
-        """
-        pair = self._ownership.get(tool_id)
-        if pair is None:
-            return None
-        epoch, ownership = pair
-        if epoch != self._epoch:
-            return None
-        return ownership
-
     def state_of(self, tool_id: str) -> ToolState | None:
         """The current state, or None (never covered, or from an older epoch).
 
-        Record first, epoch second -- `ownership_of`'s fail-closed order (D-03).
+        Both `None` cases mean "do not know" to a caller. The state is read
+        first and the epoch second, so an `invalidate` landing between the
+        two reads answers `None` -- the fail-closed direction (D-03).
         """
         state = self._states.get(tool_id)
         if state is None or state.generation != self._epoch:
@@ -1013,9 +978,6 @@ class VersionRefreshService:
         return look_through_shim(
             self._which(name), name, shim_dir=self._managed_bin_dir, path_value=self._path_value()
         )
-
-    def skill_status_of(self, tool_id: str) -> SkillHostStatus | None:
-        return self._skills.get(tool_id)
 
     def seed_skills_from_cache(self) -> None:
         """Load persisted skill answers as stale. Composition root only, never paint."""
@@ -1461,13 +1423,14 @@ class VersionRefreshService:
             return True
         return self._which("uv") is not None and (inventory.uv_tools is None or outdated.uv is None)
 
-    def refresh(self, tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+    def refresh(self, tools: Sequence[Tool]) -> None:
         """Resolve every tool once and publish the pass with one swap.
 
-        BLOCKING — call only from a worker thread. A call over the same
-        tool-id set as a pass already in flight at the current epoch joins
-        that pass and returns its result (or raises its error): no second
-        fetch, probe or publication. It never joins across an `invalidate`.
+        BLOCKING — call only from a worker thread. Read the result through
+        `state_of`. A call over the same tool-id set as a pass already in
+        flight at the current epoch joins that pass (or raises its error):
+        no second fetch, probe or publication. It never joins across an
+        `invalidate`.
         """
         key = frozenset(tool.id for tool in tools)
         with self._lock:
@@ -1477,30 +1440,24 @@ class VersionRefreshService:
                 self._seq += 1
                 flight = (self._epoch, self._seq, threading.Event(), [])
                 self._inflight[key] = flight
-        started_epoch, seq, done, outcome = flight
+        started_epoch, seq, done, failure = flight
         if joining:
             done.wait()
-            shared = outcome[0]
-            if isinstance(shared, BaseException):
-                raise shared
-            return dict(shared)
+            if failure:
+                raise failure[0]
+            return
         try:
-            result = self._pass(tools, seq=seq, started_epoch=started_epoch)
+            self._pass(tools, seq=seq, started_epoch=started_epoch)
         except BaseException as exc:
-            outcome.append(exc)
+            failure.append(exc)
             raise
-        else:
-            outcome.append(result)
-            return dict(result)
         finally:
             with self._lock:
                 if self._inflight.get(key) is flight:
                     del self._inflight[key]
             done.set()
 
-    def _pass(
-        self, tools: Sequence[Tool], *, seq: int, started_epoch: int
-    ) -> dict[str, VersionStatus]:
+    def _pass(self, tools: Sequence[Tool], *, seq: int, started_epoch: int) -> None:
         # D-14: brew is re-read every pass. Every helper of this pass gets this
         # one value; none reads the shared `self._platform`, which an
         # overlapping pass may replace mid-pass (review M5).
@@ -1534,8 +1491,6 @@ class VersionRefreshService:
             paths = [str(hit) for hit in hits if hit is not None and not attribute_path(hit, dirs)]
             native = native_index(platform.os, paths, native)
         produced: dict[str, VersionCacheEntry] = {}
-        statuses: dict[str, VersionStatus] = {}
-        ownerships: dict[str, ManagerOwnership] = {}
         states: dict[str, ToolState] = {}
         packs: list[tuple[Tool, ManagerOwnership, VersionStatus, RemovalPlan]] = []
         fetches = 0
@@ -1548,7 +1503,6 @@ class VersionRefreshService:
                 uv_tool_dir=uv_tool_dir,
                 native_probe=native,
             )
-            ownerships[tool.id] = ownership
             entry = cache.get(tool.id)
             allow_fetch = fetches < MAX_FETCHES_PER_REFRESH
             would_fetch = (
@@ -1569,7 +1523,6 @@ class VersionRefreshService:
                 allow_fetch=allow_fetch,
                 unresolved=which(tool.cmd),
             )
-            statuses[tool.id] = status
             if tool.skill_lifecycle is not None:
                 # Built at commit, from the host answers held then.
                 packs.append((tool, ownership, status, plan_removal([tool], self._managed_bin_dir)))
@@ -1618,13 +1571,12 @@ class VersionRefreshService:
         with self._lock:
             if self._epoch != started_epoch:
                 # RACED: an invalidate landed while this pass was resolving,
-                # so the WHOLE pass is discarded -- no state, no status, no
-                # ownership record, no cache write (D-02). Publishing any of
-                # it under the old tag would overwrite or shadow the answer
-                # of a pass that started after the mutation (Round-3 review
-                # HIGH #1); with this branch silent, every record the maps
-                # hold names the pass that actually produced it.
-                return statuses
+                # so the WHOLE pass is discarded -- no state and no cache
+                # write (D-02). Publishing any of it under the old tag would
+                # overwrite or shadow the answer of a pass that started after
+                # the mutation (Round-3 review HIGH #1); with this branch
+                # silent, every published state names the pass that produced it.
+                return
             for tool, ownership, status, removable in packs:
                 states[tool.id] = self._skill_state(
                     tool,
@@ -1646,14 +1598,10 @@ class VersionRefreshService:
                 if (current := self._states.get(tool_id)) is None or current.seq < seq
             }
             if not fresh:
-                return statuses
+                return
+            # The ONE publication point, tagged with `started_epoch`, which
+            # equals `self._epoch` here.
             self._states = {**self._states, **fresh}
-            self._statuses.update({tool_id: statuses[tool_id] for tool_id in fresh})
-            # The ONE ownership publication point, tagged with
-            # `started_epoch`, which equals `self._epoch` here.
-            self._ownership.update(
-                {tool_id: (started_epoch, ownerships[tool_id]) for tool_id in fresh}
-            )
             # Best effort, after the swap and still under the lock (it
             # serializes with `invalidate`'s save): a failed write leaves the
             # published states in place and surfaces as `warning`.
@@ -1668,4 +1616,3 @@ class VersionRefreshService:
                 self._warning = f"version cache not saved: {exc}"
             else:
                 self._warning = None
-        return statuses

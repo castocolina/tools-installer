@@ -143,14 +143,9 @@ class FrozenStateService(VersionRefreshService):
             stamped = {state.tool_id: replace(state, generation=self._epoch) for state in states}
             self._states = {**self._states, **stamped}
 
-    def refresh(self, tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+    def refresh(self, tools: Sequence[Tool]) -> None:
         del tools
         self.publish(list(self._states.values()))
-        return {
-            tool_id: state.version
-            for tool_id, state in self._states.items()
-            if state.version is not None
-        }
 
     def refresh_skills(self, tools: Sequence[Tool]) -> dict[str, SkillHostStatus]:
         del tools

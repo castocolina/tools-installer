@@ -4151,9 +4151,9 @@ async def test_refresh_worker_covers_the_full_catalog(
     calls: list[set[str]] = []
     refresh = service.refresh
 
-    def recording(batch: typing.Sequence[Tool]) -> dict[str, VersionStatus]:
+    def recording(batch: typing.Sequence[Tool]) -> None:
         calls.append({tool.id for tool in batch})
-        return refresh(batch)
+        refresh(batch)
 
     monkeypatch.setattr(service, "refresh", recording)
     app = _unified_app(
@@ -4456,7 +4456,10 @@ def test_frozen_state_service_publishes_without_probing(tmp_path: Path) -> None:
     assert state.generation == service.epoch
     assert state.health is Health.OUTDATED
     # frozen_service's probes all raise, so a refresh that probed would fail.
-    assert service.refresh([tool]) == {"rg": version}
+    service.refresh([tool])
+    refreshed = service.state_of("rg")
+    assert refreshed is not None
+    assert refreshed.version == version
     assert service.refresh_skills([tool]) == {}
     assert service.state_of("rg") == state
     service.invalidate(reason="a mutation")

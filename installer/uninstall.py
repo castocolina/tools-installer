@@ -193,12 +193,12 @@ def manager_name(method: Method, param: str, fallback: str) -> str:
 # would import back and create the cycle `.claude/architecture.md` rule 5
 # forbids. A plain callable keeps this module free of that import in either
 # direction -- the composition root (`setup.py`) is what actually binds the
-# seam to `VersionRefreshService.ownership_of` plus `installer.ownership
+# seam to `VersionRefreshService.state_of` plus `installer.ownership
 # .removal_hint`.
 OwnerHint = Callable[[Tool], str | None]
 
 # The TERSE half of the same seam (CR-03, 15.4-REVIEW.md), bound in `setup.py`
-# to `VersionRefreshService.ownership_of` plus `installer.ownership
+# to `VersionRefreshService.state_of` plus `installer.ownership
 # .removal_label` exactly as `OwnerHint` is bound to `removal_hint`. Two
 # callables rather than one returning a pair, for the same reason
 # `installer/ownership.py` keeps `OWNER_LABELS` and `OWNER_DETAIL_LABELS` as
