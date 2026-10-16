@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import stat as stat_module
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -22,6 +23,9 @@ from installer.locations import ensure_dir
 from installer.model import Method
 
 _TOOL_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+_MAX_RECEIPT_BYTES = 64 * 1024
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 _WRITE_LOCK = threading.Lock()
 
@@ -80,6 +84,11 @@ def method_key(method: Method) -> str:
 
 def _write_unlocked(receipt: Receipt) -> None:
     """Encode and atomically write one receipt. The caller must hold _WRITE_LOCK."""
+    path = receipt_path(receipt.tool)
+    if path.is_symlink():
+        raise OSError(
+            f"tool '{receipt.tool}': receipt path is a symlink; refusing to write through it"
+        )
     artifacts: list[dict[str, object]] = []
     for artifact in receipt.artifacts:
         if not Path(artifact.path).is_absolute():
@@ -118,14 +127,25 @@ def write(receipt: Receipt) -> None:
 def read(tool_id: str) -> Receipt | None:
     """Read back the receipt written for `tool_id`; None when it cannot be trusted.
 
-    Fail-closed (Task 2 hardens this to cover every malformed input)."""
+    Fail-closed: a missing file, a non-regular file, a file over 64 KiB (the
+    cap is the READ itself, so a file that grows or is swapped after the size
+    check is still rejected), malformed JSON, non-UTF-8 bytes, deep nesting
+    (RecursionError), an unknown version, a tool-id mismatch, any wrong-typed
+    field or any artifact violating its type's required fields returns None.
+    A bad tool id still raises ValueError: that is a programming error, not
+    an untrusted-input case."""
+    path = receipt_path(tool_id)
     try:
-        raw = receipt_path(tool_id).read_text(encoding="utf-8")
-    except OSError:
-        return None
-    try:
+        st = path.lstat()
+        if not stat_module.S_ISREG(st.st_mode) or st.st_size > _MAX_RECEIPT_BYTES:
+            return None
+        with path.open("rb") as handle:
+            raw_bytes = handle.read(_MAX_RECEIPT_BYTES + 1)
+        if len(raw_bytes) > _MAX_RECEIPT_BYTES:
+            return None
+        raw = raw_bytes.decode("utf-8")
         raw_data = json.loads(raw)
-    except ValueError:
+    except (OSError, UnicodeDecodeError, ValueError, RecursionError):
         return None
     if not isinstance(raw_data, dict):
         return None
@@ -149,28 +169,10 @@ def read(tool_id: str) -> Receipt | None:
     artifact_list: list[object] = list(cast(list[object], raw_artifacts))
     artifacts: list[ReceiptArtifact] = []
     for raw_artifact in artifact_list:
-        if not isinstance(raw_artifact, dict):
+        artifact = _read_artifact(raw_artifact)
+        if artifact is None:
             return None
-        artifact = cast(dict[str, object], raw_artifact)
-        raw_path = artifact.get("path")
-        kind = artifact.get("type")
-        if not isinstance(raw_path, str) or not isinstance(kind, str):
-            return None
-        if kind not in ("dir", "link", "file"):
-            return None
-        path = Path(raw_path)
-        if not path.is_absolute():
-            return None
-        artifacts.append(
-            ReceiptArtifact(
-                path=path,
-                type=kind,
-                target=_opt_str(artifact.get("target")),
-                sha256=_opt_str(artifact.get("sha256")),
-                size=_opt_int(artifact.get("size")),
-                mtime_ns=_opt_int(artifact.get("mtime_ns")),
-            )
-        )
+        artifacts.append(artifact)
     package = data.get("package")
     if package is not None and not isinstance(package, str):
         return None
@@ -199,13 +201,73 @@ def delete(tool_id: str) -> None:
     receipt_path(tool_id).unlink(missing_ok=True)
 
 
-def _opt_str(value: object) -> str | None:
+def _artifact_str(artifact: dict[str, object], key: str) -> str | None:
+    """An optional field that, when present, must still be a str."""
+    value = artifact.get(key)
     return value if isinstance(value, str) else None
 
 
-def _opt_int(value: object) -> int | None:
-    """A JSON int, never a bool (True is an int subclass in Python)."""
+def _artifact_int(artifact: dict[str, object], key: str) -> int | None:
+    """An optional field that, when present, must still be a non-bool int."""
+    value = artifact.get(key)
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _read_artifact(raw: object) -> ReceiptArtifact | None:
+    """Decode one artifact, enforcing each type's required fields.
+
+    A `file` without a 64-hex sha256, size and mtime_ns, or a `link` without a
+    non-empty target, would otherwise pass the stat shortcut on a matching
+    size/mtime (review M1) or follow a hashless proof — so they are rejected
+    here, at the boundary, never mid-removal."""
+    if not isinstance(raw, dict):
+        return None
+    artifact = cast(dict[str, object], raw)
+    raw_path = artifact.get("path")
+    kind = artifact.get("type")
+    if not isinstance(raw_path, str) or not isinstance(kind, str):
+        return None
+    if kind not in ("dir", "link", "file"):
+        return None
+    path = Path(raw_path)
+    if not path.is_absolute():
+        return None
+    if kind == "file":
+        sha256 = artifact.get("sha256")
+        size = _artifact_int(artifact, "size")
+        mtime_ns = _artifact_int(artifact, "mtime_ns")
+        if not isinstance(sha256, str) or not _SHA256_RE.fullmatch(sha256):
+            return None
+        if size is None or mtime_ns is None:
+            return None
+        return ReceiptArtifact(
+            path=path,
+            type="file",
+            target=_artifact_str(artifact, "target"),
+            sha256=sha256,
+            size=size,
+            mtime_ns=mtime_ns,
+        )
+    if kind == "link":
+        target = _artifact_str(artifact, "target")
+        if not target:
+            return None
+        return ReceiptArtifact(
+            path=path,
+            type="link",
+            target=target,
+            sha256=_artifact_str(artifact, "sha256"),
+            size=_artifact_int(artifact, "size"),
+            mtime_ns=_artifact_int(artifact, "mtime_ns"),
+        )
+    return ReceiptArtifact(
+        path=path,
+        type="dir",
+        target=_artifact_str(artifact, "target"),
+        sha256=_artifact_str(artifact, "sha256"),
+        size=_artifact_int(artifact, "size"),
+        mtime_ns=_artifact_int(artifact, "mtime_ns"),
+    )
 
 
 def _read_hooks(value: object) -> dict[str, tuple[str, ...]] | None:
