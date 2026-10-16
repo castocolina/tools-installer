@@ -323,7 +323,8 @@ class AppScreen(Screen[None]):
     body + StatusLine + FooterBar. The chrome is guaranteed so a screen can never
     ship without nav."""
 
-    DEFAULT_CSS = "AppScreen > Rule { margin: 0; color: $accent; }"
+    # Textual's own `Rule.-horizontal { margin: 1 0 }` out-ranks a bare `Rule` selector.
+    DEFAULT_CSS = "AppScreen > Rule.-horizontal { margin: 0; color: $accent; }"
 
     def __init__(self, *, view: str, accent: str = "$accent") -> None:
         super().__init__()

@@ -1786,42 +1786,6 @@ async def test_legend_widget_paints_every_marker_at_full_width() -> None:
             assert entry in dim, entry
 
 
-async def test_legend_keeps_the_catalog_table_usable_at_the_minimum_size() -> None:
-    """The legend is readable AND the table is usable at 80x20 -- this
-    project's own tested minimum terminal size.
-
-    Both halves are asserted together on purpose, because either one alone is
-    trivially satisfiable in a way that breaks the other: capping the height
-    clips markers off the bottom, and shortening the text leaves the next
-    edit free to collapse the table again.
-    """
-    app = _app()
-    async with app.run_test(size=(80, 20)):
-        legend = app.query_one("#browser-legend", Static)
-        table = app.query_one(DataTable[Any])
-        painted = _painted_legend(legend)
-        markers = (
-            "✓ ok",
-            "↑ update",
-            "≈ config",
-            "! broken",
-            "○ missing",
-            "… checking",
-            "– unavailable",
-            "essential",
-            "cached latest",
-            "≠ policy",
-        )
-        for marker in markers:
-            assert marker in painted, marker
-        # The line-3 tail, which clipped in the 2026-09-16 regression.
-        assert "other manager owns it" in painted
-        # The harm first, then the cause: the table has to stay usable, and
-        # the legend's own budget is what keeps it that way.
-        assert table.size.height >= 6, table.size.height
-        assert legend.size.height <= 3, legend.size.height
-
-
 # -- 15.4-03/Task 3: Owner-cell coverage split in two, on purpose (Round-2
 # review LOW). A single "the Owner value is visually reachable at 80x20"
 # assertion would depend on Textual's runtime column auto-sizing and

@@ -106,8 +106,8 @@ class ToolBrowser(Widget, Generic[T]):
     DEFAULT_CSS = """
     ToolBrowser { layout: vertical; height: 1fr; }
     ToolBrowser Tabs { dock: top; }
-    ToolBrowser #browser-detail { dock: bottom; height: 2; padding: 0 1; background: $surface; }
-    ToolBrowser #browser-legend { dock: bottom; height: auto; max-height: 3; padding: 0 1; }
+    ToolBrowser #browser-legend { height: auto; max-height: 3; padding: 0 1; }
+    ToolBrowser #browser-detail { height: 3; padding: 0 1; background: $surface; }
     ToolBrowser DataTable { height: 1fr; }
     """
     BINDINGS: ClassVar[list[BindingType]] = [
