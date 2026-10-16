@@ -4431,7 +4431,7 @@ async def test_requires_presence_comes_from_state(tmp_path: Path) -> None:
         present={"pnpm"},
         which=_brew_on_path(home),
     )
-    # The per-tier installed map is stale on purpose: the state must win.
+    # The helper's presence seed says absent on purpose: the passed state must win.
     app = _unified_app(
         [pnpm, mmdc], {"pnpm": False, "mmdc": False}, _BLURBS, version_refresh=service
     )

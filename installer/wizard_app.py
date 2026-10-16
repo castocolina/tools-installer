@@ -2564,6 +2564,11 @@ class UnifiedApp(App[list[str] | None]):
         # (CR-03), and wrote konsolerc for a session where the user selected
         # and changed nothing.
         self._install_state_changed: bool = False
+        # D-04: no tier keeps a presence copy. Each tier renders from the one
+        # tool state (`state_of`); a mutation invalidates its epoch, rows read
+        # `…`, and the next refresh pass repaints every tier in one swap. So an
+        # install close and a view switch only re-enter (`enter_view`); nothing
+        # sweeps the presence predicate over the catalog.
         self._catalogs: dict[str, CatalogScreen] = {
             tier.value: CatalogScreen(
                 [tool for tool in tools if tool.tier == tier],
@@ -2897,7 +2902,8 @@ class UnifiedApp(App[list[str] | None]):
         # launched from, and _catalogs has an entry for every tier including
         # the base one -- no base/non-base branch needed here, unlike
         # show_view (that method branches because it pushes/pops screens;
-        # this callback does neither).
+        # this callback does neither). Presence is re-read by the refresh pass
+        # `enter_view` starts below, never swept here (D-04, see __init__).
         warnings: list[str] = []
         # D-01/15.6-06 Task 1: the shared terminal synchronizer runs after a
         # close event that actually changed installed-tool state -- never

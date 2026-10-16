@@ -5609,8 +5609,7 @@ async def test_version_navigation_discards_a_superseded_generation(tmp_path: Pat
 
 
 # -- D-01/Task 1: closing the execute screen refreshes the tier it ran from,
-# end to end -- and re-derives every catalog's installed map from the run's
-# own live presence predicate before that refresh repaints. -------------------
+# end to end; that refresh pass re-reads presence into the one tool state. ----
 
 
 def _tracking_install(
@@ -5648,8 +5647,7 @@ async def test_install_closed_refreshes_the_ver_cell_without_navigating_away(
     run is visible in the SAME rendered Ver cell after the run closes -- no
     tab switch, no further keypress -- the exact deno case the user reported.
 
-    The catalog's construction-time installed map says True while the
-    presence holder starts False: deliberate (it keeps the run on the plain
+    The presence holder starts False: deliberate (it keeps the run on the plain
     install path, since CONTEXT.md puts update execution out of scope for
     this phase) and NOT coverage of a genuinely newly-installed row -- the
     fourth and fifth tests below own that, with both signals starting False
@@ -5763,8 +5761,8 @@ async def test_install_closed_refreshes_even_when_the_run_never_started(
 async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreadable_one(
     tmp_path: Path,
 ) -> None:
-    """Round 1/round 2 gate: the installed map is re-derived from the run's
-    own presence predicate rather than promoted from VersionStatus.installed,
+    """Round 1/round 2 gate: presence is re-read by the refresh pass from the
+    presence predicate rather than promoted from VersionStatus.installed,
     so it is correct in BOTH directions -- a tool the run installs stops
     being suppressed (A), and a tool whose --version never answers keeps its
     mark because presence never consulted the probe (B)."""
@@ -6239,6 +6237,87 @@ async def test_install_closed_keeps_cross_tier_ids_in_every_installed_map(
         assert "also needs pnpm" not in user.status_text
 
 
+def _sweep_app(
+    tmp_path: Path, release: threading.Event
+) -> tuple[UnifiedApp, list[Tool], list[str]]:
+    """One tool per tier; `calls` records every read of the execute inputs'
+    presence predicate, so a catalog-wide sweep shows up as one call per tool.
+    The service's own presence probe is separate and uncounted: the refresh
+    pass reading presence is the one legitimate reader."""
+    tools = [
+        _gh_tool("sys-tool", tier="system"),
+        _gh_tool("user-tool", tier="user"),
+        _gh_tool("ai-tool", tier="ai"),
+    ]
+    calls: list[str] = []
+
+    def _predicate(tool: Tool) -> bool:
+        calls.append(tool.id)
+        return False
+
+    def _service_present(tool: Tool) -> bool:
+        del tool
+        assert release.wait(timeout=10)
+        return True
+
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0", present=_service_present)
+    execute = ExecuteInputs(
+        catalog=tools,
+        platform=_install_closed_platform(),
+        wire_path=lambda: "",
+        verify=lambda: "",
+        installed=_predicate,
+        install=_tracking_install(lambda _t: None),
+    )
+    return _version_app(tools, service, execute=execute), tools, calls
+
+
+async def test_install_close_reenters_without_a_presence_sweep(tmp_path: Path) -> None:
+    """D-04: closing an install run re-enters the active tier through the
+    refresh pass. Nothing re-reads the execute presence predicate over the
+    catalog, and every row shows `…` until the pass lands."""
+    release = threading.Event()
+    release.set()
+    app, tools, calls = _sweep_app(tmp_path, release)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        app.catalog.selected.add("sys-tool")
+        await pilot.press("enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        calls.clear()
+        release.clear()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.catalog.version_refreshing is True
+        table = app.catalog.query_one(DataTable[Any])
+        assert table.get_cell("sys-tool", "health").plain == "…"
+        release.set()
+        await _settle_versions(app, pilot)
+        assert table.get_cell("sys-tool", "health").plain != "…"
+    assert calls == [], f"a presence sweep read {calls} (catalog: {[t.id for t in tools]})"
+
+
+async def test_view_switch_reenters_without_a_presence_sweep(tmp_path: Path) -> None:
+    """D-04: switching tiers re-enters through the refresh pass and never
+    re-reads the execute presence predicate over the catalog."""
+    release = threading.Event()
+    release.set()
+    app, tools, calls = _sweep_app(tmp_path, release)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle_versions(app, pilot)
+        for key, view in (("2", "user"), ("3", "ai"), ("1", "system")):
+            screen = app.catalog_for(view)
+            release.clear()
+            await pilot.press(key)
+            assert app.current_view == view
+            assert screen.version_refreshing is True
+            release.set()
+            await _settle_versions(app, pilot, screen)
+    assert calls == [], f"a presence sweep read {calls} (catalog: {[t.id for t in tools]})"
+
+
 # -- D-01/15.6-06 Task 1: every interactive close re-synchronizes terminal
 # configuration through the same shared closure Plans 04/05 wired for
 # Policies and the direct `u` update, and never silently drops a follow-up
@@ -6249,7 +6328,7 @@ async def test_install_closed_calls_the_terminal_synchronizer_once_per_tier(
     tmp_path: Path,
 ) -> None:
     """Test 1: closing an interactive run from EACH catalog tier calls the
-    injected synchronizer exactly once, after the installed-state sweep, and
+    injected synchronizer exactly once, as the close's last step, and
     the existing version-refresh behaviour (Pitfall 1: index self._catalogs
     uniformly across tiers) is unaffected."""
     calls: list[str] = []
@@ -6266,8 +6345,7 @@ async def test_install_closed_calls_the_terminal_synchronizer_once_per_tier(
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
 
     # WR-07: `installed` gates BOTH resolve_dependencies' own selection-time
-    # is_installed check (ExecuteScreen.on_mount) AND _install_closed's
-    # post-run resync sweep -- the same ExecuteInputs field serves both. It
+    # is_installed check (ExecuteScreen.on_mount). It
     # must answer False, or the tool is treated as already present and
     # excluded from the run entirely; Summary.installed then stays empty and
     # the WR-07 gate this test exercises would never fire.
@@ -6306,7 +6384,7 @@ async def test_install_closed_calls_the_terminal_synchronizer_once_per_tier(
             await pilot.press("escape")
             await _settle_versions(app, pilot, screen)
             assert calls.count("terminal-sync") == 1
-            # The synchronizer runs AFTER the installed-state sweep, never before.
+            # The synchronizer is the last thing the close calls.
             assert calls.index("terminal-sync") == len(calls) - 1
             assert (
                 screen._version_refresh_generation == before_generation + 1  # pyright: ignore[reportPrivateUsage]
