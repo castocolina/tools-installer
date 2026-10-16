@@ -255,10 +255,8 @@ class _FakeClock:
 
 def _host(inputs: ExecuteInputs, tools: list[Tool] | None = None) -> UnifiedApp:
     catalog = tools if tools is not None else list(inputs.catalog)
-    installed: Mapping[str, bool] = {tool.id: False for tool in catalog}
     return UnifiedApp(
         catalog,
-        installed,
         {"search": "find things"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: ({}, None),

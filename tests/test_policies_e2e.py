@@ -81,7 +81,6 @@ def _build_real_app(home: Path, *, path_value: str | None = None) -> tuple[Unifi
     )
     app = UnifiedApp(
         [_tool()],
-        {"rg": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: (guard_status(bin_dir), None),
@@ -179,7 +178,6 @@ async def test_policies_screen_toggles_a_tweak_bundle_live(
     helper = bin_dir / "tools-installer-wait-time"
     app = UnifiedApp(
         [_tool()],
-        {"rg": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: (guard_status(bin_dir), None),
@@ -244,7 +242,6 @@ async def test_policies_screen_toggles_omz_plugins_live(
     policy = omz_plugins_policy(zshrc_path=zshrc, state_path=tmp_path / ".myshellrc", present=True)
     app = UnifiedApp(
         [_tool()],
-        {"rg": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: (guard_status(bin_dir), None),
@@ -294,7 +291,6 @@ def _omz_app(
     )
     app = UnifiedApp(
         [_tool()],
-        {"rg": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: (guard_status(bin_dir), None),
@@ -378,7 +374,6 @@ async def test_policies_screen_never_syncs_terminals_for_ban_policy(
     )
     app = UnifiedApp(
         [_tool()],
-        {"rg": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: (guard_status(tmp_path / ".local" / "bin"), None),
@@ -474,7 +469,6 @@ async def test_every_policy_detail_fits_the_panel_at_80_columns(
     ]
     app = UnifiedApp(
         [_tool()],
-        {"rg": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: (guard_status(bin_dir), None),
@@ -557,7 +551,6 @@ def _daemon_app(home: Path, *, installed_tools: dict[str, bool]) -> tuple[Unifie
     plist_path = home / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
     app = UnifiedApp(
         [_tool()],
-        {"rg": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: (guard_status(wrapper_bin_dir), None),
@@ -611,7 +604,6 @@ async def test_linux_daemon_and_cache_redirect_toggle_against_a_sandboxed_home(
     )
     app = UnifiedApp(
         [_tool()],
-        {"rg": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: ({}, None),
@@ -746,7 +738,6 @@ async def test_policies_screen_link_mode_change_moves_active_policies(
     )
     app = UnifiedApp(
         [_tool()],
-        {"rg": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: (guard_status(bin_dir), None),
@@ -800,7 +791,6 @@ def _mode_app(
     bin_dir = home / ".local" / "bin"
     return UnifiedApp(
         [_tool()],
-        {"rg": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: (guard_status(bin_dir), None),

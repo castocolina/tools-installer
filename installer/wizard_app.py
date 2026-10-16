@@ -2491,7 +2491,6 @@ class UnifiedApp(App[list[str] | None]):
     def __init__(
         self,
         tools: list[Tool],
-        installed: Mapping[str, bool],
         blurbs: Mapping[str, str],
         *,
         report: DoctorReport,
@@ -2565,16 +2564,9 @@ class UnifiedApp(App[list[str] | None]):
         # (CR-03), and wrote konsolerc for a session where the user selected
         # and changed nothing.
         self._install_state_changed: bool = False
-        # The WHOLE catalog, not a tier slice. `_install_closed` re-derives the
-        # installed map from this list because the map is resolved against the
-        # full catalog by deps.missing_requires / selection.unstaged_recommends,
-        # while each screen's own `tools` is the tier filter -- which narrows
-        # what is DISPLAYED and never what is resolved (.claude/architecture.md).
-        self._catalog_tools: list[Tool] = list(tools)
         self._catalogs: dict[str, CatalogScreen] = {
             tier.value: CatalogScreen(
                 [tool for tool in tools if tool.tier == tier],
-                installed,
                 blurbs,
                 view=tier.value,
                 catalog=list(tools),
@@ -2781,11 +2773,6 @@ class UnifiedApp(App[list[str] | None]):
         leaving = self._catalogs.get(self.current_view)
         if leaving is not None:
             leaving.clear_transient()
-        # A view (Uninstall) may have changed the machine; no catalog shows a stale ✓.
-        if name in self._catalogs:
-            recheck_error = self._rederive_installed()
-            if recheck_error is not None:
-                self._pending_warnings.append(recheck_error)
         if self.current_view != BASE_VIEW:
             await self.pop_screen()
         if name == BASE_VIEW:
@@ -2911,44 +2898,7 @@ class UnifiedApp(App[list[str] | None]):
         # the base one -- no base/non-base branch needed here, unlike
         # show_view (that method branches because it pushes/pops screens;
         # this callback does neither).
-        #
-        # Re-derive every catalog's installed map from the run's own live
-        # presence predicate BEFORE the refresh below repaints. self._execute
-        # is guaranteed non-None whenever this callback can run at all --
-        # on_catalog_screen_decided only pushes ExecuteScreen when it is set.
-        # Presence is answered by the presence predicate and
-        # version-readability by the version probe, so this is correct in
-        # both directions (a tool installed by the run stops being
-        # suppressed; a tool whose --version stopped parsing keeps its mark)
-        # for every installation shape, including a detect_path-only tool no
-        # manager inventory lists and no `--version` probe will ever answer
-        # (oh-my-zsh, SDKMAN).
-        #
-        # The map is derived over self._catalog_tools -- the WHOLE catalog --
-        # and the identical map is handed to every screen. Deriving it per
-        # screen from `screen.tools` would drop every id belonging to another
-        # tier, and `set_installed` is a plain replacement, so the two
-        # consumers that read this map against the full catalog
-        # (deps.missing_requires and selection.unstaged_recommends, both via
-        # `installed.get(dep_id, False)`) would silently read an installed
-        # cross-tier dependency as missing -- "mmdc also needs pnpm" with pnpm
-        # already installed. The tier filter narrows what is DISPLAYED and
-        # never what is resolved (.claude/architecture.md).
-        #
-        # Rule 3 (.claude/architecture.md): the sweep goes through run_live
-        # like every other live core read a screen triggers. The predicate
-        # defaults to installer.status.is_installed, which touches PATH, `~`
-        # paths and /Applications once per catalog tool -- 89 of them in
-        # production -- so a failure here is an ordinary environment failure
-        # (an OSError stat'ing a disconnected network path), and an OSError
-        # out of a bare comprehension in a screen-result callback crashes the
-        # message pump rather than being surfaced. Through run_live it leaves
-        # the previous map in place and reports itself, exactly as the
-        # invalidate failure folded in below does.
         warnings: list[str] = []
-        recheck_error = self._rederive_installed()
-        if recheck_error is not None:
-            warnings.append(recheck_error)
         # D-01/15.6-06 Task 1: the shared terminal synchronizer runs after a
         # close event that actually changed installed-tool state -- never
         # only a selected tool id (WR-07: merely opening and dismissing the
@@ -2979,7 +2929,7 @@ class UnifiedApp(App[list[str] | None]):
         # callback takes the message pump down instead of degrading. No
         # catalog on top means nothing to re-enter (enter_view is a catalog
         # tier's own version-refresh trigger, not a generic "screen visible"
-        # signal), and the installed maps above were still replaced either way.
+        # signal).
         active = self._catalogs.get(self.current_view)
         if active is not None:
             active.enter_view()
@@ -3009,23 +2959,6 @@ class UnifiedApp(App[list[str] | None]):
             return
         pending, self._pending_warnings = self._pending_warnings, []
         visible.status.set(" · ".join(pending + warnings), "warn")
-
-    def _rederive_installed(self) -> str | None:
-        """Re-read every catalog's installed map from the live presence predicate.
-
-        One body for every moment the machine may have changed under the catalogs
-        (an install run closing, a catalog view being shown after an uninstall).
-        Returns a warning line on failure, None otherwise.
-        """
-        if self._execute is None:
-            return None
-        installed = self._execute.installed
-        fresh, error = run_live(lambda: {tool.id: installed(tool) for tool in self._catalog_tools})
-        if fresh is not None:
-            for screen in self._catalogs.values():
-                screen.set_installed(fresh)
-            return None
-        return f"installed-state re-check failed: {error}" if error is not None else None
 
     def _visible_app_screen(self) -> AppScreen | None:
         screen = self.screen

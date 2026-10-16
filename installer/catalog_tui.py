@@ -387,7 +387,6 @@ class CatalogScreen(AppScreen):
     def __init__(
         self,
         tools: list[Tool],
-        installed: Mapping[str, bool],
         blurbs: Mapping[str, str],
         *,
         view: str,
@@ -400,7 +399,6 @@ class CatalogScreen(AppScreen):
         super().__init__(view=view)
         self.tools = list(tools)
         self.table_sort: TableSortKey = "priority"
-        self._installed = dict(installed)
         self._blurbs = dict(blurbs)
         self._catalog = list(catalog)
         self._staged = staged
@@ -446,27 +444,6 @@ class CatalogScreen(AppScreen):
     def enter_view(self) -> None:
         if self.is_mounted:
             self._start_version_refresh()
-
-    def set_installed(self, installed: Mapping[str, bool]) -> None:
-        """Replace the installed map with a fresh reading and repaint.
-
-        Called by `UnifiedApp._install_closed` with a map re-derived from the
-        run's own live presence predicate (`installer.status.is_installed`),
-        never a promotion from `VersionStatus.installed` -- presence and
-        version-readability are different questions with different answers
-        (`installer/status.py:18-42` accepts a PATH command OR a `detect_path`
-        marker OR an app/cask bundle; the version probe answers only the
-        first). No decision reads this map any more: every mark, group and
-        presence check reads the tool state (plan 19-20 deletes the map). No-ops
-        when nothing changed, so the common "nothing this run touched" close
-        costs no rebuild.
-        """
-        new = dict(installed)
-        if new == self._installed:
-            return
-        self._installed = new
-        if self.is_mounted:
-            self._browser.reload(self._adapter())
 
     def _start_version_refresh(self) -> None:
         if self._version_refresh is None:
@@ -665,11 +642,11 @@ class CatalogScreen(AppScreen):
         # D-02: blank means exactly "genuinely don't know" -- no service
         # wired, no ownership record produced for this tool yet, or the
         # record itself resolved to `unknown` (owner_label returns `None`
-        # for that case). Deliberately NOT gated on `self._installed`, unlike
+        # for that case). Deliberately NOT gated on presence, unlike
         # `_ver_cell`'s early return on a not-installed tool above: ownership
         # is resolved from the live binary path (`ownership.py`'s
-        # `active_path` evidence), not from the presence predicate this
-        # screen's `_installed` map reads, so a tool the predicate happens to
+        # `active_path` evidence), not from the presence predicate the tool
+        # state reads, so a tool the predicate happens to
         # read as absent can still carry a real, useful ownership record. Do
         # not "fix" this asymmetry by adding a not-installed early return
         # here -- it would silently throw away real evidence.

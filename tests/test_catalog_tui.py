@@ -1,5 +1,6 @@
 import asyncio
 import html
+import inspect
 import re
 import threading
 import typing
@@ -110,7 +111,6 @@ def _unified_app(
     # defaults.
     return UnifiedApp(
         tools,
-        installed,
         blurbs,
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: ({}, None),
@@ -892,7 +892,6 @@ def test_unavailable_reason_renders_in_row_and_detail() -> None:
     assert isinstance(reason, UnavailableReason)
     screen = CatalogScreen(
         [tool],
-        {tool.id: False},
         _BLURBS,
         view="user",
         catalog=[tool],
@@ -909,7 +908,6 @@ def test_bare_true_unavailable_keeps_generic_copy() -> None:
     tool = _tool("x")
     screen = CatalogScreen(
         [tool],
-        {"x": False},
         _BLURBS,
         view="system",
         catalog=[tool],
@@ -976,7 +974,6 @@ def _screen(
 ) -> CatalogScreen:
     return CatalogScreen(
         tools,
-        installed,
         _BLURBS,
         view="system",
         catalog=list(tools),
@@ -2138,9 +2135,9 @@ async def test_owner_column_starts_inside_the_viewport_at_the_minimum_size() -> 
 
 
 def test_legend_is_identical_across_all_three_tier_views() -> None:
-    tools, installed = _catalog()
+    tools, _ = _catalog()
     screens = [
-        CatalogScreen(tools, installed, _BLURBS, view=tier, catalog=list(tools), staged=set())
+        CatalogScreen(tools, _BLURBS, view=tier, catalog=list(tools), staged=set())
         for tier in ("system", "user", "ai")
     ]
     legends = {screen._adapter().legend for screen in screens}  # pyright: ignore[reportPrivateUsage]
@@ -4654,3 +4651,11 @@ async def test_quick_tier_switching_runs_one_full_pass(tmp_path: Path) -> None:
             cell = screen.query_one(DataTable[Any]).get_cell(tool.id, "health")
             assert cell.plain != "…", tool.id
     assert sorted(calls) == sorted(f"owner/{tool.id}" for tool in tools)
+
+
+def test_catalog_screen_has_no_installed_parameter() -> None:
+    """D-04: the catalog keeps no presence copy of its own; every mark reads the tool state."""
+    assert "installed" not in inspect.signature(CatalogScreen).parameters
+    assert "installed" not in inspect.signature(UnifiedApp).parameters
+    assert not hasattr(CatalogScreen, "set_installed")
+    assert not hasattr(UnifiedApp, "_rederive_installed")

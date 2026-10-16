@@ -299,11 +299,9 @@ def _app(
     startup_warning: str | None = None,
 ) -> UnifiedApp:
     tools = [_tool("rg"), _tool("fd")]
-    installed: Mapping[str, bool] = {"rg": True, "fd": False}
     read_status = _predicate(guard_status or {"pip": False, "npm": False})
     return UnifiedApp(
         tools,
-        installed,
         {"search": "find things"},
         report=report or DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: (read_status(), guard_warning),
@@ -4276,7 +4274,6 @@ def test_unified_app_constructs_without_node_globals_closures() -> None:
     tools = [_tool("rg")]
     UnifiedApp(
         tools,
-        {"rg": False},
         {"search": "find things"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: ({"pip": False}, None),
@@ -4719,7 +4716,6 @@ def test_unified_app_signature_carries_no_disk_pressure_parameter() -> None:
     assert list(inspect.signature(UnifiedApp.__init__).parameters) == [
         "self",
         "tools",
-        "installed",
         "blurbs",
         "report",
         "guard_state",
@@ -4973,7 +4969,6 @@ def _daemon_app(
 ) -> UnifiedApp:
     return UnifiedApp(
         [_tool("rg")],
-        {"rg": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: ({}, None),
@@ -5398,7 +5393,6 @@ def _gh_tool(tool_id: str, *, tier: str) -> Tool:
 
 def _version_app(
     tools: list[Tool],
-    installed: Mapping[str, bool],
     service: VersionRefreshService,
     *,
     execute: ExecuteInputs | None = None,
@@ -5408,7 +5402,6 @@ def _version_app(
 ) -> UnifiedApp:
     return UnifiedApp(
         tools,
-        installed,
         {"search": "find things", "ai": "agents"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: ({}, None),
@@ -5479,7 +5472,7 @@ async def test_codegraph_ver_cell_contains_installed_and_latest_after_refresh(
     tmp_path: Path,
 ) -> None:
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.6.0")
-    app = _version_app([_codegraph()], {"codegraph": True}, service)
+    app = _version_app([_codegraph()], service)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         cell = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver")
@@ -5498,7 +5491,7 @@ async def test_version_refresh_runs_off_the_event_loop(tmp_path: Path) -> None:
         return "v1.6.0"
 
     service = _macos_service(tmp_path, resolve_tag=slow_resolve)
-    app = _version_app([_codegraph()], {"codegraph": True}, service)
+    app = _version_app([_codegraph()], service)
     async with app.run_test(size=(120, 30)) as pilot:
         assert started.wait(timeout=5)
         screen = app.catalog
@@ -5526,7 +5519,7 @@ async def test_version_shows_probed_install_when_latest_fetch_fails(tmp_path: Pa
         raise VersionError("github unavailable")
 
     service = _macos_service(tmp_path, resolve_tag=boom)
-    app = _version_app([_codegraph()], {"codegraph": True}, service)
+    app = _version_app([_codegraph()], service)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         assert app.is_running
@@ -5545,7 +5538,7 @@ async def test_version_worker_crash_clears_refreshing_and_renders_a_cell(
         raise RuntimeError("unexpected domain failure")
 
     service = _macos_service(tmp_path, resolve_tag=boom)
-    app = _version_app([_codegraph()], {"codegraph": True}, service)
+    app = _version_app([_codegraph()], service)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         assert app.is_running
@@ -5582,9 +5575,8 @@ async def test_version_navigation_discards_a_superseded_generation(tmp_path: Pat
         _gh_tool("user-tool", tier="user"),
         _gh_tool("ai-tool", tier="ai"),
     ]
-    installed = {tool.id: True for tool in tools}
     service = _macos_service(tmp_path, resolve_tag=resolve_tag)
-    app = _version_app(tools, installed, service)
+    app = _version_app(tools, service)
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.press("2")
         assert app.current_view == "user"
@@ -5684,7 +5676,7 @@ async def test_install_closed_refreshes_the_ver_cell_without_navigating_away(
         installed=lambda t: presence[t.id],
         install=_tracking_install(on_install),
     )
-    app = _version_app([tool], {"codegraph": True}, service, execute=execute)
+    app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         before = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver").plain
@@ -5719,7 +5711,7 @@ async def test_install_closed_refreshes_the_non_base_tier_it_ran_from(
         installed=lambda _t: True,
         install=_tracking_install(lambda _t: None),
     )
-    app = _version_app([tool], {"user-tool": True}, service, execute=execute)
+    app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.press("2")
         assert app.current_view == "user"
@@ -5754,7 +5746,7 @@ async def test_install_closed_refreshes_even_when_the_run_never_started(
         installed=lambda _t: True,
         install=_tracking_install(lambda _t: None),
     )
-    app = _version_app([tool], {"codegraph": True}, service, execute=execute)
+    app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         before = app.catalog._version_refresh_generation  # pyright: ignore[reportPrivateUsage]
@@ -5804,7 +5796,6 @@ async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreada
     )
     app = _version_app(
         [tool_a, tool_b],
-        {"newly-installed": False, "stays-installed": True},
         service,
         execute=execute,
     )
@@ -5830,7 +5821,9 @@ async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreada
         assert table.get_cell("stays-installed", "health").plain == "✓"
 
 
-async def test_returning_from_another_view_rederives_the_installed_map(tmp_path: Path) -> None:
+async def test_returning_from_another_view_rereads_presence_through_the_pass(
+    tmp_path: Path,
+) -> None:
     """A tool removed while the user was on Uninstall must not keep its ✓ when
     they come back: `show_view` re-reads presence on every catalog entry."""
     tool = _gh_tool("removable", tier="system")
@@ -5846,7 +5839,7 @@ async def test_returning_from_another_view_rederives_the_installed_map(tmp_path:
         installed=lambda t: presence[t.id],
         install=_tracking_install(lambda installed_tool: None),
     )
-    app = _version_app([tool], {"removable": True}, service, execute=execute)
+    app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         await pilot.press("5")
@@ -5875,9 +5868,7 @@ async def test_returning_to_the_base_tier_re_resolves_ownership_an_install_dropp
         installed=lambda t: True,
         install=_tracking_install(lambda installed_tool: None),
     )
-    app = _version_app(
-        [system_tool, user_tool], {"sys-tool": True, "usr-tool": True}, service, execute=execute
-    )
+    app = _version_app([system_tool, user_tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         await pilot.press("2")
@@ -5935,7 +5926,7 @@ async def test_install_closed_marks_a_detect_path_tool_that_answers_no_version(
         installed=lambda t: presence[t.id],
         install=_tracking_install(on_install),
     )
-    app = _version_app([tool], {"shell-fn-tool": False}, service, execute=execute)
+    app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         table = app.catalog.query_one(DataTable[Any])
@@ -5991,7 +5982,7 @@ async def test_install_closed_refresh_requeries_the_manager_inventory_after_a_ru
         installed=lambda _t: True,
         install=_tracking_install(lambda _t: None),
     )
-    app = _version_app([tool], {"codegraph": True}, service, execute=execute)
+    app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         before_calls = len(calls)
@@ -6007,22 +5998,18 @@ async def test_install_closed_refresh_requeries_the_manager_inventory_after_a_ru
         assert service.epoch > before_epoch
 
 
-async def test_install_closed_reports_a_failed_presence_sweep_and_keeps_the_old_map(
+async def test_install_close_survives_a_presence_predicate_that_fails_after_the_run(
     tmp_path: Path,
 ) -> None:
     """ExecuteInputs.installed is an injected LIVE predicate -- by default
-    installer.status.is_installed, which touches PATH, `~` paths and
-    /Applications once per catalog tool (89 of them in production). Called
-    from a bare comprehension in a screen-result callback, one OSError (a stat
-    on a disconnected network path) propagates out and takes the message pump
-    down. .claude/architecture.md rule 3: a failed live core call is
-    surfaced, never a silent crash -- which is why the sweep goes through
-    run_live, the same seam every other live read from a screen uses.
+    installer.status.is_installed. Closing the run never reads it (D-04: the
+    catalog keeps no presence copy to re-derive; the refresh pass re-reads the
+    tool state), so a predicate that starts raising after the run can neither
+    take the message pump down nor put a re-check warning on the status line.
 
-    The failure is injected after the run rather than before it so the sweep
-    is the only caller that sees it; ExecuteScreen reads the same predicate on
-    mount, and a predicate that failed there would prove nothing about this
-    callback.
+    The failure is injected after the run rather than before it: ExecuteScreen
+    reads the same predicate on mount, and a predicate that failed there would
+    prove nothing about the close.
     """
     tool = _gh_tool("codegraph", tier="system")
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
@@ -6041,7 +6028,7 @@ async def test_install_closed_reports_a_failed_presence_sweep_and_keeps_the_old_
         installed=_presence,
         install=_tracking_install(lambda _t: None),
     )
-    app = _version_app([tool], {"codegraph": True}, service, execute=execute)
+    app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         app.catalog.selected.add("codegraph")
@@ -6053,10 +6040,8 @@ async def test_install_closed_reports_a_failed_presence_sweep_and_keeps_the_old_
         await pilot.press("escape")
         await _settle_versions(app, pilot)
         assert app.is_running is True
-        # The map the sweep could not replace is the map that is still there.
-        assert app.catalog._installed == {"codegraph": True}  # pyright: ignore[reportPrivateUsage]
-        assert "installed-state re-check failed" in app.catalog.status_text
-        assert "stale file handle" in app.catalog.status_text
+        assert "re-check failed" not in app.catalog.status_text
+        assert "stale file handle" not in app.catalog.status_text
 
 
 async def test_install_closed_degrades_when_the_active_view_is_not_a_catalog_tier(
@@ -6079,7 +6064,7 @@ async def test_install_closed_degrades_when_the_active_view_is_not_a_catalog_tie
         installed=lambda _t: True,
         install=_tracking_install(lambda _t: None),
     )
-    app = _version_app([tool], {"codegraph": False}, service, execute=execute)
+    app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_versions(app, pilot)
         await pilot.press("4")
@@ -6087,10 +6072,9 @@ async def test_install_closed_degrades_when_the_active_view_is_not_a_catalog_tie
         assert app.current_view == "doctor"
         app._install_closed(None)  # pyright: ignore[reportPrivateUsage]
         await pilot.pause()
-        # No KeyError: the app is still up, and the half that does not need a
-        # visible catalog -- the installed maps -- still ran.
+        # No KeyError: the app is still up and the doctor view is untouched.
         assert app.is_running is True
-        assert app.catalog._installed == {"codegraph": True}  # pyright: ignore[reportPrivateUsage]
+        assert app.current_view == "doctor"
 
 
 async def test_a_failed_post_run_cache_invalidation_is_reported_not_swallowed(
@@ -6125,7 +6109,7 @@ async def test_a_failed_post_run_cache_invalidation_is_reported_not_swallowed(
         installed=lambda _t: True,
         install=_tracking_install(lambda _t: None),
     )
-    app = _version_app([tool], {"codegraph": True}, service, execute=execute)
+    app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         app.catalog.selected.add("codegraph")
@@ -6190,7 +6174,6 @@ async def test_install_closed_then_navigating_to_uninstall_shows_the_post_instal
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
     app = _version_app(
         [tool],
-        {"codegraph": False},
         service,
         execute=execute,
         uninstall=_uninstall_inputs(rows=rows),
@@ -6213,21 +6196,22 @@ async def test_install_closed_then_navigating_to_uninstall_shows_the_post_instal
 async def test_install_closed_keeps_cross_tier_ids_in_every_installed_map(
     tmp_path: Path,
 ) -> None:
-    """The re-derived map covers the WHOLE catalog, not the screen's own tier.
+    """Presence after a run is read against the WHOLE catalog, not the screen's own tier.
 
     `deps.missing_requires` and `selection.unstaged_recommends` resolve against
-    the full catalog and read a missing key as "not installed"
-    (`installed.get(dep_id, False)`), so a map narrowed to one tier turns an
+    the full catalog, so a presence reading narrowed to one tier turns an
     installed cross-tier dependency into the false notice "mmdc also needs
     pnpm". The registry ships ten such pairs today (`mmdc`->`pnpm`,
     `oh-my-zsh`->`git`, `graphify`->`uv`, ...). Two tiers are the whole point
-    of this test: a one-tool catalog cannot tell a narrowed map from a full
-    one, which is why every other install_closed test above misses this.
+    of this test: a one-tool catalog cannot tell a narrowed reading from a full
+    one.
     """
     pnpm = _gh_tool("pnpm", tier="system")
     mmdc = replace(_gh_tool("mmdc", tier="user"), requires=("pnpm",))
     presence = {"pnpm": True, "mmdc": False}
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    service = _macos_service(
+        tmp_path, resolve_tag=lambda repo: "v1.0.0", present=lambda t: presence[t.id]
+    )
     execute = ExecuteInputs(
         catalog=[pnpm, mmdc],
         platform=_install_closed_platform(),
@@ -6236,7 +6220,7 @@ async def test_install_closed_keeps_cross_tier_ids_in_every_installed_map(
         installed=lambda t: presence[t.id],
         install=_tracking_install(lambda _t: None),
     )
-    app = _version_app([pnpm, mmdc], dict(presence), service, execute=execute)
+    app = _version_app([pnpm, mmdc], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.press("2")
         assert app.current_view == "user"
@@ -6253,10 +6237,6 @@ async def test_install_closed_keeps_cross_tier_ids_in_every_installed_map(
         await pilot.pause()
         assert user.selected == {"mmdc"}
         assert "also needs pnpm" not in user.status_text
-        # Structural: both tier screens hold the same whole-catalog map, so
-        # "pnpm" is still a KEY on the user screen rather than being dropped.
-        for screen in (app.catalog_for("system"), user):
-            assert screen._installed == presence  # pyright: ignore[reportPrivateUsage]
 
 
 # -- D-01/15.6-06 Task 1: every interactive close re-synchronizes terminal
@@ -6305,7 +6285,6 @@ async def test_install_closed_calls_the_terminal_synchronizer_once_per_tier(
     )
     app = _version_app(
         tools,
-        {tool.id: True for tool in tools},
         service,
         execute=execute,
         terminal_sync=_terminal_sync,
@@ -6359,7 +6338,7 @@ async def test_install_closed_reports_a_terminal_sync_oserror_without_losing_the
         installed=lambda _t: False,
         install=_tracking_install(lambda _t: None),
     )
-    app = _version_app([tool], {"codegraph": True}, service, execute=execute, terminal_sync=_boom)
+    app = _version_app([tool], service, execute=execute, terminal_sync=_boom)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         app.catalog.selected.add("codegraph")
@@ -6396,7 +6375,7 @@ async def test_install_closed_delivers_a_terminal_sync_warning_to_the_visible_do
         installed=lambda _t: True,
         install=_tracking_install(lambda _t: None),
     )
-    app = _version_app([tool], {"codegraph": False}, service, execute=execute, terminal_sync=_warns)
+    app = _version_app([tool], service, execute=execute, terminal_sync=_warns)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_versions(app, pilot)
         await pilot.press("4")
@@ -6432,7 +6411,7 @@ async def test_install_closed_with_no_terminal_sync_wired_is_unaffected(
         installed=lambda _t: True,
         install=_tracking_install(lambda _t: None),
     )
-    app = _version_app([tool], {"codegraph": True}, service, execute=execute)
+    app = _version_app([tool], service, execute=execute)
     assert app._terminal_sync is None  # pyright: ignore[reportPrivateUsage]
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
@@ -6475,9 +6454,7 @@ async def test_install_closed_skips_the_terminal_synchronizer_when_nothing_was_i
         installed=lambda _t: True,
         install=_tracking_install(lambda _t: None),
     )
-    app = _version_app(
-        [tool], {"codegraph": True}, service, execute=execute, terminal_sync=_terminal_sync
-    )
+    app = _version_app([tool], service, execute=execute, terminal_sync=_terminal_sync)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         app.catalog.selected.add("codegraph")
@@ -6513,9 +6490,7 @@ async def test_install_closed_flushes_a_previously_queued_warning_even_with_no_n
         installed=lambda _t: False,
         install=_tracking_install(lambda _t: None),
     )
-    app = _version_app(
-        [tool], {"codegraph": False}, service, execute=execute, terminal_sync=lambda: None
-    )
+    app = _version_app([tool], service, execute=execute, terminal_sync=lambda: None)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         # Simulate a warning that arrived while queued (T-15.6-13) -- the
@@ -6567,14 +6542,12 @@ def _owned(
 
 def _update_app(
     tools: list[Tool],
-    installed: Mapping[str, bool],
     *,
     service: VersionRefreshService,
     updates: UpdateService,
 ) -> UnifiedApp:
     return UnifiedApp(
         tools,
-        installed,
         {"search": "find things", "ai": "agents", "pkg-mgr": "pkg"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: ({}, None),
@@ -6665,7 +6638,7 @@ async def test_second_u_press_while_latched_is_refused(tmp_path: Path) -> None:
         reresolve_ownership=lambda _tool: ownership,
         invalidate=service.invalidate,
     )
-    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_versions(app, pilot)
         await pilot.press("u")
@@ -6702,7 +6675,7 @@ async def test_unknown_owner_row_produces_zero_runner_invocations(tmp_path: Path
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=lambda _tool: ownership,
     )
-    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_versions(app, pilot)
         await pilot.press("u")
@@ -6736,7 +6709,7 @@ async def test_non_mutation_grade_owner_produces_zero_runner_invocations(tmp_pat
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=lambda _tool: ownership,
     )
-    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_versions(app, pilot)
         await pilot.press("u")
@@ -6769,7 +6742,7 @@ async def test_rg_end_to_end_delegates_to_brew(tmp_path: Path) -> None:
         reresolve_ownership=lambda _tool: ownership,
         invalidate=service.invalidate,
     )
-    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_versions(app, pilot)
         depth = len(app.screen_stack)
@@ -6805,7 +6778,7 @@ async def test_update_worker_crash_still_posts_and_clears(tmp_path: Path) -> Non
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=lambda _tool: ownership,
     )
-    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_versions(app, pilot)
         await pilot.press("u")
@@ -6840,7 +6813,7 @@ async def test_fresh_ownership_dispatches_on_reresolve_not_cache(tmp_path: Path)
         reresolve_ownership=lambda _tool: fresh,
         invalidate=service.invalidate,
     )
-    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_versions(app, pilot)
         await pilot.press("u")
@@ -6884,7 +6857,7 @@ async def test_fresh_unknown_overrides_cached_green_light(tmp_path: Path) -> Non
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=reresolve,
     )
-    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_versions(app, pilot)
         await pilot.press("u")
@@ -6946,7 +6919,7 @@ async def test_pnpm_precapture_replays_pre_update_set(tmp_path: Path) -> None:
         reresolve_ownership=reresolve,
         invalidate=service.invalidate,
     )
-    app = _update_app([tool], {"pnpm": True}, service=service, updates=updates)
+    app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_versions(app, pilot)
         await pilot.press("u")
@@ -7005,7 +6978,7 @@ async def test_non_pnpm_node_tool_skips_snapshot_and_replay(
         reresolve_ownership=lambda _tool: ownership,
         invalidate=service.invalidate,
     )
-    app = _update_app([tool], {"mmdc": True}, service=service, updates=updates)
+    app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_versions(app, pilot)
         await pilot.press("u")
@@ -7055,7 +7028,7 @@ async def test_none_package_snapshot_refuses_the_update(tmp_path: Path) -> None:
         reresolve_ownership=lambda _tool: ownership,
         invalidate=service.invalidate,
     )
-    app = _update_app([tool], {"pnpm": True}, service=service, updates=updates)
+    app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_versions(app, pilot)
         await pilot.press("u")
@@ -7112,7 +7085,7 @@ async def test_post_update_status_comes_from_version_refresh(tmp_path: Path) -> 
         reresolve_ownership=lambda _tool: ownership,
         invalidate=service.invalidate,
     )
-    app = _update_app([tool], {"rectangle": True}, service=service, updates=updates)
+    app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_versions(app, pilot)
         await pilot.press("u")
@@ -7159,7 +7132,7 @@ async def test_post_update_status_for_brew_also_comes_from_refresh(tmp_path: Pat
         reresolve_ownership=lambda _tool: ownership,
         invalidate=service.invalidate,
     )
-    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_versions(app, pilot)
         await pilot.press("u")
@@ -7205,7 +7178,7 @@ async def test_epoch_guard_drops_stale_refresh_after_update(tmp_path: Path) -> N
         reresolve_ownership=lambda _tool: ownership,
         invalidate=service.invalidate,
     )
-    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         assert started.wait(timeout=5)
         app.catalog._version_statuses["rg"] = VersionStatus(  # pyright: ignore[reportPrivateUsage]
@@ -7257,7 +7230,7 @@ async def test_update_runs_off_the_event_loop_with_no_confirmation(tmp_path: Pat
         reresolve_ownership=lambda _tool: ownership,
         invalidate=service.invalidate,
     )
-    app = _update_app([tool], {"rg": True}, service=service, updates=updates)
+    app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle_versions(app, pilot)
         depth = len(app.screen_stack)
@@ -7488,7 +7461,7 @@ async def test_ownership_refreshed_rebuilds_a_mounted_uninstall_screen_entered_d
         rows_calls["n"] += 1
         return []
 
-    app = _version_app([tool], {"codegraph": True}, service, uninstall=_uninstall_inputs(rows=rows))
+    app = _version_app([tool], service, uninstall=_uninstall_inputs(rows=rows))
     async with app.run_test(size=(120, 30)) as pilot:
         assert started.wait(timeout=5)  # the base tier's version refresh is in flight
         await pilot.press("5")  # navigate to Uninstall BEFORE that refresh commits
@@ -7524,7 +7497,7 @@ async def test_ownership_refreshed_does_not_touch_a_different_current_view(
         rows_calls["n"] += 1
         return []
 
-    app = _version_app([tool], {"codegraph": True}, service, uninstall=_uninstall_inputs(rows=rows))
+    app = _version_app([tool], service, uninstall=_uninstall_inputs(rows=rows))
     async with app.run_test(size=(120, 30)) as pilot:
         assert started.wait(timeout=5)
         await pilot.press("5")
@@ -7560,7 +7533,6 @@ async def test_ownership_refreshed_preserves_a_standing_removal_summary(tmp_path
 
     app = _version_app(
         [tool],
-        {"codegraph": True},
         service,
         uninstall=_uninstall_inputs(rows=rows, remove=_recorder(captured)),
         initial_view="uninstall",
@@ -7756,7 +7728,6 @@ async def test_uninstall_screen_cell_reflects_post_run_ownership_map(tmp_path: P
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
     app = _version_app(
         [tool],
-        {"codegraph": False},
         service,
         execute=execute,
         uninstall=_uninstall_inputs(rows=rows),
@@ -7900,7 +7871,7 @@ async def test_uninstall_screen_renders_codex_generic_hint_on_linux_not_homebrew
         )
 
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
-    app = _version_app([codex], {"codex": True}, service, uninstall=_uninstall_inputs(rows=rows))
+    app = _version_app([codex], service, uninstall=_uninstall_inputs(rows=rows))
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
@@ -7965,7 +7936,7 @@ async def test_uninstall_screen_renders_ripgrep_not_rg_for_the_dnf_split_package
         )
 
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
-    app = _version_app([rg], {"rg": True}, service, uninstall=_uninstall_inputs(rows=rows))
+    app = _version_app([rg], service, uninstall=_uninstall_inputs(rows=rows))
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)

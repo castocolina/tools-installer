@@ -1158,7 +1158,6 @@ def _build_app(
 
     return UnifiedApp(
         tools,
-        installed,
         load_categories(_REGISTRY),
         report=report,
         guard_state=_guard_state,

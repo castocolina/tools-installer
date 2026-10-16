@@ -69,7 +69,6 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
     )
     app = UnifiedApp(
         [_dl_tool()],
-        {"fd": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: (guard_status(bin_dir), None),
@@ -129,7 +128,6 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
     )
     app = UnifiedApp(
         [_dl_tool()],
-        {"fd": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: (guard_status(bin_dir), None),
@@ -163,7 +161,6 @@ def _error_app(home: Path) -> UnifiedApp:
     )
     return UnifiedApp(
         [_dl_tool()],
-        {"fd": True},
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: ({}, None),
