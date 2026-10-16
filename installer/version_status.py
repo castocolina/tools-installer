@@ -498,6 +498,13 @@ def resolve_status(
     )
 
 
+def default_skill_home() -> Path:
+    """The home whose skill and project-pack evidence a service reads by
+    default. A function, resolved at construction, so the test suite can
+    redirect it in one place (checker W5)."""
+    return Path.home()
+
+
 @dataclass(frozen=True)
 class SkillHostStatus:
     hosts: dict[str, str]
@@ -508,6 +515,8 @@ BROKEN_SHIM_REASON = (
     "shim present, package missing — select it and press enter to reinstall and repair"
 )
 NEEDS_BREW_REASON = "needs Homebrew, which is not on PATH"
+SKILL_CHECKING_REASON = "checking which hosts have it"
+SKILL_SEEDED_NOTE = "host status from the previous run, re-checking"
 _PRESENT_HEALTH = frozenset({Health.BROKEN, Health.MISCONFIGURED, Health.OUTDATED, Health.OK})
 
 
@@ -570,6 +579,10 @@ def tool_state(
     outdated: tuple[str, ...] = ()
     if version is not None and version.outdated:
         outdated = (f"{version.installed} -> {version.latest} available",)
+    if not present:
+        # An absent tool keeps its configuration facts, first (L-19-18, L-19-23).
+        notes = misconfigured + notes
+        misconfigured = ()
     health, reasons = tool_health(
         Evidence(
             present=present,
@@ -655,7 +668,7 @@ class VersionRefreshService:
         # (setup.py) supplies the real runner explicitly.
         self._native_probe = native_probe
         self._skill_probe = skill_probe
-        self._skill_home = skill_home if skill_home is not None else Path.home()
+        self._skill_home = skill_home if skill_home is not None else default_skill_home()
         self._lock = threading.Lock()
         self._statuses: dict[str, VersionStatus] = {}
         # ONE map of epoch-tagged records, deliberately never a second
@@ -790,6 +803,22 @@ class VersionRefreshService:
                 )
                 self._skills = merged
                 self._skills_probed = True
+                rebuilt = {
+                    tool.id: self._skill_state(
+                        tool,
+                        generation=state.generation,
+                        seq=state.seq,
+                        platform=self._platform,
+                        ownership=state.ownership,
+                        version=state.version,
+                        removable=state.removable,
+                    )
+                    for tool in packs
+                    if (state := self._states.get(tool.id)) is not None
+                    and state.generation == started_epoch
+                }
+                if rebuilt:
+                    self._states = {**self._states, **rebuilt}
                 return dict(merged)
 
     def invalidate(self, *, reason: str) -> int:
@@ -805,27 +834,70 @@ class VersionRefreshService:
             }
             return self._epoch
 
+    def _skill_state(
+        self,
+        tool: Tool,
+        *,
+        generation: int,
+        seq: int,
+        platform: Platform,
+        ownership: ManagerOwnership,
+        version: VersionStatus | None,
+        removable: RemovalPlan,
+    ) -> ToolState:
+        """A skill pack's state from the host answers held now (call under
+        `_lock`). No answer yet is CHECKING, through the builder's own input."""
+        hosts = self._skills.get(tool.id)
+        answers = set(hosts.hosts.values()) if hosts is not None else set[str]()
+        checking: tuple[str, ...] = ()
+        if not answers & {"present", "absent"}:
+            checking = (SKILL_CHECKING_REASON,)
+        notes = (SKILL_SEEDED_NOTE,) if hosts is not None and hosts.stale else ()
+        return tool_state(
+            tool,
+            generation=generation,
+            seq=seq,
+            platform=platform,
+            present=bool(checking) or "present" in answers,
+            ownership=ownership,
+            version=version,
+            removable=removable,
+            skill_hosts=hosts,
+            checking=checking,
+            notes=notes,
+        )
+
     def _artifacts(self, tool: Tool) -> Sequence[Path]:
         if self._artifacts_for is not None:
             return self._artifacts_for(tool)
         return plan_uninstall([tool], self._managed_bin_dir)
 
     def _load_or_query_snapshot(
-        self, *, now: datetime
+        self, *, now: datetime, platform: Platform
     ) -> tuple[ManagerSnapshot | None, bool, bool]:
-        """Return (snapshot, persist, failed). persist means this pass queried."""
+        """Return (snapshot, persist, failed). persist means this pass queried.
+
+        A fresh snapshot is reused only when its brew evidence agrees with
+        the pass's `has_brew`, or when it records a failure (the retry
+        backoff stays in charge): brew appearing or vanishing reaches
+        ownership on the next pass, not after the 6-hour window (review M6).
+        """
         snapshot = load_manager_snapshot(self._cache_path)
-        if not should_fetch_managers(snapshot, now=now):
+        if not should_fetch_managers(snapshot, now=now) and (
+            snapshot is None
+            or snapshot.failed_at is not None
+            or (snapshot.inventory.brew_prefix is not None) == platform.has_brew
+        ):
             return snapshot, False, False
         now_iso = now.astimezone(UTC).isoformat()
         try:
             inventory = self._read_inventory(
-                has_brew=self._platform.has_brew,
+                has_brew=platform.has_brew,
                 query=self._query,
                 pnpm_packages=self._pnpm_packages,
             )
             outdated = self._read_outdated(
-                has_brew=self._platform.has_brew,
+                has_brew=platform.has_brew,
                 query=self._query,
                 resolve_pnpm=self._resolve_pnpm,
             )
@@ -838,7 +910,7 @@ class VersionRefreshService:
                 failed_at=now_iso,
             )
             return failed, True, True
-        if self._partial_manager_failure(inventory, outdated):
+        if self._partial_manager_failure(inventory, outdated, platform=platform):
             # W3 (12-REVIEW.md, codex-sol-high): each manager reader swallows
             # its own CommandError/OSError into a `None` field rather than
             # raising, so a single transient brew/pnpm/uv failure never trips
@@ -872,12 +944,12 @@ class VersionRefreshService:
         )
 
     def _partial_manager_failure(
-        self, inventory: ManagerInventory, outdated: OutdatedReport
+        self, inventory: ManagerInventory, outdated: OutdatedReport, *, platform: Platform
     ) -> bool:
         """True when a manager CONFIRMED present on this machine came back
         `None` on at least one of its fields — a swallowed transient query
         failure, never "this manager just isn't installed"."""
-        if self._platform.has_brew and (
+        if platform.has_brew and (
             inventory.brew_formulae is None
             or inventory.brew_casks is None
             or inventory.brew_prefix is None
@@ -931,20 +1003,29 @@ class VersionRefreshService:
     def _pass(
         self, tools: Sequence[Tool], *, seq: int, started_epoch: int
     ) -> dict[str, VersionStatus]:
+        # D-14: brew is re-read every pass. Every helper of this pass gets this
+        # one value; none reads the shared `self._platform`, which an
+        # overlapping pass may replace mid-pass (review M5).
+        platform = replace(self._platform, has_brew=self._which("brew") is not None)
+        with self._lock:
+            self._platform = platform
         now = self._now()
         cache = load_version_cache(self._cache_path)
-        snapshot, persist_snapshot, _failed = self._load_or_query_snapshot(now=now)
+        snapshot, persist_snapshot, _failed = self._load_or_query_snapshot(
+            now=now, platform=platform
+        )
         inventory = snapshot.inventory if snapshot is not None else _EMPTY_INVENTORY
         outdated = snapshot.outdated if snapshot is not None else _EMPTY_OUTDATED
         produced: dict[str, VersionCacheEntry] = {}
         statuses: dict[str, VersionStatus] = {}
         ownerships: dict[str, ManagerOwnership] = {}
         states: dict[str, ToolState] = {}
+        packs: list[tuple[Tool, ManagerOwnership, VersionStatus, RemovalPlan]] = []
         fetches = 0
         for tool in tools:
             ownership = resolve_ownership(
                 tool,
-                platform=self._platform,
+                platform=platform,
                 inventory=inventory,
                 artifacts=self._artifacts(tool),
                 which=self._which,
@@ -957,7 +1038,7 @@ class VersionRefreshService:
             would_fetch = (
                 allow_fetch
                 and ownership.owner == "installer"
-                and github_repo(tool, self._platform) is not None
+                and github_repo(tool, platform) is not None
                 and should_fetch(entry, now=now)
             )
             status, new_entry = resolve_status(
@@ -968,20 +1049,25 @@ class VersionRefreshService:
                 now=now,
                 probe_output=self._probe_output,
                 resolve_tag=self._resolve_tag,
-                platform=self._platform,
+                platform=platform,
                 allow_fetch=allow_fetch,
             )
             statuses[tool.id] = status
-            states[tool.id] = tool_state(
-                tool,
-                generation=started_epoch,
-                seq=seq,
-                platform=self._platform,
-                present=self._present(tool),
-                ownership=ownership,
-                version=status,
-                removable=plan_removal([tool], self._managed_bin_dir),
-            )
+            removable = plan_removal([tool], self._managed_bin_dir)
+            if tool.skill_lifecycle is not None:
+                # Built at commit, from the host answers held then.
+                packs.append((tool, ownership, status, removable))
+            else:
+                states[tool.id] = tool_state(
+                    tool,
+                    generation=started_epoch,
+                    seq=seq,
+                    platform=platform,
+                    present=self._present(tool),
+                    ownership=ownership,
+                    version=status,
+                    removable=removable,
+                )
             if would_fetch:
                 fetches += 1
             if new_entry is not None:
@@ -996,6 +1082,16 @@ class VersionRefreshService:
                 # HIGH #1); with this branch silent, every record the maps
                 # hold names the pass that actually produced it.
                 return statuses
+            for tool, ownership, status, removable in packs:
+                states[tool.id] = self._skill_state(
+                    tool,
+                    generation=started_epoch,
+                    seq=seq,
+                    platform=platform,
+                    ownership=ownership,
+                    version=status,
+                    removable=removable,
+                )
             # Newest pass wins per record (L-19-02): at one epoch a record
             # is replaced only by one from a pass with a higher sequence,
             # so a slower older pass can still fill tools a newer partial

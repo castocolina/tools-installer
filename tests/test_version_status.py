@@ -11,8 +11,10 @@ from typing import cast
 
 import pytest
 
+from installer import version_status
 from installer.manager_versions import ManagerVersion, OutdatedReport
 from installer.model import (
+    ConfigStep,
     Method,
     SkillLifecycle,
     SkillOperation,
@@ -28,7 +30,7 @@ from installer.ownership import (
     resolve_ownership,
 )
 from installer.platform import Platform
-from installer.resolve import unavailable_reason
+from installer.resolve import resolve_methods, unavailable_reason
 from installer.uninstall import RemovalPlan, plan_removal
 from installer.version_cache import (
     MANAGER_RETRY_BACKOFF,
@@ -2672,3 +2674,296 @@ def test_only_published_records_are_cached(tmp_path: Path) -> None:
         "a": "2.0.0",
         "b": "2.0.0",
     }
+
+
+# -- 19-08 Task 3: live has_brew per pass, skill packs CHECKING until probed. --
+
+_BREW = "/home/linuxbrew/.linuxbrew/bin/brew"
+_CHECKING_HOSTS = "checking which hosts have it"
+_SEEDED_NOTE = "host status from the previous run, re-checking"
+
+
+def _no_brew_platform() -> Platform:
+    return Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
+
+
+class _BrewWorld:
+    """A PATH whose `brew` answer flips, plus inventory readers that record
+    the `has_brew` each query was made with."""
+
+    def __init__(self, managed: Path, *, tools: tuple[str, ...] = ()) -> None:
+        self.brew = False
+        self.managed = managed
+        self.tools = tools
+        self.inventory_calls: list[bool] = []
+
+    def which(self, cmd: str) -> str | None:
+        if cmd == "brew":
+            return _BREW if self.brew else None
+        return str(self.managed / cmd) if cmd in self.tools else None
+
+    def read_inventory(self, *, has_brew: bool, **_kwargs: object) -> ManagerInventory:
+        self.inventory_calls.append(has_brew)
+        return ManagerInventory(
+            brew_formulae={} if has_brew else None,
+            brew_casks={} if has_brew else None,
+            pnpm_globals=frozenset(),
+            uv_tools={},
+            brew_prefix=Path("/home/linuxbrew/.linuxbrew") if has_brew else None,
+        )
+
+    def read_outdated(self, *, has_brew: bool, **_kwargs: object) -> OutdatedReport:
+        return OutdatedReport(
+            brew={} if has_brew else None, cask={} if has_brew else None, pnpm={}, uv={}
+        )
+
+    def service(
+        self, tmp_path: Path, *, resolve_tag: Callable[[str], str] = lambda _r: "1.0.0"
+    ) -> VersionRefreshService:
+        return VersionRefreshService(
+            platform=_no_brew_platform(),
+            cache_path=tmp_path / "versions.json",
+            resolve_tag=resolve_tag,
+            probe_output=lambda _argv: "0.9.0",
+            now=lambda: _STATE_NOW,
+            managed_bin_dir=self.managed,
+            which=self.which,
+            artifacts_for=lambda tool: [self.managed / tool.cmd],
+            read_inventory_fn=self.read_inventory,
+            read_outdated_fn=self.read_outdated,
+            pnpm_packages=lambda: (),
+            resolve_pnpm=lambda: None,
+            query=lambda *_args, **_kwargs: "",
+        )
+
+
+@pytest.mark.parametrize("shape", ["no-snapshot", "fresh-snapshot-without-brew"])
+def test_has_brew_is_reread_each_pass(tmp_path: Path, shape: str) -> None:
+    world = _BrewWorld(tmp_path / "managed")
+    service = world.service(tmp_path)
+    tool = _brew_tool()
+    service.refresh([tool])
+    first = service.state_of(tool.id)
+    assert first is not None
+    assert first.health is Health.UNAVAILABLE
+    assert first.reasons[0] == NEEDS_BREW_REASON
+    assert service.platform.has_brew is False
+    snapshot = load_manager_snapshot(tmp_path / "versions.json")
+    assert snapshot is not None
+    assert snapshot.checked_at == _STATE_NOW.isoformat()
+    if shape == "no-snapshot":
+        save_version_cache(tmp_path / "versions.json", {}, managers={})
+    world.brew = True
+    world.inventory_calls.clear()
+    service.refresh([tool])
+    second = service.state_of(tool.id)
+    assert second is not None
+    assert second.health is Health.MISSING
+    assert service.platform.has_brew is True
+    assert resolve_methods(tool, service.platform)
+    assert world.inventory_calls == [True]
+
+
+def test_manager_snapshot_query_uses_the_live_has_brew(tmp_path: Path) -> None:
+    world = _BrewWorld(tmp_path / "managed")
+    world.brew = True
+    service = world.service(tmp_path)
+    tool = _brew_tool()
+    service.refresh([tool])
+    assert world.inventory_calls == [True]
+    # Fresh, and its brew evidence agrees with has_brew: reused.
+    service.refresh([tool])
+    assert world.inventory_calls == [True]
+    # A failed snapshot inside its retry backoff is reused whatever its evidence.
+    failed = ManagerSnapshot(
+        inventory=_empty_inventory(),
+        outdated=_empty_outdated(),
+        checked_at=(_STATE_NOW - MANAGER_STALE_AFTER - timedelta(hours=1)).isoformat(),
+        failed_at=(_STATE_NOW - timedelta(minutes=10)).isoformat(),
+    )
+    save_version_cache(tmp_path / "versions.json", {}, managers=encode_manager_snapshot(failed))
+    service.refresh([tool])
+    assert world.inventory_calls == [True]
+
+
+def test_a_pass_uses_one_platform_throughout(tmp_path: Path) -> None:
+    world = _BrewWorld(tmp_path / "managed", tools=("g", "y"))
+    hold = _Hold()
+    service = world.service(tmp_path, resolve_tag=hold)
+    g, x, y = _gh_tool("g"), _brew_tool(), _gh_tool("y")
+    run_a = _start(lambda: service.refresh([g, x]))
+    assert hold.holding.wait(timeout=10)
+    assert world.inventory_calls == [False]
+    world.brew = True
+    service.refresh([y])
+    assert service.platform.has_brew is True
+    hold.release.set()
+    assert _join(run_a) is None
+    state = service.state_of(x.id)
+    assert state is not None
+    assert state.health is Health.UNAVAILABLE
+    assert world.inventory_calls == [False, True]
+    assert service.platform.has_brew is True
+
+
+def _skill_state_service(
+    tmp_path: Path, probe: Callable[[list[str]], str] | None = None
+) -> VersionRefreshService:
+    managed = tmp_path / "managed"
+    return VersionRefreshService(
+        platform=Platform(os="linux", arch="amd64", immutable=True, has_brew=False),
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "1.0.0",
+        probe_output=lambda _argv: "1.0.0",
+        now=lambda: _STATE_NOW,
+        managed_bin_dir=managed,
+        skill_probe=probe,
+        skill_home=tmp_path,
+        which=lambda cmd: str(managed / cmd) if cmd == "alpha" else None,
+        artifacts_for=lambda tool: [managed / tool.cmd],
+        query=lambda *_args, **_kwargs: "",
+        pnpm_packages=lambda: (),
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+        resolve_pnpm=lambda: None,
+    )
+
+
+def test_skill_pack_without_data_is_checking(tmp_path: Path) -> None:
+    service = _skill_state_service(tmp_path)
+    pack = _claude_pack()
+    service.refresh([pack])
+    state = service.state_of(pack.id)
+    assert state is not None
+    assert state.health is Health.CHECKING
+    assert state.present is False
+    built = tool_state(
+        pack,
+        generation=state.generation,
+        seq=state.seq,
+        platform=service.platform,
+        present=True,
+        ownership=state.ownership,
+        version=state.version,
+        removable=state.removable,
+        checking=(_CHECKING_HOSTS,),
+    )
+    assert (state.health, state.reasons) == (built.health, built.reasons)
+    assert state.reasons[0] == _CHECKING_HOSTS
+
+
+def test_skill_pack_states_follow_refresh_skills(tmp_path: Path) -> None:
+    service = _skill_state_service(tmp_path / "a", lambda _argv: _CLAUDE_SUPERPOWERS_JSON)
+    pack, alpha = _claude_pack(), _gh_tool("alpha")
+    service.refresh([pack, alpha])
+    binary = service.state_of("alpha")
+    checking = service.state_of(pack.id)
+    assert binary is not None
+    assert checking is not None
+    assert checking.health is Health.CHECKING
+    service.refresh_skills([pack])
+    probed = service.state_of(pack.id)
+    assert probed is not None
+    assert probed.health is Health.OK
+    assert probed.generation == checking.generation == service.epoch
+    assert probed.seq == checking.seq
+    assert probed.skill_hosts is not None
+    assert probed.skill_hosts.hosts == {"claude": "present"}
+    assert service.state_of("alpha") is binary
+
+    absent = _skill_state_service(tmp_path / "b", lambda _argv: "[]")
+    absent.refresh([pack])
+    absent.refresh_skills([pack])
+    missing = absent.state_of(pack.id)
+    assert missing is not None
+    assert missing.health is Health.MISSING
+
+
+def test_refresh_skills_superseded_rebuilds_nothing(tmp_path: Path) -> None:
+    holder: dict[str, VersionRefreshService] = {}
+
+    def skill_probe(_argv: list[str]) -> str:
+        holder["svc"].invalidate(reason="x")
+        return _CLAUDE_SUPERPOWERS_JSON
+
+    service = _skill_state_service(tmp_path, skill_probe)
+    holder["svc"] = service
+    pack, alpha = _claude_pack(), _gh_tool("alpha")
+    service.refresh([pack, alpha])
+    service.refresh_skills([pack])
+    assert service.skill_status_of(pack.id) is None
+    assert service.state_of(pack.id) is None
+    assert service.state_of("alpha") is None
+    service.refresh([pack])
+    fresh = service.state_of(pack.id)
+    assert fresh is not None
+    assert fresh.generation == service.epoch
+    assert fresh.health is Health.CHECKING
+
+
+def test_seeded_skill_hosts_are_a_note(tmp_path: Path) -> None:
+    path = tmp_path / "versions.json"
+    save_version_cache(path, {}, skills={"superpowers": {"claude": "present"}})
+    service = _skill_state_service(tmp_path)
+    service.seed_skills_from_cache()
+    pack = _claude_pack()
+    service.refresh([pack])
+    state = service.state_of(pack.id)
+    assert state is not None
+    assert state.health is Health.OK
+    assert _SEEDED_NOTE in state.reasons
+
+
+def test_absent_pack_keeps_configuration_facts_as_reasons() -> None:
+    pack = _claude_pack()
+    fact = "disabled: superpowers@claude-plugins-official in user scope (6.4.1)"
+    step = ConfigStep(
+        "enable superpowers@claude-plugins-official in user scope", "plugin_enable", "claude"
+    )
+
+    def build(*, present: bool) -> ToolState:
+        return tool_state(
+            pack,
+            generation=0,
+            platform=_platform(),
+            present=present,
+            ownership=_unknown_owner(pack),
+            version=None,
+            removable=_NO_REMOVAL,
+            misconfigured=(fact,),
+            unconfigured=(step,),
+            notes=("no manager claimed the tool",),
+        )
+
+    absent = build(present=False)
+    assert absent.health is Health.MISSING
+    assert absent.reasons == (fact, "no manager claimed the tool")
+    assert absent.unconfigured == (step,)
+    present = build(present=True)
+    assert present.health is Health.MISCONFIGURED
+    assert present.reasons == (fact, "no manager claimed the tool")
+    assert present.unconfigured == (step,)
+
+
+def test_suite_sandbox_redirects_skill_home(tmp_path_factory: pytest.TempPathFactory) -> None:
+    sandbox = version_status.default_skill_home()
+    assert not sandbox.is_relative_to(_REAL_HOME)
+    assert sandbox.is_relative_to(tmp_path_factory.getbasetemp())
+    marker = sandbox / ".claude" / "gsd-install-state.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("{}")
+    pack = _skill_pack("opengsd", (SkillStatusProbe("claude", "install-state", "gsd-core"),))
+    service = VersionRefreshService(
+        platform=_no_brew_platform(),
+        cache_path=tmp_path_factory.mktemp("skills") / "versions.json",
+        skill_probe=lambda _argv: "",
+        which=lambda _cmd: None,
+        query=lambda *_args, **_kwargs: "",
+        pnpm_packages=lambda: (),
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+    )
+    service.refresh_skills([pack])
+    status = service.skill_status_of("opengsd")
+    assert status is not None
+    assert status.hosts == {"claude": "present"}

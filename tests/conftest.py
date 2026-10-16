@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from installer import locations, receipts
+from installer import locations, receipts, version_status
 
 # Captured at conftest IMPORT time, before any test can monkeypatch $HOME, so
 # this stays the developer's real home no matter what a test does later.
@@ -133,6 +133,28 @@ def sandboxed_bin_dir(
         return original(declared)
 
     monkeypatch.setattr(locations, "bin_dir", _sandboxed)
+
+
+@pytest.fixture(autouse=True)
+def sandboxed_skill_home(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Answer `version_status.default_skill_home()` with a per-test scratch dir.
+
+    A service built without `skill_home` would otherwise read the developer's
+    real host GSD leftovers and plugin lists (checker W5). The dir is not
+    created. As in `sandboxed_bin_dir`, a test that redirected HOME keeps
+    reading that HOME; a test passing `skill_home` is unaffected.
+    """
+    original: Callable[[], Path] = version_status.default_skill_home
+    scratch = tmp_path_factory.getbasetemp() / "skill-home" / uuid.uuid4().hex
+
+    def _sandboxed() -> Path:
+        if Path.home() == _REAL_HOME:
+            return scratch
+        return original()
+
+    monkeypatch.setattr(version_status, "default_skill_home", _sandboxed)
 
 
 @pytest.fixture(scope="session")
