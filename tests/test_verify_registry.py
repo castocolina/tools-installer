@@ -1397,14 +1397,39 @@ sha256 = "{digest}"
     assert report.findings[0].status == "drift"
 
 
+def _corrupt_xz_tar_bytes() -> bytes:
+    noise = b"".join(hashlib.sha256(i.to_bytes(4, "big")).digest() for i in range(2048))
+    data = _xz_tar_bytes({"bin/x": b"x", "pad": noise})
+    flipped = bytearray(data)
+    for i in range(len(data) // 2, len(data) // 2 + 64):
+        flipped[i] ^= 0xFF
+    return bytes(flipped)
+
+
+def _corrupt_gz_tar_bytes() -> bytes:
+    tar = gzip.decompress(_gz_tar_bytes({"bin/x": b"x", "pad": bytes(65536)}))
+    head = tar[:16384]
+    out = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff"
+    out += b"\x00"
+    out += len(head).to_bytes(2, "little")
+    out += (0xFFFF ^ len(head)).to_bytes(2, "little")
+    out += head
+    out += b"\x06"
+    out += bytes(16)
+    return out
+
+
 @pytest.mark.parametrize(
     ("payload", "archive", "label"),
     [
         (b"not-a-tar", "gz", "gz"),
         (b"not-a-zip", "zip", "zip"),
+        pytest.param(_corrupt_xz_tar_bytes(), "xz", "xz", id="xz_corrupt_stream"),
+        pytest.param(_corrupt_gz_tar_bytes(), "gz", "gz", id="gz_bad_deflate_block"),
     ],
 )
 def test_corrupt_archive_is_drift(tmp_path: Path, payload: bytes, archive: str, label: str) -> None:
+    ext = {"zip": "zip", "gz": "tar.gz", "xz": "tar.xz"}[archive]
     content = f"""
 [[tool]]
 id = "t1"
@@ -1417,15 +1442,17 @@ tier = "user"
 [[tool.method]]
 kind = "github_release"
 repo = "o/r"
-asset = "a-{{ver}}.{"zip" if archive == "zip" else "tar.gz"}"
+asset = "a-{{ver}}.{ext}"
 member = "bin/x"
 """
     if archive == "zip":
         content += 'archive = "zip"\n'
     else:
         content += "strip = 0\n"
+    if archive == "xz":
+        content += 'archive = "xz"\n'
     registry = _write_registry(tmp_path, content)
-    asset_name = "a-1.0.0.zip" if archive == "zip" else "a-1.0.0.tar.gz"
+    asset_name = f"a-1.0.0.{ext}"
     release = _release(tag="1.0.0", assets={})
     probe, _ = _map_probe(release, payloads={asset_name: payload})
     report = check_registry(load_tools(registry), probe, state={})

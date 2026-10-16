@@ -11,6 +11,7 @@ import copy
 import functools
 import http.client
 import json
+import lzma
 import os
 import re
 import shutil
@@ -22,6 +23,7 @@ import traceback
 import unicodedata
 import urllib.request
 import zipfile
+import zlib
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, replace
@@ -771,6 +773,10 @@ def check_registry(
                             tarfile.TarError,
                             EOFError,
                             zipfile.BadZipFile,
+                            # On Python 3.12, tarfile lets a corrupt stream's
+                            # decompressor error escape unwrapped.
+                            lzma.LZMAError,
+                            zlib.error,
                         ) as exc:
                             listings[target.archive] = exc
                     url_download_cache[target.url] = (actual_hash, listings)
