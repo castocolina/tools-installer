@@ -94,9 +94,22 @@ def real_home_untouched() -> "object":
 # (underscore-prefixed) name reads as dead code to pyright.
 @pytest.fixture(autouse=True)
 def no_shell_location_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Clear `$ZDOTDIR` and `$ZSH` so tests never follow the developer's shell location."""
+    """Clear inherited shell and location overrides so tests never follow the
+    developer's real HOME.
+
+    `$ZDOTDIR` and `$ZSH` point at the developer's shell. `PNPM_HOME`,
+    `VOLTA_HOME`, `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are absolute overrides
+    inherited from the developer's shell that point into the real HOME (RR-05:
+    `owner_dirs` reads the first two, the terminal and XDG helpers the last
+    two). A test that exercises one sets it with `monkeypatch.setenv`, which
+    runs after this autouse fixture.
+    """
     monkeypatch.delenv("ZDOTDIR", raising=False)
     monkeypatch.delenv("ZSH", raising=False)  # omz_root falls back to $ZSH
+    monkeypatch.delenv("PNPM_HOME", raising=False)
+    monkeypatch.delenv("VOLTA_HOME", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
 
 
 @pytest.fixture(autouse=True)

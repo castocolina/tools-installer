@@ -15,6 +15,8 @@ from installer.locations import (
     xdg_config_base,
 )
 from installer.model import load_tools
+from installer.ownership import ManagerInventory, owner_dirs
+from installer.platform import Platform
 from tests.state_doubles import seeded_service
 from tests.test_registry import REGISTRY
 
@@ -49,6 +51,21 @@ def test_suite_home_is_a_per_test_scratch_dir(tmp_path_factory: pytest.TempPathF
     assert home.is_dir()
     assert home.is_relative_to(tmp_path_factory.getbasetemp())
     assert not home.is_relative_to(_REAL_HOME)
+
+
+def test_inherited_location_overrides_are_cleared(tmp_path: Path) -> None:
+    """RR-05: an inherited PNPM_HOME, VOLTA_HOME, XDG_CONFIG_HOME or
+    XDG_DATA_HOME from the developer's shell never reaches a test. Cleared,
+    owner prefixes fall back under the scratch HOME."""
+    for name in ("PNPM_HOME", "VOLTA_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
+        assert name not in os.environ
+    dirs = owner_dirs(
+        inventory=ManagerInventory(None, None, None, None, None),
+        managed_bin_dir=tmp_path / "managed",
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+    )
+    assert dirs["pnpm"][0].is_relative_to(Path.home())
+    assert dirs["volta"][0].is_relative_to(Path.home())
 
 
 def test_registry_pass_reads_declared_locations_from_the_scratch_home(tmp_path: Path) -> None:
