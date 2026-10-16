@@ -2,8 +2,11 @@
 
 A receipt is the proof a later removal uses: it records what a successful
 install actually created (artifacts with absolute paths, per-type fingerprints)
-plus the method that created them. A corrupt, unreadable or tampered receipt
-means NO PROOF, never a crash and never a removal.
+plus the method that created them. A directory is matched by its own identity
+(device and inode), so a re-created directory — a vendor reinstall into
+~/Applications, a hand-made ~/.local/opt/<name> — never inherits an old
+receipt's proof. A corrupt, unreadable or tampered receipt means NO PROOF,
+never a crash and never a removal.
 """
 
 from __future__ import annotations
@@ -50,6 +53,8 @@ class ReceiptArtifact:
     sha256: str | None = None
     size: int | None = None
     mtime_ns: int | None = None
+    dev: int | None = None
+    ino: int | None = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +118,8 @@ def _write_unlocked(receipt: Receipt) -> None:
                 "sha256": artifact.sha256,
                 "size": artifact.size,
                 "mtime_ns": artifact.mtime_ns,
+                "dev": artifact.dev,
+                "ino": artifact.ino,
             }
         )
     payload: dict[str, object] = {
@@ -301,8 +308,10 @@ def fingerprint(path: Path, kind: Literal["dir", "link", "file"]) -> ReceiptArti
     """Record what `path` looks like now, for the given artifact type.
 
     A file needs to be a regular file and records sha256 + size + mtime_ns; a
-    link records its readlink target; a dir must be a real directory (never a
-    symlink). Anything else, or an OSError, is not fingerprintable."""
+    link records its readlink target; a dir records the directory's own
+    identity `(st_dev, st_ino)` from one lstat, so a re-created directory can
+    never match it. A symlink is never a dir. Anything else, or an OSError,
+    is not fingerprintable."""
     try:
         if kind == "file":
             st = path.lstat()
@@ -320,9 +329,10 @@ def fingerprint(path: Path, kind: Literal["dir", "link", "file"]) -> ReceiptArti
                 return None
             return ReceiptArtifact(path=path, type="link", target=os.readlink(path))
         if kind == "dir":
-            if not path.is_dir() or path.is_symlink():
+            st = path.lstat()
+            if not stat_module.S_ISDIR(st.st_mode):
                 return None
-            return ReceiptArtifact(path=path, type="dir")
+            return ReceiptArtifact(path=path, type="dir", dev=st.st_dev, ino=st.st_ino)
     except OSError:
         return None
     return None
@@ -331,7 +341,8 @@ def fingerprint(path: Path, kind: Literal["dir", "link", "file"]) -> ReceiptArti
 def matches(artifact: ReceiptArtifact, *, rehash: bool = False) -> bool:
     """Does the on-disk artifact still equal what the receipt recorded (D-08)?
 
-    A link matches on readlink; a dir on being a real directory; a file on the
+    A link matches on readlink; a dir on still being that same real directory
+    (its `(st_dev, st_ino)`); a file on the
     stat fingerprint, re-hashed only when the stat differs (or `rehash=True`,
     the deletion-time re-proof, which bypasses both the shortcut and the
     memo). A re-hash result is remembered per (path, size, mtime_ns), so an
@@ -342,7 +353,11 @@ def matches(artifact: ReceiptArtifact, *, rehash: bool = False) -> bool:
         if artifact.type == "link":
             return path.is_symlink() and os.readlink(path) == artifact.target
         if artifact.type == "dir":
-            return path.is_dir() and not path.is_symlink()
+            st = path.lstat()
+            return stat_module.S_ISDIR(st.st_mode) and (st.st_dev, st.st_ino) == (
+                artifact.dev,
+                artifact.ino,
+            )
         st = path.lstat()
         if not stat_module.S_ISREG(st.st_mode):
             return False
@@ -373,12 +388,6 @@ def drifted(receipt: Receipt, *, rehash: bool = False) -> tuple[ReceiptArtifact,
     return tuple(a for a in receipt.artifacts if not matches(a, rehash=rehash))
 
 
-def _artifact_str(artifact: dict[str, object], key: str) -> str | None:
-    """An optional field that, when present, must still be a str."""
-    value = artifact.get(key)
-    return value if isinstance(value, str) else None
-
-
 def _artifact_int(artifact: dict[str, object], key: str) -> int | None:
     """An optional field that, when present, must still be a non-bool int."""
     value = artifact.get(key)
@@ -388,10 +397,10 @@ def _artifact_int(artifact: dict[str, object], key: str) -> int | None:
 def _read_artifact(raw: object) -> ReceiptArtifact | None:
     """Decode one artifact, enforcing each type's required fields.
 
-    A `file` without a 64-hex sha256, size and mtime_ns, or a `link` without a
-    non-empty target, would otherwise pass the stat shortcut on a matching
-    size/mtime (review M1) or follow a hashless proof — so they are rejected
-    here, at the boundary, never mid-removal."""
+    Each type keeps only the fields it is checked on: a `file` its 64-hex
+    sha256, size and mtime_ns; a `link` its non-empty target; a `dir` its int
+    `dev` and `ino`. A `dir` without that identity would match on existence
+    alone, so it is rejected here, at the boundary, never mid-removal."""
     if not isinstance(raw, dict):
         return None
     artifact = cast(dict[str, object], raw)
@@ -412,34 +421,17 @@ def _read_artifact(raw: object) -> ReceiptArtifact | None:
             return None
         if size is None or mtime_ns is None:
             return None
-        return ReceiptArtifact(
-            path=path,
-            type="file",
-            target=_artifact_str(artifact, "target"),
-            sha256=sha256,
-            size=size,
-            mtime_ns=mtime_ns,
-        )
+        return ReceiptArtifact(path=path, type="file", sha256=sha256, size=size, mtime_ns=mtime_ns)
     if kind == "link":
-        target = _artifact_str(artifact, "target")
-        if not target:
+        target = artifact.get("target")
+        if not isinstance(target, str) or not target:
             return None
-        return ReceiptArtifact(
-            path=path,
-            type="link",
-            target=target,
-            sha256=_artifact_str(artifact, "sha256"),
-            size=_artifact_int(artifact, "size"),
-            mtime_ns=_artifact_int(artifact, "mtime_ns"),
-        )
-    return ReceiptArtifact(
-        path=path,
-        type="dir",
-        target=_artifact_str(artifact, "target"),
-        sha256=_artifact_str(artifact, "sha256"),
-        size=_artifact_int(artifact, "size"),
-        mtime_ns=_artifact_int(artifact, "mtime_ns"),
-    )
+        return ReceiptArtifact(path=path, type="link", target=target)
+    dev = _artifact_int(artifact, "dev")
+    ino = _artifact_int(artifact, "ino")
+    if dev is None or ino is None:
+        return None
+    return ReceiptArtifact(path=path, type="dir", dev=dev, ino=ino)
 
 
 def _read_hooks(value: object) -> dict[str, tuple[str, ...]] | None:

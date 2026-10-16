@@ -30,6 +30,8 @@ def _sample(tmp_path: Path) -> Receipt:
     link = tmp_path / "link"
     directory = tmp_path / "dir"
     directory.mkdir()
+    directory_artifact = receipts.fingerprint(directory, "dir")
+    assert directory_artifact is not None
     return Receipt(
         tool="yq",
         at="2026-10-16T12:00:00+00:00",
@@ -40,7 +42,7 @@ def _sample(tmp_path: Path) -> Receipt:
                 path=target_file.resolve(), type="file", sha256="b" * 64, size=3, mtime_ns=1
             ),
             ReceiptArtifact(path=link, type="link", target="/x/y"),
-            ReceiptArtifact(path=directory, type="dir"),
+            directory_artifact,
         ),
         smoke="ok",
         hooks={},
@@ -223,7 +225,10 @@ def _artifact_variant(**changes: object) -> str:
         ("v true", '{"v": true, "tool": "yq"}'),
         ("wrong tool", _variant(tool="other")),
         ("artifact type socket", _variant(artifacts=[{"path": "/x", "type": "socket"}])),
-        ("relative artifact path", _variant(artifacts=[{"path": "relative/yq", "type": "dir"}])),
+        (
+            "relative artifact path",
+            _variant(artifacts=[{"path": "relative/yq", "type": "dir", "dev": 1, "ino": 1}]),
+        ),
         ("artifacts not a list", _variant(artifacts="x")),
         ("size is a string", _artifact_variant(size="3")),
         ("size is true", _artifact_variant(size=True)),
@@ -394,7 +399,8 @@ def test_matches_link_only_when_the_target_is_unchanged(tmp_path: Path) -> None:
 def test_matches_dir_only_when_it_is_a_real_directory(tmp_path: Path) -> None:
     directory = tmp_path / "dir"
     directory.mkdir()
-    artifact = ReceiptArtifact(path=directory, type="dir")
+    artifact = receipts.fingerprint(directory, "dir")
+    assert artifact is not None
     assert receipts.matches(artifact)
     directory.rmdir()
     directory.symlink_to(tmp_path, target_is_directory=True)
@@ -726,3 +732,104 @@ def test_adopt_completes_without_deadlock(tmp_path: Path) -> None:
     writing.join(timeout=5)
     assert not writing.is_alive()
     assert receipts.read("yq") == rewritten
+
+
+# --- 19-22 Task 1: a dir is proven by identity; the reader keeps each type's fields ---
+
+
+def test_dir_fingerprint_records_its_identity(tmp_path: Path) -> None:
+    """A dir artifact records the directory's own (st_dev, st_ino) from lstat.
+
+    A regular file or a symlink to a directory is not a directory this installer
+    created, so neither fingerprints as type dir."""
+    directory = tmp_path / "dir"
+    directory.mkdir()
+    artifact = receipts.fingerprint(directory, "dir")
+    stat = directory.lstat()
+    assert artifact is not None
+    assert artifact.dev == stat.st_dev
+    assert artifact.ino == stat.st_ino
+
+    regular = tmp_path / "file"
+    regular.write_bytes(b"abc")
+    assert receipts.fingerprint(regular, "dir") is None
+    linked = tmp_path / "linked"
+    linked.symlink_to(directory, target_is_directory=True)
+    assert receipts.fingerprint(linked, "dir") is None
+
+
+def test_recreated_dir_does_not_match(tmp_path: Path) -> None:
+    """A directory deleted and re-created is a different directory: a vendor
+    reinstall into ~/Applications must never inherit an old receipt's proof."""
+    original = tmp_path / "a"
+    sibling = tmp_path / "b"
+    original.mkdir()
+    sibling.mkdir()
+    artifact = receipts.fingerprint(original, "dir")
+    assert artifact is not None
+    assert receipts.matches(artifact)
+    original.rmdir()
+    sibling.rename(original)
+    assert not receipts.matches(artifact)
+    receipt = _write_receipt((artifact,))
+    assert receipts.drifted(receipt) == (artifact,)
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {},
+        {"dev": True, "ino": 1},
+        {"dev": 1, "ino": "1"},
+        {"dev": None, "ino": None},
+    ],
+)
+def test_dir_artifact_without_identity_is_unreadable(identity: dict[str, object]) -> None:
+    """A dir artifact without an int dev and ino makes the whole receipt unreadable."""
+    artifact: dict[str, object] = {"path": "/tmp/x/dir", "type": "dir"}
+    artifact.update(identity)
+    _malformed(Path("/unused"), _variant(artifacts=[artifact]))
+    assert receipts.read("yq") is None
+
+
+def test_reader_keeps_only_each_types_fields() -> None:
+    """The reader drops fields an artifact type is never checked on (G18)."""
+    digest = "c" * 64
+    _malformed(
+        Path("/unused"),
+        _variant(
+            artifacts=[
+                {
+                    "path": "/tmp/x/link",
+                    "type": "link",
+                    "target": "/opt/x",
+                    "sha256": digest,
+                    "size": 3,
+                    "mtime_ns": 1,
+                },
+                {
+                    "path": "/tmp/x/file",
+                    "type": "file",
+                    "target": "/opt/x",
+                    "sha256": digest,
+                    "size": 3,
+                    "mtime_ns": 1,
+                },
+                {
+                    "path": "/tmp/x/dir",
+                    "type": "dir",
+                    "dev": 7,
+                    "ino": 9,
+                    "target": "/opt/x",
+                    "sha256": digest,
+                },
+            ]
+        ),
+    )
+    loaded = receipts.read("yq")
+    assert loaded is not None
+    assert loaded.artifacts == (
+        ReceiptArtifact(path=Path("/tmp/x/link"), type="link", target="/opt/x"),
+        ReceiptArtifact(path=Path("/tmp/x/file"), type="file", sha256=digest, size=3, mtime_ns=1),
+        ReceiptArtifact(path=Path("/tmp/x/dir"), type="dir", dev=7, ino=9),
+    )

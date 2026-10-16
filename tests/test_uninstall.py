@@ -1945,3 +1945,65 @@ def test_remove_proven_refuses_a_retyped_artifact(
     assert refused == (f"changed since the preview; not removed: {bin_dir / 'yq'}",)
     assert (bin_dir / "yq").is_dir()
     assert decoy.read_text() == "not ours"
+
+
+# --- 19-22 Task 1: a re-created directory never inherits a stale receipt (G2) --
+
+
+def _recreate_over(original: Path) -> None:
+    """Replace `original` with a sibling directory of the same contents.
+
+    Both exist at once, so the replacement gets a new inode even on a
+    filesystem that recycles the one just freed."""
+    sibling = original.with_name(original.name + ".new")
+    sibling.mkdir()
+    for child in original.iterdir():
+        child.rename(sibling / child.name)
+    original.rmdir()
+    sibling.rename(original)
+
+
+@pytest.mark.parametrize("shape", ["archive", "app"])
+def test_recreated_dir_artifact_is_not_removable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    """A vendor reinstall into the same path must not be removable (G2).
+
+    The link's target string is unchanged; only the directory's identity
+    changed, and that is enough to drop the whole tool's proof."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    if shape == "archive":
+        tool, _, directory = _plant_rg(tmp_path)
+        link = bin_dir / "rg"
+    else:
+        directory = tmp_path / "Applications" / "Demo.app"
+        (directory / "Contents" / "MacOS").mkdir(parents=True)
+        (directory / "Contents" / "MacOS" / "demo").write_text("demo binary")
+        link = bin_dir / "demo"
+        link.symlink_to(directory / "Contents" / "MacOS" / "demo")
+        tool = _tool(
+            Method(
+                kind="app",
+                params={
+                    "url": "https://example.test/a.zip",
+                    "app": "Demo.app",
+                    "cli": "Contents/MacOS/demo",
+                },
+            ),
+            tool_id="demo",
+            cmd="demo",
+        )
+    write_receipt(
+        tool,
+        [(directory, "dir"), (link, "link")],
+        kind="app" if shape == "app" else "github_release",
+    )
+    assert set(plan_removal([tool], bin_dir).removable) == {directory, link}
+
+    _recreate_over(directory)
+    plan = plan_removal([tool], bin_dir)
+    assert plan.removable == ()
+    assert plan.by_tool == {}
+    assert directory.is_dir()
