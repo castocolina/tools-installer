@@ -77,7 +77,7 @@ Out of scope:
   - Then issue a single `rpm -qf`, `dpkg -S` or `pacman -Qo` call with an output format that names each path, so an unowned path cannot shift the positional output.
   - Finish attribution with dict lookups.
   - A per-path memo was rejected: it still makes N calls for N distinct paths, which fails SPEC AC "one `rpm -qf` per pass". jev: Laya 0.78, TypeSafe 0.99.
-- **D-12:** The uv owner dir comes from `uv tool dir --bin`, run once per pass and only when uv is present.
+- **D-12:** The uv owner dir comes from `uv tool dir --bin`, run once per pass and only when uv is present. *(Superseded in part by Ledger L-19-01: use `uv tool dir`, not `--bin`.)*
   - This replaces the `UV_TOOL_BIN_DIR`-or-`~/.local/bin` guess (`ownership.py:456-457`). That guess collides with `managed_bin_dir` (`:445`), so graphify comes out unknown today.
 - **D-13:** Volta, including pnpm reached through Volta, resolves to `volta`.
   - Redirect shims are followed to the real owner.
