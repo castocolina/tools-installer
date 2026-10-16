@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from installer import apps, download, executors
+from installer import apps, download, executors, receipts
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.enums import InstallStatus
 from installer.locations import bin_dir, prepend_path
 from installer.model import Method, Tool
-from installer.ownership import method_removal_command
+from installer.ownership import method_package, method_removal_command
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction, run_post_install
 from installer.postinstall import run_postinstall
@@ -232,6 +232,10 @@ def install_tool(
         except (CommandError, executors.ExecutorError, VersionError, OSError) as exc:
             errors.append(exc)
         else:
+            downloaded = method.kind in download.DOWNLOAD_KINDS or method.kind in apps.APP_KINDS
+            receipts.record(
+                tool, method, package=method_package(method), smoke="ok" if downloaded else None
+            )
             warning = None
             if tool.postinstall:
                 try:

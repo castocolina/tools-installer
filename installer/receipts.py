@@ -16,15 +16,20 @@ import stat as stat_module
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 
+from installer import locations
 from installer.atomic import atomic_write_text
 from installer.checksums import sha256_file
+from installer.download import artifact_paths
 from installer.locations import ensure_dir
-from installer.model import Method
+from installer.model import TOOL_ID_RE, Method, Tool
 
-_TOOL_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+# The OS package manager or the agent harness owns these installs; a receipt
+# would claim files this installer did not create.
+RECEIPTLESS_KINDS = frozenset({"dnf", "apt", "pacman", "rpm_ostree", "skill_pack", "host_setup"})
 
 _MAX_RECEIPT_BYTES = 64 * 1024
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -76,7 +81,7 @@ def receipts_dir() -> Path:
 
 def receipt_path(tool_id: str) -> Path:
     """The receipt file for a tool id; a non-safe id is rejected before any path."""
-    if not _TOOL_ID_RE.fullmatch(tool_id):
+    if not TOOL_ID_RE.fullmatch(tool_id):
         raise ValueError(f"unsafe tool id: {tool_id!r}")
     return receipts_dir() / f"{tool_id}.json"
 
@@ -201,6 +206,67 @@ def read(tool_id: str) -> Receipt | None:
         smoke=smoke,
         hooks=hooks,
     )
+
+
+def _build_receipt(
+    tool: Tool,
+    method: Method,
+    artifacts: tuple[ReceiptArtifact, ...],
+    *,
+    package: str | None,
+    smoke: str | None,
+) -> Receipt:
+    """The one receipt constructor; callers pass fingerprints they already hold.
+
+    Pure: it never fingerprints, hashes or stats a path, so a caller that
+    verified an artifact (adoption, under its lock) records exactly that."""
+    return Receipt(
+        tool=tool.id,
+        at=datetime.now(UTC).isoformat(timespec="microseconds"),
+        method=ReceiptMethod(kind=method.kind, key=method_key(method)),
+        package=package,
+        artifacts=artifacts,
+        smoke=smoke,
+        hooks={},
+    )
+
+
+def record(
+    tool: Tool,
+    method: Method,
+    *,
+    package: str | None,
+    smoke: str | None,
+    default_bin_dir: Path | None = None,
+) -> Receipt | None:
+    """Write the receipt for a method that just succeeded; None for a receiptless kind.
+
+    Artifacts are `artifact_paths` (D-07) fingerprinted now; one the method did
+    not create is dropped. Script and manager kinds get none. When the write
+    fails over an existing receipt, that receipt is deleted (best effort) so it
+    never claims bytes it did not fingerprint, and the raised OSError says
+    what happened to it."""
+    if method.kind in RECEIPTLESS_KINDS:
+        return None
+    base = default_bin_dir or locations.bin_dir(None)
+    found = (fingerprint(a.path, a.kind) for a in artifact_paths(method, base))
+    artifacts = tuple(a for a in found if a is not None)
+    receipt = _build_receipt(tool, method, artifacts, package=package, smoke=smoke)
+    path = receipt_path(tool.id)
+    existed = path.exists() or path.is_symlink()
+    try:
+        write(receipt)
+    except OSError as exc:
+        if not existed:
+            raise
+        try:
+            delete(tool.id)
+        except OSError:
+            raise OSError(
+                f"{exc}; the previous receipt could not be removed and may not match the new files"
+            ) from exc
+        raise OSError(f"{exc}; the previous receipt was removed") from exc
+    return receipt
 
 
 def delete(tool_id: str) -> None:

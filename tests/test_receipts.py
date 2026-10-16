@@ -9,8 +9,8 @@ from typing import ClassVar
 
 import pytest
 
-from installer import receipts
-from installer.model import Method
+from installer import model, receipts
+from installer.model import Method, Tool
 from installer.receipts import (
     Receipt,
     ReceiptArtifact,
@@ -465,3 +465,126 @@ def test_drifted_lists_only_the_mismatched_artifacts(
     monkeypatch.setattr(receipts, "_REHASH_MEMO", {})
     assert receipts.drifted(receipt) == (good_file,)
     assert receipts.drifted(receipt) == (good_file,)
+
+
+# --- Plan 19-09: the one receipt writer ---------------------------------------
+
+
+def _record_tool(tool_id: str, *methods: Method) -> Tool:
+    return Tool(id=tool_id, name=tool_id, category="cli", cmd=tool_id, methods=methods)
+
+
+def _raw_yq(bin_dir: Path) -> Method:
+    return Method(
+        kind="github_release",
+        params={
+            "repo": "mikefarah/yq",
+            "asset": "yq_linux_{arch.deb}",
+            "member": "yq_linux_amd64",
+            "bin_name": "yq",
+            "raw": True,
+            "bin_dir": str(bin_dir),
+        },
+    )
+
+
+def test_record_writes_download_artifacts(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "yq").write_bytes(b"yq-bytes")
+    method = _raw_yq(bin_dir)
+    written = receipts.record(
+        _record_tool("yq", method), method, package=None, smoke="ok", default_bin_dir=bin_dir
+    )
+    assert written is not None
+    assert written.artifacts == (receipts.fingerprint(bin_dir / "yq", "file"),)
+    assert written.method.kind == "github_release"
+    assert written.method.key == method_key(method)
+    assert written.hooks == {}
+    assert written.smoke == "ok"
+    assert receipts.read("yq") == written
+
+
+def test_record_skips_missing_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = tmp_path / "Applications" / "Draw.app"
+    bundle.mkdir(parents=True)
+    method = Method(
+        kind="app",
+        params={"url": "https://x/d.zip", "app": "Draw.app", "cli": "Contents/MacOS/draw"},
+    )
+    written = receipts.record(
+        _record_tool("drawio", method),
+        method,
+        package=None,
+        smoke="ok",
+        default_bin_dir=tmp_path / "bin",
+    )
+    assert written is not None
+    assert written.artifacts == (receipts.fingerprint(bundle, "dir"),)
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        Method(kind="dnf", params={"package": "yq"}),
+        Method(kind="apt", params={"package": "yq"}),
+        Method(kind="pacman", params={"package": "yq"}),
+        Method(kind="rpm_ostree", params={"package": "yq"}),
+        Method(kind="skill_pack", params={}),
+        Method(kind="host_setup", params={"setup_id": "pi"}),
+    ],
+)
+def test_receiptless_kinds_write_nothing(method: Method) -> None:
+    assert method.kind in receipts.RECEIPTLESS_KINDS
+    assert receipts.record(_record_tool("yq", method), method, package="yq", smoke=None) is None
+    sandbox = receipts.receipts_dir()
+    assert not sandbox.exists() or list(sandbox.iterdir()) == []
+
+
+@pytest.mark.parametrize("tool_id", ["../x", "Yq", "a/b", "-x"])
+def test_receipt_ids_follow_the_registry_rule(tool_id: str) -> None:
+    assert receipts.TOOL_ID_RE is model.TOOL_ID_RE
+    assert model.TOOL_ID_RE.fullmatch(tool_id) is None
+    with pytest.raises(ValueError, match="unsafe tool id"):
+        receipt_path(tool_id)
+    assert receipt_path("yq").name == "yq.json"
+
+
+@pytest.mark.parametrize("case", ["removed", "delete_fails", "no_previous"])
+def test_record_failure_removes_the_previous_receipt(
+    case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "yq").write_bytes(b"yq-bytes")
+    method = _raw_yq(bin_dir)
+    tool = _record_tool("yq", method)
+    if case != "no_previous":
+        receipts.record(tool, method, package=None, smoke="ok", default_bin_dir=bin_dir)
+    path = receipt_path("yq")
+    before = path.read_bytes() if path.exists() else None
+
+    def failing_write(_receipt: Receipt) -> None:
+        raise OSError("read-only")
+
+    def failing_delete(_tool_id: str) -> None:
+        raise OSError("busy")
+
+    monkeypatch.setattr(receipts, "write", failing_write)
+    if case == "delete_fails":
+        monkeypatch.setattr(receipts, "delete", failing_delete)
+    with pytest.raises(OSError) as raised:
+        receipts.record(tool, method, package=None, smoke="ok", default_bin_dir=bin_dir)
+    message = str(raised.value)
+    if case == "removed":
+        assert message == "read-only; the previous receipt was removed"
+        assert not path.exists()
+    elif case == "delete_fails":
+        assert message == (
+            "read-only; the previous receipt could not be removed and may not match the new files"
+        )
+        assert path.read_bytes() == before
+    else:
+        assert message == "read-only"
+        assert not path.exists()

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import installer.engine as engine
-from installer import executors
+from installer import executors, receipts
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.engine import install_tool
@@ -1690,3 +1690,119 @@ def test_failed_vendor_script_smoke_names_its_own_uninstaller(
     assert outcome.status == InstallStatus.FAILED
     last = str(outcome.errors[-1])
     assert "that installer's own uninstaller" in last
+
+
+# --- Plan 19-09: install receipts ----------------------------------------------
+
+_RECEIPT_MEMBER_SCRIPT = b"#!/bin/sh\nexit 0\n"
+
+
+def _pin_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    import installer.download as download_mod
+
+    workdir = tmp_path / "dl"
+    workdir.mkdir(exist_ok=True)
+
+    def fake_mkdtemp(prefix: str) -> str:
+        workdir.mkdir(exist_ok=True)
+        return str(workdir)
+
+    monkeypatch.setattr(download_mod.tempfile, "mkdtemp", fake_mkdtemp)
+    return workdir
+
+
+def _raw_yq_method(bin_dir: Path) -> Method:
+    return Method(
+        kind="github_release",
+        params={
+            "repo": "mikefarah/yq",
+            "asset": "yq_linux_{arch.deb}",
+            "member": "yq_linux_amd64",
+            "bin_name": "yq",
+            "raw": True,
+            "bin_dir": str(bin_dir),
+        },
+    )
+
+
+def _install_raw_yq(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    payload: bytes = _RECEIPT_MEMBER_SCRIPT,
+    *,
+    postinstall: str | None = None,
+    repair: bool = False,
+) -> tuple[engine.InstallOutcome, Path]:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    workdir = _pin_workdir(tmp_path, monkeypatch)
+    _calls, runner = fixture_runner(workdir, {"yq_linux_amd64": payload})
+    bin_dir = tmp_path / "bin"
+    tool = _tool(_raw_yq_method(bin_dir), postinstall=postinstall, tool_id="yq")
+    outcome = install_tool(
+        tool, _platform(), runner=runner, resolve_tag=lambda _repo: "4.44.1", repair=repair
+    )
+    return outcome, bin_dir / "yq"
+
+
+def test_install_writes_one_receipt_before_postinstall(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    seen: list[receipts.Receipt | None] = []
+
+    def observing_postinstall(_name: str, _method: Method, _runner: object, _tools: object) -> None:
+        seen.append(receipts.read("yq"))
+
+    monkeypatch.setattr(engine, "run_postinstall", observing_postinstall)
+    outcome, placed = _install_raw_yq(tmp_path, monkeypatch, postinstall="codegraph-mcp-register")
+    assert outcome.status == InstallStatus.INSTALLED
+    written = receipts.read("yq")
+    assert written is not None
+    assert written.artifacts == (receipts.fingerprint(placed, "file"),)
+    assert written.smoke == "ok"
+    assert seen == [written]
+    assert [p.name for p in receipts.receipts_dir().iterdir()] == ["yq.json"]
+
+
+def test_failed_install_writes_no_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_not_installed(monkeypatch)
+
+    def failing(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1)
+
+    outcome = install_tool(
+        _tool(Method(kind="brew", params={"formula": "ripgrep"})),
+        _macos_with_brew(),
+        runner=failing,
+    )
+    assert outcome.status == InstallStatus.FAILED
+    assert receipts.read("rg") is None
+
+
+def test_archive_install_writes_a_receipt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_not_installed(monkeypatch)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    workdir = _pin_workdir(tmp_path, monkeypatch)
+    opt = tmp_path / ".local" / "opt" / "rg"
+    asset = "rg-14.1.0-x86_64.tar.gz"
+    _calls, runner = fixture_runner(workdir, {asset: b"archive"}, member=opt / "rg-x" / "rg")
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "BurntSushi/ripgrep",
+            "asset": "rg-{ver}-{arch.machine}.tar.gz",
+            "member": "rg-x/rg",
+        },
+    )
+    outcome = install_tool(
+        _tool(method), _platform(), runner=runner, resolve_tag=lambda _repo: "14.1.0"
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    link = tmp_path / ".local" / "bin" / "rg"
+    written = receipts.read("rg")
+    assert written is not None
+    assert written.artifacts == (
+        receipts.fingerprint(opt, "dir"),
+        receipts.fingerprint(link, "link"),
+    )
+    assert written.artifacts[1].target == os.readlink(link)
