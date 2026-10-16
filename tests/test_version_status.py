@@ -552,11 +552,12 @@ def _count_pnpm(counter: dict[str, int]) -> Callable[[], tuple[str, ...] | None]
     return pnpm_packages
 
 
-def _which_for_fixture(cmd: str) -> str:
+def _which_for_fixture(cmd: str) -> str | None:
     if cmd == "mmdc":
         return str(Path.home() / "Library" / "pnpm" / "mmdc")
     if cmd == "ruff":
-        return str(Path.home() / ".local" / "bin" / "ruff")
+        # ~/.local/bin proves no uv ownership (D-12); ruff is uv-owned by elimination.
+        return None
     return f"/opt/homebrew/bin/{cmd}"
 
 

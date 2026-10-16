@@ -423,11 +423,26 @@ def _query_uv_tools(query: Callable[..., str]) -> dict[str, str] | None:
     return parse_uv_tool_list(raw)
 
 
+def query_uv_tool_dir(query: Callable[..., str] = run_query) -> Path | None:
+    """`uv tool dir`: where uv keeps tool environments (L-19-01).
+
+    Not the `--bin` variant: that answers `~/.local/bin`, which collides with
+    the managed bin dir and proves nothing (D-12). None when uv cannot answer.
+    """
+    try:
+        raw = query(["uv", "tool", "dir"])
+    except (CommandError, OSError):
+        return None
+    text = raw.strip()
+    return Path(text) if text else None
+
+
 def owner_dirs(
     *,
     inventory: ManagerInventory,
     managed_bin_dir: Path,
     platform: Platform,
+    uv_tool_dir: Path | None = None,
 ) -> dict[Owner, tuple[Path, ...]]:
     """Directory-membership attribution per candidate owner.
 
@@ -442,6 +457,10 @@ def owner_dirs(
     and fall through to `unknown` rather than picking one arbitrarily. A tool
     genuinely owned by only one of the two still resolves `direct`, because
     only that one owner appears among `candidates` in the first place.
+
+    The uv entry is the `uv tool dir` answer the caller passes in
+    (`query_uv_tool_dir`), never a guess: the old `~/.local/bin` default
+    collided with the managed bin dir (D-12). No answer attributes nothing.
     """
     installer_dirs = (managed_bin_dir, opt_dir("x").parent, applications_dir())
     brew_dirs: tuple[Path, ...] = ()
@@ -454,8 +473,6 @@ def owner_dirs(
     else:
         declared = _PNPM_DEFAULTS.get(platform.os, "~/.local/share/pnpm")
         pnpm_dir = Path(declared).expanduser()
-    uv_bin = os.environ.get("UV_TOOL_BIN_DIR")
-    uv_dir = Path(uv_bin).expanduser() if uv_bin else Path.home() / ".local" / "bin"
     # Volta keeps no inventory; its shim dir is the proof (19-RESEARCH Pattern 8).
     volta_dir = Path(os.environ.get("VOLTA_HOME", "~/.volta")).expanduser() / "bin"
     return {
@@ -463,7 +480,7 @@ def owner_dirs(
         "brew": brew_dirs,
         "cask": cask_dirs,
         "pnpm": (pnpm_dir,),
-        "uv": (uv_dir,),
+        "uv": () if uv_tool_dir is None else (uv_tool_dir,),
         "volta": (volta_dir,),
     }
 
@@ -571,6 +588,7 @@ def resolve_ownership(
     managed_bin_dir: Path,
     which: Callable[[str], str | None] = shutil.which,
     native_probe: ProbeRunner | None = None,
+    uv_tool_dir: Path | None = None,
 ) -> ManagerOwnership:
     applicable = resolve_methods(tool, platform)
     methods = (*applicable, *_ownership_only_methods(tool, platform))
@@ -592,7 +610,12 @@ def resolve_ownership(
                 pending_shadows.append(brew_candidate)
     declared_policy = declared_manager_label(tool, platform) is not None
     unreadable = _unreadable(tool, platform, inventory)
-    dirs = owner_dirs(inventory=inventory, managed_bin_dir=managed_bin_dir, platform=platform)
+    dirs = owner_dirs(
+        inventory=inventory,
+        managed_bin_dir=managed_bin_dir,
+        platform=platform,
+        uv_tool_dir=uv_tool_dir,
+    )
     location_dirs = _location_dirs(tool, methods)
     for owner, prefixes in location_dirs.items():
         dirs[owner] = dirs.get(owner, ()) + prefixes

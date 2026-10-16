@@ -107,6 +107,7 @@ def _resolve(
     managed_bin_dir: Path = _MANAGED,
     platform: Platform = _MAC,
     native_probe: Callable[[list[str]], str] | None = None,
+    uv_tool_dir: Path | None = None,
 ) -> ManagerOwnership:
     def lookup(_cmd: str) -> str | None:
         return which
@@ -119,6 +120,7 @@ def _resolve(
         which=lookup,
         managed_bin_dir=managed_bin_dir,
         native_probe=native_probe,
+        uv_tool_dir=uv_tool_dir,
     )
 
 
@@ -301,9 +303,8 @@ def test_shadowed_pnpm_does_not_win_when_active_path_is_brew(
     assert unclaimed.owner == "unknown"
 
 
-def test_uv_owned_when_bin_dir_is_distinct(monkeypatch: pytest.MonkeyPatch) -> None:
-    uv_bin = Path("/opt/uv/bin")
-    monkeypatch.setenv("UV_TOOL_BIN_DIR", str(uv_bin))
+def test_uv_owned_when_bin_dir_is_distinct() -> None:
+    uv_tools = Path("/opt/uv/tools")
     tool = Tool(
         id="ruff",
         name="ruff",
@@ -314,16 +315,14 @@ def test_uv_owned_when_bin_dir_is_distinct(monkeypatch: pytest.MonkeyPatch) -> N
     result = _resolve(
         tool,
         inventory=_readable(uv_tools={"ruff": "0.6.0"}),
-        which=str(uv_bin / "ruff"),
+        which=str(uv_tools / "ruff" / "bin" / "ruff"),
+        uv_tool_dir=uv_tools,
     )
     assert result.owner == "uv"
     assert result.confidence == "direct"
 
 
-def test_uv_owned_by_elimination_when_default_bin_collides(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("UV_TOOL_BIN_DIR", raising=False)
+def test_uv_owned_by_elimination_when_default_bin_collides() -> None:
     tool = Tool(
         id="ruff",
         name="ruff",
@@ -337,6 +336,7 @@ def test_uv_owned_by_elimination_when_default_bin_collides(
         artifacts=[],
         which=None,
         managed_bin_dir=Path.home() / ".local" / "bin",
+        uv_tool_dir=Path.home() / ".local" / "share" / "uv" / "tools",
     )
     assert result.owner == "uv"
     assert result.confidence == "by-elimination"
@@ -1235,7 +1235,6 @@ def test_read_inventory_query_count_without_brew() -> None:
 
 def test_attribute_path_unit_cases(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PNPM_HOME", str(_PNPM_HOME))
-    monkeypatch.delenv("UV_TOOL_BIN_DIR", raising=False)
     inventory = _readable()
     dirs = owner_dirs(inventory=inventory, managed_bin_dir=_MANAGED, platform=_MAC)
     assert attribute_path(_BREW_PREFIX / "bin" / "rg", dirs) == frozenset({"brew", "cask"})
@@ -1243,6 +1242,7 @@ def test_attribute_path_unit_cases(monkeypatch: pytest.MonkeyPatch) -> None:
         inventory=inventory,
         managed_bin_dir=Path.home() / ".local" / "bin",
         platform=_MAC,
+        uv_tool_dir=Path.home() / ".local" / "bin",
     )
     managed = Path.home() / ".local" / "bin" / "ruff"
     assert attribute_path(managed, colliding) == frozenset({"installer", "uv"})
@@ -2006,12 +2006,9 @@ def test_own_installer_location_candidate_loses_to_a_live_brew_path(tmp_path: Pa
     assert result.active_candidate == "brew"
 
 
-def test_script_and_uv_attributing_the_same_live_path_stay_unknown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_script_and_uv_attributing_the_same_live_path_stay_unknown(tmp_path: Path) -> None:
     shared = tmp_path / "bin"
     binary = _touch_executable(shared, "ruff")
-    monkeypatch.setenv("UV_TOOL_BIN_DIR", str(shared))
     tool = Tool(
         id="ruff",
         name="ruff",
@@ -2022,7 +2019,12 @@ def test_script_and_uv_attributing_the_same_live_path_stay_unknown(
             Method(kind="uv-tool", params={"pypi_pkg": "ruff"}),
         ),
     )
-    result = _resolve(tool, inventory=_readable(uv_tools={"ruff": "0.6.0"}), which=str(binary))
+    result = _resolve(
+        tool,
+        inventory=_readable(uv_tools={"ruff": "0.6.0"}),
+        which=str(binary),
+        uv_tool_dir=shared,
+    )
     assert result.owner == "unknown"
     assert result.active_path is not None
     assert result.unknown_reason is not None
@@ -2781,3 +2783,65 @@ def test_volta_owner_labels() -> None:
     assert removal_hint(_record("volta", package="pnpm"), "pnpm") == (
         "managed by Volta — `volta uninstall pnpm`"
     )
+
+
+# -- 19-05/D-12 as amended by L-19-01: the uv owner dir is `uv tool dir`. ----
+
+
+def test_query_uv_tool_dir_reads_the_tools_dir() -> None:
+    seen: list[list[str]] = []
+
+    def answer(argv: list[str], **_kwargs: object) -> str:
+        seen.append(argv)
+        return "/home/u/.local/share/uv/tools\n"
+
+    assert ownership.query_uv_tool_dir(answer) == Path("/home/u/.local/share/uv/tools")
+    assert seen == [["uv", "tool", "dir"]]
+
+    def blank(_argv: list[str], **_kwargs: object) -> str:
+        return "  \n"
+
+    def failing(argv: list[str], **_kwargs: object) -> str:
+        raise CommandError(argv, 1, detail="boom")
+
+    def missing(_argv: list[str], **_kwargs: object) -> str:
+        raise OSError("no uv")
+
+    for query in (blank, failing, missing):
+        assert ownership.query_uv_tool_dir(query) is None
+
+
+def test_graphify_under_the_uv_tool_dir_resolves_to_uv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    uv_tools = tmp_path / ".local" / "share" / "uv" / "tools"
+    real = uv_tools / "graphifyy" / "bin" / "graphify"
+    real.parent.mkdir(parents=True)
+    real.write_text("#!/bin/sh\n")
+    local_bin = tmp_path / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    (local_bin / "graphify").symlink_to(real)
+    tool = Tool(
+        id="graphify",
+        name="graphify",
+        category="ai",
+        cmd="graphify",
+        methods=(Method(kind="uv-tool", params={"pypi_pkg": "graphifyy"}),),
+    )
+    result = _resolve(
+        tool,
+        inventory=_readable(uv_tools={"graphifyy": "0.4.0"}),
+        which=str(local_bin / "graphify"),
+        managed_bin_dir=local_bin,
+        uv_tool_dir=uv_tools,
+    )
+    assert result.owner == "uv"
+    assert result.confidence == "direct"
+
+
+def test_no_uv_tool_dir_attributes_nothing_to_uv(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UV_TOOL_BIN_DIR", "/opt/uv/bin")
+    dirs = owner_dirs(inventory=_readable(), managed_bin_dir=_MANAGED, platform=_MAC)
+    assert dirs["uv"] == ()
+    assert attribute_path(Path("/opt/uv/bin/ruff"), dirs) == frozenset()
