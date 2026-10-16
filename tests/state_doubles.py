@@ -5,15 +5,27 @@ Every service built here is a real `VersionRefreshService` with offline fakes.
 test-built service reads the developer's home (checker W5).
 """
 
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
 from installer.manager_versions import OutdatedReport
-from installer.model import Tool
-from installer.ownership import ManagerInventory
+from installer.model import ConfigStep, Tool
+from installer.ownership import ManagerInventory, ManagerOwnership
 from installer.platform import Platform
-from installer.version_status import VersionRefreshService
+from installer.uninstall import RemovalPlan
+from installer.version_status import (
+    SkillHostStatus,
+    ToolState,
+    VersionRefreshService,
+    VersionStatus,
+    ownership_notes,
+    tool_state,
+    version_notes,
+)
+
+_MACOS = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
 
 
 def empty_inventory(**_kwargs: object) -> ManagerInventory:
@@ -59,7 +71,7 @@ def offline_service(
     the scratch managed bin dir, so every tool reads present and installer-owned."""
     managed = skill_home / ".local" / "bin"
     return VersionRefreshService(
-        platform=platform or Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        platform=platform or _MACOS,
         cache_path=cache_path,
         resolve_tag=resolve_tag,
         probe_output=probe_output,
@@ -120,3 +132,106 @@ def seeded_service(
         service.refresh_skills(tools)
     service.refresh(tools)
     return service
+
+
+class FrozenStateService(VersionRefreshService):
+    """A machine that never changes: `publish` sets the states, and a refresh
+    re-publishes them at the current epoch without probing anything."""
+
+    def publish(self, states: Iterable[ToolState]) -> None:
+        with self._lock:
+            stamped = {state.tool_id: replace(state, generation=self._epoch) for state in states}
+            self._states = {**self._states, **stamped}
+
+    def refresh(self, tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+        del tools
+        self.publish(list(self._states.values()))
+        return {
+            tool_id: state.version
+            for tool_id, state in self._states.items()
+            if state.version is not None
+        }
+
+    def refresh_skills(self, tools: Sequence[Tool]) -> dict[str, SkillHostStatus]:
+        del tools
+        return {
+            tool_id: state.skill_hosts
+            for tool_id, state in self._states.items()
+            if state.skill_hosts is not None
+        }
+
+
+def _probe_nothing(argv: list[str]) -> str:
+    raise OSError(f"frozen test double: no probe for {argv}")
+
+
+def frozen_service(home: Path, *, platform: Platform | None = None) -> FrozenStateService:
+    """A FrozenStateService with no states yet; every probe raises."""
+    return FrozenStateService(
+        platform=platform or _MACOS,
+        cache_path=home / "versions.json",
+        resolve_tag=_no_release,
+        probe_output=_no_version,
+        managed_bin_dir=home / ".local" / "bin",
+        which=lambda _cmd: None,
+        artifacts_for=lambda _tool: [],
+        read_inventory_fn=empty_inventory,
+        read_outdated_fn=empty_outdated,
+        pnpm_packages=lambda: (),
+        query=lambda *_a, **_k: "",
+        native_probe=_probe_nothing,
+        skill_probe=_probe_nothing,
+        skill_home=home,
+        present=lambda _tool: False,
+    )
+
+
+def unknown_ownership(tool: Tool) -> ManagerOwnership:
+    return ManagerOwnership(
+        tool_id=tool.id,
+        owner="unknown",
+        method=None,
+        package=None,
+        current_version=None,
+        confidence="none",
+        shadowed=False,
+        candidates=(),
+        active_candidate=None,
+        active_path=None,
+        unknown_reason=None,
+    )
+
+
+def pass_state(
+    tool: Tool,
+    *,
+    platform: Platform,
+    present: bool = True,
+    ownership: ManagerOwnership | None = None,
+    version: VersionStatus | None = None,
+    skill_hosts: SkillHostStatus | None = None,
+    broken: tuple[str, ...] = (),
+    misconfigured: tuple[str, ...] = (),
+    unconfigured: tuple[ConfigStep, ...] = (),
+    notes: tuple[str, ...] = (),
+) -> ToolState:
+    """A state built the way the refresh pass builds one: the owner and
+    version sentences come first among the notes."""
+    owner = ownership if ownership is not None else unknown_ownership(tool)
+    pass_notes = ownership_notes(tool, owner, platform)
+    if version is not None:
+        pass_notes += version_notes(tool, version, owner, present=present)
+    return tool_state(
+        tool,
+        generation=0,
+        platform=platform,
+        present=present,
+        ownership=owner,
+        version=version,
+        removable=RemovalPlan(removable=(), yourself=()),
+        skill_hosts=skill_hosts,
+        broken=broken,
+        misconfigured=misconfigured,
+        unconfigured=unconfigured,
+        notes=pass_notes + notes,
+    )

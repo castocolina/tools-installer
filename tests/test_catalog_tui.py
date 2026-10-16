@@ -72,7 +72,7 @@ from installer.version_status import (
     VersionStatus,
 )
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
-from tests.state_doubles import offline_service, seeded_service
+from tests.state_doubles import frozen_service, offline_service, pass_state, seeded_service
 from tests.test_registry import REGISTRY
 
 # The developer's home, read at import time before any test patches HOME.
@@ -1042,54 +1042,53 @@ def test_zsh_is_audience_human_in_the_real_catalog() -> None:
     assert "for human" in screen._detail_text(zsh)  # pyright: ignore[reportPrivateUsage]
 
 
-def test_stale_marker_is_visible_on_rendered_ver_cell() -> None:
+def _ver_screen(
+    tmp_path: Path, tool: Tool, version: VersionStatus | None, *, refreshing: bool = False
+) -> CatalogScreen:
+    """A screen over a frozen machine where `tool` is present at `version`
+    (no state at all when `version` is None)."""
+    service = frozen_service(tmp_path)
+    if version is not None:
+        service.publish([pass_state(tool, platform=service.platform, version=version)])
+    screen = _screen([tool], {}, version_refresh=service)
+    screen.version_refreshing = refreshing
+    return screen
+
+
+def test_stale_marker_is_visible_on_rendered_ver_cell(tmp_path: Path) -> None:
     tool = _tool("rg")
-    screen = _screen([tool], {"rg": True})
-    screen._version_statuses = {"rg": _status(stale=False)}  # pyright: ignore[reportPrivateUsage]
-    fresh = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
-    screen._version_statuses = {"rg": _status(stale=True)}  # pyright: ignore[reportPrivateUsage]
-    stale = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
+    fresh = _ver_screen(tmp_path, tool, _status(stale=False))._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
+    stale = _ver_screen(tmp_path, tool, _status(stale=True))._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
     assert stale != fresh
     assert stale.endswith(" ~")
     assert not fresh.endswith(" ~")
 
 
-def test_ver_cell_shows_probed_version_with_source_unknown_marker() -> None:
-    """Regression: a dnf/apt/pacman-owned tool has a real probed version but no
-    'latest' source (ownership.py doesn't track those managers) -- the cell
-    must show that version, not discard it, and the marker names the missing
-    attribution rather than asserting the tool is permanently untracked."""
+def test_ver_cell_shows_a_probed_version_without_a_source_marker(tmp_path: Path) -> None:
+    """A dnf/apt/pacman-owned tool has a real probed version but no 'latest'
+    source: the cell keeps the version, and the missing comparison is a
+    reason in the detail, never a marker in the cell (D-15)."""
     tool = _tool("rg")
-    screen = _screen([tool], {"rg": True})
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "rg": VersionStatus(
-            tool_id="rg",
-            installed="14.1.0",
-            latest=None,
-            outdated=None,
-            stale=False,
-            source="unknown",
-        )
-    }
-    cell = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
-    assert "14.1.0" in cell
-    assert cell == "14.1.0 (source unknown)"
+    status = VersionStatus(
+        tool_id="rg", installed="14.1.0", latest=None, outdated=None, stale=False, source="unknown"
+    )
+    screen = _ver_screen(tmp_path, tool, status)
+    assert screen._ver_cell(tool).plain == "14.1.0"  # pyright: ignore[reportPrivateUsage]
+    state = screen._state(tool)  # pyright: ignore[reportPrivateUsage]
+    assert state is not None
+    assert "no latest version to compare against" in state.reasons
 
 
-def test_ver_cell_shows_no_version_marker_when_nothing_was_probed_at_all() -> None:
+def test_ver_cell_is_empty_when_no_version_was_read(tmp_path: Path) -> None:
     tool = _tool("rg")
-    screen = _screen([tool], {"rg": True})
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "rg": VersionStatus(
-            tool_id="rg",
-            installed=None,
-            latest=None,
-            outdated=None,
-            stale=True,
-            source="unknown",
-        )
-    }
-    assert screen._ver_cell(tool).plain == "no version"  # pyright: ignore[reportPrivateUsage]
+    status = VersionStatus(
+        tool_id="rg", installed=None, latest=None, outdated=None, stale=True, source="unknown"
+    )
+    screen = _ver_screen(tmp_path, tool, status)
+    assert screen._ver_cell(tool).plain == ""  # pyright: ignore[reportPrivateUsage]
+    state = screen._state(tool)  # pyright: ignore[reportPrivateUsage]
+    assert state is not None
+    assert "version unreadable" in state.reasons
 
 
 def test_epoch_guard_drops_a_superseded_version_refresh(tmp_path: Path) -> None:
@@ -1257,78 +1256,57 @@ def test_owner_column_and_detail_paint_the_os_package_case_end_to_end(tmp_path: 
 def test_owner_column_renders_every_owner_value_in_both_branches(
     owner: Owner, tmp_path: Path
 ) -> None:
-    tool = _tool("demo")
-    ownership = _ownership(tool, owner=owner, package="demo-pkg" if owner == "os-package" else None)
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"demo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
-    screen = _screen([tool], {"demo": True}, version_refresh=service)
-    expected = owner_label(ownership)
-    assert expected
-    for unavailable in (False, True):
-        screen._unavailable["demo"] = unavailable  # pyright: ignore[reportPrivateUsage]
+    # The second tool cannot install on this macOS host, so its absent state
+    # is UNAVAILABLE and its row takes the dim branch.
+    for tool, present in ((_tool("demo"), True), (_tool("demo", method_os=("linux",)), False)):
+        ownership = _ownership(
+            tool, owner=owner, package="demo-pkg" if owner == "os-package" else None
+        )
+        service = frozen_service(tmp_path)
+        service.publish(
+            [pass_state(tool, platform=service.platform, present=present, ownership=ownership)]
+        )
+        screen = _screen([tool], {}, version_refresh=service)
+        expected = owner_label(ownership)
+        assert expected
         cells = screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
+        assert cells[0].plain == ("[ ]" if present else "")
         assert cells[7].plain == expected
 
 
 def test_owner_column_is_blank_for_an_unknown_record(tmp_path: Path) -> None:
-    tool = _tool("demo")
-    ownership = _ownership(tool, owner="unknown", unknown_reason="no manager claimed the tool")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"demo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
-    screen = _screen([tool], {"demo": True}, version_refresh=service)
-    for unavailable in (False, True):
-        screen._unavailable["demo"] = unavailable  # pyright: ignore[reportPrivateUsage]
-        assert screen._row_cells(tool)[7].plain == ""  # pyright: ignore[reportPrivateUsage]
+    for tool, present in ((_tool("demo"), True), (_tool("demo", method_os=("linux",)), False)):
+        ownership = _ownership(tool, owner="unknown", unknown_reason="no manager claimed the tool")
+        service = frozen_service(tmp_path)
+        service.publish(
+            [pass_state(tool, platform=service.platform, present=present, ownership=ownership)]
+        )
+        screen = _screen([tool], {}, version_refresh=service)
+        cells = screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
+        assert cells[0].plain == ("[ ]" if present else "")
+        assert cells[7].plain == ""
 
 
 def test_owner_column_is_blank_with_no_ownership_record_produced_yet(tmp_path: Path) -> None:
-    """No ownership pass has produced a record for this tool (e.g. the
-    refresh worker has not landed) -- the SAME blank as an unknown record,
-    because both genuinely mean "don't know"."""
+    """No pass has produced a state for this tool yet (e.g. the refresh
+    worker has not landed) -- the SAME blank as an unknown record, because
+    both genuinely mean "don't know"."""
     tool = _tool("demo")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    # No entry in service._ownership -- ownership_of("demo") returns None.
-    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    screen = _screen([tool], {}, version_refresh=frozen_service(tmp_path))
     for unavailable in (False, True):
         screen._unavailable["demo"] = unavailable  # pyright: ignore[reportPrivateUsage]
         assert screen._row_cells(tool)[7].plain == ""  # pyright: ignore[reportPrivateUsage]
 
 
-def test_owner_column_says_checking_while_a_pass_is_in_flight(tmp_path: Path) -> None:
-    """CR-02 (15.4-REVIEW.md): while a refresh is in flight, `None` does not
-    mean "genuinely don't know" -- a mutation bumped the shared epoch, so
-    EVERY record is stale by construction until that pass commits. The cell
-    must say `checking…` (the same word `_ver_cell` already uses, already in
-    `_LEGEND`) rather than blank, which D-02 reserves for a real unknown."""
+def test_owner_column_is_blank_while_a_pass_is_in_flight(tmp_path: Path) -> None:
+    """19-UI-SPEC A9: while no state exists the Health `…` is the one place
+    that says "checking", so Owner stays blank instead of repeating it."""
     tool = _tool("demo")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    screen = _screen([tool], {"demo": True}, version_refresh=service)
+    screen = _screen([tool], {}, version_refresh=frozen_service(tmp_path))
     screen.version_refreshing = True
     for unavailable in (False, True):
         screen._unavailable["demo"] = unavailable  # pyright: ignore[reportPrivateUsage]
-        assert screen._row_cells(tool)[7].plain == "checking…"  # pyright: ignore[reportPrivateUsage]
-    screen.version_refreshing = False
-    assert screen._row_cells(tool)[7].plain == ""  # pyright: ignore[reportPrivateUsage]
+        assert screen._row_cells(tool)[7].plain == ""  # pyright: ignore[reportPrivateUsage]
 
 
 def test_owner_column_is_blank_with_no_version_refresh_service_wired() -> None:
@@ -1342,38 +1320,39 @@ def test_owner_column_is_blank_with_no_version_refresh_service_wired() -> None:
 def test_owner_column_dims_in_the_unavailable_branch_like_every_other_cell(
     tmp_path: Path,
 ) -> None:
-    tool = _tool("demo")
+    tool = _tool("demo", method_os=("linux",))
     ownership = _ownership(tool, owner="brew")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
+    service = frozen_service(tmp_path)
+    service.publish(
+        [pass_state(tool, platform=service.platform, present=False, ownership=ownership)]
     )
-    service._ownership = {"demo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
-    screen = _screen([tool], {"demo": True}, version_refresh=service)
-    screen._unavailable["demo"] = True  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {}, version_refresh=service)
     cells = screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
+    assert cells[7].plain == "Homebrew"
     assert "dim" in str(cells[7].style)
 
 
 def test_owner_column_does_not_gate_on_installed_state_unlike_ver_cell(
     tmp_path: Path,
 ) -> None:
-    """The column does not suppress on installed-state (contrast with
-    `_ver_cell`'s deliberate not-installed early return): ownership is
-    resolved from the live binary path, and a tool the presence predicate
-    happens to read as absent can still carry a real, useful record."""
+    """The column does not suppress on presence (contrast with `_ver_cell`):
+    ownership is resolved from the live binary path, and a tool the presence
+    predicate happens to read as absent can still carry a real record."""
     tool = _tool("demo")
     ownership = _ownership(tool, owner="brew")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
+    service = frozen_service(tmp_path)
+    service.publish(
+        [
+            pass_state(
+                tool,
+                platform=service.platform,
+                present=False,
+                ownership=ownership,
+                version=_ver("1.0", "1.1", True),
+            )
+        ]
     )
-    service._ownership = {"demo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
-    screen = _screen([tool], {"demo": False}, version_refresh=service)
+    screen = _screen([tool], {}, version_refresh=service)
     cells = screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
     assert cells[7].plain == owner_label(ownership)
     # The Ver cell, by contrast, DOES suppress for a not-installed tool.
@@ -1394,7 +1373,7 @@ def _gh_tool(tool_id: str, *, desc: str = "") -> Tool:
     )
 
 
-async def test_ver_cell_renders_no_version_marker_for_unparseable_probe_output(
+async def test_ver_cell_is_empty_for_unparseable_probe_output(
     tmp_path: Path,
 ) -> None:
     tool = _gh_tool("dasel")
@@ -1406,265 +1385,159 @@ async def test_ver_cell_renders_no_version_marker_for_unparseable_probe_output(
     )
     app = _unified_app([tool], {"dasel": True}, _BLURBS, version_refresh=service)
     async with app.run_test(size=(120, 30)) as pilot:
-        for _ in range(400):
-            if "dasel" in app.catalog._version_statuses:  # pyright: ignore[reportPrivateUsage]
-                break
-            await pilot.pause()
+        await _wait_until(pilot, lambda: not app.catalog.version_refreshing)
+        await pilot.pause()
+        state = service.state_of("dasel")
+        assert state is not None
+        assert "version unreadable" in state.reasons
         cell = app.catalog.query_one(DataTable[Any]).get_cell("dasel", "ver")
-        assert cell.plain == "no version"
+        assert cell.plain == ""
 
 
-async def test_stale_and_fresh_rows_differ_only_by_trailing_marker() -> None:
-    stale_status = VersionStatus(
-        tool_id="rg",
-        installed="15.2.0",
-        latest="15.2.0",
-        outdated=False,
-        stale=True,
-        source="github",
+async def test_stale_and_fresh_rows_differ_only_by_trailing_marker(tmp_path: Path) -> None:
+    def status(tool_id: str, installed: str | None, *, stale: bool) -> VersionStatus:
+        return VersionStatus(
+            tool_id=tool_id,
+            installed=installed,
+            latest=installed,
+            outdated=False if installed else None,
+            stale=stale,
+            source="github",
+        )
+
+    rg, fd, dasel = _gh_tool("rg"), _gh_tool("fd"), _gh_tool("dasel")
+    service = frozen_service(tmp_path)
+    service.publish(
+        [
+            pass_state(rg, platform=service.platform, version=status("rg", "15.2.0", stale=True)),
+            pass_state(fd, platform=service.platform, version=status("fd", "15.2.0", stale=False)),
+            pass_state(dasel, platform=service.platform, version=status("dasel", None, stale=True)),
+        ]
     )
-    fresh_status = VersionStatus(
-        tool_id="fd",
-        installed="15.2.0",
-        latest="15.2.0",
-        outdated=False,
-        stale=False,
-        source="github",
-    )
-    unknown_status = VersionStatus(
-        tool_id="dasel",
-        installed=None,
-        latest=None,
-        outdated=None,
-        stale=True,
-        source="github",
-    )
-    rg = _gh_tool("rg")
-    fd = _gh_tool("fd")
-    dasel = _gh_tool("dasel")
-    screen = _screen([rg, fd, dasel], {"rg": True, "fd": True, "dasel": True})
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "rg": stale_status,
-        "fd": fresh_status,
-        "dasel": unknown_status,
-    }
+    screen = _screen([rg, fd, dasel], {}, version_refresh=service)
     stale_cell = screen._ver_cell(rg).plain  # pyright: ignore[reportPrivateUsage]
     fresh_cell = screen._ver_cell(fd).plain  # pyright: ignore[reportPrivateUsage]
     unknown_cell = screen._ver_cell(dasel).plain  # pyright: ignore[reportPrivateUsage]
     assert stale_cell == fresh_cell + " ~"
     assert not fresh_cell.endswith(" ~")
-    assert unknown_cell == "no version"
-    assert " ~" not in unknown_cell
+    assert unknown_cell == ""
 
 
 # -- D-02/Task 2: every dim Ver cell says which situation produced it --------
 
 
-def test_ver_cell_dim_github_source_no_latest_shows_no_comparison_marker() -> None:
-    """A github-sourced status whose latest fetch failed/was deferred is
-    labelled as having nothing to compare against, never as unmanaged --
-    that label is reserved for source == "unknown" (native packages and
-    unreadable manager inventories)."""
+def test_ver_cell_github_source_without_latest_shows_the_bare_version(tmp_path: Path) -> None:
+    """A github-sourced status whose latest fetch failed or was deferred keeps
+    its installed version and gains no marker; the missing comparison is a
+    reason in the detail bar (D-15)."""
     tool = _gh_tool("rg")
-    screen = _screen([tool], {"rg": True})
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "rg": VersionStatus(
+    status = VersionStatus(
+        tool_id="rg", installed="14.1.0", latest=None, outdated=None, stale=False, source="github"
+    )
+    screen = _ver_screen(tmp_path, tool, status)
+    assert screen._ver_cell(tool).plain == "14.1.0"  # pyright: ignore[reportPrivateUsage]
+
+
+def test_ver_cell_unparseable_latest_shows_the_bare_version(tmp_path: Path) -> None:
+    """The `outdated is None` branch with a latest present (both versions
+    exist but one would not parse) keeps the installed version, unmarked."""
+    tool = _tool("rg")
+    status = VersionStatus(
+        tool_id="rg",
+        installed="14.1.0",
+        latest="not-a-version",
+        outdated=None,
+        stale=False,
+        source="github",
+    )
+    screen = _ver_screen(tmp_path, tool, status)
+    assert screen._ver_cell(tool).plain == "14.1.0"  # pyright: ignore[reportPrivateUsage]
+
+
+def test_ver_cell_is_empty_without_a_state_whether_or_not_refreshing(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    for refreshing in (True, False):
+        screen = _ver_screen(tmp_path, tool, None, refreshing=refreshing)
+        assert screen._ver_cell(tool).plain == ""  # pyright: ignore[reportPrivateUsage]
+
+
+def test_ver_cell_never_renders_a_dim_label(tmp_path: Path) -> None:
+    """The six situations that used to produce four dim labels (D-02) now
+    produce only two cells: empty when there is no version to show, the bare
+    version otherwise. Their facts moved to the state's reasons (D-15)."""
+    tool = _tool("rg")
+    installed = "14.1.0"
+
+    def cell_for(status: VersionStatus | None, *, refreshing: bool = False) -> Text:
+        screen = _ver_screen(tmp_path, tool, status, refreshing=refreshing)
+        return screen._ver_cell(tool)  # pyright: ignore[reportPrivateUsage]
+
+    def status(version: str | None, latest: str | None, source: str) -> VersionStatus:
+        return VersionStatus(
             tool_id="rg",
-            installed="14.1.0",
-            latest=None,
+            installed=version,
+            latest=latest,
             outdated=None,
             stale=False,
-            source="github",
+            source=source,
         )
-    }
-    cell = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
-    assert cell == "14.1.0 (no comparison)"
-    assert "(source unknown)" not in cell
+
+    empty = [
+        cell_for(None, refreshing=True),
+        cell_for(None),
+        cell_for(status(None, None, "unknown")),
+    ]
+    bare = [
+        cell_for(status(installed, None, "unknown")),
+        cell_for(status(installed, None, "github")),
+        cell_for(status(installed, "not-a-version", "github")),
+    ]
+    assert [cell.plain for cell in empty] == ["", "", ""]
+    assert [cell.plain for cell in bare] == [installed] * 3
+    assert all(not cell.spans and str(cell.style) == "" for cell in empty + bare)
 
 
-def test_ver_cell_dim_unparseable_latest_keeps_installed_with_no_comparison_marker() -> None:
-    """The `outdated is None` branch (both versions exist but one would not
-    parse) had zero existing coverage: every prior `outdated=None` fixture
-    also had `latest=None`, which is the OTHER branch."""
+def test_ver_cell_stale_suffix_only_qualifies_a_comparison(tmp_path: Path) -> None:
+    """D-04 as interpreted 2026-09-16 (15.1-CONTEXT.md), kept by 19-UI-SPEC
+    A13: the stale suffix qualifies a claim about `latest`, so it is appended
+    only to a cell that compared against one -- asserted over every situation
+    at once, all built with stale=True, so a no-comparison branch falling
+    through into the suffix assembly is caught."""
     tool = _tool("rg")
-    screen = _screen([tool], {"rg": True})
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "rg": VersionStatus(
-            tool_id="rg",
-            installed="14.1.0",
-            latest="not-a-version",
-            outdated=None,
-            stale=False,
-            source="github",
-        )
-    }
-    cell = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
-    assert cell == "14.1.0 (no comparison)"
-
-
-def test_ver_cell_dim_checking_marker_only_while_refreshing() -> None:
-    tool = _tool("rg")
-    screen = _screen([tool], {"rg": True})
-    screen.version_refreshing = True
-    assert screen._ver_cell(tool).plain == "checking…"  # pyright: ignore[reportPrivateUsage]
-    screen.version_refreshing = False
-    assert screen._ver_cell(tool).plain == "no version"  # pyright: ignore[reportPrivateUsage]
-
-
-def test_ver_cell_dim_six_situations_collapse_onto_exactly_four_texts() -> None:
-    """The six dim-producing situations collapse onto four distinct texts,
-    and the only two collapses are the named ones: S2 (no status, not
-    refreshing) equals S3 (a status whose installed version could not be
-    read), and S5 (a real source with no latest) equals S6 (both versions
-    present, outdated undetermined). Both halves -- the two equalities and
-    the four-way distinctness -- are asserted together: the distinctness
-    alone would pass a design that stopped sharing the two intended labels,
-    and the equalities alone would pass a design that collapsed everything
-    onto one label."""
-    tool = _tool("rg")
-    installed_version = "14.1.0"
-
-    def cell_for(*, refreshing: bool, status: VersionStatus | None) -> str:
-        screen = _screen([tool], {"rg": True})
-        screen.version_refreshing = refreshing
-        if status is not None:
-            screen._version_statuses = {"rg": status}  # pyright: ignore[reportPrivateUsage]
-        return screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
-
-    s1 = cell_for(refreshing=True, status=None)
-    s2 = cell_for(refreshing=False, status=None)
-    s3 = cell_for(
-        refreshing=False,
-        status=VersionStatus(
-            tool_id="rg", installed=None, latest=None, outdated=None, stale=True, source="unknown"
-        ),
-    )
-    s4 = cell_for(
-        refreshing=False,
-        status=VersionStatus(
-            tool_id="rg",
-            installed=installed_version,
-            latest=None,
-            outdated=None,
-            stale=False,
-            source="unknown",
-        ),
-    )
-    s5 = cell_for(
-        refreshing=False,
-        status=VersionStatus(
-            tool_id="rg",
-            installed=installed_version,
-            latest=None,
-            outdated=None,
-            stale=False,
-            source="github",
-        ),
-    )
-    s6 = cell_for(
-        refreshing=False,
-        status=VersionStatus(
-            tool_id="rg",
-            installed=installed_version,
-            latest="not-a-version",
-            outdated=None,
-            stale=False,
-            source="github",
-        ),
-    )
-    assert s2 == s3
-    assert s5 == s6
-    representative = (s1, s2, s4, s5)
-    assert len(set(representative)) == 4, representative
-
-
-def test_ver_cell_dim_stale_suffix_scoped_to_colored_branches_only() -> None:
-    """D-04 as interpreted 2026-09-16 (15.1-CONTEXT.md): the trailing stale
-    suffix is scoped to the two colored branches and NEVER appended on a dim
-    cell, built from statuses that all carry stale=True so the property is
-    asserted over all eight situations at once rather than one spot check --
-    the risk this guards is a single dim branch being rewritten to fall
-    through into the suffix assembly."""
-    tool = _tool("rg")
-    installed_version = "14.1.0"
+    installed = "14.1.0"
 
     def cell_for(status: VersionStatus | None, *, refreshing: bool = False) -> str:
-        screen = _screen([tool], {"rg": True})
-        screen.version_refreshing = refreshing
-        if status is not None:
-            screen._version_statuses = {"rg": status}  # pyright: ignore[reportPrivateUsage]
+        screen = _ver_screen(tmp_path, tool, status, refreshing=refreshing)
         return screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
 
-    dim_cells = [
-        cell_for(None, refreshing=True),  # S1
-        cell_for(None, refreshing=False),  # S2
-        cell_for(
-            VersionStatus(
-                tool_id="rg",
-                installed=None,
-                latest=None,
-                outdated=None,
-                stale=True,
-                source="unknown",
-            )
-        ),  # S3
-        cell_for(
-            VersionStatus(
-                tool_id="rg",
-                installed=installed_version,
-                latest=None,
-                outdated=None,
-                stale=True,
-                source="unknown",
-            )
-        ),  # S4
-        cell_for(
-            VersionStatus(
-                tool_id="rg",
-                installed=installed_version,
-                latest=None,
-                outdated=None,
-                stale=True,
-                source="github",
-            )
-        ),  # S5
-        cell_for(
-            VersionStatus(
-                tool_id="rg",
-                installed=installed_version,
-                latest="not-a-version",
-                outdated=None,
-                stale=True,
-                source="github",
-            )
-        ),  # S6
+    def status(
+        version: str | None, latest: str | None, outdated: bool | None, source: str
+    ) -> VersionStatus:
+        return VersionStatus(
+            tool_id="rg",
+            installed=version,
+            latest=latest,
+            outdated=outdated,
+            stale=True,
+            source=source,
+        )
+
+    no_claim = [
+        cell_for(None, refreshing=True),
+        cell_for(None),
+        cell_for(status(None, None, None, "unknown")),
+        cell_for(status(installed, None, None, "unknown")),
+        cell_for(status(installed, None, None, "github")),
+        cell_for(status(installed, "not-a-version", None, "github")),
     ]
-    colored_cells = [
-        cell_for(
-            VersionStatus(
-                tool_id="rg",
-                installed=installed_version,
-                latest="15.0.0",
-                outdated=True,
-                stale=True,
-                source="github",
-            )
-        ),
-        cell_for(
-            VersionStatus(
-                tool_id="rg",
-                installed=installed_version,
-                latest=installed_version,
-                outdated=False,
-                stale=True,
-                source="github",
-            )
-        ),
+    compared = [
+        cell_for(status(installed, "15.0.0", True, "github")),
+        cell_for(status(installed, installed, False, "github")),
     ]
-    for dim in dim_cells:
-        assert "~" not in dim, dim
-    for colored in colored_cells:
-        assert colored.endswith(" ~"), colored
+    for cell in no_claim:
+        assert "~" not in cell, cell
+    for cell in compared:
+        assert cell.endswith(" ~"), cell
 
 
 async def test_checking_mark_reaches_the_rendered_table_while_a_pass_is_blocked(
@@ -2109,17 +1982,8 @@ async def test_owner_column_starts_inside_the_viewport_at_the_minimum_size() -> 
     app = _unified_app(tools, installed, {tool.category: "" for tool in tools})
     async with app.run_test(size=(80, 20)) as pilot:
         catalog = app.catalog
-        catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-            tool.id: VersionStatus(
-                tool_id=tool.id,
-                installed="1.22.3",
-                latest="1.22.44",
-                outdated=True,
-                stale=True,
-                source="brew",
-            )
-            for tool in catalog.tools
-        }
+        # The widest Ver cell this phase renders (19-UI-SPEC "Columns").
+        catalog._ver_cell = lambda _tool: Text("1.22.3 -> 1.22.44 ~")  # type: ignore[method-assign]
         # The widest label `OWNER_LABELS` can produce, so the assertion is
         # made against the worst case rather than an empty column.
         catalog._owner_cell = lambda _tool: Text("Homebrew cask")  # type: ignore[method-assign]
@@ -2172,11 +2036,8 @@ async def test_budget_deferred_row_renders_stale_marker(tmp_path: Path) -> None:
     tools = [_gh_tool("fresh"), _gh_tool("stale")]
     app = _unified_app(tools, {"fresh": True, "stale": True}, _BLURBS, version_refresh=service)
     async with app.run_test(size=(120, 30)) as pilot:
-        for _ in range(400):
-            statuses = app.catalog._version_statuses  # pyright: ignore[reportPrivateUsage]
-            if "fresh" in statuses and "stale" in statuses:
-                break
-            await pilot.pause()
+        await _wait_until(pilot, lambda: not app.catalog.version_refreshing)
+        await pilot.pause()
         table = app.catalog.query_one(DataTable[Any])
         fresh = table.get_cell("fresh", "ver").plain
         stale = table.get_cell("stale", "ver").plain
@@ -2569,35 +2430,24 @@ def test_detail_text_omits_default_shell_note_for_non_shell_tools() -> None:
 def test_unknown_owner_detail_contains_unknown_reason(tmp_path: Path) -> None:
     tool = _tool("rg")
     reason = "the brew inventory could not be read"
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
+    ownership = _ownership(tool, owner="unknown", unknown_reason=reason)
+    status = VersionStatus(
+        tool_id="rg", installed="14.1.0", latest=None, outdated=None, stale=True, source="unknown"
     )
-    service.refresh([tool])
-    service._ownership = {  # pyright: ignore[reportPrivateUsage]
-        "rg": (service.epoch, _ownership(tool, owner="unknown", unknown_reason=reason))
-    }
-    screen = _screen([tool], {"rg": True}, version_refresh=service)
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "rg": VersionStatus(
-            tool_id="rg",
-            installed="14.1.0",
-            latest=None,
-            outdated=None,
-            stale=True,
-            source="unknown",
-        )
-    }
+    service = frozen_service(tmp_path)
+    service.publish(
+        [pass_state(tool, platform=service.platform, ownership=ownership, version=status)]
+    )
+    service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {}, version_refresh=service)
+    screen._version_statuses = {"rg": status}  # pyright: ignore[reportPrivateUsage]
     text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert reason in text
     cell = screen._ver_cell(tool)  # pyright: ignore[reportPrivateUsage]
     # A probed version is real information even with no "latest" to diff
     # against (e.g. a dnf/apt/pacman package -- ownership.py deliberately
-    # doesn't track those managers) -- discarding it would throw away a
-    # version we already have, so the marker is appended, not substituted.
-    assert cell.plain == "14.1.0 (source unknown)"
+    # doesn't track those managers), so the cell keeps it, unmarked.
+    assert cell.plain == "14.1.0"
     assert "re-check is pending" not in text
 
 
@@ -2703,15 +2553,9 @@ def test_pinned_spec_appears_in_detail_line(tmp_path: Path) -> None:
 
 def test_stale_latest_has_marker_and_detail_explanation(tmp_path: Path) -> None:
     tool = _tool("rg")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service.refresh([tool])
-    service._ownership = {"rg": (service.epoch, _ownership(tool, owner="brew"))}  # pyright: ignore[reportPrivateUsage]
-    screen = _screen([tool], {"rg": True}, version_refresh=service)
+    ownership = _ownership(tool, owner="brew")
+    service = frozen_service(tmp_path)
+    screen = _screen([tool], {}, version_refresh=service)
     stale_status = VersionStatus(
         tool_id="rg",
         installed="14.1.0",
@@ -2728,11 +2572,17 @@ def test_stale_latest_has_marker_and_detail_explanation(tmp_path: Path) -> None:
         stale=False,
         source="brew",
     )
+    service.publish(
+        [pass_state(tool, platform=service.platform, ownership=ownership, version=stale_status)]
+    )
     screen._version_statuses = {"rg": stale_status}  # pyright: ignore[reportPrivateUsage]
     stale_cell = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
     stale_detail = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert stale_cell.endswith(" ~")
     assert "re-check is pending" in stale_detail
+    service.publish(
+        [pass_state(tool, platform=service.platform, ownership=ownership, version=fresh_status)]
+    )
     screen._version_statuses = {"rg": fresh_status}  # pyright: ignore[reportPrivateUsage]
     fresh_cell = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
     fresh_detail = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
@@ -2850,16 +2700,11 @@ def _counting_begin(updates: UpdateService) -> list[str]:
 
 def test_off_policy_owner_cell_and_detail_name_the_declared_manager(tmp_path: Path) -> None:
     tool = _sdkman_tool("groovy")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {  # pyright: ignore[reportPrivateUsage]
-        "groovy": (service.epoch, _ownership(tool, owner="brew", off_policy=True))
-    }
-    screen = _screen([tool], {"groovy": True}, version_refresh=service)
+    ownership = _ownership(tool, owner="brew", off_policy=True)
+    service = frozen_service(tmp_path)
+    service.publish([pass_state(tool, platform=service.platform, ownership=ownership)])
+    service._ownership = {"groovy": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    screen = _screen([tool], {}, version_refresh=service)
     cell = screen._owner_cell(tool)  # pyright: ignore[reportPrivateUsage]
     assert cell.plain == "Homebrew ≠ policy"
     tag = " ≠ policy"
@@ -3626,25 +3471,28 @@ def _skill_screen(
     tmp_path: Path,
     hosts: dict[str, str] | None,
     *,
-    installed: bool = False,
     stale: bool = False,
     refreshing: bool = False,
 ) -> tuple[CatalogScreen, Tool]:
+    """A screen over a frozen pack state with these host answers (no state at
+    all when `hosts` is None)."""
     pack = _skill_pack(
         "superpowers",
         (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
     )
-    service = offline_service(
-        tmp_path / "versions.json",
-        resolve_tag=lambda _repo: "v1",
-        probe_output=lambda _argv: None,
-        skill_home=tmp_path,
-    )
+    service = frozen_service(tmp_path)
     if hosts is not None:
-        service._skills = {  # pyright: ignore[reportPrivateUsage]
-            pack.id: SkillHostStatus(hosts=dict(hosts), stale=stale)
-        }
-    screen = _screen([pack], {pack.id: installed}, version_refresh=service)
+        service.publish(
+            [
+                pass_state(
+                    pack,
+                    platform=service.platform,
+                    present="present" in hosts.values(),
+                    skill_hosts=SkillHostStatus(hosts=dict(hosts), stale=stale),
+                )
+            ]
+        )
+    screen = _screen([pack], {}, version_refresh=service)
     screen.skill_refreshing = refreshing
     return screen, pack
 
@@ -3693,10 +3541,9 @@ def test_skill_health_cell_is_ok_after_the_probe_lands(tmp_path: Path) -> None:
 
 
 def test_skill_health_cell_is_checking_until_a_host_answers(tmp_path: Path) -> None:
-    for installed in (False, True):
-        screen, pack = _skill_screen(tmp_path, None, installed=installed, refreshing=True)
-        cell = screen._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
-        assert (cell.plain, str(cell.style)) == ("…", "dim"), installed
+    screen, pack = _skill_screen(tmp_path, None, refreshing=True)
+    cell = screen._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
+    assert (cell.plain, str(cell.style)) == ("…", "dim")
 
 
 def test_skill_health_cell_is_checking_when_every_host_is_unknown(tmp_path: Path) -> None:
@@ -3955,18 +3802,10 @@ def _probe_less_pack_screen(tmp_path: Path, *, installed: bool) -> tuple[Catalog
         cache_path=tmp_path / "versions.json",
         home=tmp_path,
         present={pack.id} if installed else set[str](),
+        which=lambda cmd: str(tmp_path / "bin" / cmd),
+        probe_output=lambda _argv: "1.2.3",
     )
     screen = _screen([pack], {pack.id: installed}, version_refresh=service)
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        pack.id: VersionStatus(
-            tool_id=pack.id,
-            installed="1.2.3",
-            latest="1.2.3",
-            outdated=False,
-            stale=False,
-            source="github",
-        )
-    }
     return screen, pack
 
 
@@ -4659,3 +4498,111 @@ def test_catalog_screen_has_no_installed_parameter() -> None:
     assert "installed" not in inspect.signature(UnifiedApp).parameters
     assert not hasattr(CatalogScreen, "set_installed")
     assert not hasattr(UnifiedApp, "_rederive_installed")
+
+
+# -- 19-15 Task 1: the Ver and Owner cells read the one tool state (19-UI-SPEC)
+
+
+def _ver(
+    installed: str | None, latest: str | None, outdated: bool | None, *, stale: bool = False
+) -> VersionStatus:
+    return VersionStatus(
+        tool_id="rg",
+        installed=installed,
+        latest=latest,
+        outdated=outdated,
+        stale=stale,
+        source="github",
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "version", "expected"),
+    [
+        ("checking", None, ""),
+        ("missing", _ver("1.2.3", "1.3.0", True), ""),
+        ("unavailable", _ver("1.2.3", "1.3.0", True), ""),
+        ("unreadable", _ver(None, None, None), ""),
+        ("no latest", _ver("1.2.3", None, None), "1.2.3"),
+        ("current", _ver("1.2.3", "1.2.3", False), "1.2.3"),
+        ("outdated", _ver("1.2.3", "1.3.0", True), "1.2.3 -> 1.3.0"),
+        ("stale current", _ver("1.2.3", "1.2.3", False, stale=True), "1.2.3 ~"),
+        ("stale outdated", _ver("1.2.3", "1.3.0", True, stale=True), "1.2.3 -> 1.3.0 ~"),
+    ],
+)
+def test_ver_cell_follows_the_state(
+    case: str, version: VersionStatus | None, expected: str, tmp_path: Path
+) -> None:
+    tool = _tool("rg", method_os=("linux",)) if case == "unavailable" else _tool("rg")
+    service = frozen_service(tmp_path)
+    if version is not None:
+        present = case not in ("missing", "unavailable")
+        service.publish(
+            [pass_state(tool, platform=service.platform, present=present, version=version)]
+        )
+    screen = _screen([tool], {}, version_refresh=service)
+    cell = screen._ver_cell(tool)  # pyright: ignore[reportPrivateUsage]
+    assert cell.plain == expected
+    # The Health mark is the row's only color: the version text has no style,
+    # and only the stale suffix is dim.
+    assert str(cell.style) == ""
+    assert [(cell.plain[s.start : s.end], str(s.style)) for s in cell.spans] == (
+        [(" ~", "dim")] if expected.endswith(" ~") else []
+    )
+
+
+def test_owner_cell_follows_the_state(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    groovy = _sdkman_tool("groovy")
+    pending = _tool("fd")
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
+    service = frozen_service(tmp_path)
+    hosts = SkillHostStatus(hosts={"claude": "present", "pi": "present"}, stale=False)
+    service.publish(
+        [
+            pass_state(rg, platform=service.platform, ownership=_ownership(rg, owner="brew")),
+            pass_state(
+                groovy,
+                platform=service.platform,
+                ownership=_ownership(groovy, owner="brew", off_policy=True),
+            ),
+            pass_state(pack, platform=service.platform, skill_hosts=hosts),
+        ]
+    )
+    screen = _screen([rg, groovy, pending, pack], {}, version_refresh=service)
+    screen.version_refreshing = True
+    owner = screen._owner_cell  # pyright: ignore[reportPrivateUsage]
+    assert owner(rg).plain == "Homebrew"
+    off_policy = owner(groovy)
+    assert off_policy.plain == "Homebrew ≠ policy"
+    assert [(off_policy.plain[s.start : s.end], str(s.style)) for s in off_policy.spans] == [
+        (" ≠ policy", "dim")
+    ]
+    # No state yet: the Health `…` already says checking, so Owner is blank.
+    assert owner(pending).plain == ""
+    assert owner(pack).plain == "Claude Code, Pi"
+
+
+def test_frozen_state_service_publishes_without_probing(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    service = frozen_service(tmp_path)
+    service.invalidate(reason="test")
+    version = _ver("1.2.3", "1.3.0", True)
+    service.publish([pass_state(tool, platform=service.platform, version=version)])
+    state = service.state_of("rg")
+    assert state is not None
+    assert state.generation == service.epoch
+    assert state.health is Health.OUTDATED
+    # frozen_service's probes all raise, so a refresh that probed would fail.
+    assert service.refresh([tool]) == {"rg": version}
+    assert service.refresh_skills([tool]) == {}
+    assert service.state_of("rg") == state
+    service.invalidate(reason="a mutation")
+    assert service.state_of("rg") is None
+    service.refresh([tool])
+    refreshed = service.state_of("rg")
+    assert refreshed is not None
+    assert refreshed.generation == service.epoch

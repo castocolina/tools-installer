@@ -63,7 +63,7 @@ from installer.systemd_daemon import CompetingUnit, TimerStateCache
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, ToolRow, classify_tools
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
-from installer.version_status import VersionRefreshService, VersionStatus
+from installer.version_status import ToolState, VersionRefreshService, VersionStatus
 from installer.versions import TagResolver, VersionError
 from installer.wizard_app import (
     VIEW_ORDER,
@@ -80,6 +80,7 @@ from installer.wizard_app import (
     UninstallInputs,
     UninstallScreen,
 )
+from tests.state_doubles import FrozenStateService, frozen_service, pass_state
 
 _REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -5524,7 +5525,7 @@ async def test_version_shows_probed_install_when_latest_fetch_fails(tmp_path: Pa
         await _settle_versions(app, pilot)
         assert app.is_running
         cell = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver")
-        assert cell.plain == "1.2.0 (no comparison)"
+        assert cell.plain == "1.2.0"
         await pilot.press("space")
         assert app.is_running
         assert app.catalog.selected == {"codegraph"}
@@ -6638,21 +6639,21 @@ def _update_app(
     )
 
 
+def _frozen_state(
+    tool: Tool, platform: Platform, *, ownership: ManagerOwnership, status: VersionStatus
+) -> ToolState:
+    return pass_state(tool, platform=platform, ownership=ownership, version=status)
+
+
 def _freeze_status(
-    service: VersionRefreshService,
-    *,
-    ownership: dict[str, ManagerOwnership],
-    statuses: dict[str, VersionStatus],
-) -> None:
-    service._ownership = {  # pyright: ignore[reportPrivateUsage]
-        tool_id: (service.epoch, record) for tool_id, record in ownership.items()
-    }
-    service._statuses = statuses  # pyright: ignore[reportPrivateUsage]
-
-    def frozen(_tools: Sequence[Tool]) -> dict[str, VersionStatus]:
-        return dict(statuses)
-
-    service.refresh = frozen  # type: ignore[method-assign]
+    tmp_path: Path, tool: Tool, *, ownership: ManagerOwnership, status: VersionStatus
+) -> FrozenStateService:
+    """A machine frozen with `tool` present at `status` and owned per `ownership`;
+    a refresh re-publishes that state and probes nothing."""
+    service = frozen_service(tmp_path)
+    service.publish([_frozen_state(tool, service.platform, ownership=ownership, status=status)])
+    service._ownership = {tool.id: (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    return service
 
 
 async def _settle_update(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> None:
@@ -6704,8 +6705,7 @@ async def test_second_u_press_while_latched_is_refused(tmp_path: Path) -> None:
         stale=False,
         source="brew",
     )
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
-    _freeze_status(service, ownership={"rg": ownership}, statuses={"rg": stale_status})
+    service = _freeze_status(tmp_path, tool, ownership=ownership, status=stale_status)
     updates = UpdateService(
         platform=service.platform,
         runner=runner,
@@ -6742,8 +6742,7 @@ async def test_unknown_owner_row_produces_zero_runner_invocations(tmp_path: Path
         stale=False,
         source="unknown",
     )
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
-    _freeze_status(service, ownership={"rg": ownership}, statuses={"rg": stale_status})
+    service = _freeze_status(tmp_path, tool, ownership=ownership, status=stale_status)
     updates = UpdateService(
         platform=service.platform,
         runner=calls.append,
@@ -6776,8 +6775,7 @@ async def test_non_mutation_grade_owner_produces_zero_runner_invocations(tmp_pat
         stale=False,
         source="brew",
     )
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
-    _freeze_status(service, ownership={"rg": ownership}, statuses={"rg": stale_status})
+    service = _freeze_status(tmp_path, tool, ownership=ownership, status=stale_status)
     updates = UpdateService(
         platform=service.platform,
         runner=calls.append,
@@ -6808,8 +6806,7 @@ async def test_rg_end_to_end_delegates_to_brew(tmp_path: Path) -> None:
         stale=False,
         source="brew",
     )
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
-    _freeze_status(service, ownership={"rg": ownership}, statuses={"rg": stale_status})
+    service = _freeze_status(tmp_path, tool, ownership=ownership, status=stale_status)
     updates = UpdateService(
         platform=service.platform,
         runner=calls.append,
@@ -6841,8 +6838,7 @@ async def test_update_worker_crash_still_posts_and_clears(tmp_path: Path) -> Non
         stale=False,
         source="brew",
     )
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
-    _freeze_status(service, ownership={"rg": ownership}, statuses={"rg": stale_status})
+    service = _freeze_status(tmp_path, tool, ownership=ownership, status=stale_status)
 
     def boom(_cmd: list[str]) -> None:
         raise VersionError("boom")
@@ -6879,8 +6875,7 @@ async def test_fresh_ownership_dispatches_on_reresolve_not_cache(tmp_path: Path)
         stale=False,
         source="installer",
     )
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
-    _freeze_status(service, ownership={"rg": cached}, statuses={"rg": stale_status})
+    service = _freeze_status(tmp_path, tool, ownership=cached, status=stale_status)
     updates = UpdateService(
         platform=service.platform,
         runner=calls.append,
@@ -6914,8 +6909,7 @@ async def test_fresh_unknown_overrides_cached_green_light(tmp_path: Path) -> Non
         stale=False,
         source="brew",
     )
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
-    _freeze_status(service, ownership={"rg": cached}, statuses={"rg": stale_status})
+    service = _freeze_status(tmp_path, tool, ownership=cached, status=stale_status)
     order: list[str] = []
 
     def reresolve(_tool: Tool) -> ManagerOwnership:
@@ -6967,8 +6961,7 @@ async def test_pnpm_precapture_replays_pre_update_set(tmp_path: Path) -> None:
         stale=True,
         source="installer",
     )
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
-    _freeze_status(service, ownership={"pnpm": ownership}, statuses={"pnpm": stale_status})
+    service = _freeze_status(tmp_path, tool, ownership=ownership, status=stale_status)
 
     def reresolve(_tool: Tool) -> ManagerOwnership:
         order.append("reresolve")
@@ -7031,8 +7024,7 @@ async def test_non_pnpm_node_tool_skips_snapshot_and_replay(
         stale=False,
         source="pnpm",
     )
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
-    _freeze_status(service, ownership={"mmdc": ownership}, statuses={"mmdc": stale_status})
+    service = _freeze_status(tmp_path, tool, ownership=ownership, status=stale_status)
 
     def managed() -> tuple[str, ...] | None:
         managed_calls.append(1)
@@ -7089,8 +7081,7 @@ async def test_none_package_snapshot_refuses_the_update(tmp_path: Path) -> None:
         stale=True,
         source="installer",
     )
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
-    _freeze_status(service, ownership={"pnpm": ownership}, statuses={"pnpm": stale_status})
+    service = _freeze_status(tmp_path, tool, ownership=ownership, status=stale_status)
 
     def replay(packages: Sequence[str]) -> tuple[str, ...]:
         replay_calls.append(1)
@@ -7142,20 +7133,14 @@ async def test_post_update_status_comes_from_version_refresh(tmp_path: Path) -> 
         stale=False,
         source="cask",
     )
-    service = _macos_service(
-        tmp_path, resolve_tag=lambda repo: "v1", probe_output=lambda argv: None
-    )
-    real_refresh = service.refresh
-    _freeze_status(service, ownership={"rectangle": ownership}, statuses={"rectangle": pre})
+    service = _freeze_status(tmp_path, tool, ownership=ownership, status=pre)
 
-    def fake_refresh(tools: Sequence[Tool]) -> dict[str, VersionStatus]:
-        real_refresh(tools)
-        return {tools[0].id: post}
+    def upgrade(_cmd: list[str]) -> None:
+        service.publish([_frozen_state(tool, service.platform, ownership=ownership, status=post)])
 
-    service.refresh = fake_refresh  # type: ignore[method-assign]
     updates = UpdateService(
         platform=service.platform,
-        runner=lambda _cmd: None,
+        runner=upgrade,
         resolve_tag=lambda _repo: "v1",
         tools={"rectangle": tool},
         managed_packages=lambda: (),
@@ -7191,18 +7176,14 @@ async def test_post_update_status_for_brew_also_comes_from_refresh(tmp_path: Pat
         stale=False,
         source="brew",
     )
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
-    real_refresh = service.refresh
-    _freeze_status(service, ownership={"rg": ownership}, statuses={"rg": pre})
+    service = _freeze_status(tmp_path, tool, ownership=ownership, status=pre)
 
-    def fake_refresh(tools: Sequence[Tool]) -> dict[str, VersionStatus]:
-        real_refresh(tools)
-        return {tools[0].id: post}
+    def upgrade(_cmd: list[str]) -> None:
+        service.publish([_frozen_state(tool, service.platform, ownership=ownership, status=post)])
 
-    service.refresh = fake_refresh  # type: ignore[method-assign]
     updates = UpdateService(
         platform=service.platform,
-        runner=lambda _cmd: None,
+        runner=upgrade,
         resolve_tag=lambda _repo: "v1",
         tools={"rg": tool},
         managed_packages=lambda: (),
@@ -7291,8 +7272,7 @@ async def test_update_runs_off_the_event_loop_with_no_confirmation(tmp_path: Pat
         stale=False,
         source="brew",
     )
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
-    _freeze_status(service, ownership={"rg": ownership}, statuses={"rg": stale_status})
+    service = _freeze_status(tmp_path, tool, ownership=ownership, status=stale_status)
 
     def runner(_cmd: list[str]) -> None:
         started.set()

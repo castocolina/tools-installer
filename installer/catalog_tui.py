@@ -538,12 +538,8 @@ class CatalogScreen(AppScreen):
         self._state_line = line
 
     def _skill_status(self, tool: Tool) -> SkillHostStatus | None:
-        if tool.skill_lifecycle is None:
-            return None
-        service = self._version_refresh
-        if service is None:
-            return None
-        return service.skill_status_of(tool.id)
+        state = self._state(tool) if tool.skill_lifecycle is not None else None
+        return state.skill_hosts if state is not None else None
 
     def _state(self, tool: Tool) -> ToolState | None:
         service = self._version_refresh
@@ -574,53 +570,21 @@ class CatalogScreen(AppScreen):
         return {tool.id: self._is_unavailable(tool) for tool in self._catalog}
 
     def _ver_cell(self, tool: Tool) -> Text:
-        if not self._is_present(tool):
+        """Version facts only (19-UI-SPEC "Ver cell"): empty unless the tool is
+        present with a readable version. The text carries no color; the Health
+        mark is the row's only color carrier."""
+        state = self._state(tool)
+        version = state.version if state is not None and state.present else None
+        if version is None or version.installed is None:
             return Text("")
-        status = self._version_statuses.get(tool.id)
-        if status is None:
-            # The screen attribute is the only thing that separates a probe
-            # that has not landed yet from one that landed with nothing (a
-            # crashed worker) -- without it this would claim to be checking
-            # forever after a crash.
-            return Text(_VER_CHECKING if self.version_refreshing else _VER_NO_VERSION, style="dim")
-        if status.installed is None:
-            return Text(_VER_NO_VERSION, style="dim")
-        if status.latest is None:
-            # A probed version with no comparison source (e.g. a dnf/apt/pacman
-            # package -- ownership.py deliberately doesn't track those managers,
-            # so there is no "latest" to diff against) is still real information;
-            # replacing it with a bare marker would throw away a version we
-            # already have. status.source == "unknown" is resolve_status's
-            # final fallthrough (installer/version_status.py:325-337), reached
-            # by both a native package and a manager inventory that could not
-            # be read this pass -- see _VER_SOURCE_UNKNOWN's own comment.
-            marker = _VER_SOURCE_UNKNOWN if status.source == "unknown" else _VER_NO_COMPARISON
-            return Text.assemble((status.installed, "dim"), (f" {marker}", "dim"))
-        if status.outdated is True:
-            base = f"{status.installed} -> {status.latest}"
-            color = "yellow"
-        elif status.outdated is False:
-            base = status.installed
-            color = "green"
-        else:
-            # Both versions exist but one of them would not parse -- the
-            # version is real and must survive, same reasoning as the
-            # latest-is-None branch above.
-            return Text.assemble((status.installed, "dim"), (f" {_VER_NO_COMPARISON}", "dim"))
-        # The trailing stale suffix is scoped to these two colored branches
-        # only, never appended on a dim cell (D-04 as interpreted 2026-09-16
-        # -- see 15.1-CONTEXT.md's D-04 Interpretation note). It qualifies a
-        # `latest` this cell rendered a claim about; a dim cell renders no
-        # such claim, and resolve_status hardcodes stale=True on every path
-        # that yields latest=None (installer/version_status.py:269, :290,
-        # :332), so an unconditional suffix would sit on substantially every
-        # dim cell and distinguish nothing. Pinned by
-        # tests/test_catalog_tui.py's stale-scope test (ver_cell_dim) and the
-        # pre-existing anti-regression assertion that a stale=True status
-        # with installed=None renders no suffix.
-        if status.stale:
-            return Text.assemble((base, color), (f" {_VER_STALE}", "dim"))
-        return Text(base, style=color)
+        text = version.installed
+        if version.outdated:
+            text = f"{version.installed} -> {version.latest}"
+        # The stale suffix qualifies a claim about `latest`, so only a cell that
+        # compared against one carries it.
+        if version.stale and version.outdated is not None:
+            return Text.assemble(text, (f" {_VER_STALE}", "dim"))
+        return Text(text)
 
     # -- catalog data wiring for the browser adapter -----------------------
     def _skill_owner_cell(self, status: SkillHostStatus) -> Text:
@@ -636,35 +600,20 @@ class CatalogScreen(AppScreen):
         return Text(f"{labels[0]} +{len(labels) - 1}")
 
     def _owner_cell(self, tool: Tool) -> Text:
+        """The owner label, or the hosts for a skill pack, from the state. Empty
+        without a state (the Health `…` already says checking) and for an
+        unknown owner. Not gated on presence: ownership comes from the live
+        binary path, so an absent-reading tool can still carry a real owner."""
+        state = self._state(tool)
+        if state is None:
+            return Text("")
         if tool.skill_lifecycle is not None:
-            status = self._skill_status(tool)
-            return self._skill_owner_cell(status) if status is not None else Text("")
-        # D-02: blank means exactly "genuinely don't know" -- no service
-        # wired, no ownership record produced for this tool yet, or the
-        # record itself resolved to `unknown` (owner_label returns `None`
-        # for that case). Deliberately NOT gated on presence, unlike
-        # `_ver_cell`'s early return on a not-installed tool above: ownership
-        # is resolved from the live binary path (`ownership.py`'s
-        # `active_path` evidence), not from the presence predicate the tool
-        # state reads, so a tool the predicate happens to
-        # read as absent can still carry a real, useful ownership record. Do
-        # not "fix" this asymmetry by adding a not-installed early return
-        # here -- it would silently throw away real evidence.
-        service = self._version_refresh
-        ownership = service.ownership_of(tool.id) if service is not None else None
-        if ownership is None:
-            # CR-02 (15.4-REVIEW.md): while a pass is in flight, `None` does
-            # NOT mean "genuinely don't know" -- every record in the shared
-            # map is epoch-stale by construction until that pass commits, so
-            # a blank here would say the wrong thing about the whole catalog
-            # at once. Reuses `_ver_cell`'s own `checking…` label (already in
-            # `_LEGEND`, so this needs no new legend budget) rather than
-            # inventing a second word for the same state.
-            return Text(_VER_CHECKING, style="dim") if self.version_refreshing else Text("")
-        label = owner_label(ownership)
+            hosts = state.skill_hosts
+            return self._skill_owner_cell(hosts) if hosts is not None else Text("")
+        label = owner_label(state.ownership)
         if not label:
             return Text("")
-        if ownership.off_policy:
+        if state.ownership.off_policy:
             return Text.assemble(label, (" ≠ policy", "dim"))
         return Text(label)
 
