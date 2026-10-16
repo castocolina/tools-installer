@@ -557,6 +557,68 @@ def test_staged_cli_symlink_outside_the_bundle_is_rejected(
     assert not (tmp_path / "Applications" / "draw.io.app").exists()
 
 
+@pytest.mark.parametrize(
+    ("case", "match"),
+    [
+        pytest.param("symlink_with_cli", "real directory", id="symlink_with_cli"),
+        pytest.param("symlink_without_cli", "real directory", id="symlink_without_cli"),
+        pytest.param("regular_file_without_cli", "real directory", id="regular_file_without_cli"),
+        pytest.param(
+            "cli_resolving_to_a_zip_sibling", "regular file", id="cli_resolving_to_a_zip_sibling"
+        ),
+    ],
+)
+def test_staged_bundle_escape_is_refused_and_moves_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, match: str
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    marker = tmp_path / "outside-ran.marker"
+    outside = tmp_path / "outside"
+    outside_cli = outside / "Contents/MacOS/draw.io"
+    outside_cli.parent.mkdir(parents=True)
+    outside_cli.write_text(f"#!/bin/sh\n: > {marker}\n", encoding="utf-8")
+    outside_cli.chmod(0o755)
+    outside_bytes = outside_cli.read_bytes()
+    payload = b"zip"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    def escape_runner(cmd: list[str]) -> None:
+        if cmd and cmd[0] == "curl" and "-o" in cmd:
+            dest = Path(cmd[cmd.index("-o") + 1])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(payload)
+        elif cmd and cmd[0] == "ditto":
+            dest = Path(cmd[-1])
+            bundle = dest / "draw.io.app"
+            if case.startswith("symlink"):
+                bundle.symlink_to(outside)
+            elif case == "regular_file_without_cli":
+                bundle.write_bytes(b"not a bundle")
+            else:
+                sibling = dest / "other" / "draw.io"
+                sibling.parent.mkdir(parents=True, exist_ok=True)
+                sibling.write_text(f"#!/bin/sh\n: > {marker}\n", encoding="utf-8")
+                sibling.chmod(0o755)
+                target = bundle / "Contents/MacOS/draw.io"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.symlink_to("../../../other/draw.io")
+        else:
+            raise AssertionError(cmd)
+
+    if case.endswith("without_cli"):
+        method = _method(app="draw.io.app", sha256=digest)
+    else:
+        method = _drawio_method(sha256=digest)
+    with pytest.raises(ExecutorError, match=match):
+        install_app(method, escape_runner)
+    assert not marker.exists()
+    assert list((tmp_path / "Applications").iterdir()) == []
+    link = tmp_path / ".local" / "bin" / "drawio"
+    assert not link.exists()
+    assert not link.is_symlink()
+    assert outside_cli.read_bytes() == outside_bytes
+
+
 def test_declared_sha256_is_checked_on_an_unpinned_app_url(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

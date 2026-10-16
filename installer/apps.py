@@ -177,8 +177,10 @@ def _stage_and_swap_app(
         extract_root.mkdir(parents=True, exist_ok=True)
         runner(["ditto", "-x", "-k", str(zip_path), str(extract_root)])
         staged_bundle = extract_root / app
-        if not staged_bundle.exists():
-            raise ExecutorError(f"extracted zip did not contain '{app}'")
+        # A bundle entry that is a symlink (or not a directory) would move the
+        # containment root, the smoke and the swap outside staging.
+        if staged_bundle.is_symlink() or not staged_bundle.is_dir():
+            raise ExecutorError(f"extracted zip did not contain '{app}' as a real directory")
         if spec is not None:
             cli, _name = spec
             cli_path = staged_member(staged_bundle, cli)
