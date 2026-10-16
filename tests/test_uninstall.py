@@ -2231,3 +2231,22 @@ def test_nul_receipt_path_never_aborts_plan_removal(
     plan = plan_removal([_raw_yq_tool()], bin_dir)
     assert plan.removable == ()
     assert plan.yourself == (bin_dir / "yq",)
+
+
+# --- 19-29 Task 1: an unreadable receipts dir never aborts removal (G23) ---
+
+
+def test_inaccessible_receipts_dir_never_aborts_plan_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A layout-provable archive with no receipt stays unproven when the
+    receipts dir cannot be searched: no crash, and no layout fallback."""
+    from tests.test_receipts import deny_receipts_dir
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rg, bin_dir, opt = _plant_rg(tmp_path)
+    deny_receipts_dir(monkeypatch)
+    plan = plan_removal([rg], bin_dir)
+    assert plan.removable == ()
+    assert plan.by_tool == {}
+    assert set(plan.yourself) == {opt, bin_dir / "rg"}

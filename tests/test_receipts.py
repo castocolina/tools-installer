@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -914,3 +915,66 @@ def test_receipt_read_never_blocks_on_a_fifo(tmp_path: Path) -> None:
         with contextlib.suppress(OSError):
             os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
         thread.join(timeout=5)
+
+
+# --- 19-29 Task 1: an unreadable receipts dir is present-but-untrusted (G23) ---
+
+
+def deny_receipts_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every stat or open strictly inside the receipts dir raise EACCES.
+
+    Public: other tests import this instead of chmod, which root ignores. The
+    directory is captured when the helper is called, and anything outside it
+    (or an int fd) still reaches the real call."""
+    import errno
+
+    receipts_dir = receipts.receipts_dir()
+
+    def inside(path: object) -> str | None:
+        # str and Path are what pathlib and the callers pass; an int fd, or
+        # anything else, is never a receipts-dir path.
+        if isinstance(path, str):
+            text = path
+        elif isinstance(path, Path):
+            text = str(path)
+        else:
+            return None
+        candidate = Path(text)
+        if candidate == receipts_dir or receipts_dir in candidate.parents:
+            return text
+        return None
+
+    def wrap(name: str) -> None:
+        original: Callable[..., object] = getattr(os, name)
+
+        def guarded(*args: object, **kwargs: object) -> object:
+            text = inside(args[0]) if args else None
+            if text is not None:
+                raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), text)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(os, name, guarded)
+
+    for call in ("stat", "lstat", "open"):
+        wrap(call)
+
+
+def test_receipt_exists_treats_an_unreadable_dir_as_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert receipts.receipt_exists("yq") is False
+    write(_sample(tmp_path))
+    assert receipts.receipt_exists("yq") is True
+    receipt_path("yq").unlink()
+    receipt_path("yq").symlink_to(tmp_path / "nowhere")
+    assert receipts.receipt_exists("yq") is True
+    deny_receipts_dir(monkeypatch)
+    assert receipts.receipt_exists("yq") is True
+
+
+def test_adopt_refuses_when_the_receipts_dir_is_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool, method, artifact = _adoptable(tmp_path)
+    deny_receipts_dir(monkeypatch)
+    assert receipts.adopt(tool, method, artifact, package=None) is None

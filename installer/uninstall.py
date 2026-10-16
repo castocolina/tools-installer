@@ -104,10 +104,11 @@ def _receipt_proof(
 def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = False) -> RemovalPlan:
     """Prove removability by receipt, else by the archive layout; name the rest.
 
-    A tool with a receipt file is proven by that receipt alone (L-19-14): the
-    receipt artifacts `artifact_paths` also names, unless the receipt is
-    corrupt or any artifact drifted — then nothing, with no layout fallback.
-    `verify=True` re-hashes every recorded file (the deletion-time re-proof).
+    A tool with a receipt file is proven by that receipt alone (L-19-14); an
+    unreadable receipts dir counts as a receipt file (G23). The receipt
+    artifacts `artifact_paths` also names, unless the receipt is corrupt or any
+    artifact drifted — then nothing, with no layout fallback. `verify=True`
+    re-hashes every recorded file (the deletion-time re-proof).
 
     A tool with no receipt file keeps the archive-layout proof. For each
     download method, the (link, opt dir) pair comes from
@@ -123,7 +124,7 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
     by_tool: dict[str, tuple[Path, ...]] = {}
     artifacts: dict[Path, receipts.ReceiptArtifact] = {}
     for tool in tools:
-        if _exists(receipts.receipt_path(tool.id)):
+        if receipts.receipt_exists(tool.id):
             proven = _receipt_proof(tool, default_bin_dir, verify=verify)
             if proven:
                 by_tool[tool.id] = tuple(a.path for a in proven)

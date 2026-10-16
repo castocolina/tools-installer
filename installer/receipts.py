@@ -258,8 +258,7 @@ def record(
     found = (fingerprint(a.path, a.kind) for a in artifact_paths(method, base))
     artifacts = tuple(a for a in found if a is not None)
     receipt = _build_receipt(tool, method, artifacts, package=package, smoke=smoke)
-    path = receipt_path(tool.id)
-    existed = path.exists() or path.is_symlink()
+    existed = receipt_exists(tool.id)
     try:
         write(receipt)
     except OSError as exc:
@@ -287,8 +286,7 @@ def adopt(
     never as proof (review C2-H1). It writes through `_write_unlocked`: the
     lock is not reentrant and `write` would hang here (review H1)."""
     with _WRITE_LOCK:
-        path = receipt_path(tool.id)
-        if path.exists() or path.is_symlink():
+        if receipt_exists(tool.id):
             return None
         fresh = fingerprint(artifact.path, artifact.type)
         if fresh is None or fresh != artifact:
@@ -301,6 +299,23 @@ def adopt(
 def delete(tool_id: str) -> None:
     """Remove the receipt for `tool_id` when it exists."""
     receipt_path(tool_id).unlink(missing_ok=True)
+
+
+def receipt_exists(tool_id: str) -> bool:
+    """Whether a receipt is there, counting one that cannot be looked at.
+
+    A missing file (or a missing receipts dir) is False. Any other failure to
+    look — an inaccessible receipts dir — is True: the receipt is
+    present-but-untrusted, so it is never adopted and it gets no archive-layout
+    proof (G23). `lstat` keeps a dangling link counted, and it raises the same
+    way on Python 3.12 and 3.14 (Path.exists does not)."""
+    try:
+        receipt_path(tool_id).lstat()
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def fingerprint(path: Path, kind: Literal["dir", "link", "file"]) -> ReceiptArtifact | None:
