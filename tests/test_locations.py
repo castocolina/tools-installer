@@ -14,9 +14,14 @@ from installer.locations import (
     prepend_path,
     xdg_config_base,
 )
+from installer.model import load_tools
+from tests.state_doubles import seeded_service
+from tests.test_registry import REGISTRY
 
 ROOT = Path(__file__).resolve().parent.parent
 SETUP_PY = ROOT / "setup.py"
+# Captured at import, before the suite points HOME at a scratch dir (G28).
+_REAL_HOME = Path.home()
 
 # --- default bin dir sandbox (plan 19-01, checker W2) -------------------------
 
@@ -28,13 +33,50 @@ def test_suite_sandbox_redirects_the_default_bin_dir(
     dir under pytest's base temp, never the developer's real ~/.local/bin. A
     test that redirects HOME still gets HOME/.local/bin, and a declared dir is
     never touched either way."""
-    real_home = Path(os.path.expanduser("~"))
     # Through the module attribute, so the conftest sandbox patch applies.
     default = locations.bin_dir(None)
-    assert not default.is_relative_to(real_home)
+    assert not default.is_relative_to(_REAL_HOME)
     monkeypatch.setenv("HOME", str(tmp_path))
     assert bin_dir(None) == tmp_path / ".local" / "bin"
     assert bin_dir("/opt/x/bin") == Path("/opt/x/bin")
+
+
+def test_suite_home_is_a_per_test_scratch_dir(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Every test's HOME is a scratch dir under pytest's base temp, never the
+    developer's home, whichever of the three home readers asks (G28)."""
+    home = Path.home()
+    assert home == Path(os.environ["HOME"]) == Path(os.path.expanduser("~"))
+    assert home.is_dir()
+    assert home.is_relative_to(tmp_path_factory.getbasetemp())
+    assert not home.is_relative_to(_REAL_HOME)
+
+
+def test_registry_pass_reads_declared_locations_from_the_scratch_home(tmp_path: Path) -> None:
+    """A real-registry refresh expands `~/.sdkman/...` through HOME. An empty
+    scratch home is not SDKMAN; a java planted there is, which is only possible
+    if `~` expanded into the scratch dir and not the developer's home (G28)."""
+    assert not Path.home().is_relative_to(_REAL_HOME)
+    java = next(tool for tool in load_tools(REGISTRY) if tool.id == "java")
+    empty = seeded_service(
+        [java], cache_path=tmp_path / "before.json", home=tmp_path / "skill-home"
+    )
+    before = empty.state_of("java")
+    assert before is not None
+    assert before.ownership is not None
+    assert before.ownership.owner != "sdkman"
+
+    planted = Path.home() / ".sdkman" / "candidates" / "java" / "current" / "bin" / "java"
+    planted.parent.mkdir(parents=True)
+    planted.write_bytes(b"#!/bin/sh\n")
+    planted.chmod(0o755)
+    after_service = seeded_service(
+        [java], cache_path=tmp_path / "after.json", home=tmp_path / "skill-home"
+    )
+    after = after_service.state_of("java")
+    assert after is not None
+    assert after.ownership is not None
+    assert after.ownership.owner == "sdkman"
+    assert "managed by SDKMAN" in after.reasons
 
 
 # --- xdg_config_base (lane-2 MEDIUM-01) --------------------------------------

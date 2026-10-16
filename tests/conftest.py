@@ -1,10 +1,13 @@
 """Shared test environment guards.
 
-Tests must be deterministic and independent of the developer's shell, the same
-way they sandbox HOME. `$ZDOTDIR` now steers which .zshrc the installer writes
-to (installer.locations.zshrc_path), so a developer who runs the suite from a
-ZDOTDIR-based zsh setup would otherwise get different paths than CI. Clearing
-it by default keeps every test that does not set it explicitly on ~/.zshrc.
+Tests must be deterministic and independent of the developer's shell. Every
+test runs with HOME pointing at a per-test scratch dir, so `Path.home()` and
+`os.path.expanduser` never read the developer's home; a test that sets HOME
+itself still overrides that. `$ZDOTDIR` now steers which .zshrc the installer
+writes to (installer.locations.zshrc_path), so a developer who runs the suite
+from a ZDOTDIR-based zsh setup would otherwise get different paths than CI.
+Clearing it by default keeps every test that does not set it explicitly on
+~/.zshrc.
 """
 
 import os
@@ -94,6 +97,23 @@ def no_shell_location_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear `$ZDOTDIR` and `$ZSH` so tests never follow the developer's shell location."""
     monkeypatch.delenv("ZDOTDIR", raising=False)
     monkeypatch.delenv("ZSH", raising=False)  # omz_root falls back to $ZSH
+
+
+@pytest.fixture(autouse=True)
+def sandboxed_home(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Point HOME at a per-test scratch dir under pytest's base temp (P19-12, G28).
+
+    The state doubles sandbox `skill_home` and the managed bin dir, but declared
+    locations (`~/.sdkman/...`, `~/.local/opt`, `~/Applications`) are expanded
+    through HOME deep in production code. `Path.home()` and `expanduser` both
+    read HOME on Linux and macOS, so one assignment covers both. A test that
+    sets HOME itself still overrides this.
+    """
+    home = tmp_path_factory.getbasetemp() / "home" / uuid.uuid4().hex
+    home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
 
 
 @pytest.fixture(autouse=True)
