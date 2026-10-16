@@ -218,4 +218,7 @@ None.
 - **Ledger L-19-20 (D-14):** `UpdateService` takes a `live_platform` callable.
 - **Ledger L-19-21:** `default_skill_home()` is sandboxed in every test by conftest.
 - **Ledger L-19-22:** `model.TOOL_ID_RE` is enforced at registry load and reused for receipt file names; declared-package probes are memoized per pass; the opengsd handoff text pins `pnpm dlx @opengsd/gsd-core@1.16.0 --<runtime> --local`.
+- **Ledger L-19-23 (D-18):** for an absent pack the demoted configuration facts come first in the notes; skill packs get no owner or version notes.
+- **Ledger L-19-24:** `is_installed(..., default_bin_dir=)` is fed from the service's managed bin dir; an autouse `sandboxed_bin_dir` fixture (19-01) keeps tests off the real `~/.local/bin`.
+- **Ledger L-19-25 (D-02):** pass order is the public `ToolState.seq` field, used by the merge rule.
 
