@@ -144,7 +144,7 @@ Plans (numbered in creation order; W = execution wave):
   4. graphify (uv) resolves owner uv, and Volta, redirect shims, the implicit `~/.local/bin`, `host_setup` tools and native packages resolve their real owner with the native probe run once per pass; installing brew in-session makes colima installable without restarting the app.
   5. Skill packs show partial or duplicate installs per harness.
 
-**Plans:** 19 plans
+**Plans:** 21 plans
 
 Plans (W = execution wave):
 - [ ] 19-01-PLAN.md — receipts module and Wave-0 test sandbox for the receipts dir (W1)
@@ -153,19 +153,21 @@ Plans (W = execution wave):
 - [ ] 19-04-PLAN.md — batched native-package index and shim look-through owner evidence (W1)
 - [ ] 19-05-PLAN.md — Volta, `uv tool dir` and host_setup owners plus their update refusals (W1)
 - [ ] 19-06-PLAN.md — dry-run terminal drift and pnpm co-install group evidence (W1)
-- [ ] 19-07-PLAN.md — Claude plugin duplicates/disabled copies, per-harness partials and `ConfigStep` (W1)
-- [ ] 19-08-PLAN.md — one `ToolState` snapshot published in one swap, read through `state_of`; live `has_brew` (W2)
+- [ ] 19-07-PLAN.md — Claude plugin duplicates/disabled copies, per-harness partials, `ConfigStep` and the tool id rule (W1)
+- [ ] 19-08-PLAN.md — one `ToolState` snapshot published in one swap, read through `state_of`; single-flight pass; live `has_brew`; sandboxed skill home (W2)
 - [ ] 19-09-PLAN.md — one receipt writer called from install and update (W2)
 - [ ] 19-10-PLAN.md — receipt-proven removal with re-hash before deletion, one shared remover (W2)
-- [ ] 19-11-PLAN.md — project-scope skill packs: registry scope/pin, leftovers and per-repo install steps (W2)
+- [ ] 19-11-PLAN.md — project-scope skill packs: registry scope/pin and global leftovers in all nine harness homes, hook configs included (W2)
 - [ ] 19-12-PLAN.md — owner evidence wired into the refresh pass; owner/version reasons in state (W3)
-- [ ] 19-13-PLAN.md — one Health cell per row from state; per-tier installed copies deleted (W3)
+- [ ] 19-13-PLAN.md — one Health cell per row from state; `u` and tier switching run one full pass (W3)
+- [ ] 19-21-PLAN.md — project-pack repo walk, per-repo install steps and pinned opengsd handoff text (W3)
 - [ ] 19-14-PLAN.md — receipts as state evidence and digest adoption of pre-phase installs (W4)
-- [ ] 19-15-PLAN.md — Ver/Owner cells, focused-row health detail, legend text and `u` from state (W4)
+- [ ] 19-20-PLAN.md — per-tier installed copies deleted; install close and view switches rely on the pass (W4)
+- [ ] 19-15-PLAN.md — Ver/Owner cells, focused-row health detail, legend text and `u` from state (W5)
 - [ ] 19-16-PLAN.md — terminal, pnpm, skill and project-pack misconfiguration facts and steps (W5)
-- [ ] 19-17-PLAN.md — 80x20 layout: legend and health detail visible on every tier and chrome screen (W5)
-- [ ] 19-18-PLAN.md — execute screen, composition root and update service read state; transitional readers deleted (W6)
-- [ ] 19-19-PLAN.md — container e2e receipt assertions and Phase 19 architecture record (W6)
+- [ ] 19-17-PLAN.md — 80x20 layout: legend and health detail visible on every tier and chrome screen; every mark on every tier (W6)
+- [ ] 19-18-PLAN.md — execute screen, composition root and update service read state; transitional readers deleted (W7)
+- [ ] 19-19-PLAN.md — container e2e receipt assertions and Phase 19 architecture record (W8)
 
 **UI hint**: yes
 
