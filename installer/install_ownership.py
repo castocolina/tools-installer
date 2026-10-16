@@ -409,23 +409,33 @@ def detect_owner(tool: Tool, probe: ProbeRunner, *, immutable: bool) -> Ownershi
     return _UNKNOWN
 
 
-_RPM_PATH_QUERY = ["rpm", "-qf", "--qf", "%{NAME}\\n"]
+# The per-path query shapes above, by argv minus the trailing path, and how
+# each dialect prints one owner of that path.
+_PATH_ANSWERS: dict[tuple[str, ...], Callable[[str, str], str]] = {
+    ("rpm", "-qf", "--qf", "%{NAME}\\n"): lambda name, _path: f"{name}\n",
+    ("dpkg-query", "-S"): lambda name, path: f"{name}: {path}\n",
+    ("pacman", "-Qoq"): lambda name, _path: f"{name}\n",
+}
 
 
 class NativeIndex:
     """A `ProbeRunner` built once per refresh pass from one batched owner query.
 
-    The per-path queries above (`_rpm_owner`, `_rpm_owns_path`, ...) keep their
+    The per-path queries above (`_rpm_owner`, `_dpkg_owns_path`, ...) keep their
     code; this runner answers their argv shapes by dict lookup instead of a
     subprocess, so N native tools cost one query per pass, not N (D-11). A path
     the pass did not collect answers unowned -- fail closed -- rather than
-    issuing a second query.
+    issuing a second query. Every other argv (`rpm-ostree status --json`, the
+    declared-package queries, host-setup probes) reaches the wrapped probe at
+    most once per index: its text or its exception is memoized, so two tools
+    declaring one package cost one query per pass.
     """
 
     def __init__(self, probe: ProbeRunner, owners: dict[str, frozenset[str]]) -> None:
         self._probe = probe
         self._owners = owners
         self._dirs: dict[str, str] = {}
+        self._memo: dict[tuple[str, ...], str | Exception] = {}
 
     def key(self, path: str) -> str:
         """The usrmerge-safe join key: directory resolved, basename kept (an
@@ -438,21 +448,56 @@ class NativeIndex:
                 self._dirs[head] = head
         return os.path.join(self._dirs[head], base)
 
-    def _names(self, command: list[str]) -> frozenset[str]:
-        names = self._owners.get(self.key(command[-1]), frozenset())
-        if not names:
-            raise subprocess.CalledProcessError(1, command, output="")
-        return names
-
     def __call__(self, command: list[str]) -> str:
-        if command[:-1] == _RPM_PATH_QUERY:
-            return "".join(f"{name}\n" for name in sorted(self._names(command)))
-        return self._probe(command)
+        answer = _PATH_ANSWERS.get(tuple(command[:-1]))
+        if answer is not None:
+            path = command[-1]
+            names = self._owners.get(self.key(path))
+            if not names:
+                raise subprocess.CalledProcessError(1, command, output="")
+            return "".join(answer(name, path) for name in sorted(names))
+        argv = tuple(command)
+        if argv not in self._memo:
+            try:
+                self._memo[argv] = self._probe(command)
+            except Exception as exc:  # memoized verbatim and re-raised below
+                self._memo[argv] = exc
+        result = self._memo[argv]
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 def _parse_rpm(line: str) -> tuple[str, list[str]]:
     path, _, name = line.partition("\t")
     return path, [name]
+
+
+def _parse_dpkg(line: str) -> tuple[str, list[str]]:
+    names, sep, path = line.partition(": ")
+    if not sep or names.startswith("diversion by"):
+        return "", []
+    # Multi-owner `a, b: /p`; a multiarch `libc6:amd64` keeps the bare name, as
+    # `_dpkg_owner` does.
+    return path, [name.split(":", maxsplit=1)[0] for name in names.split(", ")]
+
+
+_PACMAN_OWNED_RE = re.compile(r"^(/\S.*) is owned by (\S+) \S+$")
+
+
+def _parse_pacman(line: str) -> tuple[str, list[str]]:
+    match = _PACMAN_OWNED_RE.fullmatch(line)
+    return (match[1], [match[2]]) if match else ("", [])
+
+
+# One batched "who owns these paths" argv per OS family, and its line parser.
+# pacman's message is localized, so it runs under the C locale. macOS has no
+# OS package database and no entry.
+_BATCHES: dict[str, tuple[list[str], Callable[[str], tuple[str, list[str]]]]] = {
+    "fedora": (["rpm", "-qf", "--qf", "[%{FILENAMES}\\t%{=NAME}\\n]"], _parse_rpm),
+    "debian": (["dpkg-query", "-S"], _parse_dpkg),
+    "arch": (["env", "LC_ALL=C", "pacman", "-Qo"], _parse_pacman),
+}
 
 
 def native_index(os_family: str, paths: Iterable[str], probe: ProbeRunner) -> NativeIndex:
@@ -466,10 +511,12 @@ def native_index(os_family: str, paths: Iterable[str], probe: ProbeRunner) -> Na
     queried = list(dict.fromkeys(path for path in paths if os.path.isabs(path)))
     found: dict[str, frozenset[str]] = {}
     index = NativeIndex(probe, found)
-    if os_family != "fedora" or not queried:
+    batch = _BATCHES.get(os_family)
+    if batch is None or not queried:
         return index
+    argv, parse = batch
     try:
-        output = probe(["rpm", "-qf", "--qf", "[%{FILENAMES}\\t%{=NAME}\\n]", *queried])
+        output = probe([*argv, *queried])
     except subprocess.CalledProcessError as exc:
         output = exc.stdout if isinstance(exc.stdout, str) else ""
     except (OSError, RuntimeError, subprocess.SubprocessError):
@@ -478,11 +525,14 @@ def native_index(os_family: str, paths: Iterable[str], probe: ProbeRunner) -> Na
     basenames = {os.path.basename(path) for path in queried}
     owners: dict[str, set[str]] = {}
     for line in output.splitlines():
-        path, names = _parse_rpm(line)
+        path, names = parse(line)
         # rpm prints every file of an owning package: drop by basename before
         # resolving any directory, so the cost stays bounded by the query.
-        if os.path.basename(path) not in basenames or (key := index.key(path)) not in wanted:
+        if not path or os.path.basename(path) not in basenames:
             continue
-        owners.setdefault(key, set()).update(n for n in names if _PACKAGE_NAME_RE.fullmatch(n))
+        if (key := index.key(path)) in wanted:
+            owners.setdefault(key, set()).update(
+                name for name in names if _PACKAGE_NAME_RE.fullmatch(name)
+            )
     found.update((key, frozenset(names)) for key, names in owners.items() if names)
     return index

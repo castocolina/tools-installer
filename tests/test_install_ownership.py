@@ -784,3 +784,107 @@ def test_native_index_joins_usrmerge_aliases(tmp_path: Path) -> None:
     elsewhere = f"{tmp_path}/opt/baz\tbaz-pkg\n"
     index = ownership.native_index("fedora", [other], _batch_probe(elsewhere, []))
     assert ownership.path_owner_package("fedora", other, index) is None
+
+
+def test_native_index_debian_one_query() -> None:
+    calls: list[list[str]] = []
+    paths = ["/usr/bin/ls", "/usr/lib/x", "/usr/bin/z"]
+    output = "coreutils: /usr/bin/ls\nlibc6:amd64: /usr/lib/x\ndiversion by foo from: /usr/bin/z\n"
+    index = ownership.native_index("debian", paths, _batch_probe(output, calls, returncode=1))
+    assert calls == [["dpkg-query", "-S", *paths]]
+    assert ownership.path_owner_package("debian", "/usr/bin/ls", index) == "coreutils"
+    assert ownership.path_owner_package("debian", "/usr/lib/x", index) == "libc6"
+    assert ownership.path_owner_package("debian", "/usr/bin/z", index) is None
+    assert len(calls) == 1
+
+
+def test_native_index_debian_multi_owner_is_ambiguous() -> None:
+    index = ownership.native_index("debian", ["/p"], _batch_probe("a, b: /p\n", []))
+    tool = _tool(methods=(Method(kind="apt", params={"package": "a"}),))
+    assert ownership.path_owner_package("debian", "/p", index) is None
+    assert ownership.package_owns_path(tool, "apt", "/p", index)
+
+
+def test_native_index_arch_one_query_under_c_locale() -> None:
+    calls: list[list[str]] = []
+    paths = ["/usr/bin/ls", "/x"]
+    output = "/usr/bin/ls is owned by coreutils 9.11-2\nerror: No package owns /x\n"
+    index = ownership.native_index("arch", paths, _batch_probe(output, calls, returncode=1))
+    assert calls == [["env", "LC_ALL=C", "pacman", "-Qo", *paths]]
+    assert ownership.path_owner_package("arch", "/usr/bin/ls", index) == "coreutils"
+    assert ownership.path_owner_package("arch", "/x", index) is None
+    tool = _tool(methods=(Method(kind="pacman", params={"package": "coreutils"}),))
+    assert ownership.package_owns_path(tool, "pacman", "/usr/bin/ls", index)
+    assert len(calls) == 1
+
+
+def _counting_probe(results: dict[tuple[str, ...], str | Exception], calls: list[list[str]]):
+    def run(command: list[str]) -> str:
+        calls.append(command)
+        result = results[tuple(command)]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    return run
+
+
+def test_native_index_reads_rpm_ostree_status_once() -> None:
+    status = ("rpm-ostree", "status", "--json")
+    calls: list[list[str]] = []
+    index = ownership.native_index("fedora", [], _counting_probe({status: "{}"}, calls))
+    assert index(list(status)) == index(list(status)) == "{}"
+    assert len(calls) == 1
+
+    calls.clear()
+    failing = _counting_probe({status: FileNotFoundError("rpm-ostree")}, calls)
+    index = ownership.native_index("fedora", [], failing)
+    for _ in range(2):
+        with pytest.raises(FileNotFoundError):
+            index(list(status))
+    assert len(calls) == 1
+
+
+def test_native_index_memoizes_every_delegated_argv() -> None:
+    git = ("rpm", "-q", "--qf", "%{NAME}\\n", "git")
+    jq = ("rpm", "-q", "--qf", "%{NAME}\\n", "jq")
+    gone = ("rpm", "-q", "--qf", "%{NAME}\\n", "gone")
+    calls: list[list[str]] = []
+    results: dict[tuple[str, ...], str | Exception] = {
+        git: "git\n",
+        jq: "jq\n",
+        gone: subprocess.CalledProcessError(1, list(gone), output=""),
+    }
+    index = ownership.native_index("fedora", [], _counting_probe(results, calls))
+    for _ in range(2):
+        assert index(list(git)) == "git\n"
+        assert index(list(jq)) == "jq\n"
+        with pytest.raises(subprocess.CalledProcessError):
+            index(list(gone))
+    assert calls == [list(git), list(jq), list(gone)]
+    # Two dnf tools declaring one package cost one query per pass.
+    one = _tool(methods=(Method(kind="dnf", params={"package": "git"}),))
+    assert detect_owner(_tool(owner_probes=("dnf",), methods=one.methods), index, immutable=False)
+    assert len(calls) == 3
+
+
+def test_native_index_passes_other_argv_through() -> None:
+    brew = ("brew", "list", "--versions", "x")
+    calls: list[list[str]] = []
+    index = ownership.native_index("fedora", [], _counting_probe({brew: "x 1.0\n"}, calls))
+    assert index(list(brew)) == "x 1.0\n"
+    assert calls == [list(brew)]
+
+
+def test_native_index_macos_makes_no_query() -> None:
+    calls: list[list[str]] = []
+    ownership.native_index("macos", ["/usr/bin/git"], _recording_probe({}, calls))
+    assert calls == []
+
+
+def test_native_index_survives_an_unresolvable_output_path() -> None:
+    """Stdout is untrusted: a NUL in a reported directory makes realpath raise,
+    and that line must simply match nothing."""
+    output = "/us\0r/bin/git\tevil\n/usr/bin/git\tgit-core\n"
+    index = ownership.native_index("fedora", ["/usr/bin/git"], _batch_probe(output, []))
+    assert ownership.path_owner_package("fedora", "/usr/bin/git", index) == "git-core"
