@@ -207,4 +207,8 @@ None.
 - **Ledger L-19-09 (D-18, verifiable):** parse `claude plugin list --json` (scope, enabled, version) instead of the text output.
 - **Ledger L-19-10 (R9, verifiable):** the catalog has no `konsole` row; Konsole shell drift attaches to the `zsh` row.
 - **Ledger L-19-11:** CONTEXT line references have drifted since Phases 17/18; plans cite current lines (19-RESEARCH), no decision changes.
+- **Ledger L-19-12 (D-02, planner):** the snapshot merge is per-record newest-wins; an overtaken full pass publishes nothing, an older full pass may still fill records a newer partial pass did not cover.
+- **Ledger L-19-13 (D-05, planner):** `ConfigStep` lives in `installer/model.py`; `version_status.py` would create an import cycle and D-05 forbids new modules.
+- **Ledger L-19-14 (D-08/D-10, planner):** a corrupt receipt leaves the tool unproven (no layout fallback); a valid receipt beats layout proof; one changed artifact makes the whole tool non-removable.
+- **Ledger L-19-15 (D-18/D-21, host check):** `claude plugin install -s user <id>` is valid (`-s, --scope user|project|local`); `projectPath` on project-scope records is unverified on this host, so without it the duplicate reason shows with no fix step.
 
