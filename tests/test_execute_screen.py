@@ -24,6 +24,7 @@ from textual.timer import Timer
 from textual.widgets import Label, ListItem, ListView, Static
 
 import installer.execute_screen
+import installer.update as update_module
 from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus
@@ -4424,7 +4425,7 @@ async def test_brew_appearing_mid_session_unblocks_colima(
         await pilot.pause()
         screen = app.screen
         assert isinstance(screen, ExecuteScreen)
-        assert [tool.id for tool in screen._ordered] == ["colima"]  # pyright: ignore[reportPrivateUsage]
+        assert _progress_text(screen).splitlines() == ["\u25cb colima [pending]"]
         assert "not available" not in _head_text(screen)
         await pilot.press("enter")
         await _settle_execute(screen, pilot)
@@ -4433,7 +4434,9 @@ async def test_brew_appearing_mid_session_unblocks_colima(
 
 async def test_classify_reads_the_state(tmp_path: Path) -> None:
     """Repair is the pnpm-shim case only; a drifted (`changed since install`)
-    BROKEN state is not repaired (19-RESEARCH Pitfall 10)."""
+    BROKEN state is not repaired (19-RESEARCH Pitfall 10). `shim` is reinstalled
+    as the repair; `drifted` stays an update target and `UpdateService.run`
+    refuses it."""
     shim, ok, old, drifted = (_tool(name) for name in ("shim", "ok", "old", "drifted"))
     service = frozen_service(tmp_path)
     service.publish(
@@ -4476,14 +4479,12 @@ async def test_classify_reads_the_state(tmp_path: Path) -> None:
         await pilot.pause()
         screen = app.screen
         assert isinstance(screen, ExecuteScreen)
-        repair = [tool.id for tool in screen._repair]  # pyright: ignore[reportPrivateUsage]
-        current = [tool.id for tool in screen._current]  # pyright: ignore[reportPrivateUsage]
-        to_update = [tool.id for tool in screen._to_update]  # pyright: ignore[reportPrivateUsage]
-    assert repair == ["shim"]
-    assert current == ["ok"]
-    assert "old" in to_update
-    assert "ok" not in to_update
-    assert "drifted" not in repair
+        assert _progress_text(screen).splitlines() == [
+            "\u25cb shim [pending]",
+            "\u25cb old update [pending]",
+            "\u25cb drifted update [pending]",
+            "\u2713 ok [already current]",
+        ]
 
 
 async def test_run_updates_reads_ownership_and_version_from_state(tmp_path: Path) -> None:
@@ -4520,3 +4521,97 @@ async def test_run_updates_reads_ownership_and_version_from_state(tmp_path: Path
     assert [target.ownership.package for target in updates.recorded] == ["from-state"]
     assert refresh.asked == ["rg"]
     assert "updated rg now 2.0.0" in log
+
+
+def _raw_yq(bin_dir: Path) -> Method:
+    """A raw github_release method local to this module (no private import)."""
+    return Method(
+        kind="github_release",
+        params={
+            "repo": "mikefarah/yq",
+            "asset": "yq_linux_{arch.deb}",
+            "member": "yq_linux_amd64",
+            "bin_name": "yq",
+            "raw": True,
+            "bin_dir": str(bin_dir),
+        },
+    )
+
+
+async def test_drifted_receipt_update_is_refused_per_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """G3: the execute screen reports the mutation-gate refusal per tool and
+    never replaces the changed file."""
+    from installer import receipts
+    from installer.download import UpdateExecResult as DownloadUpdateExecResult
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    placed = bin_dir / "yq"
+    placed.write_bytes(b"old-yq")
+    method = _raw_yq(bin_dir)
+    yq = Tool(
+        id="yq",
+        name="yq",
+        category="search",
+        cmd="yq",
+        methods=(method,),
+        priority="P1",
+        audience="both",
+        tier="system",
+        desc="",
+    )
+    receipts.record(yq, method, package=None, smoke="ok")
+    placed.write_bytes(b"a local dev build")
+
+    def fake_update(_method: Method, _ctx: object) -> DownloadUpdateExecResult:
+        placed.write_bytes(b"overwritten")
+        return DownloadUpdateExecResult(verified=True, warnings=())
+
+    monkeypatch.setattr(update_module.download, "update_download", fake_update)
+    ownership = replace(
+        _brew_ownership(yq),
+        owner="installer",
+        active_candidate="installer",
+    )
+    refresh = frozen_service(tmp_path)
+    refresh.publish(
+        [
+            pass_state(
+                yq,
+                platform=_PLATFORM,
+                ownership=ownership,
+                broken=("changed since install",),
+            )
+        ]
+    )
+    calls: list[list[str]] = []
+    updates = UpdateService(
+        platform=_PLATFORM,
+        runner=calls.append,
+        tools={},
+        managed_packages=lambda: (),
+        replay_globals=tuple,
+        reresolve_ownership=lambda _tool: ownership,
+    )
+    inputs = _inputs(
+        tools=[yq],
+        installed=lambda _tool: True,
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [yq])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["yq"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        log = _log_text(screen)
+        progress = _progress_text(screen)
+    assert "yq is broken: changed since install" in log
+    assert "\u2716 yq update [not done]" in progress
+    assert calls == []
+    assert placed.read_bytes() == b"a local dev build"

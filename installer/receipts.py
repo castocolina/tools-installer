@@ -34,6 +34,9 @@ from installer.model import TOOL_ID_RE, Method, Tool
 # would claim files this installer did not create.
 RECEIPTLESS_KINDS = frozenset({"dnf", "apt", "pacman", "rpm_ostree", "skill_pack", "host_setup"})
 
+# 19-UI-SPEC locked copy (D-08). One owner: version_status and the update gate both read it.
+CHANGED_SINCE_INSTALL = "changed since install"
+
 _MAX_RECEIPT_BYTES = 64 * 1024
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 

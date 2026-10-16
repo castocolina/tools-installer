@@ -1429,3 +1429,50 @@ def test_update_service_reads_the_live_platform(monkeypatch: pytest.MonkeyPatch)
     fixed.run(_target(tool, "brew", method=brew, package="ripgrep"))
     assert [platform.has_brew for platform in seen] == [True, True]
     assert seen[1] is fixed.platform
+
+
+def test_update_service_refuses_a_drifted_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """G3: the one mutation gate refuses an installer-owned update while the
+    receipt shows drift. The changed file and the receipt stay as they are."""
+    tool, method, placed = _yq_with_old_bytes(tmp_path)
+    receipts.record(tool, method, package=None, smoke="ok")
+    receipt_bytes = receipts.receipt_path("yq").read_bytes()
+    placed.write_bytes(b"a local dev build")
+    downloads: list[object] = []
+
+    def fake_update(_method: Method, _ctx: object) -> DownloadUpdateExecResult:
+        downloads.append(_method)
+        placed.write_bytes(b"overwritten")
+        return DownloadUpdateExecResult(verified=True, warnings=())
+
+    monkeypatch.setattr(update.download, "update_download", fake_update)
+    calls: list[list[str]] = []
+    outcome = _service(
+        reresolve=lambda _t: _ownership(tool, "installer", method=method),
+        runner=calls.append,
+    ).run(_target(tool, "installer", method=method))
+    assert outcome.status == "unsupported"
+    assert outcome.detail == "yq is broken: changed since install"
+    assert calls == []
+    assert downloads == []
+    assert placed.read_bytes() == b"a local dev build"
+    assert receipts.receipt_path("yq").read_bytes() == receipt_bytes
+
+
+def test_all_gone_receipt_does_not_block_an_update(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Every artifact gone is not drift: the update runs and writes the file."""
+    tool, method, placed = _yq_with_old_bytes(tmp_path)
+    receipts.record(tool, method, package=None, smoke="ok")
+    placed.unlink()
+    _fake_download_update(monkeypatch, placed, b"restored-yq")
+    calls: list[list[str]] = []
+    outcome = _service(
+        reresolve=lambda _t: _ownership(tool, "installer", method=method),
+        runner=calls.append,
+    ).run(_target(tool, "installer", method=method))
+    assert outcome.status == "updated"
+    assert placed.read_bytes() == b"restored-yq"

@@ -488,6 +488,21 @@ class UpdateService:
                 detail=fresh.unknown_reason or _FALLBACK_UNKNOWN,
             )
         fresh_target = UpdateTarget(tool=target.tool, ownership=fresh)
+        # The one mutation gate for `u` and the execute screen (G3): an update
+        # would replace the changed file and erase the drift evidence.
+        if fresh.owner == "installer":
+            receipt = receipts.read(target.tool.id)
+            if (
+                receipt is not None
+                and not receipts.all_gone(receipt)
+                and receipts.drifted(receipt, rehash=True)
+            ):
+                return UpdateOutcome(
+                    tool_id=target.tool.id,
+                    status="unsupported",
+                    owner=fresh.owner,
+                    detail=f"{target.tool.id} is broken: {receipts.CHANGED_SINCE_INSTALL}",
+                )
         snapshot: tuple[str, ...] | None = None
         if should_replay_node_globals(fresh_target):
             captured = self._managed_packages()

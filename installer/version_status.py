@@ -81,7 +81,7 @@ from installer.pnpm_globals import (
     node_install_policy,
     pnpm_global_packages,
 )
-from installer.receipts import Receipt
+from installer.receipts import CHANGED_SINCE_INSTALL, Receipt
 from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError, run_query
 from installer.skill_lifecycle import (
@@ -599,8 +599,7 @@ BROKEN_SHIM_REASON = (
 NEEDS_BREW_REASON = "needs Homebrew, which is not on PATH"
 SKILL_CHECKING_REASON = "checking which hosts have it"
 SKILL_SEEDED_NOTE = "host status from the previous run, re-checking"
-# 19-UI-SPEC locked copy (D-08, D-09, SPEC R4).
-CHANGED_SINCE_INSTALL = "changed since install"
+# 19-UI-SPEC locked copy (D-09, SPEC R4). CHANGED_SINCE_INSTALL lives in receipts.
 RECEIPT_UNREADABLE_NOTE = "install receipt unreadable — treated as unproven"
 ADOPTED_NOTE = "adopted: the file matches the release checksum"
 # SPEC-locked text; this phase adds no `r` binding (Phase 20 does).
