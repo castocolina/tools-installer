@@ -60,8 +60,13 @@ from installer.model import ConfigStep, Method, Tool
 from installer.ownership import (
     ManagerInventory,
     ManagerOwnership,
+    active_path_note,
+    also_installed_note,
     attribute_path,
+    declared_manager_label,
+    owner_detail,
     owner_dirs,
+    owner_label,
     query_uv_tool_dir,
     read_inventory,
     resolve_ownership,
@@ -237,6 +242,7 @@ def resolve_github_release_status(
     resolve_tag: TagResolver,
     allow_fetch: bool = True,
     ownership: ManagerOwnership | None = None,
+    unresolved: str | None = None,
 ) -> tuple[VersionStatus, VersionCacheEntry | None]:
     """Probe the installed tool, optionally fetch the latest tag, build status.
 
@@ -246,7 +252,7 @@ def resolve_github_release_status(
     `allow_fetch=False` skips the network even when `should_fetch` is True
     (the per-pass GitHub budget) and forces stale=True.
     """
-    output = probe_output(_version_argv(tool, ownership))
+    output = probe_output(_version_argv(tool, ownership, unresolved=unresolved))
     installed = extract_observed_version(output) if output else None
     now_iso = now.astimezone(UTC).isoformat()
     fetched = False
@@ -309,7 +315,16 @@ def _pinned_spec(ownership: ManagerOwnership) -> str | None:
     return None
 
 
-def _version_argv(tool: Tool, ownership: ManagerOwnership | None) -> list[str]:
+def _version_argv(
+    tool: Tool, ownership: ManagerOwnership | None, *, unresolved: str | None = None
+) -> list[str]:
+    # A Volta shim or a host-setup launcher resolves to a dispatcher, not the
+    # tool: probe the PATH hit itself (19-RESEARCH Pitfall 6).
+    if unresolved is not None and (
+        (ownership is not None and ownership.owner == "volta")
+        or any(method.kind == "host_setup" for method in tool.methods)
+    ):
+        return [unresolved, "--version"]
     if ownership is not None and ownership.active_path is not None:
         return [str(ownership.active_path), "--version"]
     methods: list[Method] = []
@@ -344,11 +359,13 @@ def _probed_version(
     tool: Tool,
     ownership: ManagerOwnership,
     probe_output: Callable[[list[str]], str | None],
+    *,
+    unresolved: str | None = None,
 ) -> str | None:
     from_file = _version_file(ownership)
     if from_file is not False:
         return from_file
-    output = probe_output(_version_argv(tool, ownership))
+    output = probe_output(_version_argv(tool, ownership, unresolved=unresolved))
     return extract_observed_version(output) if output else None
 
 
@@ -391,8 +408,12 @@ def resolve_status(
     resolve_tag: TagResolver,
     platform: Platform,
     allow_fetch: bool = True,
+    unresolved: str | None = None,
 ) -> tuple[VersionStatus, VersionCacheEntry | None]:
-    """Pick the latest-version source from ownership.owner, never from rank."""
+    """Pick the latest-version source from ownership.owner, never from rank.
+
+    `unresolved` is the pass's PATH hit, forwarded to every version probe.
+    """
     pin = _pinned_spec(ownership)
     owner = ownership.owner
     if owner == "installer":
@@ -408,6 +429,7 @@ def resolve_status(
                 resolve_tag=resolve_tag,
                 allow_fetch=allow_fetch,
                 ownership=ownership,
+                unresolved=unresolved,
             )
             if pin is None:
                 return status, new_entry
@@ -421,7 +443,7 @@ def resolve_status(
                 pinned_spec=pin,
             )
             return pinned, new_entry
-        probed = _probed_version(tool, ownership, probe_output)
+        probed = _probed_version(tool, ownership, probe_output, unresolved=unresolved)
         return (
             VersionStatus(
                 tool_id=tool.id,
@@ -441,7 +463,7 @@ def resolve_status(
             "pnpm": outdated.pnpm,
             "uv": outdated.uv,
         }[owner]
-        probed = _probed_version(tool, ownership, probe_output)
+        probed = _probed_version(tool, ownership, probe_output, unresolved=unresolved)
         if mapping is None:
             return (
                 VersionStatus(
@@ -497,7 +519,7 @@ def resolve_status(
             ),
             None,
         )
-    probed = _probed_version(tool, ownership, probe_output)
+    probed = _probed_version(tool, ownership, probe_output, unresolved=unresolved)
     return (
         VersionStatus(
             tool_id=tool.id,
@@ -622,6 +644,78 @@ def tool_state(
         removable=removable,
         unconfigured=unconfigured,
     )
+
+
+def _is_skill_pack(tool: Tool) -> bool:
+    return any(method.kind == "skill_pack" for method in tool.methods)
+
+
+def ownership_notes(tool: Tool, ownership: ManagerOwnership, platform: Platform) -> tuple[str, ...]:
+    """The catalog detail bar's owner sentences, raw, in its order (D-15).
+
+    A skill pack gets none: they describe a binary on PATH, and the resolver
+    answers `unknown` for every pack (checker W1).
+    """
+    if _is_skill_pack(tool):
+        return ()
+    notes: list[str] = []
+    if ownership.owner != "unknown":
+        label = owner_detail(ownership)
+        if label:
+            notes.append(label)
+        if ownership.off_policy:
+            declared = declared_manager_label(tool, platform)
+            real = owner_label(ownership)
+            if declared is not None and real is not None:
+                notes.append(
+                    f"{real} owns this copy; the catalog's policy installs {tool.id} via {declared}"
+                )
+        if ownership.shadowed:
+            also = also_installed_note(ownership)
+            live = ownership.active_path
+            if also is not None and live is not None:
+                notes.append(f"{also} — live copy at {live}")
+            elif also is not None:
+                notes.append(also)
+            elif live is not None:
+                notes.append(f"shadowed — live copy at {live}")
+            else:
+                notes.append("shadowed")
+    elif ownership.unknown_reason:
+        notes.append(ownership.unknown_reason)
+    path_note = active_path_note(ownership)
+    if path_note:
+        notes.append(path_note)
+    return tuple(notes)
+
+
+def version_notes(
+    tool: Tool, status: VersionStatus, ownership: ManagerOwnership, *, present: bool
+) -> tuple[str, ...]:
+    """The catalog's version sentences plus the facts its dim Ver labels
+    carried (D-15). None for a skill pack (checker W1)."""
+    if _is_skill_pack(tool):
+        return ()
+    notes: list[str] = []
+    if present and status.installed is None:
+        notes.append("version unreadable")
+    elif present and (status.latest is None or status.outdated is None):
+        notes.append("no latest version to compare against")
+    if status.source == "installer" and status.outdated is None and ownership.owner == "installer":
+        notes.append(
+            "latest version cannot be determined for this install method — "
+            "pressing u re-runs the same install path this tool was originally installed with"
+        )
+    if status.pinned_spec:
+        notes.append(
+            f"this project pins {status.pinned_spec} and constrains the version deliberately"
+        )
+    if status.stale and status.latest is not None:
+        notes.append(
+            "the shown latest version came from a cache entry at or past STALE_AFTER "
+            "and a re-check is pending"
+        )
+    return tuple(notes)
 
 
 # One in-flight refresh: (epoch, seq, done, outcome). The outcome list gets the
@@ -1092,6 +1186,7 @@ class VersionRefreshService:
                 resolve_tag=self._resolve_tag,
                 platform=platform,
                 allow_fetch=allow_fetch,
+                unresolved=which(tool.cmd),
             )
             statuses[tool.id] = status
             removable = plan_removal([tool], self._managed_bin_dir)
@@ -1099,15 +1194,18 @@ class VersionRefreshService:
                 # Built at commit, from the host answers held then.
                 packs.append((tool, ownership, status, removable))
             else:
+                present = self._present(tool)
                 states[tool.id] = tool_state(
                     tool,
                     generation=started_epoch,
                     seq=seq,
                     platform=platform,
-                    present=self._present(tool),
+                    present=present,
                     ownership=ownership,
                     version=status,
                     removable=removable,
+                    notes=ownership_notes(tool, ownership, platform)
+                    + version_notes(tool, status, ownership, present=present),
                 )
             if would_fetch:
                 fetches += 1

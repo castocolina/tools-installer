@@ -30,6 +30,9 @@ from installer.ownership import (
     ManagerOwnership,
     Owner,
     OwnershipCandidate,
+    also_installed_note,
+    declared_manager_label,
+    owner_label,
     resolve_ownership,
 )
 from installer.platform import Platform
@@ -56,9 +59,11 @@ from installer.version_status import (
     ToolState,
     VersionRefreshService,
     VersionStatus,
+    ownership_notes,
     resolve_github_release_status,
     resolve_status,
     tool_state,
+    version_notes,
 )
 from installer.versions import Release, VersionError, resolve_github_tag
 
@@ -3332,3 +3337,242 @@ def test_pass_memoizes_declared_package_queries(tmp_path: Path) -> None:
     assert calls.count(declared) == 1
     service.refresh(tools)
     assert calls.count(declared) == 2
+
+
+# -- 19-12 Task 3: owner and version facts become state reasons; shim-managed
+# tools probe the unresolved path (D-15, 19-RESEARCH Pitfall 6). --
+
+_INSTALLER_NO_LATEST = (
+    "latest version cannot be determined for this install method — "
+    "pressing u re-runs the same install path this tool was originally installed with"
+)
+_STALE_NOTE = (
+    "the shown latest version came from a cache entry at or past STALE_AFTER "
+    "and a re-check is pending"
+)
+
+
+def _status(tool: Tool, **fields: object) -> VersionStatus:
+    base = VersionStatus(
+        tool_id=tool.id,
+        installed="1.0.0",
+        latest="1.0.0",
+        outdated=False,
+        stale=False,
+        source="brew",
+    )
+    return replace(base, **fields)
+
+
+def test_owner_notes_are_state_reasons(tmp_path: Path) -> None:
+    managed = tmp_path / "managed"
+    prefix = tmp_path / "brew"
+    tool = _brew_tool()
+    hits = {"brew": str(prefix / "bin" / "brew"), "rg": str(prefix / "bin" / "rg")}
+    service = _owner_pass_service(
+        tmp_path,
+        which=lambda cmd: hits.get(cmd),
+        managed=managed,
+        inventory=replace(
+            _empty_inventory(), brew_formulae={"ripgrep": "14.1.0"}, brew_prefix=prefix
+        ),
+        artifacts_for=lambda candidate: [managed / candidate.cmd],
+        platform=_platform(),
+    )
+    service.refresh([tool])
+    state = service.state_of("rg")
+    assert state is not None
+    assert state.ownership.owner == "brew"
+    assert state.ownership.shadowed is True
+    also = also_installed_note(state.ownership)
+    assert also is not None
+    assert state.reasons == (
+        "managed by Homebrew",
+        f"{also} — live copy at {state.ownership.active_path}",
+    )
+
+
+def test_off_policy_note() -> None:
+    tool = _codegraph()
+    ownership = replace(_owned(tool, "brew", package="codegraph"), off_policy=True)
+    declared = declared_manager_label(tool, _platform())
+    real = owner_label(ownership)
+    assert declared is not None
+    assert real is not None
+    sentence = f"{real} owns this copy; the catalog's policy installs {tool.id} via {declared}"
+    assert ownership_notes(tool, ownership, _platform()).count(sentence) == 1
+
+
+def test_unknown_owner_reason_note() -> None:
+    tool = _gh_tool("alpha")
+    notes = ownership_notes(tool, _unknown_owner(tool), _platform())
+    assert notes == ("no manager claimed the tool",)
+
+
+def test_active_path_note() -> None:
+    tool = _gh_tool("alpha")
+    ownership = replace(_unknown_owner(tool), active_path=Path("/opt/x/bin/alpha"))
+    notes = ownership_notes(tool, ownership, _platform())
+    assert notes.count("active binary resolves to /opt/x/bin/alpha") == 1
+    assert notes.count("no manager claimed the tool") == 1
+
+
+def test_version_notes() -> None:
+    tool = _codegraph()
+    installer = _owned(tool, "installer")
+    no_comparison = _status(tool, latest=None, outdated=None, stale=True, source="installer")
+    notes = version_notes(tool, no_comparison, installer, present=True)
+    assert notes.count(_INSTALLER_NO_LATEST) == 1
+
+    pnpm_tool = _node_tool(pinned=True)
+    pinned = _status(pnpm_tool, source="pnpm", pinned_spec="puppeteer ^25")
+    notes = version_notes(pnpm_tool, pinned, _owned(pnpm_tool, "pnpm"), present=True)
+    assert (
+        notes.count("this project pins puppeteer ^25 and constrains the version deliberately") == 1
+    )
+
+    stale = _status(tool, latest="2.0.0", outdated=True, stale=True, source="github")
+    assert version_notes(tool, stale, installer, present=True).count(_STALE_NOTE) == 1
+
+
+def test_version_unreadable_and_no_comparison_reasons() -> None:
+    tool = _gh_tool("alpha")
+    ownership = _unknown_owner(tool)
+    unreadable = _status(tool, installed=None, latest=None, outdated=None, source="unknown")
+    notes = version_notes(tool, unreadable, ownership, present=True)
+    assert "version unreadable" in notes
+    assert "no latest version to compare against" not in notes
+    no_latest = _status(tool, latest=None, outdated=None, stale=True, source="unknown")
+    assert "no latest version to compare against" in version_notes(
+        tool, no_latest, ownership, present=True
+    )
+    for status in (unreadable, no_latest):
+        absent = version_notes(tool, status, ownership, present=False)
+        assert "version unreadable" not in absent
+        assert "no latest version to compare against" not in absent
+
+
+def test_skill_pack_gets_no_binary_notes(tmp_path: Path) -> None:
+    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "install-state", "gsd-core"),))
+    ownership = _unknown_owner(pack)
+    unread = _status(pack, installed=None, latest=None, outdated=None, source="unknown")
+    assert ownership_notes(pack, ownership, _platform()) == ()
+    assert version_notes(pack, unread, ownership, present=True) == ()
+
+    service = _owner_pass_service(tmp_path, which=lambda _cmd: None, managed=tmp_path / "managed")
+    service.refresh([pack])
+    state = service.state_of("superpowers")
+    assert state is not None
+    assert state.ownership.owner == "unknown"
+    binary_sentences = {
+        "version unreadable",
+        "no latest version to compare against",
+        state.ownership.unknown_reason,
+    }
+    assert not binary_sentences & set(state.reasons)
+
+
+def _recording_probe() -> tuple[Callable[[list[str]], str | None], list[list[str]]]:
+    calls: list[list[str]] = []
+
+    def probe(argv: list[str]) -> str | None:
+        calls.append(list(argv))
+        return "1.2.3"
+
+    return probe, calls
+
+
+def test_volta_tool_version_probes_the_unresolved_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volta_bin = _volta_pnpm(tmp_path, monkeypatch)
+    hit = str(volta_bin / "pnpm")
+    probe, calls = _recording_probe()
+    service = _owner_pass_service(
+        tmp_path,
+        which=lambda cmd: hit if cmd == "pnpm" else None,
+        managed=tmp_path / "managed",
+        probe_output=probe,
+    )
+    service.refresh([_pnpm_script_tool()])
+    state = service.state_of("pnpm")
+    assert state is not None
+    assert state.ownership.owner == "volta"
+    assert calls == [[hit, "--version"]]
+
+
+def test_host_setup_tool_version_probes_the_unresolved_path(tmp_path: Path) -> None:
+    launcher = tmp_path / "lib" / "pi" / "launcher.js"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("launcher")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "pi").symlink_to(launcher)
+    hit = str(bin_dir / "pi")
+    tool = _tool("pi", Method(kind="host_setup", params={"setup_id": "pi"}))
+    probe, calls = _recording_probe()
+    service = _owner_pass_service(
+        tmp_path,
+        which=lambda cmd: hit if cmd == "pi" else None,
+        managed=tmp_path / "managed",
+        probe_output=probe,
+    )
+    service.refresh([tool])
+    state = service.state_of("pi")
+    assert state is not None
+    assert state.ownership.active_path == launcher
+    assert calls == [[hit, "--version"]]
+
+
+@pytest.mark.parametrize(
+    "route", ["volta", "host_setup_installer", "host_setup_brew", "host_setup_github"]
+)
+def test_resolve_status_forwards_the_unresolved_path_for_volta_and_host_setup(route: str) -> None:
+    """review C2-M5: every route from `resolve_status` into `_version_argv`
+    carries the looked-through hit."""
+    host_setup = Method(kind="host_setup", params={"setup_id": "demo"})
+    if route == "volta":
+        tool = _pnpm_script_tool()
+        ownership = replace(_owned(tool, "volta"), method=None)
+    elif route == "host_setup_github":
+        tool = _tool("demo", host_setup, Method(kind="github_release", params={"repo": "o/demo"}))
+        ownership = _owned(tool, "installer", method=host_setup)
+    else:
+        tool = _tool("demo", host_setup)
+        owner: Owner = "brew" if route == "host_setup_brew" else "installer"
+        ownership = _owned(tool, owner, method=host_setup)
+    ownership = replace(ownership, active_path=Path(f"/resolved/{tool.cmd}"))
+
+    def recorded(unresolved: str | None = None) -> list[list[str]]:
+        calls, probe = _probe_calls()
+        resolve_status(
+            tool,
+            ownership=ownership,
+            outdated=_empty_outdated(),
+            entry=None,
+            now=_status_now(),
+            probe_output=probe,
+            resolve_tag=lambda _repo: "v1.0.0",
+            platform=_platform(),
+            unresolved=unresolved,
+        )
+        return calls
+
+    assert recorded(unresolved=f"/x/bin/{tool.cmd}") == [[f"/x/bin/{tool.cmd}", "--version"]]
+    assert recorded() == [[f"/resolved/{tool.cmd}", "--version"]]
+
+
+def test_shadowed_note_variants() -> None:
+    tool = _brew_tool()
+    owned = replace(_owned(tool, "brew", package="ripgrep"), shadowed=True)
+    other = OwnershipCandidate(
+        owner="installer", method=None, package=None, current_version=None, evidence="test"
+    )
+    with_other = replace(owned, candidates=(*owned.candidates, other), active_path=None)
+    also = also_installed_note(with_other)
+    assert also is not None
+    assert also in ownership_notes(tool, with_other, _platform())
+    live = Path("/opt/homebrew/bin/rg")
+    assert f"shadowed — live copy at {live}" in ownership_notes(tool, owned, _platform())
+    alone = replace(owned, active_path=None)
+    assert "shadowed" in ownership_notes(tool, alone, _platform())
