@@ -5442,6 +5442,7 @@ def _macos_service(
     *,
     resolve_tag: Callable[[str], str],
     probe_output: Callable[[list[str]], str | None] = lambda argv: "1.2.0",
+    present: Callable[[Tool], bool] | None = None,
 ) -> VersionRefreshService:
     managed = tmp_path / "bin"
     return VersionRefreshService(
@@ -5456,6 +5457,7 @@ def _macos_service(
         read_outdated_fn=_empty_outdated,
         pnpm_packages=lambda: (),
         query=lambda *_a, **_k: "",
+        present=present,
     )
 
 
@@ -5790,7 +5792,12 @@ async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreada
     def on_install(installed_tool: Tool) -> None:
         presence[installed_tool.id] = True
 
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0", probe_output=probe_output)
+    service = _macos_service(
+        tmp_path,
+        resolve_tag=lambda repo: "v1.0.0",
+        probe_output=probe_output,
+        present=lambda t: presence[t.id],
+    )
     execute = ExecuteInputs(
         catalog=[tool_a, tool_b],
         platform=_install_closed_platform(),
@@ -5809,8 +5816,8 @@ async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreada
         await _settle_versions(app, pilot)
         table = app.catalog.query_one(DataTable[Any])
         assert table.get_cell("newly-installed", "ver").plain == ""
-        assert table.get_cell("newly-installed", "inst").plain == "○"
-        assert table.get_cell("stays-installed", "inst").plain == "✓"
+        assert table.get_cell("newly-installed", "health").plain == "○"
+        assert table.get_cell("stays-installed", "health").plain == "✓"
         app.catalog.selected.add("newly-installed")
         await pilot.press("enter")
         assert isinstance(app.screen, ExecuteScreen)
@@ -5823,8 +5830,8 @@ async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreada
         # is Task 2's contract, not Task 1's.
         assert table.get_cell("newly-installed", "ver").plain != ""
         assert "1.0.0" in table.get_cell("newly-installed", "ver").plain
-        assert table.get_cell("newly-installed", "inst").plain == "✓"
-        assert table.get_cell("stays-installed", "inst").plain == "✓"
+        assert table.get_cell("newly-installed", "health").plain == "✓"
+        assert table.get_cell("stays-installed", "health").plain == "✓"
 
 
 async def test_returning_from_another_view_rederives_the_installed_map(tmp_path: Path) -> None:
@@ -5832,7 +5839,9 @@ async def test_returning_from_another_view_rederives_the_installed_map(tmp_path:
     they come back: `show_view` re-reads presence on every catalog entry."""
     tool = _gh_tool("removable", tier="system")
     presence = {"removable": True}
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    service = _macos_service(
+        tmp_path, resolve_tag=lambda repo: "v1.0.0", present=lambda t: presence[t.id]
+    )
     execute = ExecuteInputs(
         catalog=[tool],
         platform=_install_closed_platform(),
@@ -5850,7 +5859,7 @@ async def test_returning_from_another_view_rederives_the_installed_map(tmp_path:
         await pilot.press("1")
         await _settle_versions(app, pilot)
         table = app.catalog.query_one(DataTable[Any])
-        assert table.get_cell("removable", "inst").plain == "○"
+        assert table.get_cell("removable", "health").plain == "○"
 
 
 async def test_returning_to_the_base_tier_re_resolves_ownership_an_install_dropped(
@@ -5917,7 +5926,10 @@ async def test_install_closed_marks_a_detect_path_tool_that_answers_no_version(
         presence[installed_tool.id] = True
 
     service = _macos_service(
-        tmp_path, resolve_tag=lambda repo: "v1.0.0", probe_output=lambda argv: None
+        tmp_path,
+        resolve_tag=lambda repo: "v1.0.0",
+        probe_output=lambda argv: None,
+        present=lambda t: presence[t.id],
     )
     execute = ExecuteInputs(
         catalog=[tool],
@@ -5931,7 +5943,7 @@ async def test_install_closed_marks_a_detect_path_tool_that_answers_no_version(
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         table = app.catalog.query_one(DataTable[Any])
-        assert table.get_cell("shell-fn-tool", "inst").plain == "○"
+        assert table.get_cell("shell-fn-tool", "health").plain == "○"
         app.catalog.selected.add("shell-fn-tool")
         await pilot.press("enter")
         assert isinstance(app.screen, ExecuteScreen)
@@ -5940,7 +5952,7 @@ async def test_install_closed_marks_a_detect_path_tool_that_answers_no_version(
         await pilot.press("escape")
         await _settle_versions(app, pilot)
         table = app.catalog.query_one(DataTable[Any])
-        assert table.get_cell("shell-fn-tool", "inst").plain == "✓"
+        assert table.get_cell("shell-fn-tool", "health").plain == "✓"
 
 
 async def test_install_closed_refresh_requeries_the_manager_inventory_after_a_run(

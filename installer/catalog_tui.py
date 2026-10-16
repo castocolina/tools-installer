@@ -37,9 +37,15 @@ from installer.status import is_default_shell
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import AppScreen, StatusLine, mark, run_live
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
-from installer.version_status import SkillHostStatus, VersionRefreshService, VersionStatus
+from installer.version_status import (
+    Health,
+    SkillHostStatus,
+    ToolState,
+    VersionRefreshService,
+    VersionStatus,
+)
 
-TableSortKey = Literal["id", "category", "priority", "audience", "installed"]
+TableSortKey = Literal["id", "category", "priority", "audience", "health"]
 
 PRIORITY_LABEL = {
     Priority.P0: "essential",
@@ -54,7 +60,7 @@ def sort_for_table(
     tools: list[Tool], installed: Mapping[str, bool], key: TableSortKey
 ) -> list[Tool]:
     """Flat-table order: by `key`, then priority, then id (deterministic)."""
-    if key == "installed":
+    if key == "health":
         return sorted(tools, key=lambda t: (installed[t.id], t.priority, t.id))
     return sorted(tools, key=lambda t: (getattr(t, key), t.priority, t.id))
 
@@ -104,6 +110,13 @@ def group_tools(
     else:  # "table" is routed by the app before grouping; anything else is a bug
         raise ValueError(f"unknown view: {view!r}")
     return [(title, detail, members) for title, detail, members in groups if members]
+
+
+def health_cell(state: ToolState | None) -> Text:
+    """The one writer of the Health column (D-15): `…` until a state exists,
+    so a pending tool never reads `✓`."""
+    glyph, style = _HEALTH_CELL[Health.CHECKING if state is None else state.health]
+    return Text(glyph, style=style)
 
 
 class ToolUpdated(Message):
@@ -188,7 +201,7 @@ _SORT_BY_COLUMN: dict[str, TableSortKey] = {
     "tool": "id",
     "cat": "category",
     "for": "audience",
-    "inst": "installed",
+    "health": "health",
 }
 
 _COLUMNS = (
@@ -197,7 +210,7 @@ _COLUMNS = (
     ("Tool", "tool"),
     ("Cat", "cat"),
     ("For", "for"),
-    ("Inst", "inst"),
+    ("Health", "health"),
     ("Ver", "ver"),
     # 15.4-01/D-01: a non-sorting column, like sel/ver/desc -- _SORT_BY_COLUMN
     # above is deliberately left untouched (its own comment already documents
@@ -224,8 +237,18 @@ _VER_NO_VERSION = "no version"
 _VER_SOURCE_UNKNOWN = "(source unknown)"
 _VER_NO_COMPARISON = "(no comparison)"
 _VER_STALE = "~"
-_BROKEN_MARK = "!"
 _BROKEN_DETAIL = "shim present, package missing — select it and press enter to reinstall and repair"
+# The Health column's glyph and style per state (19-UI-SPEC): every state has
+# its own glyph, so the meaning never depends on color.
+_HEALTH_CELL: dict[Health, tuple[str, str]] = {
+    Health.CHECKING: ("…", "dim"),
+    Health.BROKEN: ("!", "red"),
+    Health.MISCONFIGURED: ("≈", "yellow"),
+    Health.OUTDATED: ("↑", "yellow"),
+    Health.OK: ("✓", "green"),
+    Health.MISSING: ("○", ""),
+    Health.UNAVAILABLE: ("–", "dim"),
+}
 # Already this wide for one owner, so a host list truncates only if it would widen the column (D-13)
 _OWNER_CELL_MAX = max(len(label) for label in OWNER_LABELS.values())
 
@@ -491,30 +514,9 @@ class CatalogScreen(AppScreen):
             return False
         return None
 
-    def _inst_cell(self, tool: Tool, installed: bool) -> Text:
-        if tool.skill_lifecycle is None:
-            service = self._version_refresh
-            ownership = service.ownership_of(tool.id) if service is not None else None
-            if ownership is not None and ownership.broken:
-                return Text(_BROKEN_MARK, style="red")
-            return Text("✓", style="green") if installed else Text("○", style="yellow")
-        status = self._skill_status(tool)
-        if status is not None and status.hosts:
-            values = list(status.hosts.values())
-            if any(value == "present" for value in values):
-                glyph, style = "✓", "green"
-            elif all(value == "absent" for value in values):
-                glyph, style = "○", "yellow"
-            else:
-                glyph, style = "?", "dim"
-            if status.stale:
-                return Text.assemble((glyph, style), (f" {_VER_STALE}", "dim"))
-            return Text(glyph, style=style)
-        if self.skill_refreshing:
-            glyph = "✓" if installed else "○"
-            style = "green" if installed else "yellow"
-            return Text.assemble((glyph, style), (f" {_VER_STALE}", "dim"))
-        return Text("✓", style="green") if installed else Text("○", style="yellow")
+    def _state(self, tool: Tool) -> ToolState | None:
+        service = self._version_refresh
+        return service.state_of(tool.id) if service is not None else None
 
     def _ver_cell(self, tool: Tool) -> Text:
         if not bool(self._present(tool)):
@@ -612,7 +614,7 @@ class CatalogScreen(AppScreen):
         return Text(label)
 
     def _row_cells(self, tool: Tool) -> list[Text]:
-        installed = self._installed[tool.id]
+        health = health_cell(self._state(tool))
         desc = tool.desc or tool.name
         ver = self._ver_cell(tool)
         unavailable = self._unavailable.get(tool.id, False)
@@ -627,7 +629,7 @@ class CatalogScreen(AppScreen):
                 Text(tool.id, style="dim"),
                 Text(tool.category, style="dim"),
                 Text(AUDIENCE_LABEL[tool.audience], style="dim"),
-                Text(self._inst_cell(tool, installed).plain, style="dim"),
+                Text(health.plain, style="dim"),
                 Text(ver.plain, style="dim"),
                 Text(self._owner_cell(tool).plain, style="dim"),
                 Text(desc, style="dim"),
@@ -638,7 +640,7 @@ class CatalogScreen(AppScreen):
             Text(tool.id, style="bold"),
             Text(tool.category),
             Text(AUDIENCE_LABEL[tool.audience], style=_AUDIENCE_STYLE[tool.audience]),
-            self._inst_cell(tool, installed),
+            health,
             ver,
             self._owner_cell(tool),
             Text(desc, style="dim"),

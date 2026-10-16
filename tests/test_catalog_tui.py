@@ -4,6 +4,7 @@ import re
 import threading
 import typing
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -30,12 +31,12 @@ from installer.catalog_tui import (
     ToolUpdated,
     VersionStatusRefreshed,
     group_tools,
+    health_cell,
     sort_for_table,
 )
 from installer.deps import resolve_dependencies
 from installer.doctor import DoctorReport
 from installer.enums import Audience
-from installer.manager_versions import OutdatedReport
 from installer.model import (
     Method,
     SkillLifecycle,
@@ -61,9 +62,37 @@ from installer.selection import select_tools
 from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_cache import VersionCacheEntry, save_version_cache
-from installer.version_status import SkillHostStatus, VersionRefreshService, VersionStatus
+from installer.version_status import (
+    Health,
+    SkillHostStatus,
+    VersionRefreshService,
+    VersionStatus,
+)
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
+from tests.state_doubles import offline_service, seeded_service
 from tests.test_registry import REGISTRY
+
+# The developer's home, read at import time before any test patches HOME.
+_REAL_HOME = Path.home()
+# Per-test scratch dir for the services the helpers below build on their own.
+_SCRATCH: dict[str, Path] = {}
+
+
+@pytest.fixture(autouse=True)
+def scratch_state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give `_screen`/`_unified_app` a scratch cache and home under `tmp_path`."""
+    monkeypatch.setitem(_SCRATCH, "dir", tmp_path / "catalog-state")
+
+
+def _seeded(tools: list[Tool], installed: Mapping[str, bool]) -> VersionRefreshService:
+    """A service whose one completed pass reads `installed` as presence."""
+    scratch = _SCRATCH["dir"]
+    return seeded_service(
+        tools,
+        cache_path=scratch / "versions.json",
+        home=scratch / "home",
+        present={tool_id for tool_id, present in installed.items() if present},
+    )
 
 
 def _unified_app(
@@ -93,7 +122,7 @@ def _unified_app(
         ),
         policies=PolicyInputs(policies=[]),
         unavailable=unavailable,
-        version_refresh=version_refresh,
+        version_refresh=version_refresh or _seeded(tools, installed),
         updates=updates,
     )
 
@@ -201,7 +230,7 @@ def test_sort_for_table_by_each_key():
         "fd",
         "lazygit",
     ]  # ai < both < human alphabetically
-    assert [t.id for t in sort_for_table(tools, installed, "installed")] == [
+    assert [t.id for t in sort_for_table(tools, installed, "health")] == [
         "fd",
         "lazygit",
         "rg",
@@ -940,7 +969,7 @@ def _screen(
         view="system",
         catalog=list(tools),
         staged=set(),
-        version_refresh=version_refresh,
+        version_refresh=version_refresh or _seeded(tools, installed),
         updates=updates,
     )
 
@@ -958,7 +987,7 @@ def _status(*, stale: bool) -> VersionStatus:
 
 def test_catalog_columns_include_ver_and_owner() -> None:
     assert len(_COLUMNS) == 9
-    assert _COLUMNS[5] == ("Inst", "inst")
+    assert _COLUMNS[5] == ("Health", "health")
     assert _COLUMNS[6] == ("Ver", "ver")
     assert _COLUMNS[7] == ("Owner", "owner")
     assert _COLUMNS[8] == ("What it does", "desc")
@@ -1056,8 +1085,9 @@ def test_ver_cell_shows_no_version_marker_when_nothing_was_probed_at_all() -> No
 
 def test_epoch_guard_drops_a_superseded_version_refresh(tmp_path: Path) -> None:
     tool = _tool("rg")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1.6.0",
         probe_output=lambda argv: "1.2.0",
     )
@@ -1093,8 +1123,9 @@ def test_ownership_refreshed_is_posted_on_the_commit_path(
     that posts the completion signal a mounted Uninstall screen listens
     for."""
     tool = _tool("rg")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1.6.0",
         probe_output=lambda argv: "1.2.0",
     )
@@ -1111,8 +1142,9 @@ def test_ownership_refreshed_is_not_posted_on_a_superseded_generation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tool = _tool("rg")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1.6.0",
         probe_output=lambda argv: "1.2.0",
     )
@@ -1129,8 +1161,9 @@ def test_ownership_refreshed_is_not_posted_on_a_raced_epoch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tool = _tool("rg")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1.6.0",
         probe_output=lambda argv: "1.2.0",
     )
@@ -1142,56 +1175,6 @@ def test_ownership_refreshed_is_not_posted_on_a_raced_epoch(
         VersionStatusRefreshed({"rg": _status(stale=False)}, generation=1, epoch=0)
     )
     assert not any(isinstance(message, OwnershipRefreshed) for message in posted)
-
-
-_MANAGED = Path("/tmp/tools-installer-bin")
-
-
-def _empty_inventory(**_kwargs: object) -> ManagerInventory:
-    return ManagerInventory(
-        brew_formulae={},
-        brew_casks={},
-        pnpm_globals=frozenset(),
-        uv_tools={},
-        brew_prefix=None,
-    )
-
-
-def _empty_outdated(**_kwargs: object) -> OutdatedReport:
-    return OutdatedReport(brew={}, cask={}, pnpm={}, uv={})
-
-
-def _offline_service(
-    cache_path: Path,
-    *,
-    resolve_tag: Callable[[str], str],
-    probe_output: Callable[[list[str]], str | None],
-    now: Callable[[], datetime] | None = None,
-    platform: Platform | None = None,
-    which: Callable[[str], str | None] | None = None,
-    native_probe: Callable[[list[str]], str] | None = None,
-    artifacts_for: Callable[[Tool], list[Path]] | None = None,
-    skill_probe: Callable[[list[str]], str] | None = None,
-    skill_home: Path | None = None,
-    read_inventory_fn: Callable[..., ManagerInventory] = _empty_inventory,
-) -> VersionRefreshService:
-    return VersionRefreshService(
-        platform=platform or Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
-        cache_path=cache_path,
-        resolve_tag=resolve_tag,
-        probe_output=probe_output,
-        now=now,
-        managed_bin_dir=_MANAGED,
-        which=which or (lambda cmd: str(_MANAGED / cmd)),
-        artifacts_for=artifacts_for or (lambda tool: [_MANAGED / tool.cmd]),
-        read_inventory_fn=read_inventory_fn,
-        read_outdated_fn=_empty_outdated,
-        pnpm_packages=lambda: (),
-        query=lambda *_a, **_k: "",
-        native_probe=native_probe,
-        skill_probe=skill_probe,
-        skill_home=skill_home,
-    )
 
 
 # -- 15.4-01/D-01: tracer -- probe -> resolver -> label table -> rendered
@@ -1226,8 +1209,9 @@ def test_owner_column_and_detail_paint_the_os_package_case_end_to_end(tmp_path: 
     def which(cmd: str) -> str | None:
         return "/usr/bin/git" if cmd == "git" else None
 
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1.0.0",
         probe_output=lambda argv: None,
         platform=Platform(os="fedora", arch="amd64", immutable=True, has_brew=False),
@@ -1266,8 +1250,9 @@ def test_owner_column_renders_every_owner_value_in_both_branches(
 ) -> None:
     tool = _tool("demo")
     ownership = _ownership(tool, owner=owner, package="demo-pkg" if owner == "os-package" else None)
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -1284,8 +1269,9 @@ def test_owner_column_renders_every_owner_value_in_both_branches(
 def test_owner_column_is_blank_for_an_unknown_record(tmp_path: Path) -> None:
     tool = _tool("demo")
     ownership = _ownership(tool, owner="unknown", unknown_reason="no manager claimed the tool")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -1301,8 +1287,9 @@ def test_owner_column_is_blank_with_no_ownership_record_produced_yet(tmp_path: P
     refresh worker has not landed) -- the SAME blank as an unknown record,
     because both genuinely mean "don't know"."""
     tool = _tool("demo")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -1320,8 +1307,9 @@ def test_owner_column_says_checking_while_a_pass_is_in_flight(tmp_path: Path) ->
     must say `checking…` (the same word `_ver_cell` already uses, already in
     `_LEGEND`) rather than blank, which D-02 reserves for a real unknown."""
     tool = _tool("demo")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -1347,8 +1335,9 @@ def test_owner_column_dims_in_the_unavailable_branch_like_every_other_cell(
 ) -> None:
     tool = _tool("demo")
     ownership = _ownership(tool, owner="brew")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -1368,8 +1357,9 @@ def test_owner_column_does_not_gate_on_installed_state_unlike_ver_cell(
     happens to read as absent can still carry a real, useful record."""
     tool = _tool("demo")
     ownership = _ownership(tool, owner="brew")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -1399,8 +1389,9 @@ async def test_ver_cell_renders_no_version_marker_for_unparseable_probe_output(
     tmp_path: Path,
 ) -> None:
     tool = _gh_tool("dasel")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v2.8.0",
         probe_output=lambda argv: "Usage: dasel <command>",
     )
@@ -1690,8 +1681,9 @@ async def test_ver_cell_dim_checking_marker_reaches_the_rendered_table(tmp_path:
         assert release.wait(timeout=5)
         return "v2.8.0"
 
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=resolve_tag,
         probe_output=lambda argv: "1.0.0",
     )
@@ -1746,8 +1738,9 @@ async def test_refresh_cursor_survives_both_repaints_of_one_cycle(tmp_path: Path
             assert release.wait(timeout=5)
         return "1.0.0"
 
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1.0.0",
         probe_output=probe_output,
     )
@@ -1788,16 +1781,25 @@ async def test_refresh_cursor_survives_both_repaints_of_one_cycle(tmp_path: Path
 _BROKEN_HINT = "shim present, package missing — select it and press enter to reinstall and repair"
 
 
-def test_broken_row_marks_inst_red_and_explains_repair(tmp_path: Path) -> None:
-    tool = _tool("mmdc")
-    service = _offline_service(
-        tmp_path / "versions.json",
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
+def test_broken_row_marks_health_red_and_explains_repair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pnpm_home = tmp_path / "pnpm"
+    monkeypatch.setenv("PNPM_HOME", str(pnpm_home))
+    tool = Tool(
+        id="mmdc",
+        name="mmdc",
+        category="docs",
+        cmd="mmdc",
+        methods=(Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
     )
-    service._ownership = {  # pyright: ignore[reportPrivateUsage]
-        "mmdc": (service.epoch, _ownership(tool, owner="pnpm", broken=True))
-    }
+    service = seeded_service(
+        [tool],
+        cache_path=tmp_path / "versions.json",
+        home=tmp_path / "home",
+        present={"mmdc"},
+        which=lambda cmd: str(pnpm_home / cmd),
+    )
     screen = _screen([tool], {"mmdc": True}, version_refresh=service)
     cell = screen._row_cells(tool)[5]  # pyright: ignore[reportPrivateUsage]
     assert cell.plain == "!"
@@ -1809,8 +1811,9 @@ def test_broken_row_marks_inst_red_and_explains_repair(tmp_path: Path) -> None:
 def test_update_on_broken_row_hints_repair_without_updating(tmp_path: Path) -> None:
     tool = _tool("mmdc")
     ownership = _ownership(tool, owner="pnpm", broken=True)
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -1840,12 +1843,9 @@ def test_legend_names_the_broken_mark() -> None:
 
 def test_installed_row_without_broken_still_shows_green_check(tmp_path: Path) -> None:
     tool = _tool("rg")
-    service = _offline_service(
-        tmp_path / "versions.json",
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
+    service = seeded_service(
+        [tool], cache_path=tmp_path / "versions.json", home=tmp_path / "home", present={"rg"}
     )
-    service._ownership = {"rg": (service.epoch, _ownership(tool, owner="brew"))}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([tool], {"rg": True}, version_refresh=service)
     cell = screen._row_cells(tool)[5]  # pyright: ignore[reportPrivateUsage]
     assert cell.plain == "✓"
@@ -2033,8 +2033,9 @@ async def test_owner_cell_semantic_value_reaches_the_mounted_table(tmp_path: Pat
             brew_prefix=tmp_path / "brew",
         )
 
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
         artifacts_for=lambda _t: [],
@@ -2152,8 +2153,9 @@ async def test_budget_deferred_row_renders_stale_marker(tmp_path: Path) -> None:
             ),
         },
     )
-    service = _offline_service(
+    service = offline_service(
         path,
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "1.0.0",
         probe_output=lambda argv: "1.0.0",
         now=lambda: now,
@@ -2227,8 +2229,9 @@ def test_version_detail_reads_the_prose_register_for_every_simple_owner_value(
 ) -> None:
     tool = _tool("demo")
     ownership = _ownership(tool, owner=owner)
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2267,8 +2270,9 @@ def test_version_detail_names_every_installer_placement_mechanism(
         active_path=None,
         unknown_reason=None,
     )
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2284,8 +2288,9 @@ def test_version_detail_names_every_installer_placement_mechanism(
 def test_version_detail_os_package_names_the_actual_package(tmp_path: Path) -> None:
     tool = _tool("demo")
     ownership = _ownership(tool, owner="os-package", package="git-core")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2321,8 +2326,9 @@ def test_version_detail_hand_writes_no_owner_vocabulary_of_its_own() -> None:
 
 def test_detail_line_names_homebrew_for_brew_owned_row(tmp_path: Path) -> None:
     tool = _tool("rg")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2345,8 +2351,9 @@ def test_detail_line_names_homebrew_for_brew_owned_row(tmp_path: Path) -> None:
 def test_detail_line_names_competing_manager_and_active_path(tmp_path: Path) -> None:
     tool = _tool("rg")
     path = Path("/opt/homebrew/bin/rg")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2385,8 +2392,9 @@ def test_detail_line_names_competing_manager_and_active_path(tmp_path: Path) -> 
 def test_detail_names_also_installed_via_the_shadowed_manager(tmp_path: Path) -> None:
     tool = _sdkman_tool("java")
     path = Path("/home/user/.sdkman/candidates/java/current/bin/java")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2425,8 +2433,9 @@ def test_detail_names_also_installed_via_the_shadowed_manager(tmp_path: Path) ->
 def test_unknown_detail_names_the_active_binary(tmp_path: Path) -> None:
     tool = _tool("foo")
     path = Path("/opt/x/bin/foo")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2455,8 +2464,9 @@ def test_update_unknown_appends_the_active_path(tmp_path: Path) -> None:
         unknown_reason="no manager claimed this tool",
         active_path=path,
     )
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2513,8 +2523,9 @@ def test_detail_escapes_path_with_bracket(tmp_path: Path) -> None:
     )
     needle = "/opt/a[red]b/bin/foo"
     for tool, ownership in records:
-        service = _offline_service(
+        service = offline_service(
             tmp_path / "versions.json",
+            skill_home=tmp_path,
             resolve_tag=lambda repo: "v1",
             probe_output=lambda argv: "1.0",
         )
@@ -2549,8 +2560,9 @@ def test_detail_text_omits_default_shell_note_for_non_shell_tools() -> None:
 def test_unknown_owner_detail_contains_unknown_reason(tmp_path: Path) -> None:
     tool = _tool("rg")
     reason = "the brew inventory could not be read"
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2586,8 +2598,9 @@ def test_unknown_owner_detail_contains_unknown_reason(tmp_path: Path) -> None:
 
 def test_native_owner_detail_names_manager_and_no_update_fact(tmp_path: Path) -> None:
     tool = _tool("jq")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2605,8 +2618,9 @@ async def test_native_owner_update_key_reaches_the_service_and_renders_its_refus
     show a message without the service ever being asked."""
     tool = _tool("jq")
     ownership = _ownership(tool, owner="dnf")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2654,8 +2668,9 @@ async def test_native_owner_update_key_reaches_the_service_and_renders_its_refus
 
 def test_pinned_spec_appears_in_detail_line(tmp_path: Path) -> None:
     tool = _tool("mmdc")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2678,8 +2693,9 @@ def test_pinned_spec_appears_in_detail_line(tmp_path: Path) -> None:
 
 def test_stale_latest_has_marker_and_detail_explanation(tmp_path: Path) -> None:
     tool = _tool("rg")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2721,8 +2737,9 @@ def test_installer_no_repo_detail_explains_undetermined_latest(tmp_path: Path) -
         cmd="pnpm",
         methods=(Method(kind="script", params={"url": "https://get.pnpm.io/install.sh"}),),
     )
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2769,8 +2786,9 @@ def test_update_binding_exists_and_is_shown() -> None:
 def test_action_update_tool_skips_confirmed_current(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2821,8 +2839,9 @@ def _counting_begin(updates: UpdateService) -> list[str]:
 
 def test_off_policy_owner_cell_and_detail_name_the_declared_manager(tmp_path: Path) -> None:
     tool = _sdkman_tool("groovy")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2842,8 +2861,9 @@ def test_off_policy_owner_cell_and_detail_name_the_declared_manager(tmp_path: Pa
 def test_update_on_current_off_policy_tool_explains_and_does_not_begin(tmp_path: Path) -> None:
     tool = _sdkman_tool("groovy")
     ownership = _ownership(tool, owner="brew", off_policy=True)
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2875,8 +2895,9 @@ def test_update_on_current_off_policy_tool_explains_and_does_not_begin(tmp_path:
 def test_update_on_current_tool_says_already_current(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2905,8 +2926,9 @@ def test_update_on_current_tool_says_already_current(tmp_path: Path) -> None:
 def test_update_on_stale_current_qualifies_the_last_check(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2933,8 +2955,9 @@ def test_update_on_stale_current_qualifies_the_last_check(tmp_path: Path) -> Non
 def test_update_on_stale_current_off_policy_keeps_the_tail(tmp_path: Path) -> None:
     tool = _sdkman_tool("groovy")
     ownership = _ownership(tool, owner="brew", off_policy=True)
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -2969,8 +2992,9 @@ def test_action_update_tool_refuses_non_mutation_grade(tmp_path: Path) -> None:
     ownership = _ownership(
         tool, owner="unknown", unknown_reason="the brew inventory could not be read"
     )
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -3005,8 +3029,9 @@ def test_action_update_tool_reports_an_in_flight_refresh_instead_of_a_silent_noo
     that is the answer for every OTHER tool in the catalog, so pressing `u`
     on any of them was a silent no-op the user had no way to interpret."""
     tool = _tool("rg")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -3051,8 +3076,9 @@ def test_action_update_tool_starts_worker_when_outdated_is_none(tmp_path: Path) 
         active_path=None,
         unknown_reason=None,
     )
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -3118,8 +3144,9 @@ async def _mount_and_settle(app: UnifiedApp, pilot: Any) -> None:
 async def test_update_success_renders_new_version_on_status_line(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew", package="rg")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -3155,8 +3182,9 @@ def test_a_single_tool_refresh_after_invalidate_strands_every_other_record(
     every other tool's record is stranded under the previous one and
     `ownership_of` answers `None` for it."""
     alpha, beta = _tool("alpha"), _tool("beta")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -3178,8 +3206,9 @@ async def test_an_in_catalog_update_restores_the_whole_owner_column(tmp_path: Pa
     rg, fd = _tool("rg"), _tool("fd")
     ownership_rg = _ownership(rg, owner="brew", package="rg")
     ownership_fd = _ownership(fd, owner="brew", package="fd")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -3265,8 +3294,9 @@ async def test_update_success_reports_replay_cleanup_and_postinstall_warnings(
         active_path=None,
         unknown_reason=None,
     )
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v2",
         probe_output=lambda argv: "2.0",
     )
@@ -3305,8 +3335,9 @@ async def test_update_success_reports_terminal_follow_up_warning_without_downgra
 ) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew", package="rg")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -3347,8 +3378,9 @@ async def test_update_via_u_calls_the_injected_terminal_follow_up_exactly_once(
     second, `CatalogScreen`-owned mutation path that duplicates the sync."""
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew", package="rg")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -3384,8 +3416,9 @@ async def test_update_via_u_calls_the_injected_terminal_follow_up_exactly_once(
 async def test_update_failure_renders_status_line(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew", package="rg")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -3428,8 +3461,9 @@ async def test_update_unknown_owner_refusal_from_fresh_reresolution(tmp_path: Pa
     fresh_unknown = _ownership(
         tool, owner="unknown", unknown_reason="brew inventory changed mid-flight"
     )
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -3461,8 +3495,9 @@ async def test_second_update_press_shows_already_in_flight(tmp_path: Path) -> No
 
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew", package="rg")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -3555,7 +3590,7 @@ async def test_skill_worker_paints_superpowers_installed_with_claude_code_owner(
         "superpowers",
         (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
     )
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
         resolve_tag=lambda _repo: "v1",
         probe_output=lambda _argv: None,
@@ -3567,17 +3602,13 @@ async def test_skill_worker_paints_superpowers_installed_with_claude_code_owner(
         await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
         await pilot.pause()
         table = app.catalog.query_one(DataTable[Any])
-        assert table.get_cell("superpowers", "inst").plain == "✓"
+        assert table.get_cell("superpowers", "health").plain == "✓"
         assert table.get_cell("superpowers", "owner").plain == "Claude Code"
     assert calls
 
 
-def _stale_mark_is_dim(cell: Text) -> bool:
-    start = cell.plain.rfind(_VER_STALE)
-    return start >= 0 and any(
-        span.start <= start and span.end >= start + len(_VER_STALE) and "dim" in str(span.style)
-        for span in cell.spans
-    )
+def _claude_has_superpowers(argv: list[str]) -> str:
+    return _CLAUDE_SUPERPOWERS_JSON if argv == ["claude", "plugin", "list", "--json"] else ""
 
 
 def _skill_screen(
@@ -3592,7 +3623,7 @@ def _skill_screen(
         "superpowers",
         (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
     )
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
         resolve_tag=lambda _repo: "v1",
         probe_output=lambda _argv: None,
@@ -3607,8 +3638,10 @@ def _skill_screen(
     return screen, pack
 
 
-def test_skill_inst_cell_shows_persisted_answer_with_stale_mark(tmp_path: Path) -> None:
-    from installer.version_cache import save_version_cache
+def test_skill_health_cell_reads_a_persisted_answer_without_a_stale_variant(
+    tmp_path: Path,
+) -> None:
+    from installer.version_status import SKILL_SEEDED_NOTE
 
     path = tmp_path / "versions.json"
     save_version_cache(path, {}, skills={"superpowers": {"claude": "present"}})
@@ -3616,45 +3649,62 @@ def test_skill_inst_cell_shows_persisted_answer_with_stale_mark(tmp_path: Path) 
         "superpowers",
         (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
     )
-    service = _offline_service(
+    service = offline_service(
         path,
         resolve_tag=lambda _repo: "v1",
         probe_output=lambda _argv: None,
         skill_home=tmp_path,
     )
     service.seed_skills_from_cache()
+    service.refresh([pack])
+    state = service.state_of(pack.id)
+    assert state is not None
+    assert SKILL_SEEDED_NOTE in state.reasons
     screen = _screen([pack], {pack.id: False}, version_refresh=service)
     cell = screen._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
-    assert cell.plain == f"✓ {_VER_STALE}"
-    assert _stale_mark_is_dim(cell)
-    assert _VER_CHECKING not in cell.plain
+    assert (cell.plain, str(cell.style)) == ("✓", "green")
 
 
-def test_skill_inst_cell_drops_stale_mark_after_the_probe_lands(tmp_path: Path) -> None:
-    screen, pack = _skill_screen(tmp_path, {"claude": "present"}, stale=False)
+def test_skill_health_cell_is_ok_after_the_probe_lands(tmp_path: Path) -> None:
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
+    service = seeded_service(
+        [pack],
+        cache_path=tmp_path / "versions.json",
+        home=tmp_path,
+        skill_probe=_claude_has_superpowers,
+    )
+    screen = _screen([pack], {pack.id: False}, version_refresh=service)
     cell = screen._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
     assert cell.plain == "✓"
-    assert _VER_STALE not in cell.plain
 
 
-def test_skill_inst_cell_uses_filesystem_answer_while_refreshing(tmp_path: Path) -> None:
-    missing, pack = _skill_screen(tmp_path, None, installed=False, refreshing=True)
-    missing_cell = missing._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
-    assert missing_cell.plain == f"○ {_VER_STALE}"
-    assert _stale_mark_is_dim(missing_cell)
-    assert _VER_CHECKING not in missing_cell.plain
-
-    present, pack = _skill_screen(tmp_path, None, installed=True, refreshing=True)
-    present_cell = present._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
-    assert present_cell.plain == f"✓ {_VER_STALE}"
-    assert _stale_mark_is_dim(present_cell)
+def test_skill_health_cell_is_checking_until_a_host_answers(tmp_path: Path) -> None:
+    for installed in (False, True):
+        screen, pack = _skill_screen(tmp_path, None, installed=installed, refreshing=True)
+        cell = screen._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
+        assert (cell.plain, str(cell.style)) == ("…", "dim"), installed
 
 
-def test_skill_inst_cell_is_dim_question_when_every_host_is_unknown(tmp_path: Path) -> None:
-    screen, pack = _skill_screen(tmp_path, {"claude": "unknown", "pi": "unknown"})
+def test_skill_health_cell_is_checking_when_every_host_is_unknown(tmp_path: Path) -> None:
+    def skill_probe(_argv: list[str]) -> str:
+        raise OSError("harness down")
+
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
+    service = seeded_service(
+        [pack], cache_path=tmp_path / "versions.json", home=tmp_path, skill_probe=skill_probe
+    )
+    status = service.skill_status_of(pack.id)
+    assert status is not None
+    assert set(status.hosts.values()) == {"unknown"}
+    screen = _screen([pack], {pack.id: True}, version_refresh=service)
     cell = screen._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
-    assert cell.plain == "?"
-    assert "dim" in str(cell.style)
+    assert (cell.plain, str(cell.style)) == ("…", "dim")
 
 
 def test_skill_owner_cell_lists_hosts_and_truncates_when_wider_than_the_column(
@@ -3697,15 +3747,18 @@ def test_skill_detail_lists_every_present_host_and_unprobed_hosts(tmp_path: Path
 
 def test_skill_rendering_leaves_a_non_pack_row_unchanged(tmp_path: Path) -> None:
     tool = _tool("rg")
-    plain = _screen([tool], {"rg": True})
-    service = _offline_service(
-        tmp_path / "versions.json",
-        resolve_tag=lambda _repo: "v1",
-        probe_output=lambda _argv: None,
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
     )
-    service._skills = {  # pyright: ignore[reportPrivateUsage]
-        "superpowers": SkillHostStatus(hosts={"claude": "present"}, stale=True)
-    }
+    plain = _screen([tool], {"rg": True})
+    service = seeded_service(
+        [tool, pack],
+        cache_path=tmp_path / "versions.json",
+        home=tmp_path,
+        present={"rg"},
+        skill_probe=_claude_has_superpowers,
+    )
     wired = _screen([tool], {"rg": True}, version_refresh=service)
     wired.skill_refreshing = True
 
@@ -3736,7 +3789,7 @@ async def test_skill_probe_runs_once_across_three_catalog_entries(tmp_path: Path
         "superpowers",
         (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
     )
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
         resolve_tag=lambda _repo: "v1",
         probe_output=lambda _argv: None,
@@ -3762,7 +3815,7 @@ async def test_skill_probe_runs_again_after_invalidate(tmp_path: Path) -> None:
         "superpowers",
         (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
     )
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
         resolve_tag=lambda _repo: "v1",
         probe_output=lambda _argv: None,
@@ -3789,7 +3842,7 @@ async def test_skill_probe_failure_paints_unknown_and_keeps_the_app_running(tmp_
         "superpowers",
         (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
     )
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
         resolve_tag=lambda _repo: "v1",
         probe_output=lambda _argv: None,
@@ -3800,8 +3853,8 @@ async def test_skill_probe_failure_paints_unknown_and_keeps_the_app_running(tmp_
     async with app.run_test(size=(140, 30)) as pilot:
         await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
         await pilot.pause()
-        cell = app.catalog.query_one(DataTable[Any]).get_cell("superpowers", "inst")
-        assert cell.plain == "?"
+        cell = app.catalog.query_one(DataTable[Any]).get_cell("superpowers", "health")
+        assert cell.plain == "…"
         assert "dim" in str(cell.style)
     status = service.skill_status_of("superpowers")
     assert status is not None
@@ -3815,8 +3868,9 @@ def test_skill_status_refreshed_discards_a_superseded_epoch(
         "superpowers",
         (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
     )
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda _repo: "v1",
         probe_output=lambda _argv: None,
     )
@@ -3847,7 +3901,7 @@ async def test_skill_probe_covers_packs_when_system_view_mounts_first(tmp_path: 
     )
     path = tmp_path / "versions.json"
     save_version_cache(path, {}, skills={"superpowers": {"claude": "present"}})
-    service = _offline_service(
+    service = offline_service(
         path,
         resolve_tag=lambda _repo: "v1",
         probe_output=lambda _argv: None,
@@ -3875,7 +3929,7 @@ async def test_skill_probe_covers_packs_when_system_view_mounts_first(tmp_path: 
         await pilot.press("3")
         await _wait_until(pilot, lambda: not app.catalog_for("ai").skill_refreshing)
         await pilot.pause()
-        cell = app.catalog_for("ai").query_one(DataTable[Any]).get_cell("superpowers", "inst")
+        cell = app.catalog_for("ai").query_one(DataTable[Any]).get_cell("superpowers", "health")
         assert cell.plain == "✓"
         assert "~" not in cell.plain
         assert len(calls) == before
@@ -3885,13 +3939,12 @@ def _probe_less_pack_screen(tmp_path: Path, *, installed: bool) -> tuple[Catalog
     pack = _skill_pack("openspec", ())
     assert pack.skill_lifecycle is not None
     assert pack.skill_lifecycle.status_probes == ()
-    service = _offline_service(
-        tmp_path / "versions.json",
-        resolve_tag=lambda _repo: "v1",
-        probe_output=lambda _argv: None,
-        skill_home=tmp_path,
+    service = seeded_service(
+        [pack],
+        cache_path=tmp_path / "versions.json",
+        home=tmp_path,
+        present={pack.id} if installed else set[str](),
     )
-    service._skills = {pack.id: SkillHostStatus(hosts={}, stale=False)}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([pack], {pack.id: installed}, version_refresh=service)
     screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
         pack.id: VersionStatus(
@@ -3911,7 +3964,7 @@ def test_skill_pack_with_no_status_probes_uses_path_presence(tmp_path: Path) -> 
     assert screen._present(pack) is True  # pyright: ignore[reportPrivateUsage]
     assert screen._presence()[pack.id] is True  # pyright: ignore[reportPrivateUsage]
     assert screen._ver_cell(pack).plain == "1.2.3"  # pyright: ignore[reportPrivateUsage]
-    assert screen._inst_cell(pack, True).plain == "✓"  # pyright: ignore[reportPrivateUsage]
+    assert screen._row_cells(pack)[5].plain == "✓"  # pyright: ignore[reportPrivateUsage]
     groups = screen._groups("status")  # pyright: ignore[reportPrivateUsage]
     installed_members = next(members for title, _detail, members in groups if title == "installed")
     assert pack in installed_members
@@ -3920,7 +3973,7 @@ def test_skill_pack_with_no_status_probes_uses_path_presence(tmp_path: Path) -> 
 def test_skill_pack_with_no_status_probes_is_absent_when_not_on_path(tmp_path: Path) -> None:
     screen, pack = _probe_less_pack_screen(tmp_path, installed=False)
     assert screen._present(pack) is False  # pyright: ignore[reportPrivateUsage]
-    assert screen._inst_cell(pack, False).plain == "○"  # pyright: ignore[reportPrivateUsage]
+    assert screen._row_cells(pack)[5].plain == "○"  # pyright: ignore[reportPrivateUsage]
 
 
 def test_skill_pack_with_probes_and_empty_hosts_stays_unknown(tmp_path: Path) -> None:
@@ -3966,8 +4019,9 @@ async def test_a_failed_direct_update_folds_into_the_session_summary(
     even when the user quits without ever running an install."""
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew", package="rg")
-    service = _offline_service(
+    service = offline_service(
         tmp_path / "versions.json",
+        skill_home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -3996,3 +4050,158 @@ async def test_a_failed_direct_update_folds_into_the_session_summary(
         assert summary is not None
         assert "rg" in summary.update_failed
         assert summary.has_failure is True
+
+
+# -- 19-13 Task 1: one Health cell per row from the published tool state (D-15)
+
+
+_HEALTH_GLYPHS = {
+    Health.CHECKING: ("…", "dim"),
+    Health.BROKEN: ("!", "red"),
+    Health.MISCONFIGURED: ("≈", "yellow"),
+    Health.OUTDATED: ("↑", "yellow"),
+    Health.OK: ("✓", "green"),
+    Health.MISSING: ("○", ""),
+    Health.UNAVAILABLE: ("–", "dim"),
+}
+
+
+def _health_cells(app: UnifiedApp, ids: list[str]) -> dict[str, str]:
+    table = app.catalog.query_one(DataTable[Any])
+    return {tool_id: table.get_cell(tool_id, "health").plain for tool_id in ids}
+
+
+def test_health_cell_glyph_table(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    service = seeded_service(
+        [tool], cache_path=tmp_path / "versions.json", home=tmp_path / "home", present={"rg"}
+    )
+    state = service.state_of("rg")
+    assert state is not None
+    for health, (glyph, style) in _HEALTH_GLYPHS.items():
+        cell = health_cell(replace(state, health=health))
+        assert (cell.plain, str(cell.style)) == (glyph, style), health
+    checking = health_cell(None)
+    assert (checking.plain, str(checking.style)) == ("…", "dim")
+
+
+async def test_health_cell_is_checking_before_the_first_pass(tmp_path: Path) -> None:
+    tools, installed = _catalog()
+    ids = [tool.id for tool in tools]
+    home = tmp_path / "home"
+    started = threading.Event()
+    release = threading.Event()
+
+    def which(cmd: str) -> str | None:
+        if cmd == "brew":
+            started.set()
+            assert release.wait(timeout=5)
+        return str(home / ".local" / "bin" / cmd)
+
+    service = offline_service(
+        tmp_path / "versions.json",
+        skill_home=home,
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: None,
+        which=which,
+        present=lambda tool: tool.id == "rg",
+    )
+    app = _unified_app(tools, installed, _BLURBS, version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _wait_until(pilot, started.is_set)
+        cells = _health_cells(app, ids)
+        assert cells == dict.fromkeys(ids, "…")
+        release.set()
+        await _wait_until(pilot, lambda: _health_cells(app, ids)["rg"] == "✓")
+        assert _health_cells(app, ids) == {"rg": "✓", "fd": "○", "lazygit": "○"}
+
+
+def test_health_column_header() -> None:
+    from installer.catalog_tui import _SORT_BY_COLUMN  # pyright: ignore[reportPrivateUsage]
+
+    assert ("Health", "health") in _COLUMNS
+    assert ("Inst", "inst") not in _COLUMNS
+    assert _COLUMNS.index(("Health", "health")) == 5
+    assert _SORT_BY_COLUMN["health"] == "health"
+
+
+def test_broken_shim_row_shows_bang(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pnpm_home = tmp_path / "pnpm"
+    monkeypatch.setenv("PNPM_HOME", str(pnpm_home))
+    tool = Tool(
+        id="mmdc",
+        name="mmdc",
+        category="docs",
+        cmd="mmdc",
+        methods=(Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
+    )
+    service = seeded_service(
+        [tool],
+        cache_path=tmp_path / "versions.json",
+        home=tmp_path / "home",
+        present={"mmdc"},
+        which=lambda cmd: str(pnpm_home / cmd),
+    )
+    state = service.state_of("mmdc")
+    assert state is not None
+    assert state.health is Health.BROKEN
+    screen = _screen([tool], {"mmdc": True}, version_refresh=service)
+    cell = screen._row_cells(tool)[5]  # pyright: ignore[reportPrivateUsage]
+    assert cell.plain == "!"
+    assert str(cell.style) == "red"
+
+
+def test_skill_pack_rows_use_the_same_cell(tmp_path: Path) -> None:
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
+    unprobed = seeded_service(
+        [pack], cache_path=tmp_path / "a" / "versions.json", home=tmp_path / "a"
+    )
+    screen = _screen([pack], {"superpowers": True}, version_refresh=unprobed)
+    assert screen._row_cells(pack)[5].plain == "…"  # pyright: ignore[reportPrivateUsage]
+
+    def skill_probe(argv: list[str]) -> str:
+        return _CLAUDE_SUPERPOWERS_JSON if argv == ["claude", "plugin", "list", "--json"] else ""
+
+    probed = seeded_service(
+        [pack],
+        cache_path=tmp_path / "b" / "versions.json",
+        home=tmp_path / "b",
+        skill_probe=skill_probe,
+    )
+    screen = _screen([pack], {"superpowers": False}, version_refresh=probed)
+    cell = screen._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
+    assert (cell.plain, str(cell.style)) == ("✓", "green")
+
+
+def test_state_doubles_never_use_the_real_home(tmp_path: Path) -> None:
+    from installer import version_status
+
+    tool = _tool("rg")
+    seeded_home = tmp_path / "seeded-home"
+    offline_home = tmp_path / "offline-home"
+    seeded = seeded_service(
+        [tool], cache_path=tmp_path / "seeded.json", home=seeded_home, present={"rg"}
+    )
+    offline = offline_service(
+        tmp_path / "offline.json",
+        skill_home=offline_home,
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda argv: None,
+    )
+    for service, home in ((seeded, seeded_home), (offline, offline_home)):
+        assert service.managed_bin_dir.is_relative_to(home)
+        assert not home.is_relative_to(_REAL_HOME)
+        assert not service.managed_bin_dir.is_relative_to(_REAL_HOME)
+    assert not version_status.default_skill_home().is_relative_to(_REAL_HOME)
+
+    # No helper can default to Path.home(): the scratch home is a required keyword.
+    def no_version(argv: list[str]) -> str | None:
+        del argv
+        return None
+
+    without_home: dict[str, Any] = {"resolve_tag": str, "probe_output": no_version}
+    with pytest.raises(TypeError, match="skill_home"):
+        offline_service(tmp_path / "missing.json", **without_home)

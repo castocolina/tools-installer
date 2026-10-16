@@ -965,6 +965,19 @@ class VersionRefreshService:
     ) -> ToolState:
         """A skill pack's state from the host answers held now (call under
         `_lock`). No answer yet is CHECKING, through the builder's own input."""
+        if tool.skill_lifecycle is not None and not tool.skill_lifecycle.status_probes:
+            # No host probe will ever answer for this pack: presence is the
+            # presence predicate, as for any binary, never CHECKING forever.
+            return tool_state(
+                tool,
+                generation=generation,
+                seq=seq,
+                platform=platform,
+                present=self._present(tool),
+                ownership=ownership,
+                version=version,
+                removable=removable,
+            )
         hosts = self._skills.get(tool.id)
         answers = set(hosts.hosts.values()) if hosts is not None else set[str]()
         checking: tuple[str, ...] = ()
