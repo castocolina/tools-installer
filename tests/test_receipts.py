@@ -239,15 +239,37 @@ def _artifact_variant(**changes: object) -> str:
 def test_read_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, label: str, content: str | bytes | None
 ) -> None:
-    if label == "deep nesting":
-        payload = "[" * 60000
-        assert len(payload.encode("utf-8")) < 65536
-        with pytest.raises(RecursionError):
-            json.loads(payload)
     if content is None:
         pass
     else:
         _malformed(tmp_path, content)
+    assert receipts.read("yq") is None
+
+
+def test_read_fails_closed_on_recursion_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deterministic RecursionError branch coverage: patch json.loads as seen by
+    receipts.read so it raises RecursionError, write a small valid-looking
+    receipt file, and assert read returns None."""
+    payload = json.dumps(
+        {
+            "v": 1,
+            "tool": "yq",
+            "at": "2026-10-16T12:00:00+00:00",
+            "method": {"kind": "github_release", "key": "a" * 64},
+            "package": None,
+            "artifacts": [],
+            "smoke": None,
+            "hooks": {},
+        }
+    )
+    _malformed(tmp_path, payload)
+
+    def raiser(_s: str) -> object:
+        raise RecursionError("deep nesting")
+
+    monkeypatch.setattr(receipts.json, "loads", raiser)
     assert receipts.read("yq") is None
 
 
