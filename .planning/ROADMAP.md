@@ -99,7 +99,7 @@ Plans:
   4. Launched without the dev venv on PATH, ruff resolves its real owner under `make setup` (container); `/usr/bin/java` alone never counts as installed; `parse_version('-1') is None`, and quoted or `version=` output never yields a fabricated version.
   5. Every C/D/E/F audit data fix is applied, the `managed-download` owner probe is gone, and `drawio-cli` is removed with `drawio-desktop` serving both audiences.
 
-**Plans:** 27 plans
+**Plans:** 28 plans
 
 Plans (numbered in creation order; W = execution wave):
 - [ ] 18-01-PLAN.md — Closed METHOD_PARAMS keys, required `verified` date (seeded), pinned app/tarball rule (W1)
@@ -129,6 +129,7 @@ Plans (numbered in creation order; W = execution wave):
 - [ ] 18-25-PLAN.md — Gap: check_registry robustness: shared-URL identity, release-read memo, transports (W15)
 - [ ] 18-26-PLAN.md — Gap: verify-registry main: snapshot-bound write, exit codes, usage before network, writer tests (W16)
 - [ ] 18-27-PLAN.md — Gap: lean pass (M4/M5 and cheap LOWs) + Deferred to Phase 25 (W17)
+- [ ] 18-28-PLAN.md — Gap: open security threats T-18-56 (app bundle symlink escape) and T-18-69 (corrupt xz/gz archive listing) (W18)
 
 ### Phase 19: One tool state with health plus receipts
 
