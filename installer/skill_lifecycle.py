@@ -874,25 +874,31 @@ def _claude_fixes(
     family = [entry for entry in entries if entry.plugin == plugin]
     users = [entry for entry in family if entry.id == canonical and entry.scope == "user"]
     copies = [entry for entry in family if entry not in users]
+    # `claude plugin` takes an id and a scope, not a version, so no step can say which
+    # copy to keep when more than one canonical user entry exists.
+    ambiguous = len(users) > 1
     reasons = [
-        f"disabled: {entry.id} in user scope ({entry.version})"
+        f"duplicate: {entry.id} in user scope ({entry.version})"
+        if ambiguous
+        else f"disabled: {entry.id} in user scope ({entry.version})"
         for entry in users
-        if not entry.enabled
+        if ambiguous or not entry.enabled
     ]
     reasons += [f"duplicate: {e.id} in {e.scope} scope ({e.version})" for e in copies]
     if not reasons:
         return (), ()
     steps: list[ConfigStep] = []
-    if not users:
-        argv = ("claude", "plugin", "install", "-s", "user", canonical)
-        steps.append(
-            ConfigStep(f"install {canonical} in user scope", "skill_install", "claude", argv)
-        )
-    elif not any(entry.enabled for entry in users):
-        argv = ("claude", "plugin", "enable", "-s", "user", canonical)
-        steps.append(
-            ConfigStep(f"enable {canonical} in user scope", "plugin_enable", "claude", argv)
-        )
+    if not ambiguous:
+        if not users:
+            argv = ("claude", "plugin", "install", "-s", "user", canonical)
+            steps.append(
+                ConfigStep(f"install {canonical} in user scope", "skill_install", "claude", argv)
+            )
+        elif not any(entry.enabled for entry in users):
+            argv = ("claude", "plugin", "enable", "-s", "user", canonical)
+            steps.append(
+                ConfigStep(f"enable {canonical} in user scope", "plugin_enable", "claude", argv)
+            )
     removed: list[ClaudeEntry] = []
     for entry in copies:
         cwd = None if entry.scope == "user" else _project_dir(entry, paths)
@@ -944,16 +950,6 @@ def inspect_skill_reports(
     return reports
 
 
-def inspect_skill_packs(
-    tools: Sequence[Tool], probe: ProbeRunner, home: Path
-) -> dict[str, dict[str, HarnessStatus]]:
-    """Probe each distinct harness CLI once and report present, absent, or unknown."""
-    return {
-        tool_id: report.hosts
-        for tool_id, report in inspect_skill_reports(tools, probe, home).items()
-    }
-
-
 def partial_harnesses(
     hosts: Mapping[str, HarnessStatus], supported: Collection[str], present: Collection[str]
 ) -> tuple[str, ...]:
@@ -983,7 +979,9 @@ def partial_steps(
 def inspect_status(tool: Tool, probe: ProbeRunner, home: Path | None = None) -> LifecycleOutcome:
     """Probe a pack without acquiring software, or fail closed to manual status."""
     lifecycle = _lifecycle(tool)
-    hosts = inspect_skill_packs((tool,), probe, Path.home() if home is None else home)[tool.id]
+    hosts = inspect_skill_reports((tool,), probe, Path.home() if home is None else home)[
+        tool.id
+    ].hosts
     if any(status == "present" for status in hosts.values()):
         return LifecycleOutcome("present")
     if not lifecycle.status_probes:

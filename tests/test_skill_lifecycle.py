@@ -37,7 +37,6 @@ from installer.skill_lifecycle import (
     SkillPackReport,
     _install_state_status,  # pyright: ignore[reportPrivateUsage]
     inspect_project_pack,
-    inspect_skill_packs,
     inspect_skill_reports,
     inspect_status,
     partial_harnesses,
@@ -640,6 +639,16 @@ _CLAUDE_SUPERPOWERS_JSON = (
 )
 
 
+def _hosts(
+    tools: list[Tool], probe: Callable[[list[str]], str], home: Path
+) -> dict[str, dict[str, HarnessStatus]]:
+    """Host answers of `inspect_skill_reports`, the shape the deleted projection returned."""
+    return {
+        tool_id: report.hosts
+        for tool_id, report in inspect_skill_reports(tools, probe, home).items()
+    }
+
+
 def _claude_json(*entries: tuple[str, str, bool, str]) -> str:
     return json.dumps(
         [
@@ -651,7 +660,7 @@ def _claude_json(*entries: tuple[str, str, bool, str]) -> str:
 
 def _claude_status(tmp_path: Path, output: str, match: str = _SUPERPOWERS_ID) -> str:
     tool = _pack("superpowers", (SkillStatusProbe("claude", "plugin-cli", match),))
-    return inspect_skill_packs([tool], lambda _argv: output, tmp_path)["superpowers"]["claude"]
+    return _hosts([tool], lambda _argv: output, tmp_path)["superpowers"]["claude"]
 
 
 def _pack(tool_id: str, probes: tuple[SkillStatusProbe, ...]) -> Tool:
@@ -692,7 +701,7 @@ def test_shipped_packs_report_per_host_status(tmp_path: Path) -> None:
             return "ponytail@ponytail  installed, enabled  5.1.0\n"
         return ""
 
-    result = inspect_skill_packs([superpowers, ponytail], probe, tmp_path)
+    result = _hosts([superpowers, ponytail], probe, tmp_path)
 
     assert result["superpowers"]["pi"] == "present"
     assert result["ponytail"]["codex"] == "present"
@@ -705,7 +714,7 @@ def test_codex_not_installed_row_is_absent(tmp_path: Path) -> None:
         assert argv == ["codex", "plugin", "list"]
         return "superpowers@openai-curated  not installed\n"
 
-    assert inspect_skill_packs([tool], probe, tmp_path) == {"superpowers": {"codex": "absent"}}
+    assert _hosts([tool], probe, tmp_path) == {"superpowers": {"codex": "absent"}}
 
 
 def test_codex_probe_failure_is_unknown_for_every_pack(tmp_path: Path) -> None:
@@ -717,7 +726,7 @@ def test_codex_probe_failure_is_unknown_for_every_pack(tmp_path: Path) -> None:
     def probe(_argv: list[str]) -> str:
         raise RuntimeError("codex down")
 
-    assert inspect_skill_packs(packs, probe, tmp_path) == {
+    assert _hosts(packs, probe, tmp_path) == {
         "ponytail": {"codex": "unknown"},
         "other": {"codex": "unknown"},
     }
@@ -731,7 +740,7 @@ def test_plugin_cli_without_closed_row_is_unknown_and_unprobed(tmp_path: Path) -
         calls.append(argv)
         return "x"
 
-    assert inspect_skill_packs([tool], probe, tmp_path) == {"demo": {"opencode": "unknown"}}
+    assert _hosts([tool], probe, tmp_path) == {"demo": {"opencode": "unknown"}}
     assert calls == []
 
 
@@ -742,7 +751,7 @@ def test_claude_plugin_list_marker_row_is_present(tmp_path: Path) -> None:
         assert argv == ["claude", "plugin", "list", "--json"]
         return _claude_json((_SUPERPOWERS_ID, "user", True, "6.4.1"))
 
-    assert inspect_skill_packs([tool], probe, tmp_path)["superpowers"]["claude"] == "present"
+    assert _hosts([tool], probe, tmp_path)["superpowers"]["claude"] == "present"
 
 
 def test_claude_match_stops_at_name_boundary(tmp_path: Path) -> None:
@@ -754,7 +763,7 @@ def test_claude_match_stops_at_name_boundary(tmp_path: Path) -> None:
 def test_empty_cli_output_is_absent(tmp_path: Path) -> None:
     tool = _pack("ponytail", (SkillStatusProbe("codex", "plugin-cli", "ponytail"),))
 
-    assert inspect_skill_packs([tool], lambda _argv: "", tmp_path)["ponytail"]["codex"] == "absent"
+    assert _hosts([tool], lambda _argv: "", tmp_path)["ponytail"]["codex"] == "absent"
 
 
 def _lock_pack(tool_id: str = "softaworks") -> Tool:
@@ -774,7 +783,7 @@ def test_skills_lock_present_when_source_and_skill_dir_exist(tmp_path: Path) -> 
     )
     (tmp_path / ".claude" / "skills" / "c4-architecture").mkdir(parents=True)
 
-    result = inspect_skill_packs([_lock_pack()], lambda _argv: "", tmp_path)
+    result = _hosts([_lock_pack()], lambda _argv: "", tmp_path)
 
     assert result["softaworks"]["claude"] == "present"
 
@@ -785,13 +794,13 @@ def test_skills_lock_absent_when_skill_dir_missing(tmp_path: Path) -> None:
         {"skills": {"c4-architecture": {"source": "softaworks/agent-toolkit"}}},
     )
 
-    result = inspect_skill_packs([_lock_pack()], lambda _argv: "", tmp_path)
+    result = _hosts([_lock_pack()], lambda _argv: "", tmp_path)
 
     assert result["softaworks"]["claude"] == "absent"
 
 
 def test_skills_lock_absent_when_lock_file_missing(tmp_path: Path) -> None:
-    result = inspect_skill_packs([_lock_pack()], lambda _argv: "", tmp_path)
+    result = _hosts([_lock_pack()], lambda _argv: "", tmp_path)
 
     assert result["softaworks"]["claude"] == "absent"
 
@@ -802,7 +811,7 @@ def test_skills_lock_malformed_or_wrong_shape_is_unknown(tmp_path: Path, payload
     agents.mkdir()
     (agents / ".skill-lock.json").write_text(payload, encoding="utf-8")
 
-    result = inspect_skill_packs([_lock_pack()], lambda _argv: "", tmp_path)
+    result = _hosts([_lock_pack()], lambda _argv: "", tmp_path)
 
     assert result["softaworks"]["claude"] == "unknown"
 
@@ -813,7 +822,7 @@ def test_skills_lock_ignores_traversal_skill_names(tmp_path: Path) -> None:
     decoy.parent.mkdir(parents=True)
     decoy.write_text("decoy", encoding="utf-8")
 
-    result = inspect_skill_packs([_lock_pack()], lambda _argv: "", tmp_path)
+    result = _hosts([_lock_pack()], lambda _argv: "", tmp_path)
 
     assert result["softaworks"]["claude"] == "absent"
 
@@ -828,18 +837,18 @@ def test_skills_lock_unknown_harness_is_unknown(tmp_path: Path) -> None:
     )
     (tmp_path / ".muse" / "skills" / "c4-architecture").mkdir(parents=True)
 
-    result = inspect_skill_packs([tool], lambda _argv: "", tmp_path)
+    result = _hosts([tool], lambda _argv: "", tmp_path)
 
     assert result["softaworks"]["muse"] == "unknown"
 
 
 def test_install_state_file_is_present_and_missing_is_absent(tmp_path: Path) -> None:
     tool = _pack("opengsd", (SkillStatusProbe("claude", "install-state", "gsd-core"),))
-    absent = inspect_skill_packs([tool], lambda _argv: "", tmp_path)
+    absent = _hosts([tool], lambda _argv: "", tmp_path)
     state = tmp_path / ".claude" / "gsd-install-state.json"
     state.parent.mkdir()
     state.write_text("{}", encoding="utf-8")
-    present = inspect_skill_packs([tool], lambda _argv: "", tmp_path)
+    present = _hosts([tool], lambda _argv: "", tmp_path)
 
     assert absent["opengsd"]["claude"] == "absent"
     assert present["opengsd"]["claude"] == "present"
@@ -867,7 +876,7 @@ def test_install_state_unknown_harness_is_unknown(tmp_path: Path) -> None:
     (tmp_path / ".pi" / "gsd-install-state.json").parent.mkdir()
     (tmp_path / ".pi" / "gsd-install-state.json").write_text("{}", encoding="utf-8")
 
-    result = inspect_skill_packs([tool], lambda _argv: "", tmp_path)
+    result = _hosts([tool], lambda _argv: "", tmp_path)
 
     assert result["opengsd"]["pi"] == "unknown"
 
@@ -889,7 +898,7 @@ def test_skills_lock_is_read_once_per_call(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr("installer.skill_lifecycle.json.loads", counting)
     packs = [_lock_pack("a"), _lock_pack("b")]
 
-    inspect_skill_packs(packs, lambda _argv: "", tmp_path)
+    _hosts(packs, lambda _argv: "", tmp_path)
 
     assert reads == 1
 
@@ -908,7 +917,7 @@ def test_one_cli_call_per_harness_across_packs(tmp_path: Path) -> None:
         calls.append(argv)
         return _CLAUDE_SUPERPOWERS_JSON
 
-    inspect_skill_packs(packs, probe, tmp_path)
+    _hosts(packs, probe, tmp_path)
 
     assert calls == [["claude", "plugin", "list", "--json"]]
 
@@ -923,7 +932,7 @@ def test_host_order_follows_skill_harnesses_not_declaration_order(tmp_path: Path
         ),
     )
 
-    result = inspect_skill_packs([tool], lambda _argv: "", tmp_path)["demo"]
+    result = _hosts([tool], lambda _argv: "", tmp_path)["demo"]
 
     assert list(result) == [harness for harness in SKILL_HARNESSES if harness in result]
     assert list(result) == ["claude", "codex", "pi"]
@@ -932,18 +941,16 @@ def test_host_order_follows_skill_harnesses_not_declaration_order(tmp_path: Path
 def test_empty_status_probes_map_to_empty_dict(tmp_path: Path) -> None:
     tool = _pack("demo", ())
 
-    assert inspect_skill_packs([tool], lambda _argv: "nope", tmp_path) == {"demo": {}}
+    assert _hosts([tool], lambda _argv: "nope", tmp_path) == {"demo": {}}
 
 
-def test_inspect_skill_packs_is_idempotent(tmp_path: Path) -> None:
+def test_skill_hosts_are_idempotent(tmp_path: Path) -> None:
     tool = _pack("demo", (SkillStatusProbe("pi", "plugin-cli", "obra/superpowers"),))
 
     def probe(_argv: list[str]) -> str:
         return "obra/superpowers\n"
 
-    assert inspect_skill_packs([tool], probe, tmp_path) == inspect_skill_packs(
-        [tool], probe, tmp_path
-    )
+    assert _hosts([tool], probe, tmp_path) == _hosts([tool], probe, tmp_path)
 
 
 def test_skill_harness_labels_cover_every_harness() -> None:
@@ -967,7 +974,7 @@ def test_claude_probe_uses_the_json_argv(tmp_path: Path) -> None:
         calls.append(argv)
         return _claude_json((_SUPERPOWERS_ID, "user", True, "6.4.1"))
 
-    result = inspect_skill_packs(packs, probe, tmp_path)
+    result = _hosts(packs, probe, tmp_path)
 
     assert calls == [["claude", "plugin", "list", "--json"]]
     assert all(hosts == {"claude": "present"} for hosts in result.values())
@@ -1001,6 +1008,26 @@ def test_claude_two_enabled_user_entries_for_the_canonical_id_is_absent(tmp_path
     )
 
     assert _claude_status(tmp_path, listing) == "absent"
+    report = _superpowers_report(tmp_path, listing)
+    assert report.reasons == (
+        "duplicate: superpowers@claude-plugins-official in user scope (6.4.1)",
+        "duplicate: superpowers@claude-plugins-official in user scope (6.2.0)",
+    )
+    assert report.steps == ()
+
+
+def test_two_disabled_canonical_user_entries_get_no_enable_step(tmp_path: Path) -> None:
+    listing = _claude_json(
+        (_SUPERPOWERS_ID, "user", False, "6.4.1"), (_SUPERPOWERS_ID, "user", False, "6.2.0")
+    )
+
+    report = _superpowers_report(tmp_path, listing)
+
+    assert report.reasons == (
+        "duplicate: superpowers@claude-plugins-official in user scope (6.4.1)",
+        "duplicate: superpowers@claude-plugins-official in user scope (6.2.0)",
+    )
+    assert not any(step.kind in {"plugin_enable", "skill_install"} for step in report.steps)
 
 
 _CANONICAL_ENTRY = {"id": _SUPERPOWERS_ID, "scope": "user", "enabled": True, "version": "6.4.1"}
@@ -1271,31 +1298,6 @@ def test_four_install_pack_with_an_unreadable_listing_is_an_unknown_host(
     assert report.hosts["claude"] == "unknown"
     assert report.reasons == ()
     assert report.steps == ()
-
-
-def test_inspect_skill_packs_is_the_hosts_projection(tmp_path: Path) -> None:
-    _four_install_home(tmp_path)
-    tools = [
-        _pack(
-            "superpowers",
-            (
-                SkillStatusProbe("claude", "plugin-cli", _SUPERPOWERS_ID),
-                SkillStatusProbe("codex", "plugin-cli", "superpowers"),
-            ),
-        ),
-        _pack("ponytail", (SkillStatusProbe("codex", "plugin-cli", "ponytail"),)),
-    ]
-
-    def probe(argv: list[str]) -> str:
-        if argv[0] == "claude":
-            return _claude_json(*_FOUR_INSTALL)
-        return "ponytail@ponytail  installed\n"
-
-    reports = inspect_skill_reports(tools, probe, tmp_path)
-    packs = inspect_skill_packs(tools, probe, tmp_path)
-
-    assert packs == {tool_id: report.hosts for tool_id, report in reports.items()}
-    assert reports["superpowers"].steps
 
 
 def test_clean_canonical_install_has_no_reasons_or_steps(tmp_path: Path) -> None:
