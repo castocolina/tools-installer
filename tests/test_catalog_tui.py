@@ -58,6 +58,7 @@ from installer.platform import Platform
 from installer.resolve import UnavailableReason, platform_could_support, unavailable_reason
 from installer.run import CommandError
 from installer.selection import select_tools
+from installer.tool_browser import ToolBrowser
 from installer.ui_common import highlighted_key
 from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
@@ -65,6 +66,7 @@ from installer.version_cache import VersionCacheEntry, save_version_cache
 from installer.version_status import (
     Health,
     SkillHostStatus,
+    ToolState,
     VersionRefreshService,
     VersionStatus,
 )
@@ -1218,9 +1220,9 @@ def test_owner_column_and_detail_paint_the_os_package_case_end_to_end(tmp_path: 
         artifacts_for=lambda tool: [],
     )
     service.refresh([tool])
-    ownership = service.ownership_of("git")
-    assert ownership is not None
-    assert ownership.owner == "os-package"
+    state = service.state_of("git")
+    assert state is not None
+    assert state.ownership.owner == "os-package"
 
     screen = _screen([tool], {"git": True}, version_refresh=service)
     for unavailable in (False, True):
@@ -1705,7 +1707,7 @@ def test_update_on_broken_row_hints_repair_without_updating(tmp_path: Path) -> N
     screen.action_update_tool()
     assert begins == []
     assert started == []
-    assert messages == [f"mmdc: {_BROKEN_HINT}"]
+    assert messages == [f"mmdc is broken: {_BROKEN_HINT}"]
 
 
 def test_legend_names_the_broken_mark() -> None:
@@ -1859,9 +1861,9 @@ async def test_owner_cell_semantic_value_reaches_the_mounted_table(tmp_path: Pat
         # pyright where wait_for_complete's bare-generic signature does not.
         await asyncio.gather(*(worker.wait() for worker in app.workers))
         await pilot.pause()
-        resolved = service.ownership_of("rg")
+        resolved = service.state_of("rg")
         assert resolved is not None
-        assert resolved.owner == "brew"
+        assert resolved.ownership.owner == "brew"
         row_cells = app.catalog._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
         assert row_cells[7].plain == "Homebrew"
         table = app.catalog.query_one(DataTable[Any])
@@ -2744,7 +2746,7 @@ def test_action_update_tool_refuses_non_mutation_grade(tmp_path: Path) -> None:
 def test_action_update_tool_reports_an_in_flight_refresh_instead_of_a_silent_noop(
     tmp_path: Path,
 ) -> None:
-    """CR-02 (15.4-REVIEW.md): `ownership_of` answering `None` used to be a
+    """CR-02 (15.4-REVIEW.md): no current state used to be a
     bare `return` -- no status line, no message. After one in-catalog update
     that is the answer for every OTHER tool in the catalog, so pressing `u`
     on any of them was a silent no-op the user had no way to interpret."""
@@ -2772,7 +2774,7 @@ def test_action_update_tool_reports_an_in_flight_refresh_instead_of_a_silent_noo
     screen.action_update_tool()
     assert started == []
     assert any("cannot update rg" in message for message in messages)
-    assert any("being refreshed" in message for message in messages)
+    assert any("its state is still being checked" in message for message in messages)
 
 
 def test_action_update_tool_starts_worker_when_outdated_is_none(tmp_path: Path) -> None:
@@ -2899,8 +2901,8 @@ def test_a_single_tool_refresh_after_invalidate_strands_every_other_record(
     state `UpdateService.run` + `_update_tool_worker` actually produce, so the
     screen-level recovery test below is provably exercising a real condition
     and not a hypothetical one. Exactly one tool carries the current epoch;
-    every other tool's record is stranded under the previous one and
-    `ownership_of` answers `None` for it."""
+    every other tool's state is stranded under the previous one and
+    `state_of` answers `None` for it."""
     alpha, beta = _tool("alpha"), _tool("beta")
     service = offline_service(
         tmp_path / "versions.json",
@@ -2909,12 +2911,12 @@ def test_a_single_tool_refresh_after_invalidate_strands_every_other_record(
         probe_output=lambda argv: "1.0",
     )
     service.refresh([alpha, beta])
-    assert service.ownership_of("alpha") is not None
-    assert service.ownership_of("beta") is not None
+    assert service.state_of("alpha") is not None
+    assert service.state_of("beta") is not None
     service.invalidate(reason="updated alpha")  # what UpdateService.run does
     service.refresh([alpha])  # a single-tool pass after the invalidate
-    assert service.ownership_of("alpha") is not None
-    assert service.ownership_of("beta") is None
+    assert service.state_of("alpha") is not None
+    assert service.state_of("beta") is None
 
 
 async def test_an_in_catalog_update_restores_the_whole_owner_column(tmp_path: Path) -> None:
@@ -3332,6 +3334,12 @@ async def test_skill_worker_paints_superpowers_installed_with_claude_code_owner(
     assert calls
 
 
+def _skill_hosts(service: VersionRefreshService, tool_id: str) -> SkillHostStatus | None:
+    """The host answers the tool's published state carries."""
+    state = service.state_of(tool_id)
+    return state.skill_hosts if state is not None else None
+
+
 def _claude_has_superpowers(argv: list[str]) -> str:
     return _CLAUDE_SUPERPOWERS_JSON if argv == ["claude", "plugin", "list", "--json"] else ""
 
@@ -3426,7 +3434,7 @@ def test_skill_health_cell_is_checking_when_every_host_is_unknown(tmp_path: Path
     service = seeded_service(
         [pack], cache_path=tmp_path / "versions.json", home=tmp_path, skill_probe=skill_probe
     )
-    status = service.skill_status_of(pack.id)
+    status = _skill_hosts(service, pack.id)
     assert status is not None
     assert set(status.hosts.values()) == {"unknown"}
     screen = _screen([pack], {pack.id: True}, version_refresh=service)
@@ -3598,7 +3606,7 @@ async def test_skill_probe_failure_paints_unknown_and_keeps_the_app_running(tmp_
         cell = app.catalog.query_one(DataTable[Any]).get_cell("superpowers", "health")
         assert cell.plain == "…"
         assert "dim" in str(cell.style)
-    status = service.skill_status_of("superpowers")
+    status = _skill_hosts(service, "superpowers")
     assert status is not None
     assert status.hosts == {"claude": "unknown"}
 
@@ -3662,7 +3670,7 @@ async def test_skill_probe_covers_packs_when_system_view_mounts_first(tmp_path: 
         await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
         await pilot.pause()
         assert ["claude", "plugin", "list", "--json"] in calls
-        status = service.skill_status_of("superpowers")
+        status = _skill_hosts(service, "superpowers")
         assert status is not None
         assert status.stale is False
         raw = json.loads(path.read_text())
@@ -4633,3 +4641,144 @@ def test_legend_is_the_ui_spec_string() -> None:
 def test_legend_lines_fit_78_cells() -> None:
     widths = [cell_len(Text.from_markup(line).plain) for line in _LEGEND.split("\n")]
     assert widths == [78, 78, 77]
+
+
+# -- 19-15 Task 3: `u` reads the tool state (19-UI-SPEC "Copywriting")
+
+
+def _u_screen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: Tool, state: ToolState | None
+) -> tuple[CatalogScreen, list[UpdateTarget], list[tuple[str, str]], list[str]]:
+    """A screen with `tool` highlighted over a frozen machine holding `state`
+    (none when None); returns the screen, the worker's targets, the status
+    lines and the ids `begin` was asked about."""
+    service = frozen_service(tmp_path)
+    if state is not None:
+        service.publish([state])
+    updates = _update_service(lambda _tool: _ownership(tool, owner="brew"))
+    begins = _counting_begin(updates)
+    screen = _screen([tool], {}, version_refresh=service, updates=updates)
+    targets: list[UpdateTarget] = []
+    lines: list[tuple[str, str]] = []
+
+    def highlighted(_browser: ToolBrowser[Tool]) -> str:
+        return tool.id
+
+    def show(text: str, severity: str) -> None:
+        lines.append((text, severity))
+
+    monkeypatch.setattr(ToolBrowser, "highlighted_id", highlighted)
+    monkeypatch.setattr(screen, "_update_tool_worker", targets.append)
+    monkeypatch.setattr(screen.status, "set", show)
+    return screen, targets, lines, begins
+
+
+def test_u_on_a_pending_row_says_checking(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tool = _tool("rg")
+    screen, targets, lines, begins = _u_screen(tmp_path, monkeypatch, tool, None)
+    screen.action_update_tool()
+    assert lines == [
+        ("cannot update rg: its state is still being checked — try again in a moment", "warn")
+    ]
+    assert targets == []
+    assert begins == []
+    # A state that is itself CHECKING (a pack waiting on its hosts) is pending too.
+    checking = replace(
+        pass_state(
+            tool, platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+        ),
+        health=Health.CHECKING,
+    )
+    screen, targets, lines, _begins = _u_screen(tmp_path / "checking", monkeypatch, tool, checking)
+    screen.action_update_tool()
+    assert lines[-1][0].endswith("its state is still being checked — try again in a moment")
+    assert targets == []
+
+
+def test_u_on_a_broken_row_names_the_first_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool = _tool("rg")
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    state = pass_state(
+        tool,
+        platform=macos,
+        ownership=_ownership(tool, owner="brew"),
+        version=_outdated_status("rg"),
+        broken=("changed since install", "another fact"),
+    )
+    assert state.health is Health.BROKEN
+    screen, targets, lines, begins = _u_screen(tmp_path, monkeypatch, tool, state)
+    screen.action_update_tool()
+    assert lines == [("rg is broken: changed since install", "warn")]
+    assert targets == []
+    assert begins == []
+
+
+def test_u_uses_the_state_ownership(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tool = _tool("rg")
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    ownership = _ownership(tool, owner="brew", package="ripgrep")
+    state = pass_state(tool, platform=macos, ownership=ownership, version=_outdated_status("rg"))
+    assert state.health is Health.OUTDATED
+    screen, targets, lines, begins = _u_screen(tmp_path, monkeypatch, tool, state)
+    screen.action_update_tool()
+    assert targets == [UpdateTarget(tool=tool, ownership=ownership)]
+    assert begins == ["rg"]
+    assert lines == [("updating rg…", "ok")]
+
+
+def test_u_current_and_unknown_owner_copies_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool = _tool("rg")
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    current = VersionStatus(
+        tool_id="rg",
+        installed="14.1.1",
+        latest="14.1.1",
+        outdated=False,
+        stale=False,
+        source="brew",
+    )
+    state = pass_state(
+        tool, platform=macos, ownership=_ownership(tool, owner="brew"), version=current
+    )
+    screen, targets, lines, _begins = _u_screen(tmp_path, monkeypatch, tool, state)
+    screen.action_update_tool()
+    assert lines == [("rg is already current", "ok")]
+    assert targets == []
+
+    unknown = _ownership(
+        tool,
+        owner="unknown",
+        unknown_reason="the brew inventory could not be read",
+        active_path=Path("/opt/x/bin/rg"),
+    )
+    state = pass_state(tool, platform=macos, ownership=unknown, version=_outdated_status("rg"))
+    screen, targets, lines, _begins = _u_screen(tmp_path / "unknown", monkeypatch, tool, state)
+    screen.action_update_tool()
+    assert lines == [
+        (
+            "cannot update rg: the brew inventory could not be read"
+            " — active binary resolves to /opt/x/bin/rg",
+            "warn",
+        )
+    ]
+    assert targets == []
+
+
+def test_no_test_pokes_private_service_stores() -> None:
+    """Tests seed state through the public doubles (tests/state_doubles.py),
+    never by assigning a service's private ownership, status, skill or state
+    store. Plan 19-18 widens this scan to every test file."""
+    stores = "|".join(("_own" + "ership", "_stat" + "uses", "_sta" + "tes", "_sk" + "ills"))
+    poke = re.compile(r"\.(?:" + stores + r")\b(?:\[[^\]]*\])?\s*=(?!=)")
+    here = Path(__file__).parent
+    hits = [
+        f"{name}:{number}: {line.strip()}"
+        for name in ("test_catalog_tui.py", "test_wizard_app.py")
+        for number, line in enumerate((here / name).read_text().splitlines(), 1)
+        if poke.search(line)
+    ]
+    assert hits == []

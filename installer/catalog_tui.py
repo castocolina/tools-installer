@@ -236,7 +236,6 @@ _COLUMNS = (
 
 # The Ver cell's suffix for a comparison against a stale cached latest.
 _VER_STALE = "~"
-_BROKEN_DETAIL = "shim present, package missing — select it and press enter to reinstall and repair"
 # The Health column's glyph and style per state (19-UI-SPEC): every state has
 # its own glyph, so the meaning never depends on color.
 _HEALTH_CELL: dict[Health, tuple[str, str]] = {
@@ -295,7 +294,8 @@ class CatalogScreen(AppScreen):
 
     Update output policy: the update runs through `run_captured`, so the
     child's stdout never reaches the rendered frame. The user sees an
-    in-flight line, then the re-probed version or the child's stderr from
+    in-flight line, then `updated {id}` (the rows repaint when the
+    follow-up pass lands) or the child's stderr from
     `CommandError.detail`. Live streaming of manager output is not built
     this phase.
     """
@@ -762,20 +762,20 @@ class CatalogScreen(AppScreen):
         if tool is None:
             return
         state = self._state(tool)
-        if state is None:
-            # CR-02 (15.4-REVIEW.md): never a silent return. No state is
-            # "a pass has not committed yet" -- a transient the user recovers
-            # from by waiting, not a permanent refusal -- so it must say so.
+        if state is None or state.health is Health.CHECKING:
+            # CR-02 (15.4-REVIEW.md): never a silent return. A pending state is
+            # a transient the user recovers from by waiting, so it must say so.
             self.status.set(
-                f"cannot update {tool_id}: ownership data is being refreshed — "
+                f"cannot update {tool_id}: its state is still being checked — "
                 "try again in a moment",
                 "warn",
             )
             return
-        ownership, status = state.ownership, state.version
-        if ownership.broken:
-            self.status.set(f"{tool_id}: {_BROKEN_DETAIL}", "warn")
+        if state.health is Health.BROKEN:
+            # tool_health puts the winning state's facts first.
+            self.status.set(f"{tool_id} is broken: {state.reasons[0]}", "warn")
             return
+        ownership, status = state.ownership, state.version
         if status is not None and status.outdated is False:
             lead = "current as of the last check" if status.stale else "already current"
             line = f"{tool_id} is {lead}"

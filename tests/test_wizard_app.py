@@ -5879,10 +5879,10 @@ async def test_returning_to_the_base_tier_re_resolves_ownership_an_install_dropp
         await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
         await _settle_versions(app, pilot, user_screen)
-        assert service.ownership_of("sys-tool") is not None
+        assert service.state_of("sys-tool") is not None
         await pilot.press("1")
         await _settle_versions(app, pilot)
-        assert service.ownership_of("sys-tool") is not None
+        assert service.state_of("sys-tool") is not None
 
 
 async def test_install_closed_marks_a_detect_path_tool_that_answers_no_version(
