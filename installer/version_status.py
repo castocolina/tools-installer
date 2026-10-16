@@ -54,6 +54,8 @@ from typing import Literal, cast
 
 import installer.locations
 from installer import receipts
+from installer.download import ExecContext, artifact_paths, resolve_target
+from installer.executors import ExecutorError
 from installer.guards import look_through_shim, real_pnpm
 from installer.install_ownership import ProbeRunner, native_index
 from installer.manager_versions import OutdatedReport, read_outdated
@@ -93,6 +95,7 @@ from installer.version_cache import (
     should_fetch_managers,
 )
 from installer.versions import (
+    Release,
     TagResolver,
     VersionError,
     extract_observed_version,
@@ -557,6 +560,14 @@ SKILL_SEEDED_NOTE = "host status from the previous run, re-checking"
 # 19-UI-SPEC locked copy (D-08, D-09, SPEC R4).
 CHANGED_SINCE_INSTALL = "changed since install"
 RECEIPT_UNREADABLE_NOTE = "install receipt unreadable — treated as unproven"
+ADOPTED_NOTE = "adopted: the file matches the release checksum"
+
+
+def _run_nothing(cmd: list[str]) -> None:
+    """Adoption only renders an asset name; it never runs a command (D-09)."""
+    raise ExecutorError(f"adoption runs no command: {cmd}")
+
+
 _PRESENT_HEALTH = frozenset({Health.BROKEN, Health.MISCONFIGURED, Health.OUTDATED, Health.OK})
 
 
@@ -811,6 +822,8 @@ class VersionRefreshService:
         self._seq = 0
         self._inflight: dict[frozenset[str], _Flight] = {}
         self._warning: str | None = None
+        # D-09 non-match memo: (path, size, mtime_ns, asset, expected digest).
+        self._adopt_misses: set[tuple[str, int | None, int | None, str, str]] = set()
 
     @property
     def platform(self) -> Platform:
@@ -1003,21 +1016,71 @@ class VersionRefreshService:
         )
 
     def _receipt_evidence(
-        self, tool: Tool
+        self,
+        tool: Tool,
+        *,
+        present: bool,
+        entry: VersionCacheEntry | None,
+        platform: Platform,
     ) -> tuple[Receipt | None, tuple[str, ...], tuple[str, ...]]:
         """(receipt, broken facts, notes) from the tool's receipt (D-08, SPEC R4).
 
         An artifact that no longer matches its receipt is BROKEN; a receipt
-        file that does not parse proves nothing and says so as a note."""
+        file that does not parse proves nothing and says so as a note. A
+        present tool with no receipt file may be adopted (D-09)."""
         path = receipts.receipt_path(tool.id)
         if not (path.exists() or path.is_symlink()):
-            return None, (), ()
+            adopted = self._adopt(tool, entry, platform) if present else None
+            return adopted, (), (ADOPTED_NOTE,) if adopted is not None else ()
         receipt = receipts.read(tool.id)
         if receipt is None:
             return None, (), (RECEIPT_UNREADABLE_NOTE,)
         if receipts.drifted(receipt):
             return receipt, (CHANGED_SINCE_INSTALL,), ()
         return receipt, (), ()
+
+    def _adopt(
+        self, tool: Tool, entry: VersionCacheEntry | None, platform: Platform
+    ) -> Receipt | None:
+        """Adopt a raw github_release file whose sha256 is the cached digest (D-09).
+
+        No network: the asset name is rendered from the cached tag and digests.
+        ONE fingerprint is compared and handed to `receipts.adopt`, which
+        re-checks it under its lock (review H9). A non-match is remembered per
+        (path, size, mtime_ns, asset, expected digest), so a changed file, tag
+        or digest is checked again (review M10)."""
+        found = github_repo(tool, platform)
+        if found is None or entry is None or entry.latest_version is None or not entry.digests:
+            return None
+        method = found[0]
+        if method.params.get("raw") is not True:
+            return None
+        release = Release(tag=entry.latest_version, digests=entry.digests)
+        ctx = ExecContext(
+            runner=_run_nothing, platform=platform, resolve_release=lambda _repo: release
+        )
+        try:
+            asset = resolve_target(method, ctx).asset
+            expected = entry.digests.get(asset)
+            files = [
+                a.path for a in artifact_paths(method, self._managed_bin_dir) if a.kind == "file"
+            ]
+            if expected is None or not files:
+                return None
+            st = files[0].lstat()
+            if (str(files[0]), st.st_size, st.st_mtime_ns, asset, expected) in self._adopt_misses:
+                return None
+            artifact = receipts.fingerprint(files[0], "file")
+            if artifact is None:
+                return None
+            if artifact.sha256 != expected:
+                self._adopt_misses.add(
+                    (str(files[0]), artifact.size, artifact.mtime_ns, asset, expected)
+                )
+                return None
+            return receipts.adopt(tool, method, artifact, package=None)
+        except (ExecutorError, OSError):
+            return None
 
     def _artifacts(self, tool: Tool) -> Sequence[Path]:
         if self._artifacts_for is not None:
@@ -1228,7 +1291,13 @@ class VersionRefreshService:
                 packs.append((tool, ownership, status, plan_removal([tool], self._managed_bin_dir)))
             else:
                 present = self._present(tool)
-                receipt, broken, receipt_notes = self._receipt_evidence(tool)
+                # Before the removal plan, so an adopted tool is removable now.
+                receipt, broken, receipt_notes = self._receipt_evidence(
+                    tool,
+                    present=present,
+                    entry=new_entry if new_entry is not None else entry,
+                    platform=platform,
+                )
                 states[tool.id] = tool_state(
                     tool,
                     generation=started_epoch,

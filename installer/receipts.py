@@ -269,6 +269,29 @@ def record(
     return receipt
 
 
+def adopt(
+    tool: Tool, method: Method, artifact: ReceiptArtifact, *, package: str | None
+) -> Receipt | None:
+    """Write a receipt for a file installed before receipts existed (D-09).
+
+    `artifact` is the fingerprint the caller compared with the release digest.
+    Under the write lock it is refused when a receipt (or a link in its place)
+    appeared, or when ONE fresh fingerprint differs from it; the receipt then
+    records that verified fingerprint, so bytes swapped after it read as drift,
+    never as proof (review C2-H1). It writes through `_write_unlocked`: the
+    lock is not reentrant and `write` would hang here (review H1)."""
+    with _WRITE_LOCK:
+        path = receipt_path(tool.id)
+        if path.exists() or path.is_symlink():
+            return None
+        fresh = fingerprint(artifact.path, artifact.type)
+        if fresh is None or fresh != artifact:
+            return None
+        receipt = _build_receipt(tool, method, (fresh,), package=package, smoke=None)
+        _write_unlocked(receipt)
+        return receipt
+
+
 def delete(tool_id: str) -> None:
     """Remove the receipt for `tool_id` when it exists."""
     receipt_path(tool_id).unlink(missing_ok=True)

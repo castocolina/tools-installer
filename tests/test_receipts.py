@@ -4,8 +4,9 @@ import hashlib
 import io
 import json
 import os
+import threading
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import pytest
 
@@ -588,3 +589,118 @@ def test_record_failure_removes_the_previous_receipt(
     else:
         assert message == "read-only"
         assert not path.exists()
+
+
+# --- 19-14 Task 2: adoption re-checks under the lock (D-09, Pitfall 5, H1, C2-H1) ---
+
+
+def _adoptable(tmp_path: Path) -> tuple[Tool, Method, ReceiptArtifact]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    placed = bin_dir / "yq"
+    placed.write_bytes(b"#!/bin/sh\necho yq\n")
+    artifact = receipts.fingerprint(placed, "file")
+    assert artifact is not None
+    method = _raw_yq(bin_dir)
+    return _record_tool("yq", method), method, artifact
+
+
+def _rewrite_same_length(path: Path) -> None:
+    """Different bytes of the same length, with a later mtime."""
+    st = path.stat()
+    path.write_bytes(b"X" * st.st_size)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 2_000_000_000))
+
+
+def test_adopt_writes_when_nothing_changed(tmp_path: Path) -> None:
+    tool, method, artifact = _adoptable(tmp_path)
+    adopted = receipts.adopt(tool, method, artifact, package=None)
+    assert adopted is not None
+    assert adopted.artifacts == (artifact,)
+    assert adopted.method == ReceiptMethod(method.kind, method_key(method))
+    assert adopted.package is None
+    assert adopted.smoke is None
+    assert adopted.hooks == {}
+    assert receipts.read("yq") == adopted
+
+
+def test_adopt_records_the_verified_fingerprint_without_a_second_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool, method, artifact = _adoptable(tmp_path)
+    real = receipts.fingerprint
+    calls: list[Path] = []
+
+    def replaced_right_after(
+        path: Path, kind: Literal["dir", "link", "file"]
+    ) -> ReceiptArtifact | None:
+        found = real(path, kind)
+        calls.append(path)
+        _rewrite_same_length(path)
+        return found
+
+    monkeypatch.setattr(receipts, "fingerprint", replaced_right_after)
+    adopted = receipts.adopt(tool, method, artifact, package=None)
+    assert calls == [artifact.path]
+    assert adopted is not None
+    assert adopted.artifacts == (artifact,)
+    assert receipts.drifted(adopted) == (artifact,)
+
+
+def test_adopt_refuses_when_a_receipt_appeared(tmp_path: Path) -> None:
+    tool, method, artifact = _adoptable(tmp_path)
+    write(
+        Receipt(
+            tool="yq",
+            at="t",
+            method=ReceiptMethod(kind="github_release", key="k"),
+            package=None,
+            artifacts=(),
+            smoke="ok",
+            hooks={},
+        )
+    )
+    before = receipt_path("yq").read_bytes()
+    assert receipts.adopt(tool, method, artifact, package=None) is None
+    assert receipt_path("yq").read_bytes() == before
+
+
+@pytest.mark.parametrize("change", ["size", "mtime"])
+def test_adopt_refuses_when_the_file_changed(tmp_path: Path, change: str) -> None:
+    tool, method, artifact = _adoptable(tmp_path)
+    if change == "size":
+        with artifact.path.open("ab") as handle:
+            handle.write(b"# more\n")
+    else:
+        st = artifact.path.stat()
+        os.utime(artifact.path, ns=(st.st_atime_ns, st.st_mtime_ns + 2_000_000_000))
+    assert receipts.adopt(tool, method, artifact, package=None) is None
+    assert not receipt_path("yq").exists()
+
+
+def test_adopt_completes_without_deadlock(tmp_path: Path) -> None:
+    tool, method, artifact = _adoptable(tmp_path)
+    results: list[Receipt | None] = []
+    adopting = threading.Thread(
+        target=lambda: results.append(receipts.adopt(tool, method, artifact, package=None)),
+        daemon=True,
+    )
+    adopting.start()
+    adopting.join(timeout=5)
+    assert not adopting.is_alive()
+    assert results and results[0] is not None
+    assert receipt_path("yq").exists()
+    rewritten = Receipt(
+        tool="yq",
+        at="t",
+        method=ReceiptMethod(kind="github_release", key="k"),
+        package=None,
+        artifacts=(),
+        smoke=None,
+        hooks={},
+    )
+    writing = threading.Thread(target=lambda: write(rewritten), daemon=True)
+    writing.start()
+    writing.join(timeout=5)
+    assert not writing.is_alive()
+    assert receipts.read("yq") == rewritten

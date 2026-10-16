@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import subprocess
@@ -9,7 +10,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import pytest
 
@@ -3801,3 +3802,148 @@ def test_changed_link_target_is_broken_and_not_removable_end_to_end(
     assert refused == (f"changed since the preview; not removed: {link}",)
     assert link.is_symlink()
     assert receipts.receipt_path("rg").exists()
+
+
+# -- 19-14 Task 2: a present raw binary with no receipt is adopted against the
+# cached release digest, offline and race-safe (D-09, review H9, M10). --
+
+_ADOPTED = "adopted: the file matches the release checksum"
+_YQ_SHA = hashlib.sha256(_YQ_BYTES).hexdigest()
+
+
+def _cache_digests(
+    tmp_path: Path, tool_id: str, digests: Mapping[str, str], *, latest: str = "v4.54.1"
+) -> None:
+    """A fresh cache entry, so the pass never fetches (checked_at is now)."""
+    entry = VersionCacheEntry(
+        latest_version=latest, checked_at=_STATE_NOW.isoformat(), digests=dict(digests)
+    )
+    save_version_cache(tmp_path / "versions.json", {tool_id: entry})
+
+
+def _offline(calls: list[str]) -> Callable[[str], str]:
+    def resolve_tag(repo: str) -> str:
+        calls.append(repo)
+        raise AssertionError(f"network call for {repo}")
+
+    return resolve_tag
+
+
+def _adoption_service(
+    tmp_path: Path, bin_dir: Path, digests: Mapping[str, str]
+) -> tuple[VersionRefreshService, Path]:
+    placed = bin_dir / "yq"
+    placed.write_bytes(_YQ_BYTES)
+    _cache_digests(tmp_path, "yq", digests)
+    return _receipt_service(tmp_path, bin_dir, resolve_tag=_offline([])), placed
+
+
+def test_pass_adopts_a_raw_binary_by_cached_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    service, placed = _adoption_service(tmp_path, bin_dir, {"yq_linux_amd64": _YQ_SHA})
+    state = _settled(service, _yq())
+    written = receipts.read("yq")
+    assert written is not None
+    assert written.artifacts == (receipts.fingerprint(placed, "file"),)
+    assert state.receipt == written
+    assert _ADOPTED in state.reasons
+    assert state.removable.removable == (placed,)
+
+
+def test_adoption_makes_no_network_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    (bin_dir / "yq").write_bytes(_YQ_BYTES)
+    _cache_digests(tmp_path, "yq", {"yq_linux_amd64": _YQ_SHA})
+    calls: list[str] = []
+    state = _settled(_receipt_service(tmp_path, bin_dir, resolve_tag=_offline(calls)), _yq())
+    assert calls == []
+    assert _ADOPTED in state.reasons
+    assert receipts.read("yq") is not None
+
+
+def test_adoption_mismatch_is_hashed_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    service, placed = _adoption_service(tmp_path, bin_dir, {"yq_linux_amd64": "0" * 64})
+    real = receipts.sha256_file
+    hashed: list[Path] = []
+
+    def counting(path: Path) -> str:
+        hashed.append(path)
+        return real(path)
+
+    monkeypatch.setattr(receipts, "sha256_file", counting)
+    first = _settled(service, _yq())
+    second = _settled(service, _yq())
+    assert hashed == [placed]
+    assert not receipts.receipt_path("yq").exists()
+    assert _ADOPTED not in first.reasons
+    assert _ADOPTED not in second.reasons
+
+
+def test_adoption_memo_is_keyed_by_the_expected_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    service, _placed = _adoption_service(tmp_path, bin_dir, {"yq_linux_amd64": "0" * 64})
+    assert _ADOPTED not in _settled(service, _yq()).reasons
+    assert not receipts.receipt_path("yq").exists()
+    _cache_digests(tmp_path, "yq", {"yq_linux_amd64": _YQ_SHA})
+    assert _ADOPTED in _settled(service, _yq()).reasons
+    assert receipts.read("yq") is not None
+
+
+def test_adoption_binds_the_digest_to_the_adopted_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    service, placed = _adoption_service(tmp_path, bin_dir, {"yq_linux_amd64": _YQ_SHA})
+    real = receipts.fingerprint
+    calls: list[Path] = []
+
+    def replaced_after_the_first(
+        path: Path, kind: Literal["dir", "link", "file"]
+    ) -> receipts.ReceiptArtifact | None:
+        found = real(path, kind)
+        calls.append(path)
+        if len(calls) == 1:
+            st = path.stat()
+            path.write_bytes(b"X" * st.st_size)
+            os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 2_000_000_000))
+        return found
+
+    monkeypatch.setattr(receipts, "fingerprint", replaced_after_the_first)
+    state = _settled(service, _yq())
+    assert calls == [placed, placed]
+    assert not receipts.receipt_path("yq").exists()
+    assert _ADOPTED not in state.reasons
+
+
+def test_no_digest_no_adoption(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    service, _placed = _adoption_service(tmp_path, bin_dir, {})
+    state = _settled(service, _yq())
+    assert not receipts.receipt_path("yq").exists()
+    assert _ADOPTED not in state.reasons
+
+
+@pytest.mark.parametrize("shape", ["archive", "raw-tarball"])
+def test_archive_and_non_raw_methods_are_never_digest_adopted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    if shape == "archive":
+        tool, asset, latest = _rg_archive(), _RG_ASSET, "14.1.0"
+    else:
+        method = Method(
+            kind="tarball", params={"url": "https://x.test/yq.tar.gz", "member": "yq", "raw": True}
+        )
+        tool = Tool(id="yq", name="yq", category="data", cmd="yq", methods=(method,), tier="user")
+        asset, latest = "yq.tar.gz", "v4.54.1"
+    placed = bin_dir / tool.cmd
+    placed.write_bytes(_YQ_BYTES)
+    _cache_digests(tmp_path, tool.id, {asset: _YQ_SHA}, latest=latest)
+    state = _settled(_receipt_service(tmp_path, bin_dir, resolve_tag=_offline([])), tool)
+    assert not receipts.receipt_path(tool.id).exists()
+    assert _ADOPTED not in state.reasons
