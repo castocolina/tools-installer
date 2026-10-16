@@ -383,7 +383,7 @@ def test_remove_paths_deletes_dirs_files_and_symlinks(tmp_path: Path):
     plain = tmp_path / "plain"
     plain.write_text("y")
     artifacts = [
-        receipts.fingerprint(opt, "dir"),
+        receipts.fingerprint(opt, "dir", key="fd"),
         receipts.fingerprint(link, "link"),
         receipts.fingerprint(dangling, "link"),
         receipts.fingerprint(plain, "file"),
@@ -476,8 +476,9 @@ def test_remove_paths_unlinks_only_what_its_type_authorizes(tmp_path: Path) -> N
     dir_path = tmp_path / "dir"
     dir_path.mkdir()
     (dir_path / "member").write_text("inside")
-    dir_artifact = receipts.fingerprint(dir_path, "dir")
+    dir_artifact = receipts.fingerprint(dir_path, "dir", key="member")
     dir_decoy = swap_for_dir(dir_path)
+    (dir_path / "member").write_text("rebuilt")
 
     assert file_artifact is not None
     assert link_artifact is not None
@@ -500,7 +501,7 @@ def test_remove_paths_unlinks_only_what_its_type_authorizes(tmp_path: Path) -> N
     kept = [
         receipts.fingerprint(kept_file, "file"),
         receipts.fingerprint(kept_link, "link"),
-        receipts.fingerprint(kept_dir, "dir"),
+        receipts.fingerprint(kept_dir, "dir", key="gone"),
     ]
     assert all(artifact is not None for artifact in kept)
     assert remove_paths([artifact for artifact in kept if artifact is not None]) == ()
@@ -1620,7 +1621,7 @@ def test_failed_opt_dir_delete_leaves_the_remainder_listed(
 
     monkeypatch.setattr(uninstall_module.shutil, "rmtree", failing_rmtree)
     link_artifact = receipts.fingerprint(bin_dir / "fd", "link")
-    dir_artifact = receipts.fingerprint(opt, "dir")
+    dir_artifact = receipts.fingerprint(opt, "dir", key="fd")
     assert link_artifact is not None and dir_artifact is not None
     with pytest.raises(OSError):
         remove_paths([link_artifact, dir_artifact])
@@ -1745,16 +1746,31 @@ def _raw_yq_tool() -> Tool:
 
 
 def write_receipt(
-    tool: Tool, artifacts: list[tuple[Path, str]], *, kind: str = "github_release"
+    tool: Tool,
+    artifacts: list[tuple[Path, str]],
+    *,
+    kind: str = "github_release",
+    dir_key: str | None = None,
 ) -> None:
     """Write a receipt for `tool` fingerprinting each (path, type) as it is now.
 
     Public: tests/test_app.py builds its CLI receipts with it. The receipts
-    dir is the conftest sandbox, never the real HOME."""
+    dir is the conftest sandbox, never the real HOME. A dir is keyed by
+    `dir_key` when given, else by Info.plist for an app, else by the member
+    the first link in the list points to."""
+    link = next((path for path, artifact_type in artifacts if artifact_type == "link"), None)
     recorded: list[receipts.ReceiptArtifact] = []
     for path, artifact_type in artifacts:
         assert artifact_type in ("dir", "link", "file")
-        artifact = receipts.fingerprint(path, artifact_type)
+        key: str | None = None
+        if artifact_type == "dir":
+            if dir_key is not None:
+                key = dir_key
+            elif kind == "app":
+                key = receipts.APP_KEY_FILE
+            elif link is not None:
+                key = receipts.link_key(path, link)
+        artifact = receipts.fingerprint(path, artifact_type, key=key)
         assert artifact is not None, path
         recorded.append(artifact)
     receipts.write(
@@ -1901,7 +1917,7 @@ def test_plan_removal_keeps_each_proven_artifact(
     rg, rg_bin, opt = _plant_rg(tmp_path)
     layout = plan_removal([rg], rg_bin)
     link = receipts.fingerprint(rg_bin / "rg", "link")
-    directory = receipts.fingerprint(opt, "dir")
+    directory = receipts.fingerprint(opt, "dir", key="rg")
     assert link is not None and directory is not None
     assert layout.artifacts == {rg_bin / "rg": link, opt: directory}
     assert set(layout.artifacts) == set(layout.removable)
@@ -1958,7 +1974,7 @@ def _plant_retyped_yq(home: Path) -> tuple[Tool, Path, Path]:
     decoy = bin_dir / "yq" / "decoy"
     decoy.write_text("not ours")
     yq = _raw_yq_tool()
-    write_receipt(yq, [(bin_dir / "yq", "dir")])
+    write_receipt(yq, [(bin_dir / "yq", "dir")], dir_key="decoy")
     return yq, bin_dir, decoy
 
 
@@ -2103,6 +2119,7 @@ def test_remove_proven_refuses_a_dir_recreated_after_verification(
 
     def recreate_opt() -> None:
         _recreate_over(opt)
+        (opt / "fd").write_text("vendor reinstall build")
         (opt / "decoy").write_text("vendor reinstall")
 
     _after_verified_plan(monkeypatch, recreate_opt)
@@ -2130,14 +2147,11 @@ def test_remove_proven_refuses_a_retyped_artifact(
     assert decoy.read_text() == "not ours"
 
 
-# --- 19-22 Task 1: a re-created directory never inherits a stale receipt (G2) --
+# --- 19-32 Task 1: a changed key file drops the proof; identical bytes keep it --
 
 
 def _recreate_over(original: Path) -> None:
-    """Replace `original` with a sibling directory of the same contents.
-
-    Both exist at once, so the replacement gets a new inode even on a
-    filesystem that recycles the one just freed."""
+    """Put a new directory at the same path, keeping the original's contents."""
     sibling = original.with_name(original.name + ".new")
     sibling.mkdir()
     for child in original.iterdir():
@@ -2146,24 +2160,19 @@ def _recreate_over(original: Path) -> None:
     sibling.rename(original)
 
 
-@pytest.mark.parametrize("shape", ["archive", "app"])
-def test_recreated_dir_artifact_is_not_removable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
-) -> None:
-    """A vendor reinstall into the same path must not be removable (G2).
-
-    The link's target string is unchanged; only the directory's identity
-    changed, and that is enough to drop the whole tool's proof."""
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+def _plant_receipt_dir(tmp_path: Path, shape: str) -> tuple[Tool, Path, Path, Path]:
+    """An archive or app fixture with a receipt, and the directory its key file lives in."""
     bin_dir = tmp_path / ".local" / "bin"
     bin_dir.mkdir(parents=True)
     if shape == "archive":
         tool, _, directory = _plant_rg(tmp_path)
         link = bin_dir / "rg"
+        kind = "github_release"
     else:
         directory = tmp_path / "Applications" / "Demo.app"
         (directory / "Contents" / "MacOS").mkdir(parents=True)
         (directory / "Contents" / "MacOS" / "demo").write_text("demo binary")
+        (directory / "Contents" / "Info.plist").write_text("<plist>vendor</plist>")
         link = bin_dir / "demo"
         link.symlink_to(directory / "Contents" / "MacOS" / "demo")
         tool = _tool(
@@ -2178,18 +2187,44 @@ def test_recreated_dir_artifact_is_not_removable(
             tool_id="demo",
             cmd="demo",
         )
-    write_receipt(
-        tool,
-        [(directory, "dir"), (link, "link")],
-        kind="app" if shape == "app" else "github_release",
-    )
-    assert set(plan_removal([tool], bin_dir).removable) == {directory, link}
+        kind = "app"
+    write_receipt(tool, [(directory, "dir"), (link, "link")], kind=kind)
+    return tool, bin_dir, directory, link
+
+
+@pytest.mark.parametrize("shape", ["archive", "app"])
+def test_replaced_dir_artifact_is_not_removable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    """A vendor reinstall whose key file changed is not removable (L-19-31).
+
+    The link's target string is unchanged; the rewritten key file drops the
+    whole tool's proof, and the directory stays."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tool, bin_dir, directory, _link = _plant_receipt_dir(tmp_path, shape)
+    assert plan_removal([tool], bin_dir).removable
 
     _recreate_over(directory)
+    if shape == "archive":
+        (directory / "rg").write_text("rg hand-built")
+    else:
+        (directory / "Contents" / "Info.plist").write_text("<plist>vendor 2</plist>")
     plan = plan_removal([tool], bin_dir)
     assert plan.removable == ()
     assert plan.by_tool == {}
     assert directory.is_dir()
+
+
+@pytest.mark.parametrize("shape", ["archive", "app"])
+def test_dir_recreated_with_the_same_key_file_stays_removable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    """Identical key-file bytes are the same software (L-19-31): a reboot or
+    remount never drops the proof, so the directory and its link stay removable."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tool, bin_dir, directory, link = _plant_receipt_dir(tmp_path, shape)
+    _recreate_over(directory)
+    assert set(plan_removal([tool], bin_dir).removable) == {directory, link}
 
 
 # --- 19-22 Task 2: a NUL artifact path never aborts a removal (G5) ----------

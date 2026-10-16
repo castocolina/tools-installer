@@ -1803,9 +1803,10 @@ def test_archive_install_writes_a_receipt(monkeypatch: pytest.MonkeyPatch, tmp_p
     written = receipts.read("rg")
     assert written is not None
     assert written.artifacts == (
-        receipts.fingerprint(opt, "dir"),
+        receipts.fingerprint(opt, "dir", key="rg-x/rg"),
         receipts.fingerprint(link, "link"),
     )
+    assert written.artifacts[0].key == "rg-x/rg"
     assert written.artifacts[1].target == os.readlink(link)
 
 
@@ -1852,6 +1853,7 @@ def test_receipt_per_kind(
     def place() -> None:
         if method.kind == "app":
             (bundle / "Contents" / "MacOS").mkdir(parents=True)
+            (bundle / "Contents" / "Info.plist").write_bytes(b"<plist></plist>")
             link.parent.mkdir(parents=True)
             link.symlink_to(bundle / "Contents" / "MacOS" / "draw")
         elif method.kind == "script":
@@ -1869,7 +1871,7 @@ def test_receipt_per_kind(
     assert written.method.kind == method.kind
     if method.kind == "app":
         assert written.artifacts == (
-            receipts.fingerprint(bundle, "dir"),
+            receipts.fingerprint(bundle, "dir", key=receipts.APP_KEY_FILE),
             receipts.fingerprint(link, "link"),
         )
     else:

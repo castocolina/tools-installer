@@ -32,7 +32,8 @@ def _sample(tmp_path: Path) -> Receipt:
     link = tmp_path / "link"
     directory = tmp_path / "dir"
     directory.mkdir()
-    directory_artifact = receipts.fingerprint(directory, "dir")
+    (directory / "k").write_bytes(b"k")
+    directory_artifact = receipts.fingerprint(directory, "dir", key="k")
     assert directory_artifact is not None
     return Receipt(
         tool="yq",
@@ -204,7 +205,18 @@ def _artifact_variant(**changes: object) -> str:
         ("artifact type socket", _variant(artifacts=[{"path": "/x", "type": "socket"}])),
         (
             "relative artifact path",
-            _variant(artifacts=[{"path": "relative/yq", "type": "dir", "dev": 1, "ino": 1}]),
+            _variant(
+                artifacts=[
+                    {
+                        "path": "relative/yq",
+                        "type": "dir",
+                        "key": "k",
+                        "sha256": "b" * 64,
+                        "size": 1,
+                        "mtime_ns": 1,
+                    }
+                ]
+            ),
         ),
         ("artifacts not a list", _variant(artifacts="x")),
         ("size is a string", _artifact_variant(size="3")),
@@ -333,6 +345,7 @@ def test_fingerprint_records_each_artifact_type(tmp_path: Path) -> None:
     link.symlink_to("/x/y")
     directory = tmp_path / "dir"
     directory.mkdir()
+    (directory / "k").write_bytes(b"k")
 
     file_fp = receipts.fingerprint(target_file, "file")
     assert file_fp is not None
@@ -346,16 +359,17 @@ def test_fingerprint_records_each_artifact_type(tmp_path: Path) -> None:
     assert link_fp.type == "link"
     assert link_fp.target == os.readlink(link)
 
-    dir_fp = receipts.fingerprint(directory, "dir")
+    dir_fp = receipts.fingerprint(directory, "dir", key="k")
     assert dir_fp is not None
     assert dir_fp.type == "dir"
+    assert dir_fp.key == "k"
 
     assert receipts.fingerprint(tmp_path / "gone", "file") is None
-    assert receipts.fingerprint(target_file, "dir") is None
+    assert receipts.fingerprint(target_file, "dir", key="k") is None
     assert receipts.fingerprint(link, "file") is None
     symlinked_dir = tmp_path / "sdir"
     symlinked_dir.symlink_to(directory, target_is_directory=True)
-    assert receipts.fingerprint(symlinked_dir, "dir") is None
+    assert receipts.fingerprint(symlinked_dir, "dir", key="k") is None
 
 
 def test_matches_link_only_when_the_target_is_unchanged(tmp_path: Path) -> None:
@@ -376,11 +390,17 @@ def test_matches_link_only_when_the_target_is_unchanged(tmp_path: Path) -> None:
 def test_matches_dir_only_when_it_is_a_real_directory(tmp_path: Path) -> None:
     directory = tmp_path / "dir"
     directory.mkdir()
-    artifact = receipts.fingerprint(directory, "dir")
+    (directory / "k").write_bytes(b"k")
+    artifact = receipts.fingerprint(directory, "dir", key="k")
     assert artifact is not None
     assert receipts.matches(artifact)
-    directory.rmdir()
-    directory.symlink_to(tmp_path, target_is_directory=True)
+    import shutil
+
+    shutil.rmtree(directory)
+    same = tmp_path / "same"
+    same.mkdir()
+    (same / "k").write_bytes(b"k")
+    directory.symlink_to(same, target_is_directory=True)
     assert not receipts.matches(artifact)
 
 
@@ -515,6 +535,8 @@ def test_record_skips_missing_artifacts(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     bundle = tmp_path / "Applications" / "Draw.app"
     bundle.mkdir(parents=True)
+    (bundle / "Contents").mkdir()
+    (bundle / "Contents" / "Info.plist").write_bytes(b"<plist></plist>")
     method = Method(
         kind="app",
         params={"url": "https://x/d.zip", "app": "Draw.app", "cli": "Contents/MacOS/draw"},
@@ -527,7 +549,7 @@ def test_record_skips_missing_artifacts(tmp_path: Path, monkeypatch: pytest.Monk
         default_bin_dir=tmp_path / "bin",
     )
     assert written is not None
-    assert written.artifacts == (receipts.fingerprint(bundle, "dir"),)
+    assert written.artifacts == (receipts.fingerprint(bundle, "dir", key=receipts.APP_KEY_FILE),)
 
 
 @pytest.mark.parametrize(
@@ -711,60 +733,101 @@ def test_adopt_completes_without_deadlock(tmp_path: Path) -> None:
     assert receipts.read("yq") == rewritten
 
 
-# --- 19-22 Task 1: a dir is proven by identity; the reader keeps each type's fields ---
+# --- 19-32 Task 1: a dir is proven by one key file; the reader keeps each type's fields ---
 
 
-def test_dir_fingerprint_records_its_identity(tmp_path: Path) -> None:
-    """A dir artifact records the directory's own (st_dev, st_ino) from lstat.
+def test_dir_fingerprint_records_its_key_file(tmp_path: Path) -> None:
+    """A dir artifact records one key file's digest, never a device or inode.
 
-    A regular file or a symlink to a directory is not a directory this installer
-    created, so neither fingerprints as type dir."""
-    directory = tmp_path / "dir"
-    directory.mkdir()
-    artifact = receipts.fingerprint(directory, "dir")
-    stat = directory.lstat()
+    The key file must be a regular file inside a real directory. A missing key,
+    a regular file typed as dir, a symlink to the directory, or a symlinked key
+    file fingerprints as nothing."""
+    directory = tmp_path / "d"
+    (directory / "bin").mkdir(parents=True)
+    key_file = directory / "bin" / "tool"
+    key_file.write_bytes(b"tool-bytes")
+    artifact = receipts.fingerprint(directory, "dir", key="bin/tool")
     assert artifact is not None
-    assert artifact.dev == stat.st_dev
-    assert artifact.ino == stat.st_ino
+    assert artifact.key == "bin/tool"
+    assert artifact.sha256 == hashlib.sha256(b"tool-bytes").hexdigest()
+    assert artifact.size == 10
+    assert artifact.mtime_ns == key_file.stat().st_mtime_ns
+    assert not hasattr(artifact, "ino")
+    assert not hasattr(artifact, "dev")
 
+    assert receipts.fingerprint(directory, "dir", key=None) is None
+    assert receipts.fingerprint(directory, "dir", key="bin/missing") is None
     regular = tmp_path / "file"
     regular.write_bytes(b"abc")
-    assert receipts.fingerprint(regular, "dir") is None
+    assert receipts.fingerprint(regular, "dir", key="bin/tool") is None
     linked = tmp_path / "linked"
     linked.symlink_to(directory, target_is_directory=True)
-    assert receipts.fingerprint(linked, "dir") is None
+    assert receipts.fingerprint(linked, "dir", key="bin/tool") is None
+    key_link = directory / "bin" / "link"
+    key_link.symlink_to(key_file)
+    assert receipts.fingerprint(directory, "dir", key="bin/link") is None
 
 
-def test_recreated_dir_does_not_match(tmp_path: Path) -> None:
-    """A directory deleted and re-created is a different directory: a vendor
-    reinstall into ~/Applications must never inherit an old receipt's proof."""
+def test_dir_recreated_with_the_same_key_file_matches(tmp_path: Path) -> None:
+    """A re-created directory whose key file has the same bytes is the same
+    software: a reboot or a remount never drops the proof (CR2-01, IN2-01)."""
     original = tmp_path / "a"
     sibling = tmp_path / "b"
     original.mkdir()
     sibling.mkdir()
-    artifact = receipts.fingerprint(original, "dir")
+    (original / "k").write_bytes(b"same")
+    (sibling / "k").write_bytes(b"same")
+    artifact = receipts.fingerprint(original, "dir", key="k")
     assert artifact is not None
-    assert receipts.matches(artifact)
-    original.rmdir()
+    import shutil
+
+    shutil.rmtree(original)
     sibling.rename(original)
+    assert receipts.matches(artifact)
+    assert receipts.matches(artifact, rehash=True)
+
+
+@pytest.mark.parametrize("change", ["rewritten", "removed", "symlinked"])
+def test_dir_with_a_changed_or_missing_key_file_does_not_match(tmp_path: Path, change: str) -> None:
+    """A changed, missing or symlinked key file never matches the receipt."""
+    directory = tmp_path / "d"
+    directory.mkdir()
+    key_file = directory / "k"
+    key_file.write_bytes(b"abc")
+    artifact = receipts.fingerprint(directory, "dir", key="k")
+    assert artifact is not None
+    if change == "rewritten":
+        key_file.write_bytes(b"abcd")
+    elif change == "removed":
+        key_file.unlink()
+    else:
+        sibling = directory / "other"
+        sibling.write_bytes(b"abc")
+        key_file.unlink()
+        key_file.symlink_to(sibling)
     assert not receipts.matches(artifact)
     receipt = _write_receipt((artifact,))
     assert receipts.drifted(receipt) == (artifact,)
 
 
 @pytest.mark.parametrize(
-    "identity",
+    "shape",
     [
-        {},
-        {"dev": True, "ino": 1},
-        {"dev": 1, "ino": "1"},
-        {"dev": None, "ino": None},
+        {"dev": 7, "ino": 9},
+        {"sha256": "c" * 64, "size": 3, "mtime_ns": 1},
+        {"key": "/etc/passwd", "sha256": "c" * 64, "size": 3, "mtime_ns": 1},
+        {"key": "../x", "sha256": "c" * 64, "size": 3, "mtime_ns": 1},
+        {"key": "", "sha256": "c" * 64, "size": 3, "mtime_ns": 1},
+        {"key": 1, "sha256": "c" * 64, "size": 3, "mtime_ns": 1},
+        {"key": "k", "size": 3, "mtime_ns": 1},
+        {"key": "k", "sha256": "c" * 64, "size": "3", "mtime_ns": 1},
     ],
 )
-def test_dir_artifact_without_identity_is_unreadable(identity: dict[str, object]) -> None:
-    """A dir artifact without an int dev and ino makes the whole receipt unreadable."""
+def test_old_shape_dir_artifact_is_unreadable(shape: dict[str, object]) -> None:
+    """A dir artifact without a safe key and its three digest fields, including
+    every 19-22 dev/ino artifact, makes the whole receipt unreadable."""
     artifact: dict[str, object] = {"path": "/tmp/x/dir", "type": "dir"}
-    artifact.update(identity)
+    artifact.update(shape)
     _malformed(Path("/unused"), _variant(artifacts=[artifact]))
     assert receipts.read("yq") is None
 
@@ -795,10 +858,13 @@ def test_reader_keeps_only_each_types_fields() -> None:
                 {
                     "path": "/tmp/x/dir",
                     "type": "dir",
+                    "key": "k",
+                    "sha256": digest,
+                    "size": 3,
+                    "mtime_ns": 1,
+                    "target": "/opt/x",
                     "dev": 7,
                     "ino": 9,
-                    "target": "/opt/x",
-                    "sha256": digest,
                 },
             ]
         ),
@@ -808,7 +874,9 @@ def test_reader_keeps_only_each_types_fields() -> None:
     assert loaded.artifacts == (
         ReceiptArtifact(path=Path("/tmp/x/link"), type="link", target="/opt/x"),
         ReceiptArtifact(path=Path("/tmp/x/file"), type="file", sha256=digest, size=3, mtime_ns=1),
-        ReceiptArtifact(path=Path("/tmp/x/dir"), type="dir", dev=7, ino=9),
+        ReceiptArtifact(
+            path=Path("/tmp/x/dir"), type="dir", key="k", sha256=digest, size=3, mtime_ns=1
+        ),
     )
 
 
@@ -839,14 +907,13 @@ def test_invalid_artifact_paths_fail_closed(kind: Literal["dir", "link", "file"]
         path=path,
         type=kind,
         target="/opt/x",
+        key="k",
         sha256="b" * 64,
         size=3,
         mtime_ns=1,
-        dev=1,
-        ino=1,
     )
     assert receipts.matches(artifact) is False
-    assert receipts.fingerprint(path, kind) is None
+    assert receipts.fingerprint(path, kind, key="k") is None
 
 
 def test_rehash_memo_compares_each_receipts_digest(
@@ -1056,3 +1123,98 @@ def test_retire_refuses_a_replaced_receipt(tmp_path: Path) -> None:
     back = _planted_receipt(tmp_path)
     assert receipts.retire("yq", back[0]) is False
     assert receipts.receipt_exists("yq") is True
+
+
+# --- 19-32 Task 1: key files, unsafe keys, and record's key choice (L-19-31) --
+
+
+@pytest.mark.parametrize("bad", ["/abs", "../k", "", ".", "a/../../k", "k\x00", "\ud800"])
+def test_unsafe_dir_keys_never_fingerprint(tmp_path: Path, bad: str) -> None:
+    """An absolute, parent-traversing, empty, NUL or unencodable key never fingerprints."""
+    directory = tmp_path / "d"
+    directory.mkdir()
+    (directory / "k").write_bytes(b"k")
+    assert receipts.fingerprint(directory, "dir", key=bad) is None
+
+
+def test_link_key_is_the_member_inside_the_dir(tmp_path: Path) -> None:
+    """The archive key is the member the bin link points to, and only that."""
+    opt = tmp_path / "opt"
+    (opt / "rg-x").mkdir(parents=True)
+    member = opt / "rg-x" / "rg"
+    member.write_bytes(b"rg")
+    link = tmp_path / "rg"
+    link.symlink_to(member)
+    assert receipts.link_key(opt, link) == "rg-x/rg"
+
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"nope")
+    link.unlink()
+    link.symlink_to(outside)
+    assert receipts.link_key(opt, link) is None
+
+    link.unlink()
+    link.symlink_to(opt / "rg-x" / "missing")
+    assert receipts.link_key(opt, link) is None
+
+    link.unlink()
+    link.symlink_to(opt)
+    assert receipts.link_key(opt, link) is None
+
+
+@pytest.mark.parametrize("shape", ["archive", "app", "app-without-info-plist"])
+def test_record_keys_each_dir_by_its_key_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    """An archive dir is keyed by the linked member; an app by Info.plist, read only."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    if shape == "archive":
+        opt = tmp_path / ".local" / "opt" / "rg"
+        member = opt / "rg-x" / "rg"
+        member.parent.mkdir(parents=True)
+        member.write_bytes(b"rg-bytes")
+        (bin_dir / "rg").symlink_to(member)
+        method = Method(
+            kind="github_release",
+            params={"repo": "a/rg", "asset": "rg.tar.gz", "member": "rg-x/rg"},
+        )
+        written = receipts.record(
+            _record_tool("rg", method), method, package=None, smoke="ok", default_bin_dir=bin_dir
+        )
+        assert written is not None
+        assert written.artifacts[0].type == "dir"
+        assert written.artifacts[0].key == "rg-x/rg"
+        assert written.artifacts[0].sha256 == hashlib.sha256(b"rg-bytes").hexdigest()
+        assert written.artifacts[1].type == "link"
+        return
+
+    bundle = tmp_path / "Applications" / "Draw.app"
+    (bundle / "Contents" / "MacOS").mkdir(parents=True)
+    (bundle / "Contents" / "MacOS" / "draw").write_bytes(b"draw")
+    info = bundle / "Contents" / "Info.plist"
+    if shape == "app":
+        info.write_bytes(b"<plist>vendor</plist>")
+    (bin_dir / "draw").symlink_to(bundle / "Contents" / "MacOS" / "draw")
+    before_files = sorted(path.relative_to(bundle).as_posix() for path in bundle.rglob("*"))
+    before_plist = info.read_bytes() if info.exists() else None
+    method = Method(
+        kind="app",
+        params={"url": "https://x/d.zip", "app": "Draw.app", "cli": "Contents/MacOS/draw"},
+    )
+    written = receipts.record(
+        _record_tool("drawio", method),
+        method,
+        package=None,
+        smoke="ok",
+        default_bin_dir=bin_dir,
+    )
+    assert written is not None
+    after_files = sorted(path.relative_to(bundle).as_posix() for path in bundle.rglob("*"))
+    assert after_files == before_files
+    if shape == "app":
+        assert written.artifacts[0].key == receipts.APP_KEY_FILE
+        assert info.read_bytes() == before_plist
+    else:
+        assert [artifact.type for artifact in written.artifacts] == ["link"]

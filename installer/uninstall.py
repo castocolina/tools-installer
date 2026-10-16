@@ -112,7 +112,8 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
 
     A tool with no receipt file keeps the archive-layout proof. For each
     download method, the (link, opt dir) pair comes from
-    `download.artifact_paths` (D-07) — the same placement install uses. A
+    `download.artifact_paths` (D-07) — the same placement install uses. The
+    opt dir is keyed by the member the link points to. A
     method is proven when its link is a symlink whose target is a regular
     file inside this tool's own opt_dir(<link name>) — so a uv/pip file at a
     matching name, or a link into another tool's opt dir, is never proven.
@@ -143,7 +144,7 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
             if link is None or opt is None or not is_still_proven(link):
                 continue
             proven_link = receipts.fingerprint(link, "link")
-            proven_dir = receipts.fingerprint(opt, "dir")
+            proven_dir = receipts.fingerprint(opt, "dir", key=receipts.link_key(opt, link))
             if proven_link is None or proven_dir is None:
                 continue
             for artifact in (proven_link, proven_dir):

@@ -2,10 +2,14 @@
 
 A receipt is the proof a later removal uses: it records what a successful
 install actually created (artifacts with absolute paths, per-type fingerprints)
-plus the method that created them. A directory is matched by its own identity
-(device and inode), so a re-created directory — a vendor reinstall into
-~/Applications, a hand-made ~/.local/opt/<name> — never inherits an old
-receipt's proof. A corrupt, unreadable or tampered receipt means NO PROOF,
+plus the method that created them. A directory is proven by the sha256 of one
+key file inside it: the archive member its bin link points to, or
+Contents/Info.plist for an .app, which is only read, never written, because
+writing inside a bundle breaks its code signature. A re-created directory
+whose key file has the same bytes is the same software and matches. Device
+and inode numbers are never recorded: the device number is assigned at mount
+time on btrfs, NFS and ZFS and can change on reboot, and ext4 and XFS reuse
+inode numbers. A corrupt, unreadable or tampered receipt means NO PROOF,
 never a crash and never a removal.
 """
 
@@ -20,7 +24,7 @@ import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 from installer import locations
@@ -36,6 +40,9 @@ RECEIPTLESS_KINDS = frozenset({"dnf", "apt", "pacman", "rpm_ostree", "skill_pack
 
 # 19-UI-SPEC locked copy (D-08). One owner: version_status and the update gate both read it.
 CHANGED_SINCE_INSTALL = "changed since install"
+
+# L-19-31: an .app is proven by this file, only ever read.
+APP_KEY_FILE = "Contents/Info.plist"
 
 _MAX_RECEIPT_BYTES = 64 * 1024
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -58,8 +65,7 @@ class ReceiptArtifact:
     sha256: str | None = None
     size: int | None = None
     mtime_ns: int | None = None
-    dev: int | None = None
-    ino: int | None = None
+    key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -123,8 +129,7 @@ def _write_unlocked(receipt: Receipt) -> None:
                 "sha256": artifact.sha256,
                 "size": artifact.size,
                 "mtime_ns": artifact.mtime_ns,
-                "dev": artifact.dev,
-                "ino": artifact.ino,
+                "key": artifact.key,
             }
         )
     payload: dict[str, object] = {
@@ -251,15 +256,27 @@ def record(
     """Write the receipt for a method that just succeeded; None for a receiptless kind.
 
     Artifacts are `artifact_paths` (D-07) fingerprinted now; one the method did
-    not create is dropped. Script and manager kinds get none. When the write
+    not create is dropped, including a dir whose key file is missing, so it is
+    never receipt-proven. A dir is keyed by Contents/Info.plist for an app,
+    else by the member its bin link points to. Script and manager kinds get
+    none. When the write
     fails over an existing receipt, that receipt is deleted (best effort) so it
     never claims bytes it did not fingerprint, and the raised OSError says
     what happened to it."""
     if method.kind in RECEIPTLESS_KINDS:
         return None
     base = default_bin_dir or locations.bin_dir(None)
-    found = (fingerprint(a.path, a.kind) for a in artifact_paths(method, base))
-    artifacts = tuple(a for a in found if a is not None)
+    created = artifact_paths(method, base)
+    link = next((a.path for a in created if a.kind == "link"), None)
+
+    def one(path: Path, kind: Literal["dir", "link", "file"]) -> ReceiptArtifact | None:
+        if kind == "dir":
+            return fingerprint(path, kind, key=_dir_key(method, path, link))
+        return fingerprint(path, kind)
+
+    artifacts = tuple(
+        a for a in (one(entry.path, entry.kind) for entry in created) if a is not None
+    )
     receipt = _build_receipt(tool, method, artifacts, package=package, smoke=smoke)
     existed = receipt_exists(tool.id)
     try:
@@ -358,85 +375,154 @@ def retire(tool_id: str, receipt: Receipt) -> bool:
     return True
 
 
-def fingerprint(path: Path, kind: Literal["dir", "link", "file"]) -> ReceiptArtifact | None:
+def _safe_key(key: object) -> bool:
+    """True only for a relative key that cannot leave its directory.
+
+    Absolute, empty, `.` or `..`-containing keys, a NUL and a string the
+    filesystem cannot encode are all refused, so a forged receipt key can
+    never make the matcher hash a file outside the directory."""
+    if not isinstance(key, str) or not key or "\x00" in key:
+        return False
+    try:
+        os.fsencode(key)
+    except UnicodeEncodeError:
+        return False
+    path = PurePosixPath(key)
+    return not path.is_absolute() and len(path.parts) >= 1 and ".." not in path.parts
+
+
+def link_key(directory: Path, link: Path) -> str | None:
+    """The key file of an archive dir: the member its bin link points to.
+
+    Resolution mirrors `download.is_still_proven`: a strict resolve of both,
+    then the member's path relative to the directory. None when either resolve
+    fails, the member is outside the directory, or the relative path is empty."""
+    try:
+        relative = link.resolve(strict=True).relative_to(directory.resolve(strict=True))
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not relative.parts:
+        return None
+    return relative.as_posix()
+
+
+def _dir_key(method: Method, directory: Path, link: Path | None) -> str | None:
+    """The key file a method's dir records: Info.plist for an app, else the member."""
+    if method.kind == "app":
+        return APP_KEY_FILE
+    if link is None:
+        return None
+    return link_key(directory, link)
+
+
+def fingerprint(
+    path: Path, kind: Literal["dir", "link", "file"], *, key: str | None = None
+) -> ReceiptArtifact | None:
     """Record what `path` looks like now, for the given artifact type.
 
     A file needs to be a regular file and records sha256 + size + mtime_ns; a
-    link records its readlink target; a dir records the directory's own
-    identity `(st_dev, st_ino)` from one lstat, so a re-created directory can
-    never match it. A symlink is never a dir. Anything else, or an OSError or
-    ValueError (a path `lstat` would refuse), is not fingerprintable."""
+    link records its readlink target. A dir is proven by one key file inside
+    it (L-19-31): `key` must be a safe relative path, the dir a real directory
+    (a symlink never is), and the key file a regular file, whose sha256, size
+    and mtime_ns the artifact records. A re-created directory with the same
+    key-file bytes matches. Device and inode numbers are never recorded.
+    Anything else, or an OSError or ValueError (a path `lstat` would refuse),
+    is not fingerprintable."""
     try:
         if kind == "file":
-            st = path.lstat()
-            if not stat_module.S_ISREG(st.st_mode):
-                return None
-            return ReceiptArtifact(
-                path=path,
-                type="file",
-                sha256=sha256_file(path),
-                size=st.st_size,
-                mtime_ns=st.st_mtime_ns,
-            )
+            return _file_fingerprint(path)
         if kind == "link":
             if not path.is_symlink():
                 return None
             return ReceiptArtifact(path=path, type="link", target=os.readlink(path))
         if kind == "dir":
-            st = path.lstat()
-            if not stat_module.S_ISDIR(st.st_mode):
+            if key is None or not _safe_key(key):
                 return None
-            return ReceiptArtifact(path=path, type="dir", dev=st.st_dev, ino=st.st_ino)
+            if not stat_module.S_ISDIR(path.lstat().st_mode):
+                return None
+            key_file = _file_fingerprint(path / key)
+            if key_file is None:
+                return None
+            return ReceiptArtifact(
+                path=path,
+                type="dir",
+                key=key,
+                sha256=key_file.sha256,
+                size=key_file.size,
+                mtime_ns=key_file.mtime_ns,
+            )
     except (OSError, ValueError):
         return None
     return None
 
 
+def _file_fingerprint(path: Path) -> ReceiptArtifact | None:
+    """A regular file's digest, or None when `path` is not one."""
+    st = path.lstat()
+    if not stat_module.S_ISREG(st.st_mode):
+        return None
+    return ReceiptArtifact(
+        path=path,
+        type="file",
+        sha256=sha256_file(path),
+        size=st.st_size,
+        mtime_ns=st.st_mtime_ns,
+    )
+
+
 def matches(artifact: ReceiptArtifact, *, rehash: bool = False) -> bool:
     """Does the on-disk artifact still equal what the receipt recorded (D-08)?
 
-    A link matches on readlink; a dir on still being that same real directory
-    (its `(st_dev, st_ino)`); a file on the
-    stat fingerprint, re-hashed only when the stat differs (or `rehash=True`,
-    the deletion-time re-proof, which bypasses both the shortcut and the
-    memo). A re-hash is remembered as the observed digest per (path, size,
-    mtime_ns) and compared with each receipt's own, so an unchanged-but-touched
-    file is hashed once per session and a cached success never vouches for a
-    different digest. Nothing matches when the artifact is missing; OSError or
+    A link matches on readlink. A dir matches while it is a real directory
+    whose key file matches by the file rule: the stat shortcut, or sha256
+    under `rehash=True`. A changed, missing or symlinked key file never
+    matches, and a dir with no key never does. A file matches on the stat
+    fingerprint, re-hashed only when the stat differs (or `rehash=True`, the
+    deletion-time re-proof, which bypasses both the shortcut and the memo). A
+    re-hash is remembered as the observed digest per (path, size, mtime_ns)
+    and compared with each receipt's own, so an unchanged-but-touched file is
+    hashed once per session and a cached success never vouches for a different
+    digest. Nothing matches when the artifact is missing; OSError or
     ValueError (a path `lstat` would refuse) is False, never a raise."""
     path = artifact.path
     try:
         if artifact.type == "link":
             return path.is_symlink() and os.readlink(path) == artifact.target
         if artifact.type == "dir":
-            st = path.lstat()
-            return stat_module.S_ISDIR(st.st_mode) and (st.st_dev, st.st_ino) == (
-                artifact.dev,
-                artifact.ino,
-            )
-        st = path.lstat()
-        if not stat_module.S_ISREG(st.st_mode):
-            return False
-        unchanged = (
-            artifact.size is not None
-            and artifact.mtime_ns is not None
-            and st.st_size == artifact.size
-            and st.st_mtime_ns == artifact.mtime_ns
-        )
-        if rehash:
-            return sha256_file(path) == artifact.sha256
-        if unchanged:
-            return True
-        key = (str(path), st.st_size, st.st_mtime_ns)
-        with _MEMO_LOCK:
-            observed = _REHASH_MEMO.get(key)
-        if observed is None:
-            observed = sha256_file(path)
-            with _MEMO_LOCK:
-                _REHASH_MEMO[key] = observed
-        return observed == artifact.sha256
+            if artifact.key is None or not stat_module.S_ISDIR(path.lstat().st_mode):
+                return False
+            return _file_matches(path / artifact.key, artifact, rehash=rehash)
+        return _file_matches(path, artifact, rehash=rehash)
     except (OSError, ValueError):
         return False
+
+
+def _file_matches(target: Path, artifact: ReceiptArtifact, *, rehash: bool) -> bool:
+    """Whether `target` is the regular file `artifact` recorded (D-08).
+
+    The memo is keyed on `str(target)`, so a dir's key file and a raw file at
+    the same path share one observed digest."""
+    st = target.lstat()
+    if not stat_module.S_ISREG(st.st_mode):
+        return False
+    unchanged = (
+        artifact.size is not None
+        and artifact.mtime_ns is not None
+        and st.st_size == artifact.size
+        and st.st_mtime_ns == artifact.mtime_ns
+    )
+    if rehash:
+        return sha256_file(target) == artifact.sha256
+    if unchanged:
+        return True
+    memo_key = (str(target), st.st_size, st.st_mtime_ns)
+    with _MEMO_LOCK:
+        observed = _REHASH_MEMO.get(memo_key)
+    if observed is None:
+        observed = sha256_file(target)
+        with _MEMO_LOCK:
+            _REHASH_MEMO[memo_key] = observed
+    return observed == artifact.sha256
 
 
 def drifted(receipt: Receipt, *, rehash: bool = False) -> tuple[ReceiptArtifact, ...]:
@@ -454,9 +540,10 @@ def _read_artifact(raw: object) -> ReceiptArtifact | None:
     """Decode one artifact, enforcing each type's required fields.
 
     Each type keeps only the fields it is checked on: a `file` its 64-hex
-    sha256, size and mtime_ns; a `link` its non-empty target; a `dir` its int
-    `dev` and `ino`. A `dir` without that identity would match on existence
-    alone, so it is rejected here, at the boundary, never mid-removal."""
+    sha256, size and mtime_ns; a `link` its non-empty target; a `dir` its safe
+    relative `key` plus that key file's 64-hex sha256, size and mtime_ns.
+    Anything else — every 19-22 `dev`/`ino` artifact included — returns None,
+    so the receipt is unreadable and unproven."""
     if not isinstance(raw, dict):
         return None
     artifact = cast(dict[str, object], raw)
@@ -491,11 +578,23 @@ def _read_artifact(raw: object) -> ReceiptArtifact | None:
         if not isinstance(target, str) or not target:
             return None
         return ReceiptArtifact(path=path, type="link", target=target)
-    dev = _artifact_int(artifact, "dev")
-    ino = _artifact_int(artifact, "ino")
-    if dev is None or ino is None:
+    sha256 = artifact.get("sha256")
+    size = _artifact_int(artifact, "size")
+    mtime_ns = _artifact_int(artifact, "mtime_ns")
+    if not _safe_key(artifact.get("key")):
         return None
-    return ReceiptArtifact(path=path, type="dir", dev=dev, ino=ino)
+    if not isinstance(sha256, str) or not _SHA256_RE.fullmatch(sha256):
+        return None
+    if size is None or mtime_ns is None:
+        return None
+    return ReceiptArtifact(
+        path=path,
+        type="dir",
+        key=cast(str, artifact.get("key")),
+        sha256=sha256,
+        size=size,
+        mtime_ns=mtime_ns,
+    )
 
 
 def _read_hooks(value: object) -> dict[str, tuple[str, ...]] | None:
