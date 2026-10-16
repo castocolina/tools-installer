@@ -113,11 +113,16 @@ def is_installed(
     `default_bin_dir` the caller passes, D-13) -- which PATH may not
     include. `which` and the implicit bin dir are both resolved inside the
     body so runtime patches (tests, the service's managed bin dir) win.
+
+    All three file checks and the PATH hit skip this installer's own ban and
+    redirect shims (review M9, G13): a shim on PATH is not the tool, so the
+    hit falls through to the declared-bin_dir, implicit-bin and app checks.
     """
     lookup: Which = shutil.which if which is None else which
     resolved = lookup(tool.cmd)
     if (
         resolved is not None
+        and not _is_installer_shim(tool, Path(resolved))
         and macos_stub_reason(tool, darwin=darwin, probe=probe, which=which) is None
     ):
         return True
