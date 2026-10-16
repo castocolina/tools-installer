@@ -1793,6 +1793,17 @@ def _plant_rg(home: Path) -> tuple[Tool, Path, Path]:
     return _dl_tool("rg", "rg"), bin_dir, opt
 
 
+def _plant_fd(home: Path) -> tuple[Tool, Path, Path]:
+    """A layout-proven archive fd: a bin link into its own opt dir, no receipt."""
+    bin_dir = home / ".local" / "bin"
+    opt = home / ".local" / "opt" / "fd"
+    opt.mkdir(parents=True)
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    (opt / "fd").write_text("fd binary")
+    (bin_dir / "fd").symlink_to(opt / "fd")
+    return _dl_tool("fd", "fd"), bin_dir, opt
+
+
 def test_receipt_proves_a_raw_download(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     yq, bin_dir = plant_raw_yq(tmp_path)
@@ -2040,6 +2051,66 @@ def test_remove_proven_layout_tool_has_no_receipt_to_delete(
     assert refused == ()
     assert not (bin_dir / "rg").is_symlink()
     assert not opt.exists()
+
+
+def _after_verified_plan(monkeypatch: pytest.MonkeyPatch, mutate: Callable[[], None]) -> None:
+    """Wrap plan_removal so `mutate` runs once the deletion-time proof returns.
+
+    Only the `verify=True` call is the deletion-time proof; a preview-time call
+    passes through untouched, so the race is injected deterministically.
+    """
+    real = plan_removal
+
+    def wrapped(tools: list[Tool], default_bin_dir: Path, *, verify: bool = False) -> object:
+        plan = real(tools, default_bin_dir, verify=verify)
+        if verify:
+            mutate()
+        return plan
+
+    monkeypatch.setattr("installer.uninstall.plan_removal", wrapped)
+
+
+def test_remove_proven_refuses_a_file_replaced_by_a_dir_after_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A receipt-proven raw file swapped for a directory after the deletion-time
+    proof is refused, never recursively deleted, and its receipt survives (G1)."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    yq, bin_dir = plant_raw_yq(tmp_path)
+    target = bin_dir / "yq"
+
+    def replace_with_dir() -> None:
+        target.unlink()
+        target.mkdir()
+        (target / "decoy").write_text("not ours")
+
+    _after_verified_plan(monkeypatch, replace_with_dir)
+    removed, refused = remove_proven([yq], [target], bin_dir)
+    assert removed == ()
+    assert refused == (f"changed since the preview; not removed: {target}",)
+    assert (target / "decoy").read_text() == "not ours"
+    assert receipts.receipt_path("yq").exists()
+
+
+def test_remove_proven_refuses_a_dir_recreated_after_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A layout-proven opt dir re-created after the deletion-time proof is
+    refused and its new contents survive; the still-matching link is removed."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    fd, bin_dir, opt = _plant_fd(tmp_path)
+    link = bin_dir / "fd"
+
+    def recreate_opt() -> None:
+        _recreate_over(opt)
+        (opt / "decoy").write_text("vendor reinstall")
+
+    _after_verified_plan(monkeypatch, recreate_opt)
+    removed, refused = remove_proven([fd], [link, opt], bin_dir)
+    assert removed == (link,)
+    assert refused == (f"changed since the preview; not removed: {opt}",)
+    assert not link.is_symlink()
+    assert (opt / "decoy").read_text() == "vendor reinstall"
 
 
 def test_remove_proven_refuses_a_retyped_artifact(

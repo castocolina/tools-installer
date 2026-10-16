@@ -447,7 +447,7 @@ def remove_proven(
     for tool_id, tool_paths in fresh.by_tool.items():
         if all(path in removed and not _exists(path) for path in tool_paths):
             receipts.delete(tool_id)
-    return tuple(kept), refused
+    return tuple(path for path in kept if path in removed), refused
 
 
 def _omz_policy(zshrc_path: Path, state_path: Path) -> Policy:
