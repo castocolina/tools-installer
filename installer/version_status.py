@@ -925,6 +925,9 @@ class VersionRefreshService:
         # its pass's epoch (`generation`) and sequence number (`seq`).
         self._states: dict[str, ToolState] = {}
         self._skills: dict[str, SkillHostStatus] = {}
+        # Seq and scan of the latest pass that published pack states.
+        # `refresh_skills` rebuilds only those, with that scan.
+        self._pack_scan: tuple[int, _PackScan] | None = None
         self._skills_probed = False
         self._skills_pass_lock = threading.Lock()
         self._epoch = 0
@@ -995,6 +998,10 @@ class VersionRefreshService:
         A second caller waits on `_skills_pass_lock` for the in-flight pass,
         then returns that pass's map. `invalidate` must not take this lock:
         a probe may call it, and the pass lock is held across the probe.
+
+        The worker owns host answers only (G9): project facts belong to the
+        pass that published them, so the rebuild uses that pass's scan and
+        never reads the home again.
         """
         packs = [tool for tool in tools if tool.skill_lifecycle is not None]
         probe = self._skill_probe
@@ -1015,7 +1022,6 @@ class VersionRefreshService:
                 )
                 for tool_id, report in probed.items()
             }
-            scan = self._scan_packs(packs)
             with self._lock:
                 if self._epoch != started_epoch:
                     return dict(self._skills)
@@ -1027,6 +1033,7 @@ class VersionRefreshService:
                 )
                 self._skills = merged
                 self._skills_probed = True
+                published = self._pack_scan
                 rebuilt = {
                     tool.id: self._skill_state(
                         tool,
@@ -1036,11 +1043,13 @@ class VersionRefreshService:
                         ownership=state.ownership,
                         version=state.version,
                         removable=state.removable,
-                        scan=scan,
+                        scan=published[1],
                     )
                     for tool in packs
                     if (state := self._states.get(tool.id)) is not None
                     and state.generation == started_epoch
+                    and published is not None
+                    and state.seq == published[0]
                 }
                 if rebuilt:
                     self._states = {**self._states, **rebuilt}
@@ -1622,6 +1631,8 @@ class VersionRefreshService:
             # The ONE publication point, tagged with `started_epoch`, which
             # equals `self._epoch` here.
             self._states = {**self._states, **fresh}
+            if any(tool.id in fresh for tool, *_rest in packs):
+                self._pack_scan = (seq, scan)
             # Best effort, after the swap and still under the lock (it
             # serializes with `invalidate`'s save): a failed write leaves the
             # published states in place and surfaces as `warning`.

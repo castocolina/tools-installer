@@ -4641,6 +4641,85 @@ def test_present_harnesses_runs_once_per_pass(tmp_path: Path) -> None:
     assert all(calls.count(command) <= 1 for command in commands)
 
 
+def _claude_gsd_install(repo: Path) -> None:
+    """A real Claude GSD install in one repo: version plus a command file."""
+    (repo / ".claude" / "gsd-core").mkdir(parents=True)
+    (repo / ".claude" / "gsd-core" / "VERSION").write_text("1.16.0\n", encoding="utf-8")
+    (repo / ".claude" / "commands").mkdir()
+    (repo / ".claude" / "commands" / "gsd-plan-phase.md").write_text("x", encoding="utf-8")
+
+
+def test_skill_rebuild_never_rereads_project_facts(tmp_path: Path) -> None:
+    """The skill worker rebuilds with the pass's scan, never its own (G9).
+
+    A later home change is invisible to `refresh_skills`. The next full pass
+    owns those facts and reports the leftover.
+    """
+    home = tmp_path / "home"
+    repo = _gsd_repo(home)
+    _claude_gsd_install(repo)
+    service = _pack_service(
+        home,
+        _probe_for(_listing((_SP_ID, "user", True, "6.4.1"))),
+        harnesses=frozenset({"claude"}),
+    )
+    packs = [_opengsd(), _superpowers()]
+    service.refresh(packs)
+    published = service.state_of("opengsd")
+    assert published is not None
+    assert published.reasons[0].startswith("installed in 1 repo")
+
+    (repo / ".claude" / "commands" / "gsd-plan-phase.md").unlink()
+    (home / ".claude" / "gsd-core").mkdir(parents=True)
+    service.refresh_skills(packs)
+    rebuilt = service.state_of("opengsd")
+    assert rebuilt is not None
+    assert rebuilt.reasons == published.reasons
+    assert _LEFTOVER not in rebuilt.reasons
+    skills = service.state_of("superpowers")
+    assert skills is not None
+    assert skills.health is Health.OK
+
+    service.refresh(packs)
+    later = service.state_of("opengsd")
+    assert later is not None
+    assert later.reasons[0] == _LEFTOVER
+
+
+def test_skill_rebuild_after_a_newer_pass_keeps_its_facts(tmp_path: Path) -> None:
+    """A probe still in flight never overwrites a newer pass's facts (G9)."""
+    home = tmp_path / "home"
+    repo = _gsd_repo(home)
+    _claude_gsd_install(repo)
+    gate = threading.Event()
+
+    def probe(argv: list[str]) -> str:
+        gate.wait(timeout=5)
+        return _listing((_SP_ID, "user", True, "6.4.1")) if argv[0] == "claude" else ""
+
+    service = _pack_service(home, probe, harnesses=frozenset({"claude"}))
+    packs = [_opengsd(), _superpowers()]
+    service.refresh(packs)
+    worker = threading.Thread(target=service.refresh_skills, args=(packs,))
+    worker.start()
+    (repo / ".claude" / "commands" / "gsd-plan-phase.md").unlink()
+    (home / ".claude" / "gsd-core").mkdir(parents=True)
+    service.refresh(packs)
+    newer = service.state_of("opengsd")
+    assert newer is not None
+    assert newer.reasons[0] == _LEFTOVER
+    gate.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    kept = service.state_of("opengsd")
+    assert kept is not None
+    assert kept.reasons == newer.reasons
+    assert kept.seq == newer.seq
+    skills = service.state_of("superpowers")
+    assert skills is not None
+    assert skills.health is Health.OK
+
+
 def test_project_pack_present_in_repos(tmp_path: Path) -> None:
     home = tmp_path / "home"
     repo = _gsd_repo(home)
