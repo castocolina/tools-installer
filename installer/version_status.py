@@ -1236,15 +1236,19 @@ class VersionRefreshService:
         """(receipt, broken facts, notes) from the tool's receipt (D-08, SPEC R4).
 
         An artifact that no longer matches its receipt is BROKEN; a receipt
-        file that does not parse proves nothing and says so as a note. A
-        present tool with no receipt file may be adopted (D-09)."""
-        path = receipts.receipt_path(tool.id)
-        if not (path.exists() or path.is_symlink()):
+        file that does not parse proves nothing and says so as a note. An
+        inaccessible receipts dir is that same unreadable note, with no
+        adoption (G23). A receipt whose every artifact is gone is retired, and
+        the tool then reads from current evidence (G10). A present tool with
+        no receipt file may be adopted (D-09)."""
+        if not receipts.receipt_exists(tool.id):
             adopted = self._adopt(tool, entry, platform) if present else None
             return adopted, (), (ADOPTED_NOTE,) if adopted is not None else ()
         receipt = receipts.read(tool.id)
         if receipt is None:
             return None, (), (RECEIPT_UNREADABLE_NOTE,)
+        if receipts.all_gone(receipt) and receipts.retire(tool.id, receipt):
+            return None, (), ()
         if receipts.drifted(receipt):
             return receipt, (CHANGED_SINCE_INSTALL,), ()
         return receipt, (), ()

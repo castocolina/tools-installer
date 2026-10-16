@@ -318,6 +318,43 @@ def receipt_exists(tool_id: str) -> bool:
     return True
 
 
+def all_gone(receipt: Receipt) -> bool:
+    """True only when every artifact is conclusively absent.
+
+    A receipt with no artifacts is never gone: there is nothing to prove it
+    no longer protects. An artifact whose `lstat` fails for any other reason
+    (or a path `lstat` refuses) is not proven gone, so the receipt stays."""
+    if not receipt.artifacts:
+        return False
+    for artifact in receipt.artifacts:
+        try:
+            os.lstat(artifact.path)
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except (OSError, ValueError):
+            return False
+        return False
+    return True
+
+
+def retire(tool_id: str, receipt: Receipt) -> bool:
+    """Delete `receipt` once a re-read shows it is still the same and all gone.
+
+    The pass's twin of `remove_proven`'s rule (D-08): a receipt goes once every
+    path it proved is gone. The re-read runs under the write lock, so a receipt
+    written meanwhile is kept. An OSError from the delete returns False and the
+    receipt stays, still reading as drift."""
+    with _WRITE_LOCK:
+        current = read(tool_id)
+        if current != receipt or not all_gone(receipt):
+            return False
+        try:
+            delete(tool_id)
+        except OSError:
+            return False
+    return True
+
+
 def fingerprint(path: Path, kind: Literal["dir", "link", "file"]) -> ReceiptArtifact | None:
     """Record what `path` looks like now, for the given artifact type.
 

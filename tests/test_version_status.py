@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -41,6 +42,7 @@ from installer.ownership import (
     resolve_ownership,
 )
 from installer.platform import Platform
+from installer.receipts import Receipt, ReceiptMethod
 from installer.resolve import resolve_methods, unavailable_reason
 from installer.skill_lifecycle import HARNESS_PRESENCE, inspect_skill_reports, inspect_status
 from installer.terminal_shell import TerminalShellResult
@@ -5094,3 +5096,82 @@ def test_nul_receipt_path_never_aborts_refresh(
     )
     state = _settled(_receipt_service(tmp_path, bin_dir), _yq())
     assert _UNREADABLE in state.reasons
+
+
+# --- 19-29 Task 2: retire an all-gone receipt; an unreadable dir is unproven --
+
+
+def test_receipt_with_every_artifact_gone_is_retired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A receipt whose file the user deleted stops pinning a dnf copy to BROKEN."""
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    placed = _place_yq_with_receipt(bin_dir)
+    placed.unlink()
+    system = tmp_path / "usr" / "bin"
+    system.mkdir(parents=True)
+    (system / "yq").write_bytes(b"#!/bin/sh\necho dnf yq\n")
+    service = _receipt_service(
+        tmp_path, bin_dir, which=lambda cmd: str(system / cmd) if cmd == "yq" else None
+    )
+    state = _settled(service, _yq())
+    assert state.health is not Health.BROKEN
+    assert _receipt_reasons(state) == []
+    assert state.receipt is None
+    assert receipts.receipt_exists("yq") is False
+
+
+def test_partially_drifted_receipt_stays_broken(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One artifact still on disk keeps the receipt and the BROKEN mark.
+
+    The bin link stays, so the archive still reads as present; only the opt
+    dir is gone. Removing the link instead would make `is_installed` say
+    absent (it follows the link, and a dir alone is not presence), and an
+    absent tool is MISSING rather than BROKEN."""
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    outcome = _install(_rg_archive(), tmp_path, monkeypatch)
+    assert outcome.status == InstallStatus.INSTALLED
+    opt = tmp_path / ".local" / "opt" / "rg"
+    assert opt.is_dir() and (bin_dir / "rg").is_symlink()
+    shutil.rmtree(opt)
+    state = _settled(_receipt_service(tmp_path, bin_dir), _rg_archive())
+    assert state.health is Health.BROKEN
+    assert state.reasons[0] == _CHANGED
+    assert receipts.receipt_exists("rg") is True
+
+
+def test_artifactless_receipt_is_never_retired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    receipts.write(
+        Receipt(
+            tool="yq",
+            at="2026-10-16T00:00:00+00:00",
+            method=ReceiptMethod(kind="github_release", key="k"),
+            package=None,
+            artifacts=(),
+            smoke=None,
+            hooks={},
+        )
+    )
+    _settled(_receipt_service(tmp_path, bin_dir), _yq())
+    assert receipts.receipt_exists("yq") is True
+
+
+def test_inaccessible_receipts_dir_never_aborts_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dir that cannot be searched is the unreadable note: no adoption, no crash."""
+    from tests.test_receipts import deny_receipts_dir
+
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    service, _placed = _adoption_service(tmp_path, bin_dir, {"yq_linux_amd64": _YQ_SHA})
+    deny_receipts_dir(monkeypatch)
+    state = _settled(service, _yq())
+    assert _UNREADABLE in state.reasons
+    assert _ADOPTED not in state.reasons
+    assert state.receipt is None
+    assert state.removable.removable == ()

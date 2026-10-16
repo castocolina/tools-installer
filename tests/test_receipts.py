@@ -1,6 +1,7 @@
 """Receipt round-trips and the suite-wide receipts sandbox (plan 19-01, Task 1)."""
 
 import contextlib
+import errno
 import hashlib
 import json
 import os
@@ -926,8 +927,6 @@ def deny_receipts_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     Public: other tests import this instead of chmod, which root ignores. The
     directory is captured when the helper is called, and anything outside it
     (or an int fd) still reaches the real call."""
-    import errno
-
     receipts_dir = receipts.receipts_dir()
 
     def inside(path: object) -> str | None:
@@ -978,3 +977,82 @@ def test_adopt_refuses_when_the_receipts_dir_is_unreadable(
     tool, method, artifact = _adoptable(tmp_path)
     deny_receipts_dir(monkeypatch)
     assert receipts.adopt(tool, method, artifact, package=None) is None
+
+
+# --- 19-29 Task 2: a receipt goes only when every artifact is gone (G10) -----
+
+
+def _planted_receipt(tmp_path: Path) -> tuple[Receipt, Path, Path]:
+    """A yq receipt naming one file and one link, both on disk."""
+    target = tmp_path / "yq"
+    target.write_bytes(b"abc")
+    link = tmp_path / "yq-link"
+    link.symlink_to(target)
+    file_artifact = receipts.fingerprint(target, "file")
+    link_artifact = receipts.fingerprint(link, "link")
+    assert file_artifact is not None and link_artifact is not None
+    receipt = _write_receipt((file_artifact, link_artifact))
+    write(receipt)
+    return receipt, target, link
+
+
+def test_all_gone_needs_every_artifact_gone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receipt, target, link = _planted_receipt(tmp_path)
+    assert receipts.all_gone(receipt) is False
+    target.unlink()
+    assert receipts.all_gone(receipt) is False
+    link.unlink()
+    assert receipts.all_gone(receipt) is True
+    assert receipts.all_gone(_write_receipt(())) is False
+
+    left = tmp_path / "left"
+    left.write_bytes(b"still here")
+    left_artifact = receipts.fingerprint(left, "file")
+    assert left_artifact is not None
+    real_lstat: Callable[..., object] = os.lstat
+    real_stat: Callable[..., object] = os.stat
+
+    def as_path(path: object) -> Path | None:
+        if isinstance(path, str):
+            return Path(path)
+        if isinstance(path, Path):
+            return path
+        return None
+
+    def refusing(original: Callable[..., object]) -> Callable[..., object]:
+        def guarded(*args: object, **kwargs: object) -> object:
+            candidate = as_path(args[0]) if args else None
+            if candidate == left:
+                raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(candidate))
+            return original(*args, **kwargs)
+
+        return guarded
+
+    monkeypatch.setattr(os, "lstat", refusing(real_lstat))
+    monkeypatch.setattr(os, "stat", refusing(real_stat))
+    assert receipts.all_gone(_write_receipt((left_artifact,))) is False
+
+
+def test_retire_refuses_a_replaced_receipt(tmp_path: Path) -> None:
+    receipt, target, _link = _planted_receipt(tmp_path)
+    target.unlink()
+    (tmp_path / "yq-link").unlink()
+    other = Receipt(
+        tool=receipt.tool,
+        at="replaced",
+        method=receipt.method,
+        package=receipt.package,
+        artifacts=receipt.artifacts,
+        smoke=receipt.smoke,
+        hooks=receipt.hooks,
+    )
+    assert receipts.retire("yq", other) is False
+    assert receipt_path("yq").is_file()
+    assert receipts.retire("yq", receipt) is True
+    assert receipts.receipt_exists("yq") is False
+
+    back = _planted_receipt(tmp_path)
+    assert receipts.retire("yq", back[0]) is False
+    assert receipts.receipt_exists("yq") is True
