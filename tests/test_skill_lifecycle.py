@@ -2017,6 +2017,18 @@ def test_repo_walk_never_follows_symlinks(tmp_path: Path, monkeypatch: pytest.Mo
     assert _under(calls, outside) == []
 
 
+def test_repo_walk_rejects_a_symlinked_planning_dir(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    outside = tmp_path / "outside"
+    _plant(outside, ".planning/config.json", "{}")
+    linked = home / "git" / "a"
+    linked.mkdir(parents=True)
+    (linked / ".planning").symlink_to(outside / ".planning", target_is_directory=True)
+    sibling = _repo(home, "git/b")
+
+    assert _repos(home) == {sibling: ()}
+
+
 def test_real_install_counts(tmp_path: Path) -> None:
     repo = _repo(tmp_path, "git/app")
     _gsd_install(repo, ".claude")
@@ -2106,6 +2118,55 @@ def test_empty_install_gets_a_reinstall_step(tmp_path: Path) -> None:
 
     assert report.reasons == ("OpenCode install in app is empty",)
     assert report.steps == (_install_step("opencode", repo, "reinstall"),)
+
+
+def _block_scandir(monkeypatch: pytest.MonkeyPatch, blocked: set[Path]) -> None:
+    """Raise PermissionError for exactly the blocked dirs; delegate otherwise."""
+    real_scandir = os.scandir
+
+    def guarded(path: Path) -> Iterator[os.DirEntry[str]]:
+        if Path(path) in blocked:
+            raise PermissionError(path)
+        return real_scandir(path)
+
+    monkeypatch.setattr(skill_lifecycle.os, "scandir", guarded)
+
+
+def test_unreadable_install_dirs_are_not_checked_not_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repo(tmp_path, "code/proj")
+    _plant(repo, ".claude/gsd-core/VERSION", "1.16.0\n")
+    skills, commands = repo / ".claude/skills", repo / ".claude/commands"
+    skills.mkdir()
+    commands.mkdir()
+    _block_scandir(monkeypatch, {skills, commands})
+
+    report = _gsd_pack(tmp_path, {"claude", "opencode"})
+
+    assert report.repos == ((repo, ()),)
+    assert not any("is empty" in reason for reason in report.reasons)
+    assert "not installed in proj" not in report.reasons
+    assert not any(step.kind == "project_pack_install" for step in report.steps)
+    assert "code/proj/.claude/skills" in report.unchecked
+    assert "code/proj/.claude/commands" in report.unchecked
+
+
+def test_conclusive_empty_install_keeps_its_reinstall_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repo(tmp_path, "code/proj")
+    _plant(repo, ".claude/gsd-core/VERSION", "1.16.0\n")
+    (repo / ".claude/skills").mkdir()
+    (repo / ".claude/commands").mkdir()
+    _block_scandir(monkeypatch, set())
+
+    report = _gsd_pack(tmp_path, {"claude", "opencode"})
+
+    assert "Claude Code install in proj is empty" in report.reasons
+    assert [step for step in report.steps if step.kind == "project_pack_install"] == [
+        _install_step("claude", repo, "reinstall")
+    ]
 
 
 def test_absent_runtime_gets_no_step(tmp_path: Path) -> None:

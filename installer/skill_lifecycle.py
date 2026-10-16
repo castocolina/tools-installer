@@ -372,9 +372,10 @@ def _lstat_mode(path: Path) -> int:
 def _find_project_repos(home: Path) -> tuple[Path, ...]:
     """GSD repos under PROJECT_ROOTS, breadth-first and bounded; read-only.
 
-    Symlinks are never followed, a symlinked root included: a repo becomes the `cwd` of a
-    Phase 20 command, so it must stay under HOME. Every admission to the queue counts
-    against the dir cap and every entry read against the entry cap.
+    Symlinks are never followed, a symlinked root included, and an intermediate `.planning`
+    symlink is not followed either: a repo becomes the `cwd` of a Phase 20 command, so it must
+    stay under HOME. Every admission to the queue counts against the dir cap and every entry
+    read against the entry cap.
     """
     queue: deque[tuple[Path, int]] = deque()
     admitted = 0
@@ -387,7 +388,9 @@ def _find_project_repos(home: Path) -> tuple[Path, ...]:
     repos: list[Path] = []
     while queue:
         directory, depth = queue.popleft()
-        if stat.S_ISREG(_lstat_mode(directory / ".planning" / "config.json")):
+        if stat.S_ISDIR(_lstat_mode(directory / ".planning")) and stat.S_ISREG(
+            _lstat_mode(directory / ".planning" / "config.json")
+        ):
             repos.append(directory)  # a repo is not descended
             continue
         if depth >= _MAX_WALK_DEPTH or entries_left <= 0 or admitted >= _MAX_WALK_DIRS:
@@ -422,6 +425,26 @@ def _installed_runtimes(repo: Path) -> tuple[str, ...]:
         if stat.S_ISREG(_lstat_mode(repo / directory / "gsd-core" / "VERSION"))
         and any(_has_gsd_entry(repo / directory / sub) for sub in ("skills", "commands"))
     )
+
+
+def _unreadable_install_dirs(repo: Path, installed: Collection[str]) -> tuple[Path, ...]:
+    """Content dirs of a VERSION'd runtime this probe cannot list.
+
+    An unlistable dir is inconclusive, not empty: a reinstall over it could overwrite an
+    intact install. Only runtimes `installed` does not already count qualify; the caller
+    passes its own `_installed_runtimes` answer so the probe runs once.
+    """
+    unreadable: list[Path] = []
+    for runtime, directory in PROJECT_RUNTIME_DIRS.items():
+        if runtime in installed:
+            continue
+        if not stat.S_ISREG(_lstat_mode(repo / directory / "gsd-core" / "VERSION")):
+            continue
+        for sub in ("skills", "commands"):
+            content = repo / directory / sub
+            if _has_gsd_entry(content) is None:
+                unreadable.append(content)
+    return tuple(unreadable)
 
 
 def _gsd_hook_in(value: object) -> bool | None:
@@ -546,16 +569,27 @@ def inspect_project_pack(tool: Tool, home: Path, present: Collection[str]) -> Pr
     for repo in _find_project_repos(home):
         installed = _installed_runtimes(repo)
         repos.append((repo, installed))
+        unreadable = _unreadable_install_dirs(repo, installed)
+        inconclusive = {
+            runtime
+            for runtime, directory in PROJECT_RUNTIME_DIRS.items()
+            if any(path.parent == repo / directory for path in unreadable)
+        }
+        unchecked += [str(path.relative_to(home)) for path in unreadable]
         empty = [
             runtime
             for runtime, directory in PROJECT_RUNTIME_DIRS.items()
             if runtime not in installed
+            and runtime not in inconclusive
             and any(
                 stat.S_ISREG(_lstat_mode(repo / directory / trace))
                 for trace in ("gsd-core/VERSION", "gsd-install-state.json")
             )
         ]
-        if not installed and not empty:
+        if unreadable:
+            # A failed read is not an empty install and not proof the repo has none.
+            targets: list[tuple[str, str]] = []
+        elif not installed and not empty:
             reasons.append(f"not installed in {repo.name}")
             targets = [(runtime, "install") for runtime in PROJECT_RUNTIME_DIRS]
         else:
