@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import stat as stat_module
 import threading
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from installer.atomic import atomic_write_text
+from installer.checksums import sha256_file
 from installer.locations import ensure_dir
 from installer.model import Method
 
@@ -28,6 +30,11 @@ _MAX_RECEIPT_BYTES = 64 * 1024
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 _WRITE_LOCK = threading.Lock()
+
+# Re-hash memo: (str(path), size, mtime_ns) -> "matches the recorded sha256".
+# Its own lock, never _WRITE_LOCK, so no code path nests the two (review H1).
+_MEMO_LOCK = threading.Lock()
+_REHASH_MEMO: dict[tuple[str, int, int], bool] = {}
 
 
 @dataclass(frozen=True)
@@ -199,6 +206,82 @@ def read(tool_id: str) -> Receipt | None:
 def delete(tool_id: str) -> None:
     """Remove the receipt for `tool_id` when it exists."""
     receipt_path(tool_id).unlink(missing_ok=True)
+
+
+def fingerprint(path: Path, kind: Literal["dir", "link", "file"]) -> ReceiptArtifact | None:
+    """Record what `path` looks like now, for the given artifact type.
+
+    A file needs to be a regular file and records sha256 + size + mtime_ns; a
+    link records its readlink target; a dir must be a real directory (never a
+    symlink). Anything else, or an OSError, is not fingerprintable."""
+    try:
+        if kind == "file":
+            st = path.lstat()
+            if not stat_module.S_ISREG(st.st_mode):
+                return None
+            return ReceiptArtifact(
+                path=path,
+                type="file",
+                sha256=sha256_file(path),
+                size=st.st_size,
+                mtime_ns=st.st_mtime_ns,
+            )
+        if kind == "link":
+            if not path.is_symlink():
+                return None
+            return ReceiptArtifact(path=path, type="link", target=os.readlink(path))
+        if kind == "dir":
+            if not path.is_dir() or path.is_symlink():
+                return None
+            return ReceiptArtifact(path=path, type="dir")
+    except OSError:
+        return None
+    return None
+
+
+def matches(artifact: ReceiptArtifact, *, rehash: bool = False) -> bool:
+    """Does the on-disk artifact still equal what the receipt recorded (D-08)?
+
+    A link matches on readlink; a dir on being a real directory; a file on the
+    stat fingerprint, re-hashed only when the stat differs (or `rehash=True`,
+    the deletion-time re-proof, which bypasses both the shortcut and the
+    memo). A re-hash result is remembered per (path, size, mtime_ns), so an
+    unchanged-but-touched file is hashed once per session. Nothing matches
+    when the artifact is missing; OSError is False, never a raise."""
+    path = artifact.path
+    try:
+        if artifact.type == "link":
+            return path.is_symlink() and os.readlink(path) == artifact.target
+        if artifact.type == "dir":
+            return path.is_dir() and not path.is_symlink()
+        st = path.lstat()
+        if not stat_module.S_ISREG(st.st_mode):
+            return False
+        unchanged = (
+            artifact.size is not None
+            and artifact.mtime_ns is not None
+            and st.st_size == artifact.size
+            and st.st_mtime_ns == artifact.mtime_ns
+        )
+        if rehash:
+            return sha256_file(path) == artifact.sha256
+        if unchanged:
+            return True
+        key = (str(path), st.st_size, st.st_mtime_ns)
+        with _MEMO_LOCK:
+            memoized = _REHASH_MEMO.get(key)
+        if memoized is None:
+            memoized = sha256_file(path) == artifact.sha256
+            with _MEMO_LOCK:
+                _REHASH_MEMO[key] = memoized
+        return memoized
+    except OSError:
+        return False
+
+
+def drifted(receipt: Receipt, *, rehash: bool = False) -> tuple[ReceiptArtifact, ...]:
+    """The receipt's artifacts that no longer match, in receipt order."""
+    return tuple(a for a in receipt.artifacts if not matches(a, rehash=rehash))
 
 
 def _artifact_str(artifact: dict[str, object], key: str) -> str | None:

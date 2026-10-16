@@ -1,5 +1,6 @@
 """Receipt round-trips and the suite-wide receipts sandbox (plan 19-01, Task 1)."""
 
+import hashlib
 import io
 import json
 import os
@@ -303,3 +304,164 @@ def test_write_rejects_a_relative_artifact_path(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         write(receipt)
     assert not receipt_path("yq").exists()
+
+
+# --- Task 3: stat-fingerprint matching, re-hash memo and the drift list -------
+
+
+def _write_receipt(artifacts: tuple[ReceiptArtifact, ...]) -> Receipt:
+    return Receipt(
+        tool="yq",
+        at="t",
+        method=ReceiptMethod(kind="github_release", key="k"),
+        package=None,
+        artifacts=artifacts,
+        smoke=None,
+        hooks={},
+    )
+
+
+def test_fingerprint_records_each_artifact_type(tmp_path: Path) -> None:
+    target_file = tmp_path / "yq"
+    target_file.write_bytes(b"abc")
+    link = tmp_path / "link"
+    link.symlink_to("/x/y")
+    directory = tmp_path / "dir"
+    directory.mkdir()
+
+    file_fp = receipts.fingerprint(target_file, "file")
+    assert file_fp is not None
+    assert file_fp.type == "file"
+    assert file_fp.size == 3
+    assert file_fp.mtime_ns == target_file.stat().st_mtime_ns
+    assert file_fp.sha256 == hashlib.sha256(b"abc").hexdigest()
+
+    link_fp = receipts.fingerprint(link, "link")
+    assert link_fp is not None
+    assert link_fp.type == "link"
+    assert link_fp.target == os.readlink(link)
+
+    dir_fp = receipts.fingerprint(directory, "dir")
+    assert dir_fp is not None
+    assert dir_fp.type == "dir"
+
+    assert receipts.fingerprint(tmp_path / "gone", "file") is None
+    assert receipts.fingerprint(target_file, "dir") is None
+    assert receipts.fingerprint(link, "file") is None
+    symlinked_dir = tmp_path / "sdir"
+    symlinked_dir.symlink_to(directory, target_is_directory=True)
+    assert receipts.fingerprint(symlinked_dir, "dir") is None
+
+
+def test_matches_link_only_when_the_target_is_unchanged(tmp_path: Path) -> None:
+    link = tmp_path / "yq"
+    link.symlink_to("/x/y")
+    artifact = ReceiptArtifact(path=link, type="link", target="/x/y")
+    assert receipts.matches(artifact)
+    link.unlink()
+    link.symlink_to("/other")
+    assert not receipts.matches(artifact)
+    link.unlink()
+    link.write_text("now a file", encoding="utf-8")
+    assert not receipts.matches(artifact)
+    link.unlink()
+    assert not receipts.matches(artifact)
+
+
+def test_matches_dir_only_when_it_is_a_real_directory(tmp_path: Path) -> None:
+    directory = tmp_path / "dir"
+    directory.mkdir()
+    artifact = ReceiptArtifact(path=directory, type="dir")
+    assert receipts.matches(artifact)
+    directory.rmdir()
+    directory.symlink_to(tmp_path, target_is_directory=True)
+    assert not receipts.matches(artifact)
+
+
+def test_matches_file_without_hashing_when_the_stat_is_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "yq"
+    target.write_bytes(b"abc")
+    artifact = receipts.fingerprint(target, "file")
+    assert artifact is not None
+
+    def boom(path: Path) -> str:
+        raise AssertionError("sha256_file must not be called for an unchanged stat")
+
+    monkeypatch.setattr(receipts, "sha256_file", boom)
+    assert receipts.matches(artifact)
+
+
+def test_matches_rehashes_a_touched_file_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Fresh memo per test: the module dict is session state.
+    monkeypatch.setattr(receipts, "_REHASH_MEMO", {})
+    target = tmp_path / "yq"
+    target.write_bytes(b"abc")
+    artifact = receipts.fingerprint(target, "file")
+    assert artifact is not None
+    os.utime(target, ns=(0, 12345))
+    calls: list[Path] = []
+
+    def fake_sha256(path: Path) -> str:
+        calls.append(path)
+        return hashlib.sha256(target.read_bytes()).hexdigest()
+
+    monkeypatch.setattr(receipts, "sha256_file", fake_sha256)
+    assert receipts.matches(artifact)
+    assert receipts.matches(artifact)
+    assert calls == [target] * 1
+
+
+def test_matches_rejects_a_rewritten_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(receipts, "_REHASH_MEMO", {})
+    target = tmp_path / "yq"
+    target.write_bytes(b"abc")
+    artifact = receipts.fingerprint(target, "file")
+    assert artifact is not None
+    target.write_bytes(b"xyz")  # same size, different bytes, new mtime
+    assert not receipts.matches(artifact)
+
+
+def test_rehash_true_always_hashes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(receipts, "_REHASH_MEMO", {})
+    target = tmp_path / "yq"
+    target.write_bytes(b"abc")
+    artifact = receipts.fingerprint(target, "file")
+    assert artifact is not None
+    calls: list[Path] = []
+
+    def fake_sha256(path: Path) -> str:
+        calls.append(path)
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    monkeypatch.setattr(receipts, "sha256_file", fake_sha256)
+    assert receipts.matches(artifact, rehash=True)
+    assert receipts.matches(artifact, rehash=True)
+    assert len(calls) == 2
+
+    # Swapped in place with the mtime restored: only a re-hash can see it.
+    original_stat = target.stat()
+    target.write_bytes(b"xyz")
+    os.utime(target, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    assert not receipts.matches(artifact, rehash=True)
+
+
+def test_drifted_lists_only_the_mismatched_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(receipts, "_REHASH_MEMO", {})
+    link = tmp_path / "yq"
+    link.symlink_to("/x/y")
+    target = tmp_path / "file"
+    target.write_bytes(b"abc")
+    good_link = ReceiptArtifact(path=link, type="link", target="/x/y")
+    good_file = receipts.fingerprint(target, "file")
+    assert good_file is not None
+    target.write_bytes(b"xyz")
+    receipt = _write_receipt((good_link, good_file))
+    monkeypatch.setattr(receipts, "_REHASH_MEMO", {})
+    assert receipts.drifted(receipt) == (good_file,)
+    assert receipts.drifted(receipt) == (good_file,)
