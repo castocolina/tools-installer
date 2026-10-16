@@ -27,6 +27,8 @@ from installer.ownership import (
     resolve_ownership,
 )
 from installer.platform import Platform
+from installer.resolve import unavailable_reason
+from installer.uninstall import RemovalPlan, plan_removal
 from installer.version_cache import (
     MANAGER_RETRY_BACKOFF,
     MANAGER_STALE_AFTER,
@@ -40,12 +42,17 @@ from installer.version_cache import (
     should_fetch_managers,
 )
 from installer.version_status import (
+    BROKEN_SHIM_REASON,
     MAX_FETCHES_PER_REFRESH,
+    NEEDS_BREW_REASON,
+    Health,
     SkillHostStatus,
+    ToolState,
     VersionRefreshService,
     VersionStatus,
     resolve_github_release_status,
     resolve_status,
+    tool_state,
 )
 from installer.versions import Release, VersionError, resolve_github_tag
 
@@ -2039,3 +2046,332 @@ def test_second_skill_caller_waits_for_in_flight_pass(tmp_path: Path) -> None:
     assert calls["n"] == 1
     assert len(results) == 2
     assert all(item["superpowers"].stale is False for item in results)
+
+
+# -- 19-08 Task 1: one ToolState per tool, published in one swap (D-02, D-03). --
+
+# Captured at import, before any test patches HOME (checker W2).
+_REAL_HOME = Path.home()
+_STATE_NOW = datetime(2026, 10, 16, tzinfo=UTC)
+
+
+def _raw_gh_tool(tool_id: str) -> Tool:
+    """A raw github_release tool with no bin_dir: its implicit artifact is
+    `<managed bin dir>/<cmd>`, so presence follows the service's bin dir."""
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="search",
+        cmd=tool_id,
+        methods=(
+            Method(
+                kind="github_release",
+                params={"repo": f"owner/{tool_id}", "member": tool_id, "raw": True},
+            ),
+        ),
+        tier="user",
+    )
+
+
+def _state_service(
+    tmp_path: Path,
+    *,
+    which: Callable[[str], str | None],
+    present: Callable[[Tool], bool] | None = None,
+    probe_output: Callable[[list[str]], str | None] = lambda _argv: "0.9.0",
+    resolve_tag: Callable[[str], str] = lambda _repo: "1.0.0",
+    managed_bin_dir: Path | None = None,
+    platform: Platform | None = None,
+) -> VersionRefreshService:
+    managed = managed_bin_dir if managed_bin_dir is not None else tmp_path / "managed"
+    return VersionRefreshService(
+        platform=platform if platform is not None else _platform(),
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=resolve_tag,
+        probe_output=probe_output,
+        now=lambda: _STATE_NOW,
+        managed_bin_dir=managed,
+        which=which,
+        artifacts_for=lambda tool: [managed / tool.cmd],
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        query=lambda *_args, **_kwargs: "",
+        present=present,
+    )
+
+
+def _unknown_owner(tool: Tool) -> ManagerOwnership:
+    return ManagerOwnership(
+        tool_id=tool.id,
+        owner="unknown",
+        method=None,
+        package=None,
+        current_version=None,
+        confidence="none",
+        shadowed=False,
+        candidates=(),
+        active_candidate=None,
+        active_path=None,
+        unknown_reason="no manager claimed the tool",
+    )
+
+
+_NO_REMOVAL = RemovalPlan((), ())
+
+
+def test_refresh_publishes_one_tool_state_per_tool(tmp_path: Path) -> None:
+    managed = tmp_path / "managed"
+    alpha, beta = _gh_tool("alpha"), _gh_tool("beta")
+    service = _state_service(
+        tmp_path,
+        which=lambda cmd: str(managed / cmd) if cmd == "alpha" else None,
+    )
+    statuses = service.refresh([alpha, beta])
+    first = service.state_of("alpha")
+    second = service.state_of("beta")
+    assert first is not None
+    assert second is not None
+    assert first.health is Health.OUTDATED
+    assert first.reasons[0] == "0.9.0 -> 1.0.0 available"
+    assert second.health is Health.MISSING
+    assert first.generation == service.epoch
+    assert second.generation == service.epoch
+    for state, tool in ((first, alpha), (second, beta)):
+        assert state.tool_id == tool.id
+        assert state.ownership == service.ownership_of(tool.id)
+        assert state.version == service.statuses[tool.id]
+        assert state.version == statuses[tool.id]
+        assert state.removable == plan_removal([tool], service.managed_bin_dir)
+
+
+def test_nothing_is_visible_mid_pass(tmp_path: Path) -> None:
+    managed = tmp_path / "managed"
+    holder: dict[str, VersionRefreshService] = {}
+    seen: list[ToolState | None] = []
+
+    def probe_output(argv: list[str]) -> str:
+        if Path(argv[0]).name == "beta":
+            seen.append(holder["svc"].state_of("alpha"))
+        return "1.0.0"
+
+    service = _state_service(
+        tmp_path, which=lambda cmd: str(managed / cmd), probe_output=probe_output
+    )
+    holder["svc"] = service
+    service.refresh([_gh_tool("alpha"), _gh_tool("beta")])
+    assert seen == [None]
+    assert service.state_of("alpha") is not None
+
+
+def test_state_of_is_none_after_invalidate(tmp_path: Path) -> None:
+    managed = tmp_path / "managed"
+    service = _state_service(tmp_path, which=lambda cmd: str(managed / cmd))
+    service.refresh([_gh_tool("alpha")])
+    assert service.state_of("alpha") is not None
+    service.invalidate(reason="update")
+    assert service.state_of("alpha") is None
+
+
+def test_state_of_unknown_tool_is_none(tmp_path: Path) -> None:
+    managed = tmp_path / "managed"
+    service = _state_service(tmp_path, which=lambda cmd: str(managed / cmd))
+    assert service.state_of("alpha") is None
+    service.refresh([_gh_tool("alpha")])
+    assert service.state_of("nope") is None
+
+
+def test_broken_shim_state() -> None:
+    tool = _node_tool()
+    state = tool_state(
+        tool,
+        generation=0,
+        platform=_platform(),
+        present=True,
+        ownership=replace(_owned(tool, "pnpm", package="@mermaid-js/mermaid-cli"), broken=True),
+        version=None,
+        removable=_NO_REMOVAL,
+    )
+    assert state.health is Health.BROKEN
+    assert state.reasons[0] == BROKEN_SHIM_REASON
+    assert BROKEN_SHIM_REASON == (
+        "shim present, package missing — select it and press enter to reinstall and repair"
+    )
+
+
+def test_unavailable_state_uses_the_resolver_reason() -> None:
+    tool = Tool(
+        id="macapp",
+        name="macapp",
+        category="dev",
+        cmd="macapp",
+        methods=(Method(kind="github_release", params={"repo": "o/macapp"}, os=("macos",)),),
+    )
+    platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+    reason = unavailable_reason(tool, platform)
+    assert reason is not None
+    state = tool_state(
+        tool,
+        generation=0,
+        platform=platform,
+        present=False,
+        ownership=_unknown_owner(tool),
+        version=None,
+        removable=_NO_REMOVAL,
+    )
+    assert state.health is Health.UNAVAILABLE
+    assert state.reasons[0] == reason.detail
+
+
+def test_brew_only_tool_state_is_unavailable_without_brew() -> None:
+    tool = _brew_tool()
+    without = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
+    assert unavailable_reason(tool, without) is None
+    state = tool_state(
+        tool,
+        generation=0,
+        platform=without,
+        present=False,
+        ownership=_unknown_owner(tool),
+        version=None,
+        removable=_NO_REMOVAL,
+    )
+    assert state.health is Health.UNAVAILABLE
+    assert state.reasons[0] == NEEDS_BREW_REASON
+    with_brew = tool_state(
+        tool,
+        generation=0,
+        platform=replace(without, has_brew=True),
+        present=False,
+        ownership=_unknown_owner(tool),
+        version=None,
+        removable=_NO_REMOVAL,
+    )
+    assert with_brew.health is Health.MISSING
+
+
+def test_tool_state_builder_is_pure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    tool = _gh_tool("alpha")
+    version = VersionStatus(
+        tool_id="alpha", installed="1.0.0", latest="1.0.0", outdated=False, stale=False, source="x"
+    )
+
+    def build() -> ToolState:
+        return tool_state(
+            tool,
+            generation=3,
+            platform=_platform(),
+            present=True,
+            ownership=_owned(tool, "installer"),
+            version=version,
+            removable=RemovalPlan((), ()),
+        )
+
+    first, second = build(), build()
+    assert first == second
+    assert first.generation == 3
+    assert first.health is Health.OK
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_tool_state_forwards_checking_facts() -> None:
+    pack = _claude_pack()
+    checking = tool_state(
+        pack,
+        generation=0,
+        platform=_platform(),
+        present=True,
+        ownership=_unknown_owner(pack),
+        version=None,
+        removable=_NO_REMOVAL,
+        checking=("checking which hosts have it",),
+    )
+    assert checking.health is Health.CHECKING
+    assert checking.reasons[0] == "checking which hosts have it"
+    assert checking.present is False
+    settled = tool_state(
+        pack,
+        generation=0,
+        platform=_platform(),
+        present=True,
+        ownership=_unknown_owner(pack),
+        version=None,
+        removable=_NO_REMOVAL,
+    )
+    assert settled.health is not Health.CHECKING
+    assert settled.present is True
+
+
+def test_is_present_reads_the_state_then_probes(tmp_path: Path) -> None:
+    managed = tmp_path / "managed"
+    calls: list[str] = []
+
+    def present(tool: Tool) -> bool:
+        calls.append(tool.id)
+        return True
+
+    tool = _gh_tool("alpha")
+    service = _state_service(tmp_path, which=lambda cmd: str(managed / cmd), present=present)
+    assert service.is_present(tool) is True
+    assert calls == ["alpha"]
+    service.refresh([tool])
+    calls.clear()
+    state = service.state_of("alpha")
+    assert state is not None
+    assert service.is_present(tool) is state.present
+    assert calls == []
+    service.invalidate(reason="update")
+    assert service.is_present(tool) is True
+    assert calls == ["alpha"]
+
+
+def test_injected_present_predicate_drives_presence(tmp_path: Path) -> None:
+    managed = tmp_path / "managed"
+    service = _state_service(
+        tmp_path, which=lambda cmd: str(managed / cmd), present=lambda t: t.id == "alpha"
+    )
+    service.refresh([_gh_tool("alpha"), _gh_tool("beta")])
+    alpha = service.state_of("alpha")
+    beta = service.state_of("beta")
+    assert alpha is not None
+    assert beta is not None
+    assert alpha.present is True
+    assert beta.health is Health.MISSING
+
+
+def test_pass_implicit_presence_reads_the_managed_bin_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    tool = _raw_gh_tool("gamma")
+    (managed / "gamma").write_text("bin")
+    service = _state_service(tmp_path, which=lambda _cmd: None, managed_bin_dir=managed)
+    service.refresh([tool])
+    state = service.state_of("gamma")
+    assert state is not None
+    assert state.present is True
+
+    home = tmp_path / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+    (home / ".local" / "bin" / "gamma").write_text("bin")
+    monkeypatch.setenv("HOME", str(home))
+    elsewhere = tmp_path / "other"
+    other_managed = tmp_path / "managed-empty"
+    elsewhere.mkdir()
+    service = _state_service(elsewhere, which=lambda _cmd: None, managed_bin_dir=other_managed)
+    service.refresh([tool])
+    state = service.state_of("gamma")
+    assert state is not None
+    assert state.health is Health.MISSING
+
+
+def test_service_default_bin_dir_is_sandboxed(tmp_path_factory: pytest.TempPathFactory) -> None:
+    service = VersionRefreshService(
+        platform=_platform(),
+        cache_path=tmp_path_factory.mktemp("cache") / "versions.json",
+    )
+    assert not service.managed_bin_dir.is_relative_to(_REAL_HOME)
+    assert service.managed_bin_dir.is_relative_to(tmp_path_factory.getbasetemp())

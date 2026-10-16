@@ -52,10 +52,11 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal, cast
 
+import installer.locations
 from installer.guards import real_pnpm
 from installer.install_ownership import ProbeRunner
 from installer.manager_versions import OutdatedReport, read_outdated
-from installer.model import Method, Tool
+from installer.model import ConfigStep, Method, Tool
 from installer.ownership import (
     ManagerInventory,
     ManagerOwnership,
@@ -64,10 +65,12 @@ from installer.ownership import (
 )
 from installer.platform import Platform
 from installer.pnpm_globals import pnpm_global_packages
-from installer.resolve import resolve_methods
+from installer.receipts import Receipt
+from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError, run_query
 from installer.skill_lifecycle import inspect_skill_packs
-from installer.uninstall import plan_uninstall
+from installer.status import is_installed
+from installer.uninstall import RemovalPlan, plan_removal, plan_uninstall
 from installer.version_cache import (
     ManagerSnapshot,
     VersionCacheEntry,
@@ -501,6 +504,99 @@ class SkillHostStatus:
     stale: bool
 
 
+BROKEN_SHIM_REASON = (
+    "shim present, package missing — select it and press enter to reinstall and repair"
+)
+NEEDS_BREW_REASON = "needs Homebrew, which is not on PATH"
+_PRESENT_HEALTH = frozenset({Health.BROKEN, Health.MISCONFIGURED, Health.OUTDATED, Health.OK})
+
+
+@dataclass(frozen=True)
+class ToolState:
+    """Everything every view knows about one tool, from one pass (D-02).
+
+    `generation` is the epoch the pass started at; `seq` is the pass's
+    monotonic sequence number, which orders passes at one epoch.
+    """
+
+    tool_id: str
+    generation: int
+    seq: int
+    health: Health
+    reasons: tuple[str, ...]
+    ownership: ManagerOwnership
+    version: VersionStatus | None
+    skill_hosts: SkillHostStatus | None
+    receipt: Receipt | None
+    removable: RemovalPlan
+    unconfigured: tuple[ConfigStep, ...]
+
+    @property
+    def present(self) -> bool:
+        """Known presence only: CHECKING is not an answer yet."""
+        return self.health in _PRESENT_HEALTH
+
+
+def tool_state(
+    tool: Tool,
+    *,
+    generation: int,
+    platform: Platform,
+    present: bool,
+    ownership: ManagerOwnership,
+    version: VersionStatus | None,
+    removable: RemovalPlan,
+    seq: int = 0,
+    skill_hosts: SkillHostStatus | None = None,
+    receipt: Receipt | None = None,
+    checking: tuple[str, ...] = (),
+    broken: tuple[str, ...] = (),
+    misconfigured: tuple[str, ...] = (),
+    unconfigured: tuple[ConfigStep, ...] = (),
+    notes: tuple[str, ...] = (),
+) -> ToolState:
+    """Gather one tool's facts into Evidence and let `tool_health` decide. Pure.
+
+    Availability is the CURRENT answer, `resolve_methods` with this pass's
+    platform: `unavailable_reason` is brew-blind (it answers None for a tool
+    that could install once Homebrew is present), so it only words the reason.
+    """
+    absent_reason: str | None = None
+    available = bool(resolve_methods(tool, platform))
+    if not available:
+        reason = unavailable_reason(tool, platform)
+        absent_reason = reason.detail if reason is not None else NEEDS_BREW_REASON
+    broken_facts = ((BROKEN_SHIM_REASON,) if ownership.broken else ()) + broken
+    outdated: tuple[str, ...] = ()
+    if version is not None and version.outdated:
+        outdated = (f"{version.installed} -> {version.latest} available",)
+    health, reasons = tool_health(
+        Evidence(
+            present=present,
+            available=available,
+            checking=checking,
+            broken=broken_facts,
+            misconfigured=misconfigured,
+            outdated=outdated,
+            notes=notes,
+            absent_reason=absent_reason,
+        )
+    )
+    return ToolState(
+        tool_id=tool.id,
+        generation=generation,
+        seq=seq,
+        health=health,
+        reasons=reasons,
+        ownership=ownership,
+        version=version,
+        skill_hosts=skill_hosts,
+        receipt=receipt,
+        removable=removable,
+        unconfigured=unconfigured,
+    )
+
+
 class VersionRefreshService:
     """Blocking refresh of version status, shared by three screens."""
 
@@ -523,16 +619,20 @@ class VersionRefreshService:
         native_probe: ProbeRunner | None = None,
         skill_probe: Callable[[list[str]], str] | None = None,
         skill_home: Path | None = None,
+        present: Callable[[Tool], bool] | None = None,
     ) -> None:
         self._platform = platform
         self._cache_path = cache_path
         self._resolve_tag = resolve_tag
         self._probe_output = probe_output
         self._now = now if now is not None else (lambda: datetime.now(UTC))
+        # Module-attribute read: the conftest sandbox patches locations.bin_dir,
+        # so a test-built service never reads the real ~/.local/bin (checker W2).
         self._managed_bin_dir = (
-            managed_bin_dir if managed_bin_dir is not None else Path.home() / ".local" / "bin"
+            managed_bin_dir if managed_bin_dir is not None else installer.locations.bin_dir(None)
         )
         self._which = which
+        self._present = present if present is not None else self._default_present
         self._query = query if query is not None else run_query
         self._pnpm_packages = pnpm_packages
         self._resolve_pnpm = resolve_pnpm
@@ -567,6 +667,9 @@ class VersionRefreshService:
         # `save_version_cache` write, and `ownership_of` must never block
         # the UI thread on that.
         self._ownership: dict[str, tuple[int, ManagerOwnership]] = {}
+        # Never mutated after assignment: each commit assigns a new dict, so
+        # an unlocked reader holds either the old snapshot or the new one.
+        self._states: dict[str, ToolState] = {}
         self._skills: dict[str, SkillHostStatus] = {}
         self._skills_probed = False
         self._skills_pass_lock = threading.Lock()
@@ -608,6 +711,26 @@ class VersionRefreshService:
         if epoch != self._epoch:
             return None
         return ownership
+
+    def state_of(self, tool_id: str) -> ToolState | None:
+        """The current state, or None (never covered, or from an older epoch).
+
+        Record first, epoch second -- `ownership_of`'s fail-closed order (D-03).
+        """
+        state = self._states.get(tool_id)
+        if state is None or state.generation != self._epoch:
+            return None
+        return state
+
+    def is_present(self, tool: Tool) -> bool:
+        """The current state's presence; probe when there is no settled state."""
+        state = self.state_of(tool.id)
+        if state is None or state.health is Health.CHECKING:
+            return self._present(tool)
+        return state.present
+
+    def _default_present(self, tool: Tool) -> bool:
+        return is_installed(tool, which=self._which, default_bin_dir=self._managed_bin_dir)
 
     def skill_status_of(self, tool_id: str) -> SkillHostStatus | None:
         return self._skills.get(tool_id)
@@ -769,6 +892,7 @@ class VersionRefreshService:
         produced: dict[str, VersionCacheEntry] = {}
         statuses: dict[str, VersionStatus] = {}
         ownerships: dict[str, ManagerOwnership] = {}
+        states: dict[str, ToolState] = {}
         fetches = 0
         for tool in tools:
             ownership = resolve_ownership(
@@ -801,6 +925,15 @@ class VersionRefreshService:
                 allow_fetch=allow_fetch,
             )
             statuses[tool.id] = status
+            states[tool.id] = tool_state(
+                tool,
+                generation=started_epoch,
+                platform=self._platform,
+                present=self._present(tool),
+                ownership=ownership,
+                version=status,
+                removable=plan_removal([tool], self._managed_bin_dir),
+            )
             if would_fetch:
                 fetches += 1
             if new_entry is not None:
@@ -839,6 +972,7 @@ class VersionRefreshService:
             else:
                 managers = None
             save_version_cache(self._cache_path, merged, managers=managers)
+            self._states = {**self._states, **states}
             self._statuses.update(statuses)
             # The ONE ownership publication point (Round-3 review HIGH #1's
             # `EPOCH-GATED` gate counts this): tagged with `started_epoch`,
