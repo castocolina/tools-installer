@@ -194,3 +194,17 @@ None.
 - `gsd-per-repo-local-installs` (score 0.6): tooling outside this phase's scope.
 - `repair-pi-install-and-sync-models` (score 0.6): host repair, not catalog state. It is a candidate for a later registry phase.
 </deferred>
+
+### Ledger amendments (planning, 2026-10-16; RUN-LEDGER)
+- **Ledger L-19-01 (D-12, verifiable):** graphify's owner resolves through `uv tool dir` (the tools dir); `uv tool dir --bin` returns `~/.local/bin` and resolves no owner.
+- **Ledger L-19-02 (D-02, verifiable):** dropping an overtaken refresh needs a monotonic pass counter in addition to the epoch; an older pass that finishes later at the same epoch must publish nothing (SPEC AC1).
+- **Ledger L-19-03 (D-06, verifiable):** updates do not go through `engine.install_tool` (`update.py`); one receipt writer is called from both the install and the update paths.
+- **Ledger L-19-04 (D-07, verifiable):** `download.artifact_paths` cannot import `apps.cli_spec` (apps imports download); `cli_spec` moves into `download.py`.
+- **Ledger L-19-05 (D-16, verifiable):** the dry-run flag must block both the Konsole helper's state-file write and the `.zshrc` rewrite in the terminal sync.
+- **Ledger L-19-06 (D-10, verifiable):** the CLI `--yes` path never refreshes, so the real removal gate is the shared receipt-aware `plan_removal`; removal deletes only paths present both in the receipt and in `artifact_paths`.
+- **Ledger L-19-07 (D-21, jev):** Phase 19 adds the closed `scope` (and pin) to `[tool.skill_lifecycle]`, detects project-scope installs and builds + tests the exact per-repo install command (shown as the row's configuration step); Phase 20's plan/reconfigure executes it (Laya low conf -> TypeSafe build_in_19_run_in_20 p=0.99).
+- **Ledger L-19-08 (host fact):** global Claude GSD exists again on this host (`~/.claude/gsd-core` 1.16.0), so it shows as "installed globally" (≈).
+- **Ledger L-19-09 (D-18, verifiable):** parse `claude plugin list --json` (scope, enabled, version) instead of the text output.
+- **Ledger L-19-10 (R9, verifiable):** the catalog has no `konsole` row; Konsole shell drift attaches to the `zsh` row.
+- **Ledger L-19-11:** CONTEXT line references have drifted since Phases 17/18; plans cite current lines (19-RESEARCH), no decision changes.
+
