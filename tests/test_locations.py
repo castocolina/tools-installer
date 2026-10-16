@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from installer import env_redirect, systemd_daemon
+from installer import env_redirect, locations, systemd_daemon
 from installer.locations import (
     applications_dir,
     bin_dir,
@@ -17,6 +17,25 @@ from installer.locations import (
 
 ROOT = Path(__file__).resolve().parent.parent
 SETUP_PY = ROOT / "setup.py"
+
+# --- default bin dir sandbox (plan 19-01, checker W2) -------------------------
+
+
+def test_suite_sandbox_redirects_the_default_bin_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without any redirect of its own, the suite's default bin dir is a scratch
+    dir under pytest's base temp, never the developer's real ~/.local/bin. A
+    test that redirects HOME still gets HOME/.local/bin, and a declared dir is
+    never touched either way."""
+    real_home = Path(os.path.expanduser("~"))
+    # Through the module attribute, so the conftest sandbox patch applies.
+    default = locations.bin_dir(None)
+    assert not default.is_relative_to(real_home)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert bin_dir(None) == tmp_path / ".local" / "bin"
+    assert bin_dir("/opt/x/bin") == Path("/opt/x/bin")
+
 
 # --- xdg_config_base (lane-2 MEDIUM-01) --------------------------------------
 

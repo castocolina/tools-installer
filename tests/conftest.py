@@ -9,9 +9,13 @@ it by default keeps every test that does not set it explicitly on ~/.zshrc.
 
 import os
 import sys
+import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+
+from installer import locations, receipts
 
 # Captured at conftest IMPORT time, before any test can monkeypatch $HOME, so
 # this stays the developer's real home no matter what a test does later.
@@ -47,6 +51,14 @@ def _real_home_fingerprint() -> dict[str, tuple[int, float] | None]:
         else:
             fingerprint[name] = (stat.st_size, stat.st_mtime)
     fingerprint["<backups>"] = (len(list(_REAL_HOME.glob("*.tools-installer.old"))), 0.0)
+    receipts_dir = _REAL_HOME / ".local" / "state" / "tools-installer" / "receipts"
+    if receipts_dir.is_dir():
+        fingerprint["<receipts>"] = (
+            len(list(receipts_dir.iterdir())),
+            receipts_dir.stat().st_mtime,
+        )
+    else:
+        fingerprint["<receipts>"] = None
     return fingerprint
 
 
@@ -82,6 +94,45 @@ def no_shell_location_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear `$ZDOTDIR` and `$ZSH` so tests never follow the developer's shell location."""
     monkeypatch.delenv("ZDOTDIR", raising=False)
     monkeypatch.delenv("ZSH", raising=False)  # omz_root falls back to $ZSH
+
+
+@pytest.fixture(autouse=True)
+def sandboxed_receipts(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Redirect the receipts dir to a per-test scratch dir under pytest's base temp.
+
+    Every receipt write in the suite must land here, never in the developer's
+    real `~/.local/state/tools-installer/receipts` (the session fingerprint is
+    the net under this). The directory is NOT created: `receipts.write` makes
+    it lazily, and tests assert on their own tmp_path contents.
+    """
+    sandbox = tmp_path_factory.getbasetemp() / "receipts" / uuid.uuid4().hex
+    monkeypatch.setattr(receipts, "receipts_dir", lambda: sandbox)
+
+
+@pytest.fixture(autouse=True)
+def sandboxed_bin_dir(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Answer `locations.bin_dir(None)`'s default with a per-test scratch dir.
+
+    The host's real `~/.local/bin` holds about 50 registry binaries; plan 19-02
+    counts that dir as tool presence, so an un-redirected default would make
+    results depend on this machine. The HOME check keeps a test that DID
+    redirect HOME reading `HOME/.local/bin` as usual.
+    """
+    original: Callable[[str | None], Path] = locations.bin_dir
+    scratch = tmp_path_factory.getbasetemp() / "bin-dir" / uuid.uuid4().hex
+
+    def _sandboxed(declared: str | None) -> Path:
+        if declared:
+            return original(declared)
+        if Path.home() == _REAL_HOME:
+            return scratch
+        return original(declared)
+
+    monkeypatch.setattr(locations, "bin_dir", _sandboxed)
 
 
 @pytest.fixture(scope="session")
