@@ -1,3 +1,4 @@
+import json
 import subprocess
 import typing
 from collections.abc import Callable
@@ -2845,3 +2846,118 @@ def test_no_uv_tool_dir_attributes_nothing_to_uv(monkeypatch: pytest.MonkeyPatch
     dirs = owner_dirs(inventory=_readable(), managed_bin_dir=_MANAGED, platform=_MAC)
     assert dirs["uv"] == ()
     assert attribute_path(Path("/opt/uv/bin/ruff"), dirs) == frozenset()
+
+
+# -- 19-05/B 15 WR-06: host_setup keeps its verified owner; one package reader.
+
+
+_PNPM_LIST = ["pnpm", "list", "--global", "--depth", "0", "--json"]
+_PI_PACKAGE = "@earendil-works/pi-coding-agent"
+
+
+def _pi_tool() -> Tool:
+    return Tool(
+        id="pi",
+        name="Pi",
+        category="ai",
+        cmd="pi",
+        methods=(Method(kind="host_setup", params={"setup_id": "pi"}),),
+        owner_probes=("host-setup",),
+    )
+
+
+def _pnpm_listing(listed: str) -> Callable[[list[str]], str]:
+    def probe(argv: list[str]) -> str:
+        if argv == _PNPM_LIST:
+            return json.dumps({"dependencies": {listed: {"version": "1.0.0"}}})
+        raise CommandError(argv, 1)
+
+    return probe
+
+
+def test_host_setup_tool_resolves_to_its_verified_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PNPM_HOME", str(tmp_path / "pnpm"))
+    result = _resolve(
+        _pi_tool(),
+        inventory=_empty_readable(),
+        which=str(tmp_path / "pnpm" / "pi"),
+        native_probe=_pnpm_listing(_PI_PACKAGE),
+    )
+    assert result.owner == "pnpm"
+    assert result.confidence == "direct"
+    assert result.package == _PI_PACKAGE
+    assert result.method is None
+
+
+def test_host_setup_owner_needs_the_live_path_in_that_owners_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PNPM_HOME", str(tmp_path / "pnpm"))
+    result = _resolve(
+        _pi_tool(),
+        inventory=_empty_readable(),
+        which="/usr/bin/pi",
+        native_probe=_pnpm_listing(_PI_PACKAGE),
+    )
+    assert result.owner != "pnpm"
+    no_live_binary = _resolve(
+        _pi_tool(),
+        inventory=_empty_readable(),
+        which=None,
+        native_probe=_pnpm_listing(_PI_PACKAGE),
+    )
+    assert no_live_binary.owner != "pnpm"
+
+
+def test_host_setup_unverified_probe_stays_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PNPM_HOME", str(tmp_path / "pnpm"))
+    result = _resolve(
+        _pi_tool(),
+        inventory=_empty_readable(),
+        which=str(tmp_path / "pnpm" / "pi"),
+        native_probe=_pnpm_listing("@other/package"),
+    )
+    assert result.owner == "unknown"
+
+
+# The pre-19-05 `method_removal_command` formula, frozen: kind -> (param, template).
+_FROZEN_REMOVAL: dict[str, tuple[str, str]] = {
+    "brew": ("formula", "brew uninstall {}"),
+    "cask": ("cask", "brew uninstall --cask {}"),
+    "node": ("npm_pkg", "pnpm remove --global {}"),
+    "uv-tool": ("pypi_pkg", "uv tool uninstall {}"),
+    "sdkman": ("candidate", "sdk uninstall {} <version>"),
+    "dnf": ("package", "dnf remove {}"),
+    "apt": ("package", "apt remove {}"),
+    "pacman": ("package", "pacman -R {}"),
+    "rpm_ostree": ("package", "rpm-ostree uninstall {}"),
+}
+
+
+def test_method_package_reads_the_kind_param() -> None:
+    cases = [
+        (Method(kind="brew", params={"formula": "ripgrep"}), "ripgrep"),
+        (Method(kind="cask", params={"cask": "rectangle"}), "rectangle"),
+        (Method(kind="node", params={"npm_pkg": "@openai/codex"}), "@openai/codex"),
+        (Method(kind="uv-tool", params={"pypi_pkg": "graphifyy"}), "graphifyy"),
+        (Method(kind="dnf", params={"package": "git"}), "git"),
+        (Method(kind="github_release", params={"repo": "a/b"}), None),
+        (Method(kind="brew", params={}), None),
+        (Method(kind="node", params={"npm_pkg": ""}), None),
+    ]
+    for method, expected in cases:
+        assert ownership.method_package(method) == expected
+    compared = 0
+    for tool in load_tools(_REGISTRY):
+        for method in tool.methods:
+            frozen = _FROZEN_REMOVAL.get(method.kind)
+            value = method.params.get(frozen[0]) if frozen is not None else None
+            name = value if isinstance(value, str) and value else tool.cmd
+            expected = None if frozen is None else frozen[1].format(name)
+            assert ownership.method_removal_command(method, tool.cmd) == expected
+            compared += expected is not None
+    assert compared > 0

@@ -309,7 +309,16 @@ def _perform(
                 )
     elif owner == "pnpm":
         if method is None:
-            raise UpdateError("pnpm-owned update requires a resolved node method")
+            # A host-setup tool (pi): pnpm owns it but no node method installs it.
+            return UpdateOutcome(
+                tool_id=target.tool.id,
+                status="unsupported",
+                owner="pnpm",
+                detail=(
+                    "managed by pnpm through its host setup — update it with "
+                    f"`pnpm add --global {ownership.package or target.tool.cmd}`"
+                ),
+            )
         executors.execute(method, runner)
     elif owner == "installer":
         cleanup_warnings = _update_installer_owned(

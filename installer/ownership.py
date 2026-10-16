@@ -58,7 +58,9 @@ from typing import Literal, cast
 
 from installer.apps import APP_KINDS
 from installer.download import DOWNLOAD_KINDS
+from installer.host_setup import HOST_SETUPS
 from installer.install_ownership import (
+    Ownership,
     ProbeRunner,
     detect_owner,
     package_owns_path,
@@ -128,6 +130,8 @@ UNMANAGEABLE_OWNERS: frozenset[Owner] = frozenset({*NATIVE_OWNERS, OS_PACKAGE_OW
 # rejects where a dict[str, Owner] is required for the Ownership.manager
 # (str | None) lookup below.
 _NATIVE_OWNER_TRANSLATION: dict[str, Owner] = {name: name for name in NATIVE_OWNERS}
+# `HostSetup.owner` strings -> Owner, for the host-setup branch of `_native_owner`.
+_HOST_SETUP_OWNERS: dict[str, Owner] = {"pnpm": "pnpm"}
 
 _UV_NAME_VERSION = re.compile(r"^(\S+) v(\S+)$")
 _UV_NO_TOOLS = "no tools installed"
@@ -680,7 +684,9 @@ def resolve_ownership(
             for candidate in candidates
             if all(candidate is not shadow for shadow in shadows)
         )
-    native = _native_owner(tool, native_probe, gated, unreadable, active_path, platform)
+    native = _native_owner(
+        tool, native_probe, gated, unreadable, active_path, platform, attributed=attributed
+    )
     if native is not None:
         if not shadows:
             return replace(native, broken=broken)
@@ -812,7 +818,7 @@ def _volta_owner(
     synthetic = OwnershipCandidate(
         owner="volta",
         method=None,
-        package=tool.cmd if node is None else manager_name(node, "npm_pkg", tool.cmd),
+        package=(method_package(node) if node is not None else None) or tool.cmd,
         current_version=None,
         evidence=f"{tool.cmd} is a Volta shim at {active_path}",
     )
@@ -834,6 +840,8 @@ def _native_owner(
     unreadable: frozenset[Owner],
     active_path: Path | None,
     platform: Platform,
+    *,
+    attributed: frozenset[Owner],
 ) -> ManagerOwnership | None:
     """D-05 adapter: `install_ownership.detect_owner` for the four native
     package managers, never a re-implemented probe (`.claude/architecture.md`
@@ -860,9 +868,9 @@ def _native_owner(
     owner = _NATIVE_OWNER_TRANSLATION.get(verified.manager)
     if owner is None:
         # A verified NON-native manager (Homebrew, pnpm, SDKMAN, managed
-        # download, host setup) has its own evidence path elsewhere in this
-        # module; this adapter only ever claims the four native names.
-        return None
+        # download) has its own evidence path elsewhere in this module; only a
+        # host setup has none, so it keeps its verified owner here (B 15 WR-06).
+        return _host_setup_owner(tool, verified, active_path, attributed)
     # CR-01: apply the module's own live-PATH rule here rather than relying on
     # the branch below to apply it. This adapter must run ABOVE the
     # active-path unknown branch (a dnf-installed tool's `/usr/bin/<cmd>` is
@@ -924,6 +932,46 @@ def _native_owner(
         active_path=active_path,
         off_policy=False,
     )
+
+
+def _host_setup_owner(
+    tool: Tool,
+    verified: Ownership,
+    active_path: Path | None,
+    attributed: frozenset[Owner],
+) -> ManagerOwnership | None:
+    """A `host_setup` tool whose setup probe verified its manager (pi -> pnpm).
+
+    Claimed only when the live binary sits in that owner's directory: the
+    probe proves the package is installed, the directory proves this binary
+    is the one it installed (T-19-13).
+    """
+    owner = _HOST_SETUP_OWNERS.get(verified.manager or "")
+    if owner is None or owner not in attributed:
+        return None
+    for method in tool.methods:
+        if method.kind != "host_setup":
+            continue
+        setup = HOST_SETUPS.get(str(method.params.get("setup_id")))
+        if setup is None or setup.owner != verified.manager or not setup.probes:
+            continue
+        synthetic = OwnershipCandidate(
+            owner=owner,
+            method=None,
+            package=setup.probes[0].contains,
+            current_version=None,
+            evidence=verified.detail,
+        )
+        return _owned(
+            tool,
+            synthetic,
+            confidence="direct",
+            shadowed=False,
+            candidates=(synthetic,),
+            active_candidate=owner,
+            active_path=active_path,
+        )
+    return None
 
 
 def _os_package_owner(
@@ -1522,19 +1570,22 @@ _NATIVE_KIND_TO_OWNER: dict[str, Owner] = {
 }
 
 
+def method_package(method: Method) -> str | None:
+    """The manager package name a method declares, or None: the one reader."""
+    param = _KIND_PACKAGE_PARAM.get(method.kind)
+    value = method.params.get(param) if param is not None else None
+    return value if isinstance(value, str) and value else None
+
+
 def method_removal_command(method: Method, fallback: str) -> str | None:
     """Return the exact removal command for a method kind, or None for vendor scripts."""
     owner = _KIND_TO_OWNER.get(method.kind) or _NATIVE_KIND_TO_OWNER.get(method.kind)
-    if owner is None:
-        return None
-    param = _KIND_PACKAGE_PARAM.get(method.kind)
-    if param is None:
+    if owner is None or method.kind not in _KIND_PACKAGE_PARAM:
         return None
     template = _REMOVAL_COMMANDS.get(owner)
     if template is None:
         return None
-    package = manager_name(method, param, fallback)
-    return template.format(package=package)
+    return template.format(package=method_package(method) or fallback)
 
 
 def _own_script_install(ownership: ManagerOwnership) -> bool:

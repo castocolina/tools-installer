@@ -1221,3 +1221,16 @@ def test_update_refuses_volta_cleanly() -> None:
     assert outcome.owner == "volta"
     assert "volta install pnpm" in outcome.detail
     assert calls == []
+
+
+def test_update_refuses_host_setup_pnpm_cleanly() -> None:
+    # No methods on the tool: the `_target` helper would otherwise fill one in.
+    tool = _tool("pi")
+    target = _target(tool, "pnpm", package="@earendil-works/pi-coding-agent")
+    assert target.ownership.method is None
+    calls: list[list[str]] = []
+    outcome = _perform(target, calls.append)
+    assert outcome.status == "unsupported"
+    assert outcome.owner == "pnpm"
+    assert "pnpm add --global @earendil-works/pi-coding-agent" in outcome.detail
+    assert calls == []
