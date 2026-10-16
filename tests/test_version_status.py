@@ -3009,10 +3009,13 @@ def _owner_pass_service(
     platform: Platform | None = None,
     probe_output: Callable[[list[str]], str | None] = lambda _argv: "1.0.0",
     artifacts_for: Callable[[Tool], list[Path]] = lambda _tool: [],
+    inventory_reads: list[dict[str, object]] | None = None,
 ) -> VersionRefreshService:
     held = inventory if inventory is not None else _empty_inventory()
 
-    def read_inventory(**_kwargs: object) -> ManagerInventory:
+    def read_inventory(**kwargs: object) -> ManagerInventory:
+        if inventory_reads is not None:
+            inventory_reads.append(kwargs)
         return held
 
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -3325,6 +3328,84 @@ def test_pass_reads_rpm_ostree_status_once(tmp_path: Path) -> None:
         state = service.state_of(tool.id)
         assert state is not None
         assert state.ownership.owner == "rpm-ostree"
+
+
+def test_resolve_owner_uses_the_pass_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The update path's owner comes from a FRESH inventory read with the live
+    platform, through the same evidence as the pass (review M12)."""
+    home = tmp_path / "home"
+    managed = home / ".local" / "bin"
+    managed.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    uv_tools = tmp_path / "uv" / "tools"
+    real = uv_tools / "graphifyy" / "bin" / "graphify"
+    real.parent.mkdir(parents=True)
+    real.write_text("bin")
+    (managed / "graphify").symlink_to(real)
+    hits = {
+        "uv": str(tmp_path / "uv" / "uv"),
+        "graphify": str(managed / "graphify"),
+        "brew": str(tmp_path / "homebrew" / "bin" / "brew"),
+    }
+    query, asked = _uv_dir_query(uv_tools)
+    reads: list[dict[str, object]] = []
+    service = _owner_pass_service(
+        tmp_path,
+        which=lambda cmd: hits.get(cmd),
+        managed=managed,
+        query=query,
+        inventory=replace(_empty_inventory(), uv_tools={"graphifyy": "0.9.53"}),
+        inventory_reads=reads,
+    )
+    service.refresh([_graphify()])
+    state = service.state_of("graphify")
+    assert state is not None
+    assert len(reads) == 1
+    owner = service.resolve_owner(_graphify())
+    assert owner.owner == "uv"
+    assert owner == state.ownership
+    assert len(reads) == 2
+    assert reads[1]["has_brew"] is True
+    assert asked.count(["uv", "tool", "dir"]) == 2
+
+
+def test_pass_still_makes_one_native_query_with_resolve_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review M12: the pass resolves owners from its batched evidence and never
+    through the public one-tool operation, so it still makes one batched path
+    query; a later `resolve_owner` asks on its own."""
+    system = _system_bin(tmp_path)
+    tools = [_dnf_tool(f"native{n}") for n in range(5)]
+    probe, calls = _rpm_host({str(system / tool.cmd): tool.cmd for tool in tools})
+    service = _owner_pass_service(
+        tmp_path,
+        which=lambda cmd: str(system / cmd) if cmd.startswith("native") else None,
+        managed=tmp_path / "managed",
+        native_probe=probe,
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+    )
+    original = service.resolve_owner
+    used: list[str] = []
+
+    def spy(tool: Tool) -> ManagerOwnership:
+        used.append(tool.id)
+        return original(tool)
+
+    monkeypatch.setattr(service, "resolve_owner", spy)
+    service.refresh(tools)
+    assert used == []
+    batch = [[*_RPM_BATCH, *(str(system / tool.cmd) for tool in tools)]]
+    assert [call for call in calls if call[:4] == _RPM_BATCH] == batch
+    assert [call for call in calls if call[:4] == _RPM_PER_PATH] == []
+    pass_calls = list(calls)
+    owner = service.resolve_owner(tools[0])
+    assert owner.owner == "dnf"
+    assert calls[: len(pass_calls)] == pass_calls
+    assert len(calls) > len(pass_calls)
+    assert [call for call in calls if call[:4] == _RPM_BATCH] == batch
 
 
 def test_pass_memoizes_declared_package_queries(tmp_path: Path) -> None:

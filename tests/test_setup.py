@@ -8,7 +8,7 @@ import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypeVar, cast
 
 import pytest
 from rich.console import Console
@@ -35,7 +35,7 @@ from installer.shellrc import ShellrcConsolidation, ShellrcRefusal, write_myshel
 from installer.terminal_shell import TerminalShellResult
 from installer.tweaks import BUNDLES
 from installer.uninstall import SweepResult
-from installer.update import UpdateOutcome
+from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import Health, VersionRefreshService
 from installer.wizard_app import (
     BASE_VIEW,
@@ -46,6 +46,7 @@ from installer.wizard_app import (
     UninstallInputs,
     UninstallScreen,
 )
+from tests.state_doubles import FrozenStateService, empty_inventory, empty_outdated, pass_state
 
 # Aliased once, matching tests/test_daemon.py's convention for pinning a
 # private composition-root function under test.
@@ -464,6 +465,38 @@ def _capture_app(
     return seen
 
 
+_Service = TypeVar("_Service", bound=VersionRefreshService)
+
+
+def _bind_refresh(
+    monkeypatch: pytest.MonkeyPatch, make: Callable[..., _Service], **overrides: object
+) -> list[_Service]:
+    """Build the composition root's one refresh service as `make`, with
+    `overrides` replacing what setup.py passes (an injected `which`, `present`
+    or offline manager readers), and hand back every service it built."""
+    built: list[_Service] = []
+
+    def build(**kwargs: object) -> _Service:
+        service = make(**{**kwargs, **overrides})
+        built.append(service)
+        return service
+
+    monkeypatch.setattr(setup, "VersionRefreshService", build)
+    return built
+
+
+def _wired(monkeypatch: pytest.MonkeyPatch, tools: list[Tool]) -> dict[str, object]:
+    """What `setup.main([])` hands the app for `tools`."""
+
+    def load(_registry: object) -> list[Tool]:
+        return tools
+
+    monkeypatch.setattr(setup, "load_tools", load)
+    seen = _capture_app(monkeypatch)
+    assert setup.main([]) == 0
+    return seen[0]
+
+
 def _no_tools(_registry: object) -> list[Tool]:
     return []
 
@@ -516,8 +549,10 @@ def _recording_install(recorder: list[str]) -> Callable[..., InstallOutcome]:
         checksum_policy: str = "fail",
         tools: Mapping[str, Tool] | None = None,
         confirm_sensitive_action: object = None,
+        present: object = None,
     ) -> InstallOutcome:
         del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del present
         recorder.append(tool.id)
         return InstallOutcome(tool.id, "installed")
 
@@ -527,8 +562,8 @@ def _recording_install(recorder: list[str]) -> Callable[..., InstallOutcome]:
 def _hermetic_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str]:
     """Hermetic setup for the TUI route pilots: a scratch HOME (_sandbox), an
     empty PATH, no systemd, the Linux platform, a one-tool fake catalog, a
-    seeded settings file (no first-run picker), a fake TTY, and the install
-    closure replaced at the _execute_inputs seam (D-12) with a recorder.
+    seeded settings file (no first-run picker), a fake TTY, and the engine
+    install the composition root forwards to (D-04) replaced with a recorder.
     Returns the recorder's installed tool ids. No real systemctl, launchctl,
     network or HOME is ever reached."""
     _sandbox(monkeypatch, tmp_path)
@@ -560,6 +595,7 @@ def _hermetic_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str
     monkeypatch.setattr(setup, "_has_controlling_tty", lambda: True)
     monkeypatch.setattr(setup, "_stdin_on_tty", contextlib.nullcontext)
     installed: list[str] = []
+    monkeypatch.setattr(setup, "install_tool", _recording_install(installed))
     real_inputs = setup._execute_inputs  # pyright: ignore[reportPrivateUsage]
 
     def recording_inputs(
@@ -578,18 +614,10 @@ def _hermetic_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str
             disk_pressure=disk_pressure,
         )
 
-        def _never_installed(_tool: Tool) -> bool:
-            return False
-
         def _pinned_tag(_repo: str) -> str:
             return "v1.0.0"
 
-        return replace(
-            inputs,
-            installed=_never_installed,
-            install=_recording_install(installed),
-            resolve_tag=_pinned_tag,
-        )
+        return replace(inputs, resolve_tag=_pinned_tag)
 
     monkeypatch.setattr(setup, "_execute_inputs", recording_inputs)  # pyright: ignore[reportPrivateUsage]
     return installed
@@ -691,7 +719,7 @@ def test_the_uninstall_rows_closure_re_reads_presence_live(
     def fake_is_installed(t: Tool) -> bool:
         return present[t.id]
 
-    monkeypatch.setattr(setup, "is_installed", fake_is_installed)
+    _bind_refresh(monkeypatch, VersionRefreshService, present=fake_is_installed)
     seen = _capture_app(monkeypatch)
     assert setup.main(["--uninstall"]) == 0
     inputs = seen[0]["uninstall"]
@@ -733,12 +761,12 @@ def test_the_uninstall_rows_closure_calls_presence_once_per_catalog_tool(
         calls.append(t.id)
         return False
 
-    monkeypatch.setattr(setup, "is_installed", counting_is_installed)
+    _bind_refresh(monkeypatch, VersionRefreshService, present=counting_is_installed)
     seen = _capture_app(monkeypatch)
     assert setup.main(["--uninstall"]) == 0
     inputs = seen[0]["uninstall"]
     assert isinstance(inputs, UninstallInputs)
-    calls.clear()  # drop the one call _build_app itself made for the `installed` map
+    calls.clear()
 
     inputs.rows()
     assert len(calls) == len(tools)
@@ -1923,21 +1951,19 @@ def test_build_app_reresolve_reads_live_inventory_not_cache(
     # is a plain PATH lookup with no subprocess call, so it needs no patch.
     monkeypatch.setattr("installer.run.subprocess.run", fake_run)
 
-    # Hermetic: `_reresolve_ownership` calls `shutil.which(tool.cmd)` for real
-    # PATH attribution, which would otherwise read whatever `rg` this actual
-    # test-running machine happens to have on PATH. Pin it to "not found" so
-    # the by-elimination branch this test targets is reached deterministically.
-    def fake_which(_cmd: str, *, mode: int = 0, path: str | None = None) -> str | None:
-        return None
+    # Hermetic: the owner question asks `which` for brew, uv and the tool's
+    # own command; pin brew present and everything else "not found" so the
+    # by-elimination branch this test targets is reached deterministically.
+    def fake_which(cmd: str) -> str | None:
+        return "/opt/homebrew/bin/brew" if cmd == "brew" else None
 
-    monkeypatch.setattr("shutil.which", fake_which)
-    app = setup._build_app([tool], platform)  # pyright: ignore[reportPrivateUsage]
-    updates = app.catalog._updates  # pyright: ignore[reportPrivateUsage]
-    assert updates is not None
-    first = updates._reresolve_ownership(tool)  # pyright: ignore[reportPrivateUsage]
+    built = _bind_refresh(monkeypatch, VersionRefreshService, which=fake_which, native_probe=None)
+    setup._build_app([tool], platform)  # pyright: ignore[reportPrivateUsage]
+    service = built[0]
+    first = service.resolve_owner(tool)
     assert first.owner == "unknown"  # no brew formula listed yet, nothing on PATH
     state["formulae"] = {"ripgrep": "14.1.1"}
-    second = updates._reresolve_ownership(tool)  # pyright: ignore[reportPrivateUsage]
+    second = service.resolve_owner(tool)
     assert second.owner == "brew"
     assert second.current_version == "14.1.1"
 
@@ -1980,18 +2006,17 @@ def test_build_app_uninstall_hint_changes_when_the_ownership_map_changes(
         methods=(Method(kind="dnf", params={"package": "ripgrep"}),),
         tier="system",
     )
-    monkeypatch.setattr(setup, "is_installed", _always_installed)
+    built = _bind_refresh(monkeypatch, FrozenStateService, present=_always_installed)
     app = setup._build_app([tool], platform)  # pyright: ignore[reportPrivateUsage]
     screen = app._views["uninstall"]  # pyright: ignore[reportPrivateUsage]
     assert isinstance(screen, UninstallScreen)
     rows_predicate = screen._rows_predicate  # pyright: ignore[reportPrivateUsage]
-    service = app._version_refresh  # pyright: ignore[reportPrivateUsage]
-    assert service is not None
+    service = built[0]
 
     before = next(r for r in rows_predicate() if r.tool.id == "rg")
     assert "package manager" in before.hint  # no ownership pass has run yet
 
-    service._ownership["rg"] = (service.epoch, _dnf_owned_rg())  # pyright: ignore[reportPrivateUsage]
+    service.publish([pass_state(tool, platform=platform, ownership=_dnf_owned_rg())])
 
     after = next(r for r in rows_predicate() if r.tool.id == "rg")
     assert "ripgrep" in after.hint
@@ -2015,15 +2040,14 @@ def test_build_app_uninstall_hint_reverts_after_the_service_is_invalidated(
         methods=(Method(kind="dnf", params={"package": "ripgrep"}),),
         tier="system",
     )
-    monkeypatch.setattr(setup, "is_installed", _always_installed)
+    built = _bind_refresh(monkeypatch, FrozenStateService, present=_always_installed)
     app = setup._build_app([tool], platform)  # pyright: ignore[reportPrivateUsage]
     screen = app._views["uninstall"]  # pyright: ignore[reportPrivateUsage]
     assert isinstance(screen, UninstallScreen)
     rows_predicate = screen._rows_predicate  # pyright: ignore[reportPrivateUsage]
-    service = app._version_refresh  # pyright: ignore[reportPrivateUsage]
-    assert service is not None
+    service = built[0]
 
-    service._ownership["rg"] = (service.epoch, _dnf_owned_rg())  # pyright: ignore[reportPrivateUsage]
+    service.publish([pass_state(tool, platform=platform, ownership=_dnf_owned_rg())])
     before = next(r for r in rows_predicate() if r.tool.id == "rg")
     assert "ripgrep" in before.hint
 
@@ -2054,17 +2078,16 @@ def test_build_app_wires_a_refresh_seam_that_restores_the_invalidated_hint(
         methods=(Method(kind="dnf", params={"package": "ripgrep"}),),
         tier="system",
     )
-    monkeypatch.setattr(setup, "is_installed", _always_installed)
+    built = _bind_refresh(monkeypatch, FrozenStateService, present=_always_installed)
     app = setup._build_app([tool], platform)  # pyright: ignore[reportPrivateUsage]
     screen = app._views["uninstall"]  # pyright: ignore[reportPrivateUsage]
     assert isinstance(screen, UninstallScreen)
     rows_predicate = screen._rows_predicate  # pyright: ignore[reportPrivateUsage]
     refresh = screen._refresh  # pyright: ignore[reportPrivateUsage]
     assert refresh is not None
-    service = app._version_refresh  # pyright: ignore[reportPrivateUsage]
-    assert service is not None
+    service = built[0]
 
-    service._ownership["rg"] = (service.epoch, _dnf_owned_rg())  # pyright: ignore[reportPrivateUsage]
+    service.publish([pass_state(tool, platform=platform, ownership=_dnf_owned_rg())])
     service.invalidate(reason="test")
     degraded = next(r for r in rows_predicate() if r.tool.id == "rg")
     assert "package manager" in degraded.hint
@@ -2074,7 +2097,9 @@ def test_build_app_wires_a_refresh_seam_that_restores_the_invalidated_hint(
     # what matters here is that it commits a pass under the CURRENT epoch, so
     # the screen stops reporting every record as unavailable.
     refresh()
-    assert service.ownership_of("rg") is not None
+    restored = service.state_of("rg")
+    assert restored is not None
+    assert restored.ownership.owner == "dnf"
 
 
 def test_interactive_main_never_calls_run_wizard(
@@ -3174,9 +3199,10 @@ def test_linux_probe_memoizes_is_active_inside_the_ttl(
     assert len(queries) == 1
 
 
-def test_native_probe_is_wired_at_both_the_display_and_mutation_sites() -> None:
+def test_native_probe_is_wired_once_and_the_mutation_site_reuses_the_service() -> None:
     source = Path(setup.__file__).read_text()
-    assert source.count("native_probe=") == 2, source.count("native_probe=")
+    assert source.count("native_probe=") == 1, source.count("native_probe=")
+    assert "reresolve_ownership=version_refresh.resolve_owner" in source
     assert "run_probe" in source
     assert "install_ownership import run_probe" in source
 
@@ -3631,3 +3657,174 @@ def test_terminal_drift_pass_writes_nothing(
     assert kitty.reasons[0] == "Kitty does not start zsh"
     assert _home_fingerprint(home) == before
     assert kitty_conf.read_text(encoding="utf-8") == "shell /bin/bash\n"
+
+
+# -- 19-18 Task 2: the composition root binds presence and owner
+# re-resolution to the one refresh service (D-04, D-14). --
+
+
+def _brew_rg() -> Tool:
+    return Tool(
+        id="rg",
+        name="ripgrep",
+        category="search",
+        cmd="rg",
+        methods=(Method(kind="brew", params={"formula": "ripgrep"}),),
+        tier="system",
+    )
+
+
+def _brew_owned(tool: Tool) -> ManagerOwnership:
+    return replace(_dnf_owned_rg(), tool_id=tool.id, owner="brew", package=tool.id)
+
+
+class _BrewOwnedRefresh(VersionRefreshService):
+    """Answers every one-tool owner question with a brew record."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.asked: list[str] = []
+
+    def resolve_owner(self, tool: Tool) -> ManagerOwnership:
+        self.asked.append(tool.id)
+        return _brew_owned(tool)
+
+
+def test_execute_inputs_presence_is_the_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    tool = _brew_rg()
+    monkeypatch.setattr(setup, "is_installed", _always_installed)
+    built = _bind_refresh(monkeypatch, FrozenStateService, present=_always_installed)
+    execute = _wired(monkeypatch, [tool])["execute"]
+    assert isinstance(execute, ExecuteInputs)
+    service = built[0]
+    assert execute.installed == service.is_present
+    service.publish([pass_state(tool, platform=service.platform, present=False)])
+    state = service.state_of("rg")
+    assert state is not None
+    assert state.health is Health.MISSING
+    assert execute.installed(tool) is False
+
+
+def test_install_binding_passes_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    tool = _brew_rg()
+    recorded: list[dict[str, object]] = []
+
+    def fake_install(
+        tool: Tool, platform: Platform, runner: object, resolve_tag: object, **kwargs: object
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag
+        recorded.append(kwargs)
+        return InstallOutcome(tool.id, "installed")
+
+    monkeypatch.setattr(setup, "install_tool", fake_install)
+    built = _bind_refresh(monkeypatch, FrozenStateService, present=_always_installed)
+    execute = _wired(monkeypatch, [tool])["execute"]
+    assert isinstance(execute, ExecuteInputs)
+    outcome = execute.install(
+        tool, _platform(), lambda _cmd: None, lambda _repo: "v1", checksum_policy="continue"
+    )
+    assert outcome.status == "installed"
+    assert len(recorded) == 1
+    assert recorded[0]["present"] == built[0].is_present
+    assert recorded[0]["checksum_policy"] == "continue"
+
+
+def test_uninstall_rows_and_hints_read_the_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    tool = Tool(
+        id="rg",
+        name="ripgrep",
+        category="search",
+        cmd="rg",
+        methods=(Method(kind="dnf", params={"package": "ripgrep"}),),
+        tier="system",
+    )
+    monkeypatch.setattr(setup, "is_installed", _always_installed)
+    built = _bind_refresh(monkeypatch, FrozenStateService, present=_always_installed)
+    inputs = _wired(monkeypatch, [tool])["uninstall"]
+    assert isinstance(inputs, UninstallInputs)
+    service = built[0]
+    service.publish([pass_state(tool, platform=service.platform, ownership=_dnf_owned_rg())])
+    managed = next(row for row in inputs.rows() if row.tool.id == "rg")
+    assert managed.state.value == "managed"
+    assert "dnf remove ripgrep" in managed.hint
+    assert managed.manager is not None
+    service.publish(
+        [pass_state(tool, platform=service.platform, present=False, ownership=_dnf_owned_rg())]
+    )
+    absent = next(row for row in inputs.rows() if row.tool.id == "rg")
+    assert absent.state.value != "managed"
+    assert "ripgrep" not in absent.hint
+
+
+def test_update_service_reresolves_through_the_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    tool = _brew_rg()
+    built = _bind_refresh(monkeypatch, _BrewOwnedRefresh, terminal_drift=None)
+
+    def refuse(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        return UpdateOutcome(tool_id=target.tool.id, status="failed", owner=target.ownership.owner)
+
+    monkeypatch.setattr("installer.update.perform_update", refuse)
+    updates = _wired(monkeypatch, [tool])["updates"]
+    assert isinstance(updates, UpdateService)
+    stale = replace(_dnf_owned_rg(), owner="unknown", confidence="none")
+    outcome = updates.run(UpdateTarget(tool=tool, ownership=stale))
+    assert built[0].asked == ["rg"]
+    assert outcome.owner == "brew"
+
+
+def test_update_service_reads_the_live_platform_through_the_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Checker W2: the update service asks the refresh service for the
+    platform at run time, so a pass that saw brew appear reaches the update."""
+    _sandbox(monkeypatch, tmp_path)
+    tool = _brew_rg()
+    brew: list[str | None] = [None]
+
+    def which(cmd: str) -> str | None:
+        return brew[0] if cmd == "brew" else None
+
+    def no_query(*_args: object, **_kwargs: object) -> str:
+        return ""
+
+    built = _bind_refresh(
+        monkeypatch,
+        _BrewOwnedRefresh,
+        which=which,
+        cache_path=tmp_path / "versions.json",
+        read_inventory_fn=empty_inventory,
+        read_outdated_fn=empty_outdated,
+        query=no_query,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        native_probe=None,
+        terminal_drift=None,
+    )
+    seen: list[Platform] = []
+
+    def record(target: UpdateTarget, *, platform: Platform, **_kwargs: object) -> UpdateOutcome:
+        seen.append(platform)
+        return UpdateOutcome(tool_id=target.tool.id, status="failed", owner=target.ownership.owner)
+
+    monkeypatch.setattr("installer.update.perform_update", record)
+    updates = _wired(monkeypatch, [tool])["updates"]
+    assert isinstance(updates, UpdateService)
+    service = built[0]
+    target = UpdateTarget(tool=tool, ownership=_brew_owned(tool))
+    service.refresh([])
+    updates.run(target)
+    brew[0] = str(tmp_path / "homebrew" / "bin" / "brew")
+    service.refresh([])
+    updates.run(target)
+    assert [platform.has_brew for platform in seen] == [False, True]
+    assert seen[1] == service.platform

@@ -40,6 +40,7 @@ from installer.app import (
 )
 from installer.cli import Options, parse_args
 from installer.diskusage import DiskPressure
+from installer.engine import InstallOutcome, install_tool
 from installer.enums import DaemonState
 from installer.execute_screen import ExecuteInputs
 from installer.install_ownership import run_probe
@@ -53,11 +54,8 @@ from installer.locations import (
 from installer.model import Tool, load_categories, load_tools
 from installer.omz import omz_present
 from installer.ownership import (
-    ManagerOwnership,
-    read_inventory,
     removal_hint,
     removal_label,
-    resolve_ownership,
 )
 from installer.platform import Platform, detect
 from installer.policy import (
@@ -95,13 +93,12 @@ from installer.uninstall import (
     ToolRow,
     active_tweak_ids,
     classify_tools,
-    plan_uninstall,
     reverse_dependencies,
 )
 from installer.update import UpdateService
 from installer.version_cache import default_cache_path
 from installer.version_status import VersionRefreshService
-from installer.versions import probe_version_output, resolve_github_tag
+from installer.versions import TagResolver, probe_version_output, resolve_github_tag
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 
 _REGISTRY = Path(__file__).parent / "installer" / "registry.toml"
@@ -834,19 +831,18 @@ def _build_app(
         # `UninstallInputs.invalidate` (bound below) makes `_apply_removal`
         # invalidate this same service after a successful sweep, so every
         # pre-removal record reports as unavailable through the epoch-gated
-        # `ownership_of`; and (3) a screen opened BEFORE that background
+        # `state_of`; and (3) a screen opened BEFORE that background
         # refresh commits renders this fallback and then the
         # `OwnershipRefreshed` completion signal repaints it in place -- this
         # closure is re-called on that repaint too, never a one-shot read.
-        # `ownership_of`'s two `None` cases (no pass has covered this tool,
-        # or a mutation invalidated its record) are deliberately one return
-        # value here: to this caller they mean the same thing, and both
-        # degrade to the platform-filtered registry phrase (task 2) rather
-        # than guessing.
-        owned = version_refresh.ownership_of(tool.id)
-        if owned is None:
+        # `state_of`'s two `None` cases (no pass has covered this tool, or a
+        # mutation invalidated its state) are deliberately one return value
+        # here: to this caller they mean the same thing, and both degrade to
+        # the platform-filtered registry phrase (task 2) rather than guessing.
+        state = version_refresh.state_of(tool.id)
+        if state is None:
             return None
-        return removal_hint(owned, tool.cmd)
+        return removal_hint(state.ownership, tool.cmd)
 
     def _uninstall_owner_label(tool: Tool) -> str | None:
         # CR-03: the TERSE half of the same binding, off the SAME map and the
@@ -855,20 +851,19 @@ def _build_app(
         # `removal_hint`'s declared counterpart in `installer/ownership.py`
         # and answers `None` for exactly the records `removal_hint` is silent
         # for, so this closure needs no second condition of its own.
-        owned = version_refresh.ownership_of(tool.id)
-        if owned is None:
+        state = version_refresh.state_of(tool.id)
+        if state is None:
             return None
-        return removal_label(owned)
+        return removal_label(state.ownership)
 
     def _uninstall_rows() -> list[ToolRow]:
         """Re-read presence on every call (D-06): a construction-time
         snapshot goes stale the moment this session installs or removes a
         tool, which Phase 13's live in-TUI install execution made routine.
-        The same three calls the old one-time assignment composed --
-        `is_installed`, `classify_tools`, `reverse_dependencies` -- just
-        re-run on demand; `reverse_deps` above is the one piece that does
-        not need re-computing per call."""
-        installed_now = {tool.id: is_installed(tool) for tool in tools}
+        Presence is the published state's (D-04), probed only while no pass
+        has settled the tool; `reverse_deps` above is the one piece that
+        does not need re-computing per call."""
+        installed_now = {tool.id: version_refresh.is_present(tool) for tool in tools}
         return classify_tools(
             tools,
             _DEFAULT_BIN_DIR,
@@ -1123,27 +1118,18 @@ def _build_app(
 
         daemon_default_policy_id = daemon.id
 
-    def _reresolve_ownership(tool: Tool) -> ManagerOwnership:
-        inventory = read_inventory(has_brew=platform.has_brew)
-        artifacts = plan_uninstall([tool], _DEFAULT_BIN_DIR)
-        return resolve_ownership(
-            tool,
-            platform=platform,
-            inventory=inventory,
-            artifacts=artifacts,
-            which=shutil.which,
-            managed_bin_dir=_DEFAULT_BIN_DIR,
-            native_probe=run_probe,
-        )
-
     updates = UpdateService(
         platform=platform,
+        # D-14, checker W2: the platform the last pass saw, read at update time.
+        live_platform=lambda: version_refresh.platform,
         runner=run_captured,
         resolve_tag=resolve_github_tag,
         tools={tool.id: tool for tool in tools},
         managed_packages=pnpm_globals.pnpm_global_packages,
         replay_globals=_reinstall_globals,
-        reresolve_ownership=_reresolve_ownership,
+        # The pass's own evidence, freshly gathered (live platform, a fresh
+        # inventory, `uv tool dir`, shim look-through, native probe).
+        reresolve_ownership=version_refresh.resolve_owner,
         invalidate=version_refresh.invalidate,
         # D-01/15.6-05: the SAME terminal closure `omz_plugins_policy` above
         # is wired with -- a direct `u` update and a committed OMZ plugin
@@ -1162,7 +1148,22 @@ def _build_app(
         unattended=unattended,
         disk_pressure=disk_pressure,
     )
-    execute = replace(execute, version_refresh=version_refresh, updates=updates)
+
+    def _install(
+        tool: Tool, platform: Platform, runner: Runner, resolve_tag: TagResolver, **options: object
+    ) -> InstallOutcome:
+        # D-04: the engine's already-installed short-circuit reads the state too.
+        return install_tool(
+            tool, platform, runner, resolve_tag, present=version_refresh.is_present, **options
+        )
+
+    execute = replace(
+        execute,
+        installed=version_refresh.is_present,
+        install=_install,
+        version_refresh=version_refresh,
+        updates=updates,
+    )
 
     return UnifiedApp(
         tools,

@@ -1326,6 +1326,50 @@ class VersionRefreshService:
             return self._artifacts_for(tool)
         return plan_uninstall([tool], self._managed_bin_dir)
 
+    def resolve_owner(self, tool: Tool) -> ManagerOwnership:
+        """One tool's owner from fresh evidence: the update path (D-14). BLOCKING.
+
+        The same evidence the pass uses, gathered now: the platform with brew
+        re-read, a FRESH manager inventory (never the cached snapshot), `uv
+        tool dir` when uv is on PATH, the look-through `which` and the native
+        probe. Nothing is published.
+        """
+        platform = replace(self._platform, has_brew=self._which("brew") is not None)
+        inventory = self._read_inventory(
+            has_brew=platform.has_brew, query=self._query, pnpm_packages=self._pnpm_packages
+        )
+        uv_tool_dir = query_uv_tool_dir(self._query) if self._which("uv") is not None else None
+        return self._resolve_owner_from(
+            tool,
+            platform=platform,
+            inventory=inventory,
+            which=self._looked_through,
+            uv_tool_dir=uv_tool_dir,
+            native_probe=self._native_probe,
+        )
+
+    def _resolve_owner_from(
+        self,
+        tool: Tool,
+        *,
+        platform: Platform,
+        inventory: ManagerInventory,
+        which: Callable[[str], str | None],
+        uv_tool_dir: Path | None,
+        native_probe: ProbeRunner | None,
+    ) -> ManagerOwnership:
+        """The one owner resolution, over evidence the caller gathered (review M12)."""
+        return resolve_ownership(
+            tool,
+            platform=platform,
+            inventory=inventory,
+            artifacts=self._artifacts(tool),
+            which=which,
+            managed_bin_dir=self._managed_bin_dir,
+            native_probe=native_probe,
+            uv_tool_dir=uv_tool_dir,
+        )
+
     def _load_or_query_snapshot(
         self, *, now: datetime, platform: Platform
     ) -> tuple[ManagerSnapshot | None, bool, bool]:
@@ -1496,15 +1540,13 @@ class VersionRefreshService:
         packs: list[tuple[Tool, ManagerOwnership, VersionStatus, RemovalPlan]] = []
         fetches = 0
         for tool in tools:
-            ownership = resolve_ownership(
+            ownership = self._resolve_owner_from(
                 tool,
                 platform=platform,
                 inventory=inventory,
-                artifacts=self._artifacts(tool),
                 which=which,
-                managed_bin_dir=self._managed_bin_dir,
-                native_probe=native,
                 uv_tool_dir=uv_tool_dir,
+                native_probe=native,
             )
             ownerships[tool.id] = ownership
             entry = cache.get(tool.id)
