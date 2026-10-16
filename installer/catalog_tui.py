@@ -25,9 +25,7 @@ from installer.ownership import (
     MUTATION_GRADE,
     OWNER_LABELS,
     active_path_note,
-    also_installed_note,
     declared_manager_label,
-    owner_detail,
     owner_label,
 )
 from installer.resolve import UnavailableReason
@@ -42,7 +40,6 @@ from installer.version_status import (
     SkillHostStatus,
     ToolState,
     VersionRefreshService,
-    VersionStatus,
 )
 
 TableSortKey = Literal["id", "category", "priority", "audience", "health"]
@@ -138,14 +135,12 @@ class ToolUpdated(Message):
         self,
         tool_id: str,
         outcome: UpdateOutcome | None,
-        status: VersionStatus | None,
         error: str | None,
         epoch: int,
     ) -> None:
         super().__init__()
         self.tool_id = tool_id
         self.outcome = outcome
-        self.status = status
         self.error = error
         self.epoch = epoch
 
@@ -160,7 +155,6 @@ class VersionStatusRefreshed(Message):
 
     def __init__(
         self,
-        statuses: dict[str, VersionStatus],
         generation: int,
         epoch: int,
         *,
@@ -168,7 +162,6 @@ class VersionStatusRefreshed(Message):
         warning: str | None = None,
     ) -> None:
         super().__init__()
-        self.statuses = statuses
         self.generation = generation
         self.epoch = epoch
         self.error = error
@@ -241,23 +234,7 @@ _COLUMNS = (
     ("What it does", "desc"),
 )
 
-# Every dim Ver cell state gets its own text (D-02) -- no two of these mean
-# the same thing, and _ver_cell's six dim branches map onto exactly these
-# four (the two no-readable-version branches share _VER_NO_VERSION, and the
-# two nothing-to-compare branches share _VER_NO_COMPARISON; no other pair
-# collides). D-03/D-04 lock a per-state legend entry for each of these four
-# labels (plus the `~` suffix) -- _LEGEND (below) lists all four verbatim.
-_VER_CHECKING = "checking…"
-_VER_NO_VERSION = "no version"
-# Named after status.source, not a conclusion about the tool: the fallthrough
-# that stamps source="unknown" (installer/version_status.py:325-337) is
-# reached by both a native dnf/apt/pacman/rpm-ostree package AND a tool whose
-# manager inventory could not be read this pass -- VersionStatus carries
-# neither the owner nor unknown_reason, so the cell cannot tell them apart.
-# Follow-up: Phase 15.4's ownership column should plumb the resolved owner
-# into VersionStatus so this can split into two accurate labels.
-_VER_SOURCE_UNKNOWN = "(source unknown)"
-_VER_NO_COMPARISON = "(no comparison)"
+# The Ver cell's suffix for a comparison against a stale cached latest.
 _VER_STALE = "~"
 _BROKEN_DETAIL = "shim present, package missing — select it and press enter to reinstall and repair"
 # The Health column's glyph and style per state (19-UI-SPEC): every state has
@@ -293,60 +270,15 @@ _HEALTH_DETAIL = {
 # Already this wide for one owner, so a host list truncates only if it would widen the column (D-13)
 _OWNER_CELL_MAX = max(len(label) for label in OWNER_LABELS.values())
 
-# D-03/D-04: the Ver: line below is appended to the one existing legend string
-# (never a second widget/region -- BrowserAdapter.legend / the docked
-# #browser-legend Static already renders on all three tier views, once per
-# CatalogScreen). The two colored entries use the literal style tokens
-# `green`/`yellow` those branches use -- never the word "orange" CONTEXT.md's
-# prose uses for the update-available color, which is not a real Rich markup
-# name and would either no-op or visually mismatch the cell it explains.
-#
-# UAT correction (2026-09-16, live user report during Phase 15.1 closure): a
-# "legend" reads as a per-color/symbol KEY, not continuous prose -- soft-wrap
-# at an arbitrary column loses group boundaries. Fixed with explicit \n at
-# each group boundary so each of the three available rows is one
-# self-contained key line -- but every rendered dim label still gets its own
-# spelled-out entry (D-03/D-04 lock this; a single collapsed "self-explains"
-# note was tried and rejected -- it violated the locked per-state requirement,
-# see 15.1-VERIFICATION.md's second pass). The three lines are grouped by
-# BUDGET, not strict semantics, because the Ver group's own content (all four
-# dim labels + the two colored states + the stale marker) cannot fit in a
-# single 78-column row alongside anything else: line 1 is Priorities plus the
-# D-18 broken mark, placed there for budget, the same grouping-by-budget rule
-# this comment already states for lines 2 and 3 (lines 2 and 3 have no room);
-# line 2 is Audience/State plus the two colored Ver states (their combined
-# length fits the leftover budget); line 3 is the four dim labels plus the
-# stale marker. Each line is plain-text-measured (Rich markup stripped) to
-# stay at or under 78 columns -- the confirmed usable width of
-# #browser-legend's `dock: bottom` / `max-height: 3` box at this project's
-# tested minimum terminal size (80x20; `padding: 0 1` costs 2 columns).
-# Exceeding 78 on any line causes Rich to soft-wrap that line onto a 4th row,
-# which `max-height: 3` then silently clips -- not reflows. See the widened
-# test_legend_keeps_the_catalog_table_usable_at_the_minimum_size /
-# test_legend_widget_paints_every_marker_at_full_width for the regression
-# test that would now fail loudly if any line grows past this budget again.
-#
-# The stale marker keeps its `dim` style, matching how _ver_cell renders it.
-#
-# 15.4-03/D-02: the Owner column (added 15.4-01, at `_COLUMNS` index 7) gets
-# NO new legend line, deliberately. The legend's job is to decode colors and
-# symbols whose meaning is not already on screen -- the four dim Ver labels,
-# the priority colors, the installed/missing marks -- but the Owner cell
-# renders the manager's literal name (`Homebrew`, `dnf`, `GitHub release`,
-# ...) with nothing to decode. There is also no budget left to spend: this
-# block's own three-line/78-column limit above is already fully allocated to
-# the keys that DO carry meaning that isn't visible in the cell itself, and a
-# fourth line would either overflow `max-height: 3` (silently clipping a line
-# that carries a real key) or force a cramped rewrite of the three that do.
+# 19-UI-SPEC "Legend", verbatim: three lines of at most 78 cells (the 80-column
+# minimum minus `padding: 0 1`); lines 1 and 2 have no slack, so a new entry
+# replaces an old one. Each entry carries the style of the cell it decodes.
 _LEGEND = (
+    "[green]✓ ok[/] · [yellow]↑ update[/] · [yellow]≈ config[/] · [red]! broken[/]"
+    " · ○ missing · [dim]… checking[/] · [dim]– unavailable[/]\n"
     "[bold red]P0[/] essential · [bold yellow]P1[/] recommended · [blue]P2[/] nice-to-have"
-    " · [dim]P3[/] niche · [red]! broken[/]\n"
-    "[bold cyan]AI[/] / [magenta]human[/] / both"
-    " · [green]✓ installed[/] · [yellow]○ missing[/]"
-    " · Ver: [green]up to date[/] · [yellow]update avail[/]\n"
-    f"[dim]{_VER_CHECKING}[/] · [dim]{_VER_NO_VERSION}[/]"
-    f" · [dim]{_VER_SOURCE_UNKNOWN}[/] · [dim]{_VER_NO_COMPARISON}[/]"
-    f" · [dim]{_VER_STALE}[/] cached latest"
+    " · [dim]P3[/] niche · [bold cyan]AI[/] / [magenta]human[/] / both\n"
+    "Ver a -> b: newer release · [dim]~[/] cached latest · [dim]≠ policy[/]: other manager owns it"
 )
 
 
@@ -408,7 +340,6 @@ class CatalogScreen(AppScreen):
         # that construct a CatalogScreen without a service stay silent.
         self._version_refresh = version_refresh
         self._updates = updates
-        self._version_statuses: dict[str, VersionStatus] = {}
         self._version_refresh_generation = 0
         self.version_refreshing = False
         self.skill_refreshing = False
@@ -466,7 +397,6 @@ class CatalogScreen(AppScreen):
 
     @work(thread=True, exclusive=True, group="version-refresh", exit_on_error=False)
     def _refresh_versions_worker(self, generation: int) -> None:
-        statuses: dict[str, VersionStatus] = {}
         epoch = 0
         error: str | None = None
         warning: str | None = None
@@ -478,11 +408,10 @@ class CatalogScreen(AppScreen):
                 # set, so the service joins an in-flight pass instead of repeating it.
                 result, error = run_live(lambda: service.refresh(self._catalog))
                 if result is not None:
-                    statuses = result
                     warning = service.warning
         finally:
             self.post_message(
-                VersionStatusRefreshed(statuses, generation, epoch, error=error, warning=warning)
+                VersionStatusRefreshed(generation, epoch, error=error, warning=warning)
             )
 
     @work(thread=True, exclusive=True, group="skill-refresh", exit_on_error=False)
@@ -512,7 +441,6 @@ class CatalogScreen(AppScreen):
         service = self._version_refresh
         if service is None or message.epoch != service.epoch:
             return
-        self._version_statuses = dict(message.statuses)
         self._browser.reload(self._adapter())
         if message.error is not None:
             # Nothing was published: rows stay `…`, never a stale mark.
@@ -536,10 +464,6 @@ class CatalogScreen(AppScreen):
         # Plain text through StatusLine.set, never markup (T-19-40).
         self.status.set(line, "warn")
         self._state_line = line
-
-    def _skill_status(self, tool: Tool) -> SkillHostStatus | None:
-        state = self._state(tool) if tool.skill_lifecycle is not None else None
-        return state.skill_hosts if state is not None else None
 
     def _state(self, tool: Tool) -> ToolState | None:
         service = self._version_refresh
@@ -671,110 +595,38 @@ class CatalogScreen(AppScreen):
         # list, not the filtered one — the two lists differing is correct.
         if tool.recommends:
             detail += f"  |  pairs well with {', '.join(tool.recommends)}"
-        unavailable = self._unavailable.get(tool.id, False)
-        if isinstance(unavailable, UnavailableReason):
-            detail += f"  |  {unavailable.detail}"
-        elif unavailable:
-            detail += "  |  (not available on this machine)"
-        if self._is_present(tool):
+        return f"{detail}\n{self._health_block(tool)}"
+
+    def _health_block(self, tool: Tool) -> str:
+        """`{glyph} {label} — {reasons} — to configure: {steps}` (19-UI-SPEC
+        "Focused-row detail"). Reasons and steps carry machine text, so every
+        one is escaped (T-19-45)."""
+        state = self._state(tool)
+        health = Health.CHECKING if state is None else state.health
+        glyph, style = _HEALTH_CELL[health]
+        block = f"[{style}]{glyph}[/] " if style else f"{glyph} "
+        block += _HEALTH_DETAIL[health]
+        reasons = list(state.reasons) if state is not None else []
+        if state is None:
+            # Before the first pass only the launch-time resolver knows this.
+            unavailable = self._unavailable.get(tool.id, False)
+            if isinstance(unavailable, UnavailableReason):
+                reasons.append(unavailable.detail)
+            elif unavailable:
+                reasons.append("not available on this machine")
+        elif state.present:
+            # An environment fact read at render time, not part of the state.
             default_shell = is_default_shell(tool)
             if default_shell is True:
-                detail += "  |  this is your default shell"
+                reasons.append("this is your default shell")
             elif default_shell is False:
-                detail += "  |  installed, but not your default shell"
-        detail += self._version_detail(tool)
-        detail += self._skill_detail(tool)
-        return detail
-
-    def _skill_detail(self, tool: Tool) -> str:
-        status = self._skill_status(tool)
-        if status is None:
-            return ""
-        present = [
-            SKILL_HARNESS_LABELS.get(harness, harness)
-            for harness, value in status.hosts.items()
-            if value == "present"
-        ]
-        unknown = [
-            SKILL_HARNESS_LABELS.get(harness, harness)
-            for harness, value in status.hosts.items()
-            if value == "unknown"
-        ]
-        segments: list[str] = []
-        if present:
-            segments.append(f"installed in: {', '.join(present)}")
-        if unknown:
-            segments.append(f"not probed: {', '.join(unknown)}")
-        if not segments:
-            return ""
-        return "  |  " + "  |  ".join(segments)
-
-    def _version_detail(self, tool: Tool) -> str:
-        status = self._version_statuses.get(tool.id)
-        service = self._version_refresh
-        ownership = service.ownership_of(tool.id) if service is not None else None
-        segments: list[str] = []
-        if ownership is not None and ownership.broken:
-            segments.append(_BROKEN_DETAIL)
-        if ownership is not None and ownership.owner != "unknown":
-            # D-05 (Round-1 review 15.4-03 HIGH/MEDIUM): the per-owner
-            # explanation requirement here is now satisfied by an
-            # exhaustiveness-tested table in ownership.py
-            # (OWNER_DETAIL_LABELS / owner_detail) rather than by a local
-            # dict a reader could quietly under-fill -- see ownership.py's
-            # own module comment for the register split: OWNER_LABELS is the
-            # terse COLUMN register, OWNER_DETAIL_LABELS is this PROSE
-            # register, declared adjacent to it so neither can drift
-            # unnoticed.
-            label = owner_detail(ownership)
-            if label:
-                segments.append(label)
-            if ownership.off_policy and service is not None:
-                declared = declared_manager_label(tool, service.platform)
-                real = owner_label(ownership)
-                if declared is not None and real is not None:
-                    segments.append(
-                        f"{real} owns this copy; the catalog's policy installs "
-                        f"{tool.id} via {declared}"
-                    )
-            if ownership.shadowed:
-                note = also_installed_note(ownership)
-                if note is not None and ownership.active_path is not None:
-                    segments.append(escape(f"{note} — live copy at {ownership.active_path}"))
-                elif note is not None:
-                    segments.append(note)
-                elif ownership.active_path is not None:
-                    segments.append(escape(f"shadowed — live copy at {ownership.active_path}"))
-                else:
-                    segments.append("shadowed")
-        if ownership is not None and ownership.owner == "unknown" and ownership.unknown_reason:
-            segments.append(escape(ownership.unknown_reason))
-        if ownership is not None:
-            path_note = active_path_note(ownership)
-            if path_note:
-                segments.append(escape(path_note))
-        if (
-            status is not None
-            and status.source == "installer"
-            and status.outdated is None
-            and (ownership is None or ownership.owner == "installer")
-        ):
-            segments.append(
-                "latest version cannot be determined for this install method — "
-                "pressing u re-runs the same install path this tool was originally installed with"
-            )
-        if status is not None and status.pinned_spec:
-            segments.append(
-                f"this project pins {status.pinned_spec} and constrains the version deliberately"
-            )
-        if status is not None and status.stale and status.latest is not None:
-            segments.append(
-                "the shown latest version came from a cache entry at or past STALE_AFTER "
-                "and a re-check is pending"
-            )
-        if not segments:
-            return ""
-        return "  |  " + "  |  ".join(segments)
+                reasons.append("installed, but not your default shell")
+        if reasons:
+            block += " — " + " · ".join(escape(reason) for reason in reasons)
+        if state is not None and state.unconfigured:
+            steps = "; ".join(escape(step.text) for step in state.unconfigured)
+            block += f" — to configure: {steps}"
+        return block
 
     def _sort(self, column_key: str) -> None:
         key = _SORT_BY_COLUMN.get(column_key)
@@ -909,15 +761,25 @@ class CatalogScreen(AppScreen):
         tool = self._by_id.get(tool_id)
         if tool is None:
             return
-        status = self._version_statuses.get(tool_id)
-        ownership = self._version_refresh.ownership_of(tool_id)
-        if ownership is not None and ownership.broken:
+        state = self._state(tool)
+        if state is None:
+            # CR-02 (15.4-REVIEW.md): never a silent return. No state is
+            # "a pass has not committed yet" -- a transient the user recovers
+            # from by waiting, not a permanent refusal -- so it must say so.
+            self.status.set(
+                f"cannot update {tool_id}: ownership data is being refreshed — "
+                "try again in a moment",
+                "warn",
+            )
+            return
+        ownership, status = state.ownership, state.version
+        if ownership.broken:
             self.status.set(f"{tool_id}: {_BROKEN_DETAIL}", "warn")
             return
         if status is not None and status.outdated is False:
             lead = "current as of the last check" if status.stale else "already current"
             line = f"{tool_id} is {lead}"
-            if ownership is not None and ownership.off_policy:
+            if ownership.off_policy:
                 declared = declared_manager_label(tool, self._version_refresh.platform)
                 real = owner_label(ownership)
                 if declared is not None and real is not None:
@@ -926,19 +788,6 @@ class CatalogScreen(AppScreen):
                         "and moving it there is not available yet"
                     )
             self.status.set(line, "ok")
-            return
-        if ownership is None:
-            # CR-02 (15.4-REVIEW.md): never a silent return. A `None` here is
-            # overwhelmingly "a mutation bumped the epoch and the replacing
-            # pass has not committed yet" -- a transient the user recovers
-            # from by waiting, not a permanent refusal -- so it must say so.
-            # The bare `return` made `u` a no-op with no feedback at all for
-            # every tool in the catalog after one in-catalog update.
-            self.status.set(
-                f"cannot update {tool_id}: ownership data is being refreshed — "
-                "try again in a moment",
-                "warn",
-            )
             return
         if ownership.owner == "unknown" or ownership.confidence not in MUTATION_GRADE:
             reason = ownership.unknown_reason or "no manager claimed this tool"
@@ -953,24 +802,20 @@ class CatalogScreen(AppScreen):
             self.status.set(f"update already in flight for {in_flight}", "warn")
             return
         self.status.set(f"updating {tool_id}…", "ok")
-        self._update_tool_worker(tool_id)
+        # The state's ownership gates the keypress; UpdateService.run still
+        # re-resolves it before mutating (T-19-46).
+        self._update_tool_worker(UpdateTarget(tool=tool, ownership=ownership))
 
     @work(thread=True, exclusive=True, group="tool-update", exit_on_error=False)
-    def _update_tool_worker(self, tool_id: str) -> None:
+    def _update_tool_worker(self, target: UpdateTarget) -> None:
         outcome: UpdateOutcome | None = None
-        status: VersionStatus | None = None
         error: str | None = None
         epoch = 0
         try:
-            tool = self._by_id.get(tool_id)
             service = self._updates
             refresh = self._version_refresh
-            if tool is None or service is None or refresh is None:
+            if service is None or refresh is None:
                 return
-            cached = refresh.ownership_of(tool_id)
-            if cached is None:
-                return
-            target = UpdateTarget(tool=tool, ownership=cached)
             result, error = run_live(lambda: service.run(target))
             outcome = result
             # No single-tool pass here: it would publish the updated row ahead
@@ -979,24 +824,16 @@ class CatalogScreen(AppScreen):
         finally:
             if self._updates is not None:
                 self._updates.end()
-            self.post_message(ToolUpdated(tool_id, outcome, status, error, epoch))
+            self.post_message(ToolUpdated(target.tool.id, outcome, error, epoch))
 
     def on_tool_updated(self, message: ToolUpdated) -> None:
-        if message.status is not None:
-            self._version_statuses[message.tool_id] = message.status
-            self._browser.reload(self._adapter())
         outcome = message.outcome
         if outcome is not None and outcome.status == "updated":
             # CR-02 (15.4-REVIEW.md): `UpdateService.run` called `invalidate`,
-            # which bumped the shared epoch, and `_update_tool_worker` then
-            # re-refreshed ONLY the updated tool. Every OTHER tool's record is
-            # therefore epoch-stale, so `ownership_of` answers `None` for the
-            # whole rest of the catalog: the Owner column blanks, the detail
-            # bar drops its ownership sentence, and `u` refuses on every other
-            # row until the user navigates away and back. Kicking the full
-            # pass here is what replaces the invalidate the update performed,
-            # and it repaints through `_start_version_refresh`'s own reload so
-            # the transient window renders as `checking…` rather than blank.
+            # which bumped the shared epoch, so every tool's state is stale
+            # and `state_of` answers `None` until a pass lands. Kicking the
+            # full pass here replaces the invalidate the update performed; the
+            # rows read `…` in the meantime.
             self._start_version_refresh()
         if message.error is not None:
             self.status.set(f"update failed: {message.error}", "error")
@@ -1005,10 +842,7 @@ class CatalogScreen(AppScreen):
             self.status.set(f"update of {message.tool_id} did not complete", "error")
             return
         if outcome.status == "updated":
-            version = ""
-            if message.status is not None and message.status.installed:
-                version = f" now {message.status.installed}"
-            line = f"updated {message.tool_id}{version}"
+            line = f"updated {message.tool_id}"
             if outcome.replayed_globals:
                 line += f" — replayed {', '.join(outcome.replayed_globals)}"
             if outcome.cleanup_warnings:

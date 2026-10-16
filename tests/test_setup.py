@@ -3369,7 +3369,6 @@ def test_failed_direct_catalog_update_exits_1(
             "rg",
             UpdateOutcome(tool_id="rg", status="failed", owner="brew", detail="brew exploded"),
             None,
-            None,
             0,
         )
     )

@@ -6652,7 +6652,6 @@ def _freeze_status(
     a refresh re-publishes that state and probes nothing."""
     service = frozen_service(tmp_path)
     service.publish([_frozen_state(tool, service.platform, ownership=ownership, status=status)])
-    service._ownership = {tool.id: (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
     return service
 
 
@@ -7205,16 +7204,14 @@ async def test_epoch_guard_drops_stale_refresh_after_update(tmp_path: Path) -> N
     ownership = _owned(tool, "brew", package="ripgrep")
     started = threading.Event()
     release = threading.Event()
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1")
-    service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
-    original_refresh = service.refresh
-
-    def latched_refresh(tools: Sequence[Tool]) -> dict[str, VersionStatus]:
-        started.set()
-        assert release.wait(timeout=5)
-        return original_refresh(tools)
-
-    service.refresh = latched_refresh  # type: ignore[method-assign]
+    pre = VersionStatus(
+        tool_id="rg",
+        installed="14.1.0",
+        latest="14.1.1",
+        outdated=True,
+        stale=False,
+        source="brew",
+    )
     post = VersionStatus(
         tool_id="rg",
         installed="14.1.1",
@@ -7223,13 +7220,23 @@ async def test_epoch_guard_drops_stale_refresh_after_update(tmp_path: Path) -> N
         stale=False,
         source="brew",
     )
+    service = _freeze_status(tmp_path, tool, ownership=ownership, status=pre)
+    frozen_refresh = service.refresh
 
-    def post_refresh(tools: Sequence[Tool]) -> dict[str, VersionStatus]:
-        return {tools[0].id: post}
+    def latched_refresh(tools: Sequence[Tool]) -> dict[str, VersionStatus]:
+        del tools
+        started.set()
+        assert release.wait(timeout=5)
+        # A pass the update raced: the service discards what it saw.
+        return {}
 
+    def upgrade(_cmd: list[str]) -> None:
+        service.publish([_frozen_state(tool, service.platform, ownership=ownership, status=post)])
+
+    service.refresh = latched_refresh  # type: ignore[method-assign]
     updates = UpdateService(
         platform=service.platform,
-        runner=lambda _cmd: None,
+        runner=upgrade,
         resolve_tag=lambda _repo: "v1",
         tools={"rg": tool},
         managed_packages=lambda: (),
@@ -7240,23 +7247,16 @@ async def test_epoch_guard_drops_stale_refresh_after_update(tmp_path: Path) -> N
     app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         assert started.wait(timeout=5)
-        app.catalog._version_statuses["rg"] = VersionStatus(  # pyright: ignore[reportPrivateUsage]
-            tool_id="rg",
-            installed="14.1.0",
-            latest="14.1.1",
-            outdated=True,
-            stale=False,
-            source="brew",
-        )
-        service.refresh = post_refresh  # type: ignore[method-assign]
+        service.refresh = frozen_refresh  # type: ignore[method-assign]
         await pilot.press("u")
         await _settle_update(app, pilot)
-        post_cell = app.catalog.query_one(DataTable[Any]).get_cell("rg", "ver")
-        assert "14.1.1" in post_cell.plain or "updated" in app.catalog.status_text
-        release.set()
         await _settle_versions(app, pilot)
+        assert "14.1.1" in app.catalog.query_one(DataTable[Any]).get_cell("rg", "ver").plain
+        release.set()
+        await pilot.pause()
+        await pilot.pause()
         cell = app.catalog.query_one(DataTable[Any]).get_cell("rg", "ver")
-        assert "14.1.0 ->" not in cell.plain
+        assert cell.plain == "14.1.1"
 
 
 async def test_update_runs_off_the_event_loop_with_no_confirmation(tmp_path: Path) -> None:

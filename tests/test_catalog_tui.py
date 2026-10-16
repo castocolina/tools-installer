@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from rich.cells import cell_len
 from rich.text import Text
 from textual.binding import Binding
 from textual.message import Message
@@ -20,11 +21,6 @@ from textual.widgets.data_table import ColumnKey
 from installer.catalog_tui import (
     _COLUMNS,  # pyright: ignore[reportPrivateUsage]
     _LEGEND,  # pyright: ignore[reportPrivateUsage]
-    _VER_CHECKING,  # pyright: ignore[reportPrivateUsage]
-    _VER_NO_COMPARISON,  # pyright: ignore[reportPrivateUsage]
-    _VER_NO_VERSION,  # pyright: ignore[reportPrivateUsage]
-    _VER_SOURCE_UNKNOWN,  # pyright: ignore[reportPrivateUsage]
-    _VER_STALE,  # pyright: ignore[reportPrivateUsage]
     AUDIENCE_LABEL,
     CatalogScreen,
     OwnershipRefreshed,
@@ -40,6 +36,7 @@ from installer.doctor import DoctorReport
 from installer.enums import Audience, Severity
 from installer.manager_versions import ManagerVersion, OutdatedReport
 from installer.model import (
+    ConfigStep,
     Method,
     SkillLifecycle,
     SkillOperation,
@@ -917,7 +914,8 @@ def test_bare_true_unavailable_keeps_generic_copy() -> None:
     cells = screen._row_cells(tool)  # pyright: ignore[reportPrivateUsage]
     detail = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert "(not available on this machine)" in cells[8].plain
-    assert "(not available on this machine)" in detail
+    # The detail says it in the health block, as a reason (19-UI-SPEC).
+    assert detail.endswith("checking… — not available on this machine")
 
 
 async def test_unavailable_catalog_row_is_dimmed_with_blank_sel_cell() -> None:
@@ -931,7 +929,7 @@ async def test_unavailable_catalog_row_is_dimmed_with_blank_sel_cell() -> None:
         assert "dim" in str(sel.style)
         assert "dim" in str(desc.style)
         assert "(not available on this machine)" in desc.plain
-        assert "(not available on this machine)" in app.catalog.detail_text
+        assert "[dim]–[/] not available on this machine" in app.catalog.detail_text
 
 
 def test_real_apple_containers_unavailable_only_for_genuine_incompatibility() -> None:
@@ -1091,21 +1089,19 @@ def test_ver_cell_is_empty_when_no_version_was_read(tmp_path: Path) -> None:
     assert "version unreadable" in state.reasons
 
 
-def test_epoch_guard_drops_a_superseded_version_refresh(tmp_path: Path) -> None:
+def test_epoch_guard_drops_a_superseded_version_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     tool = _tool("rg")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1.6.0",
-        probe_output=lambda argv: "1.2.0",
-    )
-    screen = _screen([tool], {"rg": True}, version_refresh=service)
+    service = frozen_service(tmp_path)
+    screen = _screen([tool], {}, version_refresh=service)
     screen._version_refresh_generation = 1  # pyright: ignore[reportPrivateUsage]
     service.invalidate(reason="test")
-    screen.on_version_status_refreshed(
-        VersionStatusRefreshed({"rg": _status(stale=False)}, generation=1, epoch=0)
-    )
-    assert screen._version_statuses == {}  # pyright: ignore[reportPrivateUsage]
+    reloads: list[object] = []
+    monkeypatch.setattr(screen._browser, "reload", reloads.append)  # pyright: ignore[reportPrivateUsage]
+    screen.on_version_status_refreshed(VersionStatusRefreshed(generation=1, epoch=0))
+    assert reloads == []
+    assert screen.version_refreshing is False
 
 
 def _posted_messages(screen: CatalogScreen, monkeypatch: pytest.MonkeyPatch) -> list[Message]:
@@ -1140,9 +1136,7 @@ def test_ownership_refreshed_is_posted_on_the_commit_path(
     screen = _screen([tool], {"rg": True}, version_refresh=service)
     screen._version_refresh_generation = 1  # pyright: ignore[reportPrivateUsage]
     posted = _posted_messages(screen, monkeypatch)
-    screen.on_version_status_refreshed(
-        VersionStatusRefreshed({"rg": _status(stale=False)}, generation=1, epoch=service.epoch)
-    )
+    screen.on_version_status_refreshed(VersionStatusRefreshed(generation=1, epoch=service.epoch))
     assert any(isinstance(message, OwnershipRefreshed) for message in posted)
 
 
@@ -1159,9 +1153,7 @@ def test_ownership_refreshed_is_not_posted_on_a_superseded_generation(
     screen = _screen([tool], {"rg": True}, version_refresh=service)
     screen._version_refresh_generation = 2  # pyright: ignore[reportPrivateUsage]
     posted = _posted_messages(screen, monkeypatch)
-    screen.on_version_status_refreshed(
-        VersionStatusRefreshed({"rg": _status(stale=False)}, generation=1, epoch=service.epoch)
-    )
+    screen.on_version_status_refreshed(VersionStatusRefreshed(generation=1, epoch=service.epoch))
     assert not any(isinstance(message, OwnershipRefreshed) for message in posted)
 
 
@@ -1179,9 +1171,7 @@ def test_ownership_refreshed_is_not_posted_on_a_raced_epoch(
     screen._version_refresh_generation = 1  # pyright: ignore[reportPrivateUsage]
     service.invalidate(reason="test")
     posted = _posted_messages(screen, monkeypatch)
-    screen.on_version_status_refreshed(
-        VersionStatusRefreshed({"rg": _status(stale=False)}, generation=1, epoch=0)
-    )
+    screen.on_version_status_refreshed(VersionStatusRefreshed(generation=1, epoch=0))
     assert not any(isinstance(message, OwnershipRefreshed) for message in posted)
 
 
@@ -1242,7 +1232,7 @@ def test_owner_column_and_detail_paint_the_os_package_case_end_to_end(tmp_path: 
     # also names the new owner, so no surface is left blank before 15.4-03
     # lands. Asserted behaviourally so it survives that plan's refactor.
     screen._unavailable["git"] = False  # pyright: ignore[reportPrivateUsage]
-    detail = screen._version_detail(tool)  # pyright: ignore[reportPrivateUsage]
+    detail = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert detail
     assert "OS package" in detail
 
@@ -1693,20 +1683,23 @@ def test_broken_row_marks_health_red_and_explains_repair(
 def test_update_on_broken_row_hints_repair_without_updating(tmp_path: Path) -> None:
     tool = _tool("mmdc")
     ownership = _ownership(tool, owner="pnpm", broken=True)
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"mmdc": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    service = frozen_service(tmp_path)
     updates = _update_service(lambda _tool: ownership)
     begins = _counting_begin(updates)
     screen = _screen([tool], {"mmdc": True}, version_refresh=service, updates=updates)
-    screen._version_statuses = {"mmdc": _outdated_status("mmdc")}  # pyright: ignore[reportPrivateUsage]
+    service.publish(
+        [
+            pass_state(
+                tool,
+                platform=service.platform,
+                ownership=ownership,
+                version=_outdated_status("mmdc"),
+            )
+        ]
+    )
     screen._browser.highlighted_id = lambda: "mmdc"  # type: ignore[method-assign]
     started: list[str] = []
-    screen._update_tool_worker = lambda tool_id: started.append(tool_id)  # type: ignore[method-assign]
+    screen._update_tool_worker = lambda target: started.append(target.tool.id)  # type: ignore[method-assign]
     messages: list[str] = []
     screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
     screen.action_update_tool()
@@ -1732,59 +1725,6 @@ def test_installed_row_without_broken_still_shows_green_check(tmp_path: Path) ->
     cell = screen._row_cells(tool)[5]  # pyright: ignore[reportPrivateUsage]
     assert cell.plain == "✓"
     assert "green" in str(cell.style)
-
-
-def test_legend_names_every_ver_cell_marker_and_style_token() -> None:
-    # D-03/D-04 (locked): every rendered Ver state -- both colored states,
-    # each of the four dim gray cases, and the `~` suffix -- has its own
-    # findable legend entry. A prior attempt (2026-09-16) collapsed the four
-    # dim labels into one generic "self-explains" note; the phase verifier
-    # flagged that as a violation of this locked requirement, so all four are
-    # spelled out verbatim again.
-    for marker in (
-        _VER_CHECKING,
-        _VER_NO_VERSION,
-        _VER_SOURCE_UNKNOWN,
-        _VER_NO_COMPARISON,
-        _VER_STALE,
-    ):
-        assert marker in _LEGEND, marker
-    assert "green" in _LEGEND
-    assert "yellow" in _LEGEND
-    # The stale entry's gloss must be about the cached LATEST the comparison
-    # used, not the installed version or a shown value -- true of both the
-    # green cell (shows no latest at all) and the yellow cell (D-04 as
-    # corrected 2026-09-16, 15.1-CONTEXT.md). Assert this on the entry that
-    # actually carries the marker, not on the whole constant, so a
-    # whole-string substring check can't be satisfied by an unrelated
-    # occurrence of "latest" elsewhere in _LEGEND.
-    entries = _LEGEND.replace("\n", "·").split("·")
-    stale_entry = next(entry for entry in entries if _VER_STALE in entry)
-    assert "latest" in stale_entry
-
-
-def test_legend_uses_explicit_line_breaks_per_group() -> None:
-    # UAT correction (2026-09-16): soft-wrap at an arbitrary column loses
-    # group boundaries -- each group must be its own explicit line so the
-    # legend reads as a key, not wrapped prose. The groups are split by
-    # BUDGET, not strict semantics: the full Ver group (two colored states +
-    # four dim labels + stale marker) cannot fit one 78-column row alongside
-    # anything else, so its colored states share line 2 with Audience/State
-    # (which has the most slack) and its dim labels + stale marker form
-    # line 3 alone.
-    lines = _LEGEND.split("\n")
-    assert len(lines) == 3, lines
-    assert "P0" in lines[0] and "P3" in lines[0]
-    assert "AI" in lines[1] and "installed" in lines[1] and "up to date" in lines[1]
-    assert _VER_CHECKING in lines[2] and _VER_STALE in lines[2]
-    # Every line must fit #browser-legend's confirmed usable width (78
-    # columns: 80-column minimum terminal minus `padding: 0 1`) or it
-    # soft-wraps onto a row `max-height: 3` then silently clips -- not
-    # reflows. This is plain-text width (Rich markup stripped), matching
-    # what's actually painted.
-    for line in lines:
-        plain = re.sub(r"\[[^\]]*\]", "", line)
-        assert len(plain) <= 78, (len(plain), plain)
 
 
 def _painted_legend(legend: Static) -> str:
@@ -1821,71 +1761,59 @@ async def test_legend_widget_paints_every_marker_at_full_width() -> None:
     async with app.run_test(size=(100, 30)):
         legend = app.query_one("#browser-legend", Static)
         painted = _painted_legend(legend)
-        # Assert every marker AND the line-3 tail specifically: line 3 is the
-        # one that clipped in the 2026-09-16 regression (its dim labels sat
-        # after the point a too-long line 2 pushed onto a discarded 4th row),
-        # so a prefix-only check ("checking…" alone, say) would not have
-        # caught it -- only asserting the last label in reading order does.
         markers = (
-            _VER_CHECKING,
-            _VER_NO_VERSION,
-            _VER_SOURCE_UNKNOWN,
-            _VER_NO_COMPARISON,
-            _VER_STALE,
+            "✓ ok",
+            "↑ update",
+            "≈ config",
+            "! broken",
+            "○ missing",
+            "… checking",
+            "– unavailable",
+            "essential",
+            "cached latest",
+            "≠ policy",
         )
         for marker in markers:
             assert marker in painted, marker
-        assert "up to date" in painted
-        assert "update avail" in painted
-        assert "cached latest" in painted
-        # The stale marker is painted DIM, the way _ver_cell renders it. It
-        # used to sit in the default style while the cell it explains was
-        # dim, so the legend did not look like the thing it describes --
-        # unlike the two colored entries, which have carried `green`/`yellow`
-        # since they were written.
+        # The line-3 tail, which clipped in the 2026-09-16 regression.
+        assert "other manager owns it" in painted
+        # Each entry is painted in the style of the cell it decodes: the
+        # checking and unavailable marks, the stale `~` and `≠ policy` are dim.
         dim = _dim_legend_text(legend)
-        assert _VER_STALE in dim
-        assert _VER_NO_COMPARISON in dim
+        for entry in ("… checking", "– unavailable", "~", "≠ policy"):
+            assert entry in dim, entry
 
 
 async def test_legend_keeps_the_catalog_table_usable_at_the_minimum_size() -> None:
     """The legend is readable AND the table is usable at 80x20 -- this
-    project's own tested minimum terminal size (25 other tests run at it).
-
-    #browser-legend is `dock: bottom`, so every line the legend wraps to comes
-    straight out of the DataTable's `1fr`. An unwrapped-prose legend under an
-    uncapped `height: auto` measured 7 rows here and left the catalog -- the
-    app's primary screen, listing 89 tools -- 3 rows, i.e. roughly two tool
-    rows under the column header.
+    project's own tested minimum terminal size.
 
     Both halves are asserted together on purpose, because either one alone is
     trivially satisfiable in a way that breaks the other: capping the height
     clips markers off the bottom, and shortening the text leaves the next
-    edit free to collapse the table again. Only at this size do they conflict
-    -- the 100x30 test above cannot fail on a squeezed table.
+    edit free to collapse the table again.
     """
     app = _app()
     async with app.run_test(size=(80, 20)):
         legend = app.query_one("#browser-legend", Static)
         table = app.query_one(DataTable[Any])
         painted = _painted_legend(legend)
-        # Assert every marker at this exact clipping-prone size, including
-        # the line-3 tail -- a prefix-only check here would not have caught
-        # the 2026-09-16 regression, where line 3's content was pushed past
-        # the bottom of a `max-height: 3` box and silently dropped rather
-        # than reflowed.
         markers = (
-            _VER_CHECKING,
-            _VER_NO_VERSION,
-            _VER_SOURCE_UNKNOWN,
-            _VER_NO_COMPARISON,
-            _VER_STALE,
+            "✓ ok",
+            "↑ update",
+            "≈ config",
+            "! broken",
+            "○ missing",
+            "… checking",
+            "– unavailable",
+            "essential",
+            "cached latest",
+            "≠ policy",
         )
         for marker in markers:
             assert marker in painted, marker
-        assert "up to date" in painted
-        assert "update avail" in painted
-        assert "cached latest" in painted
+        # The line-3 tail, which clipped in the 2026-09-16 regression.
+        assert "other manager owns it" in painted
         # The harm first, then the cause: the table has to stay usable, and
         # the legend's own budget is what keeps it that way.
         assert table.size.height >= 6, table.size.height
@@ -2099,15 +2027,10 @@ def test_version_detail_reads_the_prose_register_for_every_simple_owner_value(
 ) -> None:
     tool = _tool("demo")
     ownership = _ownership(tool, owner=owner)
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"demo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    service = frozen_service(tmp_path)
+    service.publish([pass_state(tool, platform=service.platform, ownership=ownership)])
     screen = _screen([tool], {"demo": True}, version_refresh=service)
-    detail = screen._version_detail(tool)  # pyright: ignore[reportPrivateUsage]
+    detail = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     expected = owner_detail(ownership)
     assert expected is not None
     assert expected in detail
@@ -2140,15 +2063,10 @@ def test_version_detail_names_every_installer_placement_mechanism(
         active_path=None,
         unknown_reason=None,
     )
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"demo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    service = frozen_service(tmp_path)
+    service.publish([pass_state(tool, platform=service.platform, ownership=ownership)])
     screen = _screen([tool], {"demo": True}, version_refresh=service)
-    detail = screen._version_detail(tool)  # pyright: ignore[reportPrivateUsage]
+    detail = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert mechanism in detail
     # D-02a: never the bare catch-all word that implies a package manager
     # exists behind it.
@@ -2158,62 +2076,53 @@ def test_version_detail_names_every_installer_placement_mechanism(
 def test_version_detail_os_package_names_the_actual_package(tmp_path: Path) -> None:
     tool = _tool("demo")
     ownership = _ownership(tool, owner="os-package", package="git-core")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"demo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    service = frozen_service(tmp_path)
+    service.publish([pass_state(tool, platform=service.platform, ownership=ownership)])
     screen = _screen([tool], {"demo": True}, version_refresh=service)
-    detail = screen._version_detail(tool)  # pyright: ignore[reportPrivateUsage]
+    detail = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert "git-core" in detail
     assert "will not update it" in detail
 
 
-def test_version_detail_hand_writes_no_owner_vocabulary_of_its_own() -> None:
-    """NO-LOCAL-DICT gate (source-inspection, mirrors this plan's <verify>):
-    `_version_detail`'s body must contain no owner-keyed label dict of its
-    own -- every owner-prose quoted literal except the `unknown`/`installer`
-    control-flow comparisons must be gone, replaced by a call to
-    `owner_detail`."""
-    import inspect
-
+def test_detail_hand_writes_no_owner_vocabulary_of_its_own() -> None:
+    """NO-LOCAL-DICT gate (source inspection): the detail builders contain no
+    owner-keyed prose of their own -- the owner sentences arrive as state
+    reasons, built by `ownership_notes` from `owner_detail`."""
     import installer.catalog_tui as catalog_tui_module
 
-    target = catalog_tui_module.CatalogScreen._version_detail  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+    screen = catalog_tui_module.CatalogScreen
     body = "\n".join(
-        line for line in inspect.getsource(target).splitlines() if not line.lstrip().startswith("#")
+        line
+        for target in (screen._detail_text, screen._health_block)  # pyright: ignore[reportPrivateUsage]
+        for line in inspect.getsource(target).splitlines()
+        if not line.lstrip().startswith("#")
     )
-    assert "owner_detail" in body
-    stray = [
-        owner
-        for owner in typing.get_args(Owner)
-        if owner not in ("unknown", "installer") and f'"{owner}"' in body
-    ]
+    assert "state.reasons" in body
+    stray = [owner for owner in typing.get_args(Owner) if f'"{owner}"' in body]
     assert not stray, stray
 
 
 def test_detail_line_names_homebrew_for_brew_owned_row(tmp_path: Path) -> None:
     tool = _tool("rg")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"rg": (service.epoch, _ownership(tool, owner="brew"))}  # pyright: ignore[reportPrivateUsage]
+    service = frozen_service(tmp_path)
     screen = _screen([tool], {"rg": True}, version_refresh=service)
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "rg": VersionStatus(
-            tool_id="rg",
-            installed="14.1.0",
-            latest="14.1.1",
-            outdated=True,
-            stale=False,
-            source="brew",
-        )
-    }
+    service.publish(
+        [
+            pass_state(
+                tool,
+                platform=service.platform,
+                ownership=_ownership(tool, owner="brew"),
+                version=VersionStatus(
+                    tool_id="rg",
+                    installed="14.1.0",
+                    latest="14.1.1",
+                    outdated=True,
+                    stale=False,
+                    source="brew",
+                ),
+            )
+        ]
+    )
     text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert "Homebrew" in text
 
@@ -2221,40 +2130,31 @@ def test_detail_line_names_homebrew_for_brew_owned_row(tmp_path: Path) -> None:
 def test_detail_line_names_competing_manager_and_active_path(tmp_path: Path) -> None:
     tool = _tool("rg")
     path = Path("/opt/homebrew/bin/rg")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {  # pyright: ignore[reportPrivateUsage]
-        "rg": (
-            service.epoch,
-            _ownership(
-                tool,
-                owner="brew",
-                shadowed=True,
-                active_path=path,
-                candidates=(
-                    OwnershipCandidate(
-                        owner="installer",
-                        method=None,
-                        package=None,
-                        current_version=None,
-                        evidence="artifact",
-                    ),
-                    OwnershipCandidate(
-                        owner="brew",
-                        method=tool.methods[0],
-                        package="ripgrep",
-                        current_version="14.1.0",
-                        evidence="inventory",
-                    ),
-                ),
+    ownership = _ownership(
+        tool,
+        owner="brew",
+        shadowed=True,
+        active_path=path,
+        candidates=(
+            OwnershipCandidate(
+                owner="installer",
+                method=None,
+                package=None,
+                current_version=None,
+                evidence="artifact",
             ),
-        )
-    }
-    screen = _screen([tool], {"rg": True}, version_refresh=service)
+            OwnershipCandidate(
+                owner="brew",
+                method=tool.methods[0],
+                package="ripgrep",
+                current_version="14.1.0",
+                evidence="inventory",
+            ),
+        ),
+    )
+    service = frozen_service(tmp_path)
+    service.publish([pass_state(tool, platform=service.platform, ownership=ownership)])
+    screen = _screen([tool], {}, version_refresh=service)
     text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert f"also installed via installer artifact — live copy at {path}" in text
 
@@ -2262,40 +2162,31 @@ def test_detail_line_names_competing_manager_and_active_path(tmp_path: Path) -> 
 def test_detail_names_also_installed_via_the_shadowed_manager(tmp_path: Path) -> None:
     tool = _sdkman_tool("java")
     path = Path("/home/user/.sdkman/candidates/java/current/bin/java")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {  # pyright: ignore[reportPrivateUsage]
-        "java": (
-            service.epoch,
-            _ownership(
-                tool,
+    ownership = _ownership(
+        tool,
+        owner="brew",
+        shadowed=True,
+        active_path=path,
+        candidates=(
+            OwnershipCandidate(
                 owner="brew",
-                shadowed=True,
-                active_path=path,
-                candidates=(
-                    OwnershipCandidate(
-                        owner="brew",
-                        method=None,
-                        package="openjdk",
-                        current_version=None,
-                        evidence="cellar",
-                    ),
-                    OwnershipCandidate(
-                        owner="sdkman",
-                        method=tool.methods[0],
-                        package="java",
-                        current_version=None,
-                        evidence="candidate",
-                    ),
-                ),
+                method=None,
+                package="openjdk",
+                current_version=None,
+                evidence="cellar",
             ),
-        )
-    }
-    screen = _screen([tool], {"java": True}, version_refresh=service)
+            OwnershipCandidate(
+                owner="sdkman",
+                method=tool.methods[0],
+                package="java",
+                current_version=None,
+                evidence="candidate",
+            ),
+        ),
+    )
+    service = frozen_service(tmp_path)
+    service.publish([pass_state(tool, platform=service.platform, ownership=ownership)])
+    screen = _screen([tool], {}, version_refresh=service)
     text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert f"also installed via SDKMAN — live copy at {path}" in text
 
@@ -2303,24 +2194,12 @@ def test_detail_names_also_installed_via_the_shadowed_manager(tmp_path: Path) ->
 def test_unknown_detail_names_the_active_binary(tmp_path: Path) -> None:
     tool = _tool("foo")
     path = Path("/opt/x/bin/foo")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
+    ownership = _ownership(
+        tool, owner="unknown", unknown_reason="no manager claimed this tool", active_path=path
     )
-    service._ownership = {  # pyright: ignore[reportPrivateUsage]
-        "foo": (
-            service.epoch,
-            _ownership(
-                tool,
-                owner="unknown",
-                unknown_reason="no manager claimed this tool",
-                active_path=path,
-            ),
-        )
-    }
-    screen = _screen([tool], {"foo": True}, version_refresh=service)
+    service = frozen_service(tmp_path)
+    service.publish([pass_state(tool, platform=service.platform, ownership=ownership)])
+    screen = _screen([tool], {}, version_refresh=service)
     text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert "active binary resolves to /opt/x/bin/foo" in text
 
@@ -2334,13 +2213,8 @@ def test_update_unknown_appends_the_active_path(tmp_path: Path) -> None:
         unknown_reason="no manager claimed this tool",
         active_path=path,
     )
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"foo": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    service = frozen_service(tmp_path)
+    service.publish([pass_state(tool, platform=service.platform, ownership=ownership)])
     updates = _update_service(lambda _tool: ownership)
     screen = _screen([tool], {"foo": True}, version_refresh=service, updates=updates)
     screen._browser.highlighted_id = lambda: "foo"  # type: ignore[method-assign]
@@ -2393,14 +2267,9 @@ def test_detail_escapes_path_with_bracket(tmp_path: Path) -> None:
     )
     needle = "/opt/a[red]b/bin/foo"
     for tool, ownership in records:
-        service = offline_service(
-            tmp_path / "versions.json",
-            skill_home=tmp_path,
-            resolve_tag=lambda repo: "v1",
-            probe_output=lambda argv: "1.0",
-        )
-        service._ownership = {tool.id: (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
-        screen = _screen([tool], {tool.id: True}, version_refresh=service)
+        service = frozen_service(tmp_path)
+        service.publish([pass_state(tool, platform=service.platform, ownership=ownership)])
+        screen = _screen([tool], {}, version_refresh=service)
         screen._browser.detail_text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
         rendered = Text.from_markup(screen.detail_text)
         assert needle in rendered.plain
@@ -2438,9 +2307,10 @@ def test_unknown_owner_detail_contains_unknown_reason(tmp_path: Path) -> None:
     service.publish(
         [pass_state(tool, platform=service.platform, ownership=ownership, version=status)]
     )
-    service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([tool], {}, version_refresh=service)
-    screen._version_statuses = {"rg": status}  # pyright: ignore[reportPrivateUsage]
+    service.publish(
+        [pass_state(tool, platform=service.platform, ownership=ownership, version=status)]
+    )
     text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert reason in text
     cell = screen._ver_cell(tool)  # pyright: ignore[reportPrivateUsage]
@@ -2458,13 +2328,10 @@ def test_unknown_owner_detail_contains_unknown_reason(tmp_path: Path) -> None:
 
 def test_native_owner_detail_names_manager_and_no_update_fact(tmp_path: Path) -> None:
     tool = _tool("jq")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
+    service = frozen_service(tmp_path)
+    service.publish(
+        [pass_state(tool, platform=service.platform, ownership=_ownership(tool, owner="dnf"))]
     )
-    service._ownership = {"jq": (service.epoch, _ownership(tool, owner="dnf"))}  # pyright: ignore[reportPrivateUsage]
     screen = _screen([tool], {"jq": True}, version_refresh=service)
     text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert "dnf" in text
@@ -2478,12 +2345,7 @@ async def test_native_owner_update_key_reaches_the_service_and_renders_its_refus
     show a message without the service ever being asked."""
     tool = _tool("jq")
     ownership = _ownership(tool, owner="dnf")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
+    service = frozen_service(tmp_path)
     reresolve_calls: list[str] = []
 
     def reresolve(target: Tool) -> ManagerOwnership:
@@ -2507,17 +2369,23 @@ async def test_native_owner_update_key_reaches_the_service_and_renders_its_refus
     app = _unified_app([tool], {"jq": True}, _BLURBS, version_refresh=service, updates=updates)
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {"jq": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
-        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-            "jq": VersionStatus(
-                tool_id="jq",
-                installed="1.7",
-                latest=None,
-                outdated=None,
-                stale=True,
-                source="unknown",
-            )
-        }
+        service.publish(
+            [
+                pass_state(
+                    tool,
+                    platform=service.platform,
+                    ownership=ownership,
+                    version=VersionStatus(
+                        tool_id="jq",
+                        installed="1.7",
+                        latest=None,
+                        outdated=None,
+                        stale=True,
+                        source="unknown",
+                    ),
+                )
+            ]
+        )
         app.catalog._browser.highlighted_id = lambda: "jq"  # type: ignore[method-assign]
         await pilot.press("u")
         await _wait_until(pilot, lambda: reresolve_calls == ["jq"])
@@ -2528,25 +2396,26 @@ async def test_native_owner_update_key_reaches_the_service_and_renders_its_refus
 
 def test_pinned_spec_appears_in_detail_line(tmp_path: Path) -> None:
     tool = _tool("mmdc")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"mmdc": (service.epoch, _ownership(tool, owner="pnpm"))}  # pyright: ignore[reportPrivateUsage]
+    service = frozen_service(tmp_path)
     screen = _screen([tool], {"mmdc": True}, version_refresh=service)
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "mmdc": VersionStatus(
-            tool_id="mmdc",
-            installed="11.0.0",
-            latest="11.1.0",
-            outdated=True,
-            stale=False,
-            source="pnpm",
-            pinned_spec="puppeteer ^25",
-        )
-    }
+    service.publish(
+        [
+            pass_state(
+                tool,
+                platform=service.platform,
+                ownership=_ownership(tool, owner="pnpm"),
+                version=VersionStatus(
+                    tool_id="mmdc",
+                    installed="11.0.0",
+                    latest="11.1.0",
+                    outdated=True,
+                    stale=False,
+                    source="pnpm",
+                    pinned_spec="puppeteer ^25",
+                ),
+            )
+        ]
+    )
     text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert "puppeteer ^25" in text
 
@@ -2556,36 +2425,26 @@ def test_stale_latest_has_marker_and_detail_explanation(tmp_path: Path) -> None:
     ownership = _ownership(tool, owner="brew")
     service = frozen_service(tmp_path)
     screen = _screen([tool], {}, version_refresh=service)
-    stale_status = VersionStatus(
-        tool_id="rg",
-        installed="14.1.0",
-        latest="14.1.1",
-        outdated=True,
-        stale=True,
-        source="brew",
-    )
-    fresh_status = VersionStatus(
-        tool_id="rg",
-        installed="14.1.0",
-        latest="14.1.1",
-        outdated=True,
-        stale=False,
-        source="brew",
-    )
-    service.publish(
-        [pass_state(tool, platform=service.platform, ownership=ownership, version=stale_status)]
-    )
-    screen._version_statuses = {"rg": stale_status}  # pyright: ignore[reportPrivateUsage]
-    stale_cell = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
-    stale_detail = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+
+    def cell_and_detail(*, stale: bool) -> tuple[str, str]:
+        version = VersionStatus(
+            tool_id="rg",
+            installed="14.1.0",
+            latest="14.1.1",
+            outdated=True,
+            stale=stale,
+            source="brew",
+        )
+        service.publish(
+            [pass_state(tool, platform=service.platform, ownership=ownership, version=version)]
+        )
+        cell = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
+        return cell, screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+
+    stale_cell, stale_detail = cell_and_detail(stale=True)
     assert stale_cell.endswith(" ~")
     assert "re-check is pending" in stale_detail
-    service.publish(
-        [pass_state(tool, platform=service.platform, ownership=ownership, version=fresh_status)]
-    )
-    screen._version_statuses = {"rg": fresh_status}  # pyright: ignore[reportPrivateUsage]
-    fresh_cell = screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
-    fresh_detail = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    fresh_cell, fresh_detail = cell_and_detail(stale=False)
     assert not fresh_cell.endswith(" ~")
     assert "re-check is pending" not in fresh_detail
 
@@ -2598,26 +2457,25 @@ def test_installer_no_repo_detail_explains_undetermined_latest(tmp_path: Path) -
         cmd="pnpm",
         methods=(Method(kind="script", params={"url": "https://get.pnpm.io/install.sh"}),),
     )
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {  # pyright: ignore[reportPrivateUsage]
-        "pnpm": (service.epoch, _ownership(tool, owner="installer"))
-    }
+    service = frozen_service(tmp_path)
     screen = _screen([tool], {"pnpm": True}, version_refresh=service)
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "pnpm": VersionStatus(
-            tool_id="pnpm",
-            installed="11.9.0",
-            latest=None,
-            outdated=None,
-            stale=True,
-            source="installer",
-        )
-    }
+    service.publish(
+        [
+            pass_state(
+                tool,
+                platform=service.platform,
+                ownership=_ownership(tool, owner="installer"),
+                version=VersionStatus(
+                    tool_id="pnpm",
+                    installed="11.9.0",
+                    latest=None,
+                    outdated=None,
+                    stale=True,
+                    source="installer",
+                ),
+            )
+        ]
+    )
     text = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert "cannot be determined" in text
     assert "up to date" not in text.lower()
@@ -2647,28 +2505,29 @@ def test_update_binding_exists_and_is_shown() -> None:
 def test_action_update_tool_skips_confirmed_current(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    service = frozen_service(tmp_path)
     started: list[str] = []
     updates = _update_service(lambda _tool: ownership)
     screen = _screen([tool], {"rg": True}, version_refresh=service, updates=updates)
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "rg": VersionStatus(
-            tool_id="rg",
-            installed="14.1.1",
-            latest="14.1.1",
-            outdated=False,
-            stale=False,
-            source="brew",
-        )
-    }
+    service.publish(
+        [
+            pass_state(
+                tool,
+                platform=service.platform,
+                ownership=ownership,
+                version=VersionStatus(
+                    tool_id="rg",
+                    installed="14.1.1",
+                    latest="14.1.1",
+                    outdated=False,
+                    stale=False,
+                    source="brew",
+                ),
+            )
+        ]
+    )
     screen._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
-    screen._update_tool_worker = lambda tool_id: started.append(tool_id)  # type: ignore[method-assign]
+    screen._update_tool_worker = lambda target: started.append(target.tool.id)  # type: ignore[method-assign]
     messages: list[str] = []
     screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
     screen.action_update_tool()
@@ -2703,7 +2562,7 @@ def test_off_policy_owner_cell_and_detail_name_the_declared_manager(tmp_path: Pa
     ownership = _ownership(tool, owner="brew", off_policy=True)
     service = frozen_service(tmp_path)
     service.publish([pass_state(tool, platform=service.platform, ownership=ownership)])
-    service._ownership = {"groovy": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    service.publish([pass_state(tool, platform=service.platform, ownership=ownership)])
     screen = _screen([tool], {}, version_refresh=service)
     cell = screen._owner_cell(tool)  # pyright: ignore[reportPrivateUsage]
     assert cell.plain == "Homebrew ≠ policy"
@@ -2717,26 +2576,27 @@ def test_off_policy_owner_cell_and_detail_name_the_declared_manager(tmp_path: Pa
 def test_update_on_current_off_policy_tool_explains_and_does_not_begin(tmp_path: Path) -> None:
     tool = _sdkman_tool("groovy")
     ownership = _ownership(tool, owner="brew", off_policy=True)
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"groovy": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    service = frozen_service(tmp_path)
     updates = _update_service(lambda _tool: ownership)
     begins = _counting_begin(updates)
     screen = _screen([tool], {"groovy": True}, version_refresh=service, updates=updates)
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "groovy": VersionStatus(
-            tool_id="groovy",
-            installed="4.0.0",
-            latest="4.0.0",
-            outdated=False,
-            stale=False,
-            source="brew",
-        )
-    }
+    service.publish(
+        [
+            pass_state(
+                tool,
+                platform=service.platform,
+                ownership=ownership,
+                version=VersionStatus(
+                    tool_id="groovy",
+                    installed="4.0.0",
+                    latest="4.0.0",
+                    outdated=False,
+                    stale=False,
+                    source="brew",
+                ),
+            )
+        ]
+    )
     screen._browser.highlighted_id = lambda: "groovy"  # type: ignore[method-assign]
     messages: list[str] = []
     screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
@@ -2751,26 +2611,27 @@ def test_update_on_current_off_policy_tool_explains_and_does_not_begin(tmp_path:
 def test_update_on_current_tool_says_already_current(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    service = frozen_service(tmp_path)
     updates = _update_service(lambda _tool: ownership)
     begins = _counting_begin(updates)
     screen = _screen([tool], {"rg": True}, version_refresh=service, updates=updates)
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "rg": VersionStatus(
-            tool_id="rg",
-            installed="14.1.1",
-            latest="14.1.1",
-            outdated=False,
-            stale=False,
-            source="brew",
-        )
-    }
+    service.publish(
+        [
+            pass_state(
+                tool,
+                platform=service.platform,
+                ownership=ownership,
+                version=VersionStatus(
+                    tool_id="rg",
+                    installed="14.1.1",
+                    latest="14.1.1",
+                    outdated=False,
+                    stale=False,
+                    source="brew",
+                ),
+            )
+        ]
+    )
     screen._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
     messages: list[str] = []
     screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
@@ -2782,25 +2643,26 @@ def test_update_on_current_tool_says_already_current(tmp_path: Path) -> None:
 def test_update_on_stale_current_qualifies_the_last_check(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    service = frozen_service(tmp_path)
     updates = _update_service(lambda _tool: ownership)
     screen = _screen([tool], {"rg": True}, version_refresh=service, updates=updates)
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "rg": VersionStatus(
-            tool_id="rg",
-            installed="14.1.1",
-            latest="14.1.1",
-            outdated=False,
-            stale=True,
-            source="brew",
-        )
-    }
+    service.publish(
+        [
+            pass_state(
+                tool,
+                platform=service.platform,
+                ownership=ownership,
+                version=VersionStatus(
+                    tool_id="rg",
+                    installed="14.1.1",
+                    latest="14.1.1",
+                    outdated=False,
+                    stale=True,
+                    source="brew",
+                ),
+            )
+        ]
+    )
     screen._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
     messages: list[tuple[str, str]] = []
     screen.status.set = lambda text, severity: messages.append((text, severity))  # type: ignore[method-assign]
@@ -2811,25 +2673,26 @@ def test_update_on_stale_current_qualifies_the_last_check(tmp_path: Path) -> Non
 def test_update_on_stale_current_off_policy_keeps_the_tail(tmp_path: Path) -> None:
     tool = _sdkman_tool("groovy")
     ownership = _ownership(tool, owner="brew", off_policy=True)
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"groovy": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    service = frozen_service(tmp_path)
     updates = _update_service(lambda _tool: ownership)
     screen = _screen([tool], {"groovy": True}, version_refresh=service, updates=updates)
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "groovy": VersionStatus(
-            tool_id="groovy",
-            installed="4.0.0",
-            latest="4.0.0",
-            outdated=False,
-            stale=True,
-            source="brew",
-        )
-    }
+    service.publish(
+        [
+            pass_state(
+                tool,
+                platform=service.platform,
+                ownership=ownership,
+                version=VersionStatus(
+                    tool_id="groovy",
+                    installed="4.0.0",
+                    latest="4.0.0",
+                    outdated=False,
+                    stale=True,
+                    source="brew",
+                ),
+            )
+        ]
+    )
     screen._browser.highlighted_id = lambda: "groovy"  # type: ignore[method-assign]
     messages: list[tuple[str, str]] = []
     screen.status.set = lambda text, severity: messages.append((text, severity))  # type: ignore[method-assign]
@@ -2848,28 +2711,29 @@ def test_action_update_tool_refuses_non_mutation_grade(tmp_path: Path) -> None:
     ownership = _ownership(
         tool, owner="unknown", unknown_reason="the brew inventory could not be read"
     )
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    service = frozen_service(tmp_path)
     started: list[str] = []
     updates = _update_service(lambda _tool: ownership)
     screen = _screen([tool], {"rg": True}, version_refresh=service, updates=updates)
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "rg": VersionStatus(
-            tool_id="rg",
-            installed="14.1.0",
-            latest="14.1.1",
-            outdated=True,
-            stale=False,
-            source="unknown",
-        )
-    }
+    service.publish(
+        [
+            pass_state(
+                tool,
+                platform=service.platform,
+                ownership=ownership,
+                version=VersionStatus(
+                    tool_id="rg",
+                    installed="14.1.0",
+                    latest="14.1.1",
+                    outdated=True,
+                    stale=False,
+                    source="unknown",
+                ),
+            )
+        ]
+    )
     screen._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
-    screen._update_tool_worker = lambda tool_id: started.append(tool_id)  # type: ignore[method-assign]
+    screen._update_tool_worker = lambda target: started.append(target.tool.id)  # type: ignore[method-assign]
     messages: list[str] = []
     screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
     screen.action_update_tool()
@@ -2885,24 +2749,24 @@ def test_action_update_tool_reports_an_in_flight_refresh_instead_of_a_silent_noo
     that is the answer for every OTHER tool in the catalog, so pressing `u`
     on any of them was a silent no-op the user had no way to interpret."""
     tool = _tool("rg")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
+    service = frozen_service(tmp_path)
     ownership = _ownership(tool, owner="brew")
-    # The exact shape an epoch bump leaves behind: a record is present, but
-    # tagged with a superseded epoch, so `ownership_of` answers `None`.
-    service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    service.publish(
+        [
+            pass_state(
+                tool, platform=service.platform, ownership=ownership, version=_outdated_status("rg")
+            )
+        ]
+    )
+    # The exact shape an epoch bump leaves behind: a state is present, but
+    # from a superseded epoch, so `state_of` answers `None`.
     service.invalidate(reason="updated some other tool")
-    assert service.ownership_of("rg") is None
+    assert service.state_of("rg") is None
     started: list[str] = []
     updates = _update_service(lambda _tool: ownership)
     screen = _screen([tool], {"rg": True}, version_refresh=service, updates=updates)
-    screen._version_statuses = {"rg": _outdated_status("rg")}  # pyright: ignore[reportPrivateUsage]
     screen._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
-    screen._update_tool_worker = lambda tool_id: started.append(tool_id)  # type: ignore[method-assign]
+    screen._update_tool_worker = lambda target: started.append(target.tool.id)  # type: ignore[method-assign]
     messages: list[str] = []
     screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
     screen.action_update_tool()
@@ -2932,30 +2796,31 @@ def test_action_update_tool_starts_worker_when_outdated_is_none(tmp_path: Path) 
         active_path=None,
         unknown_reason=None,
     )
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
-    service._ownership = {"pnpm": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
+    service = frozen_service(tmp_path)
     started: list[str] = []
     updates = _update_service(lambda _tool: ownership)
     screen = _screen([tool], {"pnpm": True}, version_refresh=service, updates=updates)
-    screen._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-        "pnpm": VersionStatus(
-            tool_id="pnpm",
-            installed="11.9.0",
-            latest=None,
-            outdated=None,
-            stale=True,
-            source="installer",
-        )
-    }
+    service.publish(
+        [
+            pass_state(
+                tool,
+                platform=service.platform,
+                ownership=ownership,
+                version=VersionStatus(
+                    tool_id="pnpm",
+                    installed="11.9.0",
+                    latest=None,
+                    outdated=None,
+                    stale=True,
+                    source="installer",
+                ),
+            )
+        ]
+    )
     screen._browser.highlighted_id = lambda: "pnpm"  # type: ignore[method-assign]
 
-    def fake_worker(tool_id: str) -> None:
-        started.append(tool_id)
+    def fake_worker(target: UpdateTarget) -> None:
+        started.append(target.tool.id)
 
     screen._update_tool_worker = fake_worker  # type: ignore[method-assign]
     screen.status.set = lambda text, severity: None  # type: ignore[method-assign]
@@ -2990,22 +2855,15 @@ def _outdated_status(tool_id: str, *, source: str = "brew") -> VersionStatus:
 
 
 async def _mount_and_settle(app: UnifiedApp, pilot: Any) -> None:
-    """Let the on_mount version-refresh worker finish before a test overrides
-    `_version_statuses`/`service._ownership` directly -- otherwise the real
-    refresh (which runs concurrently on mount) can clobber the test's fixture
-    state with its own resolution of a fake, unrecognised inventory."""
+    """Let the on_mount version-refresh worker finish before a test publishes
+    its own states, so the mount-time pass cannot land after them."""
     await _wait_until(pilot, lambda: not app.catalog.version_refreshing)
 
 
 async def test_update_success_renders_new_version_on_status_line(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew", package="rg")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
+    service = frozen_service(tmp_path)
     updates = UpdateService(
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         runner=lambda _argv: None,
@@ -3018,10 +2876,16 @@ async def test_update_success_renders_new_version_on_status_line(tmp_path: Path)
     app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
-        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-            "rg": _outdated_status("rg")
-        }
+        service.publish(
+            [
+                pass_state(
+                    tool,
+                    platform=service.platform,
+                    ownership=ownership,
+                    version=_outdated_status("rg"),
+                )
+            ]
+        )
         await pilot.press("u")
         await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
         assert "updated rg" in app.catalog.status_text
@@ -3058,16 +2922,11 @@ async def test_an_in_catalog_update_restores_the_whole_owner_column(tmp_path: Pa
     column for the ENTIRE catalog and made `u` a silent no-op on every other
     row until the user navigated away and back. `on_tool_updated` now kicks
     the full pass that replaces the invalidate the update performed, so the
-    untouched tool's record is current again once it lands."""
+    untouched tool's state is current again once it lands."""
     rg, fd = _tool("rg"), _tool("fd")
     ownership_rg = _ownership(rg, owner="brew", package="rg")
     ownership_fd = _ownership(fd, owner="brew", package="fd")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
+    service = frozen_service(tmp_path)
     updates = UpdateService(
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         runner=lambda _argv: None,
@@ -3077,7 +2936,7 @@ async def test_an_in_catalog_update_restores_the_whole_owner_column(tmp_path: Pa
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=lambda _tool: ownership_rg,
         # Wired exactly as setup.py wires it: the invalidate is what bumps the
-        # shared epoch and strands every untouched tool's record.
+        # shared epoch and strands every untouched tool's state.
         invalidate=service.invalidate,
     )
     app = _unified_app(
@@ -3085,13 +2944,17 @@ async def test_an_in_catalog_update_restores_the_whole_owner_column(tmp_path: Pa
     )
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {  # pyright: ignore[reportPrivateUsage]
-            "rg": (service.epoch, ownership_rg),
-            "fd": (service.epoch, ownership_fd),
-        }
-        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-            "rg": _outdated_status("rg")
-        }
+        service.publish(
+            [
+                pass_state(
+                    rg,
+                    platform=service.platform,
+                    ownership=ownership_rg,
+                    version=_outdated_status("rg"),
+                ),
+                pass_state(fd, platform=service.platform, ownership=ownership_fd),
+            ]
+        )
         # Pin which row `u` acts on; the rest of the pipeline (worker,
         # UpdateService.run, the ToolUpdated message loop) stays real.
         app.catalog._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
@@ -3102,7 +2965,7 @@ async def test_an_in_catalog_update_restores_the_whole_owner_column(tmp_path: Pa
         # The untouched tool answers again -- without the follow-on pass it
         # stays `None` (and its Owner cell stays blank) for the rest of the
         # session, or until the user navigates away and back.
-        assert service.ownership_of("fd") is not None
+        assert service.state_of("fd") is not None
         assert app.catalog._row_cells(fd)[7].plain != ""  # pyright: ignore[reportPrivateUsage]
 
 
@@ -3150,12 +3013,7 @@ async def test_update_success_reports_replay_cleanup_and_postinstall_warnings(
         active_path=None,
         unknown_reason=None,
     )
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v2",
-        probe_output=lambda argv: "2.0",
-    )
+    service = frozen_service(tmp_path)
     updates = UpdateService(
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         runner=lambda _argv: None,
@@ -3168,10 +3026,16 @@ async def test_update_success_reports_replay_cleanup_and_postinstall_warnings(
     app = _unified_app([tool], {"pnpm": True}, _BLURBS, version_refresh=service, updates=updates)
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {"pnpm": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
-        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-            "pnpm": _outdated_status("pnpm", source="installer")
-        }
+        service.publish(
+            [
+                pass_state(
+                    tool,
+                    platform=service.platform,
+                    ownership=ownership,
+                    version=_outdated_status("pnpm", source="installer"),
+                )
+            ]
+        )
         await pilot.press("u")
         await _wait_until(pilot, lambda: "updating pnpm" not in app.catalog.status_text)
         status = app.catalog.status_text
@@ -3191,12 +3055,7 @@ async def test_update_success_reports_terminal_follow_up_warning_without_downgra
 ) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew", package="rg")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
+    service = frozen_service(tmp_path)
 
     def failing_terminal_follow_up() -> str | None:
         raise OSError("konsole profile is not writable")
@@ -3214,10 +3073,16 @@ async def test_update_success_reports_terminal_follow_up_warning_without_downgra
     app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
-        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-            "rg": _outdated_status("rg")
-        }
+        service.publish(
+            [
+                pass_state(
+                    tool,
+                    platform=service.platform,
+                    ownership=ownership,
+                    version=_outdated_status("rg"),
+                )
+            ]
+        )
         await pilot.press("u")
         await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
         status = app.catalog.status_text
@@ -3234,12 +3099,7 @@ async def test_update_via_u_calls_the_injected_terminal_follow_up_exactly_once(
     second, `CatalogScreen`-owned mutation path that duplicates the sync."""
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew", package="rg")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
+    service = frozen_service(tmp_path)
     calls: list[int] = []
 
     def terminal_follow_up() -> str | None:
@@ -3259,10 +3119,16 @@ async def test_update_via_u_calls_the_injected_terminal_follow_up_exactly_once(
     app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
-        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-            "rg": _outdated_status("rg")
-        }
+        service.publish(
+            [
+                pass_state(
+                    tool,
+                    platform=service.platform,
+                    ownership=ownership,
+                    version=_outdated_status("rg"),
+                )
+            ]
+        )
         await pilot.press("u")
         await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
         assert "updated rg" in app.catalog.status_text
@@ -3272,12 +3138,7 @@ async def test_update_via_u_calls_the_injected_terminal_follow_up_exactly_once(
 async def test_update_failure_renders_status_line(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew", package="rg")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
+    service = frozen_service(tmp_path)
 
     def failing_runner(argv: list[str]) -> None:
         raise CommandError(argv, 1, detail="permission denied")
@@ -3294,10 +3155,16 @@ async def test_update_failure_renders_status_line(tmp_path: Path) -> None:
     app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
-        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-            "rg": _outdated_status("rg")
-        }
+        service.publish(
+            [
+                pass_state(
+                    tool,
+                    platform=service.platform,
+                    ownership=ownership,
+                    version=_outdated_status("rg"),
+                )
+            ]
+        )
         await pilot.press("u")
         await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
         status = app.catalog.status_text
@@ -3317,12 +3184,7 @@ async def test_update_unknown_owner_refusal_from_fresh_reresolution(tmp_path: Pa
     fresh_unknown = _ownership(
         tool, owner="unknown", unknown_reason="brew inventory changed mid-flight"
     )
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
+    service = frozen_service(tmp_path)
     updates = UpdateService(
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         runner=lambda _argv: None,
@@ -3335,10 +3197,16 @@ async def test_update_unknown_owner_refusal_from_fresh_reresolution(tmp_path: Pa
     app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {"rg": (service.epoch, cached_ownership)}  # pyright: ignore[reportPrivateUsage]
-        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-            "rg": _outdated_status("rg")
-        }
+        service.publish(
+            [
+                pass_state(
+                    tool,
+                    platform=service.platform,
+                    ownership=cached_ownership,
+                    version=_outdated_status("rg"),
+                )
+            ]
+        )
         await pilot.press("u")
         await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
         status = app.catalog.status_text
@@ -3351,12 +3219,7 @@ async def test_second_update_press_shows_already_in_flight(tmp_path: Path) -> No
 
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew", package="rg")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
+    service = frozen_service(tmp_path)
     # A real mutation has non-zero duration; a no-op runner can let the whole
     # update finish before the second key press is even dispatched, which
     # would make the in-flight window flaky rather than exercised. Blocking
@@ -3380,10 +3243,16 @@ async def test_second_update_press_shows_already_in_flight(tmp_path: Path) -> No
     app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
-        app.catalog._version_statuses = {  # pyright: ignore[reportPrivateUsage]
-            "rg": _outdated_status("rg")
-        }
+        service.publish(
+            [
+                pass_state(
+                    tool,
+                    platform=service.platform,
+                    ownership=ownership,
+                    version=_outdated_status("rg"),
+                )
+            ]
+        )
         # `begin()` latches synchronously inside action_update_tool, before the
         # worker thread is even spawned, so the second press deterministically
         # observes the in-flight guard regardless of the first update's timing.
@@ -3588,19 +3457,34 @@ def test_skill_owner_cell_lists_hosts_and_truncates_when_wider_than_the_column(
     assert none._owner_cell(pack).plain == ""  # pyright: ignore[reportPrivateUsage]
 
 
-def test_skill_detail_lists_every_present_host_and_unprobed_hosts(tmp_path: Path) -> None:
-    screen, pack = _skill_screen(
-        tmp_path,
-        {
-            "claude": "present",
-            "codex": "present",
-            "pi": "present",
-            "gemini-cli": "unknown",
-        },
+def test_skill_detail_reads_the_pack_state_reasons_and_steps(tmp_path: Path) -> None:
+    """The hosts a pack is installed in are the Owner cell's job; the detail
+    explains the mark with the state's reasons and configuration steps."""
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
     )
-    detail = screen._detail_text(pack)  # pyright: ignore[reportPrivateUsage]
-    assert "installed in: Claude Code, Codex, Pi" in detail
-    assert "not probed: Gemini CLI" in detail
+    service = frozen_service(tmp_path)
+    hosts = SkillHostStatus(hosts={"claude": "present", "codex": "absent"}, stale=False)
+    step = ConfigStep("install superpowers for Codex", "skill_install", harness="codex")
+    service.publish(
+        [
+            pass_state(
+                pack,
+                platform=service.platform,
+                skill_hosts=hosts,
+                misconfigured=("partial: missing on Codex",),
+                unconfigured=(step,),
+            )
+        ]
+    )
+    screen = _screen([pack], {}, version_refresh=service)
+    _identity, health = _detail_lines(screen, pack)
+    assert health == (
+        "≈ needs configuration — partial: missing on Codex"
+        " — to configure: install superpowers for Codex"
+    )
+    assert "installed in:" not in screen._detail_text(pack)  # pyright: ignore[reportPrivateUsage]
 
 
 def test_skill_rendering_leaves_a_non_pack_row_unchanged(tmp_path: Path) -> None:
@@ -3863,7 +3747,7 @@ def test_a_failed_direct_update_renders_as_an_error_not_a_warning() -> None:
     messages: list[tuple[str, str]] = []
     screen.status.set = lambda text, severity: messages.append((text, severity))  # type: ignore[method-assign]
     outcome = UpdateOutcome(tool_id="rg", status="failed", owner="brew", detail="brew exploded")
-    screen.on_tool_updated(ToolUpdated("rg", outcome, None, None, 0))
+    screen.on_tool_updated(ToolUpdated("rg", outcome, None, 0))
     assert messages == [("brew exploded", "error")]
 
 
@@ -3888,12 +3772,7 @@ async def test_a_failed_direct_update_folds_into_the_session_summary(
     even when the user quits without ever running an install."""
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew", package="rg")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1",
-        probe_output=lambda argv: "1.0",
-    )
+    service = frozen_service(tmp_path)
     app = _unified_app(
         [tool],
         {"rg": True},
@@ -3911,8 +3790,16 @@ async def test_a_failed_direct_update_folds_into_the_session_summary(
     )
     async with app.run_test(size=(120, 30)) as pilot:
         await _mount_and_settle(app, pilot)
-        service._ownership = {"rg": (service.epoch, ownership)}  # pyright: ignore[reportPrivateUsage]
-        app.catalog._version_statuses = {"rg": _outdated_status("rg")}  # pyright: ignore[reportPrivateUsage]
+        service.publish(
+            [
+                pass_state(
+                    tool,
+                    platform=service.platform,
+                    ownership=ownership,
+                    version=_outdated_status("rg"),
+                )
+            ]
+        )
         await pilot.press("u")
         await _wait_until(pilot, lambda: "brew exploded" in app.catalog.status_text)
         summary = app.install_summary
@@ -4606,3 +4493,143 @@ def test_frozen_state_service_publishes_without_probing(tmp_path: Path) -> None:
     refreshed = service.state_of("rg")
     assert refreshed is not None
     assert refreshed.generation == service.epoch
+
+
+# -- 19-15 Task 2: the focused-row detail is identity + health block (STATE-06)
+
+
+def _detail_lines(screen: CatalogScreen, tool: Tool) -> list[str]:
+    """The detail's plain text, one entry per line (identity, then health)."""
+    markup = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    return Text.from_markup(markup).plain.split("\n")
+
+
+def test_detail_health_block(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    service = frozen_service(tmp_path)
+    steps = (ConfigStep("s1", "terminal_sync"), ConfigStep("s2", "terminal_sync"))
+    service.publish(
+        [pass_state(tool, platform=service.platform, misconfigured=("a", "b"), unconfigured=steps)]
+    )
+    screen = _screen([tool], {}, version_refresh=service)
+    assert _detail_lines(screen, tool)[1] == "≈ needs configuration — a · b — to configure: s1; s2"
+    # The glyph keeps the Health cell's style.
+    assert "[yellow]≈[/]" in screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+
+    service.publish([pass_state(tool, platform=service.platform)])
+    assert _detail_lines(screen, tool)[1] == "✓ ok"
+
+    pending = _tool("fd")
+    no_state = _screen([pending], {}, version_refresh=frozen_service(tmp_path / "other"))
+    assert _detail_lines(no_state, pending)[1] == "… checking…"
+    no_state._unavailable["fd"] = True  # pyright: ignore[reportPrivateUsage]
+    assert _detail_lines(no_state, pending)[1] == "… checking… — not available on this machine"
+
+
+def test_detail_labels_per_health(tmp_path: Path) -> None:
+    labels = {
+        Health.CHECKING: "checking…",
+        Health.BROKEN: "broken",
+        Health.MISCONFIGURED: "needs configuration",
+        Health.OUTDATED: "update available",
+        Health.OK: "ok",
+        Health.MISSING: "not installed",
+        Health.UNAVAILABLE: "not available on this machine",
+    }
+    assert set(labels) == set(Health)
+    tool = _tool("rg")
+    service = frozen_service(tmp_path)
+    screen = _screen([tool], {}, version_refresh=service)
+    for health, label in labels.items():
+        state = replace(pass_state(tool, platform=service.platform), health=health, reasons=())
+        service.publish([state])
+        glyph = health_cell(state).plain
+        assert _detail_lines(screen, tool)[1] == f"{glyph} {label}", health
+
+
+def test_detail_escapes_reasons_and_steps(tmp_path: Path) -> None:
+    tool = _tool("rg")
+    service = frozen_service(tmp_path)
+    step = ConfigStep("point [bold]Konsole[/] at /opt/a[b/zsh", "terminal_sync")
+    service.publish(
+        [
+            pass_state(
+                tool,
+                platform=service.platform,
+                misconfigured=("reason [red]x[/]",),
+                unconfigured=(step,),
+            )
+        ]
+    )
+    screen = _screen([tool], {}, version_refresh=service)
+    markup = screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
+    rendered = Text.from_markup(markup)
+    assert "reason [red]x[/]" in rendered.plain
+    assert "to configure: point [bold]Konsole[/] at /opt/a[b/zsh" in rendered.plain
+    # Only the glyph and the id carry a style; nothing the machine said does.
+    styled = {rendered.plain[span.start : span.end] for span in rendered.spans}
+    assert styled <= {"rg", "≈", "P1 recommended"}, styled
+
+
+def test_detail_identity_line_is_unchanged(tmp_path: Path) -> None:
+    tool = _tool(
+        "zsh",
+        category="shell",
+        desc="the Z shell",
+        requires=("brew",),
+        recommends=("rg",),
+        method_os=("linux",),
+    )
+    reason = UnavailableReason(short="linux only", detail="needs Linux; this is macOS")
+    screen = CatalogScreen(
+        [tool],
+        _BLURBS,
+        view="system",
+        catalog=[tool],
+        staged=set(),
+        unavailable={"zsh": reason},
+        version_refresh=frozen_service(tmp_path),
+    )
+    identity, health = _detail_lines(screen, tool)
+    assert identity == (
+        "zsh — the Z shell  |  P1 recommended  |  for both  |  requires brew  |  pairs well with rg"
+    )
+    assert reason.detail in health
+    assert "default shell" not in identity
+
+
+def test_default_shell_note_in_the_health_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    zsh = _tool("zsh", category="shell")
+    service = frozen_service(tmp_path)
+    service.publish(
+        [pass_state(zsh, platform=service.platform, ownership=_ownership(zsh, owner="brew"))]
+    )
+    screen = _screen([zsh], {}, version_refresh=service)
+    monkeypatch.setenv("SHELL", "/usr/bin/zsh")
+    identity, health = _detail_lines(screen, zsh)
+    assert health.startswith("✓ ok — managed by Homebrew")
+    assert health.endswith(" · this is your default shell")
+    assert "default shell" not in identity
+
+
+_UI_SPEC_LEGEND = (
+    "[green]✓ ok[/] · [yellow]↑ update[/] · [yellow]≈ config[/] · [red]! broken[/]"
+    " · ○ missing · [dim]… checking[/] · [dim]– unavailable[/]\n"
+    "[bold red]P0[/] essential · [bold yellow]P1[/] recommended · [blue]P2[/] nice-to-have"
+    " · [dim]P3[/] niche · [bold cyan]AI[/] / [magenta]human[/] / both\n"
+    "Ver a -> b: newer release · [dim]~[/] cached latest · [dim]≠ policy[/]: other manager owns it"
+)
+
+
+def test_legend_is_the_ui_spec_string() -> None:
+    assert _LEGEND == _UI_SPEC_LEGEND
+    lines = _LEGEND.split("\n")
+    assert len(lines) == 3
+    assert "✓ ok · ↑ update · ≈ config · ! broken · ○ missing" in Text.from_markup(lines[0]).plain
+
+
+def test_legend_lines_fit_78_cells() -> None:
+    widths = [cell_len(Text.from_markup(line).plain) for line in _LEGEND.split("\n")]
+    assert widths == [78, 78, 77]
