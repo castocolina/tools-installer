@@ -104,3 +104,4 @@ Started 2026-10-14. Hourly resume cron: session job (deleted at run end).
 | 2026-10-14 19:07–19:17 | pi executor 17-02 (router-env → grok-4.7 402 usage balance exhausted) | 10 min | retried with a resume note; task 1 commit kept, partial task-2 edits reviewed and committed by pi |
 | 2026-10-14 21:39–22:28 | pi executor 17-07 (router-env 429) | 3 × 10 min | try 4 succeeded 22:48; partial uncommitted edits carried across tries, 3 commits |
 | 2026-10-15 ~12:00–13:28 | Claude session (phase 18 cycle-3 review agent + reviews-mode plan-check) | session limit until 13:00 | both agents resumed via SendMessage after reset; no work lost |
+| 2026-10-15 ~21:30–22:12 | Claude session (phase 18 gsd-verifier) | weekly limit until 22:00 | verifier resumed via SendMessage after reset; make e2e kept running in the container meanwhile |
