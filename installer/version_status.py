@@ -1126,9 +1126,16 @@ class VersionRefreshService:
         scan: _PackScan,
     ) -> ToolState:
         """A skill pack's state from the host answers held now (call under
-        `_lock`) and the pass's scan. No answer yet is CHECKING, through the
-        builder's own input. Every configuration fact goes through here, so
-        `refresh_skills`'s rebuild keeps it."""
+        `_lock`) and the pass's scan. Every configuration fact goes through
+        here, so `refresh_skills`'s rebuild keeps it.
+
+        A user-scope pack with probes is CHECKING until the current probe has
+        answered for it (G8): stale answers, including a cache-seeded
+        `present`, add only the seeded note. Once it has, presence is any
+        fresh `present` answer, else MISSING; an unreadable present harness
+        adds its not-checked note, so mixed absent/unknown is never a
+        note-less MISSING (G24), agreeing with `skill_lifecycle.inspect_status`.
+        """
         hosts = self._skills.get(tool.id)
         failure = scan.failures.get(tool.id)
         notes: tuple[str, ...] = (failure,) if failure is not None else ()
@@ -1154,11 +1161,10 @@ class VersionRefreshService:
                 unconfigured=report.steps,
                 notes=notes,
             )
-        facts, steps, pack_notes = self._user_pack_facts(tool, hosts, scan.present)
-        notes += pack_notes
         if tool.skill_lifecycle is not None and not tool.skill_lifecycle.status_probes:
             # No host probe will ever answer for this pack: presence is the
             # presence predicate, as for any binary, never CHECKING forever.
+            facts, steps, pack_notes = self._user_pack_facts(tool, hosts, scan.present)
             return tool_state(
                 tool,
                 generation=generation,
@@ -1170,28 +1176,42 @@ class VersionRefreshService:
                 removable=removable,
                 misconfigured=facts,
                 unconfigured=steps,
+                notes=notes + pack_notes,
+            )
+        # The current probe has answered only when its answers are stored fresh
+        # (`refresh_skills` writes stale=False; the cache and `invalidate` write
+        # stale=True). Stale answers never settle presence, facts or steps.
+        if hosts is None or hosts.stale:
+            if hosts is not None and hosts.stale:
+                notes = (SKILL_SEEDED_NOTE,) + notes
+            return tool_state(
+                tool,
+                generation=generation,
+                seq=seq,
+                platform=platform,
+                present=True,
+                ownership=ownership,
+                version=version,
+                removable=removable,
+                skill_hosts=hosts,
+                checking=(SKILL_CHECKING_REASON,),
                 notes=notes,
             )
-        answers = set(hosts.hosts.values()) if hosts is not None else set[str]()
-        checking: tuple[str, ...] = ()
-        if not answers & {"present", "absent"}:
-            checking = (SKILL_CHECKING_REASON,)
-        if hosts is not None and hosts.stale:
-            notes = (SKILL_SEEDED_NOTE,) + notes
+        answered = hosts
+        facts, steps, pack_notes = self._user_pack_facts(tool, answered, scan.present)
         return tool_state(
             tool,
             generation=generation,
             seq=seq,
             platform=platform,
-            present=bool(checking) or "present" in answers,
+            present="present" in answered.hosts.values(),
             ownership=ownership,
             version=version,
             removable=removable,
-            skill_hosts=hosts,
-            checking=checking,
+            skill_hosts=answered,
             misconfigured=facts,
             unconfigured=steps,
-            notes=notes,
+            notes=notes + pack_notes,
         )
 
     def _receipt_evidence(

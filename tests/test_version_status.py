@@ -42,7 +42,7 @@ from installer.ownership import (
 )
 from installer.platform import Platform
 from installer.resolve import resolve_methods, unavailable_reason
-from installer.skill_lifecycle import HARNESS_PRESENCE, inspect_skill_reports
+from installer.skill_lifecycle import HARNESS_PRESENCE, inspect_skill_reports, inspect_status
 from installer.terminal_shell import TerminalShellResult
 from installer.uninstall import RemovalPlan, plan_removal
 from installer.version_cache import (
@@ -2957,7 +2957,8 @@ def test_seeded_skill_hosts_are_a_note(tmp_path: Path) -> None:
     service.refresh([pack])
     state = service.state_of(pack.id)
     assert state is not None
-    assert state.health is Health.OK
+    # A cache-seeded answer is informational only (G8): CHECKING, never OK.
+    assert state.health is Health.CHECKING
     assert _SEEDED_NOTE in state.reasons
 
 
@@ -4738,7 +4739,8 @@ def test_seeded_skill_cache_has_hosts_only(tmp_path: Path) -> None:
     service.seed_skills_from_cache()
     pack = _superpowers()
     seeded = _settled_states(service, [pack])["superpowers"]
-    assert seeded.health is Health.OK
+    # A seeded present answer never settles the pack (G8).
+    assert seeded.health is Health.CHECKING
     assert _SEEDED_NOTE in seeded.reasons
     assert seeded.unconfigured == ()
     service.refresh_skills([pack])
@@ -4804,6 +4806,8 @@ def test_inconclusive_claude_listing_is_a_not_checked_note(tmp_path: Path, answe
         assert (note in state.reasons) is on_machine
         assert not set(_FOUR_REASONS) & set(state.reasons)
         assert state.unconfigured == ()
+        # A finished all-unknown probe is MISSING, never stuck CHECKING (G8).
+        assert state.health is Health.MISSING
 
 
 @pytest.mark.parametrize("content", ["{", '[{"hooks": {}}]', None])
@@ -4817,6 +4821,105 @@ def test_inconclusive_hook_config_is_a_not_checked_note(
     state = _settled_states(_pack_service(home), [_opengsd()])["opengsd"]
     note = f"{_SKILL_NOT_CHECKED}cannot read ~/.claude/settings.json"
     assert (note in state.reasons) is (content is not None)
+
+
+def test_stale_cached_present_is_checking_not_ok(tmp_path: Path) -> None:
+    """A cache-seeded `present` never settles the pack (G8).
+
+    CHECKING plus the seeded note until the current probe answers; OK only
+    after that probe lists the canonical user entry; CHECKING again once
+    `invalidate` marks those answers stale.
+    """
+    home = tmp_path / "home"
+    service = _pack_service(
+        home,
+        _probe_for(_listing((_SP_ID, "user", True, "6.4.1"))),
+        harnesses=frozenset({"claude"}),
+    )
+    save_version_cache(
+        home.parent / f"{home.name}-versions.json",
+        {},
+        skills={"superpowers": {"claude": "present"}},
+    )
+    service.seed_skills_from_cache()
+    pack = _superpowers()
+    seeded = _settled_states(service, [pack])["superpowers"]
+    assert seeded.health is Health.CHECKING
+    assert _SEEDED_NOTE in seeded.reasons
+    assert seeded.present is False
+    assert not any(reason.startswith("partial:") for reason in seeded.reasons)
+    assert seeded.unconfigured == ()
+
+    service.refresh_skills([pack])
+    probed = service.state_of(pack.id)
+    assert probed is not None
+    assert probed.health is Health.OK
+
+    service.invalidate(reason="test")
+    stale = _settled_states(service, [pack])["superpowers"]
+    assert stale.health is Health.CHECKING
+    assert _SEEDED_NOTE in stale.reasons
+    service.refresh_skills([pack])
+    again = service.state_of(pack.id)
+    assert again is not None
+    assert again.health is Health.OK
+
+
+def test_all_unknown_after_the_probe_is_missing_with_a_note(tmp_path: Path) -> None:
+    """A finished probe that could not read a present harness is MISSING (G8).
+
+    The note names the harness. With no harness on the machine the same probe
+    is MISSING and note-less: there is nothing to have checked.
+    """
+    note = f"{_SKILL_NOT_CHECKED}no readable answer from Claude Code"
+    pack = _superpowers()
+    present = _pack_service(
+        tmp_path / "present", _unreadable_probe("raises"), harnesses=frozenset({"claude"})
+    )
+    state = _probed_state(present, pack)
+    assert state.health is Health.MISSING
+    assert note in state.reasons
+
+    absent = _pack_service(tmp_path / "absent", _unreadable_probe("raises"), harnesses=frozenset())
+    empty = _probed_state(absent, pack)
+    assert empty.health is Health.MISSING
+    assert note not in empty.reasons
+
+
+def test_mixed_absent_and_unknown_hosts_never_settle_absent(tmp_path: Path) -> None:
+    """One absent host never overrides another host's unknown answer (G24).
+
+    A stale mixed cache stays CHECKING. Once the current probe answers, the
+    pack is MISSING with the unreadable harness's note, never a note-less
+    MISSING and never OK. `inspect_status` answers `unknown` for the same input.
+    """
+    home = tmp_path / "home"
+    pack = _superpowers(codex=True)
+
+    def probe(argv: list[str]) -> str:
+        if argv[0] == "claude":
+            raise subprocess.CalledProcessError(1, argv)
+        return ""
+
+    service = _pack_service(home, probe, harnesses=frozenset({"claude", "codex"}))
+    save_version_cache(
+        home.parent / f"{home.name}-versions.json",
+        {},
+        skills={"superpowers": {"claude": "unknown", "codex": "absent"}},
+    )
+    service.seed_skills_from_cache()
+    seeded = _settled_states(service, [pack])["superpowers"]
+    assert seeded.health is Health.CHECKING
+
+    service.refresh_skills([pack])
+    probed = service.state_of(pack.id)
+    assert probed is not None
+    assert probed.health is Health.MISSING
+    assert f"{_SKILL_NOT_CHECKED}no readable answer from Claude Code" in probed.reasons
+    assert probed.health is not Health.OK
+
+    outcome = inspect_status(pack, probe, home)
+    assert outcome.status == "unknown"
 
 
 def test_present_harnesses_failure_is_a_not_checked_note(

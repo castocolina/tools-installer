@@ -3362,7 +3362,8 @@ def test_skill_health_cell_reads_a_persisted_answer_without_a_stale_variant(
     assert SKILL_SEEDED_NOTE in state.reasons
     screen = _screen([pack], {pack.id: False}, version_refresh=service)
     cell = screen._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
-    assert (cell.plain, str(cell.style)) == ("✓", "green")
+    # A seeded answer is still being checked (G8): never a green check.
+    assert (cell.plain, str(cell.style)) == ("…", "dim")
 
 
 def test_skill_health_cell_is_ok_after_the_probe_lands(tmp_path: Path) -> None:
@@ -3387,7 +3388,7 @@ def test_skill_health_cell_is_checking_until_a_host_answers(tmp_path: Path) -> N
     assert (cell.plain, str(cell.style)) == ("…", "dim")
 
 
-def test_skill_health_cell_is_checking_when_every_host_is_unknown(tmp_path: Path) -> None:
+def test_skill_health_cell_is_missing_when_every_host_is_unknown(tmp_path: Path) -> None:
     def skill_probe(_argv: list[str]) -> str:
         raise OSError("harness down")
 
@@ -3403,7 +3404,8 @@ def test_skill_health_cell_is_checking_when_every_host_is_unknown(tmp_path: Path
     assert set(status.hosts.values()) == {"unknown"}
     screen = _screen([pack], {pack.id: True}, version_refresh=service)
     cell = screen._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
-    assert (cell.plain, str(cell.style)) == ("…", "dim")
+    # A finished probe that read nothing is MISSING, never stuck checking (G8).
+    assert cell.plain == "○"
 
 
 def test_skill_owner_cell_lists_hosts_and_truncates_when_wider_than_the_column(
@@ -3568,8 +3570,8 @@ async def test_skill_probe_failure_paints_unknown_and_keeps_the_app_running(tmp_
         await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
         await pilot.pause()
         cell = app.catalog.query_one(DataTable[Any]).get_cell("superpowers", "health")
-        assert cell.plain == "…"
-        assert "dim" in str(cell.style)
+        # The probe finished with no readable answer: MISSING, never stuck (G8).
+        assert cell.plain == "○"
     status = _skill_hosts(service, "superpowers")
     assert status is not None
     assert status.hosts == {"claude": "unknown"}
@@ -3691,7 +3693,8 @@ def test_skill_pack_with_probes_and_empty_hosts_stays_unknown(tmp_path: Path) ->
     )
     state = service.state_of(pack.id)
     assert state is not None
-    assert state.health is Health.CHECKING
+    # A finished probe that read "" has answered: MISSING, never CHECKING (G8).
+    assert state.health is Health.MISSING
     assert state.present is False
 
 
