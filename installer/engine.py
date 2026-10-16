@@ -243,13 +243,18 @@ def install_tool(
         except (CommandError, executors.ExecutorError, VersionError, OSError) as exc:
             errors.append(exc)
         else:
-            downloaded = method.kind in download.DOWNLOAD_KINDS or method.kind in apps.APP_KINDS
+            # An app is smoked only when it declares a cli (_stage_and_swap_app);
+            # a receipt must not claim a check that never ran (IN-04). Download
+            # kinds always smoke before their link swap.
+            smoked_artifact = method.kind in download.DOWNLOAD_KINDS or (
+                method.kind in apps.APP_KINDS and method.params.get("cli") is not None
+            )
             try:
                 receipts.record(
                     tool,
                     method,
                     package=method_package(method),
-                    smoke="ok" if downloaded or smoked else None,
+                    smoke="ok" if smoked_artifact or smoked else None,
                 )
             except OSError as exc:
                 leftovers.append(f"install receipt not written: {exc}")

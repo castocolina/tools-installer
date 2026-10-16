@@ -2020,3 +2020,36 @@ def test_repair_receipt_write_failure_leaves_no_stale_receipt(
         in again.postinstall_warning
     )
     assert receipts.read("yq") is None
+
+
+@pytest.mark.parametrize(
+    ("method", "smoke"),
+    [
+        (_APP_METHOD, "ok"),
+        (Method(kind="app", params={"url": "https://x/d.zip", "app": "Draw.app"}), None),
+    ],
+    ids=["with-cli", "without-cli"],
+)
+def test_app_receipt_records_smoke_only_with_a_cli(
+    method: Method, smoke: str | None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """IN-04: an app receipt claims a smoke only when the method declares a
+    cli, the only case _stage_and_swap_app actually smokes."""
+    _patch_not_installed(monkeypatch)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bundle = tmp_path / "Applications" / "Draw.app"
+    link = tmp_path / ".local" / "bin" / "draw"
+
+    def place() -> None:
+        (bundle / "Contents" / "MacOS").mkdir(parents=True)
+        if method.params.get("cli") is not None:
+            link.parent.mkdir(parents=True)
+            link.symlink_to(bundle / "Contents" / "MacOS" / "draw")
+
+    _fake_perform(monkeypatch, place)
+    outcome = install_tool(_tool(method), _macos_with_brew(), runner=lambda _cmd: None)
+    assert outcome.status == InstallStatus.INSTALLED
+    written = receipts.read("rg")
+    assert written is not None
+    assert written.smoke == smoke
