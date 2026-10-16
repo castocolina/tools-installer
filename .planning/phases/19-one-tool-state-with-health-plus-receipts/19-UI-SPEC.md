@@ -288,6 +288,7 @@ Yellow means "present and needs action" (update or configure), so missing tools 
 | Terminal check failed (M11 review, new note) | `terminal shell not checked: {error}` |
 | pnpm inventory unreadable (M11 review, new note) | `pnpm group not checked: the pnpm inventory is unreadable` |
 | Skill check failed (M11 review, new note) | `skill configuration not checked: {error}` |
+| Skill check `{error}` values (review cycle 2) | `no readable answer from {Harness}` · `cannot read ~/{path}` |
 | Stale cache (existing sentence, `:768-772`) | Kept verbatim |
 | Empty state heading (a tier with zero tools) | Detail row 1: `No tools in the {Label} tier.` |
 | Empty state body | Detail row 2: `Press 1-6 or ^p to open another view.` The legend still renders; the table shows only its header |
