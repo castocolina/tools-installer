@@ -185,6 +185,37 @@ _PHASE_18_AUTHORING = (
 )
 
 
+_PHASE_19_REQUIRED = (
+    "ToolState",
+    "state_of",
+    "tool_health",
+    "receipts.py",
+    "artifact_paths",
+    "plan_removal",
+    "remove_proven",
+    "native_index",
+    "ConfigStep",
+    "uv tool dir",
+    "write=False",
+    "adopted: the file matches the release checksum",
+    "live_platform",
+    "PROJECT_HOOK_CONFIGS",
+    "single flight",
+)
+
+
+def test_architecture_records_phase_19_mechanisms() -> None:
+    """The comment is the mechanism; the test keeps it from rotting away unnoticed.
+
+    Each substring anchors the Phase 19 section: the one seq-gated ToolState
+    and state_of, tool_health, receipts.py and its removal proof, the batched
+    native_index, the live platform, and the misconfiguration evidence.
+    """
+    text = ARCHITECTURE.read_text(encoding="utf-8")
+    for phrase in _PHASE_19_REQUIRED:
+        assert phrase in text, f"missing load-bearing phrase: {phrase}"
+
+
 def test_architecture_records_phase_15_8_mechanisms() -> None:
     """The comment is the mechanism; the test keeps it from rotting away unnoticed.
 

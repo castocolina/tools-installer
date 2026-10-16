@@ -1022,3 +1022,77 @@ rests on `case`/`esac` being core POSIX grammar and on pnpm shipping the
 same idiom in production — a reasoned residual, never a completed proof.
 The `~/.shellrc` cases are proven against synthetic fixtures, because no
 such file exists on this host.
+
+## Phase 19: one tool state, health and receipts
+
+Every catalog view reads one `ToolState` per tool. A refresh pass builds
+that map and publishes it with one assignment, and `state_of` is the only
+per-tool reader. The pass takes a monotonic sequence together with the
+epoch. An overtaken pass publishes nothing, including one that finishes
+later at the same epoch. A partial pass merges per record, newest sequence
+wins, so an older full pass may still fill a tool the newer pass did not
+cover. Before anything publishes, and whenever the published generation is
+not the current one, `state_of` returns none and the row shows `…`.
+
+Identical passes share one fetch. The single flight joins a request to an
+in-flight pass with the same tool ids and the same epoch, and a join never
+crosses an invalidate. The cache is saved after the swap, for the records
+that pass published, and a save failure keeps the states and sets a
+warning.
+
+`tool_health` is pure. Present tools take, in precedence order, checking,
+then broken, then misconfigured, then outdated, else ok, and the winning
+facts come first in the reasons. An absent tool is missing when a method
+applies and unavailable when none does. Shadowed, off-policy, unknown
+owner and unreadable version are reasons, not states.
+
+`receipts.py` is the one receipt module. The file is
+`~/.local/state/tools-installer/receipts/<id>.json`, schema `"v": 1`, and
+the reader fails closed: an unknown version, malformed JSON, a file past
+the size cap or an unreadable file is no proof and never a crash. Writes
+go through the existing atomic writer under one lock. `record` is the one
+writer, called after a successful install and after a successful update.
+Native, skill and `host_setup` kinds write none. A failed rewrite deletes
+the previous receipt and says so, so a receipt never claims bytes it did
+not fingerprint. A reinstall rewrites the receipt and a failed update
+keeps the old one. Tests never touch the real directory: the suite
+sandboxes `receipts_dir`.
+
+`artifact_paths` is the one formula for what a method creates, shared by
+install, the receipt and uninstall. Removal deletes the intersection of
+the receipt and `artifact_paths`, computed by `plan_removal`. One changed
+artifact makes the whole tool non-removable, and a corrupt receipt leaves
+it unproven with no layout fallback. `remove_proven` is the one remover
+for the CLI and the TUI. It re-hashes at deletion time and deletes the
+receipt only once its paths are gone.
+
+A raw binary that predates receipts is adopted when its sha256 equals the
+cached release digest of its asset, the same fetch the pass already makes.
+The reason it records is `adopted: the file matches the release checksum`.
+A file that does not match stays unproven and says to reinstall with `r`.
+
+`native_index` makes one batched owner query per OS family per pass and
+answers the existing per-path probes by lookup. Declared-package queries
+are memoized per pass rather than batched into one argv. The uv owner
+directory is `uv tool dir`, never `--bin`. A Volta shim resolves to volta,
+and a redirect shim is looked through to the real owner.
+
+Every consumer reads the live platform, the update service included
+through `live_platform`, so a brew that appears mid-session makes a
+brew-only tool installable without a restart. `resolve_owner` re-reads
+that platform at mutation time and does not trust the snapshot that gated
+the keypress.
+
+`ConfigStep` is the typed fix a misconfigured row carries. The evidence
+comes from a dry-run terminal sync (`sync_terminal_shells`, `write=False`,
+which blocks the Konsole state write and the `.zshrc` rewrite), from an
+incomplete pnpm co-install group, from a skill pack that is partial or
+duplicated on a present harness, and from a project pack. Project packs
+report global leftovers in all nine harness homes. `PROJECT_HOOK_CONFIGS`
+names the hook files that scan reads, and a per-repo install is the step
+the row shows. Repo detection covers the runtime dirs verified on this
+host, claude and opencode.
+
+The catalog fits an 80x20 terminal. The legend and the detail bar stack
+under the table instead of painting over each other, the legend is three
+lines of at most 78 cells, and the detail is a fixed three rows.
