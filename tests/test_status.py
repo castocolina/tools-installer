@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+from installer import guards
+from installer.guards import REDIRECT_SENTINEL, SHIM_SENTINEL
 from installer.model import Method, Tool, load_tools
 from installer.status import (
     MACOS_STUBS,
@@ -746,3 +748,32 @@ def test_implicit_presence_reads_the_given_default_bin_dir(
     other = tmp_path / "other"
     other.mkdir()
     assert is_installed(_github_tool(raw=True), which=_which_none, default_bin_dir=other) is False
+
+
+@pytest.mark.parametrize("location", ["declared", "implicit"])
+@pytest.mark.parametrize("sentinel", [SHIM_SENTINEL, REDIRECT_SENTINEL])
+def test_installer_shim_is_never_presence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, location: str, sentinel: str
+) -> None:
+    """review M9: this installer's own ban or redirect shim in a bin dir is a
+    regular file, but it is not the tool, so the file checks skip it."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    def tool(cmd: str) -> Tool:
+        if location == "declared":
+            return _github_tool(bin_dir=str(bin_dir), cmd=cmd)
+        return _github_tool(cmd=cmd, raw=True)
+
+    shim = bin_dir / "npx"
+    shim.write_text(f"#!/bin/sh\n{sentinel}\nexit 127\n")
+    assert is_installed(tool("npx"), which=_which_none, default_bin_dir=bin_dir) is False
+    shim.write_text("real binary")
+    assert is_installed(tool("npx"), which=_which_none, default_bin_dir=bin_dir) is True
+
+    def refuse(path: Path) -> bool:
+        raise AssertionError(f"shim check opened {path} for a name this installer never shims")
+
+    monkeypatch.setattr(guards, "is_our_shim", refuse)
+    (bin_dir / "yq").write_text(f"#!/bin/sh\n{sentinel}\n")
+    assert is_installed(tool("yq"), which=_which_none, default_bin_dir=bin_dir) is True

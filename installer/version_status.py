@@ -53,13 +53,14 @@ from pathlib import Path
 from typing import Literal, cast
 
 import installer.locations
-from installer.guards import real_pnpm
+from installer.guards import look_through_shim, real_pnpm
 from installer.install_ownership import ProbeRunner
 from installer.manager_versions import OutdatedReport, read_outdated
 from installer.model import ConfigStep, Method, Tool
 from installer.ownership import (
     ManagerInventory,
     ManagerOwnership,
+    query_uv_tool_dir,
     read_inventory,
     resolve_ownership,
 )
@@ -638,6 +639,7 @@ class VersionRefreshService:
         skill_probe: Callable[[list[str]], str] | None = None,
         skill_home: Path | None = None,
         present: Callable[[Tool], bool] | None = None,
+        path_value: Callable[[], str] | None = None,
     ) -> None:
         self._platform = platform
         self._cache_path = cache_path
@@ -650,6 +652,9 @@ class VersionRefreshService:
             managed_bin_dir if managed_bin_dir is not None else installer.locations.bin_dir(None)
         )
         self._which = which
+        self._path_value = (
+            path_value if path_value is not None else (lambda: os.environ.get("PATH", ""))
+        )
         self._present = present if present is not None else self._default_present
         self._query = query if query is not None else run_query
         self._pnpm_packages = pnpm_packages
@@ -756,7 +761,13 @@ class VersionRefreshService:
         return state.present
 
     def _default_present(self, tool: Tool) -> bool:
-        return is_installed(tool, which=self._which, default_bin_dir=self._managed_bin_dir)
+        return is_installed(tool, which=self._looked_through, default_bin_dir=self._managed_bin_dir)
+
+    def _looked_through(self, name: str) -> str | None:
+        """The `which` hit, or the real binary behind this installer's own shim (D-13)."""
+        return look_through_shim(
+            self._which(name), name, shim_dir=self._managed_bin_dir, path_value=self._path_value()
+        )
 
     def skill_status_of(self, tool_id: str) -> SkillHostStatus | None:
         return self._skills.get(tool_id)
@@ -1009,6 +1020,8 @@ class VersionRefreshService:
         platform = replace(self._platform, has_brew=self._which("brew") is not None)
         with self._lock:
             self._platform = platform
+        # L-19-01: `uv tool dir`, asked once per pass and only when uv is on PATH.
+        uv_tool_dir = query_uv_tool_dir(self._query) if self._which("uv") is not None else None
         now = self._now()
         cache = load_version_cache(self._cache_path)
         snapshot, persist_snapshot, _failed = self._load_or_query_snapshot(
@@ -1028,9 +1041,10 @@ class VersionRefreshService:
                 platform=platform,
                 inventory=inventory,
                 artifacts=self._artifacts(tool),
-                which=self._which,
+                which=self._looked_through,
                 managed_bin_dir=self._managed_bin_dir,
                 native_probe=self._native_probe,
+                uv_tool_dir=uv_tool_dir,
             )
             ownerships[tool.id] = ownership
             entry = cache.get(tool.id)

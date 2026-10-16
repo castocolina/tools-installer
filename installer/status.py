@@ -7,6 +7,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
+import installer.guards
 import installer.locations
 from installer.download import DOWNLOAD_KINDS, artifact_paths
 from installer.model import Tool
@@ -71,6 +72,11 @@ def _default_app_roots() -> tuple[Path, ...]:
     return (Path.home() / "Applications", Path("/Applications"))
 
 
+def _is_installer_shim(tool: Tool, path: Path) -> bool:
+    # A ban or redirect shim blocks or forwards the command; it is not the tool (review M9).
+    return tool.cmd in installer.guards.guarded_names() and installer.guards.is_our_shim(path)
+
+
 def is_installed(
     tool: Tool,
     app_roots: tuple[Path, ...] | None = None,
@@ -128,7 +134,8 @@ def is_installed(
         # follows symlinks, so SDKMAN's `current -> <version>` link stops
         # counting once the version it points at is removed — a bare exists()
         # on the lstat would still call a dangling link present.
-        if (Path(bin_dir).expanduser() / tool.cmd).is_file():
+        candidate = Path(bin_dir).expanduser() / tool.cmd
+        if candidate.is_file() and not _is_installer_shim(tool, candidate):
             return True
     implicit = (
         default_bin_dir
@@ -146,7 +153,11 @@ def is_installed(
         for artifact in artifact_paths(method, implicit):
             # is_file() follows symlinks, so a live link into opt counts; a
             # dangling link does not -- fail-closed reads never call it present.
-            if artifact.kind in ("file", "link") and artifact.path.is_file():
+            if (
+                artifact.kind in ("file", "link")
+                and artifact.path.is_file()
+                and not _is_installer_shim(tool, artifact.path)
+            ):
                 return True
     roots = _default_app_roots() if app_roots is None else app_roots
     for method in tool.methods:

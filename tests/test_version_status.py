@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 import time
 import urllib.request
@@ -12,6 +13,7 @@ from typing import cast
 import pytest
 
 from installer import version_status
+from installer.guards import REDIRECT_SENTINEL
 from installer.manager_versions import ManagerVersion, OutdatedReport
 from installer.model import (
     ConfigStep,
@@ -572,9 +574,14 @@ def _which_for_fixture(cmd: str) -> str | None:
 
 
 def _counting_query() -> tuple[Callable[..., str], list[list[str]]]:
+    """Records the manager snapshot queries only: the per-pass `uv tool dir`
+    question (L-19-01) is answered but not counted here; its own test pins
+    it to one per pass."""
     calls: list[list[str]] = []
 
     def query(cmd: list[str], **_kwargs: object) -> str:
+        if cmd == ["uv", "tool", "dir"]:
+            return "/home/u/.local/share/uv/tools\n"
         calls.append(cmd)
         if cmd == ["brew", "--prefix"]:
             return "/opt/homebrew\n"
@@ -2967,3 +2974,203 @@ def test_suite_sandbox_redirects_skill_home(tmp_path_factory: pytest.TempPathFac
     status = service.skill_status_of("opengsd")
     assert status is not None
     assert status.hosts == {"claude": "present"}
+
+
+# -- 19-12 Task 1: the pass resolves uv tools by `uv tool dir` and looks
+# through this installer's own shims (D-12, D-13, review M9). --
+
+
+def _owner_pass_service(
+    tmp_path: Path,
+    *,
+    which: Callable[[str], str | None],
+    managed: Path,
+    query: Callable[..., str] = lambda *_args, **_kwargs: "",
+    inventory: ManagerInventory | None = None,
+    path_value: str = "",
+    native_probe: Callable[[list[str]], str] | None = None,
+    platform: Platform | None = None,
+    probe_output: Callable[[list[str]], str | None] = lambda _argv: "1.0.0",
+    artifacts_for: Callable[[Tool], list[Path]] = lambda _tool: [],
+) -> VersionRefreshService:
+    held = inventory if inventory is not None else _empty_inventory()
+
+    def read_inventory(**_kwargs: object) -> ManagerInventory:
+        return held
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    return VersionRefreshService(
+        platform=platform if platform is not None else _no_brew_platform(),
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "1.0.0",
+        probe_output=probe_output,
+        now=lambda: _STATE_NOW,
+        managed_bin_dir=managed,
+        which=which,
+        query=query,
+        artifacts_for=artifacts_for,
+        read_inventory_fn=read_inventory,
+        read_outdated_fn=_empty_outdated,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        native_probe=native_probe,
+        path_value=lambda: path_value,
+    )
+
+
+def _uv_dir_query(answer: Path) -> tuple[Callable[..., str], list[list[str]]]:
+    asked: list[list[str]] = []
+
+    def query(argv: list[str], *_args: object, **_kwargs: object) -> str:
+        asked.append(list(argv))
+        return f"{answer}\n" if argv == ["uv", "tool", "dir"] else ""
+
+    return query, asked
+
+
+def _graphify() -> Tool:
+    return Tool(
+        id="graphify",
+        name="graphify",
+        category="dev",
+        cmd="graphify",
+        methods=(Method(kind="uv-tool", params={"pypi_pkg": "graphifyy"}),),
+    )
+
+
+def test_pass_resolves_graphify_to_uv_by_tool_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    managed = home / ".local" / "bin"
+    managed.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    uv_tools = tmp_path / "uv" / "tools"
+    real = uv_tools / "graphifyy" / "bin" / "graphify"
+    real.parent.mkdir(parents=True)
+    real.write_text("bin")
+    (managed / "graphify").symlink_to(real)
+    hits = {"uv": str(tmp_path / "uv" / "uv"), "graphify": str(managed / "graphify")}
+    query, _asked = _uv_dir_query(uv_tools)
+    service = _owner_pass_service(
+        tmp_path,
+        which=lambda cmd: hits.get(cmd),
+        managed=managed,
+        query=query,
+        inventory=replace(_empty_inventory(), uv_tools={"graphifyy": "0.9.53"}),
+    )
+    service.refresh([_graphify()])
+    state = service.state_of("graphify")
+    assert state is not None
+    assert state.ownership.owner == "uv"
+    assert state.present is True
+
+
+def test_pass_queries_uv_tool_dir_once(tmp_path: Path) -> None:
+    tools = [_gh_tool("alpha"), _gh_tool("beta"), _gh_tool("gamma")]
+    query, asked = _uv_dir_query(tmp_path / "uv" / "tools")
+    service = _owner_pass_service(
+        tmp_path / "with-uv",
+        which=lambda cmd: "/x/bin/uv" if cmd == "uv" else None,
+        managed=tmp_path / "managed",
+        query=query,
+    )
+    service.refresh(tools)
+    assert asked.count(["uv", "tool", "dir"]) == 1
+
+    query, asked = _uv_dir_query(tmp_path / "uv" / "tools")
+    service = _owner_pass_service(
+        tmp_path / "without-uv",
+        which=lambda _cmd: None,
+        managed=tmp_path / "managed",
+        query=query,
+    )
+    service.refresh(tools)
+    assert ["uv", "tool", "dir"] not in asked
+
+
+def _redirect_shim(managed: Path) -> Path:
+    managed.mkdir(parents=True, exist_ok=True)
+    shim = managed / "pnpm"
+    shim.write_text(f'#!/bin/sh\n{REDIRECT_SENTINEL}\nexec /nowhere/volta install "$@"\n')
+    shim.chmod(0o755)
+    return shim
+
+
+def _pnpm_script_tool() -> Tool:
+    return Tool(
+        id="pnpm",
+        name="pnpm",
+        category="node",
+        cmd="pnpm",
+        methods=(Method(kind="script", params={"url": "https://get.pnpm.io/install.sh"}),),
+    )
+
+
+def _volta_pnpm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """`<tmp>/volta/bin/pnpm` -> `volta-shim`, with VOLTA_HOME pointing there."""
+    volta_bin = tmp_path / "volta" / "bin"
+    volta_bin.mkdir(parents=True)
+    volta_shim = volta_bin / "volta-shim"
+    volta_shim.write_text("#!/bin/sh\n")
+    volta_shim.chmod(0o755)
+    (volta_bin / "pnpm").symlink_to(volta_shim)
+    monkeypatch.setenv("VOLTA_HOME", str(tmp_path / "volta"))
+    return volta_bin
+
+
+def test_pass_looks_through_the_redirect_shim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    managed = tmp_path / "managed"
+    shim = _redirect_shim(managed)
+    volta_bin = _volta_pnpm(tmp_path, monkeypatch)
+    service = _owner_pass_service(
+        tmp_path,
+        which=lambda cmd: str(shim) if cmd == "pnpm" else None,
+        managed=managed,
+        path_value=os.pathsep.join((str(managed), str(volta_bin))),
+    )
+    service.refresh([_pnpm_script_tool()])
+    state = service.state_of("pnpm")
+    assert state is not None
+    assert state.ownership.owner == "volta"
+    assert state.present is True
+
+
+def test_redirect_shim_without_a_real_binary_is_missing(tmp_path: Path) -> None:
+    managed = tmp_path / "managed"
+    shim = _redirect_shim(managed)
+    service = _owner_pass_service(
+        tmp_path,
+        which=lambda cmd: str(shim) if cmd == "pnpm" else None,
+        managed=managed,
+        path_value=str(managed),
+    )
+    service.refresh([_pnpm_script_tool()])
+    state = service.state_of("pnpm")
+    assert state is not None
+    assert state.health is Health.MISSING
+
+
+def test_shim_only_managed_bin_path_is_missing(tmp_path: Path) -> None:
+    """review M9: the implicit artifact path holds only the redirect shim."""
+    managed = tmp_path / "managed"
+    shim = _redirect_shim(managed)
+    service = _owner_pass_service(
+        tmp_path,
+        which=lambda cmd: str(shim) if cmd == "pnpm" and shim.is_file() else None,
+        managed=managed,
+        path_value=str(managed),
+    )
+    tool = _raw_gh_tool("pnpm")
+    service.refresh([tool])
+    state = service.state_of("pnpm")
+    assert state is not None
+    assert state.health is Health.MISSING
+
+    shim.write_text("real binary")
+    service.refresh([tool])
+    state = service.state_of("pnpm")
+    assert state is not None
+    assert state.present is True
