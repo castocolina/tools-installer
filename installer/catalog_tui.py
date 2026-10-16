@@ -87,6 +87,8 @@ def group_tools(
     narrow because it lives in the first column and auto-width would otherwise
     inflate it. The detail line (e.g. the category blurb) goes to the detail
     bar when the section row is highlighted. Members are priority-then-id.
+    The status view reads each tool's health once, so a publication mid-grouping
+    cannot place a tool twice.
     """
     ordered = sorted(tools, key=lambda t: (t.priority, t.id))
     if view == "priority":
@@ -102,11 +104,12 @@ def group_tools(
             (title, title, [t for t in ordered if t.audience == a]) for a, title in titles.items()
         ]
     elif view == "status":
+        healths = {t.id: _health(health_of, t) for t in ordered}
         groups = [
             (
                 f"{_HEALTH_CELL[health][0]} {_HEALTH_WORD[health]}",
                 _HEALTH_DETAIL[health],
-                [t for t in ordered if _health(health_of, t) is health],
+                [t for t in ordered if healths[t.id] is health],
             )
             for health in Health
         ]

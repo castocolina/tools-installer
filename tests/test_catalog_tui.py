@@ -248,6 +248,34 @@ def test_sort_for_table_by_each_key():
     ]  # Health precedence: ok before missing
 
 
+def test_group_tools_reads_each_health_once():
+    """The status view reads each tool's health once, so a publication mid-grouping
+    cannot place one tool in two groups (G7)."""
+    tools, installed = _catalog()
+    reads: dict[str, int] = {}
+    base = _health_from(installed)
+
+    def counting(tool: Tool) -> Health | None:
+        reads[tool.id] = reads.get(tool.id, 0) + 1
+        return base(tool)
+
+    group_tools(tools, counting, "status", _BLURBS)
+    assert reads == {tool.id: 1 for tool in tools}
+
+    first: set[str] = set()
+
+    def flips(tool: Tool) -> Health | None:
+        if tool.id in first:
+            return Health.OK
+        first.add(tool.id)
+        return None
+
+    groups = group_tools(tools, flips, "status", _BLURBS)
+    seen = [tool.id for _, _, members in groups for tool in members]
+    assert sorted(seen) == sorted(tool.id for tool in tools)
+    assert len(seen) == len(set(seen))
+
+
 def test_group_tools_rejects_unknown_view():
     tools, installed = _catalog()
     with pytest.raises(ValueError, match="unknown view"):
