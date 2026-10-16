@@ -1539,3 +1539,97 @@ def test_failed_opt_dir_delete_leaves_the_remainder_listed(
     rows = classify_tools([tool], bin_dir, installed={"fd": True}, platform=_LINUX)
     assert rows[0].state == "managed"
     assert str(opt) in rows[0].hint
+
+
+def test_plan_uninstall_lists_exactly_the_existing_artifact_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """plan_uninstall reads download.artifact_paths (D-07): a raw method
+    creates a file, never an opt dir, so a stray ~/.local/opt/<name> beside
+    a raw tool is no longer listed."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    rg_opt = tmp_path / ".local" / "opt" / "rg"
+    rg_opt.mkdir(parents=True)
+    (rg_opt / "rg").write_text("binary")
+    (bin_dir / "rg").symlink_to(rg_opt / "rg")
+    (bin_dir / "yq").write_text("binary")
+    # The stray opt dir a raw tool must NOT claim:
+    (tmp_path / ".local" / "opt" / "yq").mkdir(parents=True)
+    (bin_dir / "gone").symlink_to(tmp_path / "nowhere")  # dangling link
+    (tmp_path / "Applications" / "Demo.app").mkdir(parents=True)
+    archive = _tool(
+        Method(kind="github_release", params={"repo": "a/rg", "asset": "x", "member": "rg"}),
+        tool_id="rg",
+    )
+    raw = _tool(
+        Method(
+            kind="github_release",
+            params={
+                "repo": "a/yq",
+                "asset": "yq",
+                "member": "yq_linux",
+                "bin_name": "yq",
+                "raw": True,
+            },
+        ),
+        tool_id="yq",
+    )
+    dangling = _dl_tool("gone", "gone")
+    app = _tool(
+        Method(kind="app", params={"url": "https://x/a.zip", "app": "Demo.app"}), tool_id="app"
+    )
+    assert plan_uninstall([archive, raw, dangling, app], bin_dir) == [
+        rg_opt,
+        bin_dir / "rg",
+        bin_dir / "yq",
+        bin_dir / "gone",
+        tmp_path / "Applications" / "Demo.app",
+    ]
+
+
+def test_plan_removal_never_proves_a_raw_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The layout proof is for archive links only: a raw github_release file
+    at ~/.local/bin/yq lands in `yourself`, never in `removable`."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "yq").write_text("binary")
+    raw = _tool(
+        Method(
+            kind="github_release",
+            params={
+                "repo": "a/yq",
+                "asset": "yq",
+                "member": "yq_linux",
+                "bin_name": "yq",
+                "raw": True,
+            },
+        ),
+        tool_id="yq",
+    )
+    plan = plan_removal([raw], bin_dir)
+    assert plan.removable == ()
+    assert plan.yourself == (bin_dir / "yq",)
+
+
+def test_plan_removal_still_proves_an_archive_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    opt = tmp_path / ".local" / "opt" / "rg"
+    opt.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (opt / "rg").write_text("binary")
+    (bin_dir / "rg").symlink_to(opt / "rg")
+    archive = _tool(
+        Method(kind="github_release", params={"repo": "a/rg", "asset": "x", "member": "rg"}),
+        tool_id="rg",
+    )
+    plan = plan_removal([archive], bin_dir)
+    assert plan.removable == (bin_dir / "rg", opt)
+    assert plan.yourself == ()

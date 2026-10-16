@@ -7,13 +7,11 @@ are left alone."""
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
-from installer.apps import APP_KINDS
-from installer.download import DOWNLOAD_KINDS, cli_spec, is_still_proven, link_name
+from installer.download import DOWNLOAD_KINDS, artifact_paths, is_still_proven
 from installer.enums import UninstallState
-from installer.executors import ExecutorError
-from installer.locations import applications_dir, opt_dir
+from installer.locations import opt_dir
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.policy import Policy, omz_plugins_policy, tweak_policy
@@ -30,63 +28,13 @@ def _exists(path: Path) -> bool:
     return path.exists() or path.is_symlink()
 
 
-def _plan_app(method: Method, default_bin_dir: Path, add: Callable[[Path], None]) -> None:
-    """Plan the ~/Applications bundle and the cli symlink an app method created.
-
-    Only the userspace bundle is planned — a copy in /Applications was never
-    ours to manage. The cli symlink name comes from the same validator the
-    installer uses (apps.cli_spec), so an invalid cli that install_app would
-    have rejected — and therefore never symlinked — plans nothing.
-    """
-    app = method.params.get("app")
-    if not isinstance(app, str) or not app:
-        return
-    if PurePosixPath(app).name != app or app in (".", ".."):
-        return
-    add(applications_dir() / app)
-    try:
-        spec = cli_spec(method)
-    except ExecutorError:
-        return
-    if spec is None:
-        return
-    add(default_bin_dir / spec[1])
-
-
-def _download_link(method: Method, default_bin_dir: Path) -> tuple[Path, str] | None:
-    """The (link path, link name) a download method creates, or None.
-
-    The one lookup `plan_uninstall` (lenient evidence) and `plan_removal`
-    (strict proof) both use, so the two can never disagree about where a
-    link lives or what it is called: `bin_name` first, else `member`'s
-    basename — the same rule `download.link_name` gives install and update.
-    """
-    if method.kind not in DOWNLOAD_KINDS:
-        return None
-    member = method.params.get("member")
-    if not isinstance(member, str) or not member:
-        return None
-    name = link_name(method, member)
-    if name in ("", ".", ".."):
-        # Defensive: a traversal/empty basename would resolve opt_dir/bin
-        # paths up to ~/.local and risk deleting far more than one tool.
-        # Members come from the trusted registry, but this code deletes files.
-        return None
-    declared = method.params.get("bin_dir")
-    base = (
-        Path(declared).expanduser() if isinstance(declared, str) and declared else default_bin_dir
-    )
-    return base / name, name
-
-
 def plan_uninstall(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
     """Existing artifacts the download/raw/app executors would have created.
 
-    The registry is the manifest: every download/raw method maps to opt_dir(binname)
-    and <bin_dir>/binname, where binname is the basename of the method's member;
-    every app method maps to ~/Applications/<app> and <bin_dir>/<cli basename>.
-    Only paths that currently exist (including dangling symlinks) are returned, in a
-    stable de-duplicated order.
+    The paths come from `download.artifact_paths` (D-07) — the same formula
+    install uses for placement, so removal never computes paths separately
+    from install. Only paths that currently exist (including dangling
+    symlinks) are returned, in a stable de-duplicated order.
     """
     found: list[Path] = []
     seen: set[Path] = set()
@@ -98,15 +46,8 @@ def plan_uninstall(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
 
     for tool in tools:
         for method in tool.methods:
-            if method.kind in APP_KINDS:
-                _plan_app(method, default_bin_dir, add)
-                continue
-            hit = _download_link(method, default_bin_dir)
-            if hit is None:
-                continue
-            link, name = hit
-            add(opt_dir(name))
-            add(link)
+            for artifact in artifact_paths(method, default_bin_dir):
+                add(artifact.path)
     return found
 
 
@@ -141,22 +82,24 @@ def still_removable(path: Path, bin_dir: Path) -> bool:
 def plan_removal(tools: list[Tool], default_bin_dir: Path) -> RemovalPlan:
     """Prove removability by the archive layout only; name the rest.
 
-    A download method is proven when its link (per `_download_link`, the
-    same name install creates) is a symlink whose target is a regular file
-    inside this tool's own opt_dir(<link name>) — so a uv/pip file at a
+    For each download method, the (link, opt dir) pair comes from
+    `download.artifact_paths` (D-07) — the same placement install uses. A
+    method is proven when its link is a symlink whose target is a regular
+    file inside this tool's own opt_dir(<link name>) — so a uv/pip file at a
     matching name, or a link into another tool's opt dir, is never proven.
-    Unproven matches keep the lenient `plan_uninstall` list as `yourself`.
+    Raw methods have no link artifact and are never layout-proven. Unproven
+    matches keep the lenient `plan_uninstall` list as `yourself`.
     """
     removable: list[Path] = []
     seen: set[Path] = set()
     for tool in tools:
         for method in tool.methods:
-            hit = _download_link(method, default_bin_dir)
-            if hit is None:
+            if method.kind not in DOWNLOAD_KINDS:
                 continue
-            link, name = hit
-            opt = opt_dir(name)
-            if not is_still_proven(link):
+            artifacts = artifact_paths(method, default_bin_dir)
+            link = next((a.path for a in artifacts if a.kind == "link"), None)
+            opt = next((a.path for a in artifacts if a.kind == "dir"), None)
+            if link is None or opt is None or not is_still_proven(link):
                 continue
             for path in (link, opt):
                 if path not in seen:
