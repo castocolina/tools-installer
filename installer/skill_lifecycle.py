@@ -408,7 +408,7 @@ def _find_project_repos(home: Path) -> tuple[Path, ...]:
                         break
         except OSError:
             continue
-    return tuple(repos)
+    return tuple(sorted(repos))  # listing order is arbitrary; reasons and steps are not
 
 
 def _installed_runtimes(repo: Path) -> tuple[str, ...]:
@@ -483,13 +483,31 @@ def _global_uninstall_step(tool_id: str, harness: str, package: str, version: st
     return ConfigStep(text, "project_pack_global_uninstall", harness, argv)
 
 
+def _project_install_step(
+    tool_id: str, runtime: str, package: str, version: str, repo: Path, verb: str
+) -> ConfigStep | None:
+    """The per-repo install Phase 20 runs in `repo`; None unless it is an absolute real dir.
+
+    The argv comes only from constants and the registry pin; the repo is only the `cwd`.
+    """
+    if not repo.is_absolute() or not stat.S_ISDIR(_lstat_mode(repo)):
+        return None
+    label = SKILL_HARNESS_LABELS.get(runtime, runtime)
+    flag = _GSD_RUNTIME_IDS.get(runtime, runtime)
+    argv = ("pnpm", "dlx", f"{package}@{version}", f"--{flag}", "--local", "--relative-includes")
+    text = f"{verb} {tool_id} for {label} in {repo.name}"
+    return ConfigStep(text, "project_pack_install", runtime, argv, repo)
+
+
 def inspect_project_pack(tool: Tool, home: Path, present: Collection[str]) -> ProjectPackReport:
     """D-21 facts of a project-scope pack: global leftovers and per-repo installs; read-only.
 
     A user-scope pack yields an empty report. Each leftover harness gets the pack's own
     global uninstall as its step; nothing under HOME is ever deleted here. Leftovers are
     files on disk, so they are reported whether or not their harness is in `present`
-    (which scopes the per-repo install steps).
+    (which scopes the per-repo install steps). A found repo with no real install gets an
+    install step per present runtime; an empty install gets its reinstall step. Steps
+    are built here and run only by Phase 20.
     """
     lifecycle = tool.skill_lifecycle
     package = PROJECT_PACK_PACKAGES.get(tool.id)
@@ -515,10 +533,7 @@ def inspect_project_pack(tool: Tool, home: Path, present: Collection[str]) -> Pr
         for directory in hits:
             if directory in PROJECT_SHARED_GLOBAL_DIRS:
                 shared.setdefault(directory, harness)
-    repos = tuple((repo, _installed_runtimes(repo)) for repo in _find_project_repos(home))
-    if not leftovers:
-        return ProjectPackReport(repos=repos, unchecked=tuple(unchecked))
-    reasons = [_GLOBAL_LEFTOVER_REASON]
+    reasons = [_GLOBAL_LEFTOVER_REASON] if leftovers else []
     for directory, harness in shared.items():
         label = SKILL_HARNESS_LABELS.get(harness, harness)
         other = PROJECT_SHARED_GLOBAL_DIRS[directory]
@@ -526,14 +541,40 @@ def inspect_project_pack(tool: Tool, home: Path, present: Collection[str]) -> Pr
             f"gsd-* entries in ~/{directory}: GSD writes there for {label} and for {other}, "
             f"so the {label} uninstall may not remove them"
         )
-    steps = tuple(
-        _global_uninstall_step(tool.id, harness, package, version) for harness in leftovers
-    )
+    steps = [_global_uninstall_step(tool.id, harness, package, version) for harness in leftovers]
+    repos: list[tuple[Path, tuple[str, ...]]] = []
+    for repo in _find_project_repos(home):
+        installed = _installed_runtimes(repo)
+        repos.append((repo, installed))
+        empty = [
+            runtime
+            for runtime, directory in PROJECT_RUNTIME_DIRS.items()
+            if runtime not in installed
+            and any(
+                stat.S_ISREG(_lstat_mode(repo / directory / trace))
+                for trace in ("gsd-core/VERSION", "gsd-install-state.json")
+            )
+        ]
+        if not installed and not empty:
+            reasons.append(f"not installed in {repo.name}")
+            targets = [(runtime, "install") for runtime in PROJECT_RUNTIME_DIRS]
+        else:
+            # A runtime with no install trace beside a real one may be unused on purpose.
+            reasons += [
+                f"{SKILL_HARNESS_LABELS.get(runtime, runtime)} install in {repo.name} is empty"
+                for runtime in empty
+            ]
+            targets = [(runtime, "reinstall") for runtime in empty]
+        for runtime, verb in targets:
+            if runtime in present:
+                step = _project_install_step(tool.id, runtime, package, version, repo, verb)
+                if step is not None:
+                    steps.append(step)
     return ProjectPackReport(
-        repos=repos,
+        repos=tuple(repos),
         leftovers=tuple(leftovers),
         reasons=tuple(reasons),
-        steps=steps,
+        steps=tuple(steps),
         unchecked=tuple(unchecked),
     )
 

@@ -1,6 +1,7 @@
 import contextlib
 import json
 import os
+import shutil
 import subprocess
 from collections import deque
 from collections.abc import Callable, Generator, Iterator
@@ -597,9 +598,11 @@ def test_shipped_skill_pack_contracts_use_only_documented_upstream_commands() ->
             "removal_fragment": "npx skills remove",
         },
         "opengsd": {
-            "install_fragment": "npx @opengsd/gsd-core@latest",
-            "update_fragment": "/gsd-update",
-            "removal_fragment": "--uninstall",
+            "install_fragment": (
+                "pnpm dlx @opengsd/gsd-core@1.16.0 --<runtime> --local --relative-includes"
+            ),
+            "update_fragment": "--local --relative-includes",
+            "removal_fragment": "--local --uninstall",
         },
         "spec-kit": {
             "install_fragment": 'specify init "$PROJECT_DIR"',
@@ -2061,3 +2064,118 @@ def test_repo_walk_writes_nothing(tmp_path: Path) -> None:
 
     assert len(_repos(tmp_path)) == 3
     assert _home_fingerprint(tmp_path) == before
+
+
+def _install_step(runtime: str, repo: Path, verb: str = "install") -> ConfigStep:
+    return ConfigStep(
+        text=f"{verb} opengsd for {SKILL_HARNESS_LABELS[runtime]} in {repo.name}",
+        kind="project_pack_install",
+        harness=runtime,
+        argv=(
+            "pnpm",
+            "dlx",
+            "@opengsd/gsd-core@1.16.0",
+            f"--{runtime}",
+            "--local",
+            "--relative-includes",
+        ),
+        cwd=repo,
+    )
+
+
+def _gsd_pack(home: Path, present: set[str]) -> ProjectPackReport:
+    return inspect_project_pack(_tools()["opengsd"], home, frozenset(present))
+
+
+def test_repo_without_any_install_gets_install_steps(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "git/app")
+
+    report = _gsd_pack(tmp_path, {"claude", "opencode"})
+
+    assert report.repos == ((repo, ()),)
+    assert report.reasons == ("not installed in app",)
+    assert report.steps == (_install_step("claude", repo), _install_step("opencode", repo))
+    assert report.steps[0].text == "install opengsd for Claude Code in app"
+
+
+def test_empty_install_gets_a_reinstall_step(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "git/app")
+    _empty_install(repo)
+
+    report = _gsd_pack(tmp_path, {"claude", "opencode"})
+
+    assert report.reasons == ("OpenCode install in app is empty",)
+    assert report.steps == (_install_step("opencode", repo, "reinstall"),)
+
+
+def test_absent_runtime_gets_no_step(tmp_path: Path) -> None:
+    bare = _repo(tmp_path, "git/a")
+    _empty_install(_repo(tmp_path, "git/b"))
+
+    report = _gsd_pack(tmp_path, {"claude"})
+
+    assert report.reasons == ("not installed in a", "OpenCode install in b is empty")
+    assert report.steps == (_install_step("claude", bare),)
+
+
+def test_repo_with_one_real_runtime_gets_no_step_for_others(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "git/app")
+    _gsd_install(repo, ".claude")
+
+    report = _gsd_pack(tmp_path, {"claude", "opencode"})
+
+    assert report.repos == ((repo, ("claude",)),)
+    assert (report.reasons, report.steps) == ((), ())
+
+
+def test_empty_dirs_opencode_beside_real_claude_gets_the_reinstall_step(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "git/app")
+    _gsd_install(repo, ".claude")
+    _empty_install(repo)
+
+    report = _gsd_pack(tmp_path, {"claude", "opencode"})
+
+    assert report.repos == ((repo, ("claude",)),)
+    assert report.reasons == ("OpenCode install in app is empty",)
+    assert report.steps == (_install_step("opencode", repo, "reinstall"),)
+    assert "--opencode" in report.steps[0].argv
+
+
+def test_install_step_cwd_is_validated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _repo(tmp_path, "git/rel")
+    monkeypatch.chdir(tmp_path)
+
+    relative = inspect_project_pack(_tools()["opengsd"], Path(), frozenset({"claude"}))
+
+    assert relative.reasons == ("not installed in rel",)
+    assert relative.steps == ()
+
+    def vanish(found: Path) -> tuple[str, ...]:
+        shutil.rmtree(found)
+        return ()
+
+    monkeypatch.setattr(skill_lifecycle, "_installed_runtimes", vanish)
+    report = _gsd_pack(tmp_path, {"claude"})
+
+    assert report.reasons == ("not installed in rel",)
+    assert report.steps == ()
+
+
+def test_no_step_installs_globally(tmp_path: Path) -> None:
+    _repo(tmp_path, "git/a")
+    _empty_install(_repo(tmp_path, "git/b"))
+    both = _repo(tmp_path, "git/c")
+    _gsd_install(both, ".claude")
+    _empty_install(both)
+    _gsd_install(_repo(tmp_path, "src/d"), ".claude")
+    _plant(tmp_path, ".claude/commands/gsd-plan.md")  # a global leftover beside them
+
+    report = _gsd_pack(tmp_path, {"claude", "opencode"})
+    installs = [step for step in report.steps if step.kind == "project_pack_install"]
+
+    assert len(installs) == 4
+    assert [step.kind for step in report.steps].count("project_pack_global_uninstall") == 1
+    for step in installs:
+        assert "--global" not in step.argv
+        assert step.cwd is not None and step.cwd.is_absolute()
+        assert step.cwd in dict(report.repos)

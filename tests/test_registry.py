@@ -10,6 +10,7 @@ from installer.download import pinned_url
 from installer.model import Method, Tool, load_categories, load_tools
 from installer.platform import Platform
 from installer.resolve import resolve_methods
+from installer.skill_lifecycle import inspect_project_pack
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -2562,6 +2563,33 @@ def test_audit_fix_f7_opengsd_notes_node_24() -> None:
     assert opengsd.skill_lifecycle is not None
     joined = "\n".join(opengsd.skill_lifecycle.install.instructions)
     assert "Node" in joined and "24" in joined
+    assert "npx" not in joined and "@latest" not in joined
+
+
+def test_opengsd_handoff_text_matches_scope_and_pin(tmp_path: Path) -> None:
+    opengsd = _tools_by_id()["opengsd"]
+    lifecycle = opengsd.skill_lifecycle
+    assert lifecycle is not None and lifecycle.version is not None
+    repo = tmp_path / "git" / "app"
+    (repo / ".planning").mkdir(parents=True)
+    (repo / ".planning" / "config.json").write_text("{}")
+    steps = inspect_project_pack(opengsd, tmp_path, frozenset({"claude"})).steps
+    assert [step.kind for step in steps] == ["project_pack_install"]
+    command = " ".join(steps[0].argv).replace("--claude", "--<runtime>")
+    assert command == "pnpm dlx @opengsd/gsd-core@1.16.0 --<runtime> --local --relative-includes"
+
+    install = lifecycle.install.instructions
+    update = lifecycle.update.instructions
+    removal = lifecycle.removal.instructions
+    assert command in install
+    assert command in update
+    for line in (*install, *update, *removal, *lifecycle.status.instructions):
+        if "@opengsd/gsd-core" in line:
+            assert f"@opengsd/gsd-core@{lifecycle.version}" in line
+    for line in (*install, *update):
+        assert "--global" not in line and "npx" not in line and "@latest" not in line
+    assert removal[-1] == "pnpm dlx @opengsd/gsd-core@1.16.0 --<runtime> --local --uninstall"
+    assert opengsd.uninstall == removal[-1]
 
 
 def test_audit_fix_f8_puppeteer_records_cft_linux_arm64() -> None:

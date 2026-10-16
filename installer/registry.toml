@@ -3481,9 +3481,10 @@ targets = [
 [tool.skill_lifecycle.install]
 mode = "manual-required"
 instructions = [
-  "After leaving the installer, run the required guided cross-runtime installer in a console (Node >= 24 per npm engines):",
-  "npx @opengsd/gsd-core@latest",
-  "Select the runtime and global or local scope; do not copy files from the repository.",
+  "This pack is project-local: install it per repository, never as a global install (Node >= 24 per npm engines).",
+  "After leaving the installer, in each repository that has a .planning/ directory, run once per runtime used there:",
+  "pnpm dlx @opengsd/gsd-core@1.16.0 --<runtime> --local --relative-includes",
+  "Do not copy files from the repository.",
 ]
 [tool.skill_lifecycle.status]
 mode = "manual-required"
@@ -3493,14 +3494,15 @@ instructions = [
 [tool.skill_lifecycle.update]
 mode = "manual-required"
 instructions = [
-  "From the installed agent runtime, invoke the documented update workflow:",
-  "/gsd-update",
+  "In each repository, re-run the same pinned command; a new upstream version arrives by bumping the registry pin:",
+  "pnpm dlx @opengsd/gsd-core@1.16.0 --<runtime> --local --relative-includes",
 ]
 [tool.skill_lifecycle.removal]
 mode = "manual-required"
 instructions = [
-  "Re-run the official installer with the same runtime and scope selected at install time and its uninstall flag:",
-  "npx @opengsd/gsd-core@latest --<runtime> --global|--local --uninstall",
+  "Remove a leftover global install with: pnpm dlx @opengsd/gsd-core@1.16.0 --<runtime> --global --uninstall",
+  "In each repository, remove the per-repository install with:",
+  "pnpm dlx @opengsd/gsd-core@1.16.0 --<runtime> --local --uninstall",
 ]
 
 
