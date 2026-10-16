@@ -2675,3 +2675,109 @@ def test_script_location_without_active_path_stays_by_elimination(tmp_path: Path
 )
 def test_method_removal_command_uses_the_shared_table(method: Method, expected: str | None) -> None:
     assert ownership.method_removal_command(method, "fallback") == expected
+
+
+# -- 19-05/D-13: Volta keeps no inventory; its shim dir is the proof. --------
+
+
+def _volta_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    volta_bin = tmp_path / "volta" / "bin"
+    volta_bin.mkdir(parents=True)
+    (volta_bin / "volta-shim").write_text("#!/bin/sh\n")
+    monkeypatch.setenv("VOLTA_HOME", str(tmp_path / "volta"))
+    return volta_bin
+
+
+def _volta_link(volta_bin: Path, cmd: str) -> Path:
+    link = volta_bin / cmd
+    link.symlink_to(volta_bin / "volta-shim")
+    return link
+
+
+def _pnpm_tool() -> Tool:
+    return Tool(
+        id="pnpm",
+        name="pnpm",
+        category="node",
+        cmd="pnpm",
+        methods=(Method(kind="script", params={"url": "https://get.pnpm.io/install.sh"}),),
+    )
+
+
+def test_volta_shim_resolves_to_volta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    volta_bin = _volta_bin(tmp_path, monkeypatch)
+    link = _volta_link(volta_bin, "pnpm")
+    result = _resolve(_pnpm_tool(), inventory=_empty_readable(), which=str(link))
+    assert result.owner == "volta"
+    assert result.confidence == "direct"
+    assert result.package == "pnpm"
+    assert len(result.candidates) == 1
+    assert "Volta shim" in result.candidates[0].evidence
+
+
+def test_volta_resolves_for_a_node_tool_with_a_pnpm_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PNPM_HOME", str(tmp_path / "pnpm"))
+    volta_bin = _volta_bin(tmp_path, monkeypatch)
+    link = _volta_link(volta_bin, "codex")
+    tool = Tool(
+        id="codex",
+        name="codex",
+        category="ai",
+        cmd="codex",
+        methods=(Method(kind="node", params={"npm_pkg": "@openai/codex"}),),
+    )
+    result = _resolve(tool, inventory=_readable(pnpm_globals=frozenset({"other"})), which=str(link))
+    assert result.owner == "volta"
+    assert result.confidence == "direct"
+    assert result.package == "@openai/codex"
+
+
+def test_volta_dir_defaults_to_home_volta_bin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VOLTA_HOME", raising=False)
+    dirs = owner_dirs(inventory=_readable(), managed_bin_dir=_MANAGED, platform=_MAC)
+    assert dirs["volta"] == (Path.home() / ".volta" / "bin",)
+
+
+def test_volta_shim_wins_over_an_overlapping_installer_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volta_bin = _volta_bin(tmp_path, monkeypatch)
+    link = _volta_link(volta_bin, "pnpm")
+    result = _resolve(
+        _pnpm_tool(),
+        inventory=_empty_readable(),
+        artifacts=[link],
+        which=str(link),
+        managed_bin_dir=volta_bin,
+    )
+    assert result.owner == "volta"
+    assert result.confidence == "direct"
+    assert result.shadowed is True
+    assert [candidate.owner for candidate in result.candidates] == ["installer", "volta"]
+
+
+def test_overlapping_volta_dir_without_a_shim_keeps_the_installer_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volta_bin = _volta_bin(tmp_path, monkeypatch)
+    binary = volta_bin / "pnpm"
+    binary.write_text("#!/bin/sh\n")
+    result = _resolve(
+        _pnpm_tool(),
+        inventory=_empty_readable(),
+        artifacts=[binary],
+        which=str(binary),
+        managed_bin_dir=volta_bin,
+    )
+    assert result.owner == "installer"
+    assert all(candidate.owner != "volta" for candidate in result.candidates)
+
+
+def test_volta_owner_labels() -> None:
+    assert OWNER_LABELS["volta"] == "Volta"
+    assert OWNER_DETAIL_LABELS["volta"] == "managed by Volta"
+    assert removal_hint(_record("volta", package="pnpm"), "pnpm") == (
+        "managed by Volta — `volta uninstall pnpm`"
+    )

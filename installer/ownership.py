@@ -81,6 +81,7 @@ Owner = Literal[
     "pnpm",
     "uv",
     "sdkman",
+    "volta",
     "unknown",
     "dnf",
     "apt",
@@ -455,12 +456,15 @@ def owner_dirs(
         pnpm_dir = Path(declared).expanduser()
     uv_bin = os.environ.get("UV_TOOL_BIN_DIR")
     uv_dir = Path(uv_bin).expanduser() if uv_bin else Path.home() / ".local" / "bin"
+    # Volta keeps no inventory; its shim dir is the proof (19-RESEARCH Pattern 8).
+    volta_dir = Path(os.environ.get("VOLTA_HOME", "~/.volta")).expanduser() / "bin"
     return {
         "installer": installer_dirs,
         "brew": brew_dirs,
         "cask": cask_dirs,
         "pnpm": (pnpm_dir,),
         "uv": (uv_dir,),
+        "volta": (volta_dir,),
     }
 
 
@@ -615,6 +619,12 @@ def resolve_ownership(
     matching = [candidate for candidate in candidates if candidate.owner in attributed]
     active_candidate: Owner | None = matching[0].owner if len(matching) == 1 else None
 
+    # Review H3: a verified Volta shim is decided BEFORE the single-candidate
+    # return, so a managed bin dir overlapping `$VOLTA_HOME/bin` never routes
+    # a Volta-managed binary to the installer.
+    volta = _volta_owner(tool, candidates, active_path, dirs.get("volta", ()))
+    if volta is not None:
+        return replace(volta, broken=broken)
     if active_candidate is not None:
         winner = next(candidate for candidate in candidates if candidate.owner == active_candidate)
         return replace(
@@ -757,6 +767,40 @@ def resolve_ownership(
             ),
         ),
         broken=broken,
+    )
+
+
+def _volta_owner(
+    tool: Tool,
+    candidates: tuple[OwnershipCandidate, ...],
+    active_path: Path | None,
+    volta_dirs: tuple[Path, ...],
+) -> ManagerOwnership | None:
+    """D-13: the live binary resolves to exactly `<Volta bin>/volta-shim`.
+
+    Any other file under the Volta dir is no claim, so a stray regular file
+    there keeps the existing candidate rules (T-19-12).
+    """
+    if active_path is None or active_path.name != "volta-shim":
+        return None
+    if not any(active_path.parent == _resolve_active_path(str(d)) for d in volta_dirs):
+        return None
+    node = next((method for method in tool.methods if method.kind == "node"), None)
+    synthetic = OwnershipCandidate(
+        owner="volta",
+        method=None,
+        package=tool.cmd if node is None else manager_name(node, "npm_pkg", tool.cmd),
+        current_version=None,
+        evidence=f"{tool.cmd} is a Volta shim at {active_path}",
+    )
+    return _owned(
+        tool,
+        synthetic,
+        confidence="direct",
+        shadowed=bool(candidates),
+        candidates=(*candidates, synthetic),
+        active_candidate="volta",
+        active_path=active_path,
     )
 
 
@@ -1168,6 +1212,7 @@ OWNER_LABELS: dict[Owner, str] = {
     "pnpm": "pnpm",
     "uv": "uv",
     "sdkman": "SDKMAN",
+    "volta": "Volta",
     "dnf": "dnf",
     "apt": "apt",
     "pacman": "pacman",
@@ -1241,6 +1286,7 @@ OWNER_DETAIL_LABELS: dict[Owner, str] = {
     "pnpm": "managed by pnpm",
     "uv": "managed by uv",
     "sdkman": "managed by SDKMAN",
+    "volta": "managed by Volta",
     "dnf": "managed by dnf — this installer will not update it",
     "apt": "managed by apt — this installer will not update it",
     "pacman": "managed by pacman — this installer will not update it",
@@ -1375,6 +1421,7 @@ _REMOVAL_COMMANDS: dict[Owner, str | None] = {
     "pnpm": "pnpm remove --global {package}",
     "uv": "uv tool uninstall {package}",
     "sdkman": "sdk uninstall {package} <version>",
+    "volta": "volta uninstall {package}",
     "dnf": "dnf remove {package}",
     "apt": "apt remove {package}",
     "pacman": "pacman -R {package}",
@@ -1395,6 +1442,7 @@ _REMOVAL_DESCRIPTIONS: dict[Owner, str] = {
     "pnpm": "managed by {label} — remove {name} with pnpm (no verified package name)",
     "uv": "managed by {label} — remove {name} with uv (no verified package name)",
     "sdkman": "managed by {label} — remove {name} with SDKMAN (no verified candidate name)",
+    "volta": "managed by {label} — remove {name} with Volta (no verified package name)",
     "dnf": "managed by {label} — remove {name} with dnf (no verified package name)",
     "apt": "managed by {label} — remove {name} with apt (no verified package name)",
     "pacman": "managed by {label} — remove {name} with pacman (no verified package name)",

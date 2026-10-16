@@ -279,6 +279,17 @@ def _perform(
             owner=ownership.owner,
             detail=detail,
         )
+    if ownership.owner == "volta":
+        # D-13: Volta pins and switches its own toolchain; never run it here.
+        return UpdateOutcome(
+            tool_id=target.tool.id,
+            status="unsupported",
+            owner="volta",
+            detail=(
+                "managed by Volta — update it with "
+                f"`volta install {ownership.package or target.tool.cmd}`"
+            ),
+        )
     owner = ownership.owner
     cleanup_warnings: tuple[str, ...] = ()
     detail = ""

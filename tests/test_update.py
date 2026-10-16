@@ -1211,3 +1211,13 @@ def test_updating_graphify_runs_no_host_registration(
     assert outcome.postinstall_warning is None
     assert calls == [["uv", "tool", "upgrade", "graphifyy"]]
     assert list(cwd.iterdir()) == []
+
+
+def test_update_refuses_volta_cleanly() -> None:
+    tool = _tool("pnpm", Method(kind="script", params={"url": "u"}))
+    calls: list[list[str]] = []
+    outcome = _perform(_target(tool, "volta", package="pnpm"), calls.append)
+    assert outcome.status == "unsupported"
+    assert outcome.owner == "volta"
+    assert "volta install pnpm" in outcome.detail
+    assert calls == []
