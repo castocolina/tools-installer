@@ -29,6 +29,7 @@ from installer.guards import (
     install_redirect_shims,
     install_shims,
     is_our_shim,
+    look_through_shim,
     real_binary,
     real_pnpm,
     redirect_shim_script,
@@ -1078,3 +1079,65 @@ def test_guard_redirect_warning_none_when_all_global_redirects_live(tmp_path: Pa
     )
     (shim_dir / "npx").write_text(redirect_shim_script("npx", str(pnpm)))
     assert guard_redirect_warning(shim_dir) is None
+
+
+# -- 19-04/D-13: owner attribution looks through this installer's own shims. --
+
+
+def _executable(path: Path, text: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    path.chmod(0o755)
+    return path
+
+
+def test_look_through_shim_finds_the_real_binary(tmp_path: Path):
+    shim_dir = tmp_path / "bin"
+    shim = _executable(shim_dir / "pnpm", f"#!/bin/sh\n{REDIRECT_SENTINEL}\n")
+    real = _executable(tmp_path / "real" / "pnpm", "#!/bin/sh\n")
+    path_value = f"{shim_dir}{os.pathsep}{real.parent}"
+    found = look_through_shim(str(shim), "pnpm", shim_dir=shim_dir, path_value=path_value)
+    assert found == str(real)
+
+
+def test_look_through_shim_keeps_a_non_shim_hit(tmp_path: Path):
+    shim_dir = tmp_path / "bin"
+    corepack = _executable(shim_dir / "pnpm", "#!/bin/sh\n")
+    path_value = str(shim_dir)
+    found = look_through_shim(str(corepack), "pnpm", shim_dir=shim_dir, path_value=path_value)
+    assert found == str(corepack)
+
+
+def test_look_through_shim_ignores_shims_outside_the_managed_dir(tmp_path: Path):
+    shim_dir = tmp_path / "bin"
+    shim_dir.mkdir()
+    other = _executable(tmp_path / "other" / "pnpm", f"#!/bin/sh\n{REDIRECT_SENTINEL}\n")
+    found = look_through_shim(str(other), "pnpm", shim_dir=shim_dir, path_value=str(other.parent))
+    assert found == str(other)
+
+
+def test_look_through_shim_none_stays_none(tmp_path: Path):
+    assert look_through_shim(None, "pnpm", shim_dir=tmp_path, path_value=str(tmp_path)) is None
+
+
+def test_is_our_shim_never_reads_a_large_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    big = tmp_path / "big"
+    big.write_text(f"#!/bin/sh\n{REDIRECT_SENTINEL}\n" + "#" * 9 * 1024)
+
+    def refuse(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("read a large file")
+
+    monkeypatch.setattr(Path, "read_text", refuse)
+    assert is_our_shim(big) is False
+
+
+def test_rendered_shims_fit_under_the_size_cap():
+    target = "/home/user/.local/share/pnpm/pnpm"
+    texts = [shim_script(name) for name in BANNED]
+    texts += [redirect_shim_script(name, target) for name in REDIRECTED]
+    texts += [
+        global_redirect_shim_script(name, volta_path=target, passthrough_path=target)
+        for name in GLOBAL_REDIRECTED
+    ]
+    assert texts
+    assert all(len(text.encode()) < 8192 for text in texts)

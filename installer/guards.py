@@ -271,9 +271,16 @@ def global_redirect_shim_script(name: str, *, volta_path: str, passthrough_path:
     )
 
 
+# Every shim this module renders is far below this; a 150 MB AppImage on PATH
+# must never be read to answer "is this our shim".
+_SHIM_MAX_BYTES = 8192
+
+
 def is_our_shim(path: Path) -> bool:
     """True only for a readable file carrying our sentinel; never a real binary."""
     try:
+        if path.stat().st_size > _SHIM_MAX_BYTES:
+            return False
         text = path.read_text()
     except (OSError, UnicodeDecodeError):
         return False
@@ -310,6 +317,22 @@ def real_binary(
         found = lookup(name, os.pathsep.join(rest))
     if found is None or is_our_shim(Path(found)):
         return None
+    return found
+
+
+def look_through_shim(
+    found: str | None,
+    name: str,
+    *,
+    shim_dir: Path,
+    path_value: str,
+    lookup: PathLookup = which_in_path,
+) -> str | None:
+    """The binary the refresh pass attributes: behind this installer's own shim
+    in the managed bin dir, the real binary it forwards to; any other hit as-is
+    (D-13)."""
+    if found is not None and Path(found).parent == shim_dir and is_our_shim(Path(found)):
+        return real_binary(name, shim_dir=shim_dir, path_value=path_value, lookup=lookup)
     return found
 
 
