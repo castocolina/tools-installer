@@ -1,16 +1,16 @@
 """Receipt round-trips and the suite-wide receipts sandbox (plan 19-01, Task 1)."""
 
+import contextlib
 import hashlib
-import io
 import json
 import os
 import threading
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import Literal
 
 import pytest
 
-from installer import model, receipts
+from installer import atomic, model, receipts
 from installer.model import Method, Tool
 from installer.receipts import (
     Receipt,
@@ -116,50 +116,25 @@ def test_method_key_is_stable() -> None:
 # --- Task 2: the reader fails closed ------------------------------------------
 
 
-class _CountingReader(io.BufferedReader):
-    """Reader that records every bounded read size the module asks for."""
-
-    sizes: ClassVar[list[int]] = []
-
-    def read(self, size: int | None = -1) -> bytes:
-        _CountingReader.sizes.append(-1 if size is None else size)
-        return super().read(size)
-
-
 def test_read_fails_closed_on_a_file_that_grew_after_the_size_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Review C2-M1: the 64 KiB cap is the read itself, not the lstat. A file
-    that grows (or is swapped) after the size check is still rejected, and at
-    most 65537 bytes are ever read from the opened file."""
+    """Review C2-M1: the 64 KiB cap is the read itself, not a stat. A file
+    that grows (or is swapped) after any earlier size check is still rejected,
+    and at most 65537 bytes are ever read from the opened descriptor."""
     path = receipt_path("yq")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("x" * 10 + json.dumps({"v": 1, "tool": "yq"}) + " " * 66000, encoding="utf-8")
-    real_lstat = Path.lstat
+    sizes: list[int] = []
+    real_read = os.read
 
-    def fake_lstat(self: Path) -> os.stat_result:
-        stat = real_lstat(self)
-        if self == path:
-            # Report a small regular file: what the size check saw before the
-            # file quietly grew to 66+ KiB.
-            fields = [int(value) for value in tuple(stat)]
-            fields[6] = 100
-            fields[0] = (fields[0] & ~0o170000) | 0o100000
-            return os.stat_result((*fields,))
-        return stat
+    def counting_read(fd: int, size: int) -> bytes:
+        sizes.append(size)
+        return real_read(fd, size)
 
-    monkeypatch.setattr(Path, "lstat", fake_lstat)
-    real_open = Path.open
-    _CountingReader.sizes = []
-
-    def fake_open(self: Path, mode: str = "r", buffering: int = -1) -> io.BufferedReader:
-        assert mode == "rb"
-        return _CountingReader(io.FileIO(self, mode))
-
-    monkeypatch.setattr(Path, "open", fake_open)
+    monkeypatch.setattr(atomic.os, "read", counting_read)
     assert receipts.read("yq") is None
-    assert _CountingReader.sizes == [65537]
-    del real_open
+    assert sizes == [65537]
 
 
 def _malformed(tmp_path: Path, content: str | bytes) -> None:
@@ -898,3 +873,44 @@ def test_rehash_memo_compares_each_receipts_digest(
     assert receipts.matches(wrong) is False
     assert receipts.matches(right) is True
     assert calls == [target]
+
+
+def test_receipt_read_goes_through_read_capped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A valid receipt is read once, without following a symlink at the path."""
+    write(_sample(tmp_path))
+    seen: list[tuple[Path, int, bool]] = []
+    real = receipts.read_capped
+
+    def recording(path: Path, cap: int, *, follow_symlinks: bool) -> bytes | None:
+        seen.append((path, cap, follow_symlinks))
+        return real(path, cap, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(receipts, "read_capped", recording)
+    loaded = receipts.read("yq")
+
+    assert loaded is not None and loaded.tool == "yq"
+    assert len(seen) == 1
+    path, cap, follow = seen[0]
+    assert path == receipt_path("yq")
+    assert follow is False
+    assert cap == 64 * 1024
+
+
+def test_receipt_read_never_blocks_on_a_fifo(tmp_path: Path) -> None:
+    """A FIFO planted at the receipt path is no receipt, and reading it cannot stall."""
+    path = receipt_path("yq")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.mkfifo(path)
+    box: list[object] = []
+    thread = threading.Thread(target=lambda: box.append(receipts.read("yq")), daemon=True)
+    try:
+        thread.start()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert box == [None]
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+        thread.join(timeout=5)

@@ -1,4 +1,7 @@
+import contextlib
 import os
+import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -8,6 +11,7 @@ from installer.atomic import (
     OLD_SUFFIX,
     atomic_write_bytes,
     atomic_write_text,
+    read_capped,
     recover_update_remnants,
     staged_sibling,
 )
@@ -164,3 +168,68 @@ def test_two_writes_to_the_same_target_produce_different_temp_names(
     assert captured[0] != captured[1]
     assert all(path.name.endswith(".tools-installer.tmp") for path in captured)
     assert target.read_text() == "two"
+
+
+def _bounded(call: Callable[[], bytes | None]) -> tuple[threading.Thread, list[bytes | None]]:
+    """Run `call` on a daemon thread and refuse to wait more than five seconds.
+
+    A FIFO with no writer used to block `open` forever. The caller releases any
+    reader the old code left waiting, then joins again so the thread is gone.
+    """
+    box: list[bytes | None] = []
+
+    def run() -> None:
+        box.append(call())
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(timeout=5)
+    return thread, box
+
+
+def test_read_capped_reads_a_regular_file(tmp_path: Path) -> None:
+    small = tmp_path / "small.bin"
+    small.write_bytes(b"abc")
+    exact = tmp_path / "exact.bin"
+    exact.write_bytes(b"x" * 8)
+
+    assert read_capped(small, 8, follow_symlinks=False) == b"abc"
+    assert read_capped(exact, 8, follow_symlinks=True) == b"x" * 8
+
+
+def test_read_capped_refuses_an_oversize_file(tmp_path: Path) -> None:
+    path = tmp_path / "big.bin"
+    path.write_bytes(b"x" * 9)
+
+    assert read_capped(path, 8, follow_symlinks=False) is None
+
+
+def test_read_capped_never_blocks_on_a_fifo(tmp_path: Path) -> None:
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)
+    thread = threading.Thread()
+    try:
+        for follow in (False, True):
+            thread, box = _bounded(
+                lambda follow=follow: read_capped(fifo, 8, follow_symlinks=follow)
+            )
+            assert not thread.is_alive()
+            assert box == [None]
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        thread.join(timeout=5)
+
+
+def test_read_capped_refuses_a_symlink_unless_following(tmp_path: Path) -> None:
+    target = tmp_path / "real.bin"
+    target.write_bytes(b"payload")
+    link = tmp_path / "link.bin"
+    link.symlink_to(target)
+    directory = tmp_path / "dir"
+    directory.mkdir()
+
+    with pytest.raises(OSError):
+        read_capped(link, 64, follow_symlinks=False)
+    assert read_capped(link, 64, follow_symlinks=True) == b"payload"
+    assert read_capped(directory, 64, follow_symlinks=False) is None

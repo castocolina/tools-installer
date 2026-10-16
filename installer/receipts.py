@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from installer import locations
-from installer.atomic import atomic_write_text
+from installer.atomic import atomic_write_text, read_capped
 from installer.checksums import sha256_file
 from installer.download import artifact_paths
 from installer.locations import ensure_dir
@@ -148,21 +148,18 @@ def write(receipt: Receipt) -> None:
 def read(tool_id: str) -> Receipt | None:
     """Read back the receipt written for `tool_id`; None when it cannot be trusted.
 
-    Fail-closed: a missing file, a non-regular file, a file over 64 KiB (the
-    cap is the READ itself, so a file that grows or is swapped after the size
-    check is still rejected), malformed JSON, non-UTF-8 bytes, deep nesting
-    (RecursionError), an unknown version, a tool-id mismatch, any wrong-typed
-    field or any artifact violating its type's required fields returns None.
-    A bad tool id still raises ValueError: that is a programming error, not
-    an untrusted-input case."""
+    Fail-closed: a missing file, a non-regular file (a FIFO or a device is
+    refused without blocking), a symlink at the receipt path, a file over
+    64 KiB (the cap is the READ itself, so a file that grows or is swapped
+    after any earlier stat is still rejected), malformed JSON, non-UTF-8
+    bytes, deep nesting (RecursionError), an unknown version, a tool-id
+    mismatch, any wrong-typed field or any artifact violating its type's
+    required fields returns None. A bad tool id still raises ValueError:
+    that is a programming error, not an untrusted-input case."""
     path = receipt_path(tool_id)
     try:
-        st = path.lstat()
-        if not stat_module.S_ISREG(st.st_mode) or st.st_size > _MAX_RECEIPT_BYTES:
-            return None
-        with path.open("rb") as handle:
-            raw_bytes = handle.read(_MAX_RECEIPT_BYTES + 1)
-        if len(raw_bytes) > _MAX_RECEIPT_BYTES:
+        raw_bytes = read_capped(path, _MAX_RECEIPT_BYTES, follow_symlinks=False)
+        if raw_bytes is None:
             return None
         raw = raw_bytes.decode("utf-8")
         raw_data = json.loads(raw)

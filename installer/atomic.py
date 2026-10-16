@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat as stat_module
 import uuid
 from pathlib import Path
 
@@ -112,6 +113,38 @@ def recover_update_remnants(live: Path) -> None:
     if live.exists():
         shutil.rmtree(live)
     os.replace(old, live)
+
+
+def read_capped(path: Path, cap: int, *, follow_symlinks: bool) -> bytes | None:
+    """Read at most `cap` bytes of a regular file, or None when it is not one.
+
+    The open is non-blocking: a FIFO planted at `path` cannot stall `open`
+    while a caller holds a lock. The type and the size are checked with
+    `fstat` on the opened descriptor, so a swap after any earlier stat is
+    still caught. `O_NOFOLLOW` is set unless `follow_symlinks` is True, which
+    is how a dotfiles-manager symlink stays readable. `OSError` from the open
+    propagates, so a caller can still tell "missing" from "unreadable".
+    """
+    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC
+    if not follow_symlinks:
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        info = os.fstat(descriptor)
+        if not stat_module.S_ISREG(info.st_mode):
+            return None
+        chunks: list[bytes] = []
+        remaining = cap + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    finally:
+        os.close(descriptor)
+    data = b"".join(chunks)
+    return None if len(data) > cap else data
 
 
 def replace_symlink(link: Path, target: str) -> None:
