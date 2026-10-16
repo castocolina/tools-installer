@@ -13,7 +13,9 @@ from typing import cast
 
 import pytest
 
-from installer import version_status
+from installer import download, receipts, uninstall, version_status
+from installer.engine import InstallOutcome, install_tool
+from installer.enums import InstallStatus
 from installer.guards import REDIRECT_SENTINEL
 from installer.manager_versions import ManagerVersion, OutdatedReport
 from installer.model import (
@@ -66,6 +68,7 @@ from installer.version_status import (
     version_notes,
 )
 from installer.versions import Release, VersionError, resolve_github_tag
+from tests.test_download import fixture_runner
 
 _MANAGED = Path("/tmp/tools-installer-bin")
 
@@ -3576,3 +3579,225 @@ def test_shadowed_note_variants() -> None:
     assert f"shadowed — live copy at {live}" in ownership_notes(tool, owned, _platform())
     alone = replace(owned, active_path=None)
     assert "shadowed" in ownership_notes(tool, alone, _platform())
+
+
+# -- 19-14 Task 1: receipts are state evidence; drift is BROKEN and a corrupt
+# receipt is unproven (D-08, SPEC R4). --
+
+_LINUX = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
+_CHANGED = "changed since install"
+_UNREADABLE = "install receipt unreadable — treated as unproven"
+_YQ_BYTES = b"#!/bin/sh\necho yq 4.54.1\n"
+_YQ_METHOD = Method(
+    kind="github_release",
+    params={"repo": "mikefarah/yq", "asset": "yq_linux_{arch.deb}", "member": "yq", "raw": True},
+)
+_RG_ASSET = "rg-14.1.0-x86_64.tar.gz"
+_RG_METHOD = Method(
+    kind="github_release",
+    params={
+        "repo": "BurntSushi/ripgrep",
+        "asset": "rg-{ver}-{arch.machine}.tar.gz",
+        "member": "rg-x/rg",
+    },
+)
+
+
+def _yq() -> Tool:
+    return Tool(id="yq", name="yq", category="data", cmd="yq", methods=(_YQ_METHOD,), tier="user")
+
+
+def _rg_archive() -> Tool:
+    return Tool(
+        id="rg", name="ripgrep", category="search", cmd="rg", methods=(_RG_METHOD,), tier="user"
+    )
+
+
+def _scratch_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """HOME is tmp_path; returns its `~/.local/bin` (the managed bin dir)."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    return bin_dir
+
+
+def _receipt_service(
+    tmp_path: Path,
+    bin_dir: Path,
+    *,
+    resolve_tag: Callable[[str], str] = lambda _repo: "v4.54.1",
+    inventory: ManagerInventory | None = None,
+    which: Callable[[str], str | None] | None = None,
+) -> VersionRefreshService:
+    def managed_which(cmd: str) -> str | None:
+        hit = bin_dir / cmd
+        return str(hit) if hit.exists() or hit.is_symlink() else None
+
+    held = inventory if inventory is not None else _empty_inventory()
+
+    def read_inventory(**_kwargs: object) -> ManagerInventory:
+        return held
+
+    return VersionRefreshService(
+        platform=_LINUX,
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=resolve_tag,
+        probe_output=lambda _argv: "4.54.1",
+        now=lambda: _STATE_NOW,
+        managed_bin_dir=bin_dir,
+        which=which if which is not None else managed_which,
+        read_inventory_fn=read_inventory,
+        read_outdated_fn=_empty_outdated,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        query=lambda *_args, **_kwargs: "",
+    )
+
+
+def _settled(service: VersionRefreshService, tool: Tool) -> ToolState:
+    service.refresh([tool])
+    state = service.state_of(tool.id)
+    assert state is not None
+    return state
+
+
+def _receipt_reasons(state: ToolState) -> list[str]:
+    """The reasons this plan adds (locked 19-UI-SPEC copy), in state order."""
+    return [
+        r
+        for r in state.reasons
+        if r in (_CHANGED, _UNREADABLE) or r.startswith(("adopted: ", "not proven: "))
+    ]
+
+
+def _place_yq_with_receipt(bin_dir: Path) -> Path:
+    placed = bin_dir / "yq"
+    placed.write_bytes(_YQ_BYTES)
+    assert receipts.record(_yq(), _YQ_METHOD, package=None, smoke=None, default_bin_dir=bin_dir)
+    return placed
+
+
+def test_state_carries_the_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    _place_yq_with_receipt(bin_dir)
+    state = _settled(_receipt_service(tmp_path, bin_dir), _yq())
+    assert state.receipt is not None
+    assert state.receipt == receipts.read("yq")
+    assert state.health is Health.OK
+    assert state.removable.removable == (bin_dir / "yq",)
+
+
+def test_drifted_receipt_is_broken(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    placed = _place_yq_with_receipt(bin_dir)
+    placed.write_bytes(_YQ_BYTES + b"# replaced\n")
+    state = _settled(_receipt_service(tmp_path, bin_dir), _yq())
+    assert state.health is Health.BROKEN
+    assert state.reasons[0] == _CHANGED
+    assert state.reasons.count(_CHANGED) == 1
+    assert state.removable.removable == ()
+
+
+def test_corrupt_receipt_is_an_unproven_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    (bin_dir / "yq").write_bytes(_YQ_BYTES)
+    path = receipts.receipt_path("yq")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{", encoding="utf-8")
+    state = _settled(_receipt_service(tmp_path, bin_dir), _yq())
+    assert state.health is not Health.BROKEN
+    assert _UNREADABLE in state.reasons
+    assert state.receipt is None
+    assert state.removable.removable == ()
+
+
+def test_receiptless_kinds_have_no_receipt_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    system = tmp_path / "usr" / "bin"
+    system.mkdir(parents=True)
+    (system / "jq").write_bytes(b"#!/bin/sh\n")
+    tool = Tool(
+        id="jq",
+        name="jq",
+        category="data",
+        cmd="jq",
+        methods=(Method(kind="dnf", params={"package": "jq"}),),
+        tier="user",
+    )
+    service = _receipt_service(
+        tmp_path, bin_dir, which=lambda cmd: str(system / cmd) if cmd == "jq" else None
+    )
+    state = _settled(service, tool)
+    assert state.receipt is None
+    assert not _receipt_reasons(state)
+
+
+def _pin_download_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    workdir = tmp_path / "dl"
+    workdir.mkdir(exist_ok=True)
+
+    def fake_mkdtemp(prefix: str) -> str:
+        del prefix
+        workdir.mkdir(exist_ok=True)
+        return str(workdir)
+
+    monkeypatch.setattr(download.tempfile, "mkdtemp", fake_mkdtemp)
+    return workdir
+
+
+def _install(
+    tool: Tool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    payload: bytes = _YQ_BYTES,
+    repair: bool = False,
+) -> InstallOutcome:
+    """Install `tool` (yq raw or the rg archive) through the real ladder, offline."""
+    workdir = _pin_download_workdir(tmp_path, monkeypatch)
+    opt = tmp_path / ".local" / "opt" / "rg"
+    if tool.id == "rg":
+        _calls, runner = fixture_runner(
+            workdir, {_RG_ASSET: b"archive"}, member=opt / "rg-x" / "rg"
+        )
+        tag = "14.1.0"
+    else:
+        _calls, runner = fixture_runner(workdir, {"yq_linux_amd64": payload})
+        tag = "v4.54.1"
+    return install_tool(
+        tool,
+        _LINUX,
+        runner=runner,
+        resolve_tag=lambda _repo: tag,
+        present=lambda _tool: False,
+        repair=repair,
+    )
+
+
+def test_changed_link_target_is_broken_and_not_removable_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ROADMAP SC3 (checker W7): install, relink, read BROKEN, refuse removal."""
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    rg = _rg_archive()
+    outcome = _install(rg, tmp_path, monkeypatch)
+    assert outcome.status == InstallStatus.INSTALLED
+    link = bin_dir / "rg"
+    assert receipts.read("rg") is not None
+    other = tmp_path / ".local" / "opt" / "rg" / "other"
+    other.write_bytes(b"#!/bin/sh\n")
+    link.unlink()
+    link.symlink_to(other)
+    state = _settled(_receipt_service(tmp_path, bin_dir), rg)
+    assert state.health is Health.BROKEN
+    assert state.reasons[0] == _CHANGED
+    assert state.removable.removable == ()
+    removed, refused = uninstall.remove_proven([rg], [link], bin_dir)
+    assert removed == ()
+    assert refused == (f"changed since the preview; not removed: {link}",)
+    assert link.is_symlink()
+    assert receipts.receipt_path("rg").exists()

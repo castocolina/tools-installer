@@ -53,6 +53,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 import installer.locations
+from installer import receipts
 from installer.guards import look_through_shim, real_pnpm
 from installer.install_ownership import ProbeRunner, native_index
 from installer.manager_versions import OutdatedReport, read_outdated
@@ -553,6 +554,9 @@ BROKEN_SHIM_REASON = (
 NEEDS_BREW_REASON = "needs Homebrew, which is not on PATH"
 SKILL_CHECKING_REASON = "checking which hosts have it"
 SKILL_SEEDED_NOTE = "host status from the previous run, re-checking"
+# 19-UI-SPEC locked copy (D-08, D-09, SPEC R4).
+CHANGED_SINCE_INSTALL = "changed since install"
+RECEIPT_UNREADABLE_NOTE = "install receipt unreadable — treated as unproven"
 _PRESENT_HEALTH = frozenset({Health.BROKEN, Health.MISCONFIGURED, Health.OUTDATED, Health.OK})
 
 
@@ -998,6 +1002,23 @@ class VersionRefreshService:
             notes=notes,
         )
 
+    def _receipt_evidence(
+        self, tool: Tool
+    ) -> tuple[Receipt | None, tuple[str, ...], tuple[str, ...]]:
+        """(receipt, broken facts, notes) from the tool's receipt (D-08, SPEC R4).
+
+        An artifact that no longer matches its receipt is BROKEN; a receipt
+        file that does not parse proves nothing and says so as a note."""
+        path = receipts.receipt_path(tool.id)
+        if not (path.exists() or path.is_symlink()):
+            return None, (), ()
+        receipt = receipts.read(tool.id)
+        if receipt is None:
+            return None, (), (RECEIPT_UNREADABLE_NOTE,)
+        if receipts.drifted(receipt):
+            return receipt, (CHANGED_SINCE_INSTALL,), ()
+        return receipt, (), ()
+
     def _artifacts(self, tool: Tool) -> Sequence[Path]:
         if self._artifacts_for is not None:
             return self._artifacts_for(tool)
@@ -1202,12 +1223,12 @@ class VersionRefreshService:
                 unresolved=which(tool.cmd),
             )
             statuses[tool.id] = status
-            removable = plan_removal([tool], self._managed_bin_dir)
             if tool.skill_lifecycle is not None:
                 # Built at commit, from the host answers held then.
-                packs.append((tool, ownership, status, removable))
+                packs.append((tool, ownership, status, plan_removal([tool], self._managed_bin_dir)))
             else:
                 present = self._present(tool)
+                receipt, broken, receipt_notes = self._receipt_evidence(tool)
                 states[tool.id] = tool_state(
                     tool,
                     generation=started_epoch,
@@ -1216,9 +1237,12 @@ class VersionRefreshService:
                     present=present,
                     ownership=ownership,
                     version=status,
-                    removable=removable,
+                    removable=plan_removal([tool], self._managed_bin_dir),
+                    receipt=receipt,
+                    broken=broken,
                     notes=ownership_notes(tool, ownership, platform)
-                    + version_notes(tool, status, ownership, present=present),
+                    + version_notes(tool, status, ownership, present=present)
+                    + receipt_notes,
                 )
             if would_fetch:
                 fetches += 1
