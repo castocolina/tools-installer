@@ -410,6 +410,32 @@ def remove_paths(paths: list[Path]) -> None:
             path.unlink()
 
 
+def remove_proven(
+    tools: list[Tool], paths: list[Path], bin_dir: Path
+) -> tuple[tuple[Path, ...], tuple[str, ...]]:
+    """Delete the previewed `paths` that are still proven now; refuse the rest.
+
+    The one remover for the CLI and the TUI (L-19-06). The preview is not a
+    permission slip: the proof is recomputed at deletion time with a re-hash
+    of every recorded file (`verify=True`), so bytes swapped in place since
+    the preview are refused even with size and mtime restored. A tool's
+    receipt is deleted only after every path it proved is gone (D-08); a
+    failed delete raises before any receipt is touched. Returns the removed
+    paths and one refusal line per path no longer proven."""
+    fresh = plan_removal(tools, bin_dir, verify=True)
+    proven = set(fresh.removable)
+    kept = [path for path in paths if path in proven]
+    refused = tuple(
+        f"changed since the preview; not removed: {path}" for path in paths if path not in proven
+    )
+    remove_paths(kept)
+    removed = set(kept)
+    for tool_id, tool_paths in fresh.by_tool.items():
+        if all(path in removed and not _exists(path) for path in tool_paths):
+            receipts.delete(tool_id)
+    return tuple(kept), refused
+
+
 def _omz_policy(zshrc_path: Path, state_path: Path) -> Policy:
     # Per CONTEXT D-04/D-05/D-06: present drives missing_requires, which gates
     # ENABLING the tweak (D-05/D-06); a teardown must never be gated on it,

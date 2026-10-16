@@ -90,6 +90,7 @@ from installer.uninstall import (
     plan_removal,
     policy_owned,
     remove_paths,
+    remove_proven,
     still_removable,
     sweep_policies,
     sweep_tweaks,
@@ -613,15 +614,12 @@ def run_uninstall(
     if not confirm("Remove these artifacts?"):
         return []
     # H1 (17-REVIEW-opencode.md): the preview is not a permission slip. The
-    # proof is recomputed NOW, at deletion time, and only paths still proven
-    # are deleted; anything that changed since the preview is reported and
-    # left on disk.
-    fresh = set(plan_removal(tools, default_bin_dir).removable)
-    kept = [path for path in paths if path in fresh]
-    for path in paths:
-        if path not in fresh:
-            console.print(f"changed since the preview; not removed: {path}")
-    remove_paths(kept)
+    # proof is recomputed NOW, at deletion time, with a re-hash, and only
+    # paths still proven are deleted; anything that changed since the preview
+    # is reported and left on disk (the one remover shared with the TUI).
+    removed, refused = remove_proven(tools, paths, default_bin_dir)
+    for line in refused:
+        console.print(line)
     remove_managed_block(myshellrc_path)
     remove_shims(default_bin_dir)
     remove_ban_aliases(myshellrc_path)
@@ -660,7 +658,7 @@ def run_uninstall(
         and daemon_policy.clear_decided is not None
     ):
         daemon_policy.clear_decided()
-    return kept
+    return list(removed)
 
 
 @dataclass(frozen=True)

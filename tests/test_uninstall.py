@@ -1,3 +1,4 @@
+import os
 from collections.abc import Callable
 from io import StringIO
 from pathlib import Path
@@ -20,6 +21,7 @@ from installer.uninstall import (
     plan_removal,
     plan_uninstall,
     remove_paths,
+    remove_proven,
     sweep_tweaks,
 )
 
@@ -1863,3 +1865,83 @@ def test_drifted_receipt_artifact_outside_the_authorized_set_blocks_the_tool(
     plan = plan_removal([yq], bin_dir)
     assert plan.removable == ()
     assert plan.by_tool == {}
+
+
+# --- remove_proven: one remover, re-proven with a re-hash (D-08) ------------
+
+
+def test_remove_proven_removes_and_deletes_the_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    yq, bin_dir = plant_raw_yq(tmp_path)
+    removed, refused = remove_proven([yq], [bin_dir / "yq"], bin_dir)
+    assert removed == (bin_dir / "yq",)
+    assert refused == ()
+    assert not (bin_dir / "yq").exists()
+    assert receipts.read("yq") is None
+    assert not receipts.receipt_path("yq").exists()
+
+
+def test_remove_proven_rehashes_before_deleting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bytes swapped in place with size and mtime restored pass the stat
+    shortcut; only the deletion-time re-hash catches them."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    yq, bin_dir = plant_raw_yq(tmp_path)
+    target = bin_dir / "yq"
+    st = target.stat()
+    target.write_text("YQ RAW BINARY")  # same length as the recorded bytes
+    os.utime(target, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert plan_removal([yq], bin_dir).removable == (target,)
+    removed, refused = remove_proven([yq], [target], bin_dir)
+    assert removed == ()
+    assert refused == (f"changed since the preview; not removed: {target}",)
+    assert target.read_text() == "YQ RAW BINARY"
+    assert receipts.read("yq") is not None
+
+
+def test_remove_proven_keeps_the_receipt_when_a_delete_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    yq, bin_dir = plant_raw_yq(tmp_path)
+
+    def boom(paths: list[Path]) -> None:
+        raise OSError(f"read-only: {paths[0]}")
+
+    monkeypatch.setattr("installer.uninstall.remove_paths", boom)
+    with pytest.raises(OSError, match="read-only"):
+        remove_proven([yq], [bin_dir / "yq"], bin_dir)
+    assert (bin_dir / "yq").exists()
+    assert receipts.read("yq") is not None
+
+
+def test_remove_proven_layout_tool_has_no_receipt_to_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rg, bin_dir, opt = _plant_rg(tmp_path)
+    removed, refused = remove_proven([rg], [bin_dir / "rg", opt], bin_dir)
+    assert removed == (bin_dir / "rg", opt)
+    assert refused == ()
+    assert not (bin_dir / "rg").is_symlink()
+    assert not opt.exists()
+
+
+def test_remove_proven_refuses_a_retyped_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    yq, bin_dir, decoy = _plant_retyped_yq(tmp_path)
+
+    def no_rmtree(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("rmtree must not run on a retyped artifact")
+
+    monkeypatch.setattr("shutil.rmtree", no_rmtree)
+    removed, refused = remove_proven([yq], [bin_dir / "yq"], bin_dir)
+    assert removed == ()
+    assert refused == (f"changed since the preview; not removed: {bin_dir / 'yq'}",)
+    assert (bin_dir / "yq").is_dir()
+    assert decoy.read_text() == "not ours"

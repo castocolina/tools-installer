@@ -3645,6 +3645,27 @@ def test_run_uninstall_refuses_paths_changed_since_the_preview(
     assert str(bin_dir / "fd") in buf.getvalue()
 
 
+def test_run_uninstall_uses_receipt_proof(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI `--yes` path removes a receipt-proven raw download (no layout
+    could prove it) and never a tampered receipt's `~/.ssh` decoy (D-10)."""
+    from installer import receipts
+    from installer.app import run_uninstall
+    from tests.test_uninstall import plant_raw_yq, write_receipt
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    key = tmp_path / ".ssh" / "id_ed25519"
+    key.parent.mkdir(parents=True)
+    key.write_text("PRIVATE KEY")
+    yq, bin_dir = plant_raw_yq(tmp_path, with_receipt=False)
+    write_receipt(yq, [(bin_dir / "yq", "file"), (key, "file")])
+    console, _buf = _console()
+    removed = run_uninstall([yq], console, **_uninstall_kwargs(tmp_path, bin_dir, lambda _m: True))
+    assert removed == [bin_dir / "yq"]
+    assert not (bin_dir / "yq").exists()
+    assert key.read_text() == "PRIVATE KEY"
+    assert receipts.read("yq") is None
+
+
 def test_perform_uninstall_refuses_paths_changed_since_the_preview(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
