@@ -40,6 +40,7 @@ from installer.ownership import (
 )
 from installer.platform import Platform
 from installer.resolve import resolve_methods, unavailable_reason
+from installer.terminal_shell import TerminalShellResult
 from installer.uninstall import RemovalPlan, plan_removal
 from installer.version_cache import (
     MANAGER_RETRY_BACKOFF,
@@ -4036,3 +4037,136 @@ def test_failed_rewrite_leaves_an_archive_layout_proven_and_a_raw_binary_unprove
     else:
         assert _UNPROVEN in state.reasons
         assert state.removable.removable == ()
+
+
+# -- 19-16 Task 1: terminal drift from a dry-run sync (D-16, L-19-10, review M11) --
+
+
+def _terminal_tool(tool_id: str) -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="terminal",
+        cmd=tool_id,
+        methods=(Method(kind="brew", params={"formula": tool_id}),),
+        tier="user",
+    )
+
+
+def _terminals() -> list[Tool]:
+    return [_terminal_tool(tool_id) for tool_id in ("kitty", "wezterm", "zsh", "jqx")]
+
+
+def _drift_service(
+    tmp_path: Path,
+    terminal_drift: Callable[[Platform], TerminalShellResult] | None,
+    *,
+    present: frozenset[str] = frozenset({"kitty", "wezterm", "zsh", "jqx"}),
+) -> VersionRefreshService:
+    managed = tmp_path / "managed"
+    return VersionRefreshService(
+        platform=_LINUX,
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "1.0.0",
+        probe_output=lambda _argv: "1.0.0",
+        now=lambda: _STATE_NOW,
+        managed_bin_dir=managed,
+        which=lambda _cmd: None,
+        artifacts_for=lambda _tool: [],
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        query=lambda *_args, **_kwargs: "",
+        present=lambda tool: tool.id in present,
+        terminal_drift=terminal_drift,
+    )
+
+
+def _settled_states(service: VersionRefreshService, tools: list[Tool]) -> dict[str, ToolState]:
+    service.refresh(tools)
+    states: dict[str, ToolState] = {}
+    for tool in tools:
+        state = service.state_of(tool.id)
+        assert state is not None
+        states[tool.id] = state
+    return states
+
+
+def _drifted(*names: str) -> Callable[[Platform], TerminalShellResult]:
+    return lambda _platform: TerminalShellResult(configured=names, drifted=names)
+
+
+def test_kitty_drift_is_misconfigured(tmp_path: Path) -> None:
+    states = _settled_states(_drift_service(tmp_path, _drifted("kitty")), _terminals())
+    kitty = states["kitty"]
+    assert kitty.health is Health.MISCONFIGURED
+    assert kitty.reasons[0] == "Kitty does not start zsh"
+    assert kitty.unconfigured == (
+        ConfigStep(text="point Kitty at zsh", kind="terminal_sync", harness=None),
+    )
+    for other in ("wezterm", "zsh", "jqx"):
+        assert states[other].health is Health.OK
+        assert states[other].unconfigured == ()
+
+
+def test_wezterm_drift_lands_on_its_own_row(tmp_path: Path) -> None:
+    states = _settled_states(_drift_service(tmp_path, _drifted("wezterm")), _terminals())
+    assert states["wezterm"].health is Health.MISCONFIGURED
+    assert states["wezterm"].reasons[0] == "WezTerm does not start zsh"
+    assert states["wezterm"].unconfigured == (ConfigStep("point WezTerm at zsh", "terminal_sync"),)
+    assert states["kitty"].health is Health.OK
+
+
+def test_konsole_drift_lands_on_zsh(tmp_path: Path) -> None:
+    states = _settled_states(_drift_service(tmp_path, _drifted("konsole")), _terminals())
+    zsh = states["zsh"]
+    assert zsh.health is Health.MISCONFIGURED
+    assert zsh.reasons[0] == "Konsole does not start zsh"
+    assert zsh.unconfigured == (ConfigStep("point Konsole at zsh", "terminal_sync"),)
+    for other in ("kitty", "wezterm", "jqx"):
+        assert states[other].health is Health.OK
+        assert not any("zsh" in reason for reason in states[other].reasons)
+
+
+def test_no_terminals_no_drift(tmp_path: Path) -> None:
+    states = _settled_states(_drift_service(tmp_path, _drifted()), _terminals())
+    for state in states.values():
+        assert state.health is Health.OK
+        assert not any("does not start zsh" in reason for reason in state.reasons)
+        assert state.unconfigured == ()
+
+
+def test_terminal_drift_seam_runs_once_per_pass(tmp_path: Path) -> None:
+    seen: list[Platform] = []
+
+    def drift(live: Platform) -> TerminalShellResult:
+        seen.append(live)
+        return TerminalShellResult()
+
+    service = _drift_service(tmp_path, drift)
+    service.refresh(_terminals())
+    assert seen == [service.platform]
+    service.refresh(_terminals()[:1])
+    assert len(seen) == 2
+
+
+def test_terminal_drift_failure_is_a_not_checked_note(tmp_path: Path) -> None:
+    def drift(_live: Platform) -> TerminalShellResult:
+        raise OSError("boom")
+
+    present = frozenset({"kitty", "zsh", "jqx"})
+    states = _settled_states(_drift_service(tmp_path, drift, present=present), _terminals())
+    note = "terminal shell not checked: boom"
+    for tool_id in ("kitty", "zsh"):
+        assert states[tool_id].health is Health.OK
+        assert note in states[tool_id].reasons
+        assert states[tool_id].unconfigured == ()
+    assert states["wezterm"].present is False
+    assert note not in states["wezterm"].reasons
+    assert note not in states["jqx"].reasons
+
+
+def test_no_terminal_drift_seam_adds_nothing(tmp_path: Path) -> None:
+    states = _settled_states(_drift_service(tmp_path, None), _terminals())
+    assert all(state.health is Health.OK for state in states.values())

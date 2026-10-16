@@ -907,6 +907,14 @@ def _build_app(
         managed_bin_dir=_DEFAULT_BIN_DIR,
         native_probe=run_probe,
         skill_probe=lambda argv: run_query(argv),
+        # D-16, T-19-47: the pass only reads drift; it never writes a terminal config.
+        terminal_drift=lambda live: sync_terminal_shells(
+            home=Path.home(),
+            environ=os.environ,
+            platform=live,
+            lookup=_which_with_brew,
+            write=False,
+        ),
     )
     version_refresh.seed_skills_from_cache()
 

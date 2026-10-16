@@ -81,6 +81,7 @@ from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError, run_query
 from installer.skill_lifecycle import inspect_skill_packs
 from installer.status import is_installed
+from installer.terminal_shell import TerminalShellResult
 from installer.uninstall import RemovalPlan, plan_removal, plan_uninstall
 from installer.version_cache import (
     ManagerSnapshot,
@@ -563,6 +564,43 @@ RECEIPT_UNREADABLE_NOTE = "install receipt unreadable — treated as unproven"
 ADOPTED_NOTE = "adopted: the file matches the release checksum"
 # SPEC-locked text; this phase adds no `r` binding (Phase 20 does).
 UNPROVEN_NOTE = "not proven: reinstall with r to adopt"
+# D-16, L-19-10: a drifted terminal -> (the row it lands on, its label). Konsole
+# has no catalog row; the zsh row carries it.
+_TERMINAL_ROWS: dict[str, tuple[str, str]] = {
+    "kitty": ("kitty", "Kitty"),
+    "wezterm": ("wezterm", "WezTerm"),
+    "konsole": ("zsh", "Konsole"),
+}
+
+
+@dataclass(frozen=True)
+class _ConfigFacts:
+    """One row's configuration facts from the pass's secondary checks.
+
+    `unchecked` notes say a check could not run; they apply to present rows only.
+    """
+
+    misconfigured: tuple[str, ...] = ()
+    steps: tuple[ConfigStep, ...] = ()
+    unchecked: tuple[str, ...] = ()
+
+    def plus(self, other: _ConfigFacts) -> _ConfigFacts:
+        return _ConfigFacts(
+            self.misconfigured + other.misconfigured,
+            self.steps + other.steps,
+            self.unchecked + other.unchecked,
+        )
+
+
+_NO_FACTS = _ConfigFacts()
+
+
+def _merge_facts(*maps: Mapping[str, _ConfigFacts]) -> dict[str, _ConfigFacts]:
+    merged: dict[str, _ConfigFacts] = {}
+    for facts in maps:
+        for tool_id, fact in facts.items():
+            merged[tool_id] = merged.get(tool_id, _NO_FACTS).plus(fact)
+    return merged
 
 
 def _run_nothing(cmd: list[str]) -> None:
@@ -764,6 +802,7 @@ class VersionRefreshService:
         skill_home: Path | None = None,
         present: Callable[[Tool], bool] | None = None,
         path_value: Callable[[], str] | None = None,
+        terminal_drift: Callable[[Platform], TerminalShellResult] | None = None,
     ) -> None:
         self._platform = platform
         self._cache_path = cache_path
@@ -798,6 +837,8 @@ class VersionRefreshService:
         self._native_probe = native_probe
         self._skill_probe = skill_probe
         self._skill_home = skill_home if skill_home is not None else default_skill_home()
+        # D-16: a dry run only; production passes `sync_terminal_shells(write=False)`.
+        self._terminal_drift = terminal_drift
         self._lock = threading.Lock()
         self._statuses: dict[str, VersionStatus] = {}
         # ONE map of epoch-tagged records, deliberately never a second
@@ -1084,6 +1125,28 @@ class VersionRefreshService:
         except (ExecutorError, OSError):
             return None
 
+    def _terminal_facts(self, platform: Platform) -> dict[str, _ConfigFacts]:
+        """D-16: ONE dry-run sync per pass; each drifted terminal is its row's fact."""
+        if self._terminal_drift is None:
+            return {}
+        try:
+            drifted = self._terminal_drift(platform).drifted
+        except Exception as exc:  # a read-only secondary fact must never fail the pass
+            # Review M11: a drop without a note would let a drifted terminal read OK.
+            note = (f"terminal shell not checked: {exc}",)
+            return {row: _ConfigFacts(unchecked=note) for row, _label in _TERMINAL_ROWS.values()}
+        facts: dict[str, _ConfigFacts] = {}
+        for name in drifted:
+            if name not in _TERMINAL_ROWS:
+                continue
+            row, label = _TERMINAL_ROWS[name]
+            fact = _ConfigFacts(
+                (f"{label} does not start zsh",),
+                (ConfigStep(f"point {label} at zsh", "terminal_sync"),),
+            )
+            facts[row] = facts.get(row, _NO_FACTS).plus(fact)
+        return facts
+
     def _artifacts(self, tool: Tool) -> Sequence[Path]:
         if self._artifacts_for is not None:
             return self._artifacts_for(tool)
@@ -1235,6 +1298,7 @@ class VersionRefreshService:
         )
         inventory = snapshot.inventory if snapshot is not None else _EMPTY_INVENTORY
         outdated = snapshot.outdated if snapshot is not None else _EMPTY_OUTDATED
+        config = _merge_facts(self._terminal_facts(platform))
         which = self._looked_through
         native = self._native_probe
         if native is not None and platform.os != "macos":
@@ -1309,6 +1373,7 @@ class VersionRefreshService:
                 ):
                     # No receipt, adoption or layout proves it (review C2-M2).
                     receipt_notes += (UNPROVEN_NOTE,)
+                facts = config.get(tool.id, _NO_FACTS)
                 states[tool.id] = tool_state(
                     tool,
                     generation=started_epoch,
@@ -1320,9 +1385,12 @@ class VersionRefreshService:
                     removable=removable,
                     receipt=receipt,
                     broken=broken,
+                    misconfigured=facts.misconfigured,
+                    unconfigured=facts.steps,
                     notes=ownership_notes(tool, ownership, platform)
                     + version_notes(tool, status, ownership, present=present)
-                    + receipt_notes,
+                    + receipt_notes
+                    + (facts.unchecked if present else ()),
                 )
             if would_fetch:
                 fetches += 1

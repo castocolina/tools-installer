@@ -8,7 +8,7 @@ import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import pytest
 from rich.console import Console
@@ -36,6 +36,7 @@ from installer.terminal_shell import TerminalShellResult
 from installer.tweaks import BUNDLES
 from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome
+from installer.version_status import Health, VersionRefreshService
 from installer.wizard_app import (
     BASE_VIEW,
     DoctorScreen,
@@ -3557,3 +3558,77 @@ async def test_uninstall_screen_passes_the_selected_tools(
     assert decision.tools == ((rg,) if with_tool else ())
     assert decision.remove_ban is with_ban
     assert decision.remove_path_block is with_block
+
+
+# -- 19-16 Task 1: the refresh pass reads terminal drift from a dry run (D-16, T-19-47) --
+
+
+def _home_fingerprint(home: Path) -> dict[str, tuple[int, int, int]]:
+    """(mode, size, mtime_ns) of every path under `home`, symlinks unfollowed."""
+    found: dict[str, tuple[int, int, int]] = {}
+    for path in sorted(home.rglob("*")):
+        st = path.lstat()
+        found[str(path.relative_to(home))] = (st.st_mode, st.st_size, st.st_mtime_ns)
+    return found
+
+
+def test_terminal_drift_pass_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    _sandbox(monkeypatch, home)
+    for name in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"):
+        monkeypatch.delenv(name, raising=False)
+    bin_dir = tmp_path / "path-bin"
+    bin_dir.mkdir()
+    for name in ("kitty", "zsh"):
+        stub = bin_dir / name
+        stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        stub.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    kitty_conf = home / ".config" / "kitty" / "kitty.conf"
+    kitty_conf.parent.mkdir(parents=True)
+    kitty_conf.write_text("shell /bin/bash\n", encoding="utf-8")
+    monkeypatch.setattr(setup, "default_cache_path", lambda: tmp_path / "state" / "versions.json")
+
+    def no_native(argv: list[str]) -> str:
+        raise OSError(f"no native probe in this test: {argv[0]}")
+
+    monkeypatch.setattr(setup, "run_probe", no_native)
+    built: list[VersionRefreshService] = []
+
+    def capture(**kwargs: Any) -> VersionRefreshService:
+        service = VersionRefreshService(**kwargs)
+        built.append(service)
+        return service
+
+    monkeypatch.setattr(setup, "VersionRefreshService", capture)
+    tools = [
+        Tool(
+            id=tool_id,
+            name=tool_id,
+            category="terminal",
+            cmd=tool_id,
+            methods=(Method(kind="brew", params={"formula": tool_id}),),
+            tier="user",
+        )
+        for tool_id in ("kitty", "zsh")
+    ]
+
+    def drift_tools(_registry: object) -> list[Tool]:
+        return tools
+
+    monkeypatch.setattr(setup, "load_tools", drift_tools)
+    monkeypatch.setattr(setup, "detect", _linux_platform)
+    _capture_app(monkeypatch)
+    assert setup.main([]) == 0
+    assert len(built) == 1
+    before = _home_fingerprint(home)
+    built[0].refresh(tools)
+    kitty = built[0].state_of("kitty")
+    assert kitty is not None
+    assert kitty.health is Health.MISCONFIGURED
+    assert kitty.reasons[0] == "Kitty does not start zsh"
+    assert _home_fingerprint(home) == before
+    assert kitty_conf.read_text(encoding="utf-8") == "shell /bin/bash\n"
