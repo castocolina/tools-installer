@@ -9,8 +9,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
-from installer.apps import APP_KINDS, cli_spec
-from installer.download import DOWNLOAD_KINDS, is_still_proven, link_name
+from installer.apps import APP_KINDS
+from installer.download import DOWNLOAD_KINDS, cli_spec, is_still_proven, link_name
 from installer.enums import UninstallState
 from installer.executors import ExecutorError
 from installer.locations import applications_dir, opt_dir

@@ -24,7 +24,7 @@ from installer.atomic import (
     staged_sibling,
 )
 from installer.checksums import ChecksumMismatch, sha256_file
-from installer.download import is_still_proven, pinned_url
+from installer.download import cli_spec, is_still_proven, pinned_url
 from installer.executors import (
     ExecutorError,
     method_smoke_argv,
@@ -51,41 +51,6 @@ class UpdateExecResult:
     """
 
     warnings: tuple[str, ...] = ()
-
-
-def cli_spec(method: Method) -> tuple[str, str] | None:
-    """(bundle-relative CLI path, symlink name) for the optional `cli` param.
-
-    Single source of truth for the symlink name: install_app creates it and
-    uninstall planning derives the same name (or skips when this raises).
-    The link name is the validated `cli_name` param when declared, otherwise
-    the basename of `cli`. This function is the only reader of `cli_name`.
-    """
-    cli = method.params.get("cli")
-    if cli is None:
-        return None
-    if not isinstance(cli, str) or not cli:
-        raise ExecutorError("method 'app' param 'cli' must be a non-empty string")
-    path = PurePosixPath(cli)
-    if path.is_absolute() or ".." in path.parts:
-        # An absolute or parent-traversing cli would symlink outside the bundle.
-        raise ExecutorError(f"invalid cli path '{cli}'")
-    cli_name = method.params.get("cli_name")
-    if cli_name is None:
-        name = path.name
-    else:
-        bad_name = (
-            not isinstance(cli_name, str)
-            or not cli_name
-            or PurePosixPath(cli_name).name != cli_name
-            or cli_name in (".", "..")
-        )
-        if bad_name:
-            raise ExecutorError(f"invalid cli_name '{cli_name}'")
-        name = str(cli_name)
-    if name in ("", "."):
-        raise ExecutorError(f"cannot derive a CLI name from '{cli}'")
-    return cli, name
 
 
 def _declared_sha256(method: Method) -> str | None:

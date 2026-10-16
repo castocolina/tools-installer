@@ -12,13 +12,16 @@ from installer.atomic import NEW_SUFFIX, OLD_SUFFIX, staged_sibling
 from installer.checksums import ChecksumMismatch
 from installer.download import (
     DOWNLOAD_KINDS,
+    Artifact,
     ExecContext,
+    artifact_paths,
     install_download,
     is_still_proven,
+    link_name,
     update_download,
 )
 from installer.executors import ExecutorError
-from installer.model import Method
+from installer.model import Method, load_tools
 from installer.platform import Platform
 from installer.run import CommandError, Runner
 from installer.versions import Release, ReleaseResolver, resolve_github_release
@@ -2043,3 +2046,178 @@ def test_raw_update_does_not_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     result = update_download(_raw_method(bindir), _ctx(runner))
     assert result.verified is False
     assert link.read_bytes() == bad
+
+
+# --- 19-02: artifact_paths, the one formula for what a method creates (D-07) ---
+
+_REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+
+
+def _dl_method(**params: object) -> Method:
+    base: dict[str, object] = {
+        "repo": "example/tool",
+        "asset": "tool-{ver}.tar.gz",
+        "member": "rg",
+    }
+    base.update(params)
+    return Method(kind="github_release", params=base)
+
+
+def test_artifact_paths_per_kind(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))  # expanduser() on a declared ~/bin_dir
+    bin_dir = tmp_path / ".local" / "bin"
+
+    # archive github_release: opt dir + bin link
+    assert artifact_paths(_dl_method(), bin_dir) == (
+        Artifact(tmp_path / ".local" / "opt" / "rg", "dir"),
+        Artifact(bin_dir / "rg", "link"),
+    )
+
+    # raw github_release: one regular file, bin_name honored
+    raw = _dl_method(member="yq_linux_amd64", bin_name="yq", raw=True)
+    assert artifact_paths(raw, bin_dir) == (Artifact(bin_dir / "yq", "file"),)
+
+    # tarball with a declared bin_dir: link under it, opt dir unchanged
+    declared = tmp_path / "x" / "bin"
+    tarball = Method(
+        kind="tarball",
+        params={"url": "https://example.test/x.tar.gz", "member": "rg", "bin_dir": "~/x/bin"},
+    )
+    assert artifact_paths(tarball, bin_dir) == (
+        Artifact(tmp_path / ".local" / "opt" / "rg", "dir"),
+        Artifact(declared / "rg", "link"),
+    )
+
+    # app with a cli: bundle + cli link under the cli_name
+    app = Method(
+        kind="app",
+        params={
+            "url": "https://example.test/a.zip",
+            "app": "draw.io.app",
+            "cli": "Contents/MacOS/draw.io",
+            "cli_name": "drawio",
+        },
+    )
+    assert artifact_paths(app, bin_dir) == (
+        Artifact(tmp_path / "Applications" / "draw.io.app", "dir"),
+        Artifact(bin_dir / "drawio", "link"),
+    )
+
+    # app without a cli: bundle only
+    plain_app = Method(kind="app", params={"url": "https://example.test/a.zip", "app": "Demo.app"})
+    assert artifact_paths(plain_app, bin_dir) == (
+        Artifact(tmp_path / "Applications" / "Demo.app", "dir"),
+    )
+
+    # every other kind creates nothing this formula knows about
+    for method in (
+        Method(kind="brew", params={"formula": "rg"}),
+        Method(kind="script", params={"url": "https://example.test/x.sh"}),
+        Method(kind="node", params={"npm_pkg": "wrangler"}),
+    ):
+        assert artifact_paths(method, bin_dir) == ()
+
+
+@pytest.mark.parametrize("member", ["", ".", "..", "a/.."])
+def test_artifact_paths_rejects_bad_member_basenames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, member: str
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert artifact_paths(_dl_method(member=member), tmp_path / "bin") == ()
+
+
+@pytest.mark.parametrize("bin_name", ["../other", "a/b", "/abs/x", ".", ".."])
+@pytest.mark.parametrize("raw", [False, True])
+def test_artifact_paths_rejects_an_unsafe_bin_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bin_name: str, raw: bool
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    method = _dl_method(bin_name=bin_name, raw=raw)
+    assert artifact_paths(method, tmp_path / "bin") == ()
+
+
+@pytest.mark.parametrize("app", ["../x", "a/b", ".", ""])
+def test_artifact_paths_rejects_a_bad_app_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, app: str
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    method = Method(kind="app", params={"url": "https://example.test/a.zip", "app": app})
+    assert artifact_paths(method, tmp_path / "bin") == ()
+
+
+def test_artifact_paths_invalid_cli_name_yields_the_bundle_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    method = Method(
+        kind="app",
+        params={
+            "url": "https://example.test/a.zip",
+            "app": "Demo.app",
+            "cli": "Contents/MacOS/draw.io",
+            "cli_name": "a/b",
+        },
+    )
+    assert artifact_paths(method, tmp_path / "bin") == (
+        Artifact(tmp_path / "Applications" / "Demo.app", "dir"),
+    )
+
+
+@pytest.mark.parametrize("bin_name", ["../other", "/abs/x"])
+@pytest.mark.parametrize("params", [{}, {"member": "yq_linux_amd64", "raw": True}])
+def test_install_download_rejects_an_unsafe_bin_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    bin_name: str,
+    params: dict[str, object],
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    calls, runner = _record()
+    method = _dl_method(bin_name=bin_name, **params)
+    with pytest.raises(ExecutorError, match="unsafe bin name"):
+        install_download(method, _ctx(runner))
+    assert calls == []  # rejected before any download runs
+    assert list((tmp_path / ".local" / "bin").glob("*")) == []
+    assert list((tmp_path / ".local" / "opt").glob("*")) == []
+
+
+@pytest.mark.parametrize("bin_name", ["../other", "/abs/x"])
+@pytest.mark.parametrize("params", [{}, {"member": "yq_linux_amd64", "raw": True}])
+def test_update_download_rejects_an_unsafe_bin_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    bin_name: str,
+    params: dict[str, object],
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    calls, runner = _record()
+    method = _dl_method(bin_name=bin_name, **params)
+    with pytest.raises(ExecutorError, match="unsafe bin name"):
+        update_download(method, _ctx(runner))
+    assert calls == []
+    assert list((tmp_path / ".local" / "bin").glob("*")) == []
+    assert list((tmp_path / ".local" / "opt").glob("*")) == []
+
+
+def test_artifact_paths_matches_install_placement_for_every_registry_method() -> None:
+    from installer.assets import arch_tokens, render_asset
+
+    checked = 0
+    for tool in load_tools(_REGISTRY):
+        for method in tool.methods:
+            if method.kind not in DOWNLOAD_KINDS:
+                continue
+            member = method.params.get("member")
+            assert isinstance(member, str) and member
+            for arch in ("amd64", "arm64"):
+                rendered = render_asset(member, "1.2.3", arch_tokens(arch))
+                artifacts = artifact_paths(method, Path("/bin"))
+                if method.params.get("raw") is True:
+                    names = [a.path.name for a in artifacts if a.kind == "file"]
+                else:
+                    names = [a.path.name for a in artifacts if a.kind == "link"]
+                assert names, f"{tool.id}: no placed artifact for {method.kind}"
+                assert link_name(method, rendered) == names[0], tool.id
+                checked += 1
+    assert checked >= 96  # every (method, arch) pair in the registry

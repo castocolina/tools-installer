@@ -6,6 +6,7 @@ import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Literal
 
 from installer.assets import arch_tokens, render_asset
 from installer.atomic import (
@@ -24,7 +25,7 @@ from installer.executors import (
     smoke_binary,
     staged_member,
 )
-from installer.locations import bin_dir, ensure_dir, opt_dir
+from installer.locations import applications_dir, bin_dir, ensure_dir, opt_dir
 from installer.model import Method
 from installer.platform import Platform
 from installer.run import Runner
@@ -185,6 +186,111 @@ def link_name(method: Method, member: str) -> str:
     return _opt_str(method, "bin_name") or PurePosixPath(member).name
 
 
+def cli_spec(method: Method) -> tuple[str, str] | None:
+    """(bundle-relative CLI path, symlink name) for the optional `cli` param.
+
+    Single source of truth for the symlink name: install_app creates it and
+    uninstall planning derives the same name (or skips when this raises).
+    The link name is the validated `cli_name` param when declared, otherwise
+    the basename of `cli`. This function is the only reader of `cli_name`.
+    Lives in download.py because apps imports download, so download could not
+    import it from apps (Ledger L-19-04).
+    """
+    cli = method.params.get("cli")
+    if cli is None:
+        return None
+    if not isinstance(cli, str) or not cli:
+        raise ExecutorError("method 'app' param 'cli' must be a non-empty string")
+    path = PurePosixPath(cli)
+    if path.is_absolute() or ".." in path.parts:
+        # An absolute or parent-traversing cli would symlink outside the bundle.
+        raise ExecutorError(f"invalid cli path '{cli}'")
+    cli_name = method.params.get("cli_name")
+    if cli_name is None:
+        name = path.name
+    else:
+        bad_name = (
+            not isinstance(cli_name, str)
+            or not cli_name
+            or PurePosixPath(cli_name).name != cli_name
+            or cli_name in (".", "..")
+        )
+        if bad_name:
+            raise ExecutorError(f"invalid cli_name '{cli_name}'")
+        name = str(cli_name)
+    if name in ("", "."):
+        raise ExecutorError(f"cannot derive a CLI name from '{cli}'")
+    return cli, name
+
+
+def _is_single_name(name: str) -> bool:
+    """True only for a name that is exactly one path component.
+
+    Applied to the FINAL name `link_name` returns, so an explicit `bin_name`
+    is checked too, not only a member basename (review M2). `../x`, `a/b` and
+    `/abs/x` all fail; this code deletes files, so a traversal or absolute
+    name must never become an opt dir or a bin path.
+    """
+    return name not in ("", ".", "..") and PurePosixPath(name).name == name
+
+
+@dataclass(frozen=True)
+class Artifact:
+    """One path a method creates, with its shape: evidence only, never the
+    removal authority (D-10) — a path being listed here does not make it
+    ours to delete; proof (receipt, adoption or layout) does that."""
+
+    path: Path
+    kind: Literal["dir", "link", "file"]
+
+
+def artifact_paths(method: Method, default_bin_dir: Path) -> tuple[Artifact, ...]:
+    """The one formula for what a method creates (D-07): install placement,
+    the receipt writer and the uninstaller's evidence all read this, so they
+    can never disagree about where a method's files live.
+
+    A download kind maps to (`opt_dir(name)`, dir) and (`<bin>/name`, link)
+    when it unpacks an archive, or one (`<bin>/name`, file) when it is raw;
+    an app kind maps to the userspace bundle and, when `cli` is declared, the
+    cli link; every other kind creates nothing this formula describes.
+    `<bin>` is the method's declared `bin_dir` when set, else
+    `default_bin_dir`. `bin_name` and `cli_name` are honored. A missing
+    member, an unsafe final name (review M2) or an invalid app name yields no
+    artifact; an invalid `cli_name` yields the bundle only (the installer
+    would have refused to link).
+    """
+    if method.kind in DOWNLOAD_KINDS:
+        member = _opt_str(method, "member")
+        if member is None:
+            return ()
+        name = link_name(method, member)
+        if not _is_single_name(name):
+            return ()
+        declared = _opt_str(method, "bin_dir")
+        bin_base = Path(declared).expanduser() if declared else default_bin_dir
+        if method.params.get("raw") is True:
+            return (Artifact(bin_base / name, "file"),)
+        return (Artifact(opt_dir(name), "dir"), Artifact(bin_base / name, "link"))
+    if method.kind == "app":
+        app = method.params.get("app")
+        if (
+            not isinstance(app, str)
+            or not app
+            or PurePosixPath(app).name != app
+            or app in (".", "..")
+        ):
+            return ()
+        bundle = Artifact(applications_dir() / app, "dir")
+        try:
+            spec = cli_spec(method)
+        except ExecutorError:
+            return (bundle,)
+        if spec is None:
+            return (bundle,)
+        return (bundle, Artifact(default_bin_dir / spec[1], "link"))
+    return ()
+
+
 def is_still_proven(path: Path, root: Path | None = None) -> bool:
     """The per-link form of `plan_removal`'s proof, re-checkable at deletion time.
 
@@ -220,6 +326,8 @@ def install_download(method: Method, ctx: ExecContext) -> str | None:
     """
     target = resolve_target(method, ctx)
     binname = link_name(method, target.member)
+    if not _is_single_name(binname):
+        raise ExecutorError(f"unsafe bin name '{binname}': must be a single file name")
     try:
         dest = ensure_dir(bin_dir(_opt_str(method, "bin_dir")))
     except OSError as exc:
@@ -267,6 +375,8 @@ def update_download(method: Method, ctx: ExecContext) -> UpdateExecResult:
     """
     target = resolve_target(method, ctx)
     binname = link_name(method, target.member)
+    if not _is_single_name(binname):
+        raise ExecutorError(f"unsafe bin name '{binname}': must be a single file name")
     try:
         dest = ensure_dir(bin_dir(_opt_str(method, "bin_dir")))
     except OSError as exc:
