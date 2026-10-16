@@ -1,5 +1,6 @@
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -682,3 +683,104 @@ def test_owner_probes_closed_set_and_probe_registry_are_the_same_set() -> None:
     implemented = set(ownership._PROBES)  # pyright: ignore[reportPrivateUsage]
     assert declarable <= implemented, sorted(declarable - implemented)
     assert implemented <= declarable, sorted(implemented - declarable)
+
+
+# -- 19-04/D-11: one batched native path query per pass, answered per path. --
+
+_RPM_BATCH_QF = ["rpm", "-qf", "--qf", "[%{FILENAMES}\\t%{=NAME}\\n]"]
+
+
+def _batch_probe(output: str, calls: list[list[str]], *, returncode: int = 2):
+    """Answers the first (batched) call; any later call fails the test."""
+
+    def run(command: list[str]) -> str:
+        calls.append(command)
+        if len(calls) > 1:
+            raise AssertionError(f"unexpected second query: {command}")
+        if returncode:
+            raise subprocess.CalledProcessError(returncode, command, output=output)
+        return output
+
+    return run
+
+
+_FEDORA_BATCH = (
+    "/usr/bin/git\tgit-core\n"
+    "/usr/share/doc/git/x\tgit-core\n"
+    "/usr/bin/jq\tjq\n"
+    "file /usr/bin/foo is not owned by any package\n"
+)
+_FEDORA_PATHS = ["/usr/bin/git", "/usr/bin/jq", "/usr/bin/foo", "/usr/bin/missing"]
+
+
+def test_native_index_makes_one_rpm_query_for_many_paths() -> None:
+    calls: list[list[str]] = []
+    ownership.native_index("fedora", _FEDORA_PATHS, _batch_probe(_FEDORA_BATCH, calls))
+    assert calls == [[*_RPM_BATCH_QF, *_FEDORA_PATHS]]
+
+
+def test_native_index_answers_the_existing_per_path_queries() -> None:
+    calls: list[list[str]] = []
+    index = ownership.native_index("fedora", _FEDORA_PATHS, _batch_probe(_FEDORA_BATCH, calls))
+    jq = _tool(methods=(Method(kind="dnf", params={"package": "jq"}),))
+    assert ownership.path_owner_package("fedora", "/usr/bin/git", index) == "git-core"
+    assert ownership.path_owner_package("fedora", "/usr/bin/foo", index) is None
+    assert ownership.path_owner_package("fedora", "/usr/bin/missing", index) is None
+    assert ownership.package_owns_path(jq, "dnf", "/usr/bin/jq", index)
+    assert len(calls) == 1
+
+
+def test_native_index_parses_by_path_not_position() -> None:
+    """The missing path prints nothing on stdout and an owning package prints
+    every one of its files, so a positional parse would shift every answer."""
+    output = (
+        "/usr/bin/jq\tjq\n"
+        "/usr/share/man/man1/jq.1.gz\tjq\n"
+        "/usr/lib64/libonig.so.5\toniguruma\n"
+        "/usr/bin/git\tgit-core\n"
+    )
+    paths = ["/usr/bin/missing", "/usr/bin/jq", "/usr/bin/git"]
+    index = ownership.native_index("fedora", paths, _batch_probe(output, []))
+    assert ownership.path_owner_package("fedora", "/usr/bin/missing", index) is None
+    assert ownership.path_owner_package("fedora", "/usr/bin/jq", index) == "jq"
+    assert ownership.path_owner_package("fedora", "/usr/bin/git", index) == "git-core"
+
+
+def test_native_index_fails_closed_for_an_uncollected_path() -> None:
+    calls: list[list[str]] = []
+    index = ownership.native_index("fedora", ["/usr/bin/git"], _batch_probe(_FEDORA_BATCH, calls))
+    calls.clear()
+    with pytest.raises(subprocess.CalledProcessError):
+        index(["rpm", "-qf", "--qf", "%{NAME}\\n", "/usr/bin/other"])
+    assert calls == []
+
+
+def test_native_index_drops_invalid_package_names() -> None:
+    output = "/usr/bin/git\tbad;name\n"
+    index = ownership.native_index("fedora", ["/usr/bin/git"], _batch_probe(output, []))
+    assert ownership.path_owner_package("fedora", "/usr/bin/git", index) is None
+
+
+def test_native_index_survives_a_probe_os_error() -> None:
+    def probe(_command: list[str]) -> str:
+        raise FileNotFoundError("rpm")
+
+    index = ownership.native_index("fedora", ["/usr/bin/git"], probe)
+    assert ownership.path_owner_package("fedora", "/usr/bin/git", index) is None
+
+
+def test_native_index_joins_usrmerge_aliases(tmp_path: Path) -> None:
+    """The package database may list a file under the other usrmerge alias."""
+    (tmp_path / "usr" / "bin").mkdir(parents=True)
+    (tmp_path / "opt").mkdir()
+    (tmp_path / "bin").symlink_to(tmp_path / "usr" / "bin")
+    foo, bar = f"{tmp_path}/usr/bin/foo", f"{tmp_path}/bin/bar"
+    output = f"{tmp_path}/bin/foo\tfoo-pkg\n{tmp_path}/usr/bin/bar\tbar-pkg\n"
+    index = ownership.native_index("fedora", [foo, bar], _batch_probe(output, []))
+    assert ownership.path_owner_package("fedora", foo, index) == "foo-pkg"
+    assert ownership.path_owner_package("fedora", bar, index) == "bar-pkg"
+
+    other = f"{tmp_path}/usr/bin/baz"
+    elsewhere = f"{tmp_path}/opt/baz\tbaz-pkg\n"
+    index = ownership.native_index("fedora", [other], _batch_probe(elsewhere, []))
+    assert ownership.path_owner_package("fedora", other, index) is None

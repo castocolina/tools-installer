@@ -17,6 +17,7 @@ rather than an unattributed tool.
 """
 
 import json
+import os
 import re
 import subprocess
 from collections.abc import Callable, Iterable
@@ -406,3 +407,82 @@ def detect_owner(tool: Tool, probe: ProbeRunner, *, immutable: bool) -> Ownershi
         if owner is not None:
             return owner
     return _UNKNOWN
+
+
+_RPM_PATH_QUERY = ["rpm", "-qf", "--qf", "%{NAME}\\n"]
+
+
+class NativeIndex:
+    """A `ProbeRunner` built once per refresh pass from one batched owner query.
+
+    The per-path queries above (`_rpm_owner`, `_rpm_owns_path`, ...) keep their
+    code; this runner answers their argv shapes by dict lookup instead of a
+    subprocess, so N native tools cost one query per pass, not N (D-11). A path
+    the pass did not collect answers unowned -- fail closed -- rather than
+    issuing a second query.
+    """
+
+    def __init__(self, probe: ProbeRunner, owners: dict[str, frozenset[str]]) -> None:
+        self._probe = probe
+        self._owners = owners
+        self._dirs: dict[str, str] = {}
+
+    def key(self, path: str) -> str:
+        """The usrmerge-safe join key: directory resolved, basename kept (an
+        alternatives symlink must keep its own name)."""
+        head, base = os.path.split(path)
+        if head not in self._dirs:
+            try:
+                self._dirs[head] = os.path.realpath(head)
+            except (OSError, ValueError):
+                self._dirs[head] = head
+        return os.path.join(self._dirs[head], base)
+
+    def _names(self, command: list[str]) -> frozenset[str]:
+        names = self._owners.get(self.key(command[-1]), frozenset())
+        if not names:
+            raise subprocess.CalledProcessError(1, command, output="")
+        return names
+
+    def __call__(self, command: list[str]) -> str:
+        if command[:-1] == _RPM_PATH_QUERY:
+            return "".join(f"{name}\n" for name in sorted(self._names(command)))
+        return self._probe(command)
+
+
+def _parse_rpm(line: str) -> tuple[str, list[str]]:
+    path, _, name = line.partition("\t")
+    return path, [name]
+
+
+def native_index(os_family: str, paths: Iterable[str], probe: ProbeRunner) -> NativeIndex:
+    """Ask the OS package database about every path in ONE batched call (D-11).
+
+    The batch is parsed by path, never by position: a missing path prints only
+    on stderr and an owning package prints all of its files, so a positional
+    parse would shift every later answer. A non-zero exit (any path unowned or
+    missing) still carries every positive line on `CalledProcessError.stdout`.
+    """
+    queried = list(dict.fromkeys(path for path in paths if os.path.isabs(path)))
+    found: dict[str, frozenset[str]] = {}
+    index = NativeIndex(probe, found)
+    if os_family != "fedora" or not queried:
+        return index
+    try:
+        output = probe(["rpm", "-qf", "--qf", "[%{FILENAMES}\\t%{=NAME}\\n]", *queried])
+    except subprocess.CalledProcessError as exc:
+        output = exc.stdout if isinstance(exc.stdout, str) else ""
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return index
+    wanted = {index.key(path) for path in queried}
+    basenames = {os.path.basename(path) for path in queried}
+    owners: dict[str, set[str]] = {}
+    for line in output.splitlines():
+        path, names = _parse_rpm(line)
+        # rpm prints every file of an owning package: drop by basename before
+        # resolving any directory, so the cost stays bounded by the query.
+        if os.path.basename(path) not in basenames or (key := index.key(path)) not in wanted:
+            continue
+        owners.setdefault(key, set()).update(n for n in names if _PACKAGE_NAME_RE.fullmatch(n))
+    found.update((key, frozenset(names)) for key, names in owners.items() if names)
+    return index
