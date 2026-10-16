@@ -39,10 +39,12 @@ _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 _WRITE_LOCK = threading.Lock()
 
-# Re-hash memo: (str(path), size, mtime_ns) -> "matches the recorded sha256".
-# Its own lock, never _WRITE_LOCK, so no code path nests the two (review H1).
+# Re-hash memo: (str(path), size, mtime_ns) -> the OBSERVED sha256. A hit is
+# always compared with the receipt's own digest, so a cached success can never
+# vouch for a different expected digest (G6). Its own lock, never _WRITE_LOCK,
+# so no code path nests the two (review H1).
 _MEMO_LOCK = threading.Lock()
-_REHASH_MEMO: dict[tuple[str, int, int], bool] = {}
+_REHASH_MEMO: dict[tuple[str, int, int], str] = {}
 
 
 @dataclass(frozen=True)
@@ -310,8 +312,8 @@ def fingerprint(path: Path, kind: Literal["dir", "link", "file"]) -> ReceiptArti
     A file needs to be a regular file and records sha256 + size + mtime_ns; a
     link records its readlink target; a dir records the directory's own
     identity `(st_dev, st_ino)` from one lstat, so a re-created directory can
-    never match it. A symlink is never a dir. Anything else, or an OSError,
-    is not fingerprintable."""
+    never match it. A symlink is never a dir. Anything else, or an OSError or
+    ValueError (a path `lstat` would refuse), is not fingerprintable."""
     try:
         if kind == "file":
             st = path.lstat()
@@ -333,7 +335,7 @@ def fingerprint(path: Path, kind: Literal["dir", "link", "file"]) -> ReceiptArti
             if not stat_module.S_ISDIR(st.st_mode):
                 return None
             return ReceiptArtifact(path=path, type="dir", dev=st.st_dev, ino=st.st_ino)
-    except OSError:
+    except (OSError, ValueError):
         return None
     return None
 
@@ -345,9 +347,11 @@ def matches(artifact: ReceiptArtifact, *, rehash: bool = False) -> bool:
     (its `(st_dev, st_ino)`); a file on the
     stat fingerprint, re-hashed only when the stat differs (or `rehash=True`,
     the deletion-time re-proof, which bypasses both the shortcut and the
-    memo). A re-hash result is remembered per (path, size, mtime_ns), so an
-    unchanged-but-touched file is hashed once per session. Nothing matches
-    when the artifact is missing; OSError is False, never a raise."""
+    memo). A re-hash is remembered as the observed digest per (path, size,
+    mtime_ns) and compared with each receipt's own, so an unchanged-but-touched
+    file is hashed once per session and a cached success never vouches for a
+    different digest. Nothing matches when the artifact is missing; OSError or
+    ValueError (a path `lstat` would refuse) is False, never a raise."""
     path = artifact.path
     try:
         if artifact.type == "link":
@@ -373,13 +377,13 @@ def matches(artifact: ReceiptArtifact, *, rehash: bool = False) -> bool:
             return True
         key = (str(path), st.st_size, st.st_mtime_ns)
         with _MEMO_LOCK:
-            memoized = _REHASH_MEMO.get(key)
-        if memoized is None:
-            memoized = sha256_file(path) == artifact.sha256
+            observed = _REHASH_MEMO.get(key)
+        if observed is None:
+            observed = sha256_file(path)
             with _MEMO_LOCK:
-                _REHASH_MEMO[key] = memoized
-        return memoized
-    except OSError:
+                _REHASH_MEMO[key] = observed
+        return observed == artifact.sha256
+    except (OSError, ValueError):
         return False
 
 
@@ -409,6 +413,14 @@ def _read_artifact(raw: object) -> ReceiptArtifact | None:
     if not isinstance(raw_path, str) or not isinstance(kind, str):
         return None
     if kind not in ("dir", "link", "file"):
+        return None
+    # A path `lstat` would refuse (an embedded NUL, a lone surrogate) is
+    # rejected here, at the boundary, so it can never abort a pass or a removal.
+    if "\x00" in raw_path:
+        return None
+    try:
+        os.fsencode(raw_path)
+    except UnicodeEncodeError:
         return None
     path = Path(raw_path)
     if not path.is_absolute():

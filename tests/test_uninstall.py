@@ -1,3 +1,4 @@
+import json
 import os
 from collections.abc import Callable
 from io import StringIO
@@ -2007,3 +2008,44 @@ def test_recreated_dir_artifact_is_not_removable(
     assert plan.removable == ()
     assert plan.by_tool == {}
     assert directory.is_dir()
+
+
+# --- 19-22 Task 2: a NUL artifact path never aborts a removal (G5) ----------
+
+
+def test_nul_receipt_path_never_aborts_plan_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A receipt whose artifact path embeds a NUL reads as unproven, not a crash."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "yq").write_text("yq raw binary")
+    path = receipts.receipt_path("yq")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "v": 1,
+                "tool": "yq",
+                "at": "2026-10-16T00:00:00Z",
+                "method": {"kind": "github_release", "key": "k"},
+                "package": None,
+                "artifacts": [
+                    {
+                        "path": "/tmp/x\u0000y",
+                        "type": "file",
+                        "sha256": "b" * 64,
+                        "size": 3,
+                        "mtime_ns": 1,
+                    }
+                ],
+                "smoke": None,
+                "hooks": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    plan = plan_removal([_raw_yq_tool()], bin_dir)
+    assert plan.removable == ()
+    assert plan.yourself == (bin_dir / "yq",)

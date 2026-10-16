@@ -833,3 +833,68 @@ def test_reader_keeps_only_each_types_fields() -> None:
         ReceiptArtifact(path=Path("/tmp/x/file"), type="file", sha256=digest, size=3, mtime_ns=1),
         ReceiptArtifact(path=Path("/tmp/x/dir"), type="dir", dev=7, ino=9),
     )
+
+
+# --- 19-22 Task 2: malformed paths fail closed; the memo compares each digest ---
+
+
+def _raw_receipt(artifacts: list[dict[str, object]]) -> None:
+    """Write one receipt JSON exactly, so a NUL survives as the escaped form."""
+    path = receipt_path("yq")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.loads(_valid_receipt())
+    payload["artifacts"] = artifacts
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+@pytest.mark.parametrize("bad_path", ["/tmp/x\u0000y", "/tmp/\ud800"])
+def test_nul_artifact_path_is_unreadable(bad_path: str) -> None:
+    """A path `os` would refuse makes the whole receipt unreadable (G5)."""
+    _raw_receipt([{"path": bad_path, "type": "file", "sha256": "b" * 64, "size": 3, "mtime_ns": 1}])
+    assert receipts.read("yq") is None
+
+
+@pytest.mark.parametrize("kind", ["file", "link", "dir"])
+def test_invalid_artifact_paths_fail_closed(kind: Literal["dir", "link", "file"]) -> None:
+    """A NUL path that slips past the reader answers False/None, never raises."""
+    path = Path("/tmp/x\x00")
+    artifact = ReceiptArtifact(
+        path=path,
+        type=kind,
+        target="/opt/x",
+        sha256="b" * 64,
+        size=3,
+        mtime_ns=1,
+        dev=1,
+        ino=1,
+    )
+    assert receipts.matches(artifact) is False
+    assert receipts.fingerprint(path, kind) is None
+
+
+def test_rehash_memo_compares_each_receipts_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A memo hit stores the observed digest and compares each receipt's own (G6)."""
+    monkeypatch.setattr(receipts, "_REHASH_MEMO", {})
+    target = tmp_path / "yq"
+    target.write_bytes(b"abc")
+    real = hashlib.sha256(b"abc").hexdigest()
+    stat = target.stat()
+    right = ReceiptArtifact(
+        path=target, type="file", sha256=real, size=stat.st_size + 1, mtime_ns=1
+    )
+    wrong = ReceiptArtifact(
+        path=target, type="file", sha256="d" * 64, size=stat.st_size + 1, mtime_ns=1
+    )
+    calls: list[Path] = []
+
+    def counting(path: Path) -> str:
+        calls.append(path)
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    monkeypatch.setattr(receipts, "sha256_file", counting)
+    assert receipts.matches(right) is True
+    assert receipts.matches(wrong) is False
+    assert receipts.matches(right) is True
+    assert calls == [target]

@@ -4830,3 +4830,41 @@ def test_present_harnesses_failure_is_a_not_checked_note(
         state = service.state_of(pack.id)
         assert state is not None
         assert f"{_SKILL_NOT_CHECKED}boom" in state.reasons
+
+
+# --- 19-22 Task 2: a NUL artifact path never aborts a refresh pass (G5) ------
+
+
+def test_nul_receipt_path_never_aborts_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A receipt whose artifact path embeds a NUL is the unreadable note, not a crash."""
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    (bin_dir / "yq").write_bytes(_YQ_BYTES)
+    path = receipts.receipt_path("yq")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "v": 1,
+                "tool": "yq",
+                "at": "2026-10-16T00:00:00Z",
+                "method": {"kind": "github_release", "key": "k"},
+                "package": None,
+                "artifacts": [
+                    {
+                        "path": "/tmp/x\u0000y",
+                        "type": "file",
+                        "sha256": "b" * 64,
+                        "size": 3,
+                        "mtime_ns": 1,
+                    }
+                ],
+                "smoke": None,
+                "hooks": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = _settled(_receipt_service(tmp_path, bin_dir), _yq())
+    assert _UNREADABLE in state.reasons
