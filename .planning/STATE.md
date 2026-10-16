@@ -2,14 +2,14 @@
 gsd_state_version: "1.0"
 milestone: v0.50.0
 milestone_name: Truthful lifecycle
-current_phase: 18
-current_phase_name: Registry truth and drift guard
-status: executing
-stopped_at: "Phase 17: all 20 plans executed; final gates + CI oracle green; e2e re-run pending"
-last_updated: "2026-10-15T21:01:29.168Z"
-last_activity: 2026-10-14
-last_activity_desc: Phase 17 execution started
-state_head: 5a2ddde0c52e346c70eb113d1e13065458bf30eb
+current_phase: 19
+current_phase_name: One tool state with health plus receipts
+status: planning
+stopped_at: "Phase 18 verified (human_needed: real-Mac draw.io), 28 plans, SECURITY 99/99; next: plan Phase 19"
+last_updated: "2026-10-16T02:52:29.234Z"
+last_activity: 2026-10-15
+last_activity_desc: Phase 18 closed; Phase 19 next
+state_head: e0f1677cb697cb1f3ec798598e4433811762fe0d
 progress:
   total_phases: 11
   completed_phases: 0
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-13)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 17 — Stop the bleeding
+**Current focus:** Phase 19 — One tool state with health plus receipts
 
 ## Current Position
 
-Phase: 18 (Registry truth and drift guard) — READY TO EXECUTE
-Plan: 1 of 13
-Status: Ready to execute
-Last activity: 2026-10-14 — Phase 17 execution started
+Phase: 19 (One tool state with health plus receipts) — READY TO PLAN
+Plan: — (not planned yet)
+Status: Ready to plan
+Last activity: 2026-10-15 — Phase 18 verified (human_needed: real-Mac draw.io only), secured 99/99, main pushed
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -105,6 +105,7 @@ Resume file: None
 | Phase | State | Resume |
 |-------|-------|--------|
 | 17 | verification_deferred_human (only CI-02 branch protection, a user action; main pushed e412b03, CI run 38710819886 green on both OSes) | /gsd-verify-work 17 |
+| 18 | verification_deferred_human (only the real-Mac draw.io pinned-app install + smoke; UAT 18/19 pass, 1 skipped; SECURITY 99/99 closed; CI run 38839041957 green on both OSes; first verify-registry run 38839643252 exit 0, cache saved) | /gsd-verify-work 18 |
 
 ## Operator Next Steps
 
