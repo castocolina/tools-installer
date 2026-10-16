@@ -60,7 +60,7 @@ from installer.executors import ExecutorError
 from installer.guards import look_through_shim, real_pnpm
 from installer.install_ownership import ProbeRunner, native_index
 from installer.manager_versions import OutdatedReport, read_outdated
-from installer.model import ConfigStep, Method, Tool
+from installer.model import SKILL_HARNESSES, ConfigStep, Method, Tool
 from installer.ownership import (
     ManagerInventory,
     ManagerOwnership,
@@ -84,7 +84,16 @@ from installer.pnpm_globals import (
 from installer.receipts import Receipt
 from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError, run_query
-from installer.skill_lifecycle import inspect_skill_packs
+from installer.skill_lifecycle import (
+    SKILL_HARNESS_LABELS,
+    HarnessStatus,
+    ProjectPackReport,
+    inspect_project_pack,
+    inspect_skill_reports,
+    partial_harnesses,
+    partial_steps,
+    present_harnesses,
+)
 from installer.status import is_installed
 from installer.terminal_shell import TerminalShellResult
 from installer.uninstall import RemovalPlan, plan_removal, plan_uninstall
@@ -553,8 +562,33 @@ def default_skill_home() -> Path:
 
 @dataclass(frozen=True)
 class SkillHostStatus:
+    """One pack's host answers plus its D-18 reasons and steps.
+
+    Only the hosts are persisted: a cache-seeded status has no reasons or
+    steps until the first `refresh_skills` of the launch.
+    """
+
     hosts: dict[str, str]
     stale: bool
+    reasons: tuple[str, ...] = ()
+    steps: tuple[ConfigStep, ...] = ()
+
+
+SKILL_NOT_CHECKED = "skill configuration not checked: "
+
+
+@dataclass(frozen=True)
+class _PackScan:
+    """The lock-free pack inputs of one pass, read from the skill home only.
+
+    `present` are the harnesses on this machine; `projects` each project
+    pack's D-21 report; `failures` the `not checked` note of a pack whose
+    helper raised (review M11).
+    """
+
+    present: frozenset[str]
+    projects: Mapping[str, ProjectPackReport]
+    failures: Mapping[str, str]
 
 
 BROKEN_SHIM_REASON = (
@@ -1009,11 +1043,17 @@ class VersionRefreshService:
                 if self._skills_probed:
                     return dict(self._skills)
                 started_epoch = self._epoch
-            probed = inspect_skill_packs(packs, probe, self._skill_home)
+            probed = inspect_skill_reports(packs, probe, self._skill_home)
             fresh = {
-                tool_id: SkillHostStatus(hosts=dict(hosts), stale=False)
-                for tool_id, hosts in probed.items()
+                tool_id: SkillHostStatus(
+                    hosts=dict(report.hosts),
+                    stale=False,
+                    reasons=report.reasons,
+                    steps=report.steps,
+                )
+                for tool_id, report in probed.items()
             }
+            scan = self._scan_packs(packs)
             with self._lock:
                 if self._epoch != started_epoch:
                     return dict(self._skills)
@@ -1034,6 +1074,7 @@ class VersionRefreshService:
                         ownership=state.ownership,
                         version=state.version,
                         removable=state.removable,
+                        scan=scan,
                     )
                     for tool in packs
                     if (state := self._states.get(tool.id)) is not None
@@ -1056,6 +1097,60 @@ class VersionRefreshService:
             }
             return self._epoch
 
+    def _scan_packs(self, packs: Sequence[Tool]) -> _PackScan:
+        """Harnesses and project reports, read once, outside `_lock` (D-17, D-21).
+
+        Every scan takes `self._skill_home` explicitly (checker W5).
+        """
+        failures: dict[str, str] = {}
+        if not packs:
+            return _PackScan(present=frozenset(), projects={}, failures=failures)
+        try:
+            present = present_harnesses(self._skill_home, self._looked_through)
+        except Exception as exc:  # a read-only secondary fact must never fail the pass
+            present = frozenset[str]()
+            failures = {tool.id: f"{SKILL_NOT_CHECKED}{exc}" for tool in packs}
+        projects: dict[str, ProjectPackReport] = {}
+        for tool in packs:
+            lifecycle = tool.skill_lifecycle
+            if lifecycle is None or lifecycle.scope != "project":
+                continue
+            try:
+                projects[tool.id] = inspect_project_pack(tool, self._skill_home, present)
+            except Exception as exc:  # a read-only secondary fact must never fail the pass
+                failures.setdefault(tool.id, f"{SKILL_NOT_CHECKED}{exc}")
+        return _PackScan(present=present, projects=projects, failures=failures)
+
+    def _user_pack_facts(
+        self, tool: Tool, hosts: SkillHostStatus | None, present: frozenset[str]
+    ) -> tuple[tuple[str, ...], tuple[ConfigStep, ...], tuple[str, ...]]:
+        """(facts, steps, notes) of a user-scope pack: D-18 first, then D-17 partials."""
+        lifecycle = tool.skill_lifecycle
+        if hosts is None or lifecycle is None or not hosts.hosts:
+            return (), (), ()
+        notes: tuple[str, ...] = ()
+        partial: tuple[tuple[str, ...], tuple[ConfigStep, ...]] = ((), ())
+        try:
+            # A harness whose D-18 fix already has a step is not also partial.
+            fixed = {step.harness for step in hosts.steps}
+            missing = partial_harnesses(
+                cast(Mapping[str, HarnessStatus], hosts.hosts),
+                lifecycle.supported_harnesses,
+                present,
+            )
+            partial = partial_steps(tool, [h for h in missing if h not in fixed])
+        except Exception as exc:  # a read-only secondary fact must never fail the pass
+            notes = (f"{SKILL_NOT_CHECKED}{exc}",)
+        if not hosts.stale:
+            # Review C2-M3: an unreadable answer from a harness this machine has.
+            notes += tuple(
+                f"{SKILL_NOT_CHECKED}no readable answer from "
+                f"{SKILL_HARNESS_LABELS.get(harness, harness)}"
+                for harness in SKILL_HARNESSES
+                if harness in present and hosts.hosts.get(harness) == "unknown"
+            )
+        return hosts.reasons + partial[0], hosts.steps + partial[1], notes
+
     def _skill_state(
         self,
         tool: Tool,
@@ -1066,9 +1161,39 @@ class VersionRefreshService:
         ownership: ManagerOwnership,
         version: VersionStatus | None,
         removable: RemovalPlan,
+        scan: _PackScan,
     ) -> ToolState:
         """A skill pack's state from the host answers held now (call under
-        `_lock`). No answer yet is CHECKING, through the builder's own input."""
+        `_lock`) and the pass's scan. No answer yet is CHECKING, through the
+        builder's own input. Every configuration fact goes through here, so
+        `refresh_skills`'s rebuild keeps it."""
+        hosts = self._skills.get(tool.id)
+        failure = scan.failures.get(tool.id)
+        notes: tuple[str, ...] = (failure,) if failure is not None else ()
+        report = scan.projects.get(tool.id)
+        if report is not None:
+            # D-21: presence is "installed in N repos" or a global leftover,
+            # never the global install-state hosts.
+            repos = sum(1 for _repo, runtimes in report.repos if runtimes)
+            if repos:
+                notes = (f"installed in {repos} repo{'' if repos == 1 else 's'}",) + notes
+            notes += tuple(f"{SKILL_NOT_CHECKED}cannot read ~/{path}" for path in report.unchecked)
+            return tool_state(
+                tool,
+                generation=generation,
+                seq=seq,
+                platform=platform,
+                present=bool(repos or report.leftovers),
+                ownership=ownership,
+                version=version,
+                removable=removable,
+                skill_hosts=hosts,
+                misconfigured=report.reasons,
+                unconfigured=report.steps,
+                notes=notes,
+            )
+        facts, steps, pack_notes = self._user_pack_facts(tool, hosts, scan.present)
+        notes += pack_notes
         if tool.skill_lifecycle is not None and not tool.skill_lifecycle.status_probes:
             # No host probe will ever answer for this pack: presence is the
             # presence predicate, as for any binary, never CHECKING forever.
@@ -1081,13 +1206,16 @@ class VersionRefreshService:
                 ownership=ownership,
                 version=version,
                 removable=removable,
+                misconfigured=facts,
+                unconfigured=steps,
+                notes=notes,
             )
-        hosts = self._skills.get(tool.id)
         answers = set(hosts.hosts.values()) if hosts is not None else set[str]()
         checking: tuple[str, ...] = ()
         if not answers & {"present", "absent"}:
             checking = (SKILL_CHECKING_REASON,)
-        notes = (SKILL_SEEDED_NOTE,) if hosts is not None and hosts.stale else ()
+        if hosts is not None and hosts.stale:
+            notes = (SKILL_SEEDED_NOTE,) + notes
         return tool_state(
             tool,
             generation=generation,
@@ -1099,6 +1227,8 @@ class VersionRefreshService:
             removable=removable,
             skill_hosts=hosts,
             checking=checking,
+            misconfigured=facts,
+            unconfigured=steps,
             notes=notes,
         )
 
@@ -1442,6 +1572,7 @@ class VersionRefreshService:
                 fetches += 1
             if new_entry is not None:
                 produced[tool.id] = new_entry
+        scan = self._scan_packs([pack for pack, *_rest in packs])
         with self._lock:
             if self._epoch != started_epoch:
                 # RACED: an invalidate landed while this pass was resolving,
@@ -1461,6 +1592,7 @@ class VersionRefreshService:
                     ownership=ownership,
                     version=status,
                     removable=removable,
+                    scan=scan,
                 )
             # Newest pass wins per record (L-19-02): at one epoch a record
             # is replaced only by one from a pass with a higher sequence,

@@ -41,6 +41,7 @@ from installer.ownership import (
 )
 from installer.platform import Platform
 from installer.resolve import resolve_methods, unavailable_reason
+from installer.skill_lifecycle import HARNESS_PRESENCE, inspect_skill_reports
 from installer.terminal_shell import TerminalShellResult
 from installer.uninstall import RemovalPlan, plan_removal
 from installer.version_cache import (
@@ -4350,3 +4351,378 @@ def test_group_maps_to_the_declaring_tool(tmp_path: Path) -> None:
     assert split["mmdc"].unconfigured == (_GROUP_STEP,)
     assert not any("pnpm group" in reason for reason in split["puppeteer"].reasons)
     assert split["puppeteer"].unconfigured == ()
+
+
+# -- 19-16 Task 3: skill partial/duplicate/disabled and project-pack evidence
+# (D-17, D-18, D-21, checker B1/W1/W5, review M11/C2-M3) --
+
+_SP_ID = "superpowers@claude-plugins-official"
+_SP_MARKET = "superpowers@superpowers-marketplace"
+_FOUR_REASONS = (
+    f"disabled: {_SP_ID} in user scope (6.4.1)",
+    f"duplicate: {_SP_ID} in project scope (6.2.0)",
+    f"duplicate: {_SP_MARKET} in user scope (6.2.0)",
+    f"duplicate: {_SP_MARKET} in project scope (6.2.0)",
+)
+_SKILL_NOT_CHECKED = "skill configuration not checked: "
+_LEFTOVER = "installed globally; this pack is project-local"
+
+
+def _listing(*entries: tuple[str, str, bool, str]) -> str:
+    return json.dumps(
+        [
+            {"id": plugin_id, "scope": scope, "enabled": enabled, "version": version}
+            for plugin_id, scope, enabled, version in entries
+        ]
+    )
+
+
+def _four_install_listing(home: Path) -> str:
+    """The 19-07 four-install host: a disabled canonical user copy plus three copies."""
+    official, market = home / "repo-official", home / "repo-market"
+    official.mkdir(parents=True)
+    market.mkdir()
+    plugins = {
+        _SP_ID: [{"scope": "project", "projectPath": str(official)}],
+        _SP_MARKET: [{"scope": "project", "projectPath": str(market)}],
+    }
+    target = home / ".claude" / "plugins"
+    target.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"version": 2, "plugins": plugins})
+    (target / "installed_plugins.json").write_text(payload, encoding="utf-8")
+    return _listing(
+        (_SP_ID, "user", False, "6.4.1"),
+        (_SP_ID, "project", True, "6.2.0"),
+        (_SP_MARKET, "user", True, "6.2.0"),
+        (_SP_MARKET, "project", True, "6.2.0"),
+    )
+
+
+def _superpowers(*, codex: bool = False) -> Tool:
+    probes = (SkillStatusProbe("claude", "plugin-cli", _SP_ID),)
+    if codex:
+        probes += (SkillStatusProbe("codex", "plugin-cli", "superpowers"),)
+    return _skill_pack("superpowers", probes)
+
+
+def _probe_for(claude: str, codex: str = "") -> Callable[[list[str]], str]:
+    def probe(argv: list[str]) -> str:
+        return claude if argv[0] == "claude" else codex
+
+    return probe
+
+
+def _pack_service(
+    home: Path,
+    probe: Callable[[list[str]], str] | None = None,
+    *,
+    harnesses: frozenset[str] = frozenset(),
+    which: Callable[[str], str | None] | None = None,
+) -> VersionRefreshService:
+    def on_path(cmd: str) -> str | None:
+        return f"/usr/bin/{cmd}" if cmd in harnesses else None
+
+    return VersionRefreshService(
+        platform=_LINUX,
+        cache_path=home.parent / f"{home.name}-versions.json",
+        resolve_tag=lambda _repo: "1.0.0",
+        probe_output=lambda _argv: "1.0.0",
+        now=lambda: _STATE_NOW,
+        managed_bin_dir=home.parent / f"{home.name}-managed",
+        skill_probe=probe,
+        skill_home=home,
+        which=which if which is not None else on_path,
+        artifacts_for=lambda _tool: [],
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        query=lambda *_args, **_kwargs: "",
+    )
+
+
+def _probed_state(service: VersionRefreshService, pack: Tool) -> ToolState:
+    """The pack's state after a pass and the once-per-launch probe's rebuild."""
+    service.refresh([pack])
+    service.refresh_skills([pack])
+    rebuilt = service.state_of(pack.id)
+    assert rebuilt is not None
+    # Carry-forward from 19-08: the next pass keeps what the rebuild attached.
+    service.refresh([pack])
+    again = service.state_of(pack.id)
+    assert again is not None
+    assert (again.health, again.reasons, again.unconfigured) == (
+        rebuilt.health,
+        rebuilt.reasons,
+        rebuilt.unconfigured,
+    )
+    return rebuilt
+
+
+def _opengsd() -> Tool:
+    return next(tool for tool in load_tools(REGISTRY) if tool.id == "opengsd")
+
+
+def _gsd_repo(home: Path, name: str = "proj") -> Path:
+    repo = home / "code" / name
+    (repo / ".planning").mkdir(parents=True)
+    (repo / ".planning" / "config.json").write_text("{}", encoding="utf-8")
+    return repo
+
+
+def test_partial_skill_pack_is_misconfigured(tmp_path: Path) -> None:
+    probe = _probe_for(_listing((_SP_ID, "user", True, "6.4.1")))
+    service = _pack_service(tmp_path / "home", probe, harnesses=frozenset({"claude", "codex"}))
+    state = _probed_state(service, _superpowers(codex=True))
+    assert state.skill_hosts is not None
+    assert state.skill_hosts.hosts == {"claude": "present", "codex": "absent"}
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[0] == "partial: missing on Codex"
+    assert state.unconfigured == (
+        ConfigStep("install superpowers for Codex", "skill_install", "codex"),
+    )
+
+
+def test_absent_harness_gives_no_partial(tmp_path: Path) -> None:
+    probe = _probe_for(_listing((_SP_ID, "user", True, "6.4.1")))
+    service = _pack_service(tmp_path / "home", probe, harnesses=frozenset({"claude"}))
+    state = _probed_state(service, _superpowers(codex=True))
+    assert state.health is Health.OK
+    assert state.unconfigured == ()
+    assert not any(reason.startswith("partial:") for reason in state.reasons)
+
+
+def test_claude_duplicates_reach_the_state(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    probe = _probe_for(_four_install_listing(home))
+    pack = _superpowers()
+    service = _pack_service(home, probe, harnesses=frozenset({"claude"}))
+    state = _probed_state(service, pack)
+    expected = inspect_skill_reports([pack], probe, home)[pack.id]
+    assert state.health is Health.MISSING
+    assert state.reasons[:4] == _FOUR_REASONS
+    assert state.unconfigured == expected.steps
+    assert state.unconfigured[0].kind == "plugin_enable"
+    assert len(state.unconfigured) == 5
+
+
+def test_claude_duplicates_on_a_present_pack_are_misconfigured(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    probe = _probe_for(_four_install_listing(home), "superpowers@openai-curated  installed\n")
+    pack = _superpowers(codex=True)
+    service = _pack_service(home, probe, harnesses=frozenset({"claude", "codex"}))
+    state = _probed_state(service, pack)
+    expected = inspect_skill_reports([pack], probe, home)[pack.id]
+    assert state.skill_hosts is not None
+    assert state.skill_hosts.hosts == {"claude": "absent", "codex": "present"}
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[:4] == _FOUR_REASONS
+    # Claude's D-18 fix already reinstates it there: no second, partial install step.
+    assert state.unconfigured == expected.steps
+    assert state.unconfigured[0].kind == "plugin_enable"
+
+
+def test_present_harnesses_runs_once_per_pass(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def which(cmd: str) -> str | None:
+        calls.append(cmd)
+        return None
+
+    service = _pack_service(tmp_path / "home", which=which)
+    service.refresh([_superpowers(), _skill_pack("ponytail", ()), _opengsd()])
+    commands = {command for commands, _markers in HARNESS_PRESENCE.values() for command in commands}
+    assert calls.count("claude") == 1
+    assert all(calls.count(command) <= 1 for command in commands)
+
+
+def test_project_pack_present_in_repos(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = _gsd_repo(home)
+    (repo / ".claude" / "gsd-core").mkdir(parents=True)
+    (repo / ".claude" / "gsd-core" / "VERSION").write_text("1.16.0\n", encoding="utf-8")
+    (repo / ".claude" / "commands").mkdir()
+    (repo / ".claude" / "commands" / "gsd-plan.md").write_text("x", encoding="utf-8")
+    service = _pack_service(home, harnesses=frozenset({"claude"}))
+    state = _settled_states(service, [_opengsd()])["opengsd"]
+    assert state.health is Health.OK
+    assert "installed in 1 repo" in state.reasons
+    assert state.unconfigured == ()
+
+
+def test_project_pack_global_leftover_is_misconfigured(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".claude" / "gsd-core").mkdir(parents=True)
+    state = _settled_states(_pack_service(home), [_opengsd()])["opengsd"]
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[0] == _LEFTOVER
+    assert [step.kind for step in state.unconfigured] == ["project_pack_global_uninstall"]
+    assert state.unconfigured[0].harness == "claude"
+
+
+def test_project_pack_empty_dirs_is_not_present(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = _gsd_repo(home)
+    (repo / ".claude" / "gsd-core").mkdir(parents=True)
+    (repo / ".claude" / "gsd-core" / "VERSION").write_text("1.16.0\n", encoding="utf-8")
+    (repo / ".claude" / "skills").mkdir()
+    service = _pack_service(home, harnesses=frozenset({"claude"}))
+    state = _settled_states(service, [_opengsd()])["opengsd"]
+    assert state.health is Health.MISSING
+    assert "Claude Code install in proj is empty" in state.reasons
+    assert not any(reason.startswith("installed in") for reason in state.reasons)
+    assert [(step.kind, step.cwd) for step in state.unconfigured] == [
+        ("project_pack_install", repo)
+    ]
+    assert state.unconfigured[0].text == "reinstall opengsd for Claude Code in proj"
+
+
+def test_project_pack_not_installed_anywhere_is_missing_with_steps(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = _gsd_repo(home)
+    service = _pack_service(home, harnesses=frozenset({"claude", "opencode"}))
+    state = _settled_states(service, [_opengsd()])["opengsd"]
+    assert state.health is Health.MISSING
+    assert "not installed in proj" in state.reasons
+    assert [(step.kind, step.harness, step.cwd) for step in state.unconfigured] == [
+        ("project_pack_install", "claude", repo),
+        ("project_pack_install", "opencode", repo),
+    ]
+
+
+def test_project_pack_scan_reads_only_the_skill_home(tmp_path: Path) -> None:
+    (tmp_path / "elsewhere" / ".claude" / "gsd-core").mkdir(parents=True)
+    service = VersionRefreshService(
+        platform=_LINUX,
+        cache_path=tmp_path / "versions.json",
+        which=lambda _cmd: None,
+        query=lambda *_args, **_kwargs: "",
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+    )
+    clean = _settled_states(service, [_opengsd()])["opengsd"]
+    assert _LEFTOVER not in clean.reasons
+    assert clean.health is Health.MISSING
+    (version_status.default_skill_home() / ".claude" / "gsd-core").mkdir(parents=True)
+    service.invalidate(reason="test")
+    leftover = _settled_states(service, [_opengsd()])["opengsd"]
+    assert leftover.health is Health.MISCONFIGURED
+    assert leftover.reasons[0] == _LEFTOVER
+
+
+def test_seeded_skill_cache_has_hosts_only(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    project = home / "repo"
+    project.mkdir(parents=True)
+    service = _pack_service(
+        home,
+        _probe_for(_listing((_SP_ID, "user", True, "6.4.1"), (_SP_ID, "project", True, "6.2.0"))),
+        harnesses=frozenset({"claude"}),
+    )
+    save_version_cache(
+        home.parent / f"{home.name}-versions.json",
+        {},
+        skills={"superpowers": {"claude": "present"}},
+    )
+    plugins = {_SP_ID: [{"scope": "project", "projectPath": str(project)}]}
+    (home / ".claude" / "plugins").mkdir(parents=True)
+    (home / ".claude" / "plugins" / "installed_plugins.json").write_text(
+        json.dumps({"version": 2, "plugins": plugins}), encoding="utf-8"
+    )
+    service.seed_skills_from_cache()
+    pack = _superpowers()
+    seeded = _settled_states(service, [pack])["superpowers"]
+    assert seeded.health is Health.OK
+    assert _SEEDED_NOTE in seeded.reasons
+    assert seeded.unconfigured == ()
+    service.refresh_skills([pack])
+    probed = service.state_of(pack.id)
+    assert probed is not None
+    assert probed.health is Health.MISCONFIGURED
+    assert probed.reasons[0] == f"duplicate: {_SP_ID} in project scope (6.2.0)"
+    assert [step.kind for step in probed.unconfigured] == ["plugin_uninstall"]
+
+
+def _raise_boom(*_args: object) -> object:
+    raise OSError("boom")
+
+
+@pytest.mark.parametrize("helper", ["inspect_project_pack", "partial_harnesses"])
+def test_skill_helper_failure_is_a_not_checked_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, helper: str
+) -> None:
+    home = tmp_path / "home"
+    service = _pack_service(
+        home,
+        _probe_for(_listing((_SP_ID, "user", True, "6.4.1"))),
+        harnesses=frozenset({"claude"}),
+    )
+    monkeypatch.setattr(version_status, helper, _raise_boom)
+    packs = [_superpowers(), _opengsd(), _skill_pack("ponytail", ())]
+    service.refresh(packs)
+    service.refresh_skills(packs)
+    note = f"{_SKILL_NOT_CHECKED}boom"
+    affected = "opengsd" if helper == "inspect_project_pack" else "superpowers"
+    for pack in packs:
+        state = service.state_of(pack.id)
+        assert state is not None
+        assert (note in state.reasons) is (pack.id == affected)
+    superpowers = service.state_of("superpowers")
+    assert superpowers is not None
+    assert superpowers.health is Health.OK
+
+
+def _raise_called_process_error(argv: list[str]) -> str:
+    raise subprocess.CalledProcessError(1, argv)
+
+
+def _unreadable_probe(answer: str) -> Callable[[list[str]], str]:
+    def probe(argv: list[str]) -> str:
+        return _raise_called_process_error(argv) if answer == "raises" else "not json"
+
+    return probe
+
+
+@pytest.mark.parametrize("answer", ["not-json", "raises"])
+def test_inconclusive_claude_listing_is_a_not_checked_note(tmp_path: Path, answer: str) -> None:
+    note = f"{_SKILL_NOT_CHECKED}no readable answer from Claude Code"
+    for on_machine in (True, False):
+        home = tmp_path / f"home-{on_machine}"
+        if on_machine:
+            _four_install_listing(home)
+        harnesses = frozenset({"claude"} if on_machine else ())
+        service = _pack_service(home, _unreadable_probe(answer), harnesses=harnesses)
+        state = _probed_state(service, _superpowers())
+        assert state.skill_hosts is not None
+        assert state.skill_hosts.hosts == {"claude": "unknown"}
+        assert (note in state.reasons) is on_machine
+        assert not set(_FOUR_REASONS) & set(state.reasons)
+        assert state.unconfigured == ()
+
+
+@pytest.mark.parametrize("content", ["{", '[{"hooks": {}}]', None])
+def test_inconclusive_hook_config_is_a_not_checked_note(
+    tmp_path: Path, content: str | None
+) -> None:
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    if content is not None:
+        (home / ".claude" / "settings.json").write_text(content, encoding="utf-8")
+    state = _settled_states(_pack_service(home), [_opengsd()])["opengsd"]
+    note = f"{_SKILL_NOT_CHECKED}cannot read ~/.claude/settings.json"
+    assert (note in state.reasons) is (content is not None)
+
+
+def test_present_harnesses_failure_is_a_not_checked_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(version_status, "present_harnesses", _raise_boom)
+    packs = [_superpowers(), _opengsd()]
+    service = _pack_service(tmp_path / "home")
+    service.refresh(packs)
+    for pack in packs:
+        state = service.state_of(pack.id)
+        assert state is not None
+        assert f"{_SKILL_NOT_CHECKED}boom" in state.reasons
