@@ -158,8 +158,8 @@
     "execution": "haiku"
   },
   "model_overrides": {
-    "gsd-planner": "opus",
-    "gsd-code-reviewer": "opus"
+    "gsd-planner": "fable",
+    "gsd-code-reviewer": "fable"
   },
   "effort": {
     "default": "medium",
