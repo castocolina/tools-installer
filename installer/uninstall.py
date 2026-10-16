@@ -5,10 +5,11 @@ path the Policies view uses (CONTEXT D-04). Cask/brew/native-managed artifacts
 are left alone."""
 
 import shutil
-from collections.abc import Callable
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from installer import receipts
 from installer.download import DOWNLOAD_KINDS, artifact_paths, is_still_proven
 from installer.enums import UninstallState
 from installer.locations import opt_dir
@@ -55,15 +56,19 @@ def plan_uninstall(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
 class RemovalPlan:
     """The strict split of a tool set's on-disk matches (CONTEXT D-04).
 
-    `removable` holds only proven artifacts: a bin link that is a symlink
-    resolving to a regular file inside the same tool's opt dir, plus that
-    opt dir. Everything else `plan_uninstall` still matches by name —
-    uv/pip files, foreign symlinks, shared files, app bundles — lands in
-    `yourself`: listed for the user, never deleted by this installer.
+    `removable` holds only proven artifacts: receipt artifacts the registry
+    formula agrees on (D-10), or — for a tool with no receipt file — a bin
+    link that is a symlink resolving to a regular file inside the same tool's
+    opt dir, plus that opt dir. Everything else `plan_uninstall` still
+    matches by name — uv/pip files, foreign symlinks, shared files, app
+    bundles — lands in `yourself`: listed for the user, never deleted by
+    this installer. `by_tool` maps a tool id to its receipt-proven paths, so
+    the remover retires a receipt only once all of them are gone.
     """
 
     removable: tuple[Path, ...]
     yourself: tuple[Path, ...]
+    by_tool: Mapping[str, tuple[Path, ...]] = field(default_factory=dict[str, tuple[Path, ...]])
 
 
 def still_removable(path: Path, bin_dir: Path) -> bool:
@@ -79,10 +84,37 @@ def still_removable(path: Path, bin_dir: Path) -> bool:
     return path == opt_dir(path.name) and is_still_proven(bin_dir / path.name)
 
 
-def plan_removal(tools: list[Tool], default_bin_dir: Path) -> RemovalPlan:
-    """Prove removability by the archive layout only; name the rest.
+def _receipt_proof(tool: Tool, default_bin_dir: Path, *, verify: bool) -> tuple[Path, ...]:
+    """The paths a tool's receipt proves: receipt ∩ `artifact_paths` (L-19-06).
 
-    For each download method, the (link, opt dir) pair comes from
+    The receipt is user-writable JSON, so it is never the authority on its
+    own: only an artifact whose (path, type) PAIR the registry formula names
+    for one of the tool's methods of the receipt's kind is proven (19-RESEARCH
+    Pitfall 8; the pair, not the path, so a receipt cannot retype a raw file
+    into a recursive directory delete, review H6). A corrupt receipt, or any
+    drifted artifact — authorized or not (review H7) — proves nothing."""
+    receipt = receipts.read(tool.id)
+    if receipt is None or receipts.drifted(receipt, rehash=verify):
+        return ()
+    allowed = {
+        (artifact.path, artifact.kind)
+        for method in tool.methods
+        if method.kind == receipt.method.kind
+        for artifact in artifact_paths(method, default_bin_dir)
+    }
+    return tuple(a.path for a in receipt.artifacts if (a.path, a.type) in allowed)
+
+
+def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = False) -> RemovalPlan:
+    """Prove removability by receipt, else by the archive layout; name the rest.
+
+    A tool with a receipt file is proven by that receipt alone (L-19-14): the
+    receipt artifacts `artifact_paths` also names, unless the receipt is
+    corrupt or any artifact drifted — then nothing, with no layout fallback.
+    `verify=True` re-hashes every recorded file (the deletion-time re-proof).
+
+    A tool with no receipt file keeps the archive-layout proof. For each
+    download method, the (link, opt dir) pair comes from
     `download.artifact_paths` (D-07) — the same placement install uses. A
     method is proven when its link is a symlink whose target is a regular
     file inside this tool's own opt_dir(<link name>) — so a uv/pip file at a
@@ -92,7 +124,17 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path) -> RemovalPlan:
     """
     removable: list[Path] = []
     seen: set[Path] = set()
+    by_tool: dict[str, tuple[Path, ...]] = {}
     for tool in tools:
+        if _exists(receipts.receipt_path(tool.id)):
+            proven = _receipt_proof(tool, default_bin_dir, verify=verify)
+            if proven:
+                by_tool[tool.id] = proven
+            for path in proven:
+                if path not in seen:
+                    seen.add(path)
+                    removable.append(path)
+            continue
         for method in tool.methods:
             if method.kind not in DOWNLOAD_KINDS:
                 continue
@@ -106,7 +148,7 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path) -> RemovalPlan:
                     seen.add(path)
                     removable.append(path)
     yourself = tuple(p for p in plan_uninstall(tools, default_bin_dir) if p not in seen)
-    return RemovalPlan(tuple(removable), yourself)
+    return RemovalPlan(tuple(removable), yourself, by_tool)
 
 
 @dataclass(frozen=True, init=False)

@@ -5,10 +5,12 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
+from installer import receipts
 from installer.download import link_name
 from installer.enums import UninstallState
 from installer.model import Method, Tool, load_tools
 from installer.policy import Policy, daemon_policy, omz_plugins_policy, tweak_policy
+from installer.receipts import Receipt, ReceiptMethod
 from installer.run import CommandError
 from installer.tweaks import BUNDLES, TweakBundle
 from installer.uninstall import (
@@ -1633,3 +1635,231 @@ def test_plan_removal_still_proves_an_archive_link(
     plan = plan_removal([archive], bin_dir)
     assert plan.removable == (bin_dir / "rg", opt)
     assert plan.yourself == ()
+
+
+# --- receipt proof: receipt ∩ artifact_paths (D-10, L-19-06) ----------------
+
+
+def _raw_yq_tool() -> Tool:
+    """A raw-download yq: the formula names `<bin>/yq` as a plain file, so no
+    archive layout can ever prove it."""
+    return _tool(
+        Method(
+            kind="github_release",
+            params={"repo": "a/yq", "asset": "yq", "member": "yq", "raw": True},
+        ),
+        tool_id="yq",
+        cmd="yq",
+    )
+
+
+def write_receipt(
+    tool: Tool, artifacts: list[tuple[Path, str]], *, kind: str = "github_release"
+) -> None:
+    """Write a receipt for `tool` fingerprinting each (path, type) as it is now.
+
+    Public: tests/test_app.py builds its CLI receipts with it. The receipts
+    dir is the conftest sandbox, never the real HOME."""
+    recorded: list[receipts.ReceiptArtifact] = []
+    for path, artifact_type in artifacts:
+        assert artifact_type in ("dir", "link", "file")
+        artifact = receipts.fingerprint(path, artifact_type)
+        assert artifact is not None, path
+        recorded.append(artifact)
+    receipts.write(
+        Receipt(
+            tool=tool.id,
+            at="2026-10-16T00:00:00Z",
+            method=ReceiptMethod(kind=kind, key="k"),
+            package=None,
+            artifacts=tuple(recorded),
+            smoke=None,
+            hooks={},
+        )
+    )
+
+
+def plant_raw_yq(home: Path, *, with_receipt: bool = True) -> tuple[Tool, Path]:
+    """Plant yq as a raw file at HOME/.local/bin/yq, with a matching receipt.
+
+    Public: tests/test_app.py drives the CLI over the same tree."""
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    (bin_dir / "yq").write_text("yq raw binary")
+    tool = _raw_yq_tool()
+    if with_receipt:
+        write_receipt(tool, [(bin_dir / "yq", "file")])
+    return tool, bin_dir
+
+
+def _plant_rg(home: Path) -> tuple[Tool, Path, Path]:
+    bin_dir = home / ".local" / "bin"
+    opt = home / ".local" / "opt" / "rg"
+    opt.mkdir(parents=True)
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    (opt / "rg").write_text("rg binary")
+    (bin_dir / "rg").symlink_to(opt / "rg")
+    return _dl_tool("rg", "rg"), bin_dir, opt
+
+
+def test_receipt_proves_a_raw_download(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    yq, bin_dir = plant_raw_yq(tmp_path)
+    plan = plan_removal([yq], bin_dir)
+    assert plan.removable == (bin_dir / "yq",)
+    assert plan.by_tool == {"yq": (bin_dir / "yq",)}
+    assert plan.yourself == ()
+
+
+def test_tampered_receipt_path_is_never_removable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """19-RESEARCH Pitfall 8: the receipt is user-writable JSON, so a path it
+    names outside artifact_paths is never removable, even with a correct sha256."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    key = tmp_path / ".ssh" / "id_ed25519"
+    key.parent.mkdir(parents=True)
+    key.write_text("PRIVATE KEY")
+    yq, bin_dir = plant_raw_yq(tmp_path, with_receipt=False)
+    write_receipt(yq, [(bin_dir / "yq", "file"), (key, "file")])
+    plan = plan_removal([yq], bin_dir, verify=True)
+    assert key not in plan.removable
+    assert all(key not in paths for paths in plan.by_tool.values())
+    assert plan.removable == (bin_dir / "yq",)
+
+
+def test_drifted_receipt_makes_the_tool_unremovable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    yq, bin_dir = plant_raw_yq(tmp_path)
+    (bin_dir / "yq").write_text("rewritten after install, a different size")
+    plan = plan_removal([yq], bin_dir)
+    assert plan.removable == ()
+    assert plan.by_tool == {}
+    assert plan.yourself == (bin_dir / "yq",)
+
+
+def test_changed_link_target_makes_the_tool_unremovable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ROADMAP SC3: a relinked bin link drifts the receipt; a valid receipt
+    beats the layout proof (L-19-14), which alone would accept the new target."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rg, bin_dir, opt = _plant_rg(tmp_path)
+    write_receipt(rg, [(opt, "dir"), (bin_dir / "rg", "link")])
+    assert plan_removal([rg], bin_dir).removable == (opt, bin_dir / "rg")
+    (opt / "other").write_text("another binary in its own opt dir")
+    (bin_dir / "rg").unlink()
+    (bin_dir / "rg").symlink_to(opt / "other")
+    plan = plan_removal([rg], bin_dir)
+    assert plan.removable == ()
+    assert plan.by_tool == {}
+    (bin_dir / "rg").unlink()
+    (bin_dir / "rg").symlink_to(opt / "rg")
+    assert plan_removal([rg], bin_dir).by_tool == {"rg": (opt, bin_dir / "rg")}
+
+
+def test_corrupt_receipt_is_unproven_without_layout_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rg, bin_dir, opt = _plant_rg(tmp_path)
+    path = receipts.receipt_path("rg")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{")
+    plan = plan_removal([rg], bin_dir)
+    assert plan.removable == ()
+    assert plan.by_tool == {}
+    assert set(plan.yourself) == {opt, bin_dir / "rg"}
+
+
+def test_no_receipt_keeps_the_layout_proof(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rg, bin_dir, opt = _plant_rg(tmp_path)
+    plan = plan_removal([rg], bin_dir)
+    assert plan.removable == (bin_dir / "rg", opt)
+    assert plan.by_tool == {}
+
+
+def test_receiptless_raw_binary_is_not_removable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review C2-M2: with its receipt gone (19-09 deletes it after a failed
+    rewrite), a raw binary is unproven, since no archive layout proves it."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    yq, bin_dir = plant_raw_yq(tmp_path, with_receipt=False)
+    plan = plan_removal([yq], bin_dir)
+    assert plan.removable == ()
+    assert plan.by_tool == {}
+    assert plan.yourself == (bin_dir / "yq",)
+
+
+def test_receipt_of_another_kind_proves_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    yq, bin_dir = plant_raw_yq(tmp_path, with_receipt=False)
+    write_receipt(yq, [(bin_dir / "yq", "file")], kind="tarball")
+    plan = plan_removal([yq], bin_dir)
+    assert plan.removable == ()
+    assert plan.by_tool == {}
+    assert plan.yourself == (bin_dir / "yq",)
+
+
+def test_classify_rows_use_the_receipt_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    yq, bin_dir = plant_raw_yq(tmp_path)
+    (row,) = classify_tools([yq], bin_dir, installed={"yq": True}, platform=_LINUX)
+    assert row.state == UninstallState.REMOVABLE
+    assert row.paths == [bin_dir / "yq"]
+    assert row.selectable is True
+    (bin_dir / "yq").write_text("rewritten after install, a different size")
+    (row,) = classify_tools([yq], bin_dir, installed={"yq": True}, platform=_LINUX)
+    assert row.state == UninstallState.MANAGED
+    assert row.selectable is False
+    assert f"remove it yourself: {bin_dir / 'yq'}" in row.hint
+
+
+def _plant_retyped_yq(home: Path) -> tuple[Tool, Path, Path]:
+    """A directory where the raw yq file belongs, with a receipt typing it "dir".
+
+    The remover test re-uses it. `matches` accepts the dir (it is a real
+    directory), so only the (path, kind) pair check keeps it out of rmtree."""
+    bin_dir = home / ".local" / "bin"
+    (bin_dir / "yq").mkdir(parents=True)
+    decoy = bin_dir / "yq" / "decoy"
+    decoy.write_text("not ours")
+    yq = _raw_yq_tool()
+    write_receipt(yq, [(bin_dir / "yq", "dir")])
+    return yq, bin_dir, decoy
+
+
+def test_receipt_type_cannot_turn_a_file_path_into_a_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    yq, bin_dir, decoy = _plant_retyped_yq(tmp_path)
+    plan = plan_removal([yq], bin_dir, verify=True)
+    assert plan.removable == ()
+    assert plan.by_tool == {}
+    assert decoy.read_text() == "not ours"
+
+
+def test_drifted_receipt_artifact_outside_the_authorized_set_blocks_the_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review H7: drift is checked over every receipt artifact BEFORE the
+    intersection, so drift outside artifact_paths still blocks the tool."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    extra = tmp_path / ".local" / "share" / "yq-extra"
+    extra.parent.mkdir(parents=True)
+    extra.write_text("recorded")
+    yq, bin_dir = plant_raw_yq(tmp_path, with_receipt=False)
+    write_receipt(yq, [(bin_dir / "yq", "file"), (extra, "file")])
+    extra.write_text("changed since, a different size")
+    plan = plan_removal([yq], bin_dir)
+    assert plan.removable == ()
+    assert plan.by_tool == {}
