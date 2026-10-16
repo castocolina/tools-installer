@@ -1234,8 +1234,10 @@ class VersionRefreshService:
     ) -> tuple[Receipt | None, tuple[str, ...], tuple[str, ...]]:
         """(receipt, broken facts, notes) from the tool's receipt (D-08, SPEC R4).
 
-        An artifact that no longer matches its receipt is BROKEN; a receipt
-        file that does not parse proves nothing and says so as a note. An
+        A file or link that no longer matches its receipt is BROKEN. A dir
+        that no longer matches loses only its removal proof (L-19-31): the
+        unproven note, never BROKEN. A receipt file that does not parse proves
+        nothing and says so as a note. An
         inaccessible receipts dir is that same unreadable note, with no
         adoption (G23). A receipt whose every artifact is gone is retired, and
         the tool then reads from current evidence (G10). A present tool with
@@ -1248,8 +1250,12 @@ class VersionRefreshService:
             return None, (), (RECEIPT_UNREADABLE_NOTE,)
         if receipts.all_gone(receipt) and receipts.retire(tool.id, receipt):
             return None, (), ()
-        if receipts.drifted(receipt):
+        drift = receipts.drifted(receipt)
+        if any(artifact.type != "dir" for artifact in drift):
             return receipt, (CHANGED_SINCE_INSTALL,), ()
+        if drift:
+            # A replaced dir, e.g. a vendor self-update, loses its proof, not its health.
+            return receipt, (), (UNPROVEN_NOTE,)
         return receipt, (), ()
 
     def _adopt(

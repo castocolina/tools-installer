@@ -1466,6 +1466,37 @@ def test_manager_update_keeps_an_installer_receipt(tmp_path: Path) -> None:
     assert kept.method.kind == "github_release"
 
 
+def test_dir_drift_does_not_block_an_update(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Dir drift alone never refuses an update; the update re-records the key file."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    opt, _link = _plant_rg_install(tmp_path)
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "BurntSushi/ripgrep",
+            "asset": "rg.tar.gz",
+            "member": "rg",
+            "bin_dir": str(tmp_path / "bin"),
+        },
+    )
+    tool = _tool("rg", method)
+    receipts.record(tool, method, package=None, smoke="ok")
+    (opt / "rg").write_bytes(b"vendor-built")
+    _fake_download_update(monkeypatch, opt / "rg", b"updated-binary")
+    calls: list[list[str]] = []
+    outcome = _service(
+        reresolve=lambda _t: _ownership(tool, "installer", method=method),
+        runner=calls.append,
+    ).run(_target(tool, "installer", method=method))
+    assert outcome.status == "updated"
+    assert (opt / "rg").read_bytes() == b"updated-binary"
+    reread = receipts.read("rg")
+    assert reread is not None
+    assert receipts.drifted(reread) == ()
+
+
 def test_update_service_refuses_a_drifted_receipt(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -3890,6 +3890,28 @@ def _install(
     )
 
 
+def test_dir_drift_is_unproven_not_broken(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A vendor rewrite of an archive's key file loses the proof, not the health.
+
+    The row keeps its current-evidence health, says the unproven note once, and
+    is not removable; the receipt stays (L-19-31)."""
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    member = tmp_path / ".local" / "opt" / "rg" / "rg-x" / "rg"
+    member.parent.mkdir(parents=True)
+    member.write_bytes(b"#!/bin/sh\n")
+    (bin_dir / "rg").symlink_to(member)
+    assert receipts.record(
+        _rg_archive(), _RG_METHOD, package=None, smoke=None, default_bin_dir=bin_dir
+    )
+    member.write_bytes(b"#!/bin/sh\n# vendor self-update\n")
+    state = _settled(_receipt_service(tmp_path, bin_dir), _rg_archive())
+    assert state.health is not Health.BROKEN
+    assert _CHANGED not in state.reasons
+    assert state.reasons.count(_UNPROVEN) == 1
+    assert state.removable.removable == ()
+    assert state.receipt == receipts.read("rg")
+
+
 def test_changed_link_target_is_broken_and_not_removable_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5121,15 +5143,14 @@ def test_receipt_with_every_artifact_gone_is_retired(
     assert receipts.receipt_exists("yq") is False
 
 
-def test_partially_drifted_receipt_stays_broken(
+def test_partially_gone_receipt_is_unproven_not_broken(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """One artifact still on disk keeps the receipt and the BROKEN mark.
+    """A gone dir loses only its proof (L-19-31), never the BROKEN mark.
 
-    The bin link stays, so the archive still reads as present; only the opt
-    dir is gone. Removing the link instead would make `is_installed` say
-    absent (it follows the link, and a dir alone is not presence), and an
-    absent tool is MISSING rather than BROKEN."""
+    The bin link stays, so the archive still reads as present and the receipt
+    is not all gone, so it is not retired. The BROKEN half of partial drift is
+    pinned by `test_changed_link_target_is_broken_and_not_removable_end_to_end`."""
     bin_dir = _scratch_home(tmp_path, monkeypatch)
     outcome = _install(_rg_archive(), tmp_path, monkeypatch)
     assert outcome.status == InstallStatus.INSTALLED
@@ -5137,8 +5158,9 @@ def test_partially_drifted_receipt_stays_broken(
     assert opt.is_dir() and (bin_dir / "rg").is_symlink()
     shutil.rmtree(opt)
     state = _settled(_receipt_service(tmp_path, bin_dir), _rg_archive())
-    assert state.health is Health.BROKEN
-    assert state.reasons[0] == _CHANGED
+    assert state.health is not Health.BROKEN
+    assert _CHANGED not in state.reasons
+    assert _UNPROVEN in state.reasons
     assert receipts.receipt_exists("rg") is True
 
 

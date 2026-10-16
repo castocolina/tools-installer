@@ -506,12 +506,16 @@ class UpdateService:
         fresh_target = UpdateTarget(tool=target.tool, ownership=fresh)
         # The one mutation gate for `u` and the execute screen (G3): an update
         # would replace the changed file and erase the drift evidence.
+        # Dir drift alone never refuses an update (L-19-31); the installer
+        # update re-records the receipt.
         if fresh.owner == "installer":
             receipt = receipts.read(target.tool.id)
             if (
                 receipt is not None
                 and not receipts.all_gone(receipt)
-                and receipts.drifted(receipt, rehash=True)
+                and any(
+                    artifact.type != "dir" for artifact in receipts.drifted(receipt, rehash=True)
+                )
             ):
                 return UpdateOutcome(
                     tool_id=target.tool.id,
