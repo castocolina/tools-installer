@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import typing
@@ -9,6 +10,7 @@ import pytest
 
 import installer.executors as executors
 import installer.update as update
+from installer import receipts
 from installer.apps import UpdateExecResult as AppUpdateExecResult
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
@@ -1234,3 +1236,160 @@ def test_update_refuses_host_setup_pnpm_cleanly() -> None:
     assert outcome.owner == "pnpm"
     assert "pnpm add --global @earendil-works/pi-coding-agent" in outcome.detail
     assert calls == []
+
+
+# --- Plan 19-09: updates rewrite the receipt through the same writer ----------
+
+
+def _raw_yq(bin_dir: Path) -> Method:
+    return Method(
+        kind="github_release",
+        params={
+            "repo": "mikefarah/yq",
+            "asset": "yq_linux_{arch.deb}",
+            "member": "yq_linux_amd64",
+            "bin_name": "yq",
+            "raw": True,
+            "bin_dir": str(bin_dir),
+        },
+    )
+
+
+def _fake_download_update(monkeypatch: pytest.MonkeyPatch, placed: Path, payload: bytes) -> None:
+    def fake_update(_method: Method, _ctx: object) -> DownloadUpdateExecResult:
+        placed.write_bytes(payload)
+        return DownloadUpdateExecResult(verified=True, warnings=())
+
+    monkeypatch.setattr(update.download, "update_download", fake_update)
+
+
+def _yq_with_old_bytes(tmp_path: Path) -> tuple[Tool, Method, Path]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    placed = bin_dir / "yq"
+    placed.write_bytes(b"old-yq")
+    method = _raw_yq(bin_dir)
+    return _tool("yq", method), method, placed
+
+
+def _later(after: str, before: str) -> bool:
+    from datetime import datetime
+
+    return datetime.fromisoformat(after) > datetime.fromisoformat(before)
+
+
+def test_installer_owned_update_rewrites_the_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool, method, placed = _yq_with_old_bytes(tmp_path)
+    before = receipts.record(tool, method, package=None, smoke="ok")
+    assert before is not None
+    _fake_download_update(monkeypatch, placed, b"new-yq-bytes")
+    outcome = _perform(_target(tool, "installer", method=method), lambda _cmd: None)
+    assert outcome.status == "updated"
+    after = receipts.read("yq")
+    assert after is not None
+    assert after.artifacts[0].sha256 == hashlib.sha256(b"new-yq-bytes").hexdigest()
+    assert after.artifacts[0].size == len(b"new-yq-bytes")
+    assert _later(after.at, before.at)
+    assert after.smoke is None
+
+
+def test_installer_owned_update_without_receipt_writes_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool, method, placed = _yq_with_old_bytes(tmp_path)
+    assert receipts.read("yq") is None
+    _fake_download_update(monkeypatch, placed, b"new-yq-bytes")
+    outcome = _perform(_target(tool, "installer", method=method), lambda _cmd: None)
+    assert outcome.status == "updated"
+    after = receipts.read("yq")
+    assert after is not None
+    assert after.artifacts == (receipts.fingerprint(placed, "file"),)
+
+
+@pytest.mark.parametrize("had_receipt", [True, False])
+def test_brew_update_rewrites_only_an_existing_receipt(had_receipt: bool) -> None:
+    brew = Method(kind="brew", params={"formula": "ripgrep"})
+    tool = _tool("rg", brew, cmd="rg")
+    before = receipts.record(tool, brew, package="ripgrep", smoke="ok") if had_receipt else None
+    calls: list[list[str]] = []
+    outcome = _perform(_target(tool, "brew", method=brew, package="ripgrep"), calls.append)
+    assert outcome.status == "updated"
+    assert calls == [["brew", "upgrade", "ripgrep"]]
+    after = receipts.read("rg")
+    if before is None:
+        assert after is None
+    else:
+        assert after is not None
+        assert after.package == "ripgrep"
+        assert after.method.kind == "brew"
+        assert _later(after.at, before.at)
+
+
+def test_failed_update_keeps_the_old_receipt() -> None:
+    brew = Method(kind="brew", params={"formula": "ripgrep"})
+    tool = _tool("rg", brew, cmd="rg")
+    receipts.record(tool, brew, package="ripgrep", smoke="ok")
+    path = receipts.receipt_path("rg")
+    old_bytes = path.read_bytes()
+
+    def failing(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1)
+
+    outcome = _perform(_target(tool, "brew", method=brew, package="ripgrep"), failing)
+    assert outcome.status == "failed"
+    assert path.read_bytes() == old_bytes
+
+
+def test_update_receipt_write_failure_is_a_detail(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool, method, placed = _yq_with_old_bytes(tmp_path)
+    receipts.record(tool, method, package=None, smoke="ok")
+    _fake_download_update(monkeypatch, placed, b"new-yq-bytes")
+
+    def read_only(_receipt: receipts.Receipt) -> None:
+        raise OSError("read-only")
+
+    monkeypatch.setattr(receipts, "write", read_only)
+    outcome = _perform(_target(tool, "installer", method=method), lambda _cmd: None)
+    assert outcome.status == "updated"
+    assert "install receipt not written" in outcome.detail
+    assert "the previous receipt was removed" in outcome.detail
+    assert receipts.read("yq") is None
+
+
+@pytest.mark.parametrize("owner", ["unknown", "sdkman", "dnf", "volta"])
+def test_unknown_and_refused_updates_write_nothing(owner: Owner) -> None:
+    if owner == "sdkman":
+        method = Method(kind="sdkman", params={"candidate": "java"})
+    elif owner == "dnf":
+        method = Method(kind="dnf", params={"package": "java"})
+    else:
+        method = Method(kind="script", params={"url": "u", "shell": "sh"})
+    tool = _tool("java", method)
+    seeded = receipts.Receipt(
+        tool="java",
+        at="2026-01-01T00:00:00+00:00",
+        method=receipts.ReceiptMethod(kind="script", key="k"),
+        package=None,
+        artifacts=(),
+        smoke=None,
+        hooks={},
+    )
+    receipts.write(seeded)
+    old_bytes = receipts.receipt_path("java").read_bytes()
+    target = _target(
+        tool,
+        owner,
+        method=method,
+        package="java",
+        unknown_reason="no evidence" if owner == "unknown" else None,
+    )
+    calls: list[list[str]] = []
+    outcome = _perform(target, calls.append)
+    assert outcome.status in ("unknown-owner", "unsupported")
+    assert calls == []
+    assert receipts.receipt_path("java").read_bytes() == old_bytes
+    assert [p.name for p in receipts.receipts_dir().iterdir()] == ["java.json"]

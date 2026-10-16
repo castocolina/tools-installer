@@ -78,7 +78,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Literal, Protocol
 
-from installer import apps, download, executors
+from installer import apps, download, executors, receipts
 from installer import ownership as ownership_mod
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
@@ -91,6 +91,7 @@ from installer.ownership import (
     UNMANAGEABLE_OWNERS,
     ManagerOwnership,
     declared_manager_label,
+    method_package,
     owner_label,
 )
 from installer.platform import Platform
@@ -326,6 +327,15 @@ def _perform(
         )
     else:
         raise UpdateError(f"unsupported owner {owner!r}")
+    # L-19-03: installer-owned updates always rewrite the receipt; a manager
+    # update only refreshes one that exists, so updating someone else's
+    # package never makes it ours. Updates run no smoke check.
+    if method is not None and (owner == "installer" or receipts.read(target.tool.id) is not None):
+        try:
+            receipts.record(target.tool, method, package=method_package(method), smoke=None)
+        except OSError as exc:
+            note = f"install receipt not written: {exc}"
+            detail = f"{detail}; {note}" if detail else note
     warning = _run_postinstall(target, method, runner, tools, postinstall)
     return UpdateOutcome(
         tool_id=target.tool.id,
