@@ -5594,6 +5594,9 @@ async def test_version_navigation_discards_a_superseded_generation(tmp_path: Pat
         superseded = user._version_refresh_generation  # pyright: ignore[reportPrivateUsage]
         await pilot.press("3")
         assert app.current_view == "ai"
+        # A same-set refresh at one epoch joins the held pass (19-08 single
+        # flight); a mutation's invalidate makes the second entry a pass of its own.
+        service.invalidate(reason="test")
         await pilot.press("2")
         assert app.current_view == "user"
         assert second_started.wait(timeout=5)

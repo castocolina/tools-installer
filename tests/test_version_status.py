@@ -2,7 +2,8 @@ import json
 import threading
 import time
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -2375,3 +2376,299 @@ def test_service_default_bin_dir_is_sandboxed(tmp_path_factory: pytest.TempPathF
     )
     assert not service.managed_bin_dir.is_relative_to(_REAL_HOME)
     assert service.managed_bin_dir.is_relative_to(tmp_path_factory.getbasetemp())
+
+
+# -- 19-08 Task 2: newest pass wins per record; overtaken passes publish nothing. --
+
+
+class _Hold:
+    """A `resolve_tag` that counts calls and parks the FIRST one on an Event."""
+
+    def __init__(self, *, tag: str = "1.0.0") -> None:
+        self.calls = 0
+        self.holding = threading.Event()
+        self.release = threading.Event()
+        self.tag = tag
+        self._lock = threading.Lock()
+
+    def __call__(self, _repo: str) -> str:
+        with self._lock:
+            self.calls += 1
+            first = self.calls == 1
+            tag = self.tag
+        if first:
+            self.holding.set()
+            assert self.release.wait(timeout=10)
+        return tag
+
+
+def _start(target: Callable[[], object]) -> Future[object]:
+    """Run `target` on its own thread; the future carries what it raised."""
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        return pool.submit(target)
+    finally:
+        pool.shutdown(wait=False)
+
+
+def _join(run: Future[object]) -> BaseException | None:
+    """Wait (bounded) for a started call and return what it raised, if anything."""
+    return run.exception(timeout=10)
+
+
+def _still_running(run: Future[object]) -> bool:
+    return not wait([run], timeout=0.2).done
+
+
+def _held_service(
+    tmp_path: Path, hold: _Hold, *, present: Callable[[Tool], bool] | None = None
+) -> VersionRefreshService:
+    managed = tmp_path / "managed"
+    return _state_service(
+        tmp_path, which=lambda cmd: str(managed / cmd), resolve_tag=hold, present=present
+    )
+
+
+def test_overtaken_pass_publishes_nothing(tmp_path: Path) -> None:
+    hold = _Hold()
+    service = _held_service(tmp_path, hold)
+    a, b, c = _gh_tool("a"), _gh_tool("b"), _gh_tool("c")
+    run_a = _start(lambda: service.refresh([a, b]))
+    assert hold.holding.wait(timeout=10)
+    service.refresh([a, b, c])
+    captured = {tool_id: service.state_of(tool_id) for tool_id in ("a", "b", "c")}
+    statuses = service.statuses
+    owners = {tool_id: service.ownership_of(tool_id) for tool_id in ("a", "b", "c")}
+    hold.release.set()
+    assert _join(run_a) is None
+    seqs: set[int] = set()
+    for tool_id, state in captured.items():
+        assert state is not None
+        assert service.state_of(tool_id) is state
+        seqs.add(state.seq)
+    assert len(seqs) == 1
+    assert service.statuses == statuses
+    assert {tool_id: service.ownership_of(tool_id) for tool_id in ("a", "b", "c")} == owners
+    # The released pass A took a sequence BEFORE B, so B's records outrank it.
+    service.refresh([_gh_tool("d")])
+    later = service.state_of("d")
+    assert later is not None
+    assert later.seq == seqs.pop() + 1
+
+
+def test_overtaken_by_invalidate_publishes_nothing(tmp_path: Path) -> None:
+    holder: dict[str, VersionRefreshService] = {}
+
+    def read_inv(**_kwargs: object) -> ManagerInventory:
+        holder["svc"].invalidate(reason="raced")
+        return _empty_inventory()
+
+    managed = tmp_path / "managed"
+    service = VersionRefreshService(
+        platform=_platform(),
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "1.0.0",
+        probe_output=lambda _argv: "0.9.0",
+        now=lambda: _STATE_NOW,
+        managed_bin_dir=managed,
+        which=lambda cmd: str(managed / cmd),
+        query=lambda *_a, **_k: "",
+        pnpm_packages=lambda: (),
+        read_inventory_fn=read_inv,
+        read_outdated_fn=_empty_outdated,
+        resolve_pnpm=lambda: None,
+    )
+    holder["svc"] = service
+    service.refresh([_gh_tool("a"), _brew_tool()])
+    assert service.state_of("a") is None
+    assert service.state_of("rg") is None
+    assert service.ownership_of("a") is None
+    assert service.statuses == {}
+
+
+def test_partial_pass_merges_into_the_full_snapshot(tmp_path: Path) -> None:
+    managed = tmp_path / "managed"
+    service = _state_service(tmp_path, which=lambda cmd: str(managed / cmd))
+    service.refresh([_gh_tool("a"), _gh_tool("b")])
+    first_a = service.state_of("a")
+    first_b = service.state_of("b")
+    assert first_a is not None
+    assert first_b is not None
+    service.refresh([_gh_tool("a")])
+    newer_a = service.state_of("a")
+    assert service.state_of("b") is first_b
+    assert newer_a is not None
+    assert newer_a is not first_a
+    assert newer_a.seq > first_a.seq
+
+
+def test_older_full_pass_fills_tools_a_newer_partial_pass_did_not_cover(tmp_path: Path) -> None:
+    hold = _Hold()
+    service = _held_service(tmp_path, hold)
+    a, b = _gh_tool("a"), _gh_tool("b")
+    run_a = _start(lambda: service.refresh([a, b]))
+    assert hold.holding.wait(timeout=10)
+    service.refresh([a])
+    partial = service.state_of("a")
+    assert partial is not None
+    assert service.state_of("b") is None
+    hold.release.set()
+    assert _join(run_a) is None
+    assert service.state_of("a") is partial
+    filled = service.state_of("b")
+    assert filled is not None
+    assert filled.seq < partial.seq
+
+
+def test_pass_sequence_is_monotonic_across_threads(tmp_path: Path) -> None:
+    """Ten passes over ten distinct sets are all in flight at once; each is
+    started only after the previous one is parked, so start order is known."""
+    managed = tmp_path / "managed"
+    arrived = {f"t{index}": threading.Event() for index in range(10)}
+    release = threading.Event()
+
+    def resolve_tag(repo: str) -> str:
+        arrived[repo.split("/")[1]].set()
+        assert release.wait(timeout=10)
+        return "1.0.0"
+
+    service = _state_service(
+        tmp_path, which=lambda cmd: str(managed / cmd), resolve_tag=resolve_tag
+    )
+    started: list[Future[object]] = []
+    for index in range(10):
+        tool = _gh_tool(f"t{index}")
+        started.append(_start(lambda tool=tool: service.refresh([tool])))
+        assert arrived[tool.id].wait(timeout=10)
+    release.set()
+    for run in started:
+        assert _join(run) is None
+    seqs: list[int] = []
+    for index in range(10):
+        state = service.state_of(f"t{index}")
+        assert state is not None
+        seqs.append(state.seq)
+    assert len(set(seqs)) == 10
+    assert all(left < right for left, right in zip(seqs, seqs[1:], strict=False))
+
+
+def test_identical_passes_share_one_flight(tmp_path: Path) -> None:
+    hold = _Hold()
+    service = _held_service(tmp_path, hold)
+    a, b = _gh_tool("a"), _gh_tool("b")
+    results: dict[str, dict[str, VersionStatus]] = {}
+
+    def first() -> None:
+        results["a"] = service.refresh([a, b])
+
+    def second() -> None:
+        results["b"] = service.refresh([b, a])
+
+    run_a = _start(first)
+    assert hold.holding.wait(timeout=10)
+    run_b = _start(second)
+    assert _still_running(run_b)
+    assert hold.calls == 1
+    hold.release.set()
+    assert _join(run_a) is None
+    assert _join(run_b) is None
+    assert results["a"] == results["b"]
+    assert hold.calls == 2
+    state_a = service.state_of("a")
+    state_b = service.state_of("b")
+    assert state_a is not None
+    assert state_b is not None
+    assert state_a.seq == state_b.seq
+    service.refresh([_gh_tool("c")])
+    nxt = service.state_of("c")
+    assert nxt is not None
+    assert nxt.seq == state_a.seq + 1
+
+
+def test_join_never_crosses_an_invalidate(tmp_path: Path) -> None:
+    hold = _Hold()
+    service = _held_service(tmp_path, hold)
+    a = _gh_tool("a")
+    run_a = _start(lambda: service.refresh([a]))
+    assert hold.holding.wait(timeout=10)
+    service.invalidate(reason="update")
+    service.refresh([a])
+    assert hold.calls == 2
+    own = service.state_of("a")
+    assert own is not None
+    hold.release.set()
+    assert _join(run_a) is None
+    assert service.state_of("a") is own
+
+
+def test_a_failed_shared_pass_raises_in_every_joiner(tmp_path: Path) -> None:
+    boom = OSError("boom")
+    failures = {"left": 1}
+
+    def present(_tool: Tool) -> bool:
+        if failures["left"]:
+            failures["left"] -= 1
+            raise boom
+        return True
+
+    hold = _Hold()
+    service = _held_service(tmp_path, hold, present=present)
+    a = _gh_tool("a")
+    run_a = _start(lambda: service.refresh([a]))
+    assert hold.holding.wait(timeout=10)
+    run_b = _start(lambda: service.refresh([a]))
+    assert _still_running(run_b)
+    hold.release.set()
+    assert _join(run_a) is boom
+    assert _join(run_b) is boom
+    assert hold.calls == 1
+    service.refresh([a])
+    assert hold.calls == 2
+    assert service.state_of("a") is not None
+
+
+def test_cache_save_failure_keeps_states_and_sets_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    managed = tmp_path / "managed"
+    service = _state_service(tmp_path, which=lambda cmd: str(managed / cmd))
+
+    failing = {"on": True}
+
+    def full(
+        path: Path,
+        cache: Mapping[str, VersionCacheEntry],
+        *,
+        managers: Mapping[str, object] | None = None,
+        skills: Mapping[str, Mapping[str, str]] | None = None,
+    ) -> None:
+        if failing["on"]:
+            raise OSError("disk full")
+        save_version_cache(path, cache, managers=managers, skills=skills)
+
+    monkeypatch.setattr("installer.version_status.save_version_cache", full)
+    service.refresh([_gh_tool("a")])
+    assert service.state_of("a") is not None
+    assert service.warning is not None
+    assert "disk full" in service.warning
+    failing["on"] = False
+    service.refresh([_gh_tool("a")])
+    assert service.warning is None
+
+
+def test_only_published_records_are_cached(tmp_path: Path) -> None:
+    hold = _Hold(tag="9.9.9")
+    service = _held_service(tmp_path, hold)
+    a, b = _gh_tool("a"), _gh_tool("b")
+    run_a = _start(lambda: service.refresh([a]))
+    assert hold.holding.wait(timeout=10)
+    # B: a different set, so it runs its own pass; its tags differ from A's.
+    hold.tag = "2.0.0"
+    service.refresh([a, b])
+    hold.release.set()
+    assert _join(run_a) is None
+    cached = load_version_cache(tmp_path / "versions.json")
+    assert {tool_id: entry.latest_version for tool_id, entry in cached.items()} == {
+        "a": "2.0.0",
+        "b": "2.0.0",
+    }

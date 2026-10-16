@@ -597,6 +597,11 @@ def tool_state(
     )
 
 
+# One in-flight refresh: (epoch, seq, done, outcome). The outcome list gets the
+# pass's statuses or its exception before `done` is set (checker W11).
+_Flight = tuple[int, int, threading.Event, list[dict[str, VersionStatus] | BaseException]]
+
+
 class VersionRefreshService:
     """Blocking refresh of version status, shared by three screens."""
 
@@ -674,6 +679,9 @@ class VersionRefreshService:
         self._skills_probed = False
         self._skills_pass_lock = threading.Lock()
         self._epoch = 0
+        self._seq = 0
+        self._inflight: dict[frozenset[str], _Flight] = {}
+        self._warning: str | None = None
 
     @property
     def platform(self) -> Platform:
@@ -690,6 +698,11 @@ class VersionRefreshService:
     @property
     def managed_bin_dir(self) -> Path:
         return self._managed_bin_dir
+
+    @property
+    def warning(self) -> str | None:
+        """Why the last committed pass could not save the cache, else None."""
+        return self._warning
 
     def ownership_of(self, tool_id: str) -> ManagerOwnership | None:
         """A record, or `None` -- meaning either "no pass has ever covered
@@ -879,11 +892,45 @@ class VersionRefreshService:
         return self._which("uv") is not None and (inventory.uv_tools is None or outdated.uv is None)
 
     def refresh(self, tools: Sequence[Tool]) -> dict[str, VersionStatus]:
-        """Load cache, resolve each tool, merge-save under the instance lock.
+        """Resolve every tool once and publish the pass with one swap.
 
-        BLOCKING — call only from a worker thread.
+        BLOCKING — call only from a worker thread. A call over the same
+        tool-id set as a pass already in flight at the current epoch joins
+        that pass and returns its result (or raises its error): no second
+        fetch, probe or publication. It never joins across an `invalidate`.
         """
-        started_epoch = self.epoch
+        key = frozenset(tool.id for tool in tools)
+        with self._lock:
+            flight: _Flight | None = self._inflight.get(key)
+            joining = flight is not None and flight[0] == self._epoch
+            if flight is None or not joining:
+                self._seq += 1
+                flight = (self._epoch, self._seq, threading.Event(), [])
+                self._inflight[key] = flight
+        started_epoch, seq, done, outcome = flight
+        if joining:
+            done.wait()
+            shared = outcome[0]
+            if isinstance(shared, BaseException):
+                raise shared
+            return dict(shared)
+        try:
+            result = self._pass(tools, seq=seq, started_epoch=started_epoch)
+        except BaseException as exc:
+            outcome.append(exc)
+            raise
+        else:
+            outcome.append(result)
+            return dict(result)
+        finally:
+            with self._lock:
+                if self._inflight.get(key) is flight:
+                    del self._inflight[key]
+            done.set()
+
+    def _pass(
+        self, tools: Sequence[Tool], *, seq: int, started_epoch: int
+    ) -> dict[str, VersionStatus]:
         now = self._now()
         cache = load_version_cache(self._cache_path)
         snapshot, persist_snapshot, _failed = self._load_or_query_snapshot(now=now)
@@ -928,6 +975,7 @@ class VersionRefreshService:
             states[tool.id] = tool_state(
                 tool,
                 generation=started_epoch,
+                seq=seq,
                 platform=self._platform,
                 present=self._present(tool),
                 ownership=ownership,
@@ -940,47 +988,44 @@ class VersionRefreshService:
                 produced[tool.id] = new_entry
         with self._lock:
             if self._epoch != started_epoch:
-                # RACED: an invalidate landed while this pass was resolving.
-                # Publish NO ownership at all for this pass -- neither a
-                # record nor an epoch for any tool in it (Round-3 review
-                # HIGH #1). This deleted line used to call
-                # `self._ownership.update(ownerships)`, which looks like a
-                # harmless partial save but is not: a pass that started at
-                # epoch 0 and finishes after a newer pass already committed
-                # at epoch 1 would overwrite that newer pass's records with
-                # its own obsolete ones, and -- because the tag travels
-                # with the record -- every affected tool's `ownership_of`
-                # would then flip from a correct current answer back to
-                # `None` until yet another refresh landed. A superseded
-                # pass's ownership answers are discarded entirely;
-                # publishing them under an old tag is not a weaker form of
-                # correct, it is the bug. This is ALSO what makes the epoch
-                # gate meaningful rather than merely defensive: with this
-                # branch silent, a tagged record can only ever have come
-                # from the accepted commit path below, so the tag names the
-                # pass that actually produced the answer the map holds.
-                # Statuses are unaffected -- they are not the subject of
-                # this fix, and this pass's statuses still merge exactly as
-                # today.
-                self._statuses.update(statuses)
-                return dict(statuses)
-            merged = load_version_cache(self._cache_path)
-            merged.update(produced)
-            managers: dict[str, object] | None
+                # RACED: an invalidate landed while this pass was resolving,
+                # so the WHOLE pass is discarded -- no state, no status, no
+                # ownership record, no cache write (D-02). Publishing any of
+                # it under the old tag would overwrite or shadow the answer
+                # of a pass that started after the mutation (Round-3 review
+                # HIGH #1); with this branch silent, every record the maps
+                # hold names the pass that actually produced it.
+                return statuses
+            # Newest pass wins per record (L-19-02): at one epoch a record
+            # is replaced only by one from a pass with a higher sequence,
+            # so a slower older pass can still fill tools a newer partial
+            # pass did not cover, but never overwrites one it did.
+            fresh = {
+                tool_id: state
+                for tool_id, state in states.items()
+                if (current := self._states.get(tool_id)) is None or current.seq < seq
+            }
+            if not fresh:
+                return statuses
+            self._states = {**self._states, **fresh}
+            self._statuses.update({tool_id: statuses[tool_id] for tool_id in fresh})
+            # The ONE ownership publication point, tagged with
+            # `started_epoch`, which equals `self._epoch` here.
+            self._ownership.update(
+                {tool_id: (started_epoch, ownerships[tool_id]) for tool_id in fresh}
+            )
+            # Best effort, after the swap and still under the lock (it
+            # serializes with `invalidate`'s save): a failed write leaves the
+            # published states in place and surfaces as `warning`.
+            managers: dict[str, object] | None = None
             if persist_snapshot:
                 managers = encode_manager_snapshot(snapshot) if snapshot is not None else {}
+            try:
+                merged = load_version_cache(self._cache_path)
+                merged.update({k: v for k, v in produced.items() if k in fresh})
+                save_version_cache(self._cache_path, merged, managers=managers)
+            except OSError as exc:
+                self._warning = f"version cache not saved: {exc}"
             else:
-                managers = None
-            save_version_cache(self._cache_path, merged, managers=managers)
-            self._states = {**self._states, **states}
-            self._statuses.update(statuses)
-            # The ONE ownership publication point (Round-3 review HIGH #1's
-            # `EPOCH-GATED` gate counts this): tagged with `started_epoch`,
-            # which equals `self._epoch` here since the raced branch above
-            # already returned otherwise. Every record in `self._ownership`
-            # therefore carries the epoch of the pass that actually
-            # produced it -- never the raced branch's obsolete one.
-            self._ownership.update(
-                {tool_id: (started_epoch, ownership) for tool_id, ownership in ownerships.items()}
-            )
-        return dict(statuses)
+                self._warning = None
+        return statuses
