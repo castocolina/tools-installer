@@ -55,7 +55,7 @@ LIMITATIONS of a name-only snapshot:
 import json
 import shlex
 import shutil
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -488,7 +488,7 @@ def split_install_groups(
 
 def incomplete_install_groups(
     policy: NodeInstallPolicy,
-    live: GlobalGroups,
+    packages: Collection[str],
 ) -> tuple[IncompleteGroup, ...]:
     """Declared groups whose dependent pnpm manages while a peer is absent entirely.
 
@@ -507,10 +507,11 @@ def incomplete_install_groups(
     hand-install shape, and calling it an incomplete group would push the user
     at an action that installs a catalog tool they never asked for.
 
-    Membership is irrelevant here, so `live.unknown` is not consulted: this
-    asks only whether pnpm listed the package, which it either did or did not.
+    Membership is irrelevant, so only the package names are taken: this asks
+    only whether pnpm listed the package, which it either did or did not. The
+    refresh pass passes the installed-package set it already cached (D-19).
     """
-    present_anywhere = set(live.packages)
+    present_anywhere = set(packages)
     found: list[IncompleteGroup] = []
     for declared in policy.groups:
         if not declared or declared[0] not in present_anywhere:
@@ -590,7 +591,7 @@ def audit_node_globals(
         missing=missing,
         managed=packages,
         split_groups=split_install_groups(policy, live),
-        incomplete_groups=incomplete_install_groups(policy, live),
+        incomplete_groups=incomplete_install_groups(policy, live.packages),
         unhealthy=_unhealthy(entries, missing, smoke),
     )
 

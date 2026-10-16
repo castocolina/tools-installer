@@ -971,15 +971,15 @@ def test_incomplete_install_groups_names_the_peer_pnpm_never_installed() -> None
     machine holding one of the two was told nothing at all — while its `mmdc`
     could not render.
     """
-    found = pnpm_globals.incomplete_install_groups(_EXPLICIT_POLICY, _BROWNFIELD_LIVE)
+    found = pnpm_globals.incomplete_install_groups(_EXPLICIT_POLICY, _BROWNFIELD_LIVE.packages)
     assert found == (pnpm_globals.IncompleteGroup(present=(MMDC_NPM,), missing=("puppeteer",)),)
 
 
 def test_incomplete_install_groups_is_quiet_on_a_complete_group() -> None:
     live = pnpm_globals.GlobalGroups(groups=((MMDC_NPM, "puppeteer"),))
-    assert pnpm_globals.incomplete_install_groups(_EXPLICIT_POLICY, live) == ()
+    assert pnpm_globals.incomplete_install_groups(_EXPLICIT_POLICY, live.packages) == ()
     split = pnpm_globals.GlobalGroups(groups=((MMDC_NPM,), ("puppeteer",)))
-    assert pnpm_globals.incomplete_install_groups(_EXPLICIT_POLICY, split) == ()
+    assert pnpm_globals.incomplete_install_groups(_EXPLICIT_POLICY, split.packages) == ()
 
 
 def test_incomplete_install_groups_is_quiet_when_only_the_peer_is_present() -> None:
@@ -989,7 +989,14 @@ def test_incomplete_install_groups_is_quiet_when_only_the_peer_is_present() -> N
     they never asked for.
     """
     live = pnpm_globals.GlobalGroups(groups=(("puppeteer",),))
-    assert pnpm_globals.incomplete_install_groups(_EXPLICIT_POLICY, live) == ()
+    assert pnpm_globals.incomplete_install_groups(_EXPLICIT_POLICY, live.packages) == ()
+
+
+def test_incomplete_install_groups_accepts_the_cached_package_set() -> None:
+    """D-19: the refresh pass holds only the plain installed-package set it
+    already cached, and must not run a second pnpm query to form groups."""
+    found = pnpm_globals.incomplete_install_groups(_EXPLICIT_POLICY, frozenset({MMDC_NPM}))
+    assert found == (pnpm_globals.IncompleteGroup(present=(MMDC_NPM,), missing=("puppeteer",)),)
 
 
 def test_audit_reports_the_brownfield_shape_the_doctor_used_to_pass_in_silence() -> None:
