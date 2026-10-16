@@ -1,7 +1,8 @@
 ---
 phase: "19"
 slug: "one-tool-state-with-health-plus-receipts"
-status: draft
+status: approved
+reviewed_at: 2026-10-16
 shadcn_initialized: false
 preset: none
 created: "2026-10-16"
@@ -106,7 +107,13 @@ Exceptions: the detail bar keeps its existing `"  |  "` (5-cell) separator betwe
   1. Drop `dock: bottom` from `#browser-legend` and `#browser-detail`. They already compose after the DataTable (`tool_browser.py:138-141`), and the DataTable is `1fr`, so vertical layout puts them below it in that order.
   2. Change the selector at `ui_common.py:326` to `AppScreen > Rule.-horizontal { margin: 0; color: $accent; }`.
   3. Set `#browser-detail { height: 3; }`.
-- **Fallback** if the Rule change breaks another screen's pinned layout: give `recommends_line` `display: none` while its text is empty. That frees 1 row. Detail then stays 3 rows and the table is ≥ 5 rows; the planner must re-pin the table-height test to ≥ 5 and record why.
+- **Blast radius of the Rule change:** `AppScreen.compose` yields the Rule for every screen (`ui_common.py:326, 351`). The change therefore also reaches `DoctorScreen` (`wizard_app.py:292`), `UninstallScreen` (`:920`) and `PoliciesScreen` (`:1611`), not only the three catalog tiers. Each of those screens loses its two blank rows around the Rule and its body moves up 1 row under the Rule. **This is accepted**: the blank rows were never intended (the declared `margin: 0`), and every screen gains 2 rows of body.
+- **Required checks (planner):** one 80×20 check per affected screen, either a snapshot or a composited-screen assertion with `screen.get_widget_at`:
+  - `DoctorScreen`: the header, Rule and ModeBadge sit on rows 0, 1 and 2; the body starts on row 3; the FooterBar is on row 19.
+  - `UninstallScreen`: the same chrome rows, and its DataTable and detail bar both show on the composited screen.
+  - `PoliciesScreen`: the same chrome rows, and its DataTable, `#link-mode-line` and `#policy-detail` (`height: 11`) all show on the composited screen.
+  - Each catalog tier (system, user, ai): DataTable ≥ 6 rows, and all three legend rows and all three detail rows are the topmost widget.
+- **Fallback** if the Rule change is rejected or breaks one of those screens: keep the Rule as it is and give `recommends_line` `display: none` while its text is empty. That frees 1 row. The detail bar stays 3 rows and the catalog table is ≥ 5 rows. A 5-row table at 80×20 is accepted in that case; the planner re-pins the table-height test to ≥ 5 and records why.
 - At 120×30 the same rule gives a 16-row table.
 
 ### Columns (every tier)
@@ -293,7 +300,8 @@ Yellow means "present and needs action" (update or configure), so missing tools 
 - **The detail bar follows the cursor.** Moving the row cursor (`↑`/`↓`, PgUp/PgDn) updates the 3-row detail. A rebuild keeps the cursor on the same row key, so a published pass does not move the user.
 - **Glyph-first encoding.** The six visible states each have their own glyph, and checking and unavailable are also dim. Color is redundant, so the contract survives `NO_COLOR` (Monochrome filter) and color-blind readers. This matches the ModeBadge's redundant-encoding rule (`ui_common.py:297-300`).
 - **No motion.** `…` is a static glyph, not a spinner (no animation, no timer repaint).
-- **Width.** Every mark is one cell by `rich.cells.cell_len`. `↑ ≈ ○ … –` are East-Asian *ambiguous* width and may render two cells wide in a CJK-locale terminal. This is accepted and already true of `✓`/`○` today; it is listed as a backstop row below.
+- **Width.** Every mark is one cell by `rich.cells.cell_len`. `↑ ≈ ○ … –` and `≠` are East-Asian width A (ambiguous). `○` and `≠` already ship today.
+- **Known limit:** Phase 19 does not support terminals that draw ambiguous-width characters as two cells (CJK locales). There, legend lines 1–2 (zero slack) wrap into a clipped 4th row, and columns misalign. The legend is not reshuffled for this.
 - **Escaping.** Reasons carry paths and tool output and are always escaped before markup, so a `[` in a path cannot restyle or hide the detail.
 
 ---
@@ -314,7 +322,7 @@ Applicable state considerations resolved: 9 covered, 2 backstop, 0 unresolved.
 | overflow | Health column at 80 columns | ✅ covered | The Health column's start + width ≤ 80 on the system, user and ai tiers with the real registry |
 | zero-one-many | reasons and configuration steps | ✅ covered | Zero reasons → the health block shows only `{glyph} {label}`; one or many → joined with ` · `, and steps after ` — to configure: ` joined with `; ` |
 | long-text | health block reasons | 🧪 backstop | Reasons longer than 2 rows end in `…` on row 3 and never push the detail past 3 rows (held-out render test at 80×20 with a 400-character reason list) |
-| long-text | glyph width in non-UTF-8 or CJK-ambiguous terminals | 🧪 backstop | Human UAT on the real host with `NO_COLOR=1` and a normal locale: marks distinguishable, columns aligned |
+| long-text | glyph rendering with `NO_COLOR` | 🧪 backstop | Human UAT on the real host with `NO_COLOR=1` in a non-CJK UTF-8 locale: marks distinguishable, columns aligned. It explicitly does **not** cover terminals that draw ambiguous-width characters as two cells (CJK locales), which Phase 19 does not support (Keyboard and accessibility, known limit) |
 
 ---
 
@@ -325,7 +333,7 @@ Rule: the option that best fits the existing UI, with the user's "best, not easi
 | # | Decision | Rationale |
 |---|----------|-----------|
 | A1 | Stack the legend and the detail bar instead of docking both at the bottom | Measured: today the detail bar covers legend lines 2–3 at every size. The health key must be visible for R3 to be true |
-| A2 | Make `AppScreen`'s declared `margin: 0` on the Rule take effect (`Rule.-horizontal` selector) | Gives back the 2 rows stacking costs, so the table stays ≥ 6 at 80×20 (prototype measured 6). It fixes a stated intent that never applied. A fallback is given in Layout |
+| A2 | Make `AppScreen`'s declared `margin: 0` on the Rule take effect (`Rule.-horizontal` selector) | Gives back the 2 rows stacking costs, so the table stays ≥ 6 at 80×20 (prototype measured 6). It fixes a stated intent that never applied. It also reaches Doctor, Uninstall and Policies (accepted; each gets an 80×20 check). A fallback is given in Layout |
 | A3 | Detail bar fixed at 3 rows: identity row + 2-row health block, each cut with `…` | Reasons must be visible (R3) without wrapping identity into them. A fixed height avoids the table resizing on every cursor move |
 | A4 | Legend line order: health first, priorities and audience second, Ver/Owner key third, with the exact strings above | The health key is the phase's subject. All three lines measure ≤ 78 |
 | A5 | Remove the four dim Ver labels from the cells and the legend; their facts become reasons; Ver text uses the default foreground | D-15 says the legend replaces them. One color carrier per row avoids a red/yellow mix on broken-and-outdated rows |
@@ -362,4 +370,4 @@ Rule: the option that best fits the existing UI, with the user's "best, not easi
 - [ ] Dimension 6 Registry Safety: PASS
 - [ ] Dimension 7 Inventory Provenance: PASS
 
-**Approval:** pending
+**Approval:** approved 2026-10-16 (2 FLAGs applied: Rule-change blast radius, CJK ambiguous-width limit)
