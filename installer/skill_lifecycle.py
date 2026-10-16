@@ -4,7 +4,7 @@ import json
 import re
 import shutil
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
@@ -611,6 +611,32 @@ def inspect_skill_packs(
         tool_id: report.hosts
         for tool_id, report in inspect_skill_reports(tools, probe, home).items()
     }
+
+
+def partial_harnesses(
+    hosts: Mapping[str, HarnessStatus], supported: Collection[str], present: Collection[str]
+) -> tuple[str, ...]:
+    """Supported harnesses on this machine where the pack is absent while another has it (D-17)."""
+    if "present" not in hosts.values():
+        return ()
+    return tuple(
+        harness
+        for harness in SKILL_HARNESSES
+        if harness in supported and harness in present and hosts.get(harness) == "absent"
+    )
+
+
+def partial_steps(
+    tool: Tool, harnesses: Sequence[str]
+) -> tuple[tuple[str, ...], tuple[ConfigStep, ...]]:
+    """One `partial:` reason and one reviewed-handoff install step per missing harness."""
+    labels = [SKILL_HARNESS_LABELS.get(harness, harness) for harness in harnesses]
+    reasons = tuple(f"partial: missing on {label}" for label in labels)
+    steps = tuple(
+        ConfigStep(f"install {tool.id} for {label}", "skill_install", harness)
+        for harness, label in zip(harnesses, labels, strict=True)
+    )
+    return reasons, steps
 
 
 def inspect_status(tool: Tool, probe: ProbeRunner, home: Path | None = None) -> LifecycleOutcome:

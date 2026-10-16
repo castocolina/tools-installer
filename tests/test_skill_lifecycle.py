@@ -22,11 +22,14 @@ from installer.model import (
 from installer.platform import Platform
 from installer.skill_lifecycle import (
     SKILL_HARNESS_LABELS,
+    HarnessStatus,
     SkillPackReport,
     _install_state_status,  # pyright: ignore[reportPrivateUsage]
     inspect_skill_packs,
     inspect_skill_reports,
     inspect_status,
+    partial_harnesses,
+    partial_steps,
     perform_action,
     present_harnesses,
 )
@@ -1329,3 +1332,35 @@ def test_a_tool_without_a_skill_lifecycle_reports_no_hosts(tmp_path: Path) -> No
     assert inspect_skill_reports([tool], lambda _argv: "", tmp_path) == {
         "rg": SkillPackReport(hosts={})
     }
+
+
+def test_partial_harnesses_lists_present_probed_absent_hosts() -> None:
+    hosts: dict[str, HarnessStatus] = {"claude": "present", "codex": "absent", "pi": "absent"}
+
+    assert partial_harnesses(hosts, ("claude", "codex", "pi"), {"claude", "codex"}) == ("codex",)
+
+
+def test_partial_harnesses_needs_one_present_host() -> None:
+    supported = ("claude", "codex", "pi")
+    present = {"claude", "codex", "pi"}
+    absent: dict[str, HarnessStatus] = {"claude": "absent", "codex": "absent"}
+    unknown: dict[str, HarnessStatus] = {"claude": "present", "codex": "unknown"}
+
+    assert partial_harnesses(absent, supported, present) == ()
+    assert partial_harnesses(unknown, supported, present) == ()
+
+
+def test_partial_harnesses_ignores_unsupported_hosts() -> None:
+    hosts: dict[str, HarnessStatus] = {"claude": "present", "codex": "absent", "pi": "absent"}
+
+    assert partial_harnesses(hosts, ("claude", "pi"), {"claude", "codex", "pi"}) == ("pi",)
+
+
+def test_partial_steps_text() -> None:
+    reasons, steps = partial_steps(_tools()["superpowers"], ("codex",))
+
+    assert reasons == ("partial: missing on Codex",)
+    assert steps == (
+        ConfigStep(text="install superpowers for Codex", kind="skill_install", harness="codex"),
+    )
+    assert steps[0].argv == ()
