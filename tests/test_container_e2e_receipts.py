@@ -333,3 +333,50 @@ def test_pre_uninstall_check_requires_binary_and_valid_receipt(
     assert strings_only.returncode != 0
     assert "TRACER_RECEIPT_PRE_UNINSTALL_MISSING" in strings_only.stdout
     assert "valid receipt" in strings_only.stdout
+
+
+def test_pre_uninstall_check_survives_a_spaced_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace path with a space stays one word for the nested cd (RR-06)."""
+    from installer import receipts
+    from installer.receipts import Receipt, ReceiptArtifact, ReceiptMethod
+
+    scratch = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: scratch)
+    monkeypatch.setattr(receipts, "receipts_dir", receipts.default_receipts_dir)
+    binary = scratch / ".local" / "bin" / PROBE_TOOL
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"yq-bytes")
+    target = scratch / "payload"
+    target.write_bytes(b"payload")
+    receipt = Receipt(
+        tool=PROBE_TOOL,
+        at="2026-10-16T12:00:00+00:00",
+        method=ReceiptMethod(kind="github_release", key="a" * 64),
+        package=None,
+        artifacts=(
+            ReceiptArtifact(
+                path=target.resolve(), type="file", sha256="b" * 64, size=7, mtime_ns=1
+            ),
+        ),
+        smoke=None,
+        hooks={},
+    )
+    receipts.write(receipt)
+    workspace = tmp_path / "work space"
+    workspace.symlink_to(ROOT, target_is_directory=True)
+    script = "\n".join(
+        [
+            _assign("TESTER_WORKSPACE", str(workspace)),
+            f"RECEIPT_PROBE_TOOL={_constant('RECEIPT_PROBE_TOOL')}",
+            f"RECEIPT_PROBE_CATEGORY={_constant('RECEIPT_PROBE_CATEGORY')}",
+            _function("assert_receipt_ready_for_removal"),
+            'exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
+            _uv_stub(),
+            "assert_receipt_ready_for_removal",
+        ]
+    )
+    ok = _run(script, scratch)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert f"TRACER_RECEIPT_PRE_UNINSTALL_OK tool={PROBE_TOOL}" in ok.stdout

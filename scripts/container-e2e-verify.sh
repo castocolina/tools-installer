@@ -301,6 +301,8 @@ assert_receipt_removed() {
 assert_receipt_ready_for_removal() {
   local binary="\$HOME/.local/bin/${RECEIPT_PROBE_TOOL}"
   local receipt="\$HOME/.local/state/tools-installer/receipts/${RECEIPT_PROBE_TOOL}.json"
+  local workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
   if ! exec_tester "test -e ${binary} || test -L ${binary}"; then
     printf 'TRACER_RECEIPT_PRE_UNINSTALL_MISSING tool=%s missing=binary %s\n' \
       "$RECEIPT_PROBE_TOOL" "$binary"
@@ -315,7 +317,7 @@ assert_receipt_ready_for_removal() {
   exec_tester "set -euo pipefail
 eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"
 export PATH=\"\$HOME/.local/bin:\$PATH\"
-cd ${TESTER_WORKSPACE}
+cd ${workspace}
 uv run --isolated --no-dev python -c 'import sys; from installer import receipts; sys.exit(0 if receipts.read(sys.argv[1]) is not None else 1)' ${RECEIPT_PROBE_TOOL}
 " || parser_status=$?
   if [[ "$parser_status" -eq 0 ]]; then
