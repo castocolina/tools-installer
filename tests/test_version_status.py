@@ -2707,6 +2707,74 @@ def test_cache_save_failure_keeps_states_and_sets_warning(
     assert service.warning is None
 
 
+def test_skill_cache_save_failure_still_settles_the_packs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    pack = _superpowers()
+    service = _pack_service(
+        home, _probe_for(_listing((_SP_ID, "user", True, "6.4.1"))), harnesses=frozenset({"claude"})
+    )
+    service.refresh([pack])
+    original = save_version_cache
+
+    def full(
+        path: Path,
+        cache: Mapping[str, VersionCacheEntry],
+        *,
+        managers: Mapping[str, object] | None = None,
+        skills: Mapping[str, Mapping[str, str]] | None = None,
+    ) -> None:
+        if skills is not None:
+            raise OSError("disk full")
+        original(path, cache, managers=managers, skills=skills)
+
+    monkeypatch.setattr("installer.version_status.save_version_cache", full)
+    hosts = service.refresh_skills([pack])
+    assert hosts["superpowers"].stale is False
+    state = service.state_of(pack.id)
+    assert state is not None
+    assert state.health is Health.OK
+    assert service.warning == "version cache not saved: disk full"
+
+
+def test_failed_invalidate_save_still_reprobes_the_skills(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    calls: list[list[str]] = []
+
+    def probe(argv: list[str]) -> str:
+        calls.append(list(argv))
+        return _listing((_SP_ID, "user", True, "6.4.1"))
+
+    pack = _superpowers()
+    service = _pack_service(home, probe, harnesses=frozenset({"claude"}))
+    service.refresh([pack])
+    service.refresh_skills([pack])
+    assert calls.count(["claude", "plugin", "list", "--json"]) == 1
+    original = save_version_cache
+    failing = {"on": True}
+
+    def full(
+        path: Path,
+        cache: Mapping[str, VersionCacheEntry],
+        *,
+        managers: Mapping[str, object] | None = None,
+        skills: Mapping[str, Mapping[str, str]] | None = None,
+    ) -> None:
+        if failing["on"]:
+            raise OSError("disk full")
+        original(path, cache, managers=managers, skills=skills)
+
+    monkeypatch.setattr("installer.version_status.save_version_cache", full)
+    with pytest.raises(OSError, match="disk full"):
+        service.invalidate(reason="test")
+    failing["on"] = False
+    service.refresh_skills([pack])
+    assert calls.count(["claude", "plugin", "list", "--json"]) == 2
+
+
 def test_only_published_records_are_cached(tmp_path: Path) -> None:
     hold = _Hold(tag="9.9.9")
     service = _held_service(tmp_path, hold)

@@ -4348,6 +4348,56 @@ async def test_cache_save_warning_reaches_the_status_line(
         assert app.catalog.status_text == ""
 
 
+async def test_skill_cache_save_warning_reaches_the_status_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import version_status
+
+    release = threading.Event()
+
+    def probe(argv: list[str]) -> str:
+        release.wait(timeout=10)
+        return _CLAUDE_SUPERPOWERS_JSON if argv == ["claude", "plugin", "list", "--json"] else ""
+
+    original = version_status.save_version_cache
+
+    def save(path: Path, *args: Any, **kwargs: Any) -> None:
+        if kwargs.get("skills") is not None:
+            raise OSError("disk full")
+        original(path, *args, **kwargs)
+
+    monkeypatch.setattr(version_status, "save_version_cache", save)
+    pack = _skill_pack(
+        "superpowers",
+        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
+    )
+    service = offline_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: None,
+        skill_probe=probe,
+        skill_home=tmp_path,
+    )
+    app = _unified_app([pack], {"superpowers": False}, _BLURBS, version_refresh=service)
+    try:
+        async with app.run_test(size=(140, 30)) as pilot:
+            # The version pass finishes first, so it cannot clear the line afterwards.
+            await _mount_and_settle(app, pilot)
+            release.set()
+            await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+            await pilot.pause()
+            state = service.state_of("superpowers")
+            assert state is not None
+            assert state.health is not Health.CHECKING
+            assert app.catalog.status_text == (
+                "version cache not saved: disk full"
+                " — marks are current; the next start checks again"
+            )
+            assert app.catalog.status.severity is Severity.WARN
+    finally:
+        release.set()
+
+
 async def test_quick_tier_switching_runs_one_full_pass(tmp_path: Path) -> None:
     tools = [
         _tier_gh_tool("sys-tool", "system"),

@@ -1027,11 +1027,16 @@ class VersionRefreshService:
                 if self._epoch != started_epoch:
                     return dict(self._skills)
                 merged = {**self._skills, **fresh}
-                save_version_cache(
-                    self._cache_path,
-                    load_version_cache(self._cache_path),
-                    skills={tool_id: dict(status.hosts) for tool_id, status in merged.items()},
-                )
+                try:
+                    save_version_cache(
+                        self._cache_path,
+                        load_version_cache(self._cache_path),
+                        skills={tool_id: dict(status.hosts) for tool_id, status in merged.items()},
+                    )
+                except OSError as exc:
+                    # Best effort, as in the pass's commit: a failed write never strands
+                    # the packs in CHECKING (WR2-03).
+                    self._warning = f"version cache not saved: {exc}"
                 self._skills = merged
                 self._skills_probed = True
                 published = self._pack_scan
@@ -1057,16 +1062,21 @@ class VersionRefreshService:
                 return dict(merged)
 
     def invalidate(self, *, reason: str) -> int:
-        """Bump the epoch and drop the manager snapshot under the merge lock."""
+        """Bump the epoch and drop the manager snapshot under the merge lock.
+
+        The in-memory flags change before the cache write, so a failed write
+        still forces the next skill probe; the write's OSError still propagates.
+        """
         del reason
         with self._lock:
             self._epoch += 1
-            tools = load_version_cache(self._cache_path)
-            save_version_cache(self._cache_path, tools, managers={})
+            # In memory first: a failed write must still force the next probe (WR2-03).
             self._skills_probed = False
             self._skills = {
                 tool_id: replace(entry, stale=True) for tool_id, entry in self._skills.items()
             }
+            tools = load_version_cache(self._cache_path)
+            save_version_cache(self._cache_path, tools, managers={})
             return self._epoch
 
     def _scan_packs(self, packs: Sequence[Tool]) -> _PackScan:

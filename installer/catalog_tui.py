@@ -172,12 +172,17 @@ class VersionStatusRefreshed(Message):
 
 
 class SkillStatusRefreshed(Message):
-    """A skill-pack probe finished. `epoch` discards a pass a mutation superseded."""
+    """A skill-pack probe finished. `epoch` discards a pass a mutation superseded.
 
-    def __init__(self, generation: int, epoch: int) -> None:
+    `warning` is the service warning after a completed probe (a failed cache
+    write); the screen shows it on the status line after the reload.
+    """
+
+    def __init__(self, generation: int, epoch: int, *, warning: str | None = None) -> None:
         super().__init__()
         self.generation = generation
         self.epoch = epoch
+        self.warning = warning
 
 
 class OwnershipRefreshed(Message):
@@ -426,13 +431,16 @@ class CatalogScreen(AppScreen):
     @work(thread=True, exclusive=True, group="skill-refresh", exit_on_error=False)
     def _refresh_skills_worker(self, generation: int) -> None:
         epoch = 0
+        warning: str | None = None
         service = self._version_refresh
         try:
             if service is not None:
                 epoch = service.epoch
-                run_live(lambda: service.refresh_skills(self._catalog))
+                _hosts, error = run_live(lambda: service.refresh_skills(self._catalog))
+                if error is None:
+                    warning = service.warning
         finally:
-            self.post_message(SkillStatusRefreshed(generation, epoch))
+            self.post_message(SkillStatusRefreshed(generation, epoch, warning=warning))
 
     def on_skill_status_refreshed(self, message: "SkillStatusRefreshed") -> None:
         if message.generation != self._version_refresh_generation:
@@ -442,6 +450,8 @@ class CatalogScreen(AppScreen):
         if service is None or message.epoch != service.epoch:
             return
         self._browser.reload(self._adapter())
+        if message.warning is not None:
+            self._show_cache_warning(message.warning)
 
     def on_version_status_refreshed(self, message: "VersionStatusRefreshed") -> None:
         if message.generation != self._version_refresh_generation:
@@ -458,9 +468,7 @@ class CatalogScreen(AppScreen):
             )
             return
         if message.warning is not None:
-            self._show_state_line(
-                f"{message.warning} — marks are current; the next start checks again"
-            )
+            self._show_cache_warning(message.warning)
         elif self._state_line is not None and self.status.text == self._state_line:
             self.status.clear()
             self._state_line = None
@@ -473,6 +481,9 @@ class CatalogScreen(AppScreen):
         # Plain text through StatusLine.set, never markup (T-19-40).
         self.status.set(line, "warn")
         self._state_line = line
+
+    def _show_cache_warning(self, warning: str) -> None:
+        self._show_state_line(f"{warning} — marks are current; the next start checks again")
 
     def _state(
         self, tool: Tool, painted: Mapping[str, ToolState | None] | None = None
