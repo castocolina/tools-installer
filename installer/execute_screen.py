@@ -519,6 +519,8 @@ class ExecuteScreen(ModalScreen[None]):
             render_dependency_notice(resolved.dragged_in, resolved.warnings, console)
             render_audit(audit(self._ordered, installed_for_order), console)
             for tool, reason in self._refused:
+                if not reason:
+                    continue
                 # A reason is data, never Rich markup.
                 console.print(f"{tool.id} is broken: {reason}", markup=False, highlight=False)
             console.print(self._preflight_prompt())
@@ -550,7 +552,8 @@ class ExecuteScreen(ModalScreen[None]):
                 # Receipt drift: the update gate would refuse it, so the
                 # preview never promises it (IN2-03).
                 elif state.health is Health.BROKEN:
-                    refused.append((tool, state.reasons[0]))
+                    reason = state.reasons[0] if state.reasons else ""
+                    refused.append((tool, reason))
                 elif state.version is not None and state.version.outdated is False:
                     current.append(tool)
         repair_ids = {tool.id for tool in repair}

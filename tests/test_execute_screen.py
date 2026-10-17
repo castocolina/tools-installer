@@ -4666,3 +4666,40 @@ async def test_drifted_tool_is_refused_before_the_run_starts(tmp_path: Path) -> 
             "\u25cf old update [done]",
             "\u2716 drifted update [not done]",
         ]
+
+
+async def test_broken_tool_with_no_reason_is_still_refused(tmp_path: Path) -> None:
+    """A hand-built BROKEN state with no reason is refused, not crashed."""
+    from installer.version_status import ToolState
+
+    bare = _tool("bare")
+    state = pass_state(bare, platform=_PLATFORM, ownership=_brew_ownership(bare), broken=("x",))
+    empty = ToolState(
+        tool_id=state.tool_id,
+        generation=state.generation,
+        seq=state.seq,
+        health=state.health,
+        reasons=(),
+        ownership=state.ownership,
+        version=state.version,
+        skill_hosts=state.skill_hosts,
+        receipt=state.receipt,
+        removable=state.removable,
+        unconfigured=state.unconfigured,
+    )
+    service = frozen_service(tmp_path)
+    service.publish([empty])
+    inputs = _inputs(
+        tools=[bare],
+        installed=lambda _tool: True,
+        version_refresh=service,
+        updates=_RecordingUpdateService(),
+    )
+    app = _host(inputs, [bare])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["bare"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert _progress_text(screen).splitlines() == ["\u2716 bare update [not done]"]
+        assert "bare is broken:" not in _head_text(screen)
