@@ -7,6 +7,7 @@ import json
 import os
 import threading
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
@@ -766,6 +767,65 @@ def test_dir_fingerprint_records_its_key_file(tmp_path: Path) -> None:
     key_link = directory / "bin" / "link"
     key_link.symlink_to(key_file)
     assert receipts.fingerprint(directory, "dir", key="bin/link") is None
+
+
+@pytest.mark.parametrize("link", ["absolute", "relative"])
+def test_key_through_an_escaping_symlink_is_no_proof(tmp_path: Path, link: str) -> None:
+    backup = tmp_path / "Demo.backup.app"
+    (backup / "Contents").mkdir(parents=True)
+    (backup / "Contents" / "Info.plist").write_bytes(b"<plist>v1</plist>")
+    genuine = receipts.fingerprint(backup, "dir", key=receipts.APP_KEY_FILE)
+    assert genuine is not None
+
+    app = tmp_path / "Demo.app"
+    app.mkdir()
+    target = (
+        backup / "Contents" if link == "absolute" else Path("..") / "Demo.backup.app" / "Contents"
+    )
+    (app / "Contents").symlink_to(target, target_is_directory=True)
+    (app / "data").write_bytes(b"unrelated")
+    forged = replace(genuine, path=app)
+
+    assert receipts.fingerprint(app, "dir", key=receipts.APP_KEY_FILE) is None
+    assert not receipts.matches(forged)
+    assert not receipts.matches(forged, rehash=True)
+    assert receipts.matches(genuine)
+
+
+def test_key_through_a_symlink_that_stays_inside_still_proves(tmp_path: Path) -> None:
+    directory = tmp_path / "d"
+    (directory / "real").mkdir(parents=True)
+    (directory / "real" / "k").write_bytes(b"k")
+    (directory / "lnk").symlink_to(Path("real"), target_is_directory=True)
+
+    artifact = receipts.fingerprint(directory, "dir", key="lnk/k")
+
+    assert artifact is not None
+    assert artifact.sha256 == hashlib.sha256(b"k").hexdigest()
+    assert receipts.matches(artifact)
+    assert receipts.matches(artifact, rehash=True)
+    (directory / "real" / "k").write_bytes(b"kk")
+    assert not receipts.matches(artifact)
+
+
+def test_key_through_a_symlink_loop_never_raises(tmp_path: Path) -> None:
+    directory = tmp_path / "d"
+    directory.mkdir()
+    (directory / "loop").symlink_to(Path("loop"))
+    (directory / "gone").symlink_to(Path("missing"))
+
+    assert receipts.fingerprint(directory, "dir", key="loop/k") is None
+    assert receipts.fingerprint(directory, "dir", key="gone/k") is None
+    artifact = receipts.ReceiptArtifact(
+        path=directory,
+        type="dir",
+        key="loop/k",
+        sha256="a" * 64,
+        size=1,
+        mtime_ns=1,
+    )
+    assert not receipts.matches(artifact)
+    assert not receipts.matches(artifact, rehash=True)
 
 
 def test_dir_recreated_with_the_same_key_file_matches(tmp_path: Path) -> None:

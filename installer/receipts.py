@@ -5,7 +5,8 @@ install actually created (artifacts with absolute paths, per-type fingerprints)
 plus the method that created them. A directory is proven by the sha256 of one
 key file inside it: the archive member its bin link points to, or
 Contents/Info.plist for an .app, which is only read, never written, because
-writing inside a bundle breaks its code signature. A re-created directory
+writing inside a bundle breaks its code signature. The key file must resolve
+inside the directory it proves (RR3-01). A re-created directory
 whose key file has the same bytes is the same software and matches. Device
 and inode numbers are never recorded: the device number is assigned at mount
 time on btrfs, NFS and ZFS and can change on reboot, and ext4 and XFS reuse
@@ -379,8 +380,10 @@ def _safe_key(key: object) -> bool:
     """True only for a relative key that cannot leave its directory.
 
     Absolute, empty, `.` or `..`-containing keys, a NUL and a string the
-    filesystem cannot encode are all refused, so a forged receipt key can
-    never make the matcher hash a file outside the directory."""
+    filesystem cannot encode are all refused. `_safe_key` bounds the key's
+    text and `_key_file` then requires the key to resolve inside the directory,
+    so neither the text nor a symlink on the way out can make the matcher hash
+    a file outside it (RR3-01)."""
     if not isinstance(key, str) or not key or "\x00" in key:
         return False
     try:
@@ -389,6 +392,23 @@ def _safe_key(key: object) -> bool:
         return False
     path = PurePosixPath(key)
     return not path.is_absolute() and len(path.parts) >= 1 and ".." not in path.parts
+
+
+def _key_file(directory: Path, key: str) -> Path | None:
+    """Resolve a key only when it stays inside the directory it proves (RR3-01).
+
+    An intermediate symlink that stays inside the tree is followed; one that
+    leaves it, a dangling component or a loop is no key file. The final
+    component is still checked by the file rule, so a symlink there never
+    matches.
+    """
+    target = directory / key
+    try:
+        if target.resolve(strict=True).is_relative_to(directory.resolve(strict=True)):
+            return target
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return None
 
 
 def link_key(directory: Path, link: Path) -> str | None:
@@ -421,11 +441,12 @@ def fingerprint(
     """Record what `path` looks like now, for the given artifact type.
 
     A file needs to be a regular file and records sha256 + size + mtime_ns; a
-    link records its readlink target. A dir is proven by one key file inside
-    it (L-19-31): `key` must be a safe relative path, the dir a real directory
-    (a symlink never is), and the key file a regular file, whose sha256, size
-    and mtime_ns the artifact records. A re-created directory with the same
-    key-file bytes matches. Device and inode numbers are never recorded.
+    link records its readlink target. A dir is proven by one key file resolved
+    inside the directory (L-19-31, RR3-01): `key` must be a safe relative path,
+    the dir a real directory (a symlink never is), and the key file a regular
+    file, whose sha256, size and mtime_ns the artifact records. A re-created
+    directory with the same key-file bytes matches. Device and inode numbers
+    are never recorded.
     Anything else, or an OSError or ValueError (a path `lstat` would refuse),
     is not fingerprintable."""
     try:
@@ -440,7 +461,10 @@ def fingerprint(
                 return None
             if not stat_module.S_ISDIR(path.lstat().st_mode):
                 return None
-            key_file = _file_fingerprint(path / key)
+            target = _key_file(path, key)
+            if target is None:
+                return None
+            key_file = _file_fingerprint(target)
             if key_file is None:
                 return None
             return ReceiptArtifact(
@@ -474,8 +498,9 @@ def matches(artifact: ReceiptArtifact, *, rehash: bool = False) -> bool:
     """Does the on-disk artifact still equal what the receipt recorded (D-08)?
 
     A link matches on readlink. A dir matches while it is a real directory
-    whose key file matches by the file rule: the stat shortcut, or sha256
-    under `rehash=True`. A changed, missing or symlinked key file never
+    whose key file resolves inside the directory and matches by the file rule:
+    the stat shortcut, or sha256 under `rehash=True`. A changed, missing or
+    symlinked key file never
     matches, and a dir with no key never does. A file matches on the stat
     fingerprint, re-hashed only when the stat differs (or `rehash=True`, the
     deletion-time re-proof, which bypasses both the shortcut and the memo). A
@@ -491,7 +516,8 @@ def matches(artifact: ReceiptArtifact, *, rehash: bool = False) -> bool:
         if artifact.type == "dir":
             if artifact.key is None or not stat_module.S_ISDIR(path.lstat().st_mode):
                 return False
-            return _file_matches(path / artifact.key, artifact, rehash=rehash)
+            target = _key_file(path, artifact.key)
+            return target is not None and _file_matches(target, artifact, rehash=rehash)
         return _file_matches(path, artifact, rehash=rehash)
     except (OSError, ValueError):
         return False
