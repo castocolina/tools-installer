@@ -467,13 +467,13 @@ def remove_paths(artifacts: Sequence[receipts.ReceiptArtifact]) -> tuple[Path, .
     a `dir` artifact is ever removed recursively, and then only after it has
     been captured under a quarantine sibling and re-verified there (RR-01);
     a `file` or `link` is only ever unlinked (G1). `receipts.matches` re-checks
-    the artifact right before the delete, so a path that changed since the
-    proof is refused and never touched. A failed delete still raises, before
-    any receipt is touched.
+    the artifact right before the delete and re-hashes files, so a path that
+    changed since the proof is refused and never touched (RR-02). A failed
+    delete still raises, before any receipt is touched.
     """
     refused: list[Path] = []
     for artifact in artifacts:
-        if not receipts.matches(artifact):
+        if not receipts.matches(artifact, rehash=True):
             refused.append(artifact.path)
             continue
         if artifact.type == "dir":
@@ -499,8 +499,8 @@ def remove_proven(
     is touched. Returns the removed paths and one refusal line per path no
     longer proven."""
     fresh = plan_removal(tools, bin_dir, verify=True)
-    proven = set(fresh.removable)
-    kept = [path for path in paths if path in proven and path in fresh.artifacts]
+    # Both plan_removal branches put every removable path into artifacts.
+    kept = [path for path in paths if path in fresh.artifacts]
     changed = remove_paths([fresh.artifacts[path] for path in kept])
     removed = set(kept) - set(changed)
     refused = tuple(

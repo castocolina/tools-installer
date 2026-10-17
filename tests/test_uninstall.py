@@ -2045,6 +2045,33 @@ def test_remove_proven_rehashes_before_deleting(
     assert receipts.read("yq") is not None
 
 
+def test_remove_proven_rehashes_a_file_swapped_after_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RR-02/T-19-108: re-hash at deletion time, even after the fresh plan.
+
+    Same-length bytes with the recorded mtime restored pass the stat shortcut.
+    They must remain on disk and retain their receipt when substituted after
+    `plan_removal(verify=True)` has already returned.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    yq, bin_dir = plant_raw_yq(tmp_path)
+    target = bin_dir / "yq"
+    st = target.stat()
+
+    def mutate() -> None:
+        target.write_text("YQ RAW BINARY")
+        os.utime(target, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+    _after_verified_plan(monkeypatch, mutate)
+    removed, refused = remove_proven([yq], [target], bin_dir)
+
+    assert removed == ()
+    assert refused == (f"changed since the preview; not removed: {target}",)
+    assert target.read_text() == "YQ RAW BINARY"
+    assert receipts.read("yq") is not None
+
+
 def test_remove_proven_keeps_the_receipt_when_a_delete_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

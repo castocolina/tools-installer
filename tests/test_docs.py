@@ -201,6 +201,8 @@ _PHASE_19_REQUIRED = (
     "live_platform",
     "PROJECT_HOOK_CONFIGS",
     "single flight",
+    "Contents/Info.plist",
+    "quarantine sibling",
 )
 
 

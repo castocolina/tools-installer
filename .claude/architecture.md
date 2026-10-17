@@ -1066,6 +1066,16 @@ it unproven with no layout fallback. `remove_proven` is the one remover
 for the CLI and the TUI. It re-hashes at deletion time and deletes the
 receipt only once its paths are gone.
 
+A directory artifact is proven by the sha256 of one key file inside it,
+never by its device or inode number: the archive member the bin link points
+to, or `Contents/Info.plist` for an `.app` bundle, which the installer only
+reads (L-19-31). A changed directory loses its removal proof but is not
+broken and does not block an update, which re-records it; a changed file or
+link is broken and refused. `remove_paths` re-hashes every file right before
+deleting it, and removes a directory by renaming it to a quarantine sibling,
+re-checking the key file inside the captured tree and only then deleting it;
+a mismatch is renamed back and refused.
+
 A raw binary that predates receipts is adopted when its sha256 equals the
 cached release digest of its asset, the same fetch the pass already makes.
 The reason it records is `adopted: the file matches the release checksum`.
