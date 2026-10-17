@@ -14,7 +14,7 @@ from installer.deps import Blocked, resolve_dependencies
 from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
 from installer.enums import InstallStatus, Priority
 from installer.model import ConfigStep, Tool
-from installer.ownership import ManagerOwnership
+from installer.ownership import ManagerOwnership, declared_manager_label, owner_label
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
 from installer.resolve import resolve_methods
@@ -383,6 +383,9 @@ def _row(
     state: ToolState | None,
     *,
     requester: str | None,
+    direct: bool,
+    platform: Platform,
+    reinstall: frozenset[str],
 ) -> PlanRow:
     if state is None or state.health is Health.CHECKING:
         return PlanRow(tool.id, Disposition.WAIT, "", requested_by=requester)
@@ -404,6 +407,47 @@ def _row(
             requested_by=requester,
             health=state.health,
             ownership=state.ownership,
+        )
+    if direct and state.health is Health.OK:
+        ownership = state.ownership
+        if ownership.off_policy:
+            real = owner_label(ownership) or ownership.owner
+            declared = declared_manager_label(tool, platform)
+            reason = f"managed by {real}"
+            if declared is not None and declared != real:
+                reason += f"; the catalog installs it via {declared}"
+            return PlanRow(
+                tool.id,
+                Disposition.SKIP,
+                reason,
+                health=state.health,
+                ownership=ownership,
+            )
+        if ownership.owner == "installer":
+            disposition = Disposition.REINSTALL if tool.id in reinstall else Disposition.SKIP
+            reason = (
+                "reinstall requested; r again to undo"
+                if tool.id in reinstall
+                else "already current"
+            )
+            return PlanRow(
+                tool.id,
+                disposition,
+                reason,
+                health=state.health,
+                can_reinstall=True,
+                ownership=ownership,
+            )
+        if ownership.owner == "unknown":
+            reason = "already current; owner unknown"
+        else:
+            reason = f"managed by {owner_label(ownership) or ownership.owner}"
+        return PlanRow(
+            tool.id,
+            Disposition.SKIP,
+            reason,
+            health=state.health,
+            ownership=ownership,
         )
     return PlanRow(
         tool.id,
@@ -450,8 +494,8 @@ def build_plan(
     Reads `state_of` and nothing else: no probe, no network, no subprocess. Rows
     follow `Resolution.closure` (execution order, dependencies first).
     """
-    del reinstall  # consumed by the installed-OK branch (plan 20-04 Task 3)
     chosen = select_tools(list(catalog), list(selected))
+    direct_ids = {tool.id for tool in chosen}
     res = resolve_dependencies(
         order_for_install(chosen),
         list(catalog),
@@ -459,7 +503,14 @@ def build_plan(
         is_installed=lambda tool: _settled(state_of(tool.id)),
     )
     rows = [
-        _row(tool, state_of(tool.id), requester=res.requested_by.get(tool.id))
+        _row(
+            tool,
+            state_of(tool.id),
+            requester=res.requested_by.get(tool.id),
+            direct=tool.id in direct_ids,
+            platform=platform,
+            reinstall=reinstall,
+        )
         for tool in res.closure
     ]
     rows.extend(

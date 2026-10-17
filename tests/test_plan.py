@@ -21,13 +21,19 @@ from tests.state_doubles import MACOS, pass_state, plan_state
 _BREW = Method(kind="brew", params={"formula": "x"})
 
 
-def _tool(tool_id: str, *, tier: str = "user", requires: tuple[str, ...] = ()) -> Tool:
+def _tool(
+    tool_id: str,
+    *,
+    tier: str = "user",
+    requires: tuple[str, ...] = (),
+    methods: tuple[Method, ...] = (_BREW,),
+) -> Tool:
     return Tool(
         id=tool_id,
         name=tool_id,
         category="search",
         cmd=tool_id,
-        methods=(_BREW,),
+        methods=methods,
         priority="P3",
         audience="both",
         tier=tier,
@@ -223,3 +229,138 @@ def test_a_tier_mixing_current_and_missing_plans_only_the_missing_as_will_instal
     by_id = {r.tool_id: r for r in rows}
     assert (by_id["fd"].disposition, by_id["fd"].reason) == (Disposition.INSTALL, "not installed")
     assert by_id["rg"].disposition is Disposition.SKIP
+
+
+def test_reinstall_requires_the_id_in_the_reinstall_set():
+    rg = _tool("rg")
+    catalog = [rg]
+    state_of = _state_of({"rg": plan_state(rg)})
+
+    current = build_plan(["rg"], catalog, state_of, MACOS, reinstall=frozenset())[0]
+    requested = build_plan(["rg"], catalog, state_of, MACOS, reinstall=frozenset({"rg"}))[0]
+
+    assert (current.disposition, current.reason, current.can_reinstall) == (
+        Disposition.SKIP,
+        "already current",
+        True,
+    )
+    assert (requested.disposition, requested.reason, requested.can_reinstall) == (
+        Disposition.REINSTALL,
+        "reinstall requested; r again to undo",
+        True,
+    )
+
+
+def test_reinstall_set_is_ignored_for_a_foreign_owned_row():
+    rg = _tool("rg")
+    dnf = _tool(
+        "dnf-tool",
+        methods=(Method(kind="dnf", params={"package": "dnf-tool"}),),
+    )
+    catalog = [rg, dnf]
+    state_of = _state_of(
+        {"rg": plan_state(rg, owner="brew"), "dnf-tool": plan_state(dnf, owner="dnf")}
+    )
+
+    rows = build_plan(
+        ["rg", "dnf-tool"], catalog, state_of, MACOS, reinstall=frozenset({"rg", "dnf-tool"})
+    )
+
+    by_id = {r.tool_id: r for r in rows}
+    assert (by_id["rg"].disposition, by_id["rg"].reason, by_id["rg"].can_reinstall) == (
+        Disposition.SKIP,
+        "managed by Homebrew",
+        False,
+    )
+    assert (
+        by_id["dnf-tool"].disposition,
+        by_id["dnf-tool"].reason,
+        by_id["dnf-tool"].can_reinstall,
+    ) == (
+        Disposition.SKIP,
+        "managed by dnf",
+        False,
+    )
+
+
+def test_reinstall_set_is_ignored_for_a_dragged_row():
+    node = _tool("node")
+    mmdc = _tool("mmdc", requires=("node",))
+    catalog = [node, mmdc]
+    state_of = _state_of(
+        {"node": plan_state(node), "mmdc": plan_state(mmdc, health=Health.MISSING, present=False)}
+    )
+
+    rows = build_plan(["mmdc"], catalog, state_of, MACOS, reinstall=frozenset({"node"}))
+
+    node_row = next(r for r in rows if r.tool_id == "node")
+    assert (node_row.disposition, node_row.reason, node_row.can_reinstall) == (
+        Disposition.SKIP,
+        "already present",
+        False,
+    )
+
+
+def test_installer_owned_current_without_a_receipt_is_still_reinstall_eligible():
+    rg = _tool("rg")
+    row = build_plan(["rg"], [rg], _state_of({"rg": plan_state(rg)}), MACOS, reinstall=frozenset())[
+        0
+    ]
+
+    assert row.can_reinstall is True
+
+
+def test_off_policy_current_row_names_both_owners(monkeypatch: pytest.MonkeyPatch):
+    import installer.session as session
+
+    rg = _tool(
+        "rg",
+        methods=(
+            Method(kind="github_release", params={"repo": "x/y", "asset": "x"}),
+            _BREW,
+        ),
+    )
+    state_of = _state_of({"rg": plan_state(rg, owner="brew", off_policy=True)})
+
+    row = build_plan(["rg"], [rg], state_of, MACOS, reinstall=frozenset())[0]
+    assert row.reason == "managed by Homebrew; the catalog installs it via GitHub release"
+
+    def unknown_declared_label(_tool: Tool, _platform: Platform) -> None:
+        return None
+
+    monkeypatch.setattr(session, "declared_manager_label", unknown_declared_label)
+    row = build_plan(["rg"], [rg], state_of, MACOS, reinstall=frozenset())[0]
+    assert row.reason == "managed by Homebrew"
+
+
+def test_current_row_with_unknown_owner():
+    rg = _tool("rg")
+    row = build_plan(
+        ["rg"],
+        [rg],
+        _state_of({"rg": plan_state(rg, owner="unknown")}),
+        MACOS,
+        reinstall=frozenset(),
+    )[0]
+
+    assert (row.disposition, row.reason, row.can_reinstall) == (
+        Disposition.SKIP,
+        "already current; owner unknown",
+        False,
+    )
+
+
+def test_pending_state_is_a_wait_row():
+    rg = _tool("rg")
+    row = build_plan(["rg"], [rg], _state_of({}), MACOS, reinstall=frozenset())[0]
+
+    assert (row.disposition, row.reason, row.health) == (Disposition.WAIT, "", None)
+
+
+def test_wait_rows_count_as_checking_in_review_counts():
+    rows = [
+        PlanRow("rg", Disposition.INSTALL, "not installed"),
+        PlanRow("fd", Disposition.WAIT, ""),
+    ]
+
+    assert review_counts(rows) == "1 will install, 1 checking…"
