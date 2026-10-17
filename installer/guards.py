@@ -317,11 +317,16 @@ def real_binary(
     "pnpm not found" while `pnpm --version` worked fine.
 
     The directory is dropped only for the retry, once our own shim has actually
-    won the lookup.
+    won the lookup. The retry drops every spelling of the managed dir.
     """
     found = lookup(name, path_value)
     if found is None or is_our_shim(Path(found)):
-        rest = [entry for entry in path_value.split(os.pathsep) if entry and entry != str(shim_dir)]
+        managed = shim_dir.resolve()
+        rest = [
+            entry
+            for entry in path_value.split(os.pathsep)
+            if entry and Path(entry).resolve() != managed
+        ]
         found = lookup(name, os.pathsep.join(rest))
     if found is None or is_our_shim(Path(found)):
         return None
@@ -338,8 +343,15 @@ def look_through_shim(
 ) -> str | None:
     """The binary the refresh pass attributes: behind this installer's own shim
     in the managed bin dir, the real binary it forwards to; any other hit as-is
-    (D-13)."""
-    if found is not None and Path(found).parent == shim_dir and is_our_shim(Path(found)):
+    (D-13). The managed dir is matched by resolved path because PATH may spell
+    it through a symlinked home or with a trailing slash (IN3-02), while the
+    returned hit keeps PATH's own spelling.
+    """
+    if (
+        found is not None
+        and Path(found).parent.resolve() == shim_dir.resolve()
+        and is_our_shim(Path(found))
+    ):
         return real_binary(name, shim_dir=shim_dir, path_value=path_value, lookup=lookup)
     return found
 

@@ -1102,6 +1102,29 @@ def test_look_through_shim_finds_the_real_binary(tmp_path: Path):
     assert found == str(real)
 
 
+def test_look_through_shim_matches_the_shim_dir_by_resolved_path(tmp_path: Path):
+    shim_dir = tmp_path / "bin"
+    _executable(shim_dir / "pnpm", f"#!/bin/sh\n{REDIRECT_SENTINEL}\n")
+    real = _executable(tmp_path / "real" / "pnpm", "#!/bin/sh\n")
+    alias = tmp_path / "alias"
+    alias.symlink_to(shim_dir, target_is_directory=True)
+    path_value = f"{alias}/{os.pathsep}{real.parent}"
+    found = f"{alias}/pnpm"
+
+    assert look_through_shim(found, "pnpm", shim_dir=shim_dir, path_value=path_value) == str(real)
+
+
+def test_real_binary_drops_every_spelling_of_the_managed_dir(tmp_path: Path):
+    shim_dir = tmp_path / "bin"
+    _executable(shim_dir / "pnpm", f"#!/bin/sh\n{REDIRECT_SENTINEL}\n")
+    real = _executable(tmp_path / "real" / "pnpm", "#!/bin/sh\n")
+    alias = tmp_path / "alias"
+    alias.symlink_to(shim_dir, target_is_directory=True)
+    path_value = f"{alias}/{os.pathsep}{shim_dir}{os.pathsep}{real.parent}"
+
+    assert real_binary("pnpm", shim_dir=shim_dir, path_value=path_value) == str(real)
+
+
 def test_look_through_shim_keeps_a_non_shim_hit(tmp_path: Path):
     shim_dir = tmp_path / "bin"
     corepack = _executable(shim_dir / "pnpm", "#!/bin/sh\n")
