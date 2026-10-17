@@ -283,3 +283,49 @@ def test_closure_raises_on_a_cycle() -> None:
     b = _tool("b", "a")
     with pytest.raises(DependencyCycleError):
         _resolve([a], [a, b])
+
+
+def test_requested_by_names_the_first_selected_requester() -> None:
+    dep = _tool("dep")
+    x = _tool("x", "dep")
+    y = _tool("y", "dep")
+    result = _resolve([x, y], [x, y, dep])
+    assert dict(result.requested_by) == {"dep": "x"}
+    assert result.dragged_in == ("dep",)
+
+
+def test_requested_by_follows_a_chain_to_the_selected_root() -> None:
+    c = _tool("c")
+    b = _tool("b", "c")
+    a = _tool("a", "b")
+    result = _resolve([a], [a, b, c])
+    assert dict(result.requested_by) == {"b": "a", "c": "a"}
+
+
+def test_requested_by_never_lists_a_selected_tool() -> None:
+    b = _tool("b")
+    a = _tool("a", "b")
+    result = _resolve([a, b], [a, b])
+    assert dict(result.requested_by) == {}
+
+
+def test_blocked_carries_needs_and_the_warning_text() -> None:
+    z = _tool("z")
+    c = _tool("c", "z")
+    result = _resolve([c], [c, z], available_ids=["c"])
+    assert [(b.tool_id, b.needs, b.reason) for b in result.blocked] == [
+        ("c", "z", "c skipped — a dependency is unavailable"),
+        ("z", None, "z is not available on this platform — skipped"),
+    ]
+    assert result.warnings == (
+        "c skipped — a dependency is unavailable",
+        "z is not available on this platform — skipped",
+    )
+
+
+def test_blocked_needs_is_the_first_blocking_dependency() -> None:
+    y = _tool("y")
+    z = _tool("z")
+    c = _tool("c", "y", "z")
+    result = _resolve([c], [c, y, z], available_ids=["c", "y"])
+    assert [(b.tool_id, b.needs) for b in result.blocked] == [("c", "z"), ("z", None)]

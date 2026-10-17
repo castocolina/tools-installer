@@ -11,13 +11,23 @@ and terminal-free.
 
 from collections import deque
 from collections.abc import Callable, Container, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from installer.model import Tool
 
 
 class DependencyCycleError(ValueError):
     """A `requires` cycle was found — a registry/config error, never a hang."""
+
+
+@dataclass(frozen=True)
+class Blocked:
+    """A tool dropped from the plan. `needs` is None when the tool itself is
+    unavailable and not installed, else the first blocking dependency id."""
+
+    tool_id: str
+    needs: str | None
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -31,6 +41,8 @@ class Resolution:
     dragged_in: tuple[str, ...]
     warnings: tuple[str, ...]
     closure: tuple[Tool, ...] = ()
+    blocked: tuple[Blocked, ...] = ()
+    requested_by: Mapping[str, str] = field(default_factory=dict[str, str])
 
 
 def resolve_dependencies(
@@ -59,8 +71,9 @@ def resolve_dependencies(
     wanted: list[Tool] = []
     seen: set[str] = set()
     warnings: list[str] = []
+    requested_by: dict[str, str] = {}
 
-    def collect(tool: Tool) -> None:
+    def collect(tool: Tool, root: Tool) -> None:
         if tool.id in seen:
             return
         seen.add(tool.id)
@@ -70,16 +83,19 @@ def resolve_dependencies(
             if dep is None:
                 warnings.append(f"{tool.id} requires unknown tool '{dep_id}' — ignored")
                 continue
-            collect(dep)
+            if dep.id not in selected_ids:
+                requested_by.setdefault(dep.id, root.id)
+            collect(dep, root)
 
     for tool in selected:
-        collect(tool)
+        collect(tool, tool)
 
     # 2. Identify blocked tools: a dep that is unavailable here AND not installed
     #    cannot be provided; it and every (transitive) dependent are skipped.
     #    We use an explicit visited set to avoid infinite recursion on cycles
     #    (cycles are reported in Step 3, not here).
     blocked: set[str] = set()
+    blocked_needs: dict[str, str | None] = {}
     visiting_block: set[str] = set()
 
     def is_blocked(tool: Tool) -> bool:
@@ -94,21 +110,31 @@ def resolve_dependencies(
             return False
         visiting_block.add(tool.id)
         unsatisfiable = not available(tool)
-        dep_blocked = any(
-            (dep := by_id.get(dep_id)) is not None and is_blocked(dep) for dep_id in tool.requires
+        needs = next(
+            (
+                dep_id
+                for dep_id in tool.requires
+                if (dep := by_id.get(dep_id)) is not None and is_blocked(dep)
+            ),
+            None,
         )
         visiting_block.discard(tool.id)
-        if unsatisfiable or dep_blocked:
+        if unsatisfiable or needs is not None:
             blocked.add(tool.id)
+            blocked_needs[tool.id] = None if unsatisfiable else needs
             return True
         return False
 
+    blocked_rows: list[Blocked] = []
     for tool in wanted:
+        # Runs once per `wanted` entry, so each blocked tool yields exactly one row.
         if is_blocked(tool):
             if not available(tool) and not is_installed(tool):
-                warnings.append(f"{tool.id} is not available on this platform — skipped")
+                text = f"{tool.id} is not available on this platform — skipped"
             else:
-                warnings.append(f"{tool.id} skipped — a dependency is unavailable")
+                text = f"{tool.id} skipped — a dependency is unavailable"
+            warnings.append(text)
+            blocked_rows.append(Blocked(tool.id, blocked_needs.get(tool.id), text))
 
     # Tools that need no installation action: already installed AND not blocked.
     # These satisfy dependency edges but are excluded from the output order.
@@ -150,6 +176,8 @@ def resolve_dependencies(
         dragged_in=dragged_in,
         warnings=tuple(warnings),
         closure=tuple(closure),
+        blocked=tuple(blocked_rows),
+        requested_by=requested_by,
     )
 
 
