@@ -1254,8 +1254,21 @@ def test_the_service_publishes_one_snapshot_of_tool_states(tmp_path: Path) -> No
         assert state is not None
         assert state.seq >= 1
     others = [m for m in keyed if m is not snapshots[0]]
-    assert len(others) == 1
-    assert all(isinstance(v, SkillHostStatus) for v in others[0].values())
+    # 19-37 (RR-03): the per-pack scan of the pass that published it is the
+    # third tool-keyed store, beside the state snapshot and the skill answers.
+    assert len(others) == 2
+    status_maps = [m for m in others if all(isinstance(v, SkillHostStatus) for v in m.values())]
+
+    def scan_entry(value: object) -> bool:
+        if not isinstance(value, tuple):
+            return False
+        entry = cast("tuple[object, ...]", value)
+        return len(entry) == 2 and isinstance(entry[0], int)
+
+    scan_maps = [
+        m for m in others if m not in status_maps and all(scan_entry(v) for v in m.values())
+    ]
+    assert others == status_maps + scan_maps
     for mapping in maps:
         for value in mapping.values():
             parts = cast("tuple[object, ...]", value) if isinstance(value, tuple) else (value,)
@@ -4761,6 +4774,26 @@ def test_claude_duplicates_on_a_present_pack_are_misconfigured(tmp_path: Path) -
     # Claude's D-18 fix already reinstates it there: no second, partial install step.
     assert state.unconfigured == expected.steps
     assert state.unconfigured[0].kind == "plugin_enable"
+
+
+def test_partial_pack_pass_keeps_every_packs_scan(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    superpowers = _superpowers()
+    ponytail = _skill_pack(
+        "ponytail", (SkillStatusProbe("claude", "plugin-cli", "ponytail@claude-plugins-official"),)
+    )
+    service = _pack_service(
+        home, _probe_for(_listing((_SP_ID, "user", True, "6.4.1"))), harnesses=frozenset({"claude"})
+    )
+    service.refresh([superpowers, ponytail])
+    service.refresh([ponytail])  # a later partial pass
+    service.refresh_skills([superpowers, ponytail])
+    sp_state = service.state_of("superpowers")
+    assert sp_state is not None
+    assert sp_state.health is Health.OK
+    pt_state = service.state_of("ponytail")
+    assert pt_state is not None
+    assert pt_state.health is Health.MISSING
 
 
 def test_present_harnesses_runs_once_per_pass(tmp_path: Path) -> None:

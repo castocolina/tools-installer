@@ -926,9 +926,9 @@ class VersionRefreshService:
         # its pass's epoch (`generation`) and sequence number (`seq`).
         self._states: dict[str, ToolState] = {}
         self._skills: dict[str, SkillHostStatus] = {}
-        # Seq and scan of the latest pass that published pack states.
-        # `refresh_skills` rebuilds only those, with that scan.
-        self._pack_scan: tuple[int, _PackScan] | None = None
+        # Per pack: seq and scan of the pass that published its state;
+        # `refresh_skills` rebuilds each pack with its own (RR-03).
+        self._pack_scans: dict[str, tuple[int, _PackScan]] = {}
         self._skills_probed = False
         self._skills_pass_lock = threading.Lock()
         self._epoch = 0
@@ -1039,7 +1039,6 @@ class VersionRefreshService:
                     self._warning = f"version cache not saved: {exc}"
                 self._skills = merged
                 self._skills_probed = True
-                published = self._pack_scan
                 rebuilt = {
                     tool.id: self._skill_state(
                         tool,
@@ -1049,13 +1048,13 @@ class VersionRefreshService:
                         ownership=state.ownership,
                         version=state.version,
                         removable=state.removable,
-                        scan=published[1],
+                        scan=entry[1],
                     )
                     for tool in packs
                     if (state := self._states.get(tool.id)) is not None
                     and state.generation == started_epoch
-                    and published is not None
-                    and state.seq == published[0]
+                    and (entry := self._pack_scans.get(tool.id)) is not None
+                    and state.seq == entry[0]
                 }
                 if rebuilt:
                     self._states = {**self._states, **rebuilt}
@@ -1664,8 +1663,10 @@ class VersionRefreshService:
             # The ONE publication point, tagged with `started_epoch`, which
             # equals `self._epoch` here.
             self._states = {**self._states, **fresh}
-            if any(tool.id in fresh for tool, *_rest in packs):
-                self._pack_scan = (seq, scan)
+            self._pack_scans = {
+                **self._pack_scans,
+                **{tool.id: (seq, scan) for tool, *_rest in packs if tool.id in fresh},
+            }
             # Best effort, after the swap and still under the lock (it
             # serializes with `invalidate`'s save): a failed write leaves the
             # published states in place and surfaces as `warning`.
