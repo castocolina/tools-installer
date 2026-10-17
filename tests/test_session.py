@@ -458,7 +458,7 @@ def test_a_raising_on_row_started_callback_crashes_that_row_only():
     ],
 )
 def test_every_install_status_maps_to_one_result(status: str, expected: str, detail: str):
-    assert set(getattr(session_module, "_" + "INSTALL_RESULT")) == set(InstallStatus)
+    assert set(getattr(session_module, "_INSTALL" + "_RESULT")) == set(InstallStatus)
     tool = _tool("rg")
     recorder = RunRecorder({"rg": InstallOutcome("rg", InstallStatus(status))})
     outcome = execute_plan(
@@ -470,7 +470,7 @@ def test_every_install_status_maps_to_one_result(status: str, expected: str, det
 
 
 def test_result_words_cover_every_non_done_result_the_engine_can_produce():
-    assert set(getattr(session_module, "_" + "INSTALL_RESULT")) == set(InstallStatus)
+    assert set(getattr(session_module, "_INSTALL" + "_RESULT")) == set(InstallStatus)
     assert set(RESULT_WORDS) == {
         "failed",
         "mismatch",
