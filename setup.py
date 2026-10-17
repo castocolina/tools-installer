@@ -761,6 +761,69 @@ def _sync_terminals_and_report(console: Console, platform: Platform) -> None:
         console.print(warning)
 
 
+def _build_services(
+    tools: list[Tool], platform: Platform
+) -> tuple[VersionRefreshService, UpdateService, pnpm_globals.NodeInstallPolicy]:
+    """The one refresh service, the one update service and the one node-globals
+    policy that every route shares (Phase 20 D-12, RESEARCH Pitfall 7): the TUI
+    composition root and the headless `--all --yes` route both build their
+    services here, so neither can act on a second epoch or a second policy.
+    The policy is returned rather than recomputed so `_build_app`'s preview
+    closures and the replay closure below hold the same object."""
+    version_refresh = VersionRefreshService(
+        platform=platform,
+        cache_path=default_cache_path(),
+        resolve_tag=resolve_github_tag,
+        probe_output=probe_version_output,
+        managed_bin_dir=_DEFAULT_BIN_DIR,
+        native_probe=run_probe,
+        skill_probe=lambda argv: run_query(argv),
+        # D-16, T-19-47: the pass only reads drift; it never writes a terminal config.
+        terminal_drift=lambda live: sync_terminal_shells(
+            home=Path.home(),
+            environ=os.environ,
+            platform=live,
+            lookup=_which_with_brew,
+            write=False,
+        ),
+    )
+    version_refresh.seed_skills_from_cache()
+
+    # Preview and reinstall must receive the SAME policy object: the module's
+    # preview-equals-effect guarantee rests on both paths reaching one argv
+    # builder with one set of inputs. Returned to `_build_app` for the preview.
+    policy = pnpm_globals.node_install_policy(tools)
+
+    def _reinstall_globals(packages: Sequence[str]) -> tuple[str, ...]:
+        # The set to replay is the one the user saw and consented to, passed in
+        # by the screen — not one re-derived here behind their back.
+        return pnpm_globals.reinstall_node_globals(packages, policy=policy)
+
+    def _terminal_follow_up() -> str | None:
+        # D-01/15.6-05: the SAME terminal synchronizer every lifecycle route
+        # reuses (`_sync_terminals`), bound to this composition's platform.
+        return _sync_terminals(platform)
+
+    updates = UpdateService(
+        platform=platform,
+        # D-14, checker W2: the platform the last pass saw, read at update time.
+        live_platform=lambda: version_refresh.platform,
+        runner=run_captured,
+        resolve_tag=resolve_github_tag,
+        tools={tool.id: tool for tool in tools},
+        managed_packages=pnpm_globals.pnpm_global_packages,
+        replay_globals=_reinstall_globals,
+        # The pass's own evidence, freshly gathered (live platform, a fresh
+        # inventory, `uv tool dir`, shim look-through, native probe).
+        reresolve_ownership=version_refresh.resolve_owner,
+        invalidate=version_refresh.invalidate,
+        # D-01/15.6-05: a direct `u` update and a committed OMZ plugin edit both
+        # end in the one shared synchronizer, never two.
+        terminal_follow_up=_terminal_follow_up,
+    )
+    return version_refresh, updates, policy
+
+
 def _build_app(
     tools: list[Tool],
     platform: Platform,
@@ -894,24 +957,7 @@ def _build_app(
     # it must exist before that construction. A pure construction with no
     # dependency on anything declared between here and its old position
     # below -- this is a reordering and nothing else.
-    version_refresh = VersionRefreshService(
-        platform=platform,
-        cache_path=default_cache_path(),
-        resolve_tag=resolve_github_tag,
-        probe_output=probe_version_output,
-        managed_bin_dir=_DEFAULT_BIN_DIR,
-        native_probe=run_probe,
-        skill_probe=lambda argv: run_query(argv),
-        # D-16, T-19-47: the pass only reads drift; it never writes a terminal config.
-        terminal_drift=lambda live: sync_terminal_shells(
-            home=Path.home(),
-            environ=os.environ,
-            platform=live,
-            lookup=_which_with_brew,
-            write=False,
-        ),
-    )
-    version_refresh.seed_skills_from_cache()
+    version_refresh, updates, policy = _build_services(tools, platform)
 
     def _do_uninstall(decision: UninstallDecision) -> SweepResult:
         # Runs live inside the UninstallScreen. rc_paths is the standard set so the
@@ -1059,8 +1105,8 @@ def _build_app(
     # reinstall worker and read by the event loop was a race waiting to be lost.
     # Preview and reinstall must receive the SAME policy object: the module's
     # preview-equals-effect guarantee rests on both paths reaching one argv
-    # builder with one set of inputs.
-    policy = pnpm_globals.node_install_policy(tools)
+    # builder with one set of inputs. The policy is the one `_build_services`
+    # returned, so this preview and the replay closure there share one object.
 
     def _node_globals_report() -> pnpm_globals.NodeGlobalsReport:
         return pnpm_globals.audit_node_globals(tools, policy=policy)
@@ -1117,25 +1163,6 @@ def _build_app(
                     daemon_default_warnings.finish()
 
         daemon_default_policy_id = daemon.id
-
-    updates = UpdateService(
-        platform=platform,
-        # D-14, checker W2: the platform the last pass saw, read at update time.
-        live_platform=lambda: version_refresh.platform,
-        runner=run_captured,
-        resolve_tag=resolve_github_tag,
-        tools={tool.id: tool for tool in tools},
-        managed_packages=pnpm_globals.pnpm_global_packages,
-        replay_globals=_reinstall_globals,
-        # The pass's own evidence, freshly gathered (live platform, a fresh
-        # inventory, `uv tool dir`, shim look-through, native probe).
-        reresolve_ownership=version_refresh.resolve_owner,
-        invalidate=version_refresh.invalidate,
-        # D-01/15.6-05: the SAME terminal closure `omz_plugins_policy` above
-        # is wired with -- a direct `u` update and a committed OMZ plugin
-        # edit both end in one shared synchronizer, never two.
-        terminal_follow_up=_sync_omz_terminals,
-    )
 
     # D-12: _build_app builds ExecuteInputs itself, so no route (current or
     # future) can build an app that cannot execute an accepted selection.

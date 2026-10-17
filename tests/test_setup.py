@@ -1517,7 +1517,21 @@ def test_build_app_shares_one_update_service_and_invalidate(
     assert updates._invalidate == refresh.invalidate  # pyright: ignore[reportPrivateUsage]
     doctor = app._views["doctor"]  # pyright: ignore[reportPrivateUsage]
     assert isinstance(doctor, DoctorScreen)
-    assert updates._replay_globals is doctor._reinstall_globals  # pyright: ignore[reportPrivateUsage]
+    # Phase 20 (review L79): the Doctor replay and the update replay are two
+    # closures over ONE policy object, so they must reach the reinstall with the
+    # same policy, not merely two equal-looking closures.
+    replayed: list[NodeInstallPolicy] = []
+
+    def fake_reinstall(packages: Sequence[str], *, policy: NodeInstallPolicy) -> tuple[str, ...]:
+        replayed.append(policy)
+        return tuple(packages)
+
+    monkeypatch.setattr(pnpm_globals, "reinstall_node_globals", fake_reinstall)
+    assert updates._replay_globals is not None  # pyright: ignore[reportPrivateUsage]
+    updates._replay_globals(())  # pyright: ignore[reportPrivateUsage]
+    doctor._reinstall_globals(())  # pyright: ignore[reportPrivateUsage]
+    assert len(replayed) == 2
+    assert replayed[0] is replayed[1]
 
 
 def test_build_app_wires_the_shared_terminal_closure_into_update_service(
@@ -1551,6 +1565,83 @@ def test_build_app_wires_the_shared_terminal_closure_into_update_service(
         "platform": platform,
         "lookup": setup._which_with_brew,  # pyright: ignore[reportPrivateUsage]
     }
+
+
+def test_build_app_takes_its_services_from_build_services(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Phase 20 D-12 / Pitfall 7: the TUI composition root takes its refresh and
+    update services from the one `_build_services` composition, so the headless
+    route can reuse the same construction."""
+    _sandbox(monkeypatch, tmp_path)
+    platform = _platform()
+    tools: list[Tool] = []
+    recorded: list[
+        tuple[
+            list[Tool],
+            Platform,
+            tuple[VersionRefreshService, UpdateService, NodeInstallPolicy],
+        ]
+    ] = []
+    real_build_services = setup._build_services  # pyright: ignore[reportPrivateUsage]
+
+    def recording_build_services(
+        seen_tools: list[Tool], seen_platform: Platform
+    ) -> tuple[VersionRefreshService, UpdateService, NodeInstallPolicy]:
+        services = real_build_services(seen_tools, seen_platform)
+        recorded.append((seen_tools, seen_platform, services))
+        return services
+
+    monkeypatch.setattr(setup, "_build_services", recording_build_services)
+    app = setup._build_app(tools, platform)  # pyright: ignore[reportPrivateUsage]
+    assert len(recorded) == 1
+    seen_tools, seen_platform, services = recorded[0]
+    refresh, updates, _policy = services
+    assert seen_tools is tools
+    assert seen_platform is platform
+    assert app.catalog._version_refresh is refresh  # pyright: ignore[reportPrivateUsage]
+    assert app._execute is not None  # pyright: ignore[reportPrivateUsage]
+    assert app._execute.updates is updates  # pyright: ignore[reportPrivateUsage]
+
+
+def test_build_services_binds_the_update_service_to_the_refresh_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    platform = _platform()
+    tools: list[Tool] = []
+    refresh, updates, policy = setup._build_services(  # pyright: ignore[reportPrivateUsage]
+        tools, platform
+    )
+    assert isinstance(refresh, VersionRefreshService)
+    assert isinstance(policy, NodeInstallPolicy)
+    assert updates.platform is platform
+    assert updates._invalidate == refresh.invalidate  # pyright: ignore[reportPrivateUsage]
+    assert updates._reresolve_ownership == refresh.resolve_owner  # pyright: ignore[reportPrivateUsage]
+
+    terminal_calls: list[Platform] = []
+
+    def fake_sync_terminals(seen: Platform) -> str | None:
+        terminal_calls.append(seen)
+        return None
+
+    monkeypatch.setattr(setup, "_sync_terminals", fake_sync_terminals)
+    follow_up = updates._terminal_follow_up  # pyright: ignore[reportPrivateUsage]
+    assert follow_up is not None
+    assert follow_up() is None
+    assert terminal_calls == [platform]
+
+    replayed: list[NodeInstallPolicy] = []
+
+    def fake_reinstall(packages: Sequence[str], *, policy: NodeInstallPolicy) -> tuple[str, ...]:
+        replayed.append(policy)
+        return tuple(packages)
+
+    monkeypatch.setattr(pnpm_globals, "reinstall_node_globals", fake_reinstall)
+    assert updates._replay_globals is not None  # pyright: ignore[reportPrivateUsage]
+    updates._replay_globals(())  # pyright: ignore[reportPrivateUsage]
+    assert replayed == [policy]
+    assert replayed[0] is policy
 
 
 # -- D-01/15.6-06 Task 2: unattended installation and the command-line
