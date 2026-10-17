@@ -144,7 +144,7 @@ Plans (numbered in creation order; W = execution wave):
   4. graphify (uv) resolves owner uv, and Volta, redirect shims, the implicit `~/.local/bin`, `host_setup` tools and native packages resolve their real owner with the native probe run once per pass; installing brew in-session makes colima installable without restarting the app.
   5. Skill packs show partial or duplicate installs per harness.
 
-**Plans:** 45 plans
+**Plans:** 46 plans
 
 Plans (W = execution wave):
 - [ ] 19-01-PLAN.md — receipts module and Wave-0 test sandbox for the receipts dir (W1)
@@ -192,6 +192,7 @@ Plans (W = execution wave):
 - [ ] 19-43-PLAN.md — gap round 3: a key file is hashed once per session; one `broken_drift` rule for health and the update gate (W16)
 - [ ] 19-44-PLAN.md — gap round 3: an interrupted dir removal puts the tree back; a leftover quarantine is listed, never deleted; one dir hash fewer (W16)
 - [ ] 19-45-PLAN.md — gap round 3: reader and record cleanups, reason-less broken `u` parity, cap-derived terminal message (W17)
+- [ ] 19-46-PLAN.md — gap round 4: the e2e tester shell gets the selected brew, a looping PATH entry never aborts the look-through or the sandbox, a receiptless dir is re-hashed at deletion time (W18)
 
 **UI hint**: yes
 
