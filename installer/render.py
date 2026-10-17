@@ -1,8 +1,10 @@
 """Render the pre-flight audit and the post-install summary to a Console."""
 
+import textwrap
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from rich.cells import cell_len
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
@@ -26,9 +28,10 @@ from installer.guidance import (
 from installer.links import TROUBLESHOOTING_URL
 from installer.pnpm_globals import NodeGlobalsReport
 from installer.sanitize import sanitize_log_line
-from installer.session import Summary
+from installer.session import WORDS, Disposition, PlanRow, Summary, review_counts
 from installer.systemd_daemon import CompetingUnit
 from installer.ui_common import SEVERITY_STYLE
+from installer.version_status import HEALTH_MARKS, Health
 
 
 def render_dependency_notice(
@@ -85,6 +88,117 @@ def render_summary(summary: Summary, console: Console) -> None:
     ):
         if ids:
             console.print(f"  {label}: {', '.join(ids)}")
+
+
+def id_width(rows: Sequence[PlanRow]) -> int:
+    """Cell width reserved for the longest id, capped to the plan's id budget."""
+    widths = (cell_len(row.tool_id) + (2 if row.requested_by else 0) for row in rows)
+    return min(26, max(widths, default=0))
+
+
+def display_order(rows: Sequence[PlanRow]) -> list[PlanRow]:
+    """Place each dragged row beneath its first requester, preserving plan order."""
+    result: list[PlanRow] = []
+    emitted: set[int] = set()
+    for row in rows:
+        if row.requested_by is not None or id(row) in emitted:
+            continue
+        result.append(row)
+        emitted.add(id(row))
+        for dependency in rows:
+            if dependency.requested_by == row.tool_id and id(dependency) not in emitted:
+                result.append(dependency)
+                emitted.add(id(dependency))
+    result.extend(row for row in rows if row.requested_by is not None and id(row) not in emitted)
+    return result
+
+
+def fold_reason(prefix: Text, body: str, column: int, width: int) -> Text:
+    """Append folded body lines with a hanging indent at ``column``."""
+    first_line = prefix.plain.rsplit("\n", 1)[-1]
+    first_room = max(1, width - cell_len(first_line))
+    continuation_room = max(1, width - column)
+    chunks = textwrap.wrap(
+        body,
+        width=first_room,
+        break_long_words=True,
+        break_on_hyphens=False,
+    )
+    if chunks and len(chunks[0]) > first_room:
+        chunks[0] = chunks[0][:first_room]
+    if len(chunks) > 1:
+        remainder = " ".join(chunks[1:])
+        chunks = [
+            chunks[0],
+            *textwrap.wrap(
+                remainder,
+                width=continuation_room,
+                break_long_words=True,
+                break_on_hyphens=False,
+            ),
+        ]
+    if not chunks:
+        return prefix
+    prefix.append(chunks[0])
+    for chunk in chunks[1:]:
+        prefix.append("\n" + " " * column + chunk)
+    return prefix
+
+
+def plan_row_text(row: PlanRow, idw: int, width: int, *, hint: bool) -> Text:
+    """Build one sanitized, styled plan row without invoking Rich markup."""
+    health = row.health or Health.CHECKING
+    glyph, glyph_style = HEALTH_MARKS[health]
+    glyph_width = cell_len(glyph)
+    dragged = row.requested_by is not None
+    indent = 2 if dragged else 0
+    text = Text()
+    text.append(glyph, style=glyph_style)
+    text.append(" ")
+    if dragged:
+        text.append("  ")
+    text.append(row.tool_id.ljust(max(0, idw - indent)), style="bold")
+    text.append("  ")
+    words = WORDS[row.disposition]
+    text.append(words.review, style=words.style)
+    column = glyph_width + 1 + idw + 2
+    reason = sanitize_log_line(row.reason) if row.disposition is not Disposition.WAIT else ""
+    if hint and row.can_reinstall:
+        reason += " (r: reinstall)"
+    if reason:
+        fold_reason(text, " — " + reason, column, width)
+    if row.disposition is Disposition.RECONFIGURE and row.steps:
+        step_text = "; ".join(sanitize_log_line(step.text) for step in row.steps)
+        text.append("\n" + " " * column)
+        fold_reason(text, "to configure: " + step_text, column, width)
+    return text
+
+
+def plan_head(rows: Sequence[PlanRow]) -> str:
+    """Return the plan title, review counts and conditional dependency note."""
+    counts = review_counts(rows)
+    suffix = (
+        ". Indented rows are needed by the tool above and run first."
+        if any(row.requested_by is not None for row in rows)
+        else ""
+    )
+    return f"Install plan — {counts}{suffix}"
+
+
+def render_plan(
+    rows: Sequence[PlanRow], console: Console, *, width: int | None = None, hint: bool = False
+) -> None:
+    """Print the review head and folded plan rows in display order."""
+    budget = min(console.width, 100) if width is None else width
+    console.print(plan_head(rows), style="bold", markup=False, highlight=False, soft_wrap=True)
+    idw = id_width(rows)
+    for row in display_order(rows):
+        console.print(
+            plan_row_text(row, idw, budget, hint=hint),
+            markup=False,
+            highlight=False,
+            soft_wrap=True,
+        )
 
 
 def render_failure_details(outcomes: list[InstallOutcome], console: Console) -> None:

@@ -185,6 +185,18 @@ class Health(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+# One glyph and style per Health state (D-15), shared by renderers and views.
+HEALTH_MARKS: dict[Health, tuple[str, str]] = {
+    Health.CHECKING: ("…", "dim"),
+    Health.BROKEN: ("!", "red"),
+    Health.MISCONFIGURED: ("≈", "yellow"),
+    Health.OUTDATED: ("↑", "yellow"),
+    Health.OK: ("✓", "green"),
+    Health.MISSING: ("○", ""),
+    Health.UNAVAILABLE: ("–", "dim"),
+}
+
+
 @dataclass(frozen=True)
 class Evidence:
     """Per-tool facts collected by the refresh pass, never stored (D-01).

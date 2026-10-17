@@ -36,6 +36,7 @@ from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import VIEW_BY_NAME, VIEW_ORDER, AppScreen, StatusLine, mark, run_live
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import (
+    HEALTH_MARKS,
     Health,
     SkillHostStatus,
     ToolState,
@@ -107,7 +108,7 @@ def group_tools(
         healths = {t.id: _health(health_of, t) for t in ordered}
         groups = [
             (
-                f"{_HEALTH_CELL[health][0]} {_HEALTH_WORD[health]}",
+                f"{HEALTH_MARKS[health][0]} {_HEALTH_WORD[health]}",
                 _HEALTH_DETAIL[health],
                 [t for t in ordered if healths[t.id] is health],
             )
@@ -127,7 +128,7 @@ def group_tools(
 def health_cell(state: ToolState | None) -> Text:
     """The one writer of the Health column (D-15): `…` until a state exists,
     so a pending tool never reads `✓`."""
-    glyph, style = _HEALTH_CELL[Health.CHECKING if state is None else state.health]
+    glyph, style = HEALTH_MARKS[Health.CHECKING if state is None else state.health]
     return Text(glyph, style=style)
 
 
@@ -244,17 +245,6 @@ _COLUMNS = (
 
 # The Ver cell's suffix for a comparison against a stale cached latest.
 _VER_STALE = "~"
-# The Health column's glyph and style per state (19-UI-SPEC): every state has
-# its own glyph, so the meaning never depends on color.
-_HEALTH_CELL: dict[Health, tuple[str, str]] = {
-    Health.CHECKING: ("…", "dim"),
-    Health.BROKEN: ("!", "red"),
-    Health.MISCONFIGURED: ("≈", "yellow"),
-    Health.OUTDATED: ("↑", "yellow"),
-    Health.OK: ("✓", "green"),
-    Health.MISSING: ("○", ""),
-    Health.UNAVAILABLE: ("–", "dim"),
-}
 # Two registers (19-UI-SPEC A11): the terse legend word and the prose detail label.
 _HEALTH_WORD = {
     Health.CHECKING: "checking",
@@ -636,7 +626,7 @@ class CatalogScreen(AppScreen):
         one is escaped (T-19-45)."""
         state = self._state(tool)
         health = Health.CHECKING if state is None else state.health
-        glyph, style = _HEALTH_CELL[health]
+        glyph, style = HEALTH_MARKS[health]
         block = f"[{style}]{glyph}[/] " if style else f"{glyph} "
         block += _HEALTH_DETAIL[health]
         reasons = list(state.reasons) if state is not None else []

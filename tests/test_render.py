@@ -3,6 +3,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from rich.cells import cell_len
 from rich.console import Console
 
 import installer.executors as executors
@@ -29,7 +30,8 @@ from installer.render import (
     render_verification,
 )
 from installer.run import CommandError
-from installer.session import Summary
+from installer.session import WORDS, Disposition, PlanRow, Summary
+from installer.version_status import Health
 
 
 def _tool(tool_id: str, category: str = "search") -> Tool:
@@ -739,3 +741,212 @@ def test_render_remove_yourself_lists_paths_without_escalation() -> None:
     empty, empty_buf = _console()
     render_remove_yourself([], empty)
     assert empty_buf.getvalue() == ""
+
+
+@pytest.mark.parametrize("hint", [True, False])
+def test_render_plan_row_anatomy_fits_78_cells_with_a_24_char_id(hint: bool) -> None:
+    from installer.render import render_plan
+
+    row = PlanRow(
+        "abcdefghijklmnopqrstuvwx",
+        Disposition.SKIP,
+        "already current",
+        health=Health.OK,
+        can_reinstall=True,
+    )
+    console, buf = _console()
+    console.width = 80
+    render_plan([row], console, hint=hint)
+    line = next(line for line in buf.getvalue().splitlines() if row.tool_id in line)
+    expected = "✓ abcdefghijklmnopqrstuvwx  skipped — already current"
+    if hint:
+        expected += " (r: reinstall)"
+    assert line == expected
+    assert cell_len(line) <= 78
+
+
+@pytest.mark.parametrize("disposition", list(Disposition))
+@pytest.mark.parametrize("tier", ["system", "user", "ai"])
+def test_render_plan_words_and_marks_come_from_the_tables(
+    disposition: Disposition, tier: str
+) -> None:
+    from installer.render import render_plan
+    from installer.version_status import HEALTH_MARKS
+
+    del tier
+    health = {
+        Disposition.INSTALL: Health.MISSING,
+        Disposition.UPDATE: Health.OUTDATED,
+        Disposition.REPAIR: Health.BROKEN,
+        Disposition.RECONFIGURE: Health.MISCONFIGURED,
+        Disposition.REINSTALL: Health.OK,
+        Disposition.SKIP: Health.OK,
+        Disposition.BLOCKED: Health.UNAVAILABLE,
+        Disposition.WAIT: None,
+    }[disposition]
+    row = PlanRow("example", disposition, "why", health=health)
+    console, buf = _console()
+    render_plan([row], console)
+    line = next(line for line in buf.getvalue().splitlines() if "example" in line)
+    glyph = HEALTH_MARKS[health or Health.CHECKING][0]
+    assert line.startswith(glyph)
+    assert WORDS[disposition].review in line
+    if disposition is Disposition.WAIT:
+        assert " — " not in line
+    colored = io.StringIO()
+    color_console = Console(file=colored, width=80, force_terminal=True, color_system="standard")
+    render_plan([row], color_console)
+    word = WORDS[disposition].review
+    color_code = {"": None, "dim": 2, "green": 32, "yellow": 33, "red": 31}[
+        WORDS[disposition].style
+    ]
+    if color_code is None:
+        assert word in colored.getvalue()
+    else:
+        assert f"\x1b[{color_code}m{word}\x1b[0m" in colored.getvalue()
+
+
+def test_health_marks_is_the_catalog_glyph_table() -> None:
+    from installer.catalog_tui import health_cell
+    from installer.version_status import HEALTH_MARKS
+
+    assert health_cell(None).plain == HEALTH_MARKS[Health.CHECKING][0]
+
+
+def test_render_plan_groups_dragged_rows_under_their_first_requester() -> None:
+    from installer.render import render_plan
+
+    rows = [
+        PlanRow("node", Disposition.SKIP, "already present", requested_by="mmdc", health=Health.OK),
+        PlanRow("mmdc", Disposition.INSTALL, "not installed", health=Health.MISSING),
+        PlanRow("jq", Disposition.UPDATE, "new version", health=Health.OUTDATED),
+    ]
+    console, buf = _console()
+    render_plan(rows, console)
+    lines = [line for line in buf.getvalue().splitlines() if line.startswith(("○", "✓", "↑"))]
+    assert [line.split()[1] for line in lines] == ["mmdc", "node", "jq"]
+    assert lines[0].startswith("○")
+    assert lines[1].startswith("✓   node")
+
+
+def test_render_plan_head_counts_review_words_and_notes_the_order_only_with_dragged_rows() -> None:
+    from installer.render import plan_head
+
+    rows = [
+        PlanRow("node", Disposition.SKIP, "present", requested_by="mmdc"),
+        PlanRow("mmdc", Disposition.INSTALL, "missing"),
+        PlanRow("jq", Disposition.UPDATE, "old"),
+    ]
+    assert plan_head(rows) == (
+        "Install plan — 1 will install, 1 will update, 1 skipped. "
+        "Indented rows are needed by the tool above and run first."
+    )
+    assert plan_head(rows[1:]) == "Install plan — 1 will install, 1 will update"
+    assert plan_head([]) == "Install plan — nothing selected"
+
+
+def test_render_plan_lists_a_chain_once_at_one_indent_level() -> None:
+    from installer.render import render_plan
+
+    rows = [
+        PlanRow("c", Disposition.SKIP, "present", requested_by="a"),
+        PlanRow("a", Disposition.INSTALL, "missing"),
+        PlanRow("b", Disposition.SKIP, "present", requested_by="a"),
+    ]
+    console, buf = _console()
+    render_plan(rows, console)
+    lines = [line for line in buf.getvalue().splitlines() if line.startswith(("…", "○", "✓"))]
+    assert sum(line.split()[1] == "c" for line in lines) == 1
+    assert sum(line.split()[1] == "b" for line in lines) == 1
+    assert [line.split()[1] for line in lines] == ["a", "c", "b"]
+    assert all(line.startswith(("…   ", "○   ", "✓   ")) for line in lines[1:])
+
+
+def test_render_plan_keeps_a_dragged_row_under_a_blocked_requester() -> None:
+    from installer.render import render_plan
+
+    rows = [
+        PlanRow("a", Disposition.BLOCKED, "needs z", health=Health.BROKEN),
+        PlanRow("z", Disposition.BLOCKED, "blocked", requested_by="a", health=Health.UNAVAILABLE),
+    ]
+    console, buf = _console()
+    render_plan(rows, console)
+    lines = [line for line in buf.getvalue().splitlines() if line.startswith(("!", "–"))]
+    assert len(lines) == 2
+    assert lines[0].startswith("! a")
+    assert lines[1].startswith("–   z")
+
+
+def test_render_plan_reconfigure_row_lists_its_steps_at_the_word_column() -> None:
+    from installer.model import ConfigStep
+    from installer.render import plan_row_text
+
+    row = PlanRow(
+        "pony",
+        Disposition.RECONFIGURE,
+        "configuration missing",
+        health=Health.MISCONFIGURED,
+        steps=(
+            ConfigStep("install ponytail for Codex", "plugin_enable"),
+            ConfigStep("sync terminals", "terminal_sync"),
+        ),
+    )
+    text = plan_row_text(row, 4, 78, hint=False).plain
+    continuation = next(line for line in text.splitlines() if "to configure:" in line)
+    assert continuation.lstrip() == "to configure: install ponytail for Codex; sync terminals"
+    assert len(continuation) - len(continuation.lstrip()) == 8
+
+
+def test_render_plan_folds_a_long_reason_with_a_hanging_indent() -> None:
+    from installer.render import render_plan
+
+    row = PlanRow("tool", Disposition.BLOCKED, "word " * 40, health=Health.BROKEN)
+    console, buf = _console()
+    render_plan([row], console, width=78)
+    lines = [
+        line
+        for line in buf.getvalue().splitlines()
+        if line.startswith("!") or line.startswith(" " * 8)
+    ]
+    assert all(cell_len(line) <= 78 for line in lines)
+    assert all(line.startswith(" " * 8) for line in lines[1:])
+
+
+def test_render_plan_folds_a_400_char_reason_and_twelve_steps_within_width() -> None:
+    from installer.model import ConfigStep
+    from installer.render import render_plan
+
+    steps = tuple(
+        ConfigStep(f"perform step number {index}", "terminal_sync") for index in range(12)
+    )
+    row = PlanRow(
+        "tool", Disposition.RECONFIGURE, "word " * 80, health=Health.MISCONFIGURED, steps=steps
+    )
+    console, buf = _console()
+    render_plan([row], console, width=78)
+    assert all(cell_len(line) <= 78 for line in buf.getvalue().splitlines())
+
+
+def test_render_plan_renders_markup_and_escapes_in_a_reason_literally() -> None:
+    from installer.render import render_plan
+
+    row = PlanRow("safe", Disposition.INSTALL, "[red]x[/] \x1b[31mboom", health=Health.MISSING)
+    console, buf = _console()
+    render_plan([row], console)
+    output = buf.getvalue()
+    assert "[red]x[/]" in output
+    assert "\x1b" not in output
+
+
+def test_render_plan_sanitizes_step_text() -> None:
+    from installer.model import ConfigStep
+    from installer.render import render_plan
+
+    step = ConfigStep("sync \x1b[2J terminals", "terminal_sync")
+    row = PlanRow(
+        "pony", Disposition.RECONFIGURE, "needed", health=Health.MISCONFIGURED, steps=(step,)
+    )
+    console, buf = _console()
+    render_plan([row], console)
+    assert "\x1b" not in buf.getvalue()
+    assert "sync [2J terminals" in buf.getvalue()
