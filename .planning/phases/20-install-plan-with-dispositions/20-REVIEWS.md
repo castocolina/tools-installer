@@ -1,8 +1,8 @@
 ---
 phase: 20
 reviewers: [opencode-plan-review]
-reviewed_at: 2026-10-17T22:25:00Z
-cycle: 2
+reviewed_at: 2026-10-17T23:25:00Z
+cycle: 3
 plans_reviewed: [20-01-PLAN.md, 20-02-PLAN.md, 20-03-PLAN.md, 20-04-PLAN.md, 20-05-PLAN.md, 20-06-PLAN.md, 20-07-PLAN.md, 20-08-PLAN.md, 20-09-PLAN.md, 20-10-PLAN.md, 20-11-PLAN.md, 20-12-PLAN.md, 20-13-PLAN.md, 20-14-PLAN.md, 20-15-PLAN.md, 20-16-PLAN.md, 20-17-PLAN.md, 20-18-PLAN.md, 20-19-PLAN.md]
 models:
   opencode-plan-review: "router-env/my-plan-review"
@@ -16,7 +16,318 @@ model_sources:
 ## Plan-Revision Conflicts
 <!-- gsd:plan-revision-conflicts:end -->
 
-## Cycle 2 (current) — reviewed at HEAD 74a893b
+## Cycle 3 (current) - reviewed at HEAD 4d7decf
+
+Reviewer: opencode-plan-review (router-env/my-plan-review), single reviewer; consensus gate skipped, so its HIGH counts (and was independently source-confirmed, see coverage block).
+
+**Method.** Plans reviewed at HEAD `4d7decf` (current on-disk plan text; the source tree is unchanged since cycle 2 — `git diff --stat bb0b71f..HEAD` over `installer/ tests/ scripts/ .claude/ setup.py` is empty, so cycle-2's source verification still describes the tree). Every load-bearing claim below was checked against the current tree (CodeGraph + direct reads of `deps.py`, `session.py`, `render.py`, `execute_screen.py`, `run.py`, `update.py`, `version_status.py`, `wizard_app.py`, `setup.py`, `app.py`, `ui_common.py`, `catalog_tui.py`, `model.py`, `skill_lifecycle.py`, `executors.py`, `ownership.py`, `receipts.py`, the e2e script, `state_doubles.py`, the pinned tests, and Textual 8.2.7 sources). Wave/file topology was re-derived mechanically from all 19 frontmatters. Reviewer note: one dispatched parallel reviewer (20-14…20-19 range) had not returned when this report was finalized; those six sections rest on my own full reads of the plans plus targeted source checks of every resolution mechanism they claim.
+
+---
+
+### Cycle-2 Resolution Check
+
+| Cycle-2 finding | Status | Evidence (current plan text / tree) |
+|---|---|---|
+| 20-14 Task-1 commit window red (`render.py:29` annotation-only `Summary` import invisible to word-anchored grep) — MEDIUM | **FULLY RESOLVED** | `20-14-PLAN.md:68`: tasks reordered renderers-first; Task 2 adds an explicit annotation/import grep (`from installer.session import…Summary`, `: Summary`, `-> Summary`) so that reference class can never slip past again; each task stays one commit with the full gate |
+| 20-14 inherited result-word zero gate could never reach 0 (`render.py:95` quoted word in kept docstring) — MEDIUM | **FULLY RESOLVED** | `20-14-PLAN.md:91` instructs rewording the kept `render_failure_details` docstring in the same commit (names `render_run_summary`, writes the word unquoted); `:107` states today's exact literal inventory (`:57`, `:78`, `:80-82` deleted + `:95` reworded), which I re-confirmed by reading `render.py:28-113` — the gate is now satisfiable by construction |
+| 20-14 Task-1 grep allowed-list omitted `tests/test_render.py` — LOW | **FULLY RESOLVED** (moot by the reorder) | Task order swapped; when the `session.py` task runs, `tests/test_render.py` no longer references `Summary` (its constructions died with the renderer task) — ledger records "Moot by the reorder" |
+| 20-10 false intermediate gate ("screen module green after Task 1 alone") — MEDIUM | **FULLY RESOLVED** | `20-10-PLAN.md:155-157`: Task 1 gates by `--collect-only` + test-count floor; `:167` states explicitly the module is *not* expected green alone (`_host` pilots on the real `UnifiedApp`, `wizard_app.py:2977` still reads old fields); full run + nine pilots asserted at Task 2's combined commit |
+| 20-12 `_waiting` pending-wait guard unspecified (mount-join + Enter would double-call the non-joining double) — LOW | **FULLY RESOLVED** | `20-12-PLAN.md:70-74`: `_waiting` set in `_await_state` (no-op while True), cleared on live-token settle and in the `esc` cancel; acceptance greps the set/clear sites; `HeldRefreshService` fits `FrozenStateService`'s overridable surface (`state_doubles.py:137-157`, verified) |
+| 20-01 `def visit(` = 0 gate vs "SAME nested visit" wording — LOW | **FULLY RESOLVED** | `20-01-PLAN.md:60`: nested helper renamed `_place`, with the rationale quoted; acceptance now asserts `def _place(` = 1 and `def visit(` = 0, satisfiable by construction |
+| 20-08 `perform_action`'s `ValueError` → row `crashed` unnamed — LOW (optional) | **FULLY RESOLVED** | `20-08-PLAN.md:71` names `skill_lifecycle.py:678` (verified: the raise is exactly there), justifies fail-closed, and `:138` pins it with `test_skill_install_without_an_executable_operation_crashes_the_row` |
+| 20-11 "without asking" pinned only under `--yes` — LOW | **FULLY RESOLVED** | `20-11-PLAN.md:83` (confirm asked only when `--yes` is off AND a non-SKIP/BLOCKED row exists) + `:113` `test_all_current_without_yes_prints_the_plan_and_summary_without_asking` with a confirm that raises if called |
+| 20-15 grep allowed-list omitted `installer/status.py` (`macos_stub_reason`'s second caller) — LOW | **FULLY RESOLVED** | `20-15-PLAN.md:67` (context: kept, second caller at `status.py:144` known) and `:88` (gate lists `installer/status.py` `:41`/`:144` + `tests/test_status.py` as expected matches) |
+| 20-16 gate filter (`deleted|Phase 20`) could false-fail a valid transition sentence — LOW | **FULLY RESOLVED** | `20-16-PLAN.md` Task 2 action: wording rule now *binds the rewriter* — a pre-Phase-20 sentence naming a deleted symbol must carry `deleted` (or `Phase 20`) on that line, with an example; the gate now matches the instruction |
+| 20-19 `ACC_SKIPPED_FILE` vs counter `ACC_SKIPPED` name overloading — LOW | **FULLY RESOLVED** | `20-19-PLAN.md:56-57`: lines file renamed `ACC_DEP_LINES_FILE` at all 13 listed sites; `:96`: old name in the zero gate, new name has a ≥13 count floor; both self-checks (`:78-82`) source the real functions under the new name |
+| Carried cycle-1: 20-05 UNAVAILABLE-in-exhaustive-else race | **DEFERRED-WITH-RATIONALE** (unchanged, sound) | Same rationale as cycle 2: closed by construction on runnable paths (20-12 rebuilds from the latest publication before any run; 20-11 runs one synchronous pass then plans); Phase 21's refresh owner removes the per-pass platform re-read (`version_status.py:1537`) that opens the window |
+| Carried cycle-1: pending-row copy `… {id}` vs `…  {id}` | **FULLY RESOLVED** (stands) | UI-SPEC `:399` aligned; 20-10/20-12 pilots expect `… rg  checking…` |
+| Carried cycle-1: 20-18 `depends_on` missing 20-12/20-13 | **FULLY RESOLVED** (stands) | Frontmatter `depends_on: ["20-10", "20-12", "20-13"]`, wave 9 |
+
+All 11 cycle-2 actionable items are resolved in the current text; the one carried deferral remains justified.
+
+**Revision-induced defects check.** Wave/file topology re-derived mechanically from all 19 frontmatters: every `depends_on` edge points to a strictly earlier wave; same-wave plans are file-disjoint (W1: deps / update+catalog_tui / setup; W3: session / render+version_status+catalog_tui; W5: session / render / execute_screen+setup; W7: app+setup+test_app+test_setup / execute_screen+state_doubles / the e2e script; W8: execute_screen+version_status / session+render+engine+post_install; W9: audit+selection+prompt+setup / execute_screen+tests; W10: docs). Cross-plan vocabulary stays coherent (`summary_counts` fixed order identical in 20-07, 20-09/UI-SPEC:171 and 20-19's parse categories; 20-03's 3-tuple ↔ 20-11's `refresh, updates, _`). Requirement coverage is complete (PLAN-01…PLAN-08 all mapped; all non-generated `@` references exist on disk). Three new defects found this cycle — the 20-07 wrapper order (HIGH), the attribution seam (MEDIUM, 20-07/20-10), and 20-12's no-poll gate (MEDIUM) — detailed below. None is revision-induced; the first two predate both prior cycles and were missed; the third rides 20-12's round-2 rewrite.
+
+---
+
+### 20-01
+
+**Summary.** Adds defaulted `closure`/`blocked`/`requested_by` to `Resolution` while keeping `order`/`dragged_in`/`warnings` byte-identical — still the correct unblocking prerequisite for `build_plan`.
+
+**Strengths.** The cycle-2 `_place` fix landed coherently: `20-01-PLAN.md:60` renames the nested DFS inside `topo`, and the acceptance gate (`def topo(` = 1, `def _place(` = 1, `def visit(` = 0) is now satisfiable by construction. Verified: `deps.py:12` imports `Mapping`, `deps.py:13` imports only `dataclass` (so `field` must be added — and the plan says so at `:134`); `deps.py:111-113` drops present tools from `order` exactly as claimed; the two warning texts are the `Blocked.reason` values verbatim.
+
+**Concerns.** None new or still-open.
+
+**Suggestions.** None.
+
+**Risk.** LOW.
+
+### 20-02
+
+**Summary.** One `update_refusal` shared by engine and plan; PLAN-08 strings reworded with a grep guard.
+
+**Strengths.** Gates remain inventory-exact against the tree: `status="unknown-owner"` 2× (`update.py:251`, `:502`), `status="unsupported"` 5× (`:259`, `:280`, `:288`, `:330`, `:520`); both reworded strings exist as described (`update.py:307-311`, `catalog_tui.py:821-825`) and the replacements match UI-SPEC Copywriting rows verbatim; the three pinned tests port by exact-text replacement.
+
+**Concerns.** None new or still-open.
+
+**Suggestions.** None.
+
+**Risk.** LOW.
+
+### 20-03
+
+**Summary.** `_build_services` returns `(refresh, updates, policy)`; the SAME-policy invariant now holds by construction.
+
+**Strengths.** `setup.py:1060-1062`'s invariant comment is real and honored: the policy object is constructed once inside `_build_services` and returned (`20-03-PLAN.md:84-85`), with `_build_app`'s preview closures reusing the returned object (gate: `node_install_policy(tools)` count = 1). `NodeInstallPolicy` is public (`pnpm_globals.py:113`). The extraction points match the tree (`VersionRefreshService(` at `setup.py:897`, `UpdateService(` at `:1121`).
+
+**Concerns.** None new. (Cycle-2's advisory — have the epoch-move test publish a state before `invalidate` — is still unaddressed; non-blocking, the executor will hit it only as a weak assertion.)
+
+**Suggestions.** None material.
+
+**Risk.** LOW.
+
+### 20-04
+
+**Summary.** The plan model (`Disposition`, `PlanRow`, `WORDS`/`RESULT_WORDS`, pure `build_plan`) with all cycle-2 fixture fixes landed.
+
+**Strengths.** `VersionStatus(tool_id=…)` first-field fix present; `plan_state` gains the `method: Method | None` passthrough into `ManagerOwnership`; the receipt story is honest (`pass_state` at `state_doubles.py:200-232` has no receipt kwarg — verified — so `receipt=None` always, exactly what L-20-06 needs). `Result` includes `manual` from the start, per L-20-02. Reason texts match the UI-SPEC Disposition-copy rows verbatim.
+
+**Concerns.** None new or still-open.
+
+**Suggestions.** None.
+
+**Risk.** LOW.
+
+### 20-05
+
+**Summary.** The full health × owner × direct/dragged matrix, drift REPAIR (L-20-01), no-steps BLOCKED (L-20-04), blocked-dependent post-pass, G cases A–I × 3 tiers.
+
+**Strengths.** The post-pass remains genuinely necessary (`is_blocked` at `deps.py:81-100` blocks only on unavailability, so a broken-but-available dnf-owned dependency does not resolver-block its dependent — the plan's marquee case). Grounding re-verified: `UNMANAGEABLE_OWNERS` (`ownership.py:119-125`), `CHANGED_SINCE_INSTALL` (`receipts.py:44`), `BROKEN_SHIM_REASON`'s first clause (`version_status.py:596-598`). The pnpm leg is buildable via 20-04's `method=` passthrough; the post-pass uses a `by_id` map built once.
+
+**Concerns.** None new (the UNAVAILABLE-race deferral is recorded above).
+
+**Suggestions.** None.
+
+**Risk.** LOW.
+
+### 20-06
+
+**Summary.** `render_plan` with grouping, folding, sanitization, plus the `HEALTH_MARKS` move.
+
+**Strengths.** The no-growth gate is satisfiable by exact inventory (today's quoted review/done literals in `render.py` are `:57`, `:78`, both inside functions 20-14 deletes; new renderers read `WORDS`/`HEALTH_MARKS` only). The glyph move is safe: `_HEALTH_CELL` has exactly seven entries (`catalog_tui.py:249-258`), `health_cell` is the only in-module consumer, and `render.py` imports nothing from `catalog_tui` today. Anatomy matches UI-SPEC `:99-119` including the fold column `2 + idw + 2`.
+
+**Concerns.** None new or still-open.
+
+**Suggestions.** None.
+
+**Risk.** LOW.
+
+### 20-07
+
+**Summary.** `RowOutcome`, `RunContext`, `execute_plan`, and the four pure views — the one engine for both routes.
+
+**Strengths.** The `UpdateRunner` protocol matches `UpdateService`'s real surface (`begin` `update.py:485`, `end` `:492`, `in_flight` `:481-483`, `run` `:496`). Exit-code parity preserved by construction (today `Summary.has_failure` excludes `manual_required`/`no_method`, `session.py:119-134`; mapping them to `manual`/`blocked` outside `_FAILURE` keeps every exit unchanged). `_UNRESOLVED` already contains `NO_METHOD`/`MANUAL_REQUIRED` (`session.py:29-37`). The crash policy (one `RowOutcome` per row, `crashed` + `not_attempted`) is a strict improvement over `run_installs`' post-cancel row dropping.
+
+**Concerns.**
+- **HIGH — the sensitive-confirm wrapper composition is inverted and raises `TypeError` on every install call.** The plan mandates `install = _with_force(with_sensitive_confirm(ctx.confirm_sensitive, ctx.install), force_ids)` twice (context block and Task 1 action). But `with_sensitive_confirm` returns `bound`, whose signature has no `confirm_sensitive_action` parameter (`session.py:84-92`), while `_with_force` — `_with_repair` moved "same body" — **accepts and forwards** `confirm_sensitive_action` in both branches (`execute_screen.py:254`, `:264`, `:273`). With the plan's order, `_with_force` calls `bound(..., confirm_sensitive_action=…)` → `TypeError` → every install-class row `crashed`, run fails closed, both routes broken. Today's working code composes the opposite way: `with_sensitive_confirm(on_confirm, _with_repair(...))` (`execute_screen.py:664-666`). TDD will surface it at Task 1's tracer test, but the plan text mandates the wrong order twice, and 20-10/20-11 consume `execute_plan` on the assumption this binding is correct.
+- **MEDIUM (shared with 20-10) — the streaming-attribution seam is unspecified, and its absence crashes streamed installs and RECONFIGURE steps.** Today's worker wraps the install in `attributed_install` (`execute_screen.py:201-237`), whose `streaming.set_tool(tool.id)` is what makes the `StreamingRunner` work at all — `_current()` raises `RuntimeError("StreamingRunner.set_tool must be called before running a command")` (`run.py:246-249`). Neither 20-07 nor 20-10 assigns this: `RunContext.runner` is the streaming runner, `on_row_started` is only specified to "post `RowStarted`", yet 20-10 expects "install rows establish the in-flight tool through `-- trying {method} --`" — emitted via `_current()`. RECONFIGURE argv steps through `ctx.runner` hit the same raise. The behavior is pinned by a ported test (`test_streamed_lines_are_attributed_per_tool_with_section_dividers`, `tests/test_execute_screen.py:322`), and `attributed_install` is on no deletion list, so it would survive as an unwired orphan (architecture rule 5).
+
+**Suggestions.** Swap the wrapper order in both places: `with_sensitive_confirm(ctx.confirm_sensitive, _with_force(ctx.install, force_ids))`. Add one context line naming the attribution seam (the screen wraps `ctx.install` in `attributed_install` before building `RunContext`, or `on_row_started` calls `runner.set_tool(row.tool_id)`), so the ported attribution test has a designed home.
+
+**Risk.** HIGH as written (core engine wiring); both defects are mechanically fixable and RED-visible at Task 1, so execution risk is contained, but the plan text must change before dispatch.
+
+### 20-08
+
+**Summary.** RECONFIGURE dispatch by `ConfigStepKind`, portable cwd shim, pnpm group via the node executor, skill handoff → `manual`.
+
+**Strengths.** `ConfigStepKind` is exactly the 8 members (`model.py:311-320`); `partial_steps` builds empty-argv `skill_install` steps (`skill_lifecycle.py:972-982`); `perform_action`'s `ValueError` is now named and pinned (fail-closed). `pnpm_group_install` → `executors.execute(first node method)` is real and correct (`executors.py:488-507` run the whole pinned group with `--allow-build`) — L-19-28 satisfied. The cwd shim keeps argv positional, never shell-interpreted, and re-validates the directory at execution time (TOCTOU closed).
+
+**Concerns.** None new (the argv steps through `ctx.runner` inherit the 20-07/20-10 attribution-seam gap above — same fix covers it).
+
+**Suggestions.** None.
+
+**Risk.** LOW.
+
+### 20-09
+
+**Summary.** `render_run_summary`, `outcome_row_text`, `running_row_text` from the one vocabulary, sanitized, `Summary — …` as the stable first line.
+
+**Strengths.** The no-growth gate is satisfiable by exact inventory (4 quoted result-word literals today: `render.py:80`, `:81`, `:82`, `:95`; the first three die in 20-14, the fourth is reworded there). The per-result row texts match UI-SPEC `:219-229` row by row. `display_order` reuse keeps one grouping rule; mapping rows back to outcomes by `tool_id` is safe because `build_plan` yields one row per id.
+
+**Concerns.** None new (the residual zero-gate belongs to 20-14, where it is now fixed).
+
+**Suggestions.** None.
+
+**Risk.** LOW.
+
+### 20-10
+
+**Summary.** The TUI port onto the plan: OptionList review, worker on `execute_plan`, retained selection, `ran_anything` sync gate, exit code from outcomes — honestly sequenced with the collect-only intermediate gate.
+
+**Strengths.** All cycle-2 sequencing fixes hold: one combined commit, `--collect-only` + count floor after Task 1, full green only at the combined commit. All port mechanisms verified present: `replace_option_prompt` (Textual `_option_list.py:647`), the shared `_staged` set and today's unconditional clear (`wizard_app.py:2898-2899`), the four other `_session_exit_code` callers, `run_errors` OR'd into the exit rule (T-20-19), the outer-except row completion (T-20-32). Classification is mount-only today (`execute_screen.py:499-502`; `action_start` at `:591-602` contains none), so the plan's mount-time `_replan()` is a faithful port, not a behavior change.
+
+**Concerns.**
+- **MEDIUM (shared with 20-07) — attribution seam unspecified** (see 20-07): the plan requires the silence indicator and per-tool `-- trying {method} --` attribution to keep working but assigns no `set_tool`/`attributed_install` wiring; without it every streamed command raises `RuntimeError` (`run.py:246-249`) and the ported attribution test (`tests/test_execute_screen.py:322`) has no mechanism to pass against.
+- **LOW (advisory) — `action_start` acts on mounted rows without a rebuild.** I traced the stale-state window: it *is* reachable in production — a direct `u` update started on a tier just before `a`+Enter completes while the modal is open (`_update_tool_worker` → `UpdateService.run` → `_invalidate` on the worker thread, `update.py:568-570`; nothing gates opening `ExecuteScreen` while it runs), silently stranding every held id's `state_of` → `None` (`version_status.py:967-970`) while the rows were frozen at mount. It is bounded, not a prohibition violation: the SPEC's "older generation" prohibition governs WAIT/unsettled rows; every mutation re-checks fresh evidence (`install_tool` re-checks presence via `present=`/`is_present`, which probes when state is `None`, `version_status.py:972-977`; `UpdateService.run` re-resolves ownership; the `begin` latch blocks the concurrent update itself); and 20-12 (W7, one wave later) closes the visible case — a mid-review invalidate makes the rows render `checking…` and Enter waits. The residual for wave 6 is a possibly-redundant UPDATE attempt or a momentarily mislabeled row — the same class cycle 2 adjudicated as deferred-with-rationale for 20-05.
+
+**Suggestions.** One line: `_replan()` at the top of `action_start` (before the WAIT check) — closes the background-`u` window, makes CONTEXT D-14's "(after Enter)" parenthetical literal, and degrades the invalidated case into the existing wait path, all without violating "never read `state_of` after the run starts" (Enter precedes the run). Note the binding UI-SPEC puts the rebuild on publication (`:272-273`), not Enter — so this is an improvement, not a contract requirement.
+
+**Risk.** MEDIUM overall — the blast radius is real but the cycle-2 sequencing defects are gone; the open items are the wrapper order (20-07 HIGH, fixes this route too) and the attribution seam.
+
+### 20-11
+
+**Summary.** Headless on the same plan and engine; dead two-step path deleted; exit code from outcomes.
+
+**Strengths.** Every cited mechanism verified: `run_wizard` at `app.py:130-197` with exactly the parameters the plan removes; `category_blurbs=load_categories(_REGISTRY)` at `setup.py:1537` (and `load_categories` still used by `_build_app`, so the import stays — as the plan says); `RecordingPrompter` at `tests/test_app.py:1306`; the failure-path ordering (`:82`) is right for the headless lifecycle; `reinstall=frozenset()` hard-coded makes the `--yes` prohibition structural; the non-`--yes` no-ask case is now pinned; the 3-tuple unpack matches revised 20-03.
+
+**Concerns.** **LOW — a headless run-level wiring failure has no stated channel.** The TUI keeps `run_errors` (L-20-08); headless computes `exit_code(outcomes)` only, and `configure_path` at `setup.py:1542-1551` is uncaught today — an `OSError` propagates as a traceback with exit 1. That is byte-equivalent to today (no regression), but the plan's truth only promises the outcome-derived exit.
+
+**Suggestions.** One sentence: "a raised wiring/verify error propagates and exits non-zero, as today."
+
+**Risk.** LOW.
+
+### 20-12
+
+**Summary.** Wait-for-state via the single flight; `_waiting` guard; token fails closed on `esc`.
+
+**Strengths.** The core mechanism is verified end-to-end: the single flight is keyed by `frozenset(tool.id …)` (`version_status.py:1508`) and joins only at the current epoch (`:1510-1521`, "never joins across an `invalidate`"); the plan refreshes the whole `ExecuteInputs.catalog` — the same key the tier screens use. `run_live`'s `(T | None, str | None)` return (`ui_common.py:42-55`) matches the unpack; `exit_on_error=False` + token-as-correctness-guard is sound (a cancelled task does not interrupt the running thread). The `_waiting` lifecycle is now complete and gatable.
+
+**Concerns.**
+- **MEDIUM — the Task-1 no-poll acceptance gate is unsatisfiable as written.** `grep -cE "time\.sleep|set_interval|poll" installer/execute_screen.py` is 0 — but `_check_output_silence`, the silence machinery 20-10 explicitly *keeps*, carries the docstring "One-shot silence check that re-arms itself; never a poll body." at `execute_screen.py:861` (the only match in the file; no `time.sleep`, no `set_interval`). The gate is a raw grep, so it reads 1, not 0, on the exact tree the plan requires. Same vocabulary-literal-vs-behavior class as the cycle-1/2 gate defects.
+- **LOW — `test_a_late_publication_after_esc_starts_nothing` expects a "second release", but the specified double's Event is one-shot.** Once `release.set()` fires, the second Enter's `release.wait()` returns immediately, so "assert `started is False` until the second release" cannot be delivered without re-arming the Event per refresh (or a fresh service per leg).
+- **LOW — `_fit` truncation wording conflicts with its own test.** `_fit(text, 78)` "cut and append `…`" applied to the whole status line would cut off `. enter retries · esc closes.`, which the suffix test requires the line to *end* with; the helper must truncate only the `{error}` into the line's remaining budget (truth `:25` reads that way; `:76`'s generic wording does not).
+- **LOW — new private-attribute assertions conflict with the plan's own suppression gates.** pyright strict includes `tests/`, and existing private accesses in `tests/test_execute_screen.py` carry per-line `# pyright: ignore[reportPrivateUsage]` suppressions (61 of them); new tests reading `screen._ids` (20-12) or `screen._reinstall` (20-13) would need *new* suppressions, violating both "No new suppression comments" and the `b <= a` no-growth gate.
+
+**Suggestions.** Scope the no-poll grep to call syntax (`"time\.sleep\(|set_interval\(|\.poll\("`) or reword the kept docstring in the same commit; make `release` re-arm per refresh; state that `_fit` truncates the error into the line's remaining budget; replace the private-attr assertions with observable row-prompt/keys-line/dismiss-value assertions.
+
+**Risk.** MEDIUM (one unsatisfiable gate; the wait/cancel design itself is sound and its central claim was verified against the real service).
+
+### 20-13
+
+**Summary.** The `r` key as the only path to a reinstall; the reworded `UNPROVEN_NOTE`; the 80×20 layout pins and Resize re-fold.
+
+**Strengths.** Anchors verified: `UNPROVEN_NOTE` at `version_status.py:606` (old text present), the `_UNPROVEN` pin at `tests/test_version_status.py:4212`, the catalog `r` binding at `catalog_tui.py:322`. The one-mutation-site gate (`self._reinstall ^= {id}`, no `add/discard/update/clear`) makes T-20-26 structural. The worst-case-head reasoning is honest (review state has at most 7 disposition words; `max-height: 3` covers both states).
+
+**Concerns.** **LOW — `test_r_is_inert_while_waiting_running_and_finished` asserts `screen._reinstall == set()`**: same pyright-strict/no-new-suppression conflict as 20-12 (a new `# pyright: ignore[reportPrivateUsage]` violates the plan's own gates).
+
+**Suggestions.** Swap the private-set assertion for observable row-text assertions in that one test.
+
+**Risk.** LOW.
+
+### 20-14
+
+**Summary.** Deletes the second copies (`Summary`/`fold_run`/`run_installs`/`summarize`, the three legacy renderers, `reapply_post_install`) with grep proof and a deleted-test ledger — now correctly ordered renderers-first.
+
+**Strengths.** Both cycle-2 MEDIUMs are resolved in the current text: the task order swap (`:68`) makes each commit window green (Task 1 deletes the renderers *and* the `Summary` import/constructions with them; Task 2 deletes the type and adds the annotation/import grep so that reference class can never slip past the word-anchored one again); the kept `render_failure_details` docstring is reworded in the same commit (`:91`), and the acceptance text lists today's exact literal inventory (`:107`), which I re-confirmed against `render.py` — the file-wide zero gates are now satisfiable exactly there. The word-anchoring analysis holds (`tests/test_install_sh.py`'s `test_run_installs_without_launching_when_no_run_set` and `ApplySummary(` do not match); `tests/test_versions.py`'s `(session_module, "run_installs")` handling is right; the `post_install.py:23-27` paragraph exists as quoted; deletion sequencing is correct against the tree (last production callers die in 20-10/20-11, W6/W7; this is W8).
+
+**Concerns.** None new or still-open.
+
+**Suggestions.** None.
+
+**Risk.** LOW — deletion with grep proof and a per-test ledger; the phase's safest plan relative to its size.
+
+### 20-15
+
+**Summary.** Finishes the `audit.py` deletion cascade down to a confirm-only prompter.
+
+**Strengths.** Every symbol verified: `installer/audit.py` (36 lines), `selection.py` `:33`/`:55`/`:59`, `prompt.py:15-33`, `setup.py:309` and `:1515`. The production-unreachability of the two-step path is verified via `main`'s routing. The cycle-2 fix landed: `installer/status.py` is now an *expected* match for `macos_stub_reason` alone (`:67`, `:88`), matching the keep intent — `is_installed`'s darwin caller at `status.py:144` is real. The FakePrompter trim is coordinated with the protocol trim in one commit, and `RecordingPrompter` is named as a delete-if-survivor.
+
+**Concerns.** None new or still-open.
+
+**Suggestions.** None.
+
+**Risk.** LOW.
+
+### 20-16
+
+**Summary.** Records Phase 20 in the doctrine; rewrites the pre-Phase-20 paragraphs that describe deleted machinery.
+
+**Strengths.** All anchors verified: the Tier paragraph names `render_dependency_notice` at `architecture.md:49`, Phase 3's `run_installs` sentences at `:103-110`, Phase 13's pins at `:652-672`, Phase 14's at `:701`/`:745`; Phase 19 is the last section; `tests/test_docs.py` pin-file structure (`_PHASE_13_REQUIRED` `:51`, `_PHASE_14_REQUIRED` `:85`, `_PHASE_19_REQUIRED` `:188`) slots the new section in cleanly. The cycle-2 fix landed: the rewrite *instruction* now mandates `deleted`/`Phase 20` on transition lines, so the verify gate's filter matches the instruction instead of false-failing a valid phrasing.
+
+**Concerns.** None new or still-open.
+
+**Suggestions.** None.
+
+**Risk.** LOW.
+
+### 20-17
+
+**Summary.** The mechanical `ExecuteInputs` contract change on its own, green alone: `version_refresh` required, `installed` deleted, `terminal_sync` wired; both screen-level test modules get input helpers with a published-state default.
+
+**Strengths.** Still the best-grounded plan in the batch: `ExecuteInputs` verified field-for-field (`execute_screen.py:400-417`), the four `installed(` read sites (`:505/:544/:573/:583`), `setup.py:1160-1166` already wiring `installed=version_refresh.is_present` — so the "behaviour unchanged while the second source of truth is gone" claim is verified, not hoped. `VersionRefreshService.is_present` exists with the CHECKING-aware semantics described (`version_status.py:972-977`). Port inventory exact; wave-5 placement file-disjoint from 20-08/20-09 and before 20-10/20-12 need the default.
+
+**Concerns.** None new or still-open.
+
+**Suggestions.** None.
+
+**Risk.** LOW.
+
+### 20-18
+
+**Summary.** Four end-to-end pins through the real `UnifiedApp` (`a` on all-current, order parity, mixed-run retention, D-05).
+
+**Strengths.** The metadata fix stands (`depends_on: ["20-10", "20-12", "20-13"]`, wave 9 — above every dependency's wave, so the ordering constraint survives frontmatter-trusting tooling). D-05 is correctly pinned, not reimplemented: `catalog_tui.py:375`'s `selectable=lambda tool: not self._is_unavailable(tool)` shipped in Phase 19 — verified. The pins map directly to SPEC acceptance 8/12 and edge ordering R9 and use the 20-17 helpers.
+
+**Concerns.** None new or still-open.
+
+**Suggestions.** None.
+
+**Risk.** LOW.
+
+### 20-19
+
+**Summary.** Rewrites the container e2e parser for the `Summary — …` line and the outcome rows, same wave as 20-11.
+
+**Strengths.** The cycle-2 fix landed completely: the dependency-failed lines file is `ACC_DEP_LINES_FILE` at all thirteen sites (`:56-57` lists them), the old name is in the zero gate and the new one has a ≥13 count floor (`:96`), and both self-checks source the real functions under the new name (`:78-82`) — the wrong-variable bug class inside a CI-dependent script is closed. Necessity and scheduling verified: `SUMMARY_RE` at `scripts/container-e2e-verify.sh:242` parses the old `Installed: …` line; the current cross-check internals (`:382-403`) are accurately described; the replacement sources (outcome rows one per line under `COLUMNS=2000`) are the right provenance; `write_tester_path` untouched as the two extracting test files require. The old-line non-match assertion pins the retirement.
+
+**Concerns.** None new or still-open.
+
+**Suggestions.** None.
+
+**Risk.** LOW.
+
+---
+
+### Overall summary
+
+**Verdict: the plan set has converged in design.** Every cycle-2 actionable finding is genuinely resolved in the current text (verified against both the plan files and the tree), the wave/file topology is mechanically sound, the shared vocabulary and exit-code rule are coherent across all 19 plans, and requirement coverage is complete. No design-level defect was found this cycle in any plan. Three execution-blocking defects remain, all in gate/wiring detail, all one-to-three-line fixes:
+
+**Remaining HIGH:**
+
+1. **20-07 — inverted wrapper composition** (`20-07-PLAN.md:73` and Task-1 action): `install = _with_force(with_sensitive_confirm(...), force_ids)` calls `bound` with a `confirm_sensitive_action` kwarg it does not accept (`session.py:84-92`) while `_with_force` forwards it (`execute_screen.py:254/:264/:273`) — every install call becomes `TypeError` → every row `crashed` → exit 1 on both routes. **Fix: swap to `with_sensitive_confirm(ctx.confirm_sensitive, _with_force(ctx.install, force_ids))`** (today's working order, `execute_screen.py:664-666`). This silently underpins 20-10 and 20-11's routes.
+
+**Remaining actionable MEDIUM/LOW:**
+
+2. **MEDIUM — 20-07/20-10, attribution seam unspecified**: nothing wires `set_tool`/`attributed_install` into `RunContext`, so every streamed install and RECONFIGURE argv step raises `RuntimeError` (`run.py:246-249`) and the ported attribution test (`tests/test_execute_screen.py:322`) has no mechanism. Fix: one context line (screen wraps `ctx.install` in `attributed_install`, or `on_row_started` calls `runner.set_tool(row.tool_id)`).
+3. **MEDIUM — 20-12, unsatisfiable no-poll gate**: the kept `_check_output_silence` docstring contains "poll" (`execute_screen.py:861`), so the raw grep reads 1, not 0. Fix: scope to call syntax or reword the docstring in the same commit.
+4. **LOW — 20-10**: `_replan()` at the top of `action_start` (closes the reachable background-`u` invalidate window for wave 6; bounded today by engine re-checks and closed by 20-12 in wave 7).
+5. **LOW — 20-12**: re-arm the `HeldRefreshService` Event per refresh (the "second release" test is undeliverable with a one-shot Event); word `_fit` as truncating the `{error}` into the line's remaining budget (else it cuts the required suffix).
+6. **LOW — 20-12/20-13**: replace the `screen._ids` / `screen._reinstall` private-attr assertions with observable row-prompt/keys-line/dismiss-value assertions (new `pyright: ignore[reportPrivateUsage]` suppressions would violate the plans' own no-new-suppression rule and `b <= a` gate).
+7. **LOW — 20-11**: one sentence naming the headless run-level wiring-failure channel (propagates, exits non-zero, as today).
+
+**Risk by plan:** LOW — 20-01, 20-02, 20-03, 20-04, 20-05, 20-06, 20-08, 20-09, 20-11, 20-13, 20-14, 20-15, 20-16, 20-17, 20-18, 20-19. MEDIUM — 20-10 (blast radius; sequencing defects gone; shares the seam and the 20-07 fix), 20-12 (one unsatisfiable gate; wait/cancel design verified). HIGH-as-written — 20-07 (the wrapper order; everything else about the engine is verified sound).
+
+**What I did not check:** I ran no tests, `make validate`, pilots, or gate scripts — gate satisfiability is reasoned from exact inventories (the render.py literal counts, the "poll" match, the 61-suppression count). Textual cancellation semantics are from source reading, not execution. One dispatched parallel reviewer covering the 20-14…20-19 range had not returned when this report was finalized; those six sections rest on my own full plan reads plus targeted source verification of every resolution mechanism (all confirmed), so the residual risk is a missed low-severity nitpick in that range, not an unresolved cycle-2 item.
+
+---
+
+### Verification coverage (cycle 3)
+
+Source-grounding pass (`plan_review.source_grounding`, effective authority `intel` via `drift-guard authority`):
+- VERIFIED: 71 distinct backtick-quoted repo paths in the 19 plans scanned; all exist except `tests/test_plan.py` (new artifact created by 20-04, excluded) and the `20-NN-SUMMARY.md` files (phase outputs, excluded).
+- VERIFIED by the orchestrator (the one reviewer HIGH was independently confirmed, so it counts): `installer/session.py:84-98` (`with_sensitive_confirm`'s `bound` has no `confirm_sensitive_action` parameter), `installer/execute_screen.py:245-278` (`_with_repair` forwards that kwarg), `:655-668` (working order today: `with_sensitive_confirm(on_confirm, _with_repair(...))`), `20-07-PLAN.md:73,111` (plan mandates the inverted order), `installer/run.py:243-249` (`_current()` raises without `set_tool`; no plan mentions `set_tool`/`attributed_install` wiring in `RunContext`), `installer/execute_screen.py:861` (docstring contains "poll", contradicting `20-12-PLAN.md:124` zero gate).
+- Reviewer re-verified ~40 further anchors (see the cycle-3 resolution table); source tree unchanged since cycle 2 (`installer/ tests/ scripts/ .claude/` diff empty).
+- UNCHECKABLE: individual Python symbol signatures (the `intel` adapter does not analyze Python; `grep` cannot assert signatures); coverage rests on manual reads.
+- Not executed: `make validate`, `make test`, pilots, gate scripts. The reviewer noted one dispatched sub-reviewer (20-14..20-19) did not return (`[spawn error: ETIMEDOUT]`); those sections rest on the reviewer's own reads.
+
+Cross-artifact fact-drift pass:
+- Phase status (`drift-guard phase-status --phase 20`): `lag` (STATE.md "Ready to execute" vs ROADMAP "Not started") - not a finding.
+- Requirement IDs: ROADMAP PLAN-01..PLAN-08 equals the union of plan `requirements:` - no contradiction.
+- Success criteria / glossary: no contradiction found; the cycle-1 pending-row copy discrepancy stays resolved.
+- Advisory only; contributes to neither HIGH nor actionable counts.
+
+---
+
+## Cycle 2 (audit trail) — reviewed at HEAD 74a893b
 
 
 
