@@ -2126,6 +2126,28 @@ def test_unreadable_install_dirs_are_not_checked_not_empty(
     assert "code/proj/.claude/commands" in report.unchecked
 
 
+def test_unreadable_runtime_never_hides_another_runtimes_empty_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unlistable Claude dir must not swallow OpenCode's empty install."""
+    repo = _repo(tmp_path, "code/proj")
+    _plant(repo, ".claude/gsd-core/VERSION", "1.16.0\n")
+    skills, commands = repo / ".claude/skills", repo / ".claude/commands"
+    skills.mkdir()
+    commands.mkdir()
+    _empty_install(repo)
+    _block_scandir(monkeypatch, {skills, commands})
+
+    report = _gsd_pack(tmp_path, {"claude", "opencode"})
+
+    assert "OpenCode install in proj is empty" in report.reasons
+    assert "not installed in proj" not in report.reasons
+    assert [step for step in report.steps if step.kind == "project_pack_install"] == [
+        _install_step("opencode", repo, "reinstall")
+    ]
+    assert "code/proj/.claude/skills" in report.unchecked
+
+
 def test_conclusive_empty_install_keeps_its_reinstall_step(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2237,6 +2259,23 @@ def _release_fifo(fifo: Path, thread: threading.Thread) -> None:
     with contextlib.suppress(OSError):
         os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
     thread.join(timeout=5)
+
+
+def test_skills_lock_fifo_never_blocks(tmp_path: Path) -> None:
+    """A FIFO at ~/.agents/.skill-lock.json must not stall the skill worker."""
+    agents = tmp_path / ".agents"
+    agents.mkdir()
+    fifo = agents / ".skill-lock.json"
+    os.mkfifo(fifo)
+    thread = threading.Thread()
+    try:
+        thread, box = _bounded_report(
+            lambda: _hosts([_lock_pack()], lambda _argv: "", tmp_path)["softaworks"]["claude"]
+        )
+        assert not thread.is_alive()
+        assert box == ["unknown"]
+    finally:
+        _release_fifo(fifo, thread)
 
 
 def test_installed_plugins_fifo_never_blocks(tmp_path: Path) -> None:

@@ -34,6 +34,7 @@ _CLAUDE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-
 CLAUDE_SCOPES = ("user", "project", "local")
 _CLAUDE_OUTPUT_CAP = 1 << 20
 _INSTALLED_PLUGINS_CAP = 64 << 10
+_SKILL_LOCK_CAP = 1 << 20
 
 
 @dataclass(frozen=True)
@@ -583,10 +584,8 @@ def inspect_project_pack(tool: Tool, home: Path, present: Collection[str]) -> Pr
                 for trace in ("gsd-core/VERSION", "gsd-install-state.json")
             )
         ]
-        if unreadable:
-            # A failed read is not an empty install and not proof the repo has none.
-            targets: list[tuple[str, str]] = []
-        elif not installed and not empty:
+        if not installed and not empty and not unreadable:
+            # A failed read is not proof the repo has no install.
             reasons.append(f"not installed in {repo.name}")
             targets = [(runtime, "install") for runtime in PROJECT_RUNTIME_DIRS]
         else:
@@ -710,12 +709,22 @@ def _probe_outputs(
 
 
 def _skills_lock_skills(home: Path) -> dict[str, str] | None:
+    """Missing -> {}; unreadable, not a regular file or over the cap -> None.
+
+    None means unknown, and the read never blocks on a FIFO.
+    """
     path = home / ".agents" / ".skill-lock.json"
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw_bytes = read_capped(path, _SKILL_LOCK_CAP, follow_symlinks=True)
     except FileNotFoundError:
         return {}
-    except (OSError, UnicodeDecodeError):
+    except OSError:
+        return None
+    if raw_bytes is None:
+        return None
+    try:
+        raw = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
         return None
     try:
         parsed: object = json.loads(raw)
