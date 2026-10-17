@@ -5,16 +5,21 @@ Every service built here is a real `VersionRefreshService` with offline fakes.
 test-built service reads the developer's home (checker W5).
 """
 
-from collections.abc import Callable, Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
+from installer.engine import ChecksumPolicy, InstallOutcome
+from installer.enums import InstallStatus
 from installer.manager_versions import OutdatedReport
 from installer.model import ConfigStep, Method, Tool
 from installer.ownership import Confidence, ManagerInventory, ManagerOwnership, Owner
 from installer.platform import Platform
+from installer.post_install import ConfirmSensitiveAction
+from installer.run import Runner
 from installer.uninstall import RemovalPlan
+from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import (
     Health,
     SkillHostStatus,
@@ -25,6 +30,7 @@ from installer.version_status import (
     tool_state,
     version_notes,
 )
+from installer.versions import TagResolver
 
 _MACOS = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
 # Public alias for test modules that build plans on the same platform.
@@ -135,6 +141,68 @@ def seeded_service(
         service.refresh_skills(tools)
     service.refresh(tools)
     return service
+
+
+class ScriptedUpdates(UpdateService):
+    """Offline update service with the real in-flight latch and scripted outcomes."""
+
+    def __init__(self, outcomes: Mapping[str, UpdateOutcome | Exception]) -> None:
+        super().__init__(
+            platform=_MACOS,
+            runner=lambda _command: None,
+            resolve_tag=lambda _repo: "v1",
+            tools={},
+            managed_packages=lambda: (),
+            replay_globals=lambda packages: tuple(packages),
+            reresolve_ownership=unknown_ownership,
+        )
+        self.outcomes = outcomes
+        self.targets: list[UpdateTarget] = []
+
+    def run(self, target: UpdateTarget) -> UpdateOutcome:
+        self.targets.append(target)
+        outcome = self.outcomes[target.tool.id]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+class RunRecorder:
+    """Record install calls and commands without touching the host."""
+
+    def __init__(self, outcomes: Mapping[str, InstallOutcome | Exception] | None = None) -> None:
+        self.outcomes = outcomes or {}
+        self.installs: list[tuple[str, bool]] = []
+        self.confirms: list[ConfirmSensitiveAction | None] = []
+        self.argv: list[list[str]] = []
+        self.synced = 0
+
+    def install(
+        self,
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+        repair: bool = False,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools
+        self.installs.append((tool.id, repair))
+        self.confirms.append(confirm_sensitive_action)
+        outcome = self.outcomes.get(tool.id, InstallOutcome(tool.id, InstallStatus.INSTALLED))
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    def runner(self, command: list[str]) -> None:
+        self.argv.append(command)
+
+    def terminal_sync(self) -> str | None:
+        self.synced += 1
+        return None
 
 
 class FrozenStateService(VersionRefreshService):

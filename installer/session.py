@@ -26,7 +26,7 @@ from installer.receipts import CHANGED_SINCE_INSTALL
 from installer.resolve import resolve_methods
 from installer.run import Runner, run_command
 from installer.selection import select_tools
-from installer.update import UpdateOutcome, update_refusal
+from installer.update import UpdateOutcome, UpdateService, UpdateTarget, update_refusal
 from installer.version_status import Health, ToolState
 from installer.versions import TagResolver, resolve_github_tag
 
@@ -82,6 +82,23 @@ class SensitiveInstall(Protocol):
         checksum_policy: ChecksumPolicy = ...,
         tools: Mapping[str, Tool] | None = ...,
         confirm_sensitive_action: ConfirmSensitiveAction | None = ...,
+    ) -> InstallOutcome: ...
+
+
+class RepairSensitiveInstall(Protocol):
+    """Sensitive installer which additionally accepts the repair force flag."""
+
+    def __call__(
+        self,
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = ...,
+        tools: Mapping[str, Tool] | None = ...,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = ...,
+        repair: bool = ...,
     ) -> InstallOutcome: ...
 
 
@@ -355,6 +372,31 @@ class PlanRow:
     ownership: ManagerOwnership | None = None
 
 
+@dataclass(frozen=True)
+class RowOutcome:
+    row: PlanRow
+    result: Result
+    install: InstallOutcome | None = None
+    update: UpdateOutcome | None = None
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class RunContext:
+    catalog: Mapping[str, Tool]
+    platform: Platform
+    runner: Runner
+    resolve_tag: TagResolver
+    install: RepairSensitiveInstall
+    updates: UpdateService | None = None
+    terminal_sync: Callable[[], str | None] | None = None
+    on_mismatch: OnMismatch | None = None
+    confirm_sensitive: ConfirmSensitiveAction | None = None
+    should_continue: Callable[[], bool] | None = None
+    on_row_started: Callable[[PlanRow], None] | None = None
+    on_outcome: Callable[[RowOutcome], None] | None = None
+
+
 _REVIEW_ORDER: tuple[Disposition, ...] = (
     *(d for d in Disposition if d is not Disposition.WAIT),
     Disposition.WAIT,
@@ -372,6 +414,219 @@ def review_counts(rows: Sequence[PlanRow]) -> str:
     """The plan head's counts over review words, e.g. `2 will install, 1 skipped`."""
     order = [WORDS[d].review for d in _REVIEW_ORDER]
     return _count_line((WORDS[row.disposition].review for row in rows), order)
+
+
+_FAILURE = frozenset({"failed", "mismatch", "dependency_failed", "not_attempted", "crashed"})
+_KEEP = _FAILURE | {"blocked", "manual"}
+_RAN = frozenset({"done", "failed", "mismatch", "crashed", "manual"})
+
+
+def exit_code(outcomes: Sequence[RowOutcome]) -> int:
+    return int(any(outcome.result in _FAILURE for outcome in outcomes))
+
+
+def retained(outcomes: Sequence[RowOutcome]) -> set[str]:
+    return {outcome.row.tool_id for outcome in outcomes if outcome.result in _KEEP}
+
+
+def ran_anything(outcomes: Sequence[RowOutcome]) -> bool:
+    return any(outcome.result in _RAN for outcome in outcomes)
+
+
+def summary_counts(outcomes: Sequence[RowOutcome]) -> str:
+    order = [word for disposition in _REVIEW_ORDER if (word := WORDS[disposition].done) is not None]
+    order.extend(
+        RESULT_WORDS[result][0]
+        for result in (
+            "skipped",
+            "blocked",
+            "manual",
+            "failed",
+            "mismatch",
+            "dependency_failed",
+            "not_attempted",
+            "crashed",
+        )
+    )
+    order = list(dict.fromkeys(order))
+    words = (
+        WORDS[outcome.row.disposition].done
+        if outcome.result == "done"
+        else RESULT_WORDS[outcome.result][0]
+        for outcome in outcomes
+    )
+    return _count_line((word for word in words if word is not None), order)
+
+
+def _with_force(
+    install: RepairSensitiveInstall, force_ids: frozenset[str]
+) -> RepairSensitiveInstall:
+    """Pass repair=True only for repair and reinstall plan rows."""
+
+    def forced(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+        repair: bool = False,
+    ) -> InstallOutcome:
+        if tool.id in force_ids or repair:
+            return install(
+                tool,
+                platform,
+                runner,
+                resolve_tag,
+                checksum_policy=checksum_policy,
+                tools=tools,
+                confirm_sensitive_action=confirm_sensitive_action,
+                repair=True,
+            )
+        return install(
+            tool,
+            platform,
+            runner,
+            resolve_tag,
+            checksum_policy=checksum_policy,
+            tools=tools,
+            confirm_sensitive_action=confirm_sensitive_action,
+            repair=False,
+        )
+
+    return forced
+
+
+_INSTALL_RESULT: dict[InstallStatus, Result] = {
+    InstallStatus.INSTALLED: "done",
+    InstallStatus.ALREADY_INSTALLED: "skipped",
+    InstallStatus.FAILED: "failed",
+    InstallStatus.CHECKSUM_MISMATCH: "mismatch",
+    InstallStatus.DEPENDENCY_FAILED: "dependency_failed",
+    InstallStatus.MANUAL_REQUIRED: "manual",
+    InstallStatus.NO_METHOD: "blocked",
+}
+
+
+def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
+    """Execute a settled plan and return one truthful outcome per row."""
+    if any(row.disposition is Disposition.WAIT for row in rows):
+        raise ValueError("cannot execute a plan while rows are still checking")
+    force_ids = frozenset(
+        row.tool_id
+        for row in rows
+        if row.disposition in {Disposition.REPAIR, Disposition.REINSTALL}
+    )
+    install = with_sensitive_confirm(ctx.confirm_sensitive, _with_force(ctx.install, force_ids))
+    unresolved: set[str] = set()
+    halted = False
+    outcomes: list[RowOutcome] = []
+    for row in rows:
+        if row.disposition is Disposition.SKIP:
+            outcome = RowOutcome(row, "skipped", detail=row.reason)
+        elif row.disposition is Disposition.BLOCKED:
+            outcome = RowOutcome(row, "blocked", detail=row.reason)
+        elif halted or (ctx.should_continue is not None and not ctx.should_continue()):
+            halted = True
+            outcome = RowOutcome(row, "not_attempted", detail="run stopped before this row")
+        else:
+            try:
+                if ctx.on_row_started is not None:
+                    ctx.on_row_started(row)
+                tool = ctx.catalog[row.tool_id]
+                if row.disposition in {
+                    Disposition.INSTALL,
+                    Disposition.REPAIR,
+                    Disposition.REINSTALL,
+                }:
+                    blockers = tuple(
+                        dep for dep in dict.fromkeys(tool.requires) if dep in unresolved
+                    )
+                    if blockers:
+                        result = InstallOutcome(
+                            tool.id, InstallStatus.DEPENDENCY_FAILED, blocked_by=blockers
+                        )
+                    else:
+                        result = install(
+                            tool, ctx.platform, ctx.runner, ctx.resolve_tag, tools=ctx.catalog
+                        )
+                        if (
+                            result.status is InstallStatus.CHECKSUM_MISMATCH
+                            and ctx.on_mismatch is not None
+                        ):
+                            choice = ctx.on_mismatch(tool.id)
+                            if choice == "retry":
+                                result = install(
+                                    tool,
+                                    ctx.platform,
+                                    ctx.runner,
+                                    ctx.resolve_tag,
+                                    tools=ctx.catalog,
+                                )
+                            elif choice == "fallback":
+                                result = install(
+                                    tool,
+                                    ctx.platform,
+                                    ctx.runner,
+                                    ctx.resolve_tag,
+                                    checksum_policy="continue",
+                                    tools=ctx.catalog,
+                                )
+                    if result.status in _UNRESOLVED:
+                        unresolved.add(tool.id)
+                    mapped = _INSTALL_RESULT[result.status]
+                    detail = (
+                        "became present before it ran"
+                        if result.status is InstallStatus.ALREADY_INSTALLED
+                        else "no install method for this platform"
+                        if result.status is InstallStatus.NO_METHOD
+                        else ""
+                    )
+                    outcome = RowOutcome(row, mapped, install=result, detail=detail)
+                elif row.disposition is Disposition.UPDATE:
+                    if ctx.updates is None:
+                        outcome = RowOutcome(row, "blocked", detail="no update service")
+                    elif row.ownership is None:
+                        outcome = RowOutcome(
+                            row, "blocked", detail="ownership could not be resolved"
+                        )
+                    elif not ctx.updates.begin(row.tool_id):
+                        outcome = RowOutcome(
+                            row,
+                            "blocked",
+                            detail=(
+                                "update already in flight for "
+                                f"{ctx.updates.in_flight or 'another tool'}"
+                            ),
+                        )
+                    else:
+                        try:
+                            update = ctx.updates.run(UpdateTarget(tool, row.ownership))
+                        finally:
+                            ctx.updates.end()
+                        mapped = (
+                            "done"
+                            if update.status == "updated"
+                            else "failed"
+                            if update.status == "failed"
+                            else "blocked"
+                        )
+                        outcome = RowOutcome(row, mapped, update=update, detail=update.detail)
+                else:
+                    outcome = RowOutcome(row, "not_attempted", detail="reconfigure not wired")
+            except Exception as exc:
+                halted = True
+                outcome = RowOutcome(
+                    row,
+                    "crashed",
+                    detail=f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}",
+                )
+        outcomes.append(outcome)
+        if ctx.on_outcome is not None:
+            ctx.on_outcome(outcome)
+    return outcomes
 
 
 def _settled(state: ToolState | None) -> bool:

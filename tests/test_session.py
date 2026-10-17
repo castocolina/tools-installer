@@ -1,7 +1,8 @@
 import inspect
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -12,16 +13,29 @@ from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
 from installer.run import Runner
 from installer.session import (
+    Disposition,
     Install,
     MismatchChoice,
+    OnMismatch,
+    PlanRow,
+    Result,
+    RowOutcome,
+    RunContext,
     Summary,
+    execute_plan,
+    exit_code,
     fold_run,
     order_for_install,
+    ran_anything,
+    retained,
     run_installs,
     summarize,
+    summary_counts,
     with_sensitive_confirm,
 )
+from installer.update import UpdateOutcome
 from installer.versions import TagResolver
+from tests.state_doubles import RunRecorder
 
 
 def _tool(tool_id: str, priority: str = "P3", *, requires: tuple[str, ...] = ()) -> Tool:
@@ -38,6 +52,143 @@ def _tool(tool_id: str, priority: str = "P3", *, requires: tuple[str, ...] = ())
 
 def _platform() -> Platform:
     return Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+
+
+def _run_context(
+    recorder: RunRecorder,
+    *,
+    catalog: Mapping[str, Tool] | None = None,
+    confirm_sensitive: ConfirmSensitiveAction | None = None,
+    on_mismatch: OnMismatch | None = None,
+    should_continue: Callable[[], bool] | None = None,
+    on_row_started: Callable[[PlanRow], None] | None = None,
+    on_outcome: Callable[[RowOutcome], None] | None = None,
+) -> RunContext:
+    return RunContext(
+        catalog=catalog or {},
+        platform=_platform(),
+        runner=recorder.runner,
+        resolve_tag=lambda _repo: "1.0.0",
+        install=recorder.install,
+        terminal_sync=recorder.terminal_sync,
+        confirm_sensitive=confirm_sensitive,
+        on_mismatch=on_mismatch,
+        should_continue=should_continue,
+        on_row_started=on_row_started,
+        on_outcome=on_outcome,
+    )
+
+
+def test_execute_plan_returns_one_outcome_per_row_in_plan_order():
+    recorder = RunRecorder()
+    rows = [
+        PlanRow("fd", Disposition.INSTALL, "not installed"),
+        PlanRow("rg", Disposition.SKIP, "already current"),
+        PlanRow("jq", Disposition.BLOCKED, "needs z"),
+    ]
+    outcomes = execute_plan(
+        rows,
+        _run_context(recorder, catalog={tool_id: _tool(tool_id) for tool_id in ("fd", "rg", "jq")}),
+    )
+    assert [outcome.result for outcome in outcomes] == ["done", "skipped", "blocked"]
+    assert [outcome.row.tool_id for outcome in outcomes] == ["fd", "rg", "jq"]
+    assert recorder.installs == [("fd", False)]
+    assert outcomes[0].install is not None
+    assert outcomes[0].install.status.value == "installed"
+
+
+def test_execute_plan_refuses_a_plan_with_a_wait_row():
+    recorder = RunRecorder()
+    with pytest.raises(ValueError):
+        execute_plan([PlanRow("rg", Disposition.WAIT, "")], _run_context(recorder))
+    assert recorder.installs == []
+
+
+def test_repair_and_reinstall_rows_force_repair():
+    recorder = RunRecorder()
+    rows = [
+        PlanRow("rg", Disposition.REPAIR, "broken"),
+        PlanRow("fd", Disposition.REINSTALL, "again"),
+        PlanRow("jq", Disposition.INSTALL, "missing"),
+    ]
+    outcomes = execute_plan(
+        rows,
+        _run_context(recorder, catalog={tool_id: _tool(tool_id) for tool_id in ("rg", "fd", "jq")}),
+    )
+    assert recorder.installs == [("rg", True), ("fd", True), ("jq", False)]
+    assert summary_counts(outcomes) == "1 installed, 1 repaired, 1 reinstalled"
+
+
+def test_force_repair_composes_under_sensitive_confirm():
+    recorder = RunRecorder()
+
+    def confirm(_tool: str, _action: str) -> bool:
+        return True
+
+    outcomes = execute_plan(
+        [
+            PlanRow("rg", Disposition.REINSTALL, "again"),
+            PlanRow("fd", Disposition.INSTALL, "missing"),
+        ],
+        _run_context(
+            recorder,
+            catalog={tool_id: _tool(tool_id) for tool_id in ("rg", "fd")},
+            confirm_sensitive=confirm,
+        ),
+    )
+    assert [outcome.result for outcome in outcomes] == ["done", "done"]
+    assert recorder.installs == [("rg", True), ("fd", False)]
+    assert recorder.confirms == [confirm, confirm]
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        "done",
+        "failed",
+        "mismatch",
+        "dependency_failed",
+        "not_attempted",
+        "crashed",
+        "skipped",
+        "blocked",
+        "manual",
+    ],
+)
+def test_exit_code_retained_and_ran_anything_are_pure_views_of_the_list(result: str):
+    row = PlanRow("rg", Disposition.INSTALL, "")
+    outcome = RowOutcome(row, cast(Result, result))
+    failures = {"failed", "mismatch", "dependency_failed", "not_attempted", "crashed"}
+    assert exit_code([outcome]) == (1 if result in failures else 0)
+    assert retained([outcome]) == ({"rg"} if result in failures | {"blocked", "manual"} else set())
+    assert ran_anything([outcome]) is (
+        result in {"done", "failed", "mismatch", "crashed", "manual"}
+    )
+
+
+def test_blocked_plus_done_exits_zero_and_failed_exits_one():
+    assert (
+        exit_code(
+            [
+                RowOutcome(PlanRow("a", Disposition.BLOCKED, ""), "blocked"),
+                RowOutcome(PlanRow("b", Disposition.INSTALL, ""), "done"),
+            ]
+        )
+        == 0
+    )
+    assert exit_code([RowOutcome(PlanRow("a", Disposition.INSTALL, ""), "failed")]) == 1
+
+
+def test_summary_counts_fixed_order_and_nothing_selected():
+    outcomes = [
+        RowOutcome(PlanRow("a", Disposition.INSTALL, ""), "done"),
+        RowOutcome(PlanRow("b", Disposition.INSTALL, ""), "done"),
+        RowOutcome(PlanRow("c", Disposition.UPDATE, ""), "done"),
+        *[RowOutcome(PlanRow(str(i), Disposition.SKIP, ""), "skipped") for i in range(3)],
+        RowOutcome(PlanRow("f", Disposition.INSTALL, ""), "failed"),
+    ]
+    assert summary_counts(outcomes) == "2 installed, 1 updated, 3 skipped, 1 failed"
+    assert summary_counts([]) == "nothing selected"
 
 
 def test_order_for_install_sorts_by_priority_then_keeps_catalog_order():
@@ -709,7 +860,6 @@ def test_summary_has_failure(kwargs: dict[str, object], expected: bool) -> None:
 
 
 def test_fold_run_records_not_attempted_update_failures_and_crash() -> None:
-    from installer.update import UpdateOutcome
 
     summary = Summary(installed=("a",), already=(), failed=(), no_method=())
     folded = fold_run(
@@ -732,7 +882,6 @@ def test_fold_run_records_not_attempted_update_failures_and_crash() -> None:
 
 
 def test_fold_run_drops_duplicate_update_failure_ids() -> None:
-    from installer.update import UpdateOutcome
 
     summary = Summary(installed=(), already=(), failed=(), no_method=())
     folded = fold_run(
