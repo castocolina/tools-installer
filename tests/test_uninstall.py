@@ -2486,3 +2486,71 @@ def test_dir_removal_leaves_no_quarantine_behind(
     assert remove_paths([artifact]) == ()
     assert not opt.exists()
     assert [p for p in opt.parent.iterdir() if p.name.endswith(_QUARANTINE_SUFFIX)] == []
+
+
+@pytest.mark.parametrize("where", ["after_capture", "at_delete"])
+def test_remove_paths_puts_the_tree_back_when_interrupted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    import installer.uninstall as uninstall_module
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    fd, bin_dir, opt = _plant_fd(tmp_path)
+    artifact = plan_removal([fd], bin_dir, verify=True).artifacts[opt]
+    if where == "after_capture":
+        original_matches = uninstall_module.receipts.matches
+
+        def interrupt_recheck(candidate: receipts.ReceiptArtifact, *, rehash: bool = False) -> bool:
+            if candidate.path.name.endswith(_QUARANTINE_SUFFIX):
+                raise KeyboardInterrupt
+            return original_matches(candidate, rehash=rehash)
+
+        monkeypatch.setattr(uninstall_module.receipts, "matches", interrupt_recheck)
+    else:
+        original_rmtree = uninstall_module.shutil.rmtree
+
+        def interrupt_delete(
+            path: str | os.PathLike[str],
+            ignore_errors: bool = False,
+            onerror: Callable[..., object] | None = None,
+        ) -> None:
+            if Path(path).name.endswith(_QUARANTINE_SUFFIX):
+                raise KeyboardInterrupt
+            original_rmtree(path, ignore_errors=ignore_errors, onerror=onerror)
+
+        monkeypatch.setattr(uninstall_module.shutil, "rmtree", interrupt_delete)
+
+    with pytest.raises(KeyboardInterrupt):
+        remove_paths([artifact])
+
+    assert (opt / "fd").read_text() == "fd binary"
+    assert opt.is_dir()
+    assert [p for p in opt.parent.iterdir() if p.name.endswith(_QUARANTINE_SUFFIX)] == []
+
+
+def test_an_interrupted_removal_that_cannot_put_back_names_the_quarantine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import installer.uninstall as uninstall_module
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    fd, bin_dir, opt = _plant_fd(tmp_path)
+    artifact = plan_removal([fd], bin_dir, verify=True).artifacts[opt]
+    original_matches = uninstall_module.receipts.matches
+
+    def interrupt_and_occupy(candidate: receipts.ReceiptArtifact, *, rehash: bool = False) -> bool:
+        if candidate.path.name.endswith(_QUARANTINE_SUFFIX):
+            opt.mkdir()
+            (opt / "newest").write_text("third copy")
+            raise KeyboardInterrupt
+        return original_matches(candidate, rehash=rehash)
+
+    monkeypatch.setattr(uninstall_module.receipts, "matches", interrupt_and_occupy)
+    with pytest.raises(OSError, match="changed during removal; it is kept at") as caught:
+        remove_paths([artifact])
+
+    kept = [p for p in opt.parent.iterdir() if p.name.endswith(_QUARANTINE_SUFFIX)]
+    assert len(kept) == 1
+    assert (kept[0] / "fd").read_text() == "fd binary"
+    assert (opt / "newest").read_text() == "third copy"
+    assert isinstance(caught.value.__context__, KeyboardInterrupt)

@@ -7,6 +7,7 @@ are left alone."""
 import contextlib
 import os
 import shutil
+import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -433,8 +434,8 @@ def _remove_dir(artifact: receipts.ReceiptArtifact) -> bool:
     rename never crosses a filesystem and never follows a planted link), the
     key file is re-hashed inside the captured tree, and only then is that tree
     deleted. A captured tree that no longer matches is renamed back untouched
-    and the artifact is refused; a `rmtree` that fails puts the remainder back
-    at its path before re-raising, so the next plan still lists it.
+    and the artifact is refused; an interruption after the capture puts the
+    tree back too; only a kill can leave the quarantine sibling behind.
     """
     quarantine = Path(
         tempfile.mkdtemp(
@@ -449,14 +450,24 @@ def _remove_dir(artifact: receipts.ReceiptArtifact) -> bool:
         with contextlib.suppress(OSError):
             quarantine.rmdir()
         raise
-    if not receipts.matches(replace(artifact, path=quarantine), rehash=True):
+    try:
+        verified = receipts.matches(replace(artifact, path=quarantine), rehash=True)
+        if verified:
+            shutil.rmtree(quarantine)
+    except BaseException:
+        # Catchable cancellation (Ctrl+C, SystemExit) and a failed delete alike
+        # put the remainder back before the exception leaves; SIGKILL leaves a
+        # sibling, which plan_removal lists (RR3-02).
+        interruption = sys.exception()
+        try:
+            _put_back(quarantine, artifact.path)
+        except OSError as put_back_error:
+            put_back_error.__context__ = interruption
+            raise put_back_error from None
+        raise
+    if not verified:
         _put_back(quarantine, artifact.path)
         return False
-    try:
-        shutil.rmtree(quarantine)
-    except OSError:
-        _put_back(quarantine, artifact.path)
-        raise
     return True
 
 
