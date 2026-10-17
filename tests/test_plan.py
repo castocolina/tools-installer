@@ -1,6 +1,7 @@
 import subprocess
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 from typing import cast
@@ -81,7 +82,7 @@ def _tool(
     )
 
 
-def _state_of(states: dict[str, ToolState]) -> Callable[[str], ToolState | None]:
+def _state_of(states: Mapping[str, ToolState | None]) -> Callable[[str], ToolState | None]:
     return states.get
 
 
@@ -519,6 +520,141 @@ def test_unavailable_dragged_dependency_blocks_its_dependent():
     assert by_id["z"].requested_by == "c"
     assert by_id["c"].disposition is Disposition.BLOCKED
     assert by_id["c"].reason == "needs z"
+
+
+@dataclass(frozen=True)
+class _ProbeCase:
+    selection: tuple[str, ...]
+    catalog: tuple[Tool, ...]
+    states: dict[str, ToolState | None]
+    reinstall: frozenset[str]
+    expected: tuple[tuple[str, Disposition, str, bool, str | None], ...]
+
+
+def _probe_case(case: str, tier: str) -> _ProbeCase:
+    if case == "A":
+        dep, top = _tool("rg", tier=tier), _tool("mmdc", tier=tier, requires=("rg",))
+        return _ProbeCase(
+            ("mmdc",),
+            (dep, top),
+            {"rg": None, "mmdc": plan_state(top, health=Health.MISSING, present=False)},
+            frozenset(),
+            (
+                ("rg", Disposition.WAIT, "", False, "mmdc"),
+                ("mmdc", Disposition.INSTALL, "not installed", False, None),
+            ),
+        )
+    if case == "B":
+        tool = _tool("rg", tier=tier)
+        return _ProbeCase(
+            ("rg",),
+            (tool,),
+            {"rg": plan_state(tool)},
+            frozenset(),
+            (("rg", Disposition.SKIP, "already current", True, None),),
+        )
+    if case == "C":
+        rg, fd = _tool("rg", tier=tier), _tool("fd", tier=tier)
+        return _ProbeCase(
+            ("rg", "fd"),
+            (rg, fd),
+            {"rg": plan_state(rg), "fd": plan_state(fd, health=Health.MISSING, present=False)},
+            frozenset(),
+            (
+                ("rg", Disposition.SKIP, "already current", True, None),
+                ("fd", Disposition.INSTALL, "not installed", False, None),
+            ),
+        )
+    if case == "D":
+        tool = _tool("jq", tier=tier)
+        return _ProbeCase(
+            ("jq",),
+            (tool,),
+            {"jq": plan_state(tool, health=Health.OUTDATED, owner="dnf")},
+            frozenset(),
+            (("jq", Disposition.SKIP, "managed by dnf", False, None),),
+        )
+    if case == "E":
+        tool = _tool("rg", tier=tier)
+        state = plan_state(tool, health=Health.BROKEN, reasons=(BROKEN_SHIM_REASON,))
+        return _ProbeCase(
+            ("rg",),
+            (tool,),
+            {"rg": state},
+            frozenset(),
+            (("rg", Disposition.REPAIR, "shim present, package missing", False, None),),
+        )
+    if case == "F":
+        tool = _tool(
+            "rg", tier=tier, methods=(Method(kind="github_release", params={"repo": "x/y"}),)
+        )
+        return _ProbeCase(
+            ("rg",),
+            (tool,),
+            {"rg": plan_state(tool, owner="brew", off_policy=True)},
+            frozenset(),
+            (
+                (
+                    "rg",
+                    Disposition.SKIP,
+                    "managed by Homebrew; the catalog installs it via GitHub release",
+                    False,
+                    None,
+                ),
+            ),
+        )
+    if case == "G":
+        tool = _tool("zsh", tier=tier)
+        return _ProbeCase(
+            ("zsh",),
+            (tool,),
+            {"zsh": plan_state(tool)},
+            frozenset({"zsh"}),
+            (("zsh", Disposition.REINSTALL, "reinstall requested; r again to undo", True, None),),
+        )
+    if case == "H":
+        tool = Tool(
+            id="rtk",
+            name="rtk",
+            category="search",
+            cmd="rtk",
+            methods=(_BREW,),
+            priority="P3",
+            audience="both",
+            tier=tier,
+            postinstall="test_hook",
+        )
+        return _ProbeCase(
+            ("rtk",),
+            (tool,),
+            {"rtk": plan_state(tool)},
+            frozenset(),
+            (("rtk", Disposition.SKIP, "already current", True, None),),
+        )
+    tool = _tool("rg", tier=tier)
+    return _ProbeCase(
+        ("rg",), (tool,), {"rg": None}, frozenset(), (("rg", Disposition.WAIT, "", False, None),)
+    )
+
+
+@pytest.mark.parametrize(
+    ("tier", "case"),
+    [
+        pytest.param(tier, case, id=f"{case}-{tier}")
+        for tier in ("system", "user", "ai")
+        for case in "ABCDEFGHI"
+    ],
+)
+def test_g_probe_cases_on_every_tier(tier: str, case: str):
+    data = _probe_case(case, tier)
+    rows = build_plan(
+        data.selection, data.catalog, _state_of(data.states), MACOS, reinstall=data.reinstall
+    )
+    actual = tuple(
+        (row.tool_id, row.disposition, row.reason, row.can_reinstall, row.requested_by)
+        for row in rows
+    )
+    assert actual == data.expected
 
 
 @pytest.mark.parametrize("tier", ["system", "user", "ai"])

@@ -391,8 +391,12 @@ def _broken_reason(state: ToolState) -> str:
     return clause
 
 
+def _needs_reason(dependency: str) -> str:
+    return f"needs {dependency}"
+
+
 def _needs_row(row: PlanRow, dependency: str) -> PlanRow:
-    return replace(row, disposition=Disposition.BLOCKED, reason=f"needs {dependency}")
+    return replace(row, disposition=Disposition.BLOCKED, reason=_needs_reason(dependency))
 
 
 def _version_arrow(state: ToolState) -> str:
@@ -579,7 +583,7 @@ def _blocked_row(
     if state is not None and state.reasons and state.health is Health.UNAVAILABLE:
         reason = _first_clause(state)
     elif blocked.needs is not None:
-        reason = f"needs {blocked.needs}"
+        reason = _needs_reason(blocked.needs)
     else:
         reason = blocked.reason
     return PlanRow(
