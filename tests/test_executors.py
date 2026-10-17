@@ -701,10 +701,12 @@ def test_unknown_smoke_raises_before_the_install_runs(
 
 # --- the launch probe itself -------------------------------------------------
 #
-# Driven through `executors.launch_puppeteer`, the module-level seam the smoke
-# check calls. Root discovery and the subprocess both sit behind it, so these
-# tests exercise the real discovery without reaching a real pnpm, node or
-# browser — and without reaching past the module's public surface.
+# These are the tests that exercise the REAL probe, so they ask for it back with
+# the `real_launch_probe` fixture (the autouse sandbox stubs the seam by default
+# to keep every other test off the host's node). What they still fake is
+# `executors.run_output` — the one call that would start a process — so root
+# discovery runs for real without reaching a real pnpm, node or browser, and
+# without reaching past the module's public surface.
 
 
 def _plant_shim(bin_dir: Path, target: Path) -> Path:
@@ -765,7 +767,7 @@ def _no_shim_anywhere(monkeypatch: pytest.MonkeyPatch, run: _FakeRun) -> None:
 
 
 def test_launch_probe_defers_every_browser_choice_to_puppeteer(
-    monkeypatch: pytest.MonkeyPatch,
+    real_launch_probe: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The whole point of H1: this project no longer picks the binary.
 
@@ -793,7 +795,7 @@ def test_launch_probe_defers_every_browser_choice_to_puppeteer(
 
 
 def test_launch_probe_resolves_puppeteer_from_the_shim_on_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, real_launch_probe: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """pnpm v11 has no single global node_modules, so the shim is the pointer.
 
@@ -812,7 +814,7 @@ def test_launch_probe_resolves_puppeteer_from_the_shim_on_path(
 
 
 def test_launch_probe_follows_a_symlinked_shim(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, real_launch_probe: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Older layouts symlink the global bin instead of writing a cmd-shim."""
     entry = _plant_package(tmp_path / "group")
@@ -829,7 +831,7 @@ def test_launch_probe_follows_a_symlinked_shim(
 
 
 def test_launch_probe_asks_pnpm_for_its_bin_dir_when_path_is_stale(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, real_launch_probe: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`which` is PATH-based, and PATH is not always current.
 
@@ -852,7 +854,7 @@ def test_launch_probe_asks_pnpm_for_its_bin_dir_when_path_is_stale(
 
 
 def test_launch_probe_offers_each_root_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, real_launch_probe: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     entry = _plant_package(tmp_path / "group")
     bin_dir = tmp_path / "bin"
@@ -866,7 +868,7 @@ def test_launch_probe_offers_each_root_once(
 
 
 def test_launch_probe_passes_no_root_it_could_not_read(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, real_launch_probe: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An opaque shim, an empty trailer and an absent file all yield nothing.
 
@@ -884,7 +886,7 @@ def test_launch_probe_passes_no_root_it_could_not_read(
 
 
 def test_launch_probe_survives_a_shim_it_cannot_open(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, real_launch_probe: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An unreadable shim costs a root, never an OSError out of the check.
 
@@ -908,7 +910,7 @@ def test_launch_probe_survives_a_shim_it_cannot_open(
 
 
 def test_launch_probe_ignores_a_pnpm_that_cannot_answer(
-    monkeypatch: pytest.MonkeyPatch,
+    real_launch_probe: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An unreadable bin dir costs a root, never the whole check."""
 
@@ -926,7 +928,9 @@ def test_launch_probe_ignores_a_pnpm_that_cannot_answer(
     assert run.node_call[0][3:] == []
 
 
-def test_launch_probe_reports_the_browsers_own_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_launch_probe_reports_the_browsers_own_error(
+    real_launch_probe: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     run = _FakeRun(
         launch=CommandError(
             ["node"], 1, detail="Failed to launch the browser process!\n  libnss3.so"
@@ -936,14 +940,16 @@ def test_launch_probe_reports_the_browsers_own_error(monkeypatch: pytest.MonkeyP
     assert executors.launch_puppeteer() == "Failed to launch the browser process! libnss3.so"
 
 
-def test_launch_probe_names_node_when_node_cannot_run(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_launch_probe_names_node_when_node_cannot_run(
+    real_launch_probe: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     run = _FakeRun(launch=CommandError(["node"], 127))
     _no_shim_anywhere(monkeypatch, run)
     assert executors.launch_puppeteer() == "node could not be started to run the launch probe"
 
 
 def test_launch_probe_falls_back_to_the_exit_code_without_a_detail(
-    monkeypatch: pytest.MonkeyPatch,
+    real_launch_probe: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run = _FakeRun(launch=CommandError(["node"], 3))
     _no_shim_anywhere(monkeypatch, run)
@@ -951,7 +957,7 @@ def test_launch_probe_falls_back_to_the_exit_code_without_a_detail(
 
 
 def test_launch_probe_reports_a_timeout_rather_than_hanging(
-    monkeypatch: pytest.MonkeyPatch,
+    real_launch_probe: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run = _FakeRun(launch=CommandError(["node"], TIMEOUT_CODE, detail="timed out after 60s"))
     _no_shim_anywhere(monkeypatch, run)
@@ -959,7 +965,7 @@ def test_launch_probe_reports_a_timeout_rather_than_hanging(
 
 
 def test_launch_failure_detail_is_condensed_for_a_one_line_warning(
-    monkeypatch: pytest.MonkeyPatch,
+    real_launch_probe: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The text lands in a Doctor warning row; a Chrome failure is a paragraph."""
     run = _FakeRun(launch=CommandError(["node"], 1, detail="a\n" + "b" * 900))

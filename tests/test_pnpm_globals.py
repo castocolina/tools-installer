@@ -1006,12 +1006,41 @@ def test_audit_reports_the_brownfield_shape_the_doctor_used_to_pass_in_silence()
         which=lambda _n: "/x/bin",
         grouped=lambda: _BROWNFIELD_LIVE,
         policy=policy,
+        smoke=lambda _name: None,
     )
     assert report.split_groups == ()
     assert report.missing == ()
     assert report.incomplete_groups == (
         pnpm_globals.IncompleteGroup(present=(MMDC_NPM,), missing=("puppeteer",)),
     )
+
+
+def test_the_default_smoke_check_in_the_suite_starts_no_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A default audit must not execute the host's node.
+
+    The launch probe runs `node -e`, and the node on this developer's PATH is
+    the Volta shim: with `VOLTA_HOME` cleared by the autouse fixture, that shim
+    re-invokes the node that is itself and forks until the timeout. The sandbox
+    stubs the launch seam for exactly this reason — this test is the net under
+    it, so a future test that reaches the default smoke check cannot quietly
+    put the whole suite back on the machine.
+    """
+    import installer.executors as executors
+    from tests.conftest import NO_BROWSER_DETAIL
+
+    def never_run_output(cmd: list[str], **_kwargs: object) -> str:
+        raise AssertionError(f"the suite started a process: {cmd[:2]}")
+
+    monkeypatch.setattr(executors, "run_output", never_run_output)
+    report = audit_node_globals(
+        load_tools(REGISTRY),
+        which=lambda _n: "/x/bin",
+        managed=_managed("puppeteer"),
+    )
+    assert [tool_id for tool_id, _reason in report.unhealthy] == ["puppeteer"]
+    assert NO_BROWSER_DETAIL in report.unhealthy[0][1]
 
 
 def test_replay_completes_a_declared_group_pnpm_is_missing_a_member_of() -> None:

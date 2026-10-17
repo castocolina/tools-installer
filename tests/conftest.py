@@ -18,11 +18,16 @@ from pathlib import Path
 
 import pytest
 
-from installer import locations, receipts, version_status
+from installer import executors, locations, receipts, version_status
 
 # Captured at conftest IMPORT time, before any test can monkeypatch $HOME, so
 # this stays the developer's real home no matter what a test does later.
 _REAL_HOME = Path(os.path.expanduser("~"))  # noqa: PTH111 -- must not follow a patched Path.home()
+
+# Same trick for the puppeteer launch probe: captured before the autouse stub
+# below replaces it, so the tests that ARE the probe can put it back through
+# the `real_launch_probe` fixture without reaching past the module's surface.
+_REAL_LAUNCH_PUPPETEER: Callable[[], str | None] = executors.launch_puppeteer
 _GUARDED_DOTFILES = (".myshellrc", ".shellrc", ".bashrc", ".zshrc", ".profile")
 
 
@@ -201,22 +206,39 @@ def empty_browser_cache(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return tmp_path_factory.mktemp("empty-browser-cache")
 
 
+# What the stubbed launch below reports. A fixed string, so a test that forgets
+# its own seam gets a failing smoke check it can read rather than a mystery.
+NO_BROWSER_DETAIL = "no browser in the test sandbox"
+
+
 @pytest.fixture(autouse=True)
 def sandboxed_puppeteer_cache(empty_browser_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point the puppeteer smoke check at an empty cache nobody installed into.
+    """Point the puppeteer smoke check at an empty cache nobody installed into,
+    and stub the launch seam so no test can execute the host's node or browser.
 
-    `installer/pnpm_globals.py::audit_node_globals` re-runs declared smoke
-    checks, and the puppeteer one reads `PUPPETEER_CACHE_DIR` (falling back to
-    `~/.cache/puppeteer`) and then EXECUTES whatever browser it finds. On a
-    developer machine that really has puppeteer installed, a test that only
-    meant to exercise group detection would read the real cache and spawn the
-    real Chrome — the same class of "never touch this machine" violation the
-    HOME sandbox exists to prevent, and a source of results that differ between
-    that machine and CI.
+    The cache env var alone is not a sandbox: the probe resolves `puppeteer`
+    through the host's own toolchain and then EXECUTES whatever it finds, so a
+    test that only meant to exercise group detection could spawn a real
+    browser — and on this machine the node on PATH is the Volta shim, which,
+    with `VOLTA_HOME` cleared above, re-invokes the node that is itself and
+    forks without end.
 
-    An empty directory makes the check fail before it runs anything. A test
-    that wants a browser sets the env var to its own cache, which overrides
-    this.
+    An empty directory plus a stubbed launch makes the check fail before it
+    runs anything, which is the verdict the tests already assume. A test that
+    wants a browser, or that exercises the real probe, sets its own seam with
+    `monkeypatch.setattr(executors, "launch_puppeteer", ...)` — that runs after
+    this autouse fixture and overrides it.
     """
     monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(empty_browser_cache))
     monkeypatch.delenv("PUPPETEER_EXECUTABLE_PATH", raising=False)
+    monkeypatch.setattr(executors, "launch_puppeteer", lambda: NO_BROWSER_DETAIL)
+
+
+@pytest.fixture
+def real_launch_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Restore the real puppeteer launch probe, for the tests that exercise it.
+
+    Those still fake `executors.run_output`, the one call that would start a
+    process, so the probe runs for real without touching the machine.
+    """
+    monkeypatch.setattr(executors, "launch_puppeteer", _REAL_LAUNCH_PUPPETEER)
