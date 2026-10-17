@@ -235,19 +235,16 @@ def perform_update(
         )
 
 
-def _perform(
-    target: UpdateTarget,
-    *,
-    platform: Platform,
-    runner: Runner,
-    resolve_tag: TagResolver,
-    tools: Mapping[str, Tool],
-    postinstall: PostinstallFn,
-) -> UpdateOutcome:
-    ownership = target.ownership
+def update_refusal(tool: Tool, ownership: ManagerOwnership) -> UpdateOutcome | None:
+    """The pre-flight refusal `_perform` answers with, or None when an update can run.
+
+    The single source of this refusal: the engine answers with it, and the review
+    (Phase 20 `session.build_plan`) consults the same predicate so it never promises
+    an update the engine would refuse. Zero subprocess, zero filesystem write.
+    """
     if ownership.owner == "unknown" or ownership.confidence not in MUTATION_GRADE:
         return UpdateOutcome(
-            tool_id=target.tool.id,
+            tool_id=tool.id,
             status="unknown-owner",
             owner=ownership.owner,
             detail=ownership.unknown_reason or _FALLBACK_UNKNOWN,
@@ -255,14 +252,14 @@ def _perform(
     method = ownership.method
     if method is not None and method.kind == "sdkman":
         return UpdateOutcome(
-            tool_id=target.tool.id,
+            tool_id=tool.id,
             status="unsupported",
             owner=ownership.owner,
-            detail=_SDKMAN_DETAIL.format(candidate=ownership.package or target.tool.id),
+            detail=_SDKMAN_DETAIL.format(candidate=ownership.package or tool.id),
         )
     if ownership.owner in UNMANAGEABLE_OWNERS:
         # D-05/T-15-15/15.4-01: this branch must precede the owner-dispatch
-        # ladder below. `direct` is in MUTATION_GRADE, so a native- or
+        # ladder in `_perform`. `direct` is in MUTATION_GRADE, so a native- or
         # os-package-owned tool now passes the gate above and would
         # otherwise reach the ladder's final `else: raise UpdateError(...)`
         # -- a confusing `status="failed"` outcome, strictly worse than the
@@ -276,7 +273,7 @@ def _perform(
         else:
             detail = _NATIVE_OWNER_DETAIL.format(owner=ownership.owner)
         return UpdateOutcome(
-            tool_id=target.tool.id,
+            tool_id=tool.id,
             status="unsupported",
             owner=ownership.owner,
             detail=detail,
@@ -284,14 +281,49 @@ def _perform(
     if ownership.owner == "volta":
         # D-13: Volta pins and switches its own toolchain; never run it here.
         return UpdateOutcome(
-            tool_id=target.tool.id,
+            tool_id=tool.id,
             status="unsupported",
             owner="volta",
             detail=(
-                "managed by Volta — update it with "
-                f"`volta install {ownership.package or target.tool.cmd}`"
+                f"managed by Volta — update it with `volta install {ownership.package or tool.cmd}`"
             ),
         )
+    if ownership.owner == "pnpm" and method is None:
+        # A host-setup tool (pi): pnpm owns it but no node method installs it.
+        # The hint quotes the reviewed handoff (G14); a tool without one gets
+        # the fallback, which still carries --ignore-scripts.
+        setup_ids = (str(m.params.get("setup_id")) for m in tool.methods if m.kind == "host_setup")
+        command = next(
+            (
+                quoted
+                for setup_id in setup_ids
+                if (quoted := pnpm_add_command(setup_id)) is not None
+            ),
+            f"pnpm add --global --ignore-scripts {ownership.package or tool.cmd}",
+        )
+        return UpdateOutcome(
+            tool_id=tool.id,
+            status="unsupported",
+            owner="pnpm",
+            detail=(f"managed by pnpm through its host setup — update it with `{command}`"),
+        )
+    return None
+
+
+def _perform(
+    target: UpdateTarget,
+    *,
+    platform: Platform,
+    runner: Runner,
+    resolve_tag: TagResolver,
+    tools: Mapping[str, Tool],
+    postinstall: PostinstallFn,
+) -> UpdateOutcome:
+    ownership = target.ownership
+    refusal = update_refusal(target.tool, ownership)
+    if refusal is not None:
+        return refusal
+    method = ownership.method
     owner = ownership.owner
     cleanup_warnings: tuple[str, ...] = ()
     detail = ""
@@ -310,27 +342,9 @@ def _perform(
                     f"updated through {real}"
                 )
     elif owner == "pnpm":
+        # update_refusal answered the host-setup case (no node method) above.
         if method is None:
-            # A host-setup tool (pi): pnpm owns it but no node method installs it.
-            # The hint quotes the reviewed handoff (G14); a tool without one gets
-            # the fallback, which still carries --ignore-scripts.
-            setup_ids = (
-                str(m.params.get("setup_id")) for m in target.tool.methods if m.kind == "host_setup"
-            )
-            command = next(
-                (
-                    quoted
-                    for setup_id in setup_ids
-                    if (quoted := pnpm_add_command(setup_id)) is not None
-                ),
-                f"pnpm add --global --ignore-scripts {ownership.package or target.tool.cmd}",
-            )
-            return UpdateOutcome(
-                tool_id=target.tool.id,
-                status="unsupported",
-                owner="pnpm",
-                detail=(f"managed by pnpm through its host setup — update it with `{command}`"),
-            )
+            raise UpdateError("pnpm update reached the engine without a node method")
         executors.execute(method, runner)
     elif owner == "installer":
         cleanup_warnings = _update_installer_owned(

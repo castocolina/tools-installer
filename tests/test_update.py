@@ -41,6 +41,7 @@ from installer.update import (
     perform_update,
     resolve_update_argv,
     should_replay_node_globals,
+    update_refusal,
 )
 from installer.versions import TagResolver, VersionError, release_resolver, resolve_github_tag
 from tests.test_download import fixture_runner
@@ -1117,6 +1118,116 @@ def test_update_service_terminal_follow_up_runs_before_invalidate(
     )
     service.run(_target(tool, "brew", method=brew, package="ripgrep"))
     assert order == ["terminal_follow_up", "invalidate"]
+
+
+_BREW = Method(kind="brew", params={"formula": "rg"})
+_SDKMAN = Method(kind="sdkman", params={"candidate": "java"})
+_SCRIPT = Method(kind="script", params={"url": "u"})
+
+
+# (tool_id, method, owner, package, extra kwargs, status, detail): literals
+# captured from the pre-refactor `_perform` branches.
+@pytest.mark.parametrize(
+    ("tool_id", "method", "owner", "package", "kwargs", "status", "detail"),
+    [
+        (
+            "rg",
+            _BREW,
+            "unknown",
+            None,
+            {"unknown_reason": "no inventory"},
+            "unknown-owner",
+            "no inventory",
+        ),
+        ("rg", _BREW, "unknown", None, {}, "unknown-owner", "no manager claimed this tool"),
+        (
+            "rg",
+            _BREW,
+            "brew",
+            "rg",
+            {"confidence": "none"},
+            "unknown-owner",
+            "no manager claimed this tool",
+        ),
+        (
+            "java",
+            _SDKMAN,
+            "brew",
+            "java",
+            {},
+            "unsupported",
+            "SDKMAN owns this tool; this installer does not run SDKMAN's interactive upgrade "
+            "— update it with `sdk upgrade java` in your own terminal",
+        ),
+        (
+            "rg",
+            _BREW,
+            "dnf",
+            "ripgrep",
+            {},
+            "unsupported",
+            "dnf owns this tool; this installer does not perform privileged system-package "
+            "updates, so update it through dnf yourself",
+        ),
+        (
+            "rg",
+            _BREW,
+            "os-package",
+            "git-core",
+            {},
+            "unsupported",
+            "an OS package (git-core) provides this tool; this installer performs no privileged "
+            "system-package updates, so the system's own update path owns it",
+        ),
+        (
+            "pnpm",
+            _SCRIPT,
+            "volta",
+            "pnpm",
+            {},
+            "unsupported",
+            "managed by Volta — update it with `volta install pnpm`",
+        ),
+        (
+            "pi",
+            None,
+            "pnpm",
+            "@earendil-works/pi-coding-agent",
+            {},
+            "unsupported",
+            "managed by pnpm through its host setup — update it with "
+            "`pnpm add --global --ignore-scripts @earendil-works/pi-coding-agent`",
+        ),
+    ],
+)
+def test_update_refusal_matches_perform_for_every_refusal(
+    tool_id: str,
+    method: Method | None,
+    owner: Owner,
+    package: str | None,
+    kwargs: dict[str, typing.Any],
+    status: str,
+    detail: str,
+) -> None:
+    tool = _tool(tool_id, method) if method is not None else _tool(tool_id)
+    target = _target(tool, owner, method=method, package=package, **kwargs)
+    refusal = update_refusal(target.tool, target.ownership)
+    assert refusal is not None
+    assert (refusal.tool_id, refusal.status, refusal.owner, refusal.detail) == (
+        tool_id,
+        status,
+        owner,
+        detail,
+    )
+    calls: list[list[str]] = []
+    assert _perform(target, calls.append) == refusal
+    assert calls == []
+
+
+def test_update_refusal_is_none_for_an_updatable_owner() -> None:
+    tool = _tool("rg", _BREW)
+    target = _target(tool, "brew", method=_BREW, package="ripgrep")
+    assert update_refusal(target.tool, target.ownership) is None
 
 
 def test_off_policy_brew_update_names_the_declared_manager() -> None:
