@@ -14,9 +14,15 @@ from installer.deps import Blocked, resolve_dependencies
 from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
 from installer.enums import InstallStatus, Priority
 from installer.model import ConfigStep, Tool
-from installer.ownership import ManagerOwnership, declared_manager_label, owner_label
+from installer.ownership import (
+    UNMANAGEABLE_OWNERS,
+    ManagerOwnership,
+    declared_manager_label,
+    owner_label,
+)
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
+from installer.receipts import CHANGED_SINCE_INSTALL
 from installer.resolve import resolve_methods
 from installer.run import Runner, run_command
 from installer.selection import select_tools
@@ -378,6 +384,17 @@ def _first_clause(state: ToolState) -> str:
     return state.reasons[0].split(" — ", 1)[0] if state.reasons else ""
 
 
+def _broken_reason(state: ToolState) -> str:
+    clause = _first_clause(state)
+    if clause == CHANGED_SINCE_INSTALL:
+        return "changed since install; the file is replaced"
+    return clause
+
+
+def _needs_row(row: PlanRow, dependency: str) -> PlanRow:
+    return replace(row, disposition=Disposition.BLOCKED, reason=f"needs {dependency}")
+
+
 def _row(
     tool: Tool,
     state: ToolState | None,
@@ -394,6 +411,28 @@ def _row(
         return PlanRow(
             tool.id,
             Disposition.INSTALL,
+            reason,
+            requested_by=requester,
+            health=state.health,
+            ownership=state.ownership,
+        )
+    if state.health is Health.BROKEN:
+        if state.ownership.owner in UNMANAGEABLE_OWNERS:
+            label = owner_label(state.ownership) or state.ownership.owner
+            return PlanRow(
+                tool.id,
+                Disposition.BLOCKED,
+                f"{label} owns it; repair needs sudo (never run here)",
+                requested_by=requester,
+                health=state.health,
+                ownership=state.ownership,
+            )
+        reason = _broken_reason(state)
+        if requester is not None:
+            reason += f"; needed by {requester}"
+        return PlanRow(
+            tool.id,
+            Disposition.REPAIR,
             reason,
             requested_by=requester,
             health=state.health,
@@ -494,6 +533,7 @@ def build_plan(
     Reads `state_of` and nothing else: no probe, no network, no subprocess. Rows
     follow `Resolution.closure` (execution order, dependencies first).
     """
+    by_id = {tool.id: tool for tool in catalog}
     chosen = select_tools(list(catalog), list(selected))
     direct_ids = {tool.id for tool in chosen}
     res = resolve_dependencies(
@@ -517,4 +557,19 @@ def build_plan(
         _blocked_row(item, state_of(item.tool_id), requester=res.requested_by.get(item.tool_id))
         for item in res.blocked
     )
+    blocked = {row.tool_id for row in rows if row.disposition is Disposition.BLOCKED}
+    runnable = {
+        Disposition.INSTALL,
+        Disposition.UPDATE,
+        Disposition.REPAIR,
+        Disposition.RECONFIGURE,
+        Disposition.REINSTALL,
+    }
+    for index, row in enumerate(rows):
+        if row.disposition not in runnable:
+            continue
+        dependency = next((dep for dep in by_id[row.tool_id].requires if dep in blocked), None)
+        if dependency is not None:
+            rows[index] = _needs_row(row, dependency)
+            blocked.add(row.tool_id)
     return rows

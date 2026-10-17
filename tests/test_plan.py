@@ -1,11 +1,14 @@
 import subprocess
 import typing
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
 from installer.model import Method, Tool
+from installer.ownership import UNMANAGEABLE_OWNERS, Owner, owner_label
 from installer.platform import Platform
+from installer.receipts import CHANGED_SINCE_INSTALL
 from installer.session import (
     RESULT_WORDS,
     WORDS,
@@ -15,7 +18,7 @@ from installer.session import (
     build_plan,
     review_counts,
 )
-from installer.version_status import Health, ToolState
+from installer.version_status import BROKEN_SHIM_REASON, Health, ToolState
 from tests.state_doubles import MACOS, pass_state, plan_state
 
 _BREW = Method(kind="brew", params={"formula": "x"})
@@ -43,6 +46,104 @@ def _tool(
 
 def _state_of(states: dict[str, ToolState]) -> Callable[[str], ToolState | None]:
     return states.get
+
+
+def test_no_sudo_argv_on_the_plan_path():
+    for path in ("installer/session.py", "installer/deps.py"):
+        source = Path(path).read_text()
+        code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+        assert all(f'"{command}"' not in code for command in ("sudo", "pkexec", "doas"))
+
+
+def test_broken_shim_direct_row_is_will_repair():
+    rg = _tool("rg")
+    state = plan_state(rg, health=Health.BROKEN, reasons=(BROKEN_SHIM_REASON,))
+
+    row = build_plan(["rg"], [rg], _state_of({"rg": state}), MACOS, reinstall=frozenset())[0]
+
+    assert (row.disposition, row.reason, row.health) == (
+        Disposition.REPAIR,
+        "shim present, package missing",
+        Health.BROKEN,
+    )
+
+
+def test_broken_by_receipt_drift_is_will_repair_with_the_drift_reason():
+    rg = _tool("rg")
+    state = plan_state(rg, health=Health.BROKEN, reasons=(f"{CHANGED_SINCE_INSTALL} — edited",))
+
+    row = build_plan(["rg"], [rg], _state_of({"rg": state}), MACOS, reinstall=frozenset())[0]
+
+    assert (row.disposition, row.reason) == (
+        Disposition.REPAIR,
+        "changed since install; the file is replaced",
+    )
+
+
+def test_broken_dragged_dependency_is_will_repair_under_its_requester():
+    node = _tool("node")
+    mmdc = _tool("mmdc", requires=("node",))
+    catalog = [node, mmdc]
+    states = {
+        "node": plan_state(node, health=Health.BROKEN, reasons=(BROKEN_SHIM_REASON,)),
+        "mmdc": plan_state(mmdc, health=Health.MISSING, present=False),
+    }
+
+    rows = build_plan(["mmdc"], catalog, _state_of(states), MACOS, reinstall=frozenset())
+
+    node_row = next(row for row in rows if row.tool_id == "node")
+    assert (node_row.disposition, node_row.reason, node_row.requested_by) == (
+        Disposition.REPAIR,
+        "shim present, package missing; needed by mmdc",
+        "mmdc",
+    )
+    assert [row.tool_id for row in rows].index("node") < [row.tool_id for row in rows].index("mmdc")
+
+
+@pytest.mark.parametrize("owner", sorted(UNMANAGEABLE_OWNERS))
+def test_broken_tool_owned_by_a_native_manager_is_blocked_never_repaired(owner: Owner):
+    rg = _tool("rg")
+    state = plan_state(rg, health=Health.BROKEN, owner=owner, reasons=(BROKEN_SHIM_REASON,))
+
+    row = build_plan(["rg"], [rg], _state_of({"rg": state}), MACOS, reinstall=frozenset())[0]
+
+    assert (row.disposition, row.reason) == (
+        Disposition.BLOCKED,
+        f"{owner_label(state.ownership)} owns it; repair needs sudo (never run here)",
+    )
+
+
+def test_dependent_of_a_plan_time_blocked_dependency_is_blocked_needs_it():
+    node = _tool("node")
+    mmdc = _tool("mmdc", requires=("node",))
+    third = _tool("third", requires=("node",))
+    b = _tool("b", requires=("node",))
+    a = _tool("a", requires=("b",))
+    catalog = [mmdc, third, a, b, node]
+    states = {
+        "node": plan_state(node, health=Health.BROKEN, owner="dnf", reasons=(BROKEN_SHIM_REASON,)),
+        "mmdc": plan_state(mmdc, health=Health.MISSING, present=False),
+        "third": plan_state(third),
+        "b": plan_state(b, health=Health.MISSING, present=False),
+        "a": plan_state(a, health=Health.MISSING, present=False),
+    }
+
+    rows = build_plan(
+        ["mmdc", "third", "a"], catalog, _state_of(states), MACOS, reinstall=frozenset()
+    )
+
+    by_id = {row.tool_id: row for row in rows}
+    assert (by_id["node"].disposition, by_id["node"].requested_by) == (Disposition.BLOCKED, "mmdc")
+    assert by_id["node"].reason == (
+        f"{owner_label(states['node'].ownership)} owns it; repair needs sudo (never run here)"
+    )
+    assert (by_id["mmdc"].disposition, by_id["mmdc"].reason) == (Disposition.BLOCKED, "needs node")
+    assert (by_id["b"].disposition, by_id["b"].reason) == (Disposition.BLOCKED, "needs node")
+    assert (by_id["a"].disposition, by_id["a"].reason) == (Disposition.BLOCKED, "needs b")
+    assert (by_id["third"].disposition, by_id["third"].reason) == (
+        Disposition.SKIP,
+        "already current",
+    )
 
 
 def test_build_plan_plans_one_missing_tool_as_will_install():
