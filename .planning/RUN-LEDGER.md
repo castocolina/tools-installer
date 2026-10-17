@@ -145,3 +145,4 @@ Started 2026-10-14. Hourly resume cron: session job (deleted at run end).
 | 2026-10-15 ~12:00–13:28 | Claude session (phase 18 cycle-3 review agent + reviews-mode plan-check) | session limit until 13:00 | both agents resumed via SendMessage after reset; no work lost |
 | 2026-10-15 ~21:30–22:12 | Claude session (phase 18 gsd-verifier) | weekly limit until 22:00 | verifier resumed via SendMessage after reset; make e2e kept running in the container meanwhile |
 | 2026-10-16 23:00–23:01 | pi 19-37 summary fix (router-env 403 5-hour limit) | <10 min | first retry succeeded |
+| 2026-10-17 ~12:20– | Claude session (phase 20 gsd-planner revision, iteration 1 of checker loop; fable) | session limit until 15:20 | tree clean (no partial edits); resume the same agent via SendMessage after reset |
