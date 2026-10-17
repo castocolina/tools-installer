@@ -144,7 +144,7 @@ Plans (numbered in creation order; W = execution wave):
   4. graphify (uv) resolves owner uv, and Volta, redirect shims, the implicit `~/.local/bin`, `host_setup` tools and native packages resolve their real owner with the native probe run once per pass; installing brew in-session makes colima installable without restarting the app.
   5. Skill packs show partial or duplicate installs per harness.
 
-**Plans:** 37 plans
+**Plans:** 45 plans
 
 Plans (W = execution wave):
 - [ ] 19-01-PLAN.md — receipts module and Wave-0 test sandbox for the receipts dir (W1)
@@ -184,6 +184,14 @@ Plans (W = execution wave):
 - [ ] 19-35-PLAN.md — gap round 2: FIFO-safe shim, terminal and skill-lock reads; one unreadable runtime never hides another's empty install (W13)
 - [ ] 19-36-PLAN.md — gap round 2: execute screen refuses a broken tool up front; dead `_health_of` deleted; spaced e2e workspace (W13)
 - [ ] 19-37-PLAN.md — gap round 2: skill cache failures publish and warn; per-pack scans; ambiguous Claude duplicates are never partial (W14)
+- [ ] 19-38-PLAN.md — gap round 3: a dir key file proves only the directory it resolves inside, in the pass and in the quarantine re-check (W15)
+- [ ] 19-39-PLAN.md — gap round 3: the test sandbox strips host toolchain dirs from PATH, refuses host node-family and brew processes, stubs brew in the e2e harness (W15)
+- [ ] 19-40-PLAN.md — gap round 3: a skill-save failure warning stays until the next version save persists the answers (W15)
+- [ ] 19-41-PLAN.md — gap round 3: the shim look-through matches the managed dir by resolved path (W15)
+- [ ] 19-42-PLAN.md — gap round 3: a deeply nested skill lock is unknown, never a dead worker (W15)
+- [ ] 19-43-PLAN.md — gap round 3: a key file is hashed once per session; one `broken_drift` rule for health and the update gate (W16)
+- [ ] 19-44-PLAN.md — gap round 3: an interrupted dir removal puts the tree back; a leftover quarantine is listed, never deleted; one dir hash fewer (W16)
+- [ ] 19-45-PLAN.md — gap round 3: reader and record cleanups, reason-less broken `u` parity, cap-derived terminal message (W17)
 
 **UI hint**: yes
 
