@@ -2,13 +2,13 @@
 gsd_state_version: "1.0"
 milestone: v0.50.0
 milestone_name: Truthful lifecycle
-current_phase: 19
+current_phase: 20
 current_phase_name: One tool state with health plus receipts
 status: executing
-stopped_at: "Phase 18 verified (human_needed: real-Mac draw.io), 28 plans, SECURITY 99/99; next: plan Phase 19"
+stopped_at: "Phase 19 verified (human_needed: host adoption only), 46 plans, SECURITY 139/139; next: plan Phase 20"
 last_updated: "2026-10-16T09:37:41.804Z"
 last_activity: 2026-10-15
-last_activity_desc: Phase 18 closed; Phase 19 next
+last_activity_desc: Phase 19 closed; Phase 20 next
 state_head: da139c0fe6caabe6f826d1963356b5ed65f4dff7
 progress:
   total_phases: 11
@@ -106,6 +106,7 @@ Resume file: None
 |-------|-------|--------|
 | 17 | verification_deferred_human (only CI-02 branch protection, a user action; main pushed e412b03, CI run 38710819886 green on both OSes) | /gsd-verify-work 17 |
 | 18 | verification_deferred_human (only the real-Mac draw.io pinned-app install + smoke; UAT 18/19 pass, 1 skipped; SECURITY 99/99 closed; CI run 38839041957 green on both OSes; first verify-registry run 38839643252 exit 0, cache saved) | /gsd-verify-work 18 |
+| 19 | verification_deferred_human (only host adoption on the real machine; UAT 11/12 pass, 1 skipped; make e2e on d49e7b2 rc 0 (PASS1 74/0/8, receipt tracers OK, REINSTALL 47); tmux 80x20 NO_COLOR check pass; SECURITY 139/139 closed; CI run 39019413698 green on both OSes) | /gsd-verify-work 19 |
 
 ## Operator Next Steps
 
