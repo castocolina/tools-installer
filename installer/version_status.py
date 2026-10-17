@@ -930,6 +930,8 @@ class VersionRefreshService:
         # `refresh_skills` rebuilds each pack with its own (RR-03).
         self._pack_scans: dict[str, tuple[int, _PackScan]] = {}
         self._skills_probed = False
+        # Fresh skill answers a failed cache write has not persisted yet (RR3-03).
+        self._skills_unsaved = False
         self._skills_pass_lock = threading.Lock()
         self._epoch = 0
         self._seq = 0
@@ -952,7 +954,7 @@ class VersionRefreshService:
 
     @property
     def warning(self) -> str | None:
-        """Why the last committed pass could not save the cache, else None."""
+        """Cache-save warning, including skill answers until a later save persists them."""
         return self._warning
 
     def state_of(self, tool_id: str) -> ToolState | None:
@@ -1037,6 +1039,9 @@ class VersionRefreshService:
                     # Best effort, as in the pass's commit: a failed write never strands
                     # the packs in CHECKING (WR2-03).
                     self._warning = f"version cache not saved: {exc}"
+                    self._skills_unsaved = True
+                else:
+                    self._skills_unsaved = False
                 self._skills = merged
                 self._skills_probed = True
                 rebuilt = {
@@ -1681,11 +1686,19 @@ class VersionRefreshService:
             managers: dict[str, object] | None = None
             if persist_snapshot:
                 managers = encode_manager_snapshot(snapshot) if snapshot is not None else {}
+            # RR3-03: carry answers a failed skill save left unsaved, so the
+            # warning clears only once they are on disk.
+            skills = (
+                {tool_id: dict(status.hosts) for tool_id, status in self._skills.items()}
+                if self._skills_unsaved
+                else None
+            )
             try:
                 merged = load_version_cache(self._cache_path)
                 merged.update({k: v for k, v in produced.items() if k in fresh})
-                save_version_cache(self._cache_path, merged, managers=managers)
+                save_version_cache(self._cache_path, merged, managers=managers, skills=skills)
             except OSError as exc:
                 self._warning = f"version cache not saved: {exc}"
             else:
+                self._skills_unsaved = False
                 self._warning = None

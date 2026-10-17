@@ -2751,6 +2751,47 @@ def test_skill_cache_save_failure_still_settles_the_packs(
     assert service.warning == "version cache not saved: disk full"
 
 
+def test_a_version_pass_persists_unsaved_skill_answers_before_clearing_the_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    cache = tmp_path / "home-versions.json"
+    pack = _superpowers()
+    service = _pack_service(
+        home,
+        _probe_for(_listing((_SP_ID, "user", True, "6.4.1"))),
+        harnesses=frozenset({"claude"}),
+    )
+    service.refresh([pack])
+    original = save_version_cache
+    failing = {"on": True}
+
+    def full(
+        path: Path,
+        cache_entries: Mapping[str, VersionCacheEntry],
+        *,
+        managers: Mapping[str, object] | None = None,
+        skills: Mapping[str, Mapping[str, str]] | None = None,
+    ) -> None:
+        if failing["on"] and skills is not None:
+            raise OSError("disk full")
+        original(path, cache_entries, managers=managers, skills=skills)
+
+    monkeypatch.setattr("installer.version_status.save_version_cache", full)
+    service.refresh_skills([pack])
+    assert service.warning == "version cache not saved: disk full"
+    assert load_skill_statuses(cache) == {}
+
+    service.refresh([pack])
+    assert service.warning == "version cache not saved: disk full"
+    assert load_skill_statuses(cache) == {}
+
+    failing["on"] = False
+    service.refresh([pack])
+    assert service.warning is None
+    assert load_skill_statuses(cache) == {"superpowers": {"claude": "present"}}
+
+
 def test_failed_invalidate_save_still_reprobes_the_skills(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
