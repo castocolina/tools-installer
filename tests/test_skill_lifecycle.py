@@ -818,6 +818,15 @@ def test_skills_lock_malformed_or_wrong_shape_is_unknown(tmp_path: Path, payload
     assert result["softaworks"]["claude"] == "unknown"
 
 
+@pytest.mark.parametrize("payload", (b"[" * 100_000, b"\xff{"), ids=("deep-nesting", "bad-bytes"))
+def test_skills_lock_deep_nesting_or_bad_bytes_is_unknown(tmp_path: Path, payload: bytes) -> None:
+    agents = tmp_path / ".agents"
+    agents.mkdir()
+    (agents / ".skill-lock.json").write_bytes(payload)
+
+    assert _hosts([_lock_pack()], lambda _argv: "", tmp_path)["softaworks"]["claude"] == "unknown"
+
+
 def test_skills_lock_ignores_traversal_skill_names(tmp_path: Path) -> None:
     _write_lock(tmp_path, {"skills": {"../evil": {"source": "softaworks/agent-toolkit"}}})
     decoy = tmp_path / ".claude" / "evil"

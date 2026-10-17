@@ -709,7 +709,7 @@ def _probe_outputs(
 
 
 def _skills_lock_skills(home: Path) -> dict[str, str] | None:
-    """Missing -> {}; unreadable, not a regular file or over the cap -> None.
+    """Missing -> {}; unreadable, not a regular file, over the cap, or not decodable JSON -> None.
 
     None means unknown, and the read never blocks on a FIFO.
     """
@@ -723,12 +723,9 @@ def _skills_lock_skills(home: Path) -> dict[str, str] | None:
     if raw_bytes is None:
         return None
     try:
-        raw = raw_bytes.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-    try:
-        parsed: object = json.loads(raw)
-    except json.JSONDecodeError:
+        parsed: object = json.loads(raw_bytes)
+    except (ValueError, RecursionError):
+        # Apply the same reader rule as _installed_project_paths.
         return None
     if not isinstance(parsed, dict):
         return None
