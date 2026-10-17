@@ -1077,7 +1077,10 @@ re-records it; a changed file or
 link is broken and refused. `remove_paths` re-hashes every file right before
 deleting it, and removes a directory by renaming it to a quarantine sibling,
 re-checking the key file inside the captured tree and only then deleting it;
-a mismatch is renamed back and refused.
+a mismatch is renamed back and refused. An interrupted removal puts the
+captured tree back before the interruption leaves; a quarantine sibling that
+survives a kill is listed under remove-it-yourself and never deleted by the
+installer.
 
 A raw binary that predates receipts is adopted when its sha256 equals the
 cached release digest of its asset, the same fetch the pass already makes.

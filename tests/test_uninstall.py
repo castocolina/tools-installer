@@ -2472,6 +2472,56 @@ def test_remove_paths_keeps_a_captured_dir_it_cannot_put_back(
     assert (aside / "fd").read_text() == "fd binary"
 
 
+def test_a_leftover_quarantine_sibling_is_listed_to_remove_yourself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import installer.uninstall as uninstall_module
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    fd, bin_dir, opt = _plant_fd(tmp_path)
+    leftover = opt.parent / f".fd.k1ll3d{_QUARANTINE_SUFFIX}"
+    opt.rename(leftover)
+
+    plan = plan_removal([fd], bin_dir)
+    assert plan.removable == ()
+    assert leftover in plan.yourself
+    rows = uninstall_module.classify_tools([fd], bin_dir, installed={"fd": False}, platform=_LINUX)
+    assert rows[0].state.value == "managed"
+    assert str(leftover) in rows[0].hint
+
+    opt.mkdir()
+    (opt / "fd").write_text("fd binary")
+    plan = plan_removal([fd], bin_dir)
+    assert plan.removable == (bin_dir / "fd", opt)
+    assert leftover in plan.yourself
+    removed, _refused = remove_proven([fd], [bin_dir / "fd", opt], bin_dir)
+    assert set(removed) == {bin_dir / "fd", opt}
+    assert leftover.is_dir()
+    assert (leftover / "fd").read_text() == "fd binary"
+
+
+def test_remove_proven_hashes_a_dir_key_file_twice_not_three_times(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(receipts, "_REHASH_MEMO", {})
+    tool, bin_dir, opt = _plant_rg(tmp_path)
+    write_receipt(tool, [(opt, "dir"), (bin_dir / "rg", "link")])
+    real_sha256 = receipts.sha256_file
+    names: list[str] = []
+
+    def count_sha256(path: Path) -> str:
+        names.append(path.name)
+        return real_sha256(path)
+
+    monkeypatch.setattr(receipts, "sha256_file", count_sha256)
+    removed, refused = remove_proven([tool], [bin_dir / "rg", opt], bin_dir)
+    assert refused == ()
+    assert not opt.exists()
+    assert names.count("rg") == 2
+    assert set(removed) == {bin_dir / "rg", opt}
+
+
 def test_dir_removal_leaves_no_quarantine_behind(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

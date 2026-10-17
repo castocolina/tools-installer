@@ -105,6 +105,34 @@ def _receipt_proof(
     return tuple(a for a in receipt.artifacts if (a.path, a.type) in allowed)
 
 
+# A removal captures a directory under a unique sibling of its own before
+# re-checking and deleting it. Never `.tools-installer.old`, which
+# `atomic.recover_update_remnants` would restore over a live path.
+_QUARANTINE_SUFFIX = ".tools-installer.rm"
+
+
+def _quarantined(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
+    """Find interrupted-removal siblings beside a tool dir (RR3-02, P3-05).
+
+    List them for the preview, never delete them here (L-19-06: they are in no
+    receipt and in no `artifact_paths`).
+    """
+    found: list[Path] = []
+    seen: set[Path] = set()
+    for tool in tools:
+        for method in tool.methods:
+            for artifact in artifact_paths(method, default_bin_dir):
+                if artifact.kind != "dir":
+                    continue
+                for path in sorted(
+                    artifact.path.parent.glob(f".{artifact.path.name}.*{_QUARANTINE_SUFFIX}")
+                ):
+                    if path not in seen:
+                        seen.add(path)
+                        found.append(path)
+    return found
+
+
 def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = False) -> RemovalPlan:
     """Prove removability by receipt, else by the archive layout; name the rest.
 
@@ -122,7 +150,8 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
     file inside this tool's own opt_dir(<link name>) — so a uv/pip file at a
     matching name, or a link into another tool's opt dir, is never proven.
     Raw methods have no link artifact and are never layout-proven. Unproven
-    matches keep the lenient `plan_uninstall` list as `yourself`.
+    matches and quarantine siblings left by an interrupted removal are listed
+    as `yourself`. Discovery costs one small-directory glob per dir artifact.
     """
     removable: list[Path] = []
     seen: set[Path] = set()
@@ -156,7 +185,11 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
                     seen.add(artifact.path)
                     removable.append(artifact.path)
                     artifacts[artifact.path] = artifact
-    yourself = tuple(p for p in plan_uninstall(tools, default_bin_dir) if p not in seen)
+    yourself = tuple(
+        p
+        for p in (*plan_uninstall(tools, default_bin_dir), *_quarantined(tools, default_bin_dir))
+        if p not in seen
+    )
     return RemovalPlan(tuple(removable), yourself, by_tool, artifacts)
 
 
@@ -407,12 +440,6 @@ def classify_tools(
     return rows
 
 
-# A removal captures a directory under a unique sibling of its own before
-# re-checking and deleting it. Never `.tools-installer.old`, which
-# `atomic.recover_update_remnants` would restore over a live path.
-_QUARANTINE_SUFFIX = ".tools-installer.rm"
-
-
 def _put_back(quarantine: Path, path: Path) -> None:
     """Rename the captured tree back to `path`, or say exactly where it is.
 
@@ -478,13 +505,17 @@ def remove_paths(artifacts: Sequence[receipts.ReceiptArtifact]) -> tuple[Path, .
     a `dir` artifact is ever removed recursively, and then only after it has
     been captured under a quarantine sibling and re-verified there (RR-01);
     a `file` or `link` is only ever unlinked (G1). `receipts.matches` re-checks
-    the artifact right before the delete and re-hashes files, so a path that
-    changed since the proof is refused and never touched (RR-02). A failed
+    the artifact right before the delete and re-hashes files; a dir is
+    re-hashed inside its quarantine. A path that changed since the proof is
+    refused and never touched (RR-02). A failed
     delete still raises, before any receipt is touched.
     """
     refused: list[Path] = []
     for artifact in artifacts:
-        if not receipts.matches(artifact, rehash=True):
+        # A dir's authoritative re-hash is inside the quarantine (RR-01); here it
+        # only has to remain a real directory whose key file stat-matches, so the
+        # rename cannot land on a non-dir. A file keeps its RR-02 re-hash.
+        if not receipts.matches(artifact, rehash=artifact.type != "dir"):
             refused.append(artifact.path)
             continue
         if artifact.type == "dir":

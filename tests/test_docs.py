@@ -204,6 +204,7 @@ _PHASE_19_REQUIRED = (
     "Contents/Info.plist",
     "quarantine sibling",
     "resolve inside the directory",
+    "interrupted removal",
 )
 
 
