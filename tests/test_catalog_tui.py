@@ -3679,7 +3679,9 @@ async def test_skill_probe_covers_packs_when_system_view_mounts_first(tmp_path: 
         assert len(calls) == before
 
 
-def _probe_less_pack_screen(tmp_path: Path, *, installed: bool) -> tuple[CatalogScreen, Tool]:
+def _probe_less_pack_screen(
+    tmp_path: Path, *, installed: bool
+) -> tuple[CatalogScreen, Tool, VersionRefreshService]:
     pack = _skill_pack("openspec", ())
     assert pack.skill_lifecycle is not None
     assert pack.skill_lifecycle.status_probes == ()
@@ -3692,21 +3694,26 @@ def _probe_less_pack_screen(tmp_path: Path, *, installed: bool) -> tuple[Catalog
         probe_output=lambda _argv: "1.2.3",
     )
     screen = _screen([pack], {pack.id: installed}, version_refresh=service)
-    return screen, pack
+    return screen, pack, service
 
 
 def test_skill_pack_with_no_status_probes_uses_path_presence(tmp_path: Path) -> None:
-    screen, pack = _probe_less_pack_screen(tmp_path, installed=True)
+    screen, pack, service = _probe_less_pack_screen(tmp_path, installed=True)
     assert screen._ver_cell(pack).plain == "1.2.3"  # pyright: ignore[reportPrivateUsage]
     assert screen._row_cells(pack)[5].plain == "✓"  # pyright: ignore[reportPrivateUsage]
-    groups = group_tools([pack], screen._health_of, "status", _BLURBS)  # pyright: ignore[reportPrivateUsage]
+
+    def health_of(tool: Tool) -> Health | None:
+        state = service.state_of(tool.id)
+        return state.health if state is not None else None
+
+    groups = group_tools([pack], health_of, "status", _BLURBS)
     assert [(title, [t.id for t in members]) for title, _detail, members in groups] == [
         ("✓ ok", ["openspec"])
     ]
 
 
 def test_skill_pack_with_no_status_probes_is_absent_when_not_on_path(tmp_path: Path) -> None:
-    screen, pack = _probe_less_pack_screen(tmp_path, installed=False)
+    screen, pack, _service = _probe_less_pack_screen(tmp_path, installed=False)
     assert screen._row_cells(pack)[5].plain == "○"  # pyright: ignore[reportPrivateUsage]
     assert screen._ver_cell(pack).plain == ""  # pyright: ignore[reportPrivateUsage]
 

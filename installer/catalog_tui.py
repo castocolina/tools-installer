@@ -482,10 +482,6 @@ class CatalogScreen(AppScreen):
         service = self._version_refresh
         return service.state_of(tool.id) if service is not None else None
 
-    def _health_of(self, tool: Tool) -> Health | None:
-        state = self._state(tool)
-        return state.health if state is not None else None
-
     def _is_present(self, tool: Tool) -> bool:
         """Known presence only: no state, or a pending one, reads as absent."""
         state = self._state(tool)
