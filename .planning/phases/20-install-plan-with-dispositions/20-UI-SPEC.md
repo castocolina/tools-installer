@@ -396,7 +396,7 @@ Applicable state considerations resolved: 13 covered, 3 backstop, 0 unresolved.
 |----------|------------|--------|---------------------|
 | empty | plan region with zero selected ids | ✅ covered | Head reads `Nothing selected.`, the region is empty, the keys line is `esc close`, and Enter does nothing (copy in Copywriting Contract) |
 | empty | plan with only skipped and blocked rows | ✅ covered | The screen opens, Enter finishes with `Summary — 3 skipped`, calls no engine, wires no PATH, runs no sync, and the skipped rows leave the selection |
-| loading | rows whose state is not published | ✅ covered | Each shows `…  {id}  checking…` in dim; none shows `✓`; Enter registers a start and waits; no timeout, no spinner |
+| loading | rows whose state is not published | ✅ covered | Each shows `… {id}  checking…` in dim; none shows `✓`; Enter registers a start and waits; no timeout, no spinner |
 | loading | the wait itself | ✅ covered | The Waiting state shows the status and keys copy; a held refresh starts nothing; `esc` returns to the review with the selection intact |
 | error | state refresh raises | ✅ covered | Rows stay `checking…`, nothing starts, status `State check failed: {error}…`, Enter retries |
 | error | row `failed`, `mismatch`, `crashed`, `dependency_failed`, `not_attempted` | ✅ covered | Red word, the reason from Outcome copy, finished status `Failed.`, exit 1, row stays selected |
