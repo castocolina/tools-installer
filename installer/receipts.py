@@ -27,7 +27,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Literal, cast
+from typing import Literal, TypeGuard, cast
 
 from installer import locations
 from installer.atomic import atomic_write_text, read_capped
@@ -261,8 +261,8 @@ def record(
     not create is dropped, including a dir whose key file is missing, so it is
     never receipt-proven. A dir is keyed by Contents/Info.plist for an app,
     else by the member its bin link points to. Script and manager kinds get
-    none. When the write
-    fails over an existing receipt, that receipt is deleted (best effort) so it
+    none. When the write fails over an existing receipt, that receipt is deleted
+    (best effort) so it
     never claims bytes it did not fingerprint, and the raised OSError says
     what happened to it."""
     if method.kind in RECEIPTLESS_KINDS:
@@ -271,15 +271,18 @@ def record(
     created = artifact_paths(method, base)
     link = next((a.path for a in created if a.kind == "link"), None)
 
-    def one(path: Path, kind: Literal["dir", "link", "file"]) -> ReceiptArtifact | None:
-        if kind == "dir":
-            # A receipt carries a digest of the bytes it describes, never a memoized one (C2-H1).
-            return fingerprint(path, kind, key=_dir_key(method, path, link), rehash=True)
-        # A receipt carries a digest of the bytes it describes, never a memoized one (C2-H1).
-        return fingerprint(path, kind, rehash=True)
-
     artifacts = tuple(
-        a for a in (one(entry.path, entry.kind) for entry in created) if a is not None
+        artifact
+        for entry in created
+        if (
+            artifact := fingerprint(
+                entry.path,
+                entry.kind,
+                key=_dir_key(method, entry.path, link) if entry.kind == "dir" else None,
+                rehash=True,
+            )
+        )
+        is not None
     )
     receipt = _build_receipt(tool, method, artifacts, package=package, smoke=smoke)
     existed = receipt_exists(tool.id)
@@ -380,7 +383,7 @@ def retire(tool_id: str, receipt: Receipt) -> bool:
     return True
 
 
-def _safe_key(key: object) -> bool:
+def _safe_key(key: object) -> TypeGuard[str]:
     """True only for a relative key that cannot leave its directory.
 
     Absolute, empty, `.` or `..`-containing keys, a NUL and a string the
@@ -466,7 +469,7 @@ def fingerprint(
                 return None
             return ReceiptArtifact(path=path, type="link", target=os.readlink(path))
         if kind == "dir":
-            if key is None or not _safe_key(key):
+            if not _safe_key(key):
                 return None
             if not stat_module.S_ISDIR(path.lstat().st_mode):
                 return None
@@ -625,15 +628,6 @@ def _read_artifact(raw: object) -> ReceiptArtifact | None:
     path = Path(raw_path)
     if not path.is_absolute():
         return None
-    if kind == "file":
-        sha256 = artifact.get("sha256")
-        size = _artifact_int(artifact, "size")
-        mtime_ns = _artifact_int(artifact, "mtime_ns")
-        if not isinstance(sha256, str) or not _SHA256_RE.fullmatch(sha256):
-            return None
-        if size is None or mtime_ns is None:
-            return None
-        return ReceiptArtifact(path=path, type="file", sha256=sha256, size=size, mtime_ns=mtime_ns)
     if kind == "link":
         target = artifact.get("target")
         if not isinstance(target, str) or not target:
@@ -642,16 +636,19 @@ def _read_artifact(raw: object) -> ReceiptArtifact | None:
     sha256 = artifact.get("sha256")
     size = _artifact_int(artifact, "size")
     mtime_ns = _artifact_int(artifact, "mtime_ns")
-    if not _safe_key(artifact.get("key")):
-        return None
     if not isinstance(sha256, str) or not _SHA256_RE.fullmatch(sha256):
         return None
     if size is None or mtime_ns is None:
         return None
+    if kind == "file":
+        return ReceiptArtifact(path=path, type="file", sha256=sha256, size=size, mtime_ns=mtime_ns)
+    key = artifact.get("key")
+    if not _safe_key(key):
+        return None
     return ReceiptArtifact(
         path=path,
         type="dir",
-        key=cast(str, artifact.get("key")),
+        key=key,
         sha256=sha256,
         size=size,
         mtime_ns=mtime_ns,
