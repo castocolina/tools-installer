@@ -1,4 +1,5 @@
 """Pure dependency resolution: transitive drag-in + deps-first topological order.
+`Resolution.closure` is the deps-first row order of the install plan (Phase 20).
 
 Mirrors uzkit's engine (with_required / order_for_install) but adds two things
 the PRD requires: a cycle is REPORTED (DependencyCycleError), not silently
@@ -22,11 +23,14 @@ class DependencyCycleError(ValueError):
 @dataclass(frozen=True)
 class Resolution:
     """order: deps-first install order. dragged_in: ids auto-added (not selected).
-    warnings: human-readable notices (drag-ins, and skipped unavailable deps)."""
+    warnings: human-readable notices (drag-ins, and skipped unavailable deps).
+    closure: deps-first order of every non-blocked tool in the closure, present
+    tools included (the plan's row order); `order` is its subset needing action."""
 
     order: tuple[Tool, ...]
     dragged_in: tuple[str, ...]
     warnings: tuple[str, ...]
+    closure: tuple[Tool, ...] = ()
 
 
 def resolve_dependencies(
@@ -112,30 +116,41 @@ def resolve_dependencies(
 
     runnable = [t for t in wanted if t.id not in blocked and t.id not in satisfied_by_install]
 
-    # 3. Deps-first topological sort over `runnable`, cycle-detecting.
-    ordered: list[Tool] = []
-    placed: set[str] = set()
-    visiting: set[str] = set()
-    runnable_ids = {t.id for t in runnable}
+    # 3. Deps-first topological sort, cycle-detecting. `order` sorts `runnable`;
+    #    `closure` sorts every non-blocked tool, present tools included (Phase 20).
+    def topo(members: list[Tool]) -> list[Tool]:
+        ordered: list[Tool] = []
+        placed: set[str] = set()
+        visiting: set[str] = set()
+        member_ids = {t.id for t in members}
 
-    def visit(tool: Tool) -> None:
-        if tool.id in placed:
-            return
-        if tool.id in visiting:
-            raise DependencyCycleError(f"dependency cycle involving '{tool.id}'")
-        visiting.add(tool.id)
-        for dep_id in tool.requires:
-            if dep_id in runnable_ids:
-                visit(by_id[dep_id])
-        visiting.discard(tool.id)
-        placed.add(tool.id)
-        ordered.append(tool)
+        def _place(tool: Tool) -> None:
+            if tool.id in placed:
+                return
+            if tool.id in visiting:
+                raise DependencyCycleError(f"dependency cycle involving '{tool.id}'")
+            visiting.add(tool.id)
+            for dep_id in tool.requires:
+                if dep_id in member_ids:
+                    _place(by_id[dep_id])
+            visiting.discard(tool.id)
+            placed.add(tool.id)
+            ordered.append(tool)
 
-    for tool in runnable:
-        visit(tool)
+        for tool in members:
+            _place(tool)
+        return ordered
+
+    ordered = topo(runnable)
+    closure = topo([t for t in wanted if t.id not in blocked])
 
     dragged_in = tuple(t.id for t in ordered if t.id not in selected_ids)
-    return Resolution(order=tuple(ordered), dragged_in=dragged_in, warnings=tuple(warnings))
+    return Resolution(
+        order=tuple(ordered),
+        dragged_in=dragged_in,
+        warnings=tuple(warnings),
+        closure=tuple(closure),
+    )
 
 
 def requires_integrity_errors(catalog: list[Tool]) -> list[str]:

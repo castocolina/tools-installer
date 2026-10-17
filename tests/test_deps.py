@@ -258,3 +258,28 @@ def test_resolve_dependencies_does_not_drag_in_recommends() -> None:
     agent_with_req = _tool("agent", "pnpm", recommends=("jq",))
     result = _resolve([agent_with_req], [agent_with_req, pnpm, jq])
     assert result.dragged_in == ("pnpm",)
+
+
+def test_closure_keeps_present_tools_deps_first() -> None:
+    node = _tool("node")
+    mmdc = _tool("mmdc", "node")
+    result = _resolve([mmdc], [mmdc, node], installed_ids=["node"])
+    assert [t.id for t in result.closure] == ["node", "mmdc"]
+    assert [t.id for t in result.order] == ["mmdc"]
+    assert result.dragged_in == ()
+
+
+def test_closure_excludes_blocked_tools_and_keeps_selected_order() -> None:
+    a, b = _tool("a"), _tool("b")
+    z = _tool("z")
+    c = _tool("c", "z")
+    result = _resolve([b, a, c], [a, b, c, z], available_ids=["a", "b", "c"])
+    assert [t.id for t in result.closure] == ["b", "a"]
+    assert [t.id for t in result.order] == ["b", "a"]
+
+
+def test_closure_raises_on_a_cycle() -> None:
+    a = _tool("a", "b")
+    b = _tool("b", "a")
+    with pytest.raises(DependencyCycleError):
+        _resolve([a], [a, b])
