@@ -818,10 +818,7 @@ class CatalogScreen(AppScreen):
                 declared = declared_manager_label(tool, self._version_refresh.platform)
                 real = owner_label(ownership)
                 if declared is not None and real is not None:
-                    line += (
-                        f" — {real} owns this copy; the catalog installs it via {declared}, "
-                        "and moving it there is not available yet"
-                    )
+                    line += f" — {real} owns this copy; the catalog installs it via {declared}"
             self.status.set(line, "ok")
             return
         if ownership.owner == "unknown" or ownership.confidence not in MUTATION_GRADE:

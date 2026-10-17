@@ -338,8 +338,7 @@ def _perform(
             if declared is not None and real is not None and declared != real:
                 detail = (
                     f"{real} owns this copy; the catalog installs {target.tool.id} via "
-                    f"{declared} — moving it there is not available yet, so it was "
-                    f"updated through {real}"
+                    f"{declared}, so it was updated through {real}"
                 )
     elif owner == "pnpm":
         # update_refusal answered the host-setup case (no node method) above.

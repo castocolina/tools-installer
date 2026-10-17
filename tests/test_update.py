@@ -1243,9 +1243,19 @@ def test_off_policy_brew_update_names_the_declared_manager() -> None:
     assert outcome.status == "updated"
     assert calls == [["brew", "upgrade", "groovy"]]
     assert outcome.detail == (
-        "Homebrew owns this copy; the catalog installs groovy via SDKMAN "
-        "— moving it there is not available yet, so it was updated through Homebrew"
+        "Homebrew owns this copy; the catalog installs groovy via SDKMAN, "
+        "so it was updated through Homebrew"
     )
+
+
+def test_no_migration_promise_anywhere_under_installer() -> None:
+    installer_dir = Path(__file__).resolve().parents[1] / "installer"
+    offenders = [
+        path.name
+        for path in sorted(installer_dir.glob("*.py"))
+        if "moving it there" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
 
 
 def test_on_policy_brew_update_keeps_empty_detail() -> None:

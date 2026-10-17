@@ -2597,8 +2597,7 @@ def test_update_on_current_off_policy_tool_explains_and_does_not_begin(tmp_path:
     screen.action_update_tool()
     assert begins == []
     assert messages == [
-        "groovy is already current — Homebrew owns this copy; the catalog installs it via "
-        "SDKMAN, and moving it there is not available yet"
+        "groovy is already current — Homebrew owns this copy; the catalog installs it via SDKMAN"
     ]
 
 
@@ -2694,7 +2693,7 @@ def test_update_on_stale_current_off_policy_keeps_the_tail(tmp_path: Path) -> No
     assert messages == [
         (
             "groovy is current as of the last check — Homebrew owns this copy; the catalog "
-            "installs it via SDKMAN, and moving it there is not available yet",
+            "installs it via SDKMAN",
             "ok",
         )
     ]
