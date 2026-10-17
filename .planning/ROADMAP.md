@@ -209,7 +209,7 @@ Plans (W = execution wave):
   4. Headless `--all --yes` uses the same plan and engine: on a host with an outdated tool it updates it and exits 0, and a failed row exits 1.
   5. No screen promises an off-policy migration ("moving it there") that does not exist.
 
-**Plans:** 16 plans
+**Plans:** 19 plans
 
 Plans (W = execution wave):
 - [ ] 20-01-PLAN.md — `Resolution.closure`/`blocked`/`requested_by`: the resolver exposes present tools, blocked reasons and first requesters as data (W1)
@@ -221,13 +221,16 @@ Plans (W = execution wave):
 - [ ] 20-07-PLAN.md — `RowOutcome`, `RunContext`, `execute_plan` for install/repair/reinstall/update/skip/blocked; `exit_code`, `retained`, `ran_anything`, `summary_counts` (W4)
 - [ ] 20-08-PLAN.md — RECONFIGURE runs typed `ConfigStep`s by kind: cwd shim, pnpm group via the node executor, terminal sync, skill handoff -> manual (W5)
 - [ ] 20-09-PLAN.md — `render_run_summary`: the `Summary — …` head and outcome rows from the one vocabulary (W5)
+- [ ] 20-17-PLAN.md — `ExecuteInputs` contract: `version_refresh` required, `installed` deleted, `terminal_sync` wired; test input helpers with a published-state default (W5)
 - [ ] 20-10-PLAN.md — the TUI on the plan: `OptionList` review, worker on `execute_plan`, retained selection, `ran_anything` sync gate, exit code from outcomes; tests ported (W6)
-- [ ] 20-11-PLAN.md — headless `--all`/`--categories` on the same plan and engine; `Run this plan?`; exit code from outcomes; e2e parser reads `Summary —` (W7)
+- [ ] 20-11-PLAN.md — headless `--all`/`--categories` on the same plan and engine; `Run this plan?`; exit code from outcomes (W7)
+- [ ] 20-19-PLAN.md — the container e2e parser reads `Summary —` and the outcome rows (W7)
 - [ ] 20-12-PLAN.md — wait for state: Enter joins the one refresh flight, `esc` cancels with the selection kept, a stale publication never starts a run (W7)
 - [ ] 20-13-PLAN.md — `r` toggles reinstall on eligible rows only; `UNPROVEN_NOTE` points at it; 80x20 layout pins and Resize re-fold (W8)
 - [ ] 20-14-PLAN.md — delete `Summary`/`run_installs`/`summarize`/`fold_run`, the audit/summary/notice renderers and `reapply_post_install` (W8)
-- [ ] 20-15-PLAN.md — delete `audit.py` and the two-step prompter helpers; the headless prompter asks one question (W8)
-- [ ] 20-16-PLAN.md — architecture doctrine: Phase 20 section pinned; Phase 3/13/14 paragraphs describe `build_plan`/`execute_plan` (W9)
+- [ ] 20-15-PLAN.md — delete `audit.py` and the two-step prompter helpers; the headless prompter asks one question (W9)
+- [ ] 20-18-PLAN.md — end-to-end pins through the real app: `a` on an all-current tier, order parity, mixed-run retained selection, D-05 (W9)
+- [ ] 20-16-PLAN.md — architecture doctrine: Phase 20 section pinned; Tier/Phase 3/13/14 paragraphs describe `build_plan`/`execute_plan` (W10)
 
 **UI hint**: yes
 

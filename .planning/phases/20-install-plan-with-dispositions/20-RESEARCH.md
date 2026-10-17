@@ -690,36 +690,38 @@ Not a rename/migration phase in the data sense. Explicit answers for the string 
 | Silent overwrite of a user-modified artifact via REPAIR | Tampering | Review shows "will repair" with the drift reason before Enter (Open Question 2) |
 | Over-broad reconfigure (removing the only working plugin copy) | Denial of service | Steps run in order and stop at the first failure |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Group dragged rows under the requester, or keep execution order?** (Pitfall 15)
+All nine were decided during Phase 20 planning and recorded in `20-CONTEXT.md` under "Ledger amendments (from Phase 20 research, 2026-10-17; RUN-LEDGER)": OQ1 -> L-20-05, OQ2 -> L-20-01, OQ3 -> L-20-02, OQ4 -> L-20-03, OQ5 -> L-20-06, OQ6 -> L-20-07, OQ7 -> L-20-04, OQ8 -> L-20-08, OQ9 -> L-20-09. Each recommendation below was adopted as written; the ledger entry is the binding text.
+
+1. **Group dragged rows under the requester, or keep execution order?** (Pitfall 15) — RESOLVED: L-20-05
    - Known: SPEC/D-02 say "indented under its first dependent"; execution is deps-first.
    - Unclear: whether the user expects the review order to equal execution order.
    - Recommendation: keep `PlanRow` order = execution order; `render_plan` groups dragged rows under their requester (literal SPEC reading). Confirm.
 
-2. **BROKEN caused by receipt drift ("changed since install"): REPAIR or refuse?**
+2. **BROKEN caused by receipt drift ("changed since install"): REPAIR or refuse?** — RESOLVED: L-20-01
    - Known: 19-RESEARCH Pitfall 10 said "Dispositions are Phase 20" and warns that repair "makes a 'changed since install' raw file get overwritten on select"; the current screen refuses it (`execute_screen.py:549-556`), and SPEC R3/TA §3.1 say BROKEN -> REPAIR for any owner.
    - Recommendation: REPAIR for both BROKEN sources with the drift reason visible in the review (informed consent at Enter), and pin it with a test. The alternative (BLOCKED, stays selected forever) is a dead end. Needs user confirmation [ASSUMED: A2].
 
-3. **Result slots for `MANUAL_REQUIRED`, `NO_METHOD`, `ALREADY_INSTALLED`.** (Pitfall 3)
+3. **Result slots for `MANUAL_REQUIRED`, `NO_METHOD`, `ALREADY_INSTALLED`.** (Pitfall 3) — RESOLVED: L-20-02
    - Recommendation: ship result `manual` in Phase 20 (kept selected, exit unchanged), map `NO_METHOD` -> `blocked`, `ALREADY_INSTALLED` -> `skipped`. Leave `Disposition.MANUAL` and `needs_manual` to Phase 22 (its D-12 owns the producer); structure `WORDS` so adding a `Disposition` member without a word fails the parity test. Confirm D-17 scope [ASSUMED: A1].
 
-4. **Wait mechanism without Phase 21's owner.** (Pitfall 6)
+4. **Wait mechanism without Phase 21's owner.** (Pitfall 6) — RESOLVED: L-20-03
    - Recommendation: Pattern 5 (join the service single-flight with `refresh(whole catalog)`), isolated in `_await_state` for Phase 21 to swap. Confirm this satisfies D-13's intent ("never a second pass") given the owner does not exist yet [ASSUMED: A4].
 
-5. **Reword `UNPROVEN_NOTE` and widen `r` eligibility to unproven installer-owned tools.** (Pitfall 9)
+5. **Reword `UNPROVEN_NOTE` and widen `r` eligibility to unproven installer-owned tools.** (Pitfall 9) — RESOLVED: L-20-06
    - Recommendation: yes to both; update the pinned tests.
 
-6. **Which ids stay selected: all failed rows, or only the user's selection?**
+6. **Which ids stay selected: all failed rows, or only the user's selection?** — RESOLVED: L-20-07
    - Recommendation: `_staged.intersection_update(retained)`, so a failed dragged-in dependency is not added to the selection (its dependent stays selected and re-drags it).
 
-7. **MISCONFIGURED with no executable step** (ambiguous Claude plugin duplicates, project pack with no detected repo, rejected pnpm names).
+7. **MISCONFIGURED with no executable step** (ambiguous Claude plugin duplicates, project pack with no detected repo, rejected pnpm names). — RESOLVED: L-20-04
    - Recommendation: BLOCKED with the health reason, never "will reconfigure" with nothing to run. Confirm [ASSUMED: A9].
 
-8. **PATH wiring / verify errors and the all-skipped run.** (Pitfall 12)
+8. **PATH wiring / verify errors and the all-skipped run.** (Pitfall 12) — RESOLVED: L-20-08
    - Recommendation: keep a run-level error beside the outcomes so a wiring failure still exits 1 and shows "Failed."; skip wiring/verify and terminal sync when `ran_anything` is false so "starts nothing" is literally true.
 
-9. **Make `ExecuteInputs.version_refresh` required?**
+9. **Make `ExecuteInputs.version_refresh` required?** — RESOLVED: L-20-09 (shipped by plan 20-17)
    - Recommendation: yes in the type; give tests a default via `frozen_service`. The alternative (synthesizing a presence-only state from `installed`) keeps a second source of truth alive.
 
 ## Assumptions Log
