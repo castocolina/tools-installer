@@ -2500,6 +2500,28 @@ def test_a_leftover_quarantine_sibling_is_listed_to_remove_yourself(
     assert (leftover / "fd").read_text() == "fd binary"
 
 
+def test_remove_proven_rehashes_a_receiptless_dir_key_file_at_deletion_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(receipts, "_REHASH_MEMO", {})
+    tool, bin_dir, opt = _plant_fd(tmp_path)
+    preview = plan_removal([tool], bin_dir)
+    assert set(preview.removable) == {bin_dir / "fd", opt}
+
+    member = opt / "fd"
+    st = member.stat()
+    member.write_text("FD BINARY")
+    os.utime(member, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+    removed, refused = remove_proven([tool], list(preview.removable), bin_dir)
+
+    assert refused == ()
+    assert set(removed) == {bin_dir / "fd", opt}
+    assert not opt.exists()
+    assert not (bin_dir / "fd").is_symlink()
+
+
 def test_remove_proven_hashes_a_dir_key_file_twice_not_three_times(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -140,7 +140,8 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
     unreadable receipts dir counts as a receipt file (G23). The receipt
     artifacts `artifact_paths` also names, unless the receipt is corrupt or any
     artifact drifted — then nothing, with no layout fallback. `verify=True`
-    re-hashes every recorded file (the deletion-time re-proof).
+    re-hashes every recorded file and the layout key file (the deletion-time
+    re-proof).
 
     A tool with no receipt file keeps the archive-layout proof. For each
     download method, the (link, opt dir) pair comes from
@@ -177,7 +178,9 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
             if link is None or opt is None or not is_still_proven(link):
                 continue
             proven_link = receipts.fingerprint(link, "link")
-            proven_dir = receipts.fingerprint(opt, "dir", key=receipts.link_key(opt, link))
+            proven_dir = receipts.fingerprint(
+                opt, "dir", key=receipts.link_key(opt, link), rehash=verify
+            )
             if proven_link is None or proven_dir is None:
                 continue
             for artifact in (proven_link, proven_dir):
