@@ -104,6 +104,18 @@ None.
 
 ### Ledger amendments (from Phase 19 planning, 2026-10-16; RUN-LEDGER)
 - **Ledger L-19-28 (inbound):** Phase 19's `ConfigStep` kind `pnpm_group_install` carries an empty argv; Phase 20's plan/reconfigure execution must dispatch it to `executors.execute` on the declaring tool's first node method (the whole pinned group with `--allow-build`), like `terminal_sync` is dispatched by kind. Phase 20 also executes the per-repo skill install command Phase 19 builds (L-19-07).
+
+### Ledger amendments (from Phase 20 research, 2026-10-17; RUN-LEDGER)
+Open questions from 20-RESEARCH.md, decided by the jev ladder (Laya first; all four below were below 0.7, so TypeSafe decided) or by the orchestrator where the research recommendation had no real alternative:
+- **L-20-01 (OQ2, TypeSafe repair_with_reason p=0.97):** BROKEN caused by receipt drift ("changed since install") is REPAIR, like every other BROKEN cause; the review row shows the drift reason so Enter is informed consent; a test pins the visible reason.
+- **L-20-02 (OQ3, TypeSafe result_only_now p=1.00):** Phase 20 ships only the run result `manual` (kept selected, exit code unchanged); `NO_METHOD` → `blocked`, `ALREADY_INSTALLED` → `skipped`. Plan-time `Disposition.MANUAL` and its predicate stay in Phase 22 (D-12); `WORDS` is structured so a `Disposition` member without a review word fails a parity test. Narrows D-17's scope.
+- **L-20-03 (OQ4, TypeSafe join_single_flight p=0.99):** D-13's wait joins the service's existing single flight with `service.refresh(whole catalog)` (same id set as the catalog pass), isolated in one helper (`_await_state`) that Phase 21's refresh owner replaces. Never a second pass, never polling.
+- **L-20-04 (OQ7, TypeSafe blocked_with_reason p=0.99):** MISCONFIGURED with no executable step (ambiguous Claude duplicates, project pack with no detected repo, rejected pnpm names) is BLOCKED with the health reason, never "will reconfigure" with nothing to run.
+- **L-20-05 (OQ1, orchestrator):** `PlanRow` order is execution order (deps first); `render_plan` groups a dragged row under its first requester (the literal D-02 reading). Display order and execution order are separate.
+- **L-20-06 (OQ5 + G21/WR-03, orchestrator):** `r` is eligible for installer-owned OK tools with or without a receipt (so "reinstall with r to adopt" is true), and `UNPROVEN_NOTE` is reworded accordingly; pinned tests are updated.
+- **L-20-07 (OQ6, orchestrator):** after a run the selection is `_staged ∩ retained`, so a failed dragged-in dependency is not added to the selection; its dependent stays selected and re-drags it.
+- **L-20-08 (OQ8, orchestrator):** a run-level error (PATH wiring / verify) is kept beside the row outcomes, so a wiring failure still shows "Failed." and exits 1; when nothing ran, wiring/verify and terminal sync are skipped so "runs nothing" is literally true.
+- **L-20-09 (OQ9, orchestrator):** `ExecuteInputs.version_refresh` is required; tests get a default through the existing frozen-service double. No presence-only fallback state (one source of truth).
 </decisions>
 
 <canonical_refs>
