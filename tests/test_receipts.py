@@ -27,6 +27,124 @@ from installer.receipts import (
 _REAL_HOME = Path(os.path.expanduser("~"))
 
 
+def test_fingerprint_hashes_an_unchanged_file_once_per_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(receipts, "_REHASH_MEMO", {})
+    target = tmp_path / "yq"
+    target.write_bytes(b"abc")
+    calls: list[Path] = []
+    real_sha256 = receipts.sha256_file
+
+    def fake_sha256(path: Path) -> str:
+        calls.append(path)
+        return real_sha256(path)
+
+    monkeypatch.setattr(receipts, "sha256_file", fake_sha256)
+    receipts.fingerprint(target, "file")
+    receipts.fingerprint(target, "file")
+    assert calls == [target]
+    target.write_bytes(b"abcd")
+    changed = receipts.fingerprint(target, "file")
+    assert changed is not None
+    assert len(calls) == 2
+    assert changed.sha256 == hashlib.sha256(b"abcd").hexdigest()
+    receipts.fingerprint(target, "file", rehash=True)
+    assert len(calls) == 3
+
+
+def test_dir_key_file_is_hashed_once_per_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(receipts, "_REHASH_MEMO", {})
+    directory = tmp_path / "opt" / "rg"
+    key_file = directory / "rg-x" / "rg"
+    key_file.parent.mkdir(parents=True)
+    key_file.write_bytes(b"rg")
+    calls: list[Path] = []
+    real_sha256 = receipts.sha256_file
+
+    def fake_sha256(path: Path) -> str:
+        calls.append(path)
+        return real_sha256(path)
+
+    monkeypatch.setattr(receipts, "sha256_file", fake_sha256)
+    receipts.fingerprint(directory, "dir", key="rg-x/rg")
+    receipts.fingerprint(directory, "dir", key="rg-x/rg")
+    assert calls == [key_file]
+
+
+def test_record_and_adopt_never_trust_the_memo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "bin" / "yq"
+    target.parent.mkdir()
+    target.write_bytes(b"real bytes")
+    stat = target.lstat()
+    monkeypatch.setattr(
+        receipts,
+        "_REHASH_MEMO",
+        {(str(target), stat.st_size, stat.st_mtime_ns): "f" * 64},
+    )
+    method = _raw_yq(target.parent)
+    tool = _record_tool("yq", method)
+    written = receipts.record(tool, method, package=None, smoke="ok", default_bin_dir=target.parent)
+    assert written is not None
+    assert written.artifacts[0].sha256 == hashlib.sha256(b"real bytes").hexdigest()
+    receipts.delete("yq")
+    stale = receipts.ReceiptArtifact(
+        path=target,
+        type="file",
+        sha256="f" * 64,
+        size=stat.st_size,
+        mtime_ns=stat.st_mtime_ns,
+    )
+    assert receipts.adopt(tool, method, stale, package=None) is None
+    monkeypatch.setattr(
+        receipts,
+        "_REHASH_MEMO",
+        {(str(target), stat.st_size, stat.st_mtime_ns): "f" * 64},
+    )
+    memoized = receipts.fingerprint(target, "file")
+    assert memoized is not None
+    assert memoized.sha256 == "f" * 64
+
+
+def test_broken_drift_skips_dirs_and_never_hashes_their_key_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(receipts, "_REHASH_MEMO", {})
+    directory = tmp_path / "d"
+    directory.mkdir()
+    key_file = directory / "k"
+    key_file.write_bytes(b"k")
+    file_path = tmp_path / "f"
+    file_path.write_bytes(b"f")
+    dir_artifact = receipts.fingerprint(directory, "dir", key="k")
+    file_artifact = receipts.fingerprint(file_path, "file")
+    assert dir_artifact is not None
+    assert file_artifact is not None
+    receipt = _write_receipt((dir_artifact, file_artifact))
+
+    key_file.write_bytes(b"kk")
+    calls: list[Path] = []
+    real_sha256 = receipts.sha256_file
+
+    def fake_sha256(path: Path) -> str:
+        calls.append(path)
+        return real_sha256(path)
+
+    monkeypatch.setattr(receipts, "sha256_file", fake_sha256)
+    assert receipts.broken_drift(receipt, rehash=True) == ()
+    assert key_file not in calls
+    assert file_path in calls
+    assert receipts.drifted(receipt) == (dir_artifact,)
+
+    file_path.write_bytes(b"ff")
+    assert receipts.broken_drift(receipt) == (file_artifact,)
+    assert receipts.drifted(receipt) == (dir_artifact, file_artifact)
+
+
 def _sample(tmp_path: Path) -> Receipt:
     target_file = tmp_path / "yq"
     target_file.write_bytes(b"abc")
@@ -660,9 +778,9 @@ def test_adopt_records_the_verified_fingerprint_without_a_second_one(
     calls: list[Path] = []
 
     def replaced_right_after(
-        path: Path, kind: Literal["dir", "link", "file"]
+        path: Path, kind: Literal["dir", "link", "file"], *, rehash: bool = False
     ) -> ReceiptArtifact | None:
-        found = real(path, kind)
+        found = real(path, kind, rehash=rehash)
         calls.append(path)
         _rewrite_same_length(path)
         return found

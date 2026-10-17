@@ -11,7 +11,8 @@ whose key file has the same bytes is the same software and matches. Device
 and inode numbers are never recorded: the device number is assigned at mount
 time on btrfs, NFS and ZFS and can change on reboot, and ext4 and XFS reuse
 inode numbers. A corrupt, unreadable or tampered receipt means NO PROOF,
-never a crash and never a removal.
+never a crash and never a removal. A key file is hashed once per session until
+its size or mtime changes.
 """
 
 from __future__ import annotations
@@ -272,8 +273,10 @@ def record(
 
     def one(path: Path, kind: Literal["dir", "link", "file"]) -> ReceiptArtifact | None:
         if kind == "dir":
-            return fingerprint(path, kind, key=_dir_key(method, path, link))
-        return fingerprint(path, kind)
+            # A receipt carries a digest of the bytes it describes, never a memoized one (C2-H1).
+            return fingerprint(path, kind, key=_dir_key(method, path, link), rehash=True)
+        # A receipt carries a digest of the bytes it describes, never a memoized one (C2-H1).
+        return fingerprint(path, kind, rehash=True)
 
     artifacts = tuple(
         a for a in (one(entry.path, entry.kind) for entry in created) if a is not None
@@ -302,14 +305,15 @@ def adopt(
 
     `artifact` is the fingerprint the caller compared with the release digest.
     Under the write lock it is refused when a receipt (or a link in its place)
-    appeared, or when ONE fresh fingerprint differs from it; the receipt then
-    records that verified fingerprint, so bytes swapped after it read as drift,
-    never as proof (review C2-H1). It writes through `_write_unlocked`: the
+    appeared, or when ONE fresh fingerprint read from the bytes, never the memo,
+    differs from it; the receipt then records that verified fingerprint, so
+    bytes swapped after it read as drift, never as proof (review C2-H1). It
+    writes through `_write_unlocked`: the
     lock is not reentrant and `write` would hang here (review H1)."""
     with _WRITE_LOCK:
         if receipt_exists(tool.id):
             return None
-        fresh = fingerprint(artifact.path, artifact.type)
+        fresh = fingerprint(artifact.path, artifact.type, rehash=True)
         if fresh is None or fresh != artifact:
             return None
         receipt = _build_receipt(tool, method, (fresh,), package=package, smoke=None)
@@ -436,10 +440,15 @@ def _dir_key(method: Method, directory: Path, link: Path | None) -> str | None:
 
 
 def fingerprint(
-    path: Path, kind: Literal["dir", "link", "file"], *, key: str | None = None
+    path: Path,
+    kind: Literal["dir", "link", "file"],
+    *,
+    key: str | None = None,
+    rehash: bool = False,
 ) -> ReceiptArtifact | None:
     """Record what `path` looks like now, for the given artifact type.
 
+    `rehash=True` always reads file bytes instead of trusting the session memo.
     A file needs to be a regular file and records sha256 + size + mtime_ns; a
     link records its readlink target. A dir is proven by one key file resolved
     inside the directory (L-19-31, RR3-01): `key` must be a safe relative path,
@@ -451,7 +460,7 @@ def fingerprint(
     is not fingerprintable."""
     try:
         if kind == "file":
-            return _file_fingerprint(path)
+            return _file_fingerprint(path, rehash=rehash)
         if kind == "link":
             if not path.is_symlink():
                 return None
@@ -464,7 +473,7 @@ def fingerprint(
             target = _key_file(path, key)
             if target is None:
                 return None
-            key_file = _file_fingerprint(target)
+            key_file = _file_fingerprint(target, rehash=rehash)
             if key_file is None:
                 return None
             return ReceiptArtifact(
@@ -480,15 +489,27 @@ def fingerprint(
     return None
 
 
-def _file_fingerprint(path: Path) -> ReceiptArtifact | None:
-    """A regular file's digest, or None when `path` is not one."""
+def _file_fingerprint(path: Path, *, rehash: bool = False) -> ReceiptArtifact | None:
+    """Hash a regular file once per session and stat tuple; rehash bypasses the memo.
+
+    A key file is hashed once per session per (path, size, mtime_ns), the same
+    memo `_file_matches` keeps, so the layout proof costs one lstat after its
+    first pass (WR3-01, D-08). `rehash=True` always reads the bytes.
+    """
     st = path.lstat()
     if not stat_module.S_ISREG(st.st_mode):
         return None
+    memo_key = (str(path), st.st_size, st.st_mtime_ns)
+    with _MEMO_LOCK:
+        digest = None if rehash else _REHASH_MEMO.get(memo_key)
+    if digest is None:
+        digest = sha256_file(path)
+        with _MEMO_LOCK:
+            _REHASH_MEMO[memo_key] = digest
     return ReceiptArtifact(
         path=path,
         type="file",
-        sha256=sha256_file(path),
+        sha256=digest,
         size=st.st_size,
         mtime_ns=st.st_mtime_ns,
     )
@@ -554,6 +575,20 @@ def _file_matches(target: Path, artifact: ReceiptArtifact, *, rehash: bool) -> b
 def drifted(receipt: Receipt, *, rehash: bool = False) -> tuple[ReceiptArtifact, ...]:
     """The receipt's artifacts that no longer match, in receipt order."""
     return tuple(a for a in receipt.artifacts if not matches(a, rehash=rehash))
+
+
+def broken_drift(receipt: Receipt, *, rehash: bool = False) -> tuple[ReceiptArtifact, ...]:
+    """Return file/link drift that is BROKEN, skipping dirs before any hash.
+
+    This owns L-19-31: changed files and links are BROKEN and refused; a
+    changed dir only loses its removal proof (`drifted` reports that). The
+    update gate's `rehash=True` therefore never reads a dir's key file.
+    """
+    return tuple(
+        artifact
+        for artifact in receipt.artifacts
+        if artifact.type != "dir" and not matches(artifact, rehash=rehash)
+    )
 
 
 def _artifact_int(artifact: dict[str, object], key: str) -> int | None:

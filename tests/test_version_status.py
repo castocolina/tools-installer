@@ -4158,9 +4158,12 @@ def test_adoption_binds_the_digest_to_the_adopted_bytes(
     calls: list[Path] = []
 
     def replaced_after_the_first(
-        path: Path, kind: Literal["dir", "link", "file"]
+        path: Path,
+        kind: Literal["dir", "link", "file"],
+        *,
+        rehash: bool = False,
     ) -> receipts.ReceiptArtifact | None:
-        found = real(path, kind)
+        found = real(path, kind, rehash=rehash)
         calls.append(path)
         if len(calls) == 1:
             st = path.stat()

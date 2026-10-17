@@ -507,15 +507,13 @@ class UpdateService:
         # The one mutation gate for `u` and the execute screen (G3): an update
         # would replace the changed file and erase the drift evidence.
         # Dir drift alone never refuses an update (L-19-31); the installer
-        # update re-records the receipt.
+        # update re-records the receipt. The rule lives in `receipts.broken_drift`.
         if fresh.owner == "installer":
             receipt = receipts.read(target.tool.id)
             if (
                 receipt is not None
                 and not receipts.all_gone(receipt)
-                and any(
-                    artifact.type != "dir" for artifact in receipts.drifted(receipt, rehash=True)
-                )
+                and receipts.broken_drift(receipt, rehash=True)
             ):
                 return UpdateOutcome(
                     tool_id=target.tool.id,

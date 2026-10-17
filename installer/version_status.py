@@ -1272,10 +1272,9 @@ class VersionRefreshService:
             return None, (), (RECEIPT_UNREADABLE_NOTE,)
         if receipts.all_gone(receipt) and receipts.retire(tool.id, receipt):
             return None, (), ()
-        drift = receipts.drifted(receipt)
-        if any(artifact.type != "dir" for artifact in drift):
+        if receipts.broken_drift(receipt):
             return receipt, (CHANGED_SINCE_INSTALL,), ()
-        if drift:
+        if receipts.drifted(receipt):
             # A replaced dir, e.g. a vendor self-update, loses its proof, not its health.
             return receipt, (), (UNPROVEN_NOTE,)
         return receipt, (), ()
