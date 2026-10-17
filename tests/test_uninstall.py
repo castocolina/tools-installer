@@ -1615,7 +1615,11 @@ def test_failed_opt_dir_delete_leaves_the_remainder_listed(
     real_rmtree = uninstall_module.shutil.rmtree
 
     def failing_rmtree(path: object, **_kwargs: object) -> None:
-        if path == opt:
+        # 19-33: the dir is deleted at its captured quarantine path, not at its
+        # original name, so the injected failure fires there. The remover puts
+        # the remainder back before re-raising, which is what the assertions
+        # below pin.
+        if Path(str(path)).name.endswith(".tools-installer.rm"):
             raise OSError("disk gremlins")
         real_rmtree(path)  # type: ignore[arg-type]
 
@@ -2285,3 +2289,115 @@ def test_inaccessible_receipts_dir_never_aborts_plan_removal(
     assert plan.removable == ()
     assert plan.by_tool == {}
     assert set(plan.yourself) == {opt, bin_dir / "rg"}
+
+
+# --- 19-33 Task 1: a proven dir is captured by rename, re-verified, deleted ---
+
+
+_QUARANTINE_SUFFIX = ".tools-installer.rm"
+
+
+def _swap_dir_after_final_check(
+    monkeypatch: pytest.MonkeyPatch,
+    opt: Path,
+    aside: Path,
+    *,
+    occupy_after_capture: bool,
+) -> None:
+    """Plant a vendor build at `opt` the moment its final proof returns.
+
+    The race is injected deterministically by wrapping `receipts.matches`:
+    the swap runs on the first call whose artifact IS `opt`, after that call's
+    real verdict, so the tree the remover believes it verified is already
+    elsewhere. `opt` holds the vendor's reinstall (`fd`, `decoy`) and `aside`
+    the tree that was proven. With `occupy_after_capture`, `opt` is re-created
+    a second time — on the call that re-checks the captured quarantine — so
+    the put-back cannot succeed.
+    """
+    real = receipts.matches
+    swapped = False
+    occupied = False
+
+    def build_vendor_tree() -> None:
+        opt.rename(aside)
+        opt.mkdir()
+        (opt / "fd").write_text("vendor build")
+        (opt / "decoy").write_text("vendor reinstall")
+
+    def wrapper(candidate: receipts.ReceiptArtifact, *, rehash: bool = False) -> bool:
+        nonlocal swapped, occupied
+        if (
+            occupy_after_capture
+            and candidate.path.name.endswith(_QUARANTINE_SUFFIX)
+            and not occupied
+        ):
+            occupied = True
+            opt.mkdir()
+            (opt / "newest").write_text("third copy")
+        verdict = real(candidate, rehash=rehash)
+        if candidate.path == opt and not swapped:
+            swapped = True
+            build_vendor_tree()
+        return verdict
+
+    monkeypatch.setattr(receipts, "matches", wrapper)
+
+
+def test_remove_paths_refuses_a_dir_replaced_after_its_final_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RR-01/T-19-107: the tree deleted must be the tree that was verified.
+
+    A vendor updater that swaps the opt dir between the last proof and the
+    recursive delete gets its own new tree back: the remover captures the
+    directory by an exclusive rename, re-verifies the key file inside the
+    captured tree, and refuses without deleting anything."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    fd, bin_dir, opt = _plant_fd(tmp_path)
+    artifact = plan_removal([fd], bin_dir, verify=True).artifacts[opt]
+    aside = tmp_path / "verified-fd"
+    _swap_dir_after_final_check(monkeypatch, opt, aside, occupy_after_capture=False)
+
+    refused = remove_paths([artifact])
+
+    assert refused == (opt,)
+    assert (opt / "decoy").read_text() == "vendor reinstall"
+    assert (aside / "fd").read_text() == "fd binary"
+    assert [p for p in opt.parent.iterdir() if p.name.endswith(_QUARANTINE_SUFFIX)] == []
+
+
+def test_remove_paths_keeps_a_captured_dir_it_cannot_put_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T-19-109: a captured tree that fails its re-check and cannot be renamed
+    back is kept at its quarantine path and named, never deleted."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    fd, bin_dir, opt = _plant_fd(tmp_path)
+    artifact = plan_removal([fd], bin_dir, verify=True).artifacts[opt]
+    aside = tmp_path / "verified-fd"
+    _swap_dir_after_final_check(monkeypatch, opt, aside, occupy_after_capture=True)
+
+    with pytest.raises(OSError, match="changed during removal; it is kept at"):
+        remove_paths([artifact])
+
+    kept = [p for p in opt.parent.iterdir() if p.name.endswith(_QUARANTINE_SUFFIX)]
+    assert len(kept) == 1
+    assert (kept[0] / "decoy").read_text() == "vendor reinstall"
+    assert (opt / "newest").read_text() == "third copy"
+    assert (aside / "fd").read_text() == "fd binary"
+
+
+def test_dir_removal_leaves_no_quarantine_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The success path: a proven dir is deleted and the capture is cleaned up.
+
+    This test passes on the pre-quarantine tree too; it pins that the new
+    sibling never survives a completed removal."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    fd, bin_dir, opt = _plant_fd(tmp_path)
+    artifact = plan_removal([fd], bin_dir, verify=True).artifacts[opt]
+
+    assert remove_paths([artifact]) == ()
+    assert not opt.exists()
+    assert [p for p in opt.parent.iterdir() if p.name.endswith(_QUARANTINE_SUFFIX)] == []

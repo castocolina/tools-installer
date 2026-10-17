@@ -4,7 +4,10 @@ teardown of every still-enabled shell tweak, reusing the same policy remove
 path the Policies view uses (CONTEXT D-04). Cask/brew/native-managed artifacts
 are left alone."""
 
+import contextlib
+import os
 import shutil
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -403,14 +406,70 @@ def classify_tools(
     return rows
 
 
+# A removal captures a directory under a unique sibling of its own before
+# re-checking and deleting it. Never `.tools-installer.old`, which
+# `atomic.recover_update_remnants` would restore over a live path.
+_QUARANTINE_SUFFIX = ".tools-installer.rm"
+
+
+def _put_back(quarantine: Path, path: Path) -> None:
+    """Rename the captured tree back to `path`, or say exactly where it is.
+
+    Nothing is deleted when the put-back fails: the tree stays at the
+    quarantine path and the error names both paths (T-19-109)."""
+    try:
+        os.rename(quarantine, path)
+    except OSError as exc:
+        raise OSError(f"{path} changed during removal; it is kept at {quarantine}") from exc
+
+
+def _remove_dir(artifact: receipts.ReceiptArtifact) -> bool:
+    """Capture `artifact`'s directory by an exclusive rename, re-verify it, delete it.
+
+    RR-01: the tree that is deleted is the tree that was verified. Checking the
+    proof and then calling `rmtree` on the *name* would delete whatever a
+    vendor updater swapped in between, so the directory is first renamed to a
+    unique quarantine sibling created exclusively under the same parent (the
+    rename never crosses a filesystem and never follows a planted link), the
+    key file is re-hashed inside the captured tree, and only then is that tree
+    deleted. A captured tree that no longer matches is renamed back untouched
+    and the artifact is refused; a `rmtree` that fails puts the remainder back
+    at its path before re-raising, so the next plan still lists it.
+    """
+    quarantine = Path(
+        tempfile.mkdtemp(
+            prefix=f".{artifact.path.name}.",
+            suffix=_QUARANTINE_SUFFIX,
+            dir=artifact.path.parent,
+        )
+    )
+    try:
+        os.rename(artifact.path, quarantine)
+    except OSError:
+        with contextlib.suppress(OSError):
+            quarantine.rmdir()
+        raise
+    if not receipts.matches(replace(artifact, path=quarantine), rehash=True):
+        _put_back(quarantine, artifact.path)
+        return False
+    try:
+        shutil.rmtree(quarantine)
+    except OSError:
+        _put_back(quarantine, artifact.path)
+        raise
+    return True
+
+
 def remove_paths(artifacts: Sequence[receipts.ReceiptArtifact]) -> tuple[Path, ...]:
     """Delete each authorized artifact; return the paths it refused.
 
     The authorized type picks the operation, never what the path is now: only
-    a `dir` artifact reaches `rmtree`, and a `file` or `link` is only ever
-    unlinked (G1). `receipts.matches` re-checks the artifact right before the
-    delete, so a path that changed since the proof is refused and never
-    touched. A failed delete still raises, before any receipt is touched.
+    a `dir` artifact is ever removed recursively, and then only after it has
+    been captured under a quarantine sibling and re-verified there (RR-01);
+    a `file` or `link` is only ever unlinked (G1). `receipts.matches` re-checks
+    the artifact right before the delete, so a path that changed since the
+    proof is refused and never touched. A failed delete still raises, before
+    any receipt is touched.
     """
     refused: list[Path] = []
     for artifact in artifacts:
@@ -418,7 +477,8 @@ def remove_paths(artifacts: Sequence[receipts.ReceiptArtifact]) -> tuple[Path, .
             refused.append(artifact.path)
             continue
         if artifact.type == "dir":
-            shutil.rmtree(artifact.path)
+            if not _remove_dir(artifact):
+                refused.append(artifact.path)
         else:
             artifact.path.unlink()
     return tuple(refused)
