@@ -3,6 +3,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -102,6 +103,20 @@ def _install_countdown_helper(tmp_path: Path) -> Path:
     return bin_dir
 
 
+def _plant_uv_stub(tmp_path: Path) -> Path:
+    stub = tmp_path / "uv-bin" / "uv"
+    stub.parent.mkdir(exist_ok=True)
+    interpreter = shlex.quote(sys.executable)
+    stub.write_text(
+        "#!/bin/sh\n"
+        'while [ "${1:-}" != "--script" ]; do shift; done\n'
+        "shift\n"
+        f'exec {interpreter} "$@"\n'
+    )
+    stub.chmod(0o755)
+    return stub.parent
+
+
 def _wait_seconds(tmp_path: Path, args: list[str], now: str = "2026-07-07T10:10:00") -> str:
     bash = shutil.which("bash")
     assert bash is not None, "bash is required to exercise wait_time"
@@ -112,7 +127,10 @@ def _wait_seconds(tmp_path: Path, args: list[str], now: str = "2026-07-07T10:10:
         + "\n"
         + f"wait_time --seconds {shlex.join(args)}\n"
     )
-    env = os.environ | {"WAIT_TIME_NOW": now}
+    env = os.environ | {
+        "PATH": f"{_plant_uv_stub(tmp_path)}{os.pathsep}{os.environ['PATH']}",
+        "WAIT_TIME_NOW": now,
+    }
     result = subprocess.run([bash, str(script)], env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     return result.stdout.strip()
@@ -130,7 +148,10 @@ def _wait_countdown(
         + "\n"
         + f"wait_time --preview {shlex.join(args)}\n"
     )
-    env = os.environ | {"WAIT_TIME_CLOCK": clock}
+    env = os.environ | {
+        "PATH": f"{_plant_uv_stub(tmp_path)}{os.pathsep}{os.environ['PATH']}",
+        "WAIT_TIME_CLOCK": clock,
+    }
     return subprocess.run([bash, str(script)], env=env, capture_output=True, text=True)
 
 

@@ -11,10 +11,13 @@ Clearing it by default keeps every test that does not set it explicitly on
 """
 
 import os
+import shutil
+import subprocess
 import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -29,6 +32,80 @@ _REAL_HOME = Path(os.path.expanduser("~"))  # noqa: PTH111 -- must not follow a 
 # the `real_launch_probe` fixture without reaching past the module's surface.
 _REAL_LAUNCH_PUPPETEER: Callable[[], str | None] = executors.launch_puppeteer
 _GUARDED_DOTFILES = (".myshellrc", ".shellrc", ".bashrc", ".zshrc", ".profile")
+# The node-family names answered by Volta, fnm, pnpm and bun, plus brew.
+# Tests that need one plant a fake under tmp_path.
+HOST_TOOLCHAIN: frozenset[str] = frozenset(
+    {"node", "npm", "npx", "pnpm", "corepack", "volta", "bun", "yarn", "brew"}
+)
+_toolchain_allowed_root: Path | None = None
+
+
+def _allowed_root() -> Path:
+    if _toolchain_allowed_root is None:
+        raise RuntimeError("toolchain_allowed_root did not run")
+    return _toolchain_allowed_root
+
+
+def assert_not_host_toolchain(
+    argv: object,
+    *,
+    env: Mapping[str, str] | None,
+    cwd: object,
+    allowed_root: Path,
+) -> None:
+    """Refuse host toolchain executables; the net is under sandboxed_puppeteer_cache.
+
+    A shell string and a script's own child processes are not inspected; the
+    PATH strip covers bare names there. Widen when a test needs a script that
+    must not reach the host toolchain.
+    """
+    if not isinstance(argv, (list, tuple)) or not argv or not isinstance(argv[0], str):
+        return
+    first = argv[0]
+    name = Path(first).name
+    if name not in HOST_TOOLCHAIN:
+        return
+    if os.sep in first:
+        base = Path(cwd if isinstance(cwd, (str, Path)) else os.getcwd())
+        candidate = base / first
+    else:
+        found = shutil.which(first, path=(env if env is not None else os.environ).get("PATH", ""))
+        if found is None:
+            return
+        candidate = Path(found)
+    resolved = candidate.resolve()
+    if not resolved.exists() or resolved.is_relative_to(allowed_root):
+        return
+    message = (
+        f"the suite tried to run the host's {name} at {resolved}; "
+        "plant a fake under tmp_path instead"
+    )
+    raise AssertionError(message)
+
+
+class GuardedPopen(subprocess.Popen[Any]):
+    """Subscriptable Popen replacement, as installer/run.py annotates Popen[str]."""
+
+    def __init__(self, args: Any, *pargs: Any, **kwargs: Any) -> None:
+        assert_not_host_toolchain(
+            args,
+            env=kwargs.get("env"),
+            cwd=kwargs.get("cwd"),
+            allowed_root=_allowed_root(),
+        )
+        super().__init__(args, *pargs, **kwargs)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def toolchain_allowed_root(tmp_path_factory: pytest.TempPathFactory) -> None:
+    global _toolchain_allowed_root
+    _toolchain_allowed_root = tmp_path_factory.getbasetemp().resolve()
+
+
+@pytest.fixture(autouse=True)
+def no_host_toolchain_exec(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every subprocess.run resolves Popen here; the guard refuses before launch."""
+    monkeypatch.setattr(subprocess, "Popen", GuardedPopen)
 
 
 def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:
@@ -104,10 +181,14 @@ def no_shell_location_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
     `$ZDOTDIR` and `$ZSH` point at the developer's shell. `PNPM_HOME`,
     `VOLTA_HOME`, `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are absolute overrides
-    inherited from the developer's shell that point into the real HOME (RR-05:
-    `owner_dirs` reads the first two, the terminal and XDG helpers the last
-    two). A test that exercises one sets it with `monkeypatch.setenv`, which
-    runs after this autouse fixture.
+    inherited from the developer's shell that point into the real HOME. The
+    developer's toolchain directories (`~/.volta/bin`, the Volta tools image,
+    `~/.bun/bin`, fnm multishells under `/run/user`, `~/.local/share/pnpm` and
+    `~/.local/bin`) are also removed from PATH by resolved path, since `/home`
+    may symlink to `/var/home`. With `VOLTA_HOME` cleared, a Volta shim can
+    reinvoke itself through PATH and fork without end (P3-01, 24d91d6). Linuxbrew
+    stays because this host's `zsh` and `python3` live there. Tests that exercise
+    these variables set them after this fixture.
     """
     monkeypatch.delenv("ZDOTDIR", raising=False)
     monkeypatch.delenv("ZSH", raising=False)  # omz_root falls back to $ZSH
@@ -115,6 +196,15 @@ def no_shell_location_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("VOLTA_HOME", raising=False)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    real_home = _REAL_HOME.resolve()
+    kept = [
+        entry
+        for entry in os.environ.get("PATH", "").split(os.pathsep)
+        if entry
+        and not Path(entry).resolve().is_relative_to(real_home)
+        and not Path(entry).resolve().is_relative_to(Path("/run/user"))
+    ]
+    monkeypatch.setenv("PATH", os.pathsep.join(kept))
 
 
 @pytest.fixture(autouse=True)
@@ -224,7 +314,9 @@ def sandboxed_puppeteer_cache(empty_browser_cache: Path, monkeypatch: pytest.Mon
     forks without end.
 
     An empty directory plus a stubbed launch makes the check fail before it
-    runs anything, which is the verdict the tests already assume. A test that
+    runs anything, which is the verdict the tests already assume. The launch
+    stub is the first layer; the PATH strip plus Popen guard are the net under it.
+    A test that
     wants a browser, or that exercises the real probe, sets its own seam with
     `monkeypatch.setattr(executors, "launch_puppeteer", ...)` — that runs after
     this autouse fixture and overrides it.
