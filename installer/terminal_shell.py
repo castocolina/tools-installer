@@ -267,7 +267,8 @@ def _read_text(path: Path) -> str:
         return ""
     if data is None:
         raise TerminalShellError(
-            f"{path} is not a regular file of at most 1 MiB; refusing to rewrite it"
+            f"{path} is not a regular file of at most {_CONFIG_MAX_BYTES >> 20} MiB; "
+            "refusing to rewrite it"
         )
     try:
         return data.decode("utf-8")

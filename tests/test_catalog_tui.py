@@ -4750,6 +4750,27 @@ def test_u_on_a_pending_row_says_checking(tmp_path: Path, monkeypatch: pytest.Mo
     assert targets == []
 
 
+def test_u_on_a_broken_row_without_a_reason_still_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool = _tool("rg")
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    state = pass_state(
+        tool,
+        platform=macos,
+        ownership=_ownership(tool, owner="brew"),
+        version=_outdated_status("rg"),
+        broken=("changed since install",),
+    )
+    state = replace(state, reasons=())
+    assert state.health is Health.BROKEN
+    screen, targets, lines, begins = _u_screen(tmp_path, monkeypatch, tool, state)
+    screen.action_update_tool()
+    assert lines == [("rg is broken", "warn")]
+    assert targets == []
+    assert begins == []
+
+
 def test_u_on_a_broken_row_names_the_first_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

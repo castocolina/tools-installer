@@ -262,8 +262,8 @@ def record(
     never receipt-proven. A dir is keyed by Contents/Info.plist for an app,
     else by the member its bin link points to. Script and manager kinds get
     none. When the write fails over an existing receipt, that receipt is deleted
-    (best effort) so it
-    never claims bytes it did not fingerprint, and the raised OSError says
+    (best effort) so it never claims bytes it did not fingerprint, and the raised
+    OSError says
     what happened to it."""
     if method.kind in RECEIPTLESS_KINDS:
         return None

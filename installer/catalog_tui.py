@@ -805,8 +805,10 @@ class CatalogScreen(AppScreen):
             )
             return
         if state.health is Health.BROKEN:
-            # tool_health puts the winning state's facts first.
-            self.status.set(f"{tool_id} is broken: {state.reasons[0]}", "warn")
+            # tool_health puts the winning facts first; a reason-less state is
+            # refused all the same, as the execute screen does (P3-07).
+            detail = f": {state.reasons[0]}" if state.reasons else ""
+            self.status.set(f"{tool_id} is broken{detail}", "warn")
             return
         ownership, status = state.ownership, state.version
         if status is not None and status.outdated is False:
