@@ -174,6 +174,19 @@ def real_home_untouched() -> "object":
 
 # Public name on purpose: pytest collects it by reference, so a private
 # (underscore-prefixed) name reads as dead code to pyright.
+def host_free_path(path_value: str) -> str:
+    """Return PATH without real-home or /run/user entries using loop-safe realpath."""
+    real_home = Path(os.path.realpath(_REAL_HOME))
+    kept = [
+        entry
+        for entry in path_value.split(os.pathsep)
+        if entry
+        and not Path(os.path.realpath(entry)).is_relative_to(real_home)
+        and not Path(os.path.realpath(entry)).is_relative_to(Path("/run/user"))
+    ]
+    return os.pathsep.join(kept)
+
+
 @pytest.fixture(autouse=True)
 def no_shell_location_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear inherited shell and location overrides so tests never follow the
@@ -196,15 +209,7 @@ def no_shell_location_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("VOLTA_HOME", raising=False)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
-    real_home = _REAL_HOME.resolve()
-    kept = [
-        entry
-        for entry in os.environ.get("PATH", "").split(os.pathsep)
-        if entry
-        and not Path(entry).resolve().is_relative_to(real_home)
-        and not Path(entry).resolve().is_relative_to(Path("/run/user"))
-    ]
-    monkeypatch.setenv("PATH", os.pathsep.join(kept))
+    monkeypatch.setenv("PATH", host_free_path(os.environ.get("PATH", "")))
 
 
 @pytest.fixture(autouse=True)

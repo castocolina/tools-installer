@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import HOST_TOOLCHAIN, assert_not_host_toolchain
+from tests.conftest import HOST_TOOLCHAIN, assert_not_host_toolchain, host_free_path
 
 
 def test_host_toolchain_dirs_are_off_path() -> None:
@@ -15,10 +15,17 @@ def test_host_toolchain_dirs_are_off_path() -> None:
     for entry in os.environ["PATH"].split(os.pathsep):
         if not entry:
             continue
-        resolved = Path(entry).resolve()
+        resolved = Path(os.path.realpath(entry))
         assert not resolved.is_relative_to(real_home)
         assert not resolved.is_relative_to(Path("/run/user"))
     assert "VOLTA_HOME" not in os.environ
+
+
+def test_the_path_strip_survives_a_looping_entry(tmp_path: Path) -> None:
+    loop = tmp_path / "loopbin"
+    loop.symlink_to(loop)
+    kept = host_free_path(f"{loop}{os.pathsep}/usr/bin").split(os.pathsep)
+    assert "/usr/bin" in kept
 
 
 def test_a_node_family_binary_outside_tmp_is_never_run(

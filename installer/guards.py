@@ -317,15 +317,17 @@ def real_binary(
     "pnpm not found" while `pnpm --version` worked fine.
 
     The directory is dropped only for the retry, once our own shim has actually
-    won the lookup. The retry drops every spelling of the managed dir.
+    won the lookup. The retry drops every spelling of the managed dir. An
+    entry that cannot be resolved (a symlink loop) is kept for the lookup to
+    skip instead of raising.
     """
     found = lookup(name, path_value)
     if found is None or is_our_shim(Path(found)):
-        managed = shim_dir.resolve()
+        managed = Path(os.path.realpath(shim_dir))
         rest = [
             entry
             for entry in path_value.split(os.pathsep)
-            if entry and Path(entry).resolve() != managed
+            if entry and Path(os.path.realpath(entry)) != managed
         ]
         found = lookup(name, os.pathsep.join(rest))
     if found is None or is_our_shim(Path(found)):
@@ -347,11 +349,9 @@ def look_through_shim(
     it through a symlinked home or with a trailing slash (IN3-02), while the
     returned hit keeps PATH's own spelling.
     """
-    if (
-        found is not None
-        and Path(found).parent.resolve() == shim_dir.resolve()
-        and is_our_shim(Path(found))
-    ):
+    managed_parent = Path(os.path.realpath(shim_dir))
+    found_parent = Path(os.path.realpath(Path(found).parent)) if found is not None else None
+    if found is not None and found_parent == managed_parent and is_our_shim(Path(found)):
         return real_binary(name, shim_dir=shim_dir, path_value=path_value, lookup=lookup)
     return found
 
