@@ -63,7 +63,7 @@ from installer.session import (
 from installer.status import is_installed
 from installer.ui_common import SEVERITY_STYLE, StatusLine, run_live
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
-from installer.version_status import VersionRefreshService
+from installer.version_status import Health, VersionRefreshService
 from installer.versions import TagResolver, resolve_github_tag
 
 _MISMATCH_CHOICES: frozenset[str] = frozenset({"retry", "skip", "fallback"})
@@ -464,6 +464,7 @@ class ExecuteScreen(ModalScreen[None]):
         self._ordered: list[Tool] = []
         self._to_update: list[Tool] = []
         self._current: list[Tool] = []
+        self._refused: list[tuple[Tool, str]] = []
         self._repair: list[Tool] = []
         self._repair_ids: frozenset[str] = frozenset()
         self._reapply: list[Tool] = []
@@ -517,6 +518,9 @@ class ExecuteScreen(ModalScreen[None]):
         def render_head(console: Console) -> None:
             render_dependency_notice(resolved.dragged_in, resolved.warnings, console)
             render_audit(audit(self._ordered, installed_for_order), console)
+            for tool, reason in self._refused:
+                # A reason is data, never Rich markup.
+                console.print(f"{tool.id} is broken: {reason}", markup=False, highlight=False)
             console.print(self._preflight_prompt())
 
         self.query_one("#execute-head", Static).update(self._render_captured(render_head))
@@ -532,6 +536,7 @@ class ExecuteScreen(ModalScreen[None]):
         refresh = self._inputs.version_refresh
         repair: list[Tool] = []
         current: list[Tool] = []
+        refused: list[tuple[Tool, str]] = []
         if refresh is not None:
             for tool in selected:
                 if not self._inputs.installed(tool):
@@ -542,15 +547,19 @@ class ExecuteScreen(ModalScreen[None]):
                 # Repair is the pnpm-shim case only, never receipt drift (Pitfall 10).
                 if state.ownership.broken:
                     repair.append(tool)
+                # Receipt drift: the update gate would refuse it, so the
+                # preview never promises it (IN2-03).
+                elif state.health is Health.BROKEN:
+                    refused.append((tool, state.reasons[0]))
                 elif state.version is not None and state.version.outdated is False:
                     current.append(tool)
         repair_ids = {tool.id for tool in repair}
         self._repair = repair
         self._repair_ids = frozenset(repair_ids)
         self._current = current
-        self._to_update = [
-            tool for tool in self._update_targets(selected) if tool.id not in repair_ids
-        ]
+        self._refused = refused
+        skip = repair_ids | {tool.id for tool, _reason in refused}
+        self._to_update = [tool for tool in self._update_targets(selected) if tool.id not in skip]
         eligible = {tool.id for tool in (*current, *self._to_update, *repair)}
         self._reapply = [
             tool
@@ -1130,6 +1139,12 @@ class ExecuteScreen(ModalScreen[None]):
             first = False
             state = self._progress.get(tool.id, "pending")
             glyph, style, label = _PROGRESS_GLYPH[state]
+            rows.append(f"{glyph} {tool.id} update [{label}]", style=style)
+        for tool, _reason in self._refused:
+            if not first:
+                rows.append("\n")
+            first = False
+            glyph, style, label = _PROGRESS_GLYPH["not-done"]
             rows.append(f"{glyph} {tool.id} update [{label}]", style=style)
         for tool in self._current:
             if not first:

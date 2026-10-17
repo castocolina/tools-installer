@@ -4435,8 +4435,8 @@ async def test_brew_appearing_mid_session_unblocks_colima(
 async def test_classify_reads_the_state(tmp_path: Path) -> None:
     """Repair is the pnpm-shim case only; a drifted (`changed since install`)
     BROKEN state is not repaired (19-RESEARCH Pitfall 10). `shim` is reinstalled
-    as the repair; `drifted` stays an update target and `UpdateService.run`
-    refuses it."""
+    as the repair; `drifted` is refused up front by its state (IN2-03); the
+    gate in `UpdateService.run` stays the backstop."""
     shim, ok, old, drifted = (_tool(name) for name in ("shim", "ok", "old", "drifted"))
     service = frozen_service(tmp_path)
     service.publish(
@@ -4482,9 +4482,10 @@ async def test_classify_reads_the_state(tmp_path: Path) -> None:
         assert _progress_text(screen).splitlines() == [
             "\u25cb shim [pending]",
             "\u25cb old update [pending]",
-            "\u25cb drifted update [pending]",
+            "\u2716 drifted update [not done]",
             "\u2713 ok [already current]",
         ]
+        assert "drifted is broken: changed since install" in _head_text(screen)
 
 
 async def test_run_updates_reads_ownership_and_version_from_state(tmp_path: Path) -> None:
@@ -4541,8 +4542,9 @@ def _raw_yq(bin_dir: Path) -> Method:
 async def test_drifted_receipt_update_is_refused_per_tool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """G3: the execute screen reports the mutation-gate refusal per tool and
-    never replaces the changed file."""
+    """The screen refuses the drifted tool before the run and never replaces
+    the changed file. `tests/test_update.py::test_update_service_refuses_a_drifted_receipt`
+    pins the gate."""
     from installer import receipts
     from installer.download import UpdateExecResult as DownloadUpdateExecResult
 
@@ -4607,11 +4609,60 @@ async def test_drifted_receipt_update_is_refused_per_tool(
         await pilot.pause()
         screen = app.screen
         assert isinstance(screen, ExecuteScreen)
+        assert "yq is broken: changed since install" in _head_text(screen)
+        assert "\u2716 yq update [not done]" in _progress_text(screen)
         await pilot.press("enter")
         await _settle_execute(screen, pilot)
-        log = _log_text(screen)
         progress = _progress_text(screen)
-    assert "yq is broken: changed since install" in log
     assert "\u2716 yq update [not done]" in progress
     assert calls == []
     assert placed.read_bytes() == b"a local dev build"
+
+
+async def test_drifted_tool_is_refused_before_the_run_starts(tmp_path: Path) -> None:
+    """A drift-BROKEN tool is refused before the run: the head says why, its
+    progress row is not-done from the first frame, and only the outdated tool
+    reaches the update service (IN2-03)."""
+    old, drifted = _tool("old"), _tool("drifted")
+    service = frozen_service(tmp_path)
+    service.publish(
+        [
+            pass_state(
+                old,
+                platform=_PLATFORM,
+                ownership=_brew_ownership(old),
+                version=_outdated_status("old", outdated=True),
+            ),
+            pass_state(
+                drifted,
+                platform=_PLATFORM,
+                ownership=_brew_ownership(drifted),
+                broken=("changed since install",),
+            ),
+        ]
+    )
+    updates = _RecordingUpdateService()
+    inputs = _inputs(
+        tools=[old, drifted],
+        installed=lambda _tool: True,
+        version_refresh=service,
+        updates=updates,
+    )
+    app = _host(inputs, [old, drifted])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["old", "drifted"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert _progress_text(screen).splitlines() == [
+            "\u25cb old update [pending]",
+            "\u2716 drifted update [not done]",
+        ]
+        assert "drifted is broken: changed since install" in _head_text(screen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert [target.tool.id for target in updates.recorded] == ["old"]
+        assert _progress_text(screen).splitlines() == [
+            "\u25cf old update [done]",
+            "\u2716 drifted update [not done]",
+        ]
