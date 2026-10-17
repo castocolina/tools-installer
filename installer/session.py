@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Literal, Protocol
 
-from installer.deps import resolve_dependencies
+from installer.deps import Blocked, resolve_dependencies
 from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
 from installer.enums import InstallStatus, Priority
 from installer.model import ConfigStep, Tool
@@ -387,10 +387,20 @@ def _row(
     if state is None or state.health is Health.CHECKING:
         return PlanRow(tool.id, Disposition.WAIT, "", requested_by=requester)
     if state.health is Health.MISSING:
+        reason = "not installed" if requester is None else f"needed by {requester}"
         return PlanRow(
             tool.id,
             Disposition.INSTALL,
-            "not installed",
+            reason,
+            requested_by=requester,
+            health=state.health,
+            ownership=state.ownership,
+        )
+    if requester is not None and state.health is Health.OK:
+        return PlanRow(
+            tool.id,
+            Disposition.SKIP,
+            "already present",
             requested_by=requester,
             health=state.health,
             ownership=state.ownership,
@@ -402,6 +412,28 @@ def _row(
         requested_by=requester,
         health=state.health,
         ownership=state.ownership,
+    )
+
+
+def _blocked_row(
+    blocked: Blocked,
+    state: ToolState | None,
+    *,
+    requester: str | None,
+) -> PlanRow:
+    if state is not None and state.reasons and state.health is Health.UNAVAILABLE:
+        reason = _first_clause(state)
+    elif blocked.needs is not None:
+        reason = f"needs {blocked.needs}"
+    else:
+        reason = blocked.reason
+    return PlanRow(
+        blocked.tool_id,
+        Disposition.BLOCKED,
+        reason,
+        requested_by=requester,
+        health=state.health if state is not None else None,
+        ownership=state.ownership if state is not None else None,
     )
 
 
@@ -426,7 +458,12 @@ def build_plan(
         available=lambda tool: bool(resolve_methods(tool, platform)),
         is_installed=lambda tool: _settled(state_of(tool.id)),
     )
-    return [
+    rows = [
         _row(tool, state_of(tool.id), requester=res.requested_by.get(tool.id))
         for tool in res.closure
     ]
+    rows.extend(
+        _blocked_row(item, state_of(item.tool_id), requester=res.requested_by.get(item.tool_id))
+        for item in res.blocked
+    )
+    return rows
