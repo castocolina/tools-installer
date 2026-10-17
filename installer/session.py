@@ -10,13 +10,13 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, get_args
 
 from installer import executors
 from installer.deps import Blocked, resolve_dependencies
 from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
 from installer.enums import InstallStatus, Priority
-from installer.model import ConfigStep, Tool
+from installer.model import ConfigStep, ConfigStepKind, Tool
 from installer.ownership import (
     UNMANAGEABLE_OWNERS,
     ManagerOwnership,
@@ -32,7 +32,7 @@ from installer.selection import select_tools
 from installer.skill_lifecycle import perform_action
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget, update_refusal
 from installer.version_status import Health, ToolState
-from installer.versions import TagResolver, resolve_github_tag
+from installer.versions import TagResolver, VersionError, resolve_github_tag
 
 # The user's answer to a checksum mismatch: retry the download, skip the
 # tool, or fall back to the remaining methods (brew/native).
@@ -554,8 +554,20 @@ class _StepResult:
     handoff: tuple[str, ...] = ()
 
 
+# The eight kinds the model declares. The dispatcher below branches on every
+# member and `test_each_config_step_kind_dispatches` asserts this set equals
+# `get_args(ConfigStepKind)`, so a ninth kind added to the model fails there
+# instead of reaching a command path no one reviewed.
+_STEP_KINDS: frozenset[str] = frozenset(get_args(ConfigStepKind))
+
+
 def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
     """Run one typed `ConfigStep` through the context's single runner seam."""
+    if step.kind not in _STEP_KINDS:
+        # A kind the model does not declare gets no command, not even a
+        # plausible-looking argv one: its producer is unreviewed, so refusing
+        # is the only answer that cannot run something nobody agreed to.
+        return _StepResult(failed="step kind has no branch")
     if step.kind == "terminal_sync":
         if ctx.terminal_sync is None:
             return _StepResult(failed="no terminal synchronizer bound")
@@ -566,7 +578,13 @@ def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
             return _StepResult(failed="no node method declares the group")
         # L-19-28: the whole pinned group, `--allow-build`, real pnpm and the
         # smoke check — the same executor install and update already use.
-        executors.execute(method, ctx.runner)
+        # Its refusals (no pnpm on PATH, a floor not met, a malformed pin) are
+        # expected answers with a sentence the user can act on, so they read as
+        # a failed step like the engine's own per-method catch, not `crashed`.
+        try:
+            executors.execute(method, ctx.runner)
+        except (CommandError, OSError, executors.ExecutorError, VersionError) as exc:
+            return _StepResult(failed=_first_line(exc))
         return _StepResult()
     if step.kind == "skill_install" and not step.argv:
         # L-19-07: a harness the installer cannot write to gets a reviewed

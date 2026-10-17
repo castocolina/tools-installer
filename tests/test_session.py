@@ -2,15 +2,24 @@ import inspect
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, cast, get_args
 
 import pytest
 
 import installer.engine as engine
 import installer.session as session_module
+from installer import executors, skill_lifecycle
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus
-from installer.model import ConfigStep, Method, Tool
+from installer.model import (
+    ConfigStep,
+    ConfigStepKind,
+    Method,
+    SkillLifecycle,
+    SkillOperation,
+    SkillTarget,
+    Tool,
+)
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError, Runner
@@ -36,6 +45,7 @@ from installer.session import (
     summary_counts,
     with_sensitive_confirm,
 )
+from installer.skill_lifecycle import LifecycleOutcome, LifecycleStatus
 from installer.update import UpdateOutcome
 from installer.versions import TagResolver
 from tests.state_doubles import RunRecorder, ScriptedUpdates
@@ -71,6 +81,7 @@ def _run_context(
     on_mismatch: OnMismatch | None = None,
     updates: ScriptedUpdates | None = None,
     runner: Runner | None = None,
+    terminal_sync: Callable[[], str | None] | None = None,
     should_continue: Callable[[], bool] | None = None,
     on_row_started: Callable[[PlanRow], None] | None = None,
     on_outcome: Callable[[RowOutcome], None] | None = None,
@@ -82,7 +93,7 @@ def _run_context(
         resolve_tag=lambda _repo: "1.0.0",
         install=recorder.install,
         updates=updates,
-        terminal_sync=recorder.terminal_sync,
+        terminal_sync=recorder.terminal_sync if terminal_sync is None else terminal_sync,
         confirm_sensitive=confirm_sensitive,
         on_mismatch=on_mismatch,
         should_continue=should_continue,
@@ -1339,3 +1350,388 @@ def test_fold_run_drops_duplicate_update_failure_ids() -> None:
     )
     assert folded.update_failed == ("u1",)
     assert folded.has_failure is True
+
+
+# ---------------------------------------------------------------------------
+# 20-08 Task 2: the three argv-less step kinds, plus the promise that no kind is
+# silently unhandled. pnpm_group_install runs the executor install and update
+# already use (19 L-19-28), terminal_sync calls the bound synchronizer, and an
+# argv-less skill_install is a reviewed handoff, never a command (19 L-19-07).
+# ---------------------------------------------------------------------------
+
+
+def _group_method() -> Method:
+    return Method(
+        kind="node",
+        params={
+            "npm_pkg": "npm-superpowers",
+            "co_install": ["@obra/superpowers"],
+            "versions": {"@obra/superpowers": "^1"},
+        },
+    )
+
+
+def _node_tool(*methods: Method) -> Tool:
+    return Tool(
+        id="superpowers",
+        name="Superpowers",
+        category="ai",
+        cmd="superpowers",
+        methods=methods or (_group_method(),),
+    )
+
+
+def _handoff_tool(install: SkillOperation) -> Tool:
+    return Tool(
+        id="superpowers",
+        name="Superpowers",
+        category="ai",
+        cmd="superpowers",
+        methods=(Method(kind="skill_pack"),),
+        skill_lifecycle=SkillLifecycle(
+            source="https://github.com/obra/superpowers",
+            owner="obra",
+            supported_harnesses=("codex", "claude"),
+            revision_policy="upstream-latest",
+            targets=(SkillTarget("harness", "<codex-plugin-dir>/superpowers"),),
+            install=install,
+            status=SkillOperation("manual-required"),
+            update=SkillOperation("manual-required"),
+            removal=SkillOperation("manual-required"),
+        ),
+    )
+
+
+_ALL_KIND_STEPS: dict[ConfigStepKind, ConfigStep] = {
+    "skill_install": ConfigStep(
+        "install superpowers with the pack CLI",
+        "skill_install",
+        "claude",
+        ("claude", "install", "x"),
+    ),
+    "plugin_enable": ConfigStep("enable superpowers", "plugin_enable", "claude", _ENABLE),
+    "plugin_uninstall": ConfigStep("remove superpowers", "plugin_uninstall", "claude", _UNINSTALL),
+    "marketplace_remove": ConfigStep(
+        "drop the marketplace", "marketplace_remove", "claude", ("claude", "marketplace", "rm")
+    ),
+    "terminal_sync": ConfigStep("point iTerm2 at zsh", "terminal_sync"),
+    "pnpm_group_install": ConfigStep("install @obra/superpowers with pnpm", "pnpm_group_install"),
+    "project_pack_global_uninstall": ConfigStep(
+        "remove the global gsd", "project_pack_global_uninstall", "claude", _UNINSTALL
+    ),
+    "project_pack_install": ConfigStep(
+        "install gsd for Claude in repo", "project_pack_install", "claude", _GSD_INSTALL
+    ),
+}
+
+
+def _execute_nothing(_method: Method, _runner: Runner) -> None:
+    """A stand-in for `executors.execute` that runs nothing and raises nothing."""
+
+
+@pytest.mark.parametrize("kind", sorted(_ALL_KIND_STEPS))
+def test_each_config_step_kind_dispatches(
+    monkeypatch: pytest.MonkeyPatch, kind: ConfigStepKind
+) -> None:
+    """Every ConfigStepKind has a branch, and the branches match the model's set.
+
+    One test per member (the plan asks for one per kind, and eight collected
+    tests are the evidence) plus the set equality, which is the guard: a ninth
+    kind added to `model.ConfigStepKind` fails here rather than reaching a
+    command path nobody reviewed. The node executor is stubbed because the pnpm
+    group is another test's subject; here the branch only has to be reached.
+    """
+    monkeypatch.setattr(session_module.executors, "execute", _execute_nothing)
+    declared = frozenset(get_args(ConfigStepKind))
+    assert declared == getattr(session_module, "_STEP" + "_KINDS")
+    assert frozenset(_ALL_KIND_STEPS) == declared
+
+    tool = _node_tool(Method(kind="host", params={"host_setup": True}), _group_method())
+    recorder = RunRecorder()
+    outcomes = execute_plan(
+        [_reconfigure_row("superpowers", _ALL_KIND_STEPS[kind])],
+        _run_context(recorder, catalog={"superpowers": tool}),
+    )
+    assert outcomes[0].result == "done", kind
+    assert outcomes[0].detail == "", kind
+    # The two built-in kinds act through a bound seam instead of the runner,
+    # so nothing is recorded as a command; the other six run exactly one argv.
+    assert len(recorder.argv) == (0 if kind in {"terminal_sync", "pnpm_group_install"} else 1), kind
+
+
+def test_pnpm_group_install_runs_the_tools_first_node_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """19 L-19-28: the whole pinned group through the existing node executor.
+
+    The step carries no argv by design (19 review H10): re-typing the pnpm argv
+    here would let the reconfigure path drift from install and update, so the
+    row dispatches `executors.execute` on the declaring tool's first node
+    method — not the `host` method that comes first in registry order.
+    """
+    executed: list[Method] = []
+
+    def _execute(method: Method, _runner: object) -> None:
+        executed.append(method)
+
+    monkeypatch.setattr(session_module.executors, "execute", _execute)
+    recorder = RunRecorder()
+    tool = _node_tool(Method(kind="host", params={"host_setup": True}), _group_method())
+    step = _ALL_KIND_STEPS["pnpm_group_install"]
+
+    outcome = execute_plan(
+        [_reconfigure_row("superpowers", step)],
+        _run_context(recorder, catalog={"superpowers": tool}),
+    )[0]
+
+    assert outcome.result == "done"
+    assert executed == [_group_method()]
+    assert recorder.argv == []
+
+    no_node = _node_tool(Method(kind="host", params={"host_setup": True}))
+    failed = execute_plan(
+        [_reconfigure_row("superpowers", step)],
+        _run_context(recorder, catalog={"superpowers": no_node}),
+    )[0]
+    assert failed.result == "failed"
+    assert failed.detail == f"{step.text}: no node method declares the group"
+
+
+def test_pnpm_group_install_reports_the_executors_own_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing or too-old pnpm is a failed step, not a crashed run.
+
+    `executors.execute` raises `ExecutorError` for the floors it checks (real
+    pnpm, min_node, min_pnpm). That is an expected refusal carrying a sentence
+    the user can act on, so the row shows its first line and the run keeps
+    going; the per-row `crashed` path stays for exceptions nobody predicted.
+    """
+
+    def _execute(_method: Method, _runner: object) -> None:
+        raise executors.ExecutorError(
+            "pnpm could not be found.\nInstall pnpm 9 or newer before using this method."
+        )
+
+    monkeypatch.setattr(session_module.executors, "execute", _execute)
+    recorder = RunRecorder()
+    tool = _node_tool()
+    step = _ALL_KIND_STEPS["pnpm_group_install"]
+
+    outcome = execute_plan(
+        [_reconfigure_row("superpowers", step)],
+        _run_context(recorder, catalog={"superpowers": tool}),
+    )[0]
+
+    assert outcome.result == "failed"
+    assert outcome.detail == f"{step.text}: pnpm could not be found."
+    assert recorder.argv == []
+
+    following = execute_plan(
+        [_reconfigure_row("superpowers", step), PlanRow("b", Disposition.INSTALL, "not installed")],
+        _run_context(recorder, catalog={"superpowers": tool, "b": _tool("b")}),
+    )
+    assert [result for result in (o.result for o in following)] == ["failed", "done"]
+
+
+@pytest.mark.parametrize(
+    "warning, expected_detail",
+    [(None, ""), ("Terminal sync needed: run iTerm2>", "Terminal sync needed: run iTerm2>")],
+)
+def test_terminal_sync_step_calls_the_bound_synchronizer(
+    warning: str | None, expected_detail: str
+) -> None:
+    """The row runs the synchronizer the app bound, and keeps its warning as detail."""
+    synced: list[str] = []
+    step = _ALL_KIND_STEPS["terminal_sync"]
+
+    def terminal_sync() -> str | None:
+        synced.append(step.text)
+        return warning
+
+    recorder = RunRecorder()
+    outcome = execute_plan(
+        [_reconfigure_row("iterm2", step)],
+        _run_context(recorder, catalog={"iterm2": _tool("iterm2")}, terminal_sync=terminal_sync),
+    )[0]
+
+    assert synced == [step.text]
+    assert outcome.result == "done"
+    assert outcome.detail == expected_detail
+    assert recorder.argv == []
+
+    unbound = replace(
+        _run_context(recorder, catalog={"iterm2": _tool("iterm2")}), terminal_sync=None
+    )
+    missing = execute_plan([_reconfigure_row("iterm2", step)], unbound)[0]
+    assert missing.result == "failed"
+    assert missing.detail == f"{step.text}: no terminal synchronizer bound"
+
+
+def test_skill_install_without_argv_is_a_reviewed_handoff_and_manual(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """19 L-19-07: a harness the installer cannot write to gets instructions.
+
+    `partial_steps` builds this step with an empty argv because the pack is
+    reviewed manual-only, so running one is never an option: the lines land on
+    `RowOutcome.install.handoff` and `render_handoff` prints them unchanged.
+    """
+    instructions = (
+        "Run each block inside the named host.",
+        "Codex:",
+        "  codex plugin add superpowers",
+    )
+
+    def _handoff(*_args: object) -> LifecycleOutcome:
+        return LifecycleOutcome("manual-required", instructions)
+
+    monkeypatch.setattr(session_module, "perform_action", _handoff)
+    tool = _handoff_tool(SkillOperation("manual-required", by_harness=(("codex", instructions),)))
+    _reasons, steps = skill_lifecycle.partial_steps(tool, ["codex"])
+    assert steps[0].argv == ()
+
+    recorder = RunRecorder()
+    outcome = execute_plan(
+        [_reconfigure_row("superpowers", *steps)],
+        _run_context(recorder, catalog={"superpowers": tool}),
+    )[0]
+
+    assert outcome.result == "manual"
+    assert outcome.install is not None
+    assert outcome.install.status is InstallStatus.MANUAL_REQUIRED
+    assert outcome.install.handoff == instructions
+    assert recorder.argv == []
+
+    enable = ConfigStep("enable superpowers in user scope", "plugin_enable", "claude", _ENABLE)
+    mixed_recorder = RunRecorder()
+    mixed = execute_plan(
+        [_reconfigure_row("superpowers", enable, *steps)],
+        _run_context(mixed_recorder, catalog={"superpowers": tool}),
+    )[0]
+    assert mixed.result == "manual"
+    assert mixed_recorder.argv == [list(_ENABLE)]
+    assert mixed.install is not None
+    assert mixed.install.handoff == instructions
+
+
+@pytest.mark.parametrize(
+    "status, expected_detail",
+    [
+        ("completed", ""),
+        ("present", ""),
+        ("absent", "skill install reported absent"),
+        ("unknown", "skill install reported unknown"),
+    ],
+)
+def test_skill_install_reports_what_the_lifecycle_returned(
+    monkeypatch: pytest.MonkeyPatch, status: LifecycleStatus, expected_detail: str
+) -> None:
+    """The step takes the lifecycle's own answer, including the two failure words."""
+
+    def _outcome(*_args: object) -> LifecycleOutcome:
+        return LifecycleOutcome(status)
+
+    monkeypatch.setattr(session_module, "perform_action", _outcome)
+    tool = _handoff_tool(SkillOperation("manual-required"))
+    step = ConfigStep("install superpowers for Codex", "skill_install", "codex")
+
+    outcome = execute_plan(
+        [_reconfigure_row("superpowers", step)],
+        _run_context(RunRecorder(), catalog={"superpowers": tool}),
+    )[0]
+
+    if expected_detail:
+        assert outcome.result == "failed"
+        assert outcome.detail == f"{step.text}: {expected_detail}"
+    else:
+        assert outcome.result == "done"
+        assert outcome.detail == ""
+
+
+def test_skill_install_with_argv_runs_it() -> None:
+    """A pack the installer CAN write to runs its own reviewed argv instead."""
+    recorder = RunRecorder()
+    tool = _handoff_tool(SkillOperation("manual-required"))
+    step = ConfigStep(
+        "install superpowers for Codex", "skill_install", "codex", ("codex", "plugin", "add", "x")
+    )
+
+    outcome = execute_plan(
+        [_reconfigure_row("superpowers", step)],
+        _run_context(recorder, catalog={"superpowers": tool}),
+    )[0]
+
+    assert outcome.result == "done"
+    assert recorder.argv == [["codex", "plugin", "add", "x"]]
+
+
+def test_skill_install_without_an_executable_operation_crashes_the_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail closed: a producer that broke the partial_steps invariant is a bug.
+
+    `perform_action` raises ValueError when the lifecycle has no reviewed
+    executable operation for the action. That stays outside the per-step catch
+    list, so the row takes the per-row crashed path from 20-07 (exit 1, row
+    kept selected) instead of reading as a clean step failure.
+    """
+
+    def _raise(*_args: object) -> LifecycleOutcome:
+        raise ValueError("no reviewed executable lifecycle operation for 'install'")
+
+    monkeypatch.setattr(session_module, "perform_action", _raise)
+    tool = _handoff_tool(SkillOperation("manual-required"))
+    step = ConfigStep("install superpowers for Codex", "skill_install", "codex")
+    recorder = RunRecorder()
+
+    outcomes = execute_plan(
+        [_reconfigure_row("superpowers", step)],
+        _run_context(recorder, catalog={"superpowers": tool}),
+    )
+
+    assert outcomes[0].result == "crashed"
+    assert outcomes[0].detail.startswith("ValueError:")
+    assert recorder.argv == []
+    assert exit_code(outcomes) == 1
+
+
+def test_an_unknown_step_kind_fails_closed_instead_of_running_argv() -> None:
+    """The guard behind `_STEP_KINDS`: a kind with no branch never executes.
+
+    The model's literal type rejects this kind at build time; a plan built by
+    an older producer, or hand-edited, can still carry one, so the dispatcher
+    refuses it rather than treating its argv as just another command.
+    """
+    step = ConfigStep(
+        "do the new thing", cast(ConfigStepKind, "brand_new_kind"), "claude", ("claude", "run", "x")
+    )
+    recorder = RunRecorder()
+
+    outcome = execute_plan(
+        [_reconfigure_row("gsd", step)],
+        _run_context(recorder, catalog={"gsd": _tool("gsd")}),
+    )[0]
+
+    assert outcome.result == "failed"
+    assert outcome.detail == f"{step.text}: step kind has no branch"
+    assert recorder.argv == []
+
+
+def test_reconfigure_stops_at_a_builtin_step_and_never_reaches_the_next() -> None:
+    """The D-18 order holds when the row starts with a kind that runs no argv.
+
+    A built-in step can be the first failure in a row whose later steps do run
+    commands; stopping there is what keeps a failed enable from being followed
+    by the removal that would delete the only working copy.
+    """
+    sync = ConfigStep("point iTerm2 at zsh", "terminal_sync")
+    enable = ConfigStep("enable gsd-core in user scope", "plugin_enable", "claude", _ENABLE)
+    recorder = RunRecorder()
+    unbound = replace(_run_context(recorder, catalog={"gsd": _tool("gsd")}), terminal_sync=None)
+
+    outcome = execute_plan([_reconfigure_row("gsd", sync, enable)], unbound)[0]
+
+    assert outcome.result == "failed"
+    assert outcome.detail == f"{sync.text}: no terminal synchronizer bound"
+    assert recorder.argv == []
