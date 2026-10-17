@@ -26,7 +26,7 @@ from installer.receipts import CHANGED_SINCE_INSTALL
 from installer.resolve import resolve_methods
 from installer.run import Runner, run_command
 from installer.selection import select_tools
-from installer.update import UpdateOutcome
+from installer.update import UpdateOutcome, update_refusal
 from installer.version_status import Health, ToolState
 from installer.versions import TagResolver, resolve_github_tag
 
@@ -395,6 +395,17 @@ def _needs_row(row: PlanRow, dependency: str) -> PlanRow:
     return replace(row, disposition=Disposition.BLOCKED, reason=f"needs {dependency}")
 
 
+def _version_arrow(state: ToolState) -> str:
+    version = state.version
+    if version is None or version.installed is None or version.latest is None:
+        return "update available"
+    return f"{version.installed} -> {version.latest}"
+
+
+def _already_present_reason(state: ToolState) -> str:
+    return f"already present; {_first_clause(state)}"
+
+
 def _row(
     tool: Tool,
     state: ToolState | None,
@@ -435,6 +446,67 @@ def _row(
             Disposition.REPAIR,
             reason,
             requested_by=requester,
+            health=state.health,
+            ownership=state.ownership,
+        )
+    if state.health is Health.MISCONFIGURED:
+        if not direct:
+            return PlanRow(
+                tool.id,
+                Disposition.SKIP,
+                _already_present_reason(state),
+                requested_by=requester,
+                health=state.health,
+                ownership=state.ownership,
+            )
+        if state.unconfigured:
+            return PlanRow(
+                tool.id,
+                Disposition.RECONFIGURE,
+                _first_clause(state),
+                steps=state.unconfigured,
+                health=state.health,
+                ownership=state.ownership,
+            )
+        return PlanRow(
+            tool.id,
+            Disposition.BLOCKED,
+            _first_clause(state),
+            health=state.health,
+            ownership=state.ownership,
+        )
+    if state.health is Health.OUTDATED:
+        if not direct:
+            return PlanRow(
+                tool.id,
+                Disposition.SKIP,
+                _already_present_reason(state),
+                requested_by=requester,
+                health=state.health,
+                ownership=state.ownership,
+            )
+        refusal = update_refusal(tool, state.ownership)
+        if refusal is None:
+            return PlanRow(
+                tool.id,
+                Disposition.UPDATE,
+                _version_arrow(state),
+                health=state.health,
+                ownership=state.ownership,
+            )
+        if state.ownership.off_policy:
+            real = owner_label(state.ownership) or state.ownership.owner
+            declared = declared_manager_label(tool, platform)
+            reason = f"managed by {real}"
+            if declared is not None and declared != real:
+                reason += f"; the catalog installs it via {declared}"
+        else:
+            label = owner_label(state.ownership)
+            reason = f"managed by {label}" if label is not None else "no update source"
+        return PlanRow(
+            tool.id,
+            Disposition.SKIP,
+            reason,
             health=state.health,
             ownership=state.ownership,
         )

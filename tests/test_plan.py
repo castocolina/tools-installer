@@ -1,11 +1,13 @@
 import subprocess
 import typing
 from collections.abc import Callable
+from importlib import import_module
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from installer.model import Method, Tool
+from installer.model import ConfigStep, Method, Tool
 from installer.ownership import UNMANAGEABLE_OWNERS, Owner, owner_label
 from installer.platform import Platform
 from installer.receipts import CHANGED_SINCE_INSTALL
@@ -18,10 +20,45 @@ from installer.session import (
     build_plan,
     review_counts,
 )
-from installer.version_status import BROKEN_SHIM_REASON, Health, ToolState
+from installer.version_status import BROKEN_SHIM_REASON, Health, ToolState, VersionStatus
 from tests.state_doubles import MACOS, pass_state, plan_state
 
 _BREW = Method(kind="brew", params={"formula": "x"})
+
+
+class _PlanRowBuilder(typing.Protocol):
+    def __call__(
+        self,
+        tool: Tool,
+        state: ToolState | None,
+        *,
+        requester: str | None,
+        direct: bool,
+        platform: Platform,
+        reinstall: frozenset[str],
+    ) -> PlanRow: ...
+
+
+_plan_row = cast(_PlanRowBuilder, import_module("installer.session")._row)
+
+
+def _build_row(
+    tool: Tool,
+    state: ToolState | None,
+    *,
+    requester: str | None,
+    direct: bool,
+    platform: Platform,
+    reinstall: frozenset[str],
+) -> PlanRow:
+    return _plan_row(
+        tool,
+        state,
+        requester=requester,
+        direct=direct,
+        platform=platform,
+        reinstall=reinstall,
+    )
 
 
 def _tool(
@@ -46,6 +83,176 @@ def _tool(
 
 def _state_of(states: dict[str, ToolState]) -> Callable[[str], ToolState | None]:
     return states.get
+
+
+def test_misconfigured_direct_row_with_steps_is_will_reconfigure_listing_them():
+    tool = _tool("pony")
+    steps = (
+        ConfigStep("install ponytail for Codex", "skill_install", "codex"),
+        ConfigStep("sync terminals", "terminal_sync"),
+    )
+    state = plan_state(
+        tool,
+        health=Health.MISCONFIGURED,
+        reasons=("partial: missing on Codex — details",),
+        unconfigured=steps,
+    )
+
+    row = _build_row(
+        tool, state, requester=None, direct=True, platform=MACOS, reinstall=frozenset()
+    )
+
+    assert (row.disposition, row.reason, row.steps) == (
+        Disposition.RECONFIGURE,
+        "partial: missing on Codex",
+        steps,
+    )
+
+
+def test_misconfigured_direct_row_without_steps_is_blocked_with_the_reason():
+    tool = _tool("pony")
+    state = plan_state(
+        tool, health=Health.MISCONFIGURED, reasons=("project pack: no repo detected",)
+    )
+
+    row = _build_row(
+        tool, state, requester=None, direct=True, platform=MACOS, reinstall=frozenset()
+    )
+
+    assert (row.disposition, row.reason, row.steps) == (
+        Disposition.BLOCKED,
+        "project pack: no repo detected",
+        (),
+    )
+
+
+def test_misconfigured_dragged_dependency_is_already_present_with_the_reason():
+    tool = _tool("pony")
+    state = plan_state(
+        tool,
+        health=Health.MISCONFIGURED,
+        reasons=("partial: missing on Codex — details",),
+        unconfigured=(ConfigStep("install ponytail for Codex", "skill_install", "codex"),),
+    )
+
+    row = _build_row(
+        tool, state, requester="mmdc", direct=False, platform=MACOS, reinstall=frozenset()
+    )
+
+    assert (row.disposition, row.reason, row.steps) == (
+        Disposition.SKIP,
+        "already present; partial: missing on Codex",
+        (),
+    )
+
+
+@pytest.mark.parametrize("owner", ("installer", "brew", "uv", "pnpm"))
+def test_outdated_direct_row_is_will_update_when_the_owner_allows(owner: Owner):
+    tool = _tool("jq")
+    if owner == "pnpm":
+        tool = _tool("jq", methods=(Method(kind="node", params={"npm_pkg": "jq"}),))
+    version = VersionStatus("jq", "1.7.1", "1.8.0", True, False, "test")
+    state = plan_state(
+        tool,
+        health=Health.OUTDATED,
+        owner=owner,
+        method=tool.methods[0] if owner == "pnpm" else None,
+        version=version,
+        reasons=("outdated",),
+    )
+
+    row = _build_row(
+        tool, state, requester=None, direct=True, platform=MACOS, reinstall=frozenset()
+    )
+
+    assert (row.disposition, row.reason, row.ownership) == (
+        Disposition.UPDATE,
+        "1.7.1 -> 1.8.0",
+        state.ownership,
+    )
+
+
+def test_outdated_direct_row_with_unreadable_versions_reads_update_available():
+    tool = _tool("jq")
+    version = VersionStatus("jq", None, "1.8.0", True, False, "test")
+    state = plan_state(tool, health=Health.OUTDATED, version=version, reasons=("outdated",))
+
+    row = _build_row(
+        tool, state, requester=None, direct=True, platform=MACOS, reinstall=frozenset()
+    )
+
+    assert (row.disposition, row.reason) == (Disposition.UPDATE, "update available")
+
+
+@pytest.mark.parametrize(
+    ("owner", "expected"),
+    (
+        ("dnf", "managed by dnf"),
+        ("os-package", "managed by OS package"),
+        ("volta", "managed by Volta"),
+        ("unknown", "no update source"),
+    ),
+)
+def test_outdated_direct_row_is_skipped_managed_by_a_refusing_owner(owner: Owner, expected: str):
+    tool = _tool("jq")
+    state = plan_state(tool, health=Health.OUTDATED, owner=owner, reasons=("outdated",))
+
+    row = _build_row(
+        tool, state, requester=None, direct=True, platform=MACOS, reinstall=frozenset()
+    )
+
+    assert (row.disposition, row.reason) == (Disposition.SKIP, expected)
+
+
+def test_outdated_dragged_dependency_is_already_present_with_the_reason():
+    tool = _tool("jq")
+    state = plan_state(tool, health=Health.OUTDATED, reasons=("outdated: 1 -> 2",))
+
+    row = _build_row(
+        tool, state, requester="mmdc", direct=False, platform=MACOS, reinstall=frozenset()
+    )
+
+    assert (row.disposition, row.reason) == (
+        Disposition.SKIP,
+        f"already present; {state.reasons[0].split(' — ', 1)[0]}",
+    )
+
+
+def test_all_current_selection_plans_only_skipped_rows():
+    tools = [_tool("a"), _tool("b"), _tool("c")]
+    states = {tool.id: plan_state(tool) for tool in tools}
+
+    selected = [tool.id for tool in tools]
+    first = build_plan(selected, tools, _state_of(states), MACOS, reinstall=frozenset())
+    second = build_plan(selected, tools, _state_of(states), MACOS, reinstall=frozenset())
+
+    assert first == second
+    assert all(row.disposition is Disposition.SKIP for row in first)
+
+
+def test_off_policy_outdated_row_with_unknown_declared_manager_names_only_the_real_owner(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    tool = _tool("jq")
+    state = plan_state(
+        tool,
+        health=Health.OUTDATED,
+        owner="brew",
+        confidence="none",
+        off_policy=True,
+        reasons=("outdated",),
+    )
+
+    def no_declared_manager(*_args: object) -> None:
+        return None
+
+    monkeypatch.setattr("installer.session.declared_manager_label", no_declared_manager)
+
+    row = _build_row(
+        tool, state, requester=None, direct=True, platform=MACOS, reinstall=frozenset()
+    )
+
+    assert (row.disposition, row.reason) == (Disposition.SKIP, "managed by Homebrew")
 
 
 def test_no_sudo_argv_on_the_plan_path():
