@@ -593,13 +593,11 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
                             row, "blocked", detail="ownership could not be resolved"
                         )
                     elif not ctx.updates.begin(row.tool_id):
+                        in_flight = ctx.updates.in_flight or "another tool"
                         outcome = RowOutcome(
                             row,
                             "blocked",
-                            detail=(
-                                "update already in flight for "
-                                f"{ctx.updates.in_flight or 'another tool'}"
-                            ),
+                            detail=f"update already in flight for {in_flight}",
                         )
                     else:
                         try:

@@ -2,17 +2,20 @@ import inspect
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import pytest
 
 import installer.engine as engine
+import installer.session as session_module
 from installer.engine import ChecksumPolicy, InstallOutcome
+from installer.enums import InstallStatus
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
 from installer.run import Runner
 from installer.session import (
+    RESULT_WORDS,
     Disposition,
     Install,
     MismatchChoice,
@@ -35,7 +38,7 @@ from installer.session import (
 )
 from installer.update import UpdateOutcome
 from installer.versions import TagResolver
-from tests.state_doubles import RunRecorder
+from tests.state_doubles import RunRecorder, ScriptedUpdates
 
 
 def _tool(tool_id: str, priority: str = "P3", *, requires: tuple[str, ...] = ()) -> Tool:
@@ -60,6 +63,7 @@ def _run_context(
     catalog: Mapping[str, Tool] | None = None,
     confirm_sensitive: ConfirmSensitiveAction | None = None,
     on_mismatch: OnMismatch | None = None,
+    updates: ScriptedUpdates | None = None,
     should_continue: Callable[[], bool] | None = None,
     on_row_started: Callable[[PlanRow], None] | None = None,
     on_outcome: Callable[[RowOutcome], None] | None = None,
@@ -70,6 +74,7 @@ def _run_context(
         runner=recorder.runner,
         resolve_tag=lambda _repo: "1.0.0",
         install=recorder.install,
+        updates=updates,
         terminal_sync=recorder.terminal_sync,
         confirm_sensitive=confirm_sensitive,
         on_mismatch=on_mismatch,
@@ -189,6 +194,306 @@ def test_summary_counts_fixed_order_and_nothing_selected():
     ]
     assert summary_counts(outcomes) == "2 installed, 1 updated, 3 skipped, 1 failed"
     assert summary_counts([]) == "nothing selected"
+
+
+def test_update_row_runs_through_the_update_service_with_the_rows_ownership():
+    from installer.ownership import ManagerOwnership
+
+    ownership = ManagerOwnership(
+        tool_id="jq",
+        owner="brew",
+        method=None,
+        package="jq",
+        current_version="1",
+        confidence="direct",
+        shadowed=False,
+        candidates=(),
+        active_candidate=None,
+        active_path=None,
+        unknown_reason=None,
+    )
+    updates = ScriptedUpdates({"jq": UpdateOutcome("jq", "updated", "brew")})
+    recorder = RunRecorder()
+    row = PlanRow("jq", Disposition.UPDATE, "1 -> 2", ownership=ownership)
+    outcomes = execute_plan(
+        [row],
+        _run_context(recorder, catalog={"jq": _tool("jq")}, updates=updates),
+    )
+    assert outcomes[0].result == "done"
+    assert outcomes[0].update is not None and outcomes[0].update.status == "updated"
+    assert updates.targets[0].ownership is ownership
+    assert recorder.installs == []
+
+
+@pytest.mark.parametrize("status", ["unknown-owner", "unsupported"])
+def test_update_refused_at_run_time_is_blocked_with_the_detail(
+    status: Literal["unknown-owner", "unsupported"],
+):
+    from installer.ownership import ManagerOwnership
+
+    ownership = ManagerOwnership(
+        tool_id="jq",
+        owner="brew",
+        method=None,
+        package="jq",
+        current_version="1",
+        confidence="direct",
+        shadowed=False,
+        candidates=(),
+        active_candidate=None,
+        active_path=None,
+        unknown_reason=None,
+    )
+    expected = UpdateOutcome("jq", status, "brew", detail="refused")
+    outcomes = execute_plan(
+        [PlanRow("jq", Disposition.UPDATE, "", ownership=ownership)],
+        _run_context(
+            RunRecorder(),
+            catalog={"jq": _tool("jq")},
+            updates=ScriptedUpdates({"jq": expected}),
+        ),
+    )
+    assert outcomes[0].result == "blocked"
+    assert outcomes[0].detail == "refused"
+
+
+def test_update_latch_refusal_is_blocked():
+    from installer.ownership import ManagerOwnership
+
+    ownership = ManagerOwnership(
+        tool_id="jq",
+        owner="brew",
+        method=None,
+        package="jq",
+        current_version="1",
+        confidence="direct",
+        shadowed=False,
+        candidates=(),
+        active_candidate=None,
+        active_path=None,
+        unknown_reason=None,
+    )
+    updates = ScriptedUpdates({})
+    assert updates.begin("rg")
+    outcomes = execute_plan(
+        [PlanRow("jq", Disposition.UPDATE, "", ownership=ownership)],
+        _run_context(RunRecorder(), catalog={"jq": _tool("jq")}, updates=updates),
+    )
+    assert outcomes[0].result == "blocked"
+    assert outcomes[0].detail == "update already in flight for rg"
+    updates.end()
+
+
+def test_update_failure_does_not_block_a_dependent():
+    from installer.ownership import ManagerOwnership
+
+    ownership = ManagerOwnership(
+        tool_id="node",
+        owner="brew",
+        method=None,
+        package="node",
+        current_version="1",
+        confidence="direct",
+        shadowed=False,
+        candidates=(),
+        active_candidate=None,
+        active_path=None,
+        unknown_reason=None,
+    )
+    tools = {"node": _tool("node"), "mmdc": _tool("mmdc", requires=("node",))}
+    updates = ScriptedUpdates({"node": UpdateOutcome("node", "failed", "brew", "failed")})
+    recorder = RunRecorder()
+    outcomes = execute_plan(
+        [
+            PlanRow("node", Disposition.UPDATE, "", ownership=ownership),
+            PlanRow("mmdc", Disposition.INSTALL, ""),
+        ],
+        _run_context(recorder, catalog=tools, updates=updates),
+    )
+    assert [outcome.result for outcome in outcomes] == ["failed", "done"]
+    assert exit_code(outcomes) == 1
+
+
+def test_install_failure_blocks_dependents_down_a_chain():
+    dependency_pairs = (("a", ""), ("b", "a"), ("c", "b"))
+    tools = {
+        tool_id: _tool(tool_id, requires=(requires,) if requires else ())
+        for tool_id, requires in dependency_pairs
+    }
+    recorder = RunRecorder({"a": InstallOutcome("a", "failed")})
+    outcomes = execute_plan(
+        [PlanRow(tool_id, Disposition.INSTALL, "") for tool_id in ("a", "b", "c")],
+        _run_context(recorder, catalog=tools),
+    )
+    assert [outcome.result for outcome in outcomes] == [
+        "failed",
+        "dependency_failed",
+        "dependency_failed",
+    ]
+    assert outcomes[1].install is not None and outcomes[1].install.blocked_by == ("a",)
+    assert recorder.installs == [("a", False)]
+
+
+@pytest.mark.parametrize(
+    "choice, calls, policies",
+    [
+        ("retry", 2, ["fail", "fail"]),
+        ("skip", 1, ["fail"]),
+        ("fallback", 2, ["fail", "continue"]),
+    ],
+)
+def test_mismatch_retry_skip_and_fallback_match_run_installs(
+    choice: MismatchChoice, calls: int, policies: list[str]
+):
+    from installer.enums import InstallStatus
+
+    seen: list[ChecksumPolicy] = []
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+        repair: bool = False,
+    ) -> InstallOutcome:
+        seen.append(checksum_policy)
+        status = InstallStatus.CHECKSUM_MISMATCH if len(seen) == 1 else InstallStatus.INSTALLED
+        return InstallOutcome(tool.id, status)
+
+    tools = {"rg": _tool("rg")}
+    outcomes = execute_plan(
+        [PlanRow("rg", Disposition.INSTALL, "")],
+        RunContext(
+            catalog=tools,
+            platform=_platform(),
+            runner=lambda _cmd: None,
+            resolve_tag=lambda _repo: "1",
+            install=install,
+            on_mismatch=lambda _id: choice,
+        ),
+    )
+    assert len(seen) == calls
+    assert seen == policies
+    assert outcomes[0].result == ("mismatch" if choice == "skip" else "done")
+
+
+def test_a_crashing_row_is_crashed_and_the_rest_not_attempted():
+    recorder = RunRecorder({"a": RuntimeError("boom")})
+    tools = {tool_id: _tool(tool_id) for tool_id in ("a", "b", "c")}
+    outcomes = execute_plan(
+        [
+            PlanRow("a", Disposition.INSTALL, ""),
+            PlanRow("b", Disposition.INSTALL, ""),
+            PlanRow("c", Disposition.SKIP, ""),
+        ],
+        _run_context(recorder, catalog=tools),
+    )
+    assert [outcome.result for outcome in outcomes] == ["crashed", "not_attempted", "skipped"]
+    assert outcomes[0].detail == "RuntimeError: boom"
+    assert exit_code(outcomes) == 1
+    assert retained(outcomes) == {"a", "b"}
+
+
+def test_should_continue_false_marks_the_rest_not_attempted():
+    checks = iter([True, False])
+    recorder = RunRecorder()
+    tools = {tool_id: _tool(tool_id) for tool_id in ("a", "b", "c")}
+    outcomes = execute_plan(
+        [PlanRow(tool_id, Disposition.INSTALL, "") for tool_id in ("a", "b", "c")],
+        _run_context(recorder, catalog=tools, should_continue=lambda: next(checks)),
+    )
+    assert [outcome.result for outcome in outcomes] == ["done", "not_attempted", "not_attempted"]
+
+
+def test_on_row_started_and_on_outcome_fire_in_plan_order():
+    recorder = RunRecorder()
+    started: list[str] = []
+    finished: list[str] = []
+    tools = {tool_id: _tool(tool_id) for tool_id in ("a", "b")}
+    outcomes = execute_plan(
+        [PlanRow("a", Disposition.INSTALL, ""), PlanRow("b", Disposition.SKIP, "")],
+        _run_context(
+            recorder,
+            catalog=tools,
+            on_row_started=lambda row: started.append(row.tool_id),
+            on_outcome=lambda outcome: finished.append(outcome.row.tool_id),
+        ),
+    )
+    assert started == ["a"]
+    assert finished == ["a", "b"]
+    assert [outcome.row.tool_id for outcome in outcomes] == ["a", "b"]
+
+
+def test_a_raising_on_row_started_callback_crashes_that_row_only():
+    recorder = RunRecorder()
+    tools = {tool_id: _tool(tool_id) for tool_id in ("a", "b")}
+
+    def started(row: PlanRow) -> None:
+        if row.tool_id == "a":
+            raise RuntimeError("ui")
+
+    outcomes = execute_plan(
+        [PlanRow("a", Disposition.INSTALL, ""), PlanRow("b", Disposition.INSTALL, "")],
+        _run_context(recorder, catalog=tools, on_row_started=started),
+    )
+    assert [outcome.result for outcome in outcomes] == ["crashed", "not_attempted"]
+    assert outcomes[0].detail == "RuntimeError: ui"
+    assert recorder.installs == []
+
+
+@pytest.mark.parametrize(
+    "status, expected, detail",
+    [
+        ("installed", "done", ""),
+        ("already-installed", "skipped", "became present before it ran"),
+        ("failed", "failed", ""),
+        ("checksum-mismatch", "mismatch", ""),
+        ("dependency-failed", "dependency_failed", ""),
+        ("manual-required", "manual", ""),
+        ("no-method", "blocked", "no install method for this platform"),
+    ],
+)
+def test_every_install_status_maps_to_one_result(status: str, expected: str, detail: str):
+    assert set(getattr(session_module, "_" + "INSTALL_RESULT")) == set(InstallStatus)
+    tool = _tool("rg")
+    recorder = RunRecorder({"rg": InstallOutcome("rg", InstallStatus(status))})
+    outcome = execute_plan(
+        [PlanRow("rg", Disposition.INSTALL, "")],
+        _run_context(recorder, catalog={"rg": tool}),
+    )[0]
+    assert outcome.result == expected
+    assert outcome.detail == detail
+
+
+def test_result_words_cover_every_non_done_result_the_engine_can_produce():
+    assert set(getattr(session_module, "_" + "INSTALL_RESULT")) == set(InstallStatus)
+    assert set(RESULT_WORDS) == {
+        "failed",
+        "mismatch",
+        "dependency_failed",
+        "not_attempted",
+        "crashed",
+        "skipped",
+        "blocked",
+        "manual",
+    }
+
+
+def test_manual_and_no_method_statuses_still_block_dependents():
+    from installer.enums import InstallStatus
+
+    for status in (InstallStatus.MANUAL_REQUIRED, InstallStatus.NO_METHOD):
+        tools = {"dep": _tool("dep"), "user": _tool("user", requires=("dep",))}
+        recorder = RunRecorder({"dep": InstallOutcome("dep", status)})
+        outcomes = execute_plan(
+            [PlanRow("dep", Disposition.INSTALL, ""), PlanRow("user", Disposition.INSTALL, "")],
+            _run_context(recorder, catalog=tools),
+        )
+        assert outcomes[1].result == "dependency_failed"
 
 
 def test_order_for_install_sorts_by_priority_then_keeps_catalog_order():
