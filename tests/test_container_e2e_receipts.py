@@ -34,7 +34,12 @@ _FUNCTIONS = (
     "assert_receipt_ready_for_removal",
 )
 
-_CONSTANTS = ("RECEIPT_PROBE_TOOL", "RECEIPT_PROBE_CATEGORY", "TESTER_WORKSPACE")
+_CONSTANTS = (
+    "RECEIPT_PROBE_TOOL",
+    "RECEIPT_PROBE_CATEGORY",
+    "TESTER_WORKSPACE",
+    "BREW_BIN",
+)
 
 
 def _bash() -> str:
@@ -248,6 +253,22 @@ def test_assignment_survives_a_spaced_workspace() -> None:
     assert result.stdout == "/a b/c"
 
 
+def _brew_stub(tmp_path: Path) -> Path:
+    stub = tmp_path / "stub" / "brew"
+    stub.parent.mkdir()
+    stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    stub.chmod(0o755)
+    return stub
+
+
+def test_extracted_functions_never_name_the_host_brew() -> None:
+    for name in ("assert_receipt_ready_for_removal", "run_setup_as_tester"):
+        text = _function(name)
+        assert "/home/linuxbrew" not in text
+        assert "${BREW_BIN} shellenv" in text
+    assert _constant("BREW_BIN") == "/home/linuxbrew/.linuxbrew/bin/brew"
+
+
 def _uv_stub() -> str:
     """Drop argv through `python` and run the rest with this interpreter."""
     exe = shlex.quote(sys.executable)
@@ -299,6 +320,7 @@ def test_pre_uninstall_check_requires_binary_and_valid_receipt(
             _assign("TESTER_WORKSPACE", str(ROOT)),
             f"RECEIPT_PROBE_TOOL={_constant('RECEIPT_PROBE_TOOL')}",
             f"RECEIPT_PROBE_CATEGORY={_constant('RECEIPT_PROBE_CATEGORY')}",
+            _assign("BREW_BIN", str(_brew_stub(tmp_path))),
             _function("assert_receipt_ready_for_removal"),
             'exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
             _uv_stub(),
@@ -371,6 +393,7 @@ def test_pre_uninstall_check_survives_a_spaced_workspace(
             _assign("TESTER_WORKSPACE", str(workspace)),
             f"RECEIPT_PROBE_TOOL={_constant('RECEIPT_PROBE_TOOL')}",
             f"RECEIPT_PROBE_CATEGORY={_constant('RECEIPT_PROBE_CATEGORY')}",
+            _assign("BREW_BIN", str(_brew_stub(tmp_path))),
             _function("assert_receipt_ready_for_removal"),
             'exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
             _uv_stub(),

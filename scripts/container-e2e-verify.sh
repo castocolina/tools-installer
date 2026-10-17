@@ -21,6 +21,8 @@ RECEIPT_PROBE_TOOL=yq
 RECEIPT_PROBE_CATEGORY=data
 # The checkout run_setup_as_tester already cds into; the host test overrides it.
 TESTER_WORKSPACE=/home/tester/workspace
+# Homebrew binary evaluated by tester functions; host tests replace it with a stub.
+BREW_BIN=/home/linuxbrew/.linuxbrew/bin/brew
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -166,7 +168,7 @@ write_tester_path() {
   # re-sources and are deliberately left alone.
   exec_tester 'touch ~/.bash_profile
 if ! grep -q linuxbrew ~/.bash_profile 2>/dev/null; then
-  printf "%s\n" "eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"" >> ~/.bash_profile
+  printf "%s\n" "eval \"\$(${BREW_BIN} shellenv)\"" >> ~/.bash_profile
 fi
 if ! grep -q ".local/bin" ~/.bash_profile 2>/dev/null; then
   cat >> ~/.bash_profile <<"TI_PATH_GUARD"
@@ -174,7 +176,7 @@ case ":${PATH-}:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin
 TI_PATH_GUARD
 fi
 if ! grep -q linuxbrew ~/.bashrc 2>/dev/null; then
-  printf "%s\n" "eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"" >> ~/.bashrc
+  printf "%s\n" "eval \"\$(${BREW_BIN} shellenv)\"" >> ~/.bashrc
 fi
 if ! grep -q ".local/bin" ~/.bashrc 2>/dev/null; then
   cat >> ~/.bashrc <<"TI_PATH_GUARD"
@@ -315,7 +317,7 @@ assert_receipt_ready_for_removal() {
   fi
   local parser_status=0
   exec_tester "set -euo pipefail
-eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"
+eval \"\$(${BREW_BIN} shellenv)\"
 export PATH=\"\$HOME/.local/bin:\$PATH\"
 cd ${workspace}
 uv run --isolated --no-dev python -c 'import sys; from installer import receipts; sys.exit(0 if receipts.read(sys.argv[1]) is not None else 1)' ${RECEIPT_PROBE_TOOL}
@@ -338,7 +340,7 @@ run_setup_as_tester() {
   # the ~90-tool catalog's longest joined tool-id list, not just the summary
   # line that first surfaced this bug class.
   exec_tester "set -euo pipefail
-eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"
+eval \"\$(${BREW_BIN} shellenv)\"
 export PATH=\"\$HOME/.local/bin:\$PATH\"
 export COLUMNS=2000
 # Container has no FUSE device; extract-and-run stands in for a desktop that mounts AppImages.
