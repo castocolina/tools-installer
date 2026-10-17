@@ -10,10 +10,10 @@ import installer.engine as engine
 import installer.session as session_module
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus
-from installer.model import Method, Tool
+from installer.model import ConfigStep, Method, Tool
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
-from installer.run import Runner
+from installer.run import CommandError, Runner
 from installer.session import (
     RESULT_WORDS,
     Disposition,
@@ -57,6 +57,12 @@ def _platform() -> Platform:
     return Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
 
 
+# argv shapes Phase 19 actually builds (skill_lifecycle enable/uninstall/project install steps).
+_ENABLE = ("claude", "plugin", "enable", "-s", "user", "gsd-core")
+_UNINSTALL = ("claude", "plugin", "uninstall", "-s", "project", "gsd-core@gsd")
+_GSD_INSTALL = ("pnpm", "dlx", "@opengsd/gsd-core@1.16.0", "--claude", "--local")
+
+
 def _run_context(
     recorder: RunRecorder,
     *,
@@ -64,6 +70,7 @@ def _run_context(
     confirm_sensitive: ConfirmSensitiveAction | None = None,
     on_mismatch: OnMismatch | None = None,
     updates: ScriptedUpdates | None = None,
+    runner: Runner | None = None,
     should_continue: Callable[[], bool] | None = None,
     on_row_started: Callable[[PlanRow], None] | None = None,
     on_outcome: Callable[[RowOutcome], None] | None = None,
@@ -71,7 +78,7 @@ def _run_context(
     return RunContext(
         catalog=catalog or {},
         platform=_platform(),
-        runner=recorder.runner,
+        runner=recorder.runner if runner is None else runner,
         resolve_tag=lambda _repo: "1.0.0",
         install=recorder.install,
         updates=updates,
@@ -443,6 +450,140 @@ def test_a_raising_on_row_started_callback_crashes_that_row_only():
     assert [outcome.result for outcome in outcomes] == ["crashed", "not_attempted"]
     assert outcomes[0].detail == "RuntimeError: ui"
     assert recorder.installs == []
+
+
+def _reconfigure_row(tool_id: str, *steps: ConfigStep) -> PlanRow:
+    return PlanRow(
+        tool_id, Disposition.RECONFIGURE, "duplicate: gsd-core in project scope", steps=steps
+    )
+
+
+def test_reconfigure_runs_argv_steps_in_order_and_is_done():
+    """One event list pins the callback-before-the-first-step order (the TUI's set_tool seam)."""
+    events: list[object] = []
+
+    def runner(command: list[str]) -> None:
+        events.append(list(command))
+
+    recorder = RunRecorder()
+    steps = (
+        ConfigStep("enable gsd-core in user scope", "plugin_enable", "claude", _ENABLE),
+        ConfigStep("remove gsd-core from project scope", "plugin_uninstall", "claude", _UNINSTALL),
+    )
+    outcomes = execute_plan(
+        [_reconfigure_row("gsd", *steps)],
+        _run_context(
+            recorder,
+            catalog={"gsd": _tool("gsd")},
+            runner=runner,
+            on_row_started=lambda row: events.append(row.tool_id),
+        ),
+    )
+    assert events == ["gsd", list(_ENABLE), list(_UNINSTALL)]
+    assert outcomes[0].result == "done"
+    assert outcomes[0].detail == ""
+    assert summary_counts(outcomes) == "1 reconfigured"
+
+
+def test_reconfigure_wraps_a_step_with_cwd_in_the_portable_directory_shim(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    recorder = RunRecorder()
+    step = ConfigStep(
+        "install gsd-core for Claude in repo", "project_pack_install", "claude", _GSD_INSTALL, repo
+    )
+    outcomes = execute_plan(
+        [_reconfigure_row("gsd", step)],
+        _run_context(recorder, catalog={"gsd": _tool("gsd")}),
+    )
+    assert recorder.argv == [
+        ["sh", "-c", 'cd -- "$1" && shift && exec "$@"', "sh", str(repo), *_GSD_INSTALL]
+    ]
+    assert outcomes[0].result == "done"
+
+
+@pytest.mark.parametrize(
+    "kind, refusal",
+    [
+        ("relative", "cwd is not absolute"),
+        ("missing", "cwd does not exist"),
+        ("symlink", "cwd is not a directory"),
+    ],
+)
+def test_reconfigure_refuses_a_cwd_that_is_relative_missing_or_a_symlink(
+    tmp_path: Path, kind: str, refusal: str
+):
+    real = tmp_path / "real"
+    real.mkdir()
+    if kind == "relative":
+        cwd: Path = Path("repo")
+    elif kind == "missing":
+        cwd = tmp_path / "gone"
+    else:
+        cwd = tmp_path / "link"
+        cwd.symlink_to(real)
+    recorder = RunRecorder()
+    step = ConfigStep(
+        "install gsd-core for Claude in repo", "project_pack_install", "claude", _GSD_INSTALL, cwd
+    )
+    outcomes = execute_plan(
+        [_reconfigure_row("gsd", step)],
+        _run_context(recorder, catalog={"gsd": _tool("gsd")}),
+    )
+    assert outcomes[0].result == "failed"
+    assert outcomes[0].detail == f"{step.text}: {refusal}"
+    assert recorder.argv == []
+
+
+def test_reconfigure_stops_at_the_first_failing_step():
+    seen: list[list[str]] = []
+
+    def runner(command: list[str]) -> None:
+        seen.append(command)
+        raise CommandError(command, 1)
+
+    recorder = RunRecorder()
+    steps = (
+        ConfigStep("enable gsd-core in user scope", "plugin_enable", "claude", _ENABLE),
+        ConfigStep("remove gsd-core from project scope", "plugin_uninstall", "claude", _UNINSTALL),
+    )
+    outcomes = execute_plan(
+        [_reconfigure_row("gsd", *steps)],
+        _run_context(recorder, catalog={"gsd": _tool("gsd")}, runner=runner),
+    )
+    assert outcomes[0].result == "failed"
+    assert outcomes[0].detail == f"{steps[0].text}: command failed (1): {' '.join(_ENABLE)}"
+    assert seen == [list(_ENABLE)]
+
+
+def test_reconfigure_failure_does_not_block_a_dependent():
+    def runner(command: list[str]) -> None:
+        raise CommandError(command, 1)
+
+    recorder = RunRecorder()
+    step = ConfigStep("enable gsd-core in user scope", "plugin_enable", "claude", _ENABLE)
+    outcomes = execute_plan(
+        [_reconfigure_row("a", step), PlanRow("b", Disposition.INSTALL, "not installed")],
+        _run_context(
+            recorder,
+            catalog={"a": _tool("a"), "b": _tool("b", requires=("a",))},
+            runner=runner,
+        ),
+    )
+    assert [outcome.result for outcome in outcomes] == ["failed", "done"]
+    assert recorder.installs == [("b", False)]
+
+
+def test_reconfigure_step_without_a_command_fails():
+    recorder = RunRecorder()
+    step = ConfigStep("enable gsd-core in user scope", "plugin_enable", "claude")
+    outcomes = execute_plan(
+        [_reconfigure_row("gsd", step)],
+        _run_context(recorder, catalog={"gsd": _tool("gsd")}),
+    )
+    assert outcomes[0].result == "failed"
+    assert outcomes[0].detail.endswith("step has no command")
+    assert recorder.argv == []
 
 
 @pytest.mark.parametrize(

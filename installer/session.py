@@ -4,12 +4,15 @@ The install plan model (Phase 20, D-01/D-08) also lives here: `Disposition`,
 `PlanRow`, the one `WORDS` vocabulary and the pure `build_plan`.
 """
 
+import stat
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from pathlib import Path
 from typing import Literal, Protocol
 
+from installer import executors
 from installer.deps import Blocked, resolve_dependencies
 from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
 from installer.enums import InstallStatus, Priority
@@ -24,8 +27,9 @@ from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
 from installer.receipts import CHANGED_SINCE_INSTALL
 from installer.resolve import resolve_methods
-from installer.run import Runner, run_command
+from installer.run import CommandError, Runner, run_command
 from installer.selection import select_tools
+from installer.skill_lifecycle import perform_action
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget, update_refusal
 from installer.version_status import Health, ToolState
 from installer.versions import TagResolver, resolve_github_tag
@@ -499,6 +503,127 @@ def _with_force(
     return forced
 
 
+# The portable per-step directory shim: `sh` changes into the validated cwd and
+# execs the argv. argv stays a list of separate positional parameters, so no
+# step value is ever shell-interpreted, and no process-global chdir is taken.
+_CWD_SHIM = 'cd -- "$1" && shift && exec "$@"'
+
+
+def in_directory(cwd: Path, argv: Sequence[str]) -> list[str]:
+    """`argv` wrapped so the child runs in `cwd` — portable, and never via `os.chdir`."""
+    return ["sh", "-c", _CWD_SHIM, "sh", str(cwd), *argv]
+
+
+def _valid_cwd(path: Path) -> str | None:
+    """Why this step must not run in `cwd` right now; None when it may.
+
+    The plan can be minutes old and a repo path is discovered by a read-only
+    walk (T-20-14): a directory replaced by a symlink, or removed, must not
+    send a per-repo install somewhere else. `lstat` is used, never `stat`, so
+    a symlink is seen as itself — its mode is `S_ISLNK`, so the `S_ISDIR`
+    test below already refuses it, and an unreadable path refuses too.
+    """
+    if not path.is_absolute():
+        return "cwd is not absolute"
+    try:
+        mode = path.lstat().st_mode
+    except OSError:
+        return "cwd does not exist"
+    if not stat.S_ISDIR(mode):
+        return "cwd is not a directory"
+    return None
+
+
+def _first_line(exc: Exception) -> str:
+    """The exception's first line, or its type name when it carries no message."""
+    text = str(exc).splitlines()[0] if str(exc) else ""
+    return text or f"{type(exc).__name__} failed"
+
+
+@dataclass(frozen=True)
+class _StepResult:
+    """One step's answer: a refusal detail, reviewed handoff lines, or a warning.
+
+    `failed` means the step did not take and the row stops. `warning` means it
+    ran and has something to report. `handoff` is the reviewed instruction lines
+    a step produced instead of running a command.
+    """
+
+    failed: str | None = None
+    warning: str | None = None
+    handoff: tuple[str, ...] = ()
+
+
+def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
+    """Run one typed `ConfigStep` through the context's single runner seam."""
+    if step.kind == "terminal_sync":
+        if ctx.terminal_sync is None:
+            return _StepResult(failed="no terminal synchronizer bound")
+        return _StepResult(warning=ctx.terminal_sync())
+    if step.kind == "pnpm_group_install":
+        method = next((m for m in tool.methods if m.kind == "node"), None)
+        if method is None:
+            return _StepResult(failed="no node method declares the group")
+        # L-19-28: the whole pinned group, `--allow-build`, real pnpm and the
+        # smoke check — the same executor install and update already use.
+        executors.execute(method, ctx.runner)
+        return _StepResult()
+    if step.kind == "skill_install" and not step.argv:
+        # L-19-07: a harness the installer cannot write to gets a reviewed
+        # handoff, never a command. `ValueError` (no executable operation for
+        # this action) is deliberately not caught here: `partial_steps` builds
+        # this step only for a lifecycle that has one, so a raise means a
+        # producer broke that invariant and the row fails closed as `crashed`.
+        outcome = perform_action(tool, "install", ctx.runner)
+        if outcome.status == "manual-required":
+            return _StepResult(handoff=outcome.instructions)
+        if outcome.status in ("completed", "present"):
+            return _StepResult()
+        return _StepResult(failed=f"skill install reported {outcome.status}")
+    if not step.argv:
+        return _StepResult(failed="step has no command")
+    if step.cwd is not None:
+        refusal = _valid_cwd(step.cwd)
+        if refusal is not None:
+            return _StepResult(failed=refusal)
+        try:
+            ctx.runner(in_directory(step.cwd, step.argv))
+        except (CommandError, OSError) as exc:
+            return _StepResult(failed=_first_line(exc))
+        return _StepResult()
+    try:
+        ctx.runner(list(step.argv))
+    except (CommandError, OSError) as exc:
+        return _StepResult(failed=_first_line(exc))
+    return _StepResult()
+
+
+def _run_reconfigure(row: PlanRow, tool: Tool, ctx: RunContext) -> RowOutcome:
+    """Run the row's steps in order and stop at the first failure.
+
+    The order is the fix (19 D-18): the canonical copy is enabled before the
+    duplicates are removed, so continuing past a failed enable would delete
+    the only working copy. A row that ran every step but produced handoff
+    lines is `manual` — the user still has reviewed steps to run themselves.
+    """
+    handoff: list[str] = []
+    detail = ""
+    for step in row.steps:
+        result = _run_step(step, tool, ctx)
+        if result.failed is not None:
+            return RowOutcome(row, "failed", detail=f"{step.text}: {result.failed}")
+        if result.warning is not None:
+            detail = result.warning
+        handoff.extend(result.handoff)
+    if handoff:
+        lines = tuple(handoff)
+        install = InstallOutcome(
+            tool.id, InstallStatus.MANUAL_REQUIRED, handoff=lines, method_kind="skill_pack"
+        )
+        return RowOutcome(row, "manual", install=install, detail=detail)
+    return RowOutcome(row, "done", detail=detail)
+
+
 _INSTALL_RESULT: dict[InstallStatus, Result] = {
     InstallStatus.INSTALLED: "done",
     InstallStatus.ALREADY_INSTALLED: "skipped",
@@ -613,7 +738,7 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
                         )
                         outcome = RowOutcome(row, mapped, update=update, detail=update.detail)
                 else:
-                    outcome = RowOutcome(row, "not_attempted", detail="reconfigure not wired")
+                    outcome = _run_reconfigure(row, tool, ctx)
             except Exception as exc:
                 halted = True
                 outcome = RowOutcome(
