@@ -1,6 +1,5 @@
 """Render the pre-flight audit and the post-install summary to a Console."""
 
-import textwrap
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -118,25 +117,8 @@ def fold_reason(prefix: Text, body: str, column: int, width: int) -> Text:
     first_line = prefix.plain.rsplit("\n", 1)[-1]
     first_room = max(1, width - cell_len(first_line))
     continuation_room = max(1, width - column)
-    chunks = textwrap.wrap(
-        body,
-        width=first_room,
-        break_long_words=True,
-        break_on_hyphens=False,
-    )
-    if chunks and len(chunks[0]) > first_room:
-        chunks[0] = chunks[0][:first_room]
-    if len(chunks) > 1:
-        remainder = " ".join(chunks[1:])
-        chunks = [
-            chunks[0],
-            *textwrap.wrap(
-                remainder,
-                width=continuation_room,
-                break_long_words=True,
-                break_on_hyphens=False,
-            ),
-        ]
+    room = min(first_room, continuation_room)
+    chunks = [line.plain for line in Text(body).wrap(Console(width=room), room)]
     if not chunks:
         return prefix
     prefix.append(chunks[0])

@@ -912,6 +912,15 @@ def test_render_plan_folds_a_long_reason_with_a_hanging_indent() -> None:
     assert all(line.startswith(" " * 8) for line in lines[1:])
 
 
+def test_render_plan_folds_wide_unicode_reasons_within_cell_width() -> None:
+    from installer.render import render_plan
+
+    row = PlanRow("tool", Disposition.BLOCKED, "界 " * 40, health=Health.BROKEN)
+    console, buf = _console()
+    render_plan([row], console, width=78)
+    assert all(cell_len(line) <= 78 for line in buf.getvalue().splitlines()[1:])
+
+
 def test_render_plan_folds_a_400_char_reason_and_twelve_steps_within_width() -> None:
     from installer.model import ConfigStep
     from installer.render import render_plan

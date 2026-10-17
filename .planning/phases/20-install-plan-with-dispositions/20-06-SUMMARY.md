@@ -18,7 +18,7 @@ affects: [20-09, 20-10, 20-14]
 actuals:
   tokens: 1040
   tasks: 3
-  commits: 1
+  commits: 2
 
 # Tech tracking
 tech-stack:
@@ -93,15 +93,16 @@ A shared `render_plan` now presents plan dispositions consistently and safely ac
 - Added plan row builders and the `render_plan` console entry point, sourcing all row marks and disposition words from shared tables.
 - Grouped dragged dependencies under requesters; rendered plan counts, RECONFIGURE steps, hints, and hanging-folded reasons.
 - Moved the health glyph/style map to `installer.version_status.HEALTH_MARKS`; catalog code now reads the canonical table directly.
-- Added tests for each disposition on three tiers, row-width budgets, grouping, folding, step rendering, and untrusted markup/control text.
+- Added tests for each disposition on three tiers, row-width budgets including wide Unicode, grouping, folding, step rendering, and untrusted markup/control text.
 
 ## Task Commits
 
-Tasks were performed in the specified order. Because the plan's XML `<task>` syntax was not recognized by the installed task-brief extractor (which requires Markdown `## Task N` headings), the task changes are in one consolidated commit:
+Tasks were performed in the specified order. Because the plan's XML `<task>` syntax was not recognized by the installed task-brief extractor (which requires Markdown `## Task N` headings), the task changes are in one consolidated feature commit, followed by a width-correctness fix:
 
 1. **Task 1: one plan row renders mark, id, word and reason within 78 cells; the glyph table moves** - `5b0eba1` (feat)
 2. **Task 2: grouping under the requester, the head line, steps continuation, folding** - `5b0eba1` (feat)
 3. **Task 3: probe-derived text is data, never markup** - `5b0eba1` (test/feat)
+4. **Cell-width folding for wide Unicode** - `60d7017` (fix)
 
 ## Files Created/Modified
 - `installer/render.py` - Shared row composition, text folding, grouping, plan head, and console rendering.
@@ -110,7 +111,7 @@ Tasks were performed in the specified order. Because the plan's XML `<task>` syn
 - `tests/test_render.py` - Renderer, grouping, width, disposition/style, and sanitization tests.
 
 ## Decisions Made
-- Applied reuse finding 06-1: standard-library `textwrap.wrap` handles spaces and long-word splitting within a hanging-indent routine.
+- Applied reuse finding 06-1: terminal-cell-aware `rich.text.Text.wrap` handles spaces and long-word splitting within a hanging-indent routine.
 - Applied reuse finding 06-2: all catalog call sites use `HEALTH_MARKS` directly; no redundant alias remains.
 - Preserved the orchestrator-owned `.planning/config.json` modification and left it unstaged.
 
@@ -134,7 +135,15 @@ Tasks were performed in the specified order. Because the plan's XML `<task>` syn
 - **Verification:** `grep -c "_HEALTH_CELL" installer/catalog_tui.py` returned 0; catalog tests passed.
 - **Committed in:** `5b0eba1`.
 
-**Total deviations:** 2 auto-fixed (one execution-helper mismatch, one reuse adjustment).
+**3. Wide Unicode width accounting**
+- **Found during:** Final review of the renderer's 78-cell guarantee.
+- **Issue:** `textwrap.wrap` measures Python characters, not terminal cells, so wide glyphs could exceed the row budget.
+- **Fix:** Fold with Rich `Text.wrap`, which measures terminal cells, and added a regression test with double-width glyphs.
+- **Files modified:** `installer/render.py`, `tests/test_render.py`.
+- **Verification:** Focused fold tests and full `make validate && make test` passed.
+- **Committed in:** `60d7017`.
+
+**Total deviations:** 3 auto-fixed (execution-helper mismatch, reuse adjustment, and terminal-cell width correction).
 **Impact on plan:** Functional scope and planned public interfaces were retained; only commit granularity and the redundant alias differed.
 
 ## Issues Encountered
@@ -151,7 +160,7 @@ None - no external service configuration required.
 - Task 2 targeted tests: `uv run pytest tests/test_render.py -q --no-cov -k "groups or head or chain or blocked_requester or reconfigure or folds"` — 11 passed.
 - Task 3 targeted tests: `uv run pytest tests/test_render.py -q --no-cov -k "literally or sanitizes_step"` — 2 passed.
 - Catalog/render integration: `uv run pytest tests/test_render.py tests/test_catalog_tui.py -n auto -q --no-cov` — passed.
-- `make validate && make test` — passed; 4,769 passed, 4 skipped, coverage 95.99%.
+- `make validate && make test` — passed after the wide-Unicode width fix; 4,770 passed, 4 skipped, coverage 96.00%.
 - Suppression no-growth gate and `git diff --check` — passed.
 - No real installs or host mutations performed.
 
