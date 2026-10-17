@@ -11,11 +11,12 @@ from datetime import datetime
 from pathlib import Path
 
 from installer.manager_versions import OutdatedReport
-from installer.model import ConfigStep, Tool
-from installer.ownership import ManagerInventory, ManagerOwnership
+from installer.model import ConfigStep, Method, Tool
+from installer.ownership import Confidence, ManagerInventory, ManagerOwnership, Owner
 from installer.platform import Platform
 from installer.uninstall import RemovalPlan
 from installer.version_status import (
+    Health,
     SkillHostStatus,
     ToolState,
     VersionRefreshService,
@@ -26,6 +27,8 @@ from installer.version_status import (
 )
 
 _MACOS = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+# Public alias for test modules that build plans on the same platform.
+MACOS = _MACOS
 
 
 def empty_inventory(**_kwargs: object) -> ManagerInventory:
@@ -229,4 +232,63 @@ def pass_state(
         misconfigured=misconfigured,
         unconfigured=unconfigured,
         notes=pass_notes + notes,
+    )
+
+
+def plan_state(
+    tool: Tool,
+    *,
+    platform: Platform = _MACOS,
+    health: Health = Health.OK,
+    owner: Owner = "installer",
+    confidence: Confidence = "direct",
+    off_policy: bool = False,
+    reasons: tuple[str, ...] = (),
+    version: VersionStatus | None = None,
+    unconfigured: tuple[ConfigStep, ...] = (),
+    method: Method | None = None,
+    present: bool = True,
+) -> ToolState:
+    """A published state for one tool with the health and owner a plan test needs.
+
+    `pass_state` never forwards a receipt, so every state built here carries
+    `receipt=None`. CHECKING is not built here: a test expresses it by making
+    `state_of` return None.
+    """
+    ownership = ManagerOwnership(
+        tool_id=tool.id,
+        owner=owner,
+        method=method,
+        package=None,
+        current_version=None,
+        confidence=confidence,
+        shadowed=False,
+        candidates=(),
+        active_candidate=None,
+        active_path=None,
+        unknown_reason=None,
+        off_policy=off_policy,
+    )
+    if health is Health.OUTDATED and version is None:
+        version = VersionStatus(
+            tool_id=tool.id,
+            installed="1.0",
+            latest="2.0",
+            outdated=True,
+            stale=False,
+            source="test",
+        )
+    broken = reasons if health is Health.BROKEN else ()
+    misconfigured = reasons if health is Health.MISCONFIGURED else ()
+    notes = reasons if health not in (Health.BROKEN, Health.MISCONFIGURED) else ()
+    return pass_state(
+        tool,
+        platform=platform,
+        present=present and health is not Health.MISSING and health is not Health.UNAVAILABLE,
+        ownership=ownership,
+        version=version,
+        unconfigured=unconfigured,
+        broken=broken,
+        misconfigured=misconfigured,
+        notes=notes,
     )

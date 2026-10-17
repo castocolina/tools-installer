@@ -1,16 +1,27 @@
-"""Orchestrate installs for a selection of tools and bucket the outcomes."""
+"""Orchestrate installs for a selection of tools and bucket the outcomes.
 
-from collections.abc import Callable, Mapping, Sequence
+The install plan model (Phase 20, D-01/D-08) also lives here: `Disposition`,
+`PlanRow`, the one `WORDS` vocabulary and the pure `build_plan`.
+"""
+
+from collections import Counter
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from typing import Literal, Protocol
 
+from installer.deps import resolve_dependencies
 from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
 from installer.enums import InstallStatus, Priority
-from installer.model import Tool
+from installer.model import ConfigStep, Tool
+from installer.ownership import ManagerOwnership
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
+from installer.resolve import resolve_methods
 from installer.run import Runner, run_command
+from installer.selection import select_tools
 from installer.update import UpdateOutcome
+from installer.version_status import Health, ToolState
 from installer.versions import TagResolver, resolve_github_tag
 
 # The user's answer to a checksum mismatch: retry the download, skip the
@@ -262,3 +273,160 @@ def summarize(outcomes: list[InstallOutcome]) -> Summary:
         dependency_failed=tuple(buckets[InstallStatus.DEPENDENCY_FAILED]),
         manual_required=tuple(buckets[InstallStatus.MANUAL_REQUIRED]),
     )
+
+
+class Disposition(StrEnum):
+    """What the plan will do to one row. Declaration order is the review order."""
+
+    WAIT = "wait"
+    INSTALL = "install"
+    UPDATE = "update"
+    REPAIR = "repair"
+    RECONFIGURE = "reconfigure"
+    REINSTALL = "reinstall"
+    SKIP = "skip"
+    BLOCKED = "blocked"
+
+
+Result = Literal[
+    "done",
+    "failed",
+    "mismatch",
+    "dependency_failed",
+    "not_attempted",
+    "crashed",
+    "skipped",
+    "blocked",
+    "manual",
+]
+
+
+@dataclass(frozen=True)
+class Words:
+    """One disposition's review word, done word (None for WAIT) and colors."""
+
+    review: str
+    done: str | None
+    style: str
+    done_style: str = "green"
+
+
+WORDS: dict[Disposition, Words] = {
+    Disposition.WAIT: Words("checking…", None, "dim", done_style="dim"),
+    Disposition.INSTALL: Words("will install", "installed", "green"),
+    Disposition.UPDATE: Words("will update", "updated", "yellow"),
+    Disposition.REPAIR: Words("will repair", "repaired", "yellow"),
+    Disposition.RECONFIGURE: Words("will reconfigure", "reconfigured", "yellow"),
+    Disposition.REINSTALL: Words("will be reinstalled", "reinstalled", "yellow"),
+    Disposition.SKIP: Words("skipped", "skipped", "dim", done_style="dim"),
+    Disposition.BLOCKED: Words("blocked", "blocked", "red", done_style="red"),
+}
+
+# Every non-done result. `done` has no entry: its word is the disposition's done word.
+RESULT_WORDS: dict[Result, tuple[str, str]] = {
+    "failed": ("failed", "red"),
+    "mismatch": ("checksum mismatch", "red"),
+    "dependency_failed": ("dependency failed", "red"),
+    "not_attempted": ("not attempted", "red"),
+    "crashed": ("crashed", "red"),
+    "manual": ("manual", "yellow"),
+    "skipped": ("skipped", "dim"),
+    "blocked": ("blocked", "red"),
+}
+
+
+@dataclass(frozen=True)
+class PlanRow:
+    """One row of the install plan. `health` None means the state is still checking."""
+
+    tool_id: str
+    disposition: Disposition
+    reason: str
+    requested_by: str | None = None
+    health: Health | None = None
+    can_reinstall: bool = False
+    steps: tuple[ConfigStep, ...] = ()
+    ownership: ManagerOwnership | None = None
+
+
+_REVIEW_ORDER: tuple[Disposition, ...] = (
+    *(d for d in Disposition if d is not Disposition.WAIT),
+    Disposition.WAIT,
+)
+
+
+def _count_line(words: Iterable[str], order: Sequence[str]) -> str:
+    """Non-zero counts of `words` in `order`, comma-joined; `nothing selected` when empty."""
+    counts = Counter(words)
+    parts = [f"{counts[word]} {word}" for word in order if counts[word]]
+    return ", ".join(parts) or "nothing selected"
+
+
+def review_counts(rows: Sequence[PlanRow]) -> str:
+    """The plan head's counts over review words, e.g. `2 will install, 1 skipped`."""
+    order = [WORDS[d].review for d in _REVIEW_ORDER]
+    return _count_line((WORDS[row.disposition].review for row in rows), order)
+
+
+def _settled(state: ToolState | None) -> bool:
+    """Installed for planning: a present, non-broken published state."""
+    return state is not None and state.present and state.health is not Health.BROKEN
+
+
+def _first_clause(state: ToolState) -> str:
+    """The text before the first ` — ` of the state's first reason, or empty."""
+    return state.reasons[0].split(" — ", 1)[0] if state.reasons else ""
+
+
+def _row(
+    tool: Tool,
+    state: ToolState | None,
+    *,
+    requester: str | None,
+) -> PlanRow:
+    if state is None or state.health is Health.CHECKING:
+        return PlanRow(tool.id, Disposition.WAIT, "", requested_by=requester)
+    if state.health is Health.MISSING:
+        return PlanRow(
+            tool.id,
+            Disposition.INSTALL,
+            "not installed",
+            requested_by=requester,
+            health=state.health,
+            ownership=state.ownership,
+        )
+    return PlanRow(
+        tool.id,
+        Disposition.SKIP,
+        _first_clause(state),
+        requested_by=requester,
+        health=state.health,
+        ownership=state.ownership,
+    )
+
+
+def build_plan(
+    selected: Sequence[str],
+    catalog: Sequence[Tool],
+    state_of: Callable[[str], ToolState | None],
+    platform: Platform,
+    *,
+    reinstall: frozenset[str],
+) -> list[PlanRow]:
+    """The install plan for `selected`, computed from published state only (D-01).
+
+    Reads `state_of` and nothing else: no probe, no network, no subprocess. Rows
+    follow `Resolution.closure` (execution order, dependencies first).
+    """
+    del reinstall  # consumed by the installed-OK branch (plan 20-04 Task 3)
+    chosen = select_tools(list(catalog), list(selected))
+    res = resolve_dependencies(
+        order_for_install(chosen),
+        list(catalog),
+        available=lambda tool: bool(resolve_methods(tool, platform)),
+        is_installed=lambda tool: _settled(state_of(tool.id)),
+    )
+    return [
+        _row(tool, state_of(tool.id), requester=res.requested_by.get(tool.id))
+        for tool in res.closure
+    ]
