@@ -4776,6 +4776,28 @@ def test_claude_duplicates_on_a_present_pack_are_misconfigured(tmp_path: Path) -
     assert state.unconfigured[0].kind == "plugin_enable"
 
 
+def test_ambiguous_claude_duplicates_never_get_a_partial_install_step(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    probe = _probe_for(
+        _listing((_SP_ID, "user", True, "6.4.1"), (_SP_ID, "user", True, "6.2.0")),
+        "superpowers@openai-curated  installed\n",
+    )
+    pack = _superpowers(codex=True)
+    service = _pack_service(home, probe, harnesses=frozenset({"claude", "codex"}))
+    state = _probed_state(service, pack)
+    assert state.skill_hosts is not None
+    assert state.skill_hosts.hosts == {"claude": "absent", "codex": "present"}
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[:2] == (
+        f"duplicate: {_SP_ID} in user scope (6.4.1)",
+        f"duplicate: {_SP_ID} in user scope (6.2.0)",
+    )
+    # Ambiguous is not absent: Claude's D-18 reasons carry no install step, so
+    # the partial logic must not add a second one over the ambiguity (RR-04).
+    assert not any(reason.startswith("partial:") for reason in state.reasons)
+    assert not any(step.kind == "skill_install" for step in state.unconfigured)
+
+
 def test_partial_pack_pass_keeps_every_packs_scan(tmp_path: Path) -> None:
     home = tmp_path / "home"
     superpowers = _superpowers()

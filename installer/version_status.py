@@ -1114,6 +1114,10 @@ class VersionRefreshService:
         try:
             # A harness whose D-18 fix already has a step is not also partial.
             fixed = {step.harness for step in hosts.steps}
+            if hosts.reasons:
+                # D-18 reasons are Claude's: an ambiguous or duplicated Claude copy
+                # is not a missing one (RR-04).
+                fixed = fixed | {"claude"}
             missing = partial_harnesses(
                 cast(Mapping[str, HarnessStatus], hosts.hosts),
                 lifecycle.supported_harnesses,
@@ -1153,7 +1157,12 @@ class VersionRefreshService:
         `present`, add only the seeded note. Once it has, presence is any
         fresh `present` answer, else MISSING; an unreadable present harness
         adds its not-checked note, so mixed absent/unknown is never a
-        note-less MISSING (G24), agreeing with `skill_lifecycle.inspect_status`.
+        note-less MISSING (G24). This differs from
+        `skill_lifecycle.inspect_status` on purpose: for a fresh map with no
+        `present` answer and at least one `unknown`, that function answers
+        `unknown`, while the state is MISSING plus the not-checked note, so a
+        pack never stays CHECKING after its probe answered (accepted in 19-27,
+        P19-07).
         """
         hosts = self._skills.get(tool.id)
         failure = scan.failures.get(tool.id)
@@ -1216,18 +1225,17 @@ class VersionRefreshService:
                 checking=(SKILL_CHECKING_REASON,),
                 notes=notes,
             )
-        answered = hosts
-        facts, steps, pack_notes = self._user_pack_facts(tool, answered, scan.present)
+        facts, steps, pack_notes = self._user_pack_facts(tool, hosts, scan.present)
         return tool_state(
             tool,
             generation=generation,
             seq=seq,
             platform=platform,
-            present="present" in answered.hosts.values(),
+            present="present" in hosts.hosts.values(),
             ownership=ownership,
             version=version,
             removable=removable,
-            skill_hosts=answered,
+            skill_hosts=hosts,
             misconfigured=facts,
             unconfigured=steps,
             notes=notes + pack_notes,
