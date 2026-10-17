@@ -1,6 +1,8 @@
+import contextlib
 import os
 import shlex
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -1120,15 +1122,32 @@ def test_look_through_shim_none_stays_none(tmp_path: Path):
     assert look_through_shim(None, "pnpm", shim_dir=tmp_path, path_value=str(tmp_path)) is None
 
 
-def test_is_our_shim_never_reads_a_large_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_is_our_shim_never_reads_a_large_file(tmp_path: Path):
     big = tmp_path / "big"
     big.write_text(f"#!/bin/sh\n{REDIRECT_SENTINEL}\n" + "#" * 9 * 1024)
 
-    def refuse(*_args: object, **_kwargs: object) -> str:
-        raise AssertionError("read a large file")
-
-    monkeypatch.setattr(Path, "read_text", refuse)
     assert is_our_shim(big) is False
+
+
+def test_is_our_shim_never_blocks_on_a_fifo(tmp_path: Path) -> None:
+    """A FIFO planted at a guarded name must not stall the refresh worker."""
+    fifo = tmp_path / "pnpm"
+    os.mkfifo(fifo)
+    box: list[bool] = []
+
+    def run() -> None:
+        box.append(is_our_shim(fifo))
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    try:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert box == [False]
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        thread.join(timeout=5)
 
 
 def test_rendered_shims_fit_under_the_size_cap():

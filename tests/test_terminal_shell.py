@@ -1,6 +1,9 @@
 """Safety-first terminal emulator shell synchronization tests."""
 
+import contextlib
+import os
 import shlex
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypedDict
@@ -591,6 +594,42 @@ def test_non_utf8_kitty_config_is_refused_as_an_oserror_without_changing_bytes(
 
     assert isinstance(caught.value, OSError)
     assert config.read_bytes() == original
+
+
+def test_dry_run_never_blocks_on_a_fifo_config(tmp_path: Path) -> None:
+    """A FIFO at kitty.conf must not stall the refresh pass's dry run."""
+    config = tmp_path / ".config" / "kitty" / "kitty.conf"
+    config.parent.mkdir(parents=True)
+    os.mkfifo(config)
+    box: list[object] = []
+
+    def run() -> None:
+        try:
+            box.append(
+                sync_terminal_shells(
+                    home=tmp_path,
+                    environ={},
+                    platform=_platform(),
+                    lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+                    write=False,
+                )
+            )
+        except Exception as exc:
+            box.append(exc)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    try:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert len(box) == 1
+        assert isinstance(box[0], TerminalShellError)
+        assert "is not a regular file of at most 1 MiB" in str(box[0])
+        assert config.is_fifo()
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(os.open(config, os.O_WRONLY | os.O_NONBLOCK))
+        thread.join(timeout=5)
 
 
 def test_terminal_sync_warning_is_the_one_total_failure_contract() -> None:

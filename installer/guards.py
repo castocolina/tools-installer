@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import installer.locations
-from installer.atomic import atomic_write_text
+from installer.atomic import atomic_write_text, read_capped
 from installer.shellrc import apply_block, strip_block
 
 BANNED: dict[str, str] = {
@@ -277,12 +277,20 @@ _SHIM_MAX_BYTES = 8192
 
 
 def is_our_shim(path: Path) -> bool:
-    """True only for a readable file carrying our sentinel; never a real binary."""
+    """True only for a regular file of at most `_SHIM_MAX_BYTES` carrying our sentinel.
+
+    Never blocks on a FIFO: a FIFO, a directory, an oversize file, a missing path
+    and an unreadable one are all not our shim.
+    """
     try:
-        if path.stat().st_size > _SHIM_MAX_BYTES:
-            return False
-        text = path.read_text()
-    except (OSError, UnicodeDecodeError):
+        data = read_capped(path, _SHIM_MAX_BYTES, follow_symlinks=True)
+    except OSError:
+        return False
+    if data is None:
+        return False
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
         return False
     return SHIM_SENTINEL in text or REDIRECT_SENTINEL in text
 

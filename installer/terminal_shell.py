@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from installer.atomic import atomic_write_text
+from installer.atomic import atomic_write_text, read_capped
 from installer.locations import zshrc_path
 from installer.omz import ensure_zshrc_template, omz_root
 from installer.platform import Platform
@@ -245,6 +245,10 @@ def _remove_if_owned(path: Path, terminal: str, *, comment: str = "#") -> bool:
     return True
 
 
+# A terminal config is a few KiB; the cap bounds the read on the refresh worker.
+_CONFIG_MAX_BYTES = 1 << 20
+
+
 def _read_text(path: Path) -> str:
     """Read a terminal configuration file, refusing one this module cannot decode.
 
@@ -253,12 +257,20 @@ def _read_text(path: Path) -> str:
     `bytes.decode` raises. UnicodeDecodeError is a ValueError, not an OSError,
     so it would escape the OSError handler each lifecycle call site wraps the
     synchronizer in. Refusing also leaves the file byte-identical rather than
-    rewriting content this module could not read.
+    rewriting content this module could not read. A FIFO, a directory or an
+    oversize file is refused the same way, through the non-blocking capped read,
+    so the dry run on the refresh worker never stalls.
     """
-    if not path.exists():
-        return ""
     try:
-        return path.read_bytes().decode("utf-8")
+        data = read_capped(path, _CONFIG_MAX_BYTES, follow_symlinks=True)
+    except (FileNotFoundError, NotADirectoryError):
+        return ""
+    if data is None:
+        raise TerminalShellError(
+            f"{path} is not a regular file of at most 1 MiB; refusing to rewrite it"
+        )
+    try:
+        return data.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise TerminalShellError(f"{path} is not valid UTF-8; refusing to rewrite it") from exc
 
