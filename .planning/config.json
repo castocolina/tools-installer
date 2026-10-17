@@ -159,15 +159,24 @@
   },
   "model_overrides": {
     "gsd-planner": "fable",
-    "gsd-code-reviewer": "fable"
+    "gsd-code-reviewer": "fable",
+    "gsd-executor": "haiku"
   },
   "effort": {
     "default": "medium",
     "agent_overrides": {
-      "gsd-planner": "xhigh",
-      "gsd-plan-checker": "xhigh",
-      "gsd-code-reviewer": "xhigh",
-      "gsd-ui-auditor": "xhigh"
+      "gsd-planner": "high",
+      "gsd-plan-checker": "high",
+      "gsd-code-reviewer": "high",
+      "gsd-ui-auditor": "high",
+      "gsd-assumptions-analyzer": "high",
+      "gsd-debugger": "high",
+      "gsd-debug-session-manager": "high",
+      "gsd-eval-planner": "high",
+      "gsd-framework-selector": "high",
+      "gsd-roadmapper": "high",
+      "gsd-security-auditor": "high",
+      "gsd-user-profiler": "high"
     }
   }
 }
