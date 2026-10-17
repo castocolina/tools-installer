@@ -2393,6 +2393,64 @@ def test_remove_paths_refuses_a_dir_replaced_after_its_final_check(
     assert [p for p in opt.parent.iterdir() if p.name.endswith(_QUARANTINE_SUFFIX)] == []
 
 
+def _escape_after_final_check(
+    monkeypatch: pytest.MonkeyPatch, directory: Path, aside: Path
+) -> None:
+    """Replace a verified app with a tree whose key escapes to the backup."""
+    real = receipts.matches
+    escaped = False
+
+    def wrapper(candidate: receipts.ReceiptArtifact, *, rehash: bool = False) -> bool:
+        nonlocal escaped
+        result = real(candidate, rehash=rehash)
+        if candidate.path == directory and not escaped:
+            escaped = True
+            directory.rename(aside)
+            directory.mkdir()
+            (directory / "Contents").symlink_to(aside / "Contents", target_is_directory=True)
+            (directory / "unrelated").write_text("new data")
+        return result
+
+    monkeypatch.setattr(receipts, "matches", wrapper)
+
+
+def test_remove_paths_refuses_a_replacement_keyed_through_an_escaping_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RR3-01: the quarantine check must not delete a replacement tree."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tool, bin_dir, directory, _link = _plant_receipt_dir(tmp_path, "app")
+    artifact = plan_removal([tool], bin_dir, verify=True).artifacts[directory]
+    aside = directory.with_name("Demo.backup.app")
+    _escape_after_final_check(monkeypatch, directory, aside)
+
+    refused = remove_paths([artifact])
+
+    assert refused == (directory,)
+    assert (directory / "unrelated").read_text() == "new data"
+    assert (directory / "Contents").is_symlink()
+    assert (aside / "Contents" / "Info.plist").read_text() == "<plist>vendor</plist>"
+    assert [p for p in directory.parent.iterdir() if p.name.endswith(_QUARANTINE_SUFFIX)] == []
+
+
+def test_plan_removal_never_proves_a_dir_whose_key_escapes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tool, bin_dir, directory, _link = _plant_receipt_dir(tmp_path, "app")
+    aside = directory.with_name("Demo.backup.app")
+    directory.rename(aside)
+    directory.mkdir()
+    (directory / "Contents").symlink_to(aside / "Contents", target_is_directory=True)
+    (directory / "unrelated").write_text("new data")
+
+    plan = plan_removal([tool], bin_dir)
+
+    assert plan.removable == ()
+    assert plan.by_tool == {}
+    assert directory in plan.yourself
+
+
 def test_remove_paths_keeps_a_captured_dir_it_cannot_put_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

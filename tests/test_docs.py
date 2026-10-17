@@ -203,6 +203,7 @@ _PHASE_19_REQUIRED = (
     "single flight",
     "Contents/Info.plist",
     "quarantine sibling",
+    "resolve inside the directory",
 )
 
 

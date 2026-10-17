@@ -1069,8 +1069,11 @@ receipt only once its paths are gone.
 A directory artifact is proven by the sha256 of one key file inside it,
 never by its device or inode number: the archive member the bin link points
 to, or `Contents/Info.plist` for an `.app` bundle, which the installer only
-reads (L-19-31). A changed directory loses its removal proof but is not
-broken and does not block an update, which re-records it; a changed file or
+reads (L-19-31). The key file must resolve inside the directory it proves; a
+key that leaves the tree through an intermediate symlink is no proof, in the
+pass and in the quarantine re-check alike (RR3-01). A changed directory
+loses its removal proof but is not broken and does not block an update, which
+re-records it; a changed file or
 link is broken and refused. `remove_paths` re-hashes every file right before
 deleting it, and removes a directory by renaming it to a quarantine sibling,
 re-checking the key file inside the captured tree and only then deleting it;
