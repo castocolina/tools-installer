@@ -254,19 +254,43 @@ def test_assignment_survives_a_spaced_workspace() -> None:
 
 
 def _brew_stub(tmp_path: Path) -> Path:
-    stub = tmp_path / "stub" / "brew"
-    stub.parent.mkdir()
+    stub = tmp_path / "linuxbrew" / "bin" / "brew"
+    stub.parent.mkdir(parents=True)
     stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     stub.chmod(0o755)
     return stub
 
 
 def test_extracted_functions_never_name_the_host_brew() -> None:
-    for name in ("assert_receipt_ready_for_removal", "run_setup_as_tester"):
+    for name in ("assert_receipt_ready_for_removal", "run_setup_as_tester", "write_tester_path"):
         text = _function(name)
         assert "/home/linuxbrew" not in text
         assert "${BREW_BIN} shellenv" in text
     assert _constant("BREW_BIN") == "/home/linuxbrew/.linuxbrew/bin/brew"
+
+
+def test_write_tester_path_hands_the_selected_brew_to_the_tester_shell(
+    tmp_path: Path,
+) -> None:
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    stub = _brew_stub(tmp_path)
+    script = "\n".join(
+        [
+            _assign("BREW_BIN", str(stub)),
+            _function("write_tester_path"),
+            'exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
+            "write_tester_path",
+            "write_tester_path",
+        ]
+    )
+    result = _run(script, scratch)
+    assert result.returncode == 0
+    for rc in (scratch / ".bash_profile", scratch / ".bashrc"):
+        lines = rc.read_text(encoding="utf-8").splitlines()
+        assert lines.count(f'eval "$({stub} shellenv)"') == 1
+        assert not any("$( shellenv)" in line for line in lines)
+    assert result.stderr == ""
 
 
 def _uv_stub() -> str:

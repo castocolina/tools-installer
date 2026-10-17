@@ -52,35 +52,39 @@ def _get_sh() -> str | None:
 
 
 def _write_tester_path_payload() -> str:
-    """Extract the payload passed to exec_tester in write_tester_path().
+    """Extract only write_tester_path's single-quoted tester-shell body.
 
-    Reads scripts/container-e2e-verify.sh, finds the write_tester_path() function,
-    and extracts the string between the first ' after exec_tester and the closing '
-    on its own line. Assert the extracted payload is non-empty and contains
-    '.local/bin' so a future refactor that renames the function fails loudly.
+    Reads scripts/container-e2e-verify.sh and extracts the string between the
+    quote after exec_tester's optional double-quoted host prefix and the closing
+    quote on its own line. Assert the payload is non-empty and contains the
+    expected rc-path content so the extractor cannot drift into another function.
+    The body is run independently with BREW_BIN unset by existing idempotency
+    tests; this helper deliberately returns only the tester-side shell program.
+    A function-local match prevents later script functions from satisfying it.
+    Assert the extracted body begins with the expected first command, then keep
+    the existing non-empty and .local/bin checks as additional drift guards.
+    This matters because another script function also invokes Homebrew setup,
+    but its payload is not safe to run in these shell-shape tests.
     """
     script_text = SCRIPT.read_text()
 
-    # Find write_tester_path function
-    match = re.search(
-        r"^write_tester_path\(\)\s*\{",
+    function = re.search(
+        r"^write_tester_path\(\) \{.*?\n\}\n",
         script_text,
-        re.MULTILINE,
-    )
-    assert match, "write_tester_path() function not found in container-e2e-verify.sh"
-    func_start = match.start()
-
-    # Find the exec_tester call and extract its payload
-    payload_match = re.search(
-        r"exec_tester\s+'(.*?)'(?:\n[}'\s]*)?$",
-        script_text[func_start:],
         re.MULTILINE | re.DOTALL,
+    )
+    assert function, "write_tester_path() function not found in container-e2e-verify.sh"
+    payload_match = re.search(
+        r"exec_tester (?:\"[^\"\n]*\")?'(.*?)'\n\}\n\Z",
+        function.group(0),
+        re.DOTALL,
     )
     assert payload_match, "exec_tester payload not found in write_tester_path()"
 
     payload = payload_match.group(1)
     assert payload.strip(), "extracted payload is empty"
     assert ".local/bin" in payload, "extracted payload does not contain .local/bin"
+    assert payload.startswith("touch ~/.bash_profile"), "payload is not write_tester_path's"
 
     return payload
 
@@ -482,19 +486,19 @@ def test_no_unclassified_accumulating_path_line_in_any_shell_script() -> None:
         ),
         (
             Path("scripts/container-e2e-verify.sh"),
-            204,
+            205,
             "one-shot command prefix inside su -c; executes once in a fresh "
             "process and is never sourced",
         ),
         (
             Path("scripts/container-e2e-verify.sh"),
-            321,
+            322,
             "one-shot command prefix inside su -c; executes once in a fresh "
             "process and is never sourced",
         ),
         (
             Path("scripts/container-e2e-verify.sh"),
-            344,
+            345,
             "one-shot command prefix inside su -c; executes once in a fresh "
             "process and is never sourced",
         ),

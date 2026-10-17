@@ -166,7 +166,8 @@ write_tester_path() {
   # must be self-deduping. The two export PATH= lines in sync_workspace and
   # run_setup_as_tester are one-shot command prefixes in processes nothing
   # re-sources and are deliberately left alone.
-  exec_tester 'touch ~/.bash_profile
+  # su - resets the environment, so hand over the selected brew as a host-expanded prefix.
+  exec_tester "BREW_BIN=${BREW_BIN}; "'touch ~/.bash_profile
 if ! grep -q linuxbrew ~/.bash_profile 2>/dev/null; then
   printf "%s\n" "eval \"\$(${BREW_BIN} shellenv)\"" >> ~/.bash_profile
 fi
