@@ -3096,6 +3096,170 @@ async def test_r_toggles_an_installer_owned_current_row_both_ways() -> None:
         assert options.get_option_at_index(options.highlighted).id == "rg"
 
 
+async def test_r_on_an_installed_oh_my_zsh_shows_the_reviewed_chsh_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from installer import engine
+
+    def fake_which(_cmd: str) -> str:
+        return "/usr/bin/chsh"
+
+    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
+    omz = Tool(
+        id="oh-my-zsh",
+        name="Oh My Zsh",
+        category="shell",
+        cmd="omz",
+        methods=(
+            Method(
+                kind="script",
+                params={
+                    "url": "https://example.test/install.sh",
+                    "shell": "sh",
+                    "refuses_existing": True,
+                },
+            ),
+        ),
+        post_install=("set_login_shell",),
+    )
+    calls: list[list[str]] = []
+
+    def refuse_run(command: list[str]) -> None:
+        calls.append(command)
+        raise CommandError(command, 1, detail="The $ZSH folder already exists")
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+        repair: bool = False,
+    ) -> InstallOutcome:
+        return engine.install_tool(
+            tool,
+            platform,
+            runner=refuse_run,
+            resolve_tag=resolve_tag,
+            checksum_policy=checksum_policy,
+            tools=tools,
+            confirm_sensitive_action=confirm_sensitive_action,
+            repair=repair,
+            present=lambda _tool: True,
+        )
+
+    inputs = _inputs(
+        tools=[omz],
+        install=install,
+        present=("oh-my-zsh",),
+        states=[plan_state(omz, health=Health.OK)],
+    )
+    app = _host(inputs, [omz])
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen_instance = ExecuteScreen(["oh-my-zsh"], inputs)
+        app.push_screen(screen_instance)
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        screen.query_one("#plan-rows", OptionList).highlighted = 0
+        await pilot.press("r", "enter")
+        for _ in range(400):
+            if "SensitiveActionScreen" in type(app.screen).__name__:
+                break
+            await pilot.pause()
+        assert "SensitiveActionScreen" in type(app.screen).__name__
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert screen.outcomes is not None
+        assert screen.outcomes[0].result == "manual"
+        assert "chsh -s $(which zsh)" in _log_text(screen)
+        assert (
+            "its installer refuses to run over an existing install, so it was not re-run."
+            in _log_text(screen)
+        )
+        assert ran_anything(screen.outcomes) is False
+        from installer.session import retained
+
+    assert retained(screen.outcomes) == {"oh-my-zsh"}
+    assert calls == []
+
+
+async def test_a_fresh_oh_my_zsh_install_in_the_review_shows_the_reviewed_chsh_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from installer import engine
+
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/chsh" if cmd == "chsh" else None
+
+    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
+    omz = Tool(
+        id="oh-my-zsh",
+        name="Oh My Zsh",
+        category="shell",
+        cmd="omz",
+        methods=(
+            Method(
+                kind="script",
+                params={"url": "https://example.test/install.sh", "shell": "sh"},
+            ),
+        ),
+        post_install=("set_login_shell",),
+    )
+    calls: list[list[str]] = []
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        return engine.install_tool(
+            tool,
+            platform,
+            runner=lambda command: calls.append(command),
+            resolve_tag=resolve_tag,
+            checksum_policy=checksum_policy,
+            tools=tools,
+            confirm_sensitive_action=confirm_sensitive_action,
+            present=lambda _tool: False,
+        )
+
+    inputs = _inputs(
+        tools=[omz],
+        install=install,
+        states=[plan_state(omz, health=Health.MISSING, present=False)],
+    )
+    app = _host(inputs, [omz])
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen_instance = ExecuteScreen(["oh-my-zsh"], inputs)
+        app.push_screen(screen_instance)
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if "SensitiveActionScreen" in type(app.screen).__name__:
+                break
+            await pilot.pause()
+        assert screen.outcomes is None or screen.outcomes[0].result == "done", _log_text(screen)
+        assert "SensitiveActionScreen" in type(app.screen).__name__, _log_text(screen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert screen.outcomes is not None
+        assert screen.outcomes[0].result == "done"
+        assert "chsh -s $(which zsh)" in _log_text(screen)
+    assert len(calls) == 1
+    assert calls[0][0:2] == ["sh", "-c"]
+
+
 async def test_r_then_enter_reinstalls_with_repair() -> None:
     calls: list[tuple[str, bool]] = []
     dismissed: list[list[RowOutcome] | None] = []

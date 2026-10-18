@@ -170,7 +170,9 @@ def install_tool(
 
     `repair` exists for D-18's broken state. It takes the identical ladder a
     fresh install takes, and is only ever set for a tool the user explicitly
-    selected while it read broken.
+    selected while it read broken. A present tool whose method declares
+    `refuses_existing` instead skips that method and dispatches its reviewed
+    post-install actions without writing a receipt.
 
     Manager kinds are smoke-run once after a successful install when a runnable
     target exists: an executable ``<bin_dir>/<cmd>`` names the method's own
@@ -203,6 +205,21 @@ def install_tool(
     errors: list[Exception] = []
     leftovers: list[str] = []
     for method in methods:
+        if installed and repair and method.params.get("refuses_existing") is True:
+            post_install_handoff, warning = _dispatch_post_install(
+                tool, platform, confirm_sensitive_action
+            )
+            return InstallOutcome(
+                tool.id,
+                InstallStatus.MANUAL_REQUIRED,
+                method_kind=method.kind,
+                handoff=(
+                    f"{tool.id}: its installer refuses to run over an existing install, "
+                    "so it was not re-run.",
+                ),
+                postinstall_warning=warning,
+                post_install_handoff=post_install_handoff,
+            )
         if isinstance(runner, MethodAwareRunner):
             runner.method_started(method.kind)
         path_before = os.environ.get("PATH", "")

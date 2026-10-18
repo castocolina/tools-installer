@@ -1010,6 +1010,88 @@ def test_repair_walks_the_ladder_past_already_installed(monkeypatch: pytest.Monk
     assert calls == [["sudo", "dnf", "install", "-y", "ripgrep"]]
 
 
+def test_a_present_tool_whose_installer_refuses_existing_is_not_re_run_on_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_which(_cmd: str) -> str:
+        return "/usr/bin/chsh"
+
+    def record_receipt(*_args: object, **_kwargs: object) -> None:
+        receipt_writes.append("write")
+
+    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
+    calls: list[list[str]] = []
+    receipt_writes: list[str] = []
+    monkeypatch.setattr(receipts, "record", record_receipt)
+
+    def refuse_run(command: list[str]) -> None:
+        calls.append(command)
+        raise CommandError(command, 1, detail="The $ZSH folder already exists")
+
+    outcome = install_tool(
+        _tool(
+            Method(
+                kind="script",
+                params={
+                    "url": "https://example.test/install.sh",
+                    "shell": "sh",
+                    "refuses_existing": True,
+                },
+            ),
+            post_install=("set_login_shell",),
+            tool_id="oh-my-zsh",
+        ),
+        _platform(),
+        runner=refuse_run,
+        confirm_sensitive_action=lambda _tool_id, _action: True,
+        repair=True,
+        present=lambda _tool: True,
+    )
+
+    assert outcome.status is InstallStatus.MANUAL_REQUIRED
+    assert outcome.handoff == (
+        "oh-my-zsh: its installer refuses to run over an existing install, so it was not re-run.",
+    )
+    assert any("chsh -s $(which zsh)" in line for line in outcome.post_install_handoff)
+    assert calls == []
+    assert receipt_writes == []
+    assert outcome.postinstall_warning is None
+
+
+def test_a_refusing_method_still_runs_when_the_tool_is_absent() -> None:
+    calls: list[list[str]] = []
+    tool = _tool(
+        Method(
+            kind="script",
+            params={
+                "url": "https://example.test/install.sh",
+                "shell": "sh",
+                "refuses_existing": True,
+            },
+        ),
+        tool_id="oh-my-zsh",
+    )
+    outcome = install_tool(
+        tool,
+        _platform(),
+        runner=lambda command: calls.append(command),
+        repair=True,
+        present=lambda _tool: False,
+    )
+    assert outcome.status is InstallStatus.INSTALLED
+    assert len(calls) == 1
+    assert calls[0][0:2] == ["sh", "-c"]
+
+
+def test_the_registry_marks_only_oh_my_zsh_as_refusing_existing() -> None:
+    refusing = {
+        tool.id
+        for tool in load_tools(Path("installer/registry.toml"))
+        if any(method.params.get("refuses_existing") is True for method in tool.methods)
+    }
+    assert refusing == {"oh-my-zsh"}
+
+
 def test_repair_dispatches_post_install_like_a_fresh_install(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

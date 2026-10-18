@@ -587,6 +587,9 @@ url = "https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh
 shell = "sh"
 env = { RUNZSH = "no", CHSH = "no", KEEP_ZSHRC = "yes" }
 detect_path = "~/.oh-my-zsh/oh-my-zsh.sh"
+# Verified 2026-10-18: upstream install.sh exits 1 when $ZSH already exists;
+# no flag or environment variable bypasses the check.
+refuses_existing = true
 
 # Verified 2026-09-06: the real Homebrew formula name is bash, not gnu-bash
 # (confirmed live, formulae.brew.sh/api/formula/bash.json, stable 5.3.15,
