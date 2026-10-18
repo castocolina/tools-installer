@@ -96,7 +96,6 @@ def _choose_tools(tools: list[Tool], options: Options) -> list[Tool]:
 
 def run_wizard(
     tools: list[Tool],
-    platform: Platform,
     prompter: Prompter,
     console: Console,
     options: Options,

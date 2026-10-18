@@ -4121,7 +4121,6 @@ def test_a_declined_headless_plan_retires_nothing_and_saves_no_cache(
 
     result = run_wizard(
         [_yq(), _rg_archive()],
-        _LINUX,
         DecliningPrompter(),
         Console(file=output, width=100, no_color=True),
         Options(all=True, categories=(), yes=False),
@@ -4158,7 +4157,6 @@ def test_a_declined_headless_plan_adopts_nothing(
     output = io.StringIO()
     result = run_wizard(
         [_yq(), missing],
-        _LINUX,
         DecliningPrompter(),
         Console(file=output, width=100, no_color=True),
         Options(all=True, categories=(), yes=False),
@@ -4196,7 +4194,6 @@ def test_a_consented_headless_plan_commits_the_adoption_before_it_runs(
 
     result = run_wizard(
         [_yq(), missing],
-        _LINUX,
         AcceptingPrompter(),
         Console(file=io.StringIO(), width=100, no_color=True),
         Options(all=True, categories=(), yes=False),

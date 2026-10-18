@@ -125,7 +125,6 @@ def test_all_yes_prints_the_plan_installs_the_missing_tool_and_returns_outcomes(
 
     outcomes = run_wizard(
         tools,
-        _platform(),
         prompter,
         console,
         Options(all=True, categories=(), yes=True),
@@ -156,7 +155,6 @@ def test_without_yes_the_plan_is_printed_then_confirmed():
 
     outcomes = run_wizard(
         tools,
-        _platform(),
         declined,
         console,
         Options(all=True, categories=(), yes=False),
@@ -176,7 +174,6 @@ def test_without_yes_the_plan_is_printed_then_confirmed():
     accepted = FakePrompter(confirm=True)
     accepted_outcomes = run_wizard(
         tools,
-        _platform(),
         accepted,
         _console()[0],
         Options(all=True, categories=(), yes=False),
@@ -199,7 +196,6 @@ def test_all_yes_on_an_all_current_host_runs_nothing_and_exits_zero_shaped():
 
     outcomes = run_wizard(
         tools,
-        _platform(),
         prompter,
         console,
         Options(all=True, categories=(), yes=True),
@@ -230,7 +226,6 @@ def test_all_current_without_yes_prints_the_plan_and_summary_without_asking():
 
     outcomes = run_wizard(
         tools,
-        _platform(),
         prompter,
         console,
         Options(all=True, categories=(), yes=False),
@@ -294,7 +289,6 @@ def test_run_wizard_commits_held_writes_only_after_consent(tmp_path: Path, scena
     prompter = FakePrompter(confirm=scenario != "decline")
     result = run_wizard(
         tools,
-        _platform(),
         prompter,
         _console()[0],
         Options(all=True, categories=(), yes=scenario == "yes"),
@@ -337,7 +331,6 @@ def test_headless_uses_the_same_plan_order_as_the_tui():
 
     run_wizard(
         tools,
-        _platform(),
         FakePrompter(confirm=True),
         console,
         Options(all=False, categories=("user",), yes=True),
@@ -372,7 +365,6 @@ def test_headless_all_settles_skill_packs_before_planning() -> None:
 
     outcomes = run_wizard(
         tools,
-        _platform(),
         FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
@@ -404,7 +396,6 @@ def test_headless_reports_a_state_check_failure_and_runs_nothing(
     console, buf = _console()
     failed = run_wizard(
         tools,
-        _platform(),
         FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
@@ -427,7 +418,6 @@ def test_headless_reports_a_state_check_failure_and_runs_nothing(
     console, buf = _console()
     unsettled = run_wizard(
         tools,
-        _platform(),
         FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
@@ -461,7 +451,6 @@ def test_headless_reports_refresh_errors_without_messages(
     try:
         outcomes = run_wizard(
             tools,
-            _platform(),
             FakePrompter(confirm=True),
             console,
             Options(all=True, categories=(), yes=True),
@@ -493,7 +482,6 @@ def test_headless_report_carries_a_successful_updates_extras() -> None:
 
     outcomes = run_wizard(
         tools,
-        _platform(),
         FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
@@ -529,7 +517,6 @@ def test_all_yes_updates_an_outdated_brew_tool_and_exits_zero() -> None:
 
     outcomes = run_wizard(
         tools,
-        _platform(),
         FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
@@ -565,7 +552,6 @@ def test_an_injected_failing_row_exits_one() -> None:
     console, buf = _console()
     outcomes = run_wizard(
         tools,
-        _platform(),
         FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
@@ -596,7 +582,6 @@ def test_a_blocked_row_plus_a_done_row_exits_zero() -> None:
 
     outcomes = run_wizard(
         tools,
-        _platform(),
         FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
@@ -624,7 +609,6 @@ def test_all_flag_installs_every_tool_without_prompting():
     console, _buf = _console()
     outcomes = run_wizard(
         tools,
-        _platform(),
         prompter,
         console,
         Options(all=True, categories=(), yes=True),
@@ -658,7 +642,6 @@ def test_failed_install_surfaces_in_summary_without_crashing():
     console, _buf = _console()
     outcomes = run_wizard(
         tools,
-        _platform(),
         prompter,
         console,
         Options(all=True, categories=(), yes=True),
@@ -694,7 +677,6 @@ def test_run_wizard_reports_a_skipped_dependent_with_its_reason() -> None:
     console, buf = _console()
     outcomes = run_wizard(
         tools,
-        _platform(),
         FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
@@ -721,7 +703,6 @@ def test_categories_flag_filters_tools():
     console, _buf = _console()
     outcomes = run_wizard(
         tools,
-        _platform(),
         prompter,
         console,
         Options(all=False, categories=("data",), yes=True),
@@ -742,7 +723,6 @@ def test_declining_confirmation_installs_nothing():
     console, _buf = _console()
     outcomes = run_wizard(
         tools,
-        _platform(),
         prompter,
         console,
         Options(all=True, categories=(), yes=False),
@@ -1753,7 +1733,6 @@ def test_wizard_consults_on_mismatch_when_interactive():
     console, _buf = _console()
     outcomes = run_wizard(
         tools,
-        _platform(),
         FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=False),
@@ -1782,7 +1761,6 @@ def test_wizard_suppresses_on_mismatch_under_yes():
     console, _buf = _console()
     outcomes = run_wizard(
         tools,
-        _platform(),
         FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
@@ -2532,7 +2510,6 @@ def test_run_wizard_installs_dependencies_before_dependents() -> None:
     console, _buf = _console()
     outcomes = run_wizard(
         catalog,
-        Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
         FakePrompter(confirm=True),
         console,
         Options(all=False, categories=("c",), yes=True),
@@ -3675,7 +3652,6 @@ def test_run_wizard_surfaces_a_postinstall_warning_on_the_real_path() -> None:
     console, buf = _console()
     outcomes = run_wizard(
         tools,
-        _platform(),
         FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
@@ -3710,7 +3686,6 @@ def test_run_wizard_passes_the_full_catalog_as_tools_by_id_into_execute_plan() -
     catalog_tools = _catalog()
     run_wizard(
         catalog_tools,
-        _platform(),
         FakePrompter(confirm=True),
         _console()[0],
         Options(all=True, categories=(), yes=True),
@@ -3760,7 +3735,6 @@ def test_run_wizard_prints_login_shell_instructions_when_sensitive_confirmed(
     console, buf = _console()
     outcomes = run_wizard(
         tools,
-        _platform(),
         prompter,
         console,
         Options(all=True, categories=(), yes=False),
@@ -3799,7 +3773,6 @@ def test_run_wizard_skips_login_shell_instructions_when_sensitive_refused(
     console, buf = _console()
     outcomes = run_wizard(
         tools,
-        _platform(),
         prompter,
         console,
         Options(all=True, categories=(), yes=False),
@@ -3827,7 +3800,6 @@ def test_run_wizard_sensitive_unattended_never_asks_and_prints_no_instructions(
     console, buf = _console()
     outcomes = run_wizard(
         tools,
-        _platform(),
         prompter,
         console,
         Options(all=True, categories=(), yes=True),
@@ -3852,7 +3824,6 @@ def test_run_wizard_never_asks_sensitive_question_without_login_shell_action(
     console, buf = _console()
     outcomes = run_wizard(
         tools,
-        _platform(),
         prompter,
         console,
         Options(all=True, categories=(), yes=False),

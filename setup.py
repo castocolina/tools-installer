@@ -149,9 +149,6 @@ _STYLE = questionary.Style(
         ("selected", "fg:green"),
         ("instruction", "fg:#858585"),
         ("description", "fg:#858585 italic"),
-        ("tag-installed", "fg:green"),
-        ("tag-missing", "fg:yellow"),
-        ("tag-dim", "fg:#858585"),
     ]
 )
 
@@ -1516,7 +1513,6 @@ def main(argv: list[str]) -> int:
     refresh, updates, _, install = _build_services(tools, platform)
     outcomes = run_wizard(
         tools,
-        platform,
         prompter,
         console,
         options,
