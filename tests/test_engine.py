@@ -15,7 +15,6 @@ from installer.engine import install_tool
 from installer.enums import InstallStatus
 from installer.model import Method, Tool, load_tools
 from installer.platform import Platform
-from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError
 from installer.versions import Release, VersionError
 from tests.test_apps import SHELLED_LINKERS
@@ -1044,53 +1043,6 @@ def test_repair_dispatches_post_install_like_a_fresh_install(
     assert outcome.post_install_handoff
     assert any("chsh -s" in line for line in outcome.post_install_handoff)
     assert asked == [("oh-my-zsh", "set_login_shell")]
-
-
-def _shelltool() -> Tool:
-    return _tool(
-        Method(kind="script", params={"url": "u"}),
-        post_install=("set_login_shell",),
-        tool_id="shelltool",
-    )
-
-
-def _stub_chsh(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_which(cmd: str) -> str | None:
-        return "/usr/bin/chsh" if cmd == "chsh" else None
-
-    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
-
-
-def _confirm(answer: bool) -> ConfirmSensitiveAction:
-    def confirm(_tool_id: str, _action: str) -> bool:
-        return answer
-
-    return confirm
-
-
-def test_reapply_post_install_returns_handoff_without_installing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _stub_chsh(monkeypatch)
-    outcome = engine.reapply_post_install(_shelltool(), _platform(), confirm=_confirm(True))
-    assert outcome.tool_id == "shelltool"
-    assert outcome.status == InstallStatus.ALREADY_INSTALLED
-    assert any("chsh -s" in line for line in outcome.post_install_handoff)
-    declined = engine.reapply_post_install(_shelltool(), _platform(), confirm=_confirm(False))
-    assert declined.post_install_handoff == ()
-
-
-def test_reapply_post_install_isolates_a_raising_action(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def boom(*_args: object, **_kwargs: object) -> tuple[str, ...]:
-        raise RuntimeError("action exploded")
-
-    monkeypatch.setattr(engine, "run_post_install", boom)
-    outcome = engine.reapply_post_install(_shelltool(), _platform(), confirm=_confirm(True))
-    assert outcome.status == InstallStatus.ALREADY_INSTALLED
-    assert outcome.postinstall_warning is not None
-    assert "action exploded" in outcome.postinstall_warning
 
 
 def test_digest_mismatch_fails_with_nothing_linked(

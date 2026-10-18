@@ -14,16 +14,11 @@ run themselves and never spawns a child process. This follows
 `installer/host_setup.py`'s documented doctrine: setup that needs a real
 terminal is displayed, never launched from the installer's worker thread.
 
-A tool the installer detects as already present never reaches this table at
-all. Dispatch sits on the post-success path of the install ladder, and the
-already-present branch returns before it. That is the intended
-single-direction trigger: a re-run cannot re-propose a system mutation the
-user already declined. It is not an oversight to be widened.
-
-The single exception is a tool the user EXPLICITLY selects again while it is
-installed. ExecuteScreen dispatches its actions once for that selection via
-`engine.reapply_post_install`; drag-ins and plain re-runs still never reach
-this table, and sensitive actions still ask.
+A tool the installer detects as already present is a SKIP on the review and
+does not reach this table. Pressing `r` marks it REINSTALL and sends it through
+the install ladder, so a successful reinstall dispatches actions once more. No
+path re-applies post-install actions on their own (D-06); sensitive actions
+still ask.
 """
 
 import shutil

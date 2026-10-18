@@ -195,10 +195,11 @@ def test_post_install_tables_are_disjoint_and_match_their_schema_sets() -> None:
     assert actions <= sensitive, sorted(actions - sensitive)
 
 
-def test_docstring_names_the_explicit_selection_exception() -> None:
+def test_docstring_keeps_post_install_dispatch_on_the_install_ladder() -> None:
     import installer.post_install as module
 
-    text = module.__doc__ or ""
-    assert "EXPLICITLY" in text
-    assert "reapply_post_install" in text
-    assert "drag-ins" in text
+    text = " ".join((module.__doc__ or "").split())
+    assert "SKIP on the review" in text
+    assert "REINSTALL" in text
+    assert "successful reinstall dispatches actions once more" in text
+    assert "No path re-applies post-install actions on their own (D-06)" in text

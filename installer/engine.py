@@ -166,8 +166,7 @@ def install_tool(
     instruction lines on `post_install_handoff`. `confirm_sensitive_action` is
     the optional confirmation callback those actions consult; `None` is the
     unattended case and skips them. The ALREADY_INSTALLED short-circuit never
-    dispatches postinstall or post_install at all. `reapply_post_install` is
-    the separate, explicit-selection-only entry point (D-20).
+    dispatches postinstall or post_install at all.
 
     `repair` exists for D-18's broken state. It takes the identical ladder a
     fresh install takes, and is only ever set for a tool the user explicitly
@@ -295,22 +294,3 @@ def _dispatch_post_install(
         return run_post_install(tool, platform, confirm), None
     except Exception as exc:  # noqa: BLE001 -- isolation boundary, see design_decisions
         return (), f"post-install actions crashed: {exc}"
-
-
-def reapply_post_install(
-    tool: Tool,
-    platform: Platform,
-    confirm: ConfirmSensitiveAction | None,
-) -> InstallOutcome:
-    """Dispatch post_install for one explicit re-selection. Not an install.
-
-    install_tool still returns before this table on ALREADY_INSTALLED. Callers
-    must pass only a tool the user selected while it was already installed.
-    """
-    handoff, warning = _dispatch_post_install(tool, platform, confirm)
-    return InstallOutcome(
-        tool.id,
-        InstallStatus.ALREADY_INSTALLED,
-        postinstall_warning=warning,
-        post_install_handoff=handoff,
-    )
