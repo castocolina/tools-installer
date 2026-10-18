@@ -30,10 +30,11 @@ from installer.render import (
     render_summary,
     render_uninstall,
     render_verification,
+    running_row_text,
     summary_head,
 )
 from installer.run import CommandError
-from installer.session import WORDS, Disposition, PlanRow, RowOutcome, Summary
+from installer.session import WORDS, Disposition, PlanRow, Result, RowOutcome, Summary
 from installer.version_status import Health
 
 
@@ -1029,3 +1030,152 @@ def test_render_run_summary_rows_follow_display_order() -> None:
     rows = buf.getvalue().splitlines()[1:]
     # The dragged row's 2-cell indent counts into the id budget, so idw is 6.
     assert rows == ["✓ mmdc    installed", "✓   node  installed"]
+
+
+def test_outcome_row_text_folds_a_long_detail_within_the_row_budget() -> None:
+    row = PlanRow("a" * 24, Disposition.INSTALL, "not installed", health=Health.MISSING)
+    outcome = RowOutcome(row, "crashed", detail="RuntimeError: " + "x" * 300)
+    text = outcome_row_text(outcome, 24, 78)
+    assert all(cell_len(line) <= 78 for line in text.plain.splitlines())
+    assert len(text.plain.splitlines()) > 1
+
+
+def test_outcome_row_text_renders_markup_and_control_characters_literally() -> None:
+    row = PlanRow("pony", Disposition.INSTALL, "not installed", health=Health.MISSING)
+    outcome = RowOutcome(row, "crashed", detail="[red]x[/] \x1b[31mboom")
+    text = outcome_row_text(outcome, 4, 78)
+    assert "[red]x[/]" in text.plain
+    assert "\x1b" not in text.plain
+    colored = io.StringIO()
+    Console(file=colored, width=100, force_terminal=True).print(text, markup=False)
+    assert "\x1b[31mx\x1b[0m" not in colored.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("result", "detail", "errors", "blocked_by", "expected", "mark"),
+    [
+        ("failed", "", (RuntimeError("last error"),), (), "failed — last error", "✖"),
+        ("failed", "", (), (), "failed — no method succeeded", "✖"),
+        ("mismatch", "", (), (), "checksum mismatch", "✖"),
+        (
+            "dependency_failed",
+            "",
+            (),
+            ("node", "java"),
+            "dependency failed — node, java",
+            "○",
+        ),
+        (
+            "dependency_failed",
+            "",
+            (),
+            (),
+            "dependency failed — an earlier failure",
+            "○",
+        ),
+        ("not_attempted", "worker stopped", (), (), "not attempted", "○"),
+        ("crashed", "RuntimeError: boom", (), (), "crashed — RuntimeError: boom", "✖"),
+        ("manual", "", (), (), "manual — see the setup steps in the log", "○"),
+        ("skipped", "", (), (), "skipped — already current", "✓"),
+        (
+            "skipped",
+            "became present before it ran",
+            (),
+            (),
+            "skipped — became present before it ran",
+            "✓",
+        ),
+        ("blocked", "", (), (), "blocked — plan reason", "○"),
+        (
+            "blocked",
+            "no install method for this platform",
+            (),
+            (),
+            "blocked — no install method for this platform",
+            "○",
+        ),
+    ],
+)
+def test_outcome_row_text_per_result(
+    result: Result,
+    detail: str,
+    errors: tuple[Exception, ...],
+    blocked_by: tuple[str, ...],
+    expected: str,
+    mark: str,
+) -> None:
+    skipped = result == "skipped"
+    row = PlanRow(
+        "tool",
+        Disposition.INSTALL,
+        "already current" if skipped else "plan reason",
+        health=Health.OK if skipped else Health.MISSING,
+    )
+    install = (
+        InstallOutcome("tool", "failed", errors=errors, blocked_by=blocked_by)
+        if result in {"failed", "dependency_failed"}
+        else None
+    )
+    outcome = RowOutcome(row, result, install=install, detail=detail)
+    text = outcome_row_text(outcome, 4, 78).plain
+    assert text.startswith(f"{mark} tool  ")
+    assert text.split("  ", 1)[1] == expected
+
+
+def test_outcome_row_error_text_is_sanitized_and_literal() -> None:
+    row = PlanRow("tool", Disposition.INSTALL, "plan reason", health=Health.MISSING)
+    outcome = RowOutcome(
+        row,
+        "failed",
+        install=InstallOutcome("tool", "failed", errors=(RuntimeError("\x1b[31m[red]x[/]"),)),
+    )
+    text = outcome_row_text(outcome, 4, 78).plain
+    assert "\x1b" not in text
+    assert "[red]x[/]" in text
+    console = io.StringIO()
+    Console(file=console, width=80, force_terminal=True).print(
+        outcome_row_text(outcome, 4, 78), markup=False
+    )
+    assert "\x1b[31mx\x1b[0m" not in console.getvalue()
+
+
+def test_running_row_text_shows_the_in_flight_mark() -> None:
+    row = PlanRow("tool", Disposition.UPDATE, "new version", health=Health.OUTDATED)
+    text = running_row_text(row, 4, 78)
+    assert text.plain.startswith("> tool  will update")
+
+
+def test_render_run_summary_mixed_run_counts_every_category() -> None:
+    outcomes = [
+        _done("a", Disposition.INSTALL),
+        RowOutcome(
+            PlanRow("b", Disposition.UPDATE, "reason", health=Health.OUTDATED),
+            "failed",
+            update=None,
+            detail="error",
+        ),
+        RowOutcome(PlanRow("c", Disposition.REPAIR, "reason", health=Health.BROKEN), "mismatch"),
+        RowOutcome(
+            PlanRow("d", Disposition.RECONFIGURE, "reason", health=Health.MISCONFIGURED),
+            "dependency_failed",
+        ),
+        RowOutcome(
+            PlanRow("e", Disposition.REINSTALL, "reason", health=Health.OK), "not_attempted"
+        ),
+        RowOutcome(
+            PlanRow("f", Disposition.INSTALL, "reason", health=Health.MISSING),
+            "crashed",
+            detail="RuntimeError: boom",
+        ),
+        RowOutcome(PlanRow("g", Disposition.SKIP, "reason", health=Health.OK), "skipped"),
+        RowOutcome(
+            PlanRow("h", Disposition.BLOCKED, "reason", health=Health.UNAVAILABLE), "blocked"
+        ),
+        RowOutcome(PlanRow("i", Disposition.INSTALL, "reason", health=Health.MISSING), "manual"),
+    ]
+    console, buf = _console()
+    render_run_summary(outcomes, console)
+    assert buf.getvalue().splitlines()[0] == (
+        "Summary — 1 installed, 1 skipped, 1 blocked, 1 manual, 1 failed, "
+        "1 checksum mismatch, 1 dependency failed, 1 not attempted, 1 crashed"
+    )
