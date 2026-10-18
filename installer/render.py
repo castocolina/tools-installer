@@ -118,8 +118,8 @@ def plan_head(rows: Sequence[PlanRow]) -> str:
 
 
 # The finished marks that replace a health glyph, per UI-SPEC "Marks": the mark
-# states a fact about the run, so a skipped or blocked row keeps its plan-time
-# health glyph and never turns green.
+# states a fact about the run, so unchanged rows keep their plan-time health glyph
+# in dim and never turn green.
 _DONE_MARK: tuple[str, str] = ("✓", "green")
 _FAILURE_MARK: tuple[str, str] = ("✖", "red")
 _RUNNING_MARK: tuple[str, str] = (">", "bold")
@@ -132,7 +132,8 @@ def outcome_mark(outcome: RowOutcome) -> tuple[str, str]:
         return _DONE_MARK
     if outcome.result in _FAILURE_RESULTS:
         return _FAILURE_MARK
-    return HEALTH_MARKS[outcome.row.health or Health.CHECKING]
+    glyph, _style = HEALTH_MARKS[outcome.row.health or Health.CHECKING]
+    return glyph, "dim"
 
 
 def outcome_word(outcome: RowOutcome) -> tuple[str, str]:
@@ -281,7 +282,6 @@ def render_run_report(outcomes: Sequence[RowOutcome], console: Console) -> None:
     render_run_summary(outcomes, console)
     installs = [outcome.install for outcome in outcomes if outcome.install is not None]
     render_failure_details(installs, console)
-    render_skipped(installs, console)
     render_handoff(installs, console)
     render_post_install_handoff(installs, console)
     render_postinstall_warnings(installs, console)
@@ -300,25 +300,12 @@ def render_failure_details(outcomes: list[InstallOutcome], console: Console) -> 
         if outcome.status is not InstallStatus.FAILED:
             continue
         detail = str(outcome.errors[-1]) if outcome.errors else "no method succeeded"
-        console.print(f"[red]✗ {outcome.tool_id} failed: {escape(sanitize_log_line(detail))}[/]")
+        console.print(f"[red]✖ {outcome.tool_id} failed: {escape(sanitize_log_line(detail))}[/]")
         for err in outcome.errors[:-1]:
             first_line = str(err).splitlines()[0]
             console.print(
                 f"  [dim]earlier method failed: {escape(sanitize_log_line(first_line))}[/]"
             )
-
-
-def render_skipped(outcomes: list[InstallOutcome], console: Console) -> None:
-    """Name every tool the run deliberately did not attempt and why.
-
-    Silent when no dependency failed. The run summary carries counts; reasons
-    live here.
-    """
-    for outcome in outcomes:
-        if outcome.status is not InstallStatus.DEPENDENCY_FAILED:
-            continue
-        blockers = ", ".join(outcome.blocked_by) or "an earlier failure"
-        console.print(f"[yellow]⚠ {outcome.tool_id} skipped — dependency failed: {blockers}[/]")
 
 
 def render_postinstall_warnings(outcomes: list[InstallOutcome], console: Console) -> None:
@@ -327,7 +314,7 @@ def render_postinstall_warnings(outcomes: list[InstallOutcome], console: Console
     The tool's own install has already succeeded (status stays INSTALLED) by
     the time this fires, so this is a secondary, non-fatal warning, never the
     reason an install is reported as failed. Silent when nothing warned,
-    matching render_skipped's restraint.
+    matching the other report renderers' restraint.
     """
     for outcome in outcomes:
         if outcome.postinstall_warning:
@@ -341,7 +328,7 @@ def render_handoff(outcomes: list[InstallOutcome], console: Console) -> None:
 
     This is where the actual steps the user must run after the installer
     releases the terminal live. Silent when nothing needs a handoff, matching
-    render_skipped's and render_postinstall_warnings' restraint.
+    the other report renderers' restraint.
     """
     for outcome in outcomes:
         if outcome.status is not InstallStatus.MANUAL_REQUIRED or not outcome.handoff:

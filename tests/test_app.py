@@ -709,7 +709,8 @@ def test_run_wizard_reports_a_skipped_dependent_with_its_reason() -> None:
         ("sdkman", "failed"),
         ("java", "dependency_failed"),
     ]
-    assert "java skipped — dependency failed: sdkman" in buf.getvalue()
+    assert "java    dependency failed — sdkman" in buf.getvalue()
+    assert "skipped — dependency failed" not in buf.getvalue()
     assert called == ["sdkman"]
 
 

@@ -886,8 +886,9 @@ async def test_cancel_mid_run_lets_the_in_flight_tool_finish() -> None:
         assert _results(screen)["rg"] == "done"
         assert _results(screen)["fd"] == "done"
         log = _log_text(screen)
-        assert "bat" in log
-        assert "not attempted" in log.lower() or "never attempted" in log.lower()
+        assert sum("bat" in line for line in log.splitlines()) == 1
+        assert any("bat" in line and "not attempted" in line for line in log.splitlines())
+        assert not any(line.startswith("Not attempted: ") for line in log.splitlines())
 
 
 async def test_a_full_run_does_not_name_not_attempted_tools() -> None:
@@ -1302,7 +1303,8 @@ async def test_post_run_log_carries_every_renderer_in_wizard_order() -> None:
         await _settle_execute(screen, pilot)
         log = _log_text(screen)
         assert "disk exploded" in log
-        assert "skipped — dependency failed: fd" in log or "skipped -- dependency failed: fd" in log
+        assert "dependency failed — fd" in log
+        assert "skipped — dependency failed" not in log
         assert "After leaving the installer, run these Pi setup commands." in log
         assert "chsh -s /bin/zsh" in log
         assert "oh-my-zsh" in log
@@ -1319,14 +1321,22 @@ async def test_post_run_log_carries_every_renderer_in_wizard_order() -> None:
         assert "PATH verified" in log
         summary_at = log.index("Summary — ")
         fail_at = log.index("disk exploded")
-        skip_at = log.lower().index("skipped")
+        dependency_at = log.lower().index("dependency failed — fd")
         handoff_at = log.index("After leaving the installer")
         post_install_at = log.index("chsh -s /bin/zsh")
         warn_at = log.index("postinstall warning")
         verify_at = log.index("sha256")
         path_at = log.index("PATH wired")
         audit_at = log.index("PATH verified")
-        assert summary_at < fail_at < skip_at < handoff_at < post_install_at < warn_at < verify_at
+        assert (
+            summary_at
+            < fail_at
+            < dependency_at
+            < handoff_at
+            < post_install_at
+            < warn_at
+            < verify_at
+        )
         assert verify_at < path_at < audit_at
         assert "PATH wiring" in log
         assert "PATH audit" in log or "Read-only audit" in log

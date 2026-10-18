@@ -12,6 +12,7 @@ from installer.engine import InstallOutcome
 from installer.executors import ExecutorError
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.render import (
+    outcome_mark,
     outcome_row_text,
     render_failure_details,
     render_guard,
@@ -21,8 +22,8 @@ from installer.render import (
     render_post_install_handoff,
     render_postinstall_warnings,
     render_remove_yourself,
+    render_run_report,
     render_run_summary,
-    render_skipped,
     render_uninstall,
     render_update_notes,
     render_verification,
@@ -109,50 +110,52 @@ def test_render_failure_details_escapes_bracketed_error_text() -> None:
     assert "[not-supported]" in out
 
 
-def test_render_skipped_names_the_tool_and_its_blockers() -> None:
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ("done", ("✓", "green")),
+        ("failed", ("✖", "red")),
+        ("skipped", ("✓", "dim")),
+        ("blocked", ("✓", "dim")),
+        ("manual", ("✓", "dim")),
+        ("dependency_failed", ("✓", "dim")),
+        ("not_attempted", ("✓", "dim")),
+    ],
+)
+def test_a_finished_mark_dims_a_row_the_run_did_not_change(
+    result: Result, expected: tuple[str, str]
+) -> None:
+    outcome = RowOutcome(PlanRow("rg", Disposition.INSTALL, "needed", health=Health.OK), result)
+
+    assert outcome_mark(outcome) == expected
+
+
+def test_failure_details_use_the_run_failure_mark() -> None:
     console, buf = _console()
-    render_skipped(
-        [
-            InstallOutcome("sdkman", "failed"),
-            InstallOutcome("java", "dependency-failed", blocked_by=("sdkman",)),
-        ],
-        console,
+    render_failure_details(
+        [InstallOutcome("rg", "failed", errors=(RuntimeError("boom"),))], console
     )
-    out = buf.getvalue()
-    assert "java skipped — dependency failed: sdkman" in out
-    skip_lines = [line for line in out.splitlines() if "skipped" in line]
-    assert len(skip_lines) == 1
-    assert "java" in skip_lines[0]
+    assert "✖ rg failed: boom" in buf.getvalue()
 
 
-def test_render_skipped_joins_multiple_blockers() -> None:
-    console, buf = _console()
-    render_skipped(
-        [InstallOutcome("java", "dependency-failed", blocked_by=("sdkman", "uv"))],
-        console,
+def test_the_run_report_states_a_dependency_failure_once() -> None:
+    failed = RowOutcome(
+        PlanRow("sdkman", Disposition.INSTALL, "missing", health=Health.MISSING),
+        "failed",
+        install=InstallOutcome("sdkman", "failed"),
     )
-    assert "dependency failed: sdkman, uv" in buf.getvalue()
-
-
-def test_render_skipped_is_silent_when_nothing_was_skipped() -> None:
-    console, buf = _console()
-    render_skipped(
-        [
-            InstallOutcome("rg", "installed", method_kind="brew"),
-            InstallOutcome("fd", "failed"),
-        ],
-        console,
+    dependent = RowOutcome(
+        PlanRow("java", Disposition.INSTALL, "needed", health=Health.MISSING),
+        "dependency_failed",
+        install=InstallOutcome("java", "dependency-failed", blocked_by=("sdkman",)),
     )
-    assert buf.getvalue() == ""
-
-
-def test_render_skipped_still_names_the_tool_without_blockers() -> None:
     console, buf = _console()
-    render_skipped([InstallOutcome("java", "dependency-failed")], console)
-    out = buf.getvalue()
-    assert "java" in out
-    assert "an earlier failure" in out
-    assert "skipped — dependency failed: an earlier failure" in out
+    render_run_report([failed, dependent], console)
+    lines = [line for line in buf.getvalue().splitlines() if "dependency failed" in line]
+    outcome_lines = [line for line in lines if not line.startswith("Summary —")]
+    assert len(outcome_lines) == 1
+    assert "java    dependency failed — sdkman" in outcome_lines[0]
+    assert all("skipped — dependency failed" not in line for line in buf.getvalue().splitlines())
 
 
 def test_render_doctor_prints_findings_with_meaning_and_next_step() -> None:

@@ -895,9 +895,6 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         log.write(
             self._render_captured(lambda console: render_run_report(message.outcomes, console))
         )
-        not_attempted = [o.row.tool_id for o in message.outcomes if o.result == "not_attempted"]
-        if not_attempted:
-            log.write("Not attempted: " + ", ".join(not_attempted))
         if message.path_text:
             log.write("PATH wiring")
             log.write(message.path_text)
