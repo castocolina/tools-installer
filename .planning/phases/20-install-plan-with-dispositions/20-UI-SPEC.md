@@ -128,11 +128,11 @@ The mark states a fact about the tool, never about the disposition word, so it n
 | A row's tool is running | `>` | bold, default foreground |
 | A row finished `done` | `✓` | `green` |
 | A row finished `failed`, `mismatch` or `crashed` | `✖` | `red` |
-| A row finished `skipped`, `blocked`, `manual`, `dependency_failed` or `not_attempted` | unchanged (the health glyph from plan time) | unchanged |
+| A row finished `skipped`, `blocked`, `manual`, `dependency_failed` or `not_attempted` | unchanged (the health glyph from plan time) | `dim` (amended by gap plan 20-27, WR-08: a row the run did not change never ends green like a `done` row) |
 
 - The mark changes only when the tool's state changed (`✓`), was attempted and failed (`✖`) or is in flight (`>`). A skipped row never turns green. That keeps the screen truthful without a re-read of state (an update invalidates the epoch, so the screen must not read `state_of` after the run starts; the glyph is stored on the `PlanRow` as `health`).
 - `PlanRow` therefore carries (UI contract addition to D-01 and research A6): `health` (the `Health` or `None`), `can_reinstall: bool`, `steps: tuple[str, ...]` (the `ConfigStep.text` values), and `owner_label`. The renderer reads only the row, never published state.
-- All eight marks are distinct glyphs; none relies on color. `>` and `✖` are new; `✖` already ships in `_PROGRESS_GLYPH` (`execute_screen.py:85`).
+- All eight marks are distinct glyphs except that the OK health glyph and the `done` mark share `✓` by design (both say the tool is now fine; the finished style tells them apart: `done` green, unchanged `dim`); none relies on color. `>` and `✖` are new; `✖` already ships in `_PROGRESS_GLYPH` (`execute_screen.py:85`).
 
 ---
 
@@ -205,6 +205,7 @@ One reason per row (R1), written once in `build_plan`, rendered verbatim. `{x}` 
 | Dragged, present but outdated or misconfigured (D-03) | `skipped` | `already present; {first clause of the health reason}` |
 | Unavailable (dragged, or direct in headless `--all`) | `blocked` | the `UnavailableReason.detail`, e.g. `needs Homebrew, which is not on PATH` |
 | Dependent of a blocked dependency (D-04) | `blocked` | `needs {dependency}` |
+| Dragged dependency whose every requester is blocked (gap plan 20-22, WR-04) | `skipped` | `not needed while {requester} is blocked` |
 | State not yet published | `checking…` | none |
 
 - The suffix ` (r: reinstall)` is appended by `render_plan` from `PlanRow.can_reinstall`, in the idle and waiting states only. It is not part of the stored reason and does not appear once the run has started or finished (the key is inert then). `r` eligibility is `Health.OK` and installer-owned, **receipt optional** (L-20-06).
@@ -224,7 +225,7 @@ The word and color follow the Words tables. The text after the word:
 | `dependency_failed` | `dependency failed — {blocked_by ids, comma-joined}`; `dependency failed — an earlier failure` when empty |
 | `not_attempted` | `not attempted` |
 | `crashed` | `crashed — {exception type}: {message first line, sanitized}` |
-| `manual` | `manual — see the setup steps in the log` |
+| `manual` | `manual — see the setup steps in the log` ; a reinstall/repair of a present tool whose installer refuses to run over an existing install (gap plan 20-26, L-20-11) also ends `manual`, and the log carries `{id}: its installer refuses to run over an existing install, so it was not re-run.` before its post-install handoff |
 | `skipped` | `skipped — {plan reason}` (without the `(r: reinstall)` suffix); an engine race (`ALREADY_INSTALLED`) reads `skipped — became present before it ran` |
 | `blocked` | `blocked — {plan reason}`; engine `NO_METHOD` reads `blocked — no install method for this platform`; an update refused at run time reads `blocked — {outcome detail}` |
 

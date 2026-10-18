@@ -209,7 +209,7 @@ Plans (W = execution wave):
   4. Headless `--all --yes` uses the same plan and engine: on a host with an outdated tool it updates it and exits 0, and a failed row exits 1.
   5. No screen promises an off-policy migration ("moving it there") that does not exist.
 
-**Plans:** 19 plans
+**Plans:** 29 plans (19 + 10 gap closure)
 
 Plans (W = execution wave):
 - [ ] 20-01-PLAN.md — `Resolution.closure`/`blocked`/`requested_by`: the resolver exposes present tools, blocked reasons and first requesters as data (W1)
@@ -231,6 +231,18 @@ Plans (W = execution wave):
 - [ ] 20-15-PLAN.md — delete `audit.py` and the two-step prompter helpers; the headless prompter asks one question (W9)
 - [ ] 20-18-PLAN.md — end-to-end pins through the real app: `a` on an all-current tier, order parity, mixed-run retained selection, D-05 (W9)
 - [ ] 20-16-PLAN.md — architecture doctrine: Phase 20 section pinned; Tier/Phase 3/13/14 paragraphs describe `build_plan`/`execute_plan` (W10)
+
+Gap closure from 20-REVIEW-CONSOLIDATED.md (GW = gap execution wave):
+- [ ] 20-20-PLAN.md — J1, J5: skill packs settle before planning on both routes; the review wait always settles (GW1)
+- [ ] 20-21-PLAN.md — J2: one e2e install-step gate fails a run that did nothing; builtin-only summary parser (GW1)
+- [ ] 20-22-PLAN.md — J4: dependency blocking reads the dependency's own disposition; pruned drag-ins; pending deps wait (GW1)
+- [ ] 20-23-PLAN.md — J8 / L-20-10: the pre-confirmation refresh writes nothing headless; TUI consent boundary documented; drift note (GW2)
+- [ ] 20-24-PLAN.md — J7, J9: one presence predicate and run-level errors on the outcome exit rule; handoff-only rows ran nothing (GW2)
+- [ ] 20-25-PLAN.md — J3, J6: one end-of-run report with update notes; failed rows keep their reason (GW3)
+- [ ] 20-26-PLAN.md — J11 (L-20-11): `r` on an installed oh-my-zsh shows the reviewed chsh handoff; fresh install pinned on both routes (GW2)
+- [ ] 20-27-PLAN.md — J10: dim unchanged finished marks, one statement per fact, cursor on row 1, running keys pinned (GW4)
+- [ ] 20-28-PLAN.md — J12: dead install wrapper, resolver outputs, `run_wizard(platform)`, unused styles (GW5)
+- [ ] 20-29-PLAN.md — J12: one runnable set, `_row` maker, dead selection helpers, fold-width floor (GW6)
 
 **UI hint**: yes
 
