@@ -32,7 +32,13 @@ from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome
 from installer.version_status import Health
 from installer.versions import TagResolver
-from tests.state_doubles import ScriptedUpdates, plan_state, presence_service
+from tests.state_doubles import (
+    ScriptedUpdates,
+    offline_service,
+    plan_state,
+    presence_service,
+    skill_pack_tool,
+)
 
 
 def _tool(tool_id: str, category: str, *, requires: tuple[str, ...] = ()) -> Tool:
@@ -281,6 +287,39 @@ def test_headless_uses_the_same_plan_order_as_the_tui():
         if len(line.split()) > 1 and line.split()[1] in expected
     ]
     assert output_rows == expected
+
+
+def test_headless_all_settles_skill_packs_before_planning() -> None:
+    tools = [_tool("rg", "search"), skill_pack_tool("superpowers")]
+    refresh = offline_service(
+        Path.home() / "versions.json",
+        skill_home=Path.home(),
+        resolve_tag=lambda _repo: (_ for _ in ()).throw(OSError("offline")),
+        probe_output=lambda _argv: None,
+        skill_probe=lambda _argv: "not json",
+        present=lambda _tool: False,
+    )
+    installed, install = _recording_install()
+    console, buf = _console()
+
+    outcomes = run_wizard(
+        tools,
+        _platform(),
+        FakePrompter(confirm=True),
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        refresh=refresh,
+        updates=ScriptedUpdates({}),
+    )
+
+    assert "State check failed" not in buf.getvalue()
+    assert isinstance(outcomes, list)
+    assert all(outcome.result != "not_attempted" for outcome in outcomes)
+    assert all(row.disposition.value != "wait" for row in (outcome.row for outcome in outcomes))
+    assert "rg" in installed
 
 
 def test_headless_reports_a_state_check_failure_and_runs_nothing(

@@ -14,7 +14,15 @@ from pathlib import Path
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus
 from installer.manager_versions import OutdatedReport
-from installer.model import ConfigStep, Method, Tool
+from installer.model import (
+    ConfigStep,
+    Method,
+    SkillLifecycle,
+    SkillOperation,
+    SkillStatusProbe,
+    SkillTarget,
+    Tool,
+)
 from installer.ownership import Confidence, ManagerInventory, ManagerOwnership, Owner
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
@@ -36,6 +44,33 @@ from installer.versions import TagResolver
 _MACOS = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
 # Public alias for test modules that build plans on the same platform.
 MACOS = _MACOS
+
+
+def skill_pack_tool(tool_id: str) -> Tool:
+    """A skill pack with one Claude plugin status probe."""
+    manual = SkillOperation(
+        mode="manual-required", instructions=("Review and run the official flow.",)
+    )
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="agents",
+        cmd=tool_id,
+        methods=(Method(kind="skill_pack", params={}),),
+        tier="ai",
+        skill_lifecycle=SkillLifecycle(
+            source="https://github.com/example/skills",
+            owner="example",
+            supported_harnesses=("claude",),
+            revision_policy="upstream-latest",
+            targets=(SkillTarget("harness", "<claude-plugin-dir>/demo"),),
+            install=manual,
+            status=manual,
+            update=manual,
+            removal=manual,
+            status_probes=(SkillStatusProbe("claude", "plugin-cli", tool_id),),
+        ),
+    )
 
 
 def empty_inventory(**_kwargs: object) -> ManagerInventory:

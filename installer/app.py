@@ -114,10 +114,14 @@ def run_wizard(
     install: SensitiveInstall = install_tool,
     on_mismatch: OnMismatch | None = None,
 ) -> list[RowOutcome] | None:
-    """Print and execute a fresh plan, or return None when confirmation is declined."""
+    """Print and execute a fresh plan, or return None when confirmation is declined.
+
+    The synchronous pass covers version state and skill-pack host answers.
+    """
     selected = _choose_tools(tools, options)
     try:
         refresh.refresh(tools)
+        refresh.refresh_skills(tools)
     except (OSError, CommandError, ValueError) as exc:
         lines = str(exc).splitlines()
         detail = lines[0] if lines and lines[0] else type(exc).__name__
