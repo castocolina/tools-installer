@@ -359,6 +359,143 @@ def test_a_present_dependency_blocked_for_its_own_reason_does_not_block_its_depe
     )
 
 
+def test_a_dragged_dependency_of_a_blocked_requester_is_skipped_not_installed():
+    pnpm = _tool("pnpm")
+    puppeteer = _tool("puppeteer", methods=())
+    mmdc = _tool("mmdc", requires=("pnpm", "puppeteer"))
+    catalog = [pnpm, puppeteer, mmdc]
+    states = {
+        "pnpm": plan_state(pnpm, health=Health.MISSING, present=False),
+        "puppeteer": plan_state(
+            puppeteer, health=Health.UNAVAILABLE, present=False, reasons=("no method",)
+        ),
+        "mmdc": plan_state(mmdc, health=Health.MISSING, present=False),
+    }
+
+    rows = build_plan(["mmdc"], catalog, _state_of(states), MACOS, reinstall=frozenset())
+
+    by_id = {row.tool_id: row for row in rows}
+    assert (by_id["puppeteer"].disposition, by_id["puppeteer"].reason) == (
+        Disposition.BLOCKED,
+        "puppeteer declares no install method.",
+    )
+    assert (by_id["mmdc"].disposition, by_id["mmdc"].reason) == (
+        Disposition.BLOCKED,
+        "needs puppeteer",
+    )
+    assert (by_id["pnpm"].disposition, by_id["pnpm"].reason, by_id["pnpm"].requested_by) == (
+        Disposition.SKIP,
+        "not needed while mmdc is blocked",
+        "mmdc",
+    )
+
+
+def test_a_dragged_chain_needed_only_by_a_blocked_tool_is_skipped():
+    z = _tool("z", methods=())
+    d = _tool("d")
+    c = _tool("c", requires=("d",))
+    x = _tool("x", requires=("c", "z"))
+    catalog = [z, d, c, x]
+    states = {
+        "z": plan_state(z, health=Health.UNAVAILABLE, present=False, reasons=("no method",)),
+        "d": plan_state(d, health=Health.MISSING, present=False),
+        "c": plan_state(c, health=Health.MISSING, present=False),
+        "x": plan_state(x, health=Health.MISSING, present=False),
+    }
+
+    rows = build_plan(["x"], catalog, _state_of(states), MACOS, reinstall=frozenset())
+
+    by_id = {row.tool_id: row for row in rows}
+    assert (by_id["c"].disposition, by_id["c"].reason) == (
+        Disposition.SKIP,
+        "not needed while x is blocked",
+    )
+    assert (by_id["d"].disposition, by_id["d"].reason) == (
+        Disposition.SKIP,
+        "not needed while x is blocked",
+    )
+
+
+def test_a_dragged_dependency_still_needed_by_a_runnable_tool_keeps_its_disposition():
+    pnpm = _tool("pnpm")
+    puppeteer = _tool("puppeteer", methods=())
+    mmdc = _tool("mmdc", requires=("pnpm", "puppeteer"))
+    y = _tool("y", requires=("pnpm",))
+    catalog = [pnpm, puppeteer, mmdc, y]
+    states = {
+        "pnpm": plan_state(pnpm, health=Health.MISSING, present=False),
+        "puppeteer": plan_state(
+            puppeteer, health=Health.UNAVAILABLE, present=False, reasons=("no method",)
+        ),
+        "mmdc": plan_state(mmdc, health=Health.MISSING, present=False),
+        "y": plan_state(y, health=Health.MISSING, present=False),
+    }
+
+    rows = build_plan(["mmdc", "y"], catalog, _state_of(states), MACOS, reinstall=frozenset())
+
+    by_id = {row.tool_id: row for row in rows}
+    assert (by_id["pnpm"].disposition, by_id["pnpm"].reason) == (
+        Disposition.INSTALL,
+        "needed by mmdc",
+    )
+
+
+def test_a_pending_dependency_without_a_method_waits():
+    zsh = _tool("zsh", methods=())
+    omz = _tool("oh-my-zsh", requires=("zsh",))
+    catalog = [zsh, omz]
+    pending_rows = build_plan(
+        ["oh-my-zsh"],
+        catalog,
+        _state_of({"oh-my-zsh": plan_state(omz, health=Health.MISSING, present=False)}),
+        MACOS,
+        reinstall=frozenset(),
+    )
+    settled_rows = build_plan(
+        ["oh-my-zsh"],
+        catalog,
+        _state_of(
+            {
+                "oh-my-zsh": plan_state(omz, health=Health.MISSING, present=False),
+                "zsh": plan_state(zsh),
+            }
+        ),
+        MACOS,
+        reinstall=frozenset(),
+    )
+
+    pending = {row.tool_id: row for row in pending_rows}
+    settled = {row.tool_id: row for row in settled_rows}
+    assert (pending["zsh"].disposition, pending["zsh"].reason) == (Disposition.WAIT, "")
+    assert (settled["zsh"].disposition, settled["zsh"].reason) == (
+        Disposition.SKIP,
+        "already present",
+    )
+    assert settled["oh-my-zsh"].disposition is Disposition.INSTALL
+
+
+def test_a_blocked_row_whose_state_is_not_unavailable_reads_not_available():
+    unavailable = _tool("unavailable", methods=())
+    state = plan_state(
+        unavailable,
+        health=Health.BROKEN,
+        reasons=("broken for an unrelated reason",),
+    )
+
+    row = build_plan(
+        ["unavailable"],
+        [unavailable],
+        _state_of({"unavailable": state}),
+        MACOS,
+        reinstall=frozenset(),
+    )[0]
+
+    assert (row.disposition, row.reason) == (
+        Disposition.BLOCKED,
+        "not available on this platform",
+    )
+
+
 def test_dependent_of_a_plan_time_blocked_dependency_is_blocked_needs_it():
     node = _tool("node")
     mmdc = _tool("mmdc", requires=("node",))

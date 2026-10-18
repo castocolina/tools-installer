@@ -793,19 +793,21 @@ def _blocked_row(
     *,
     requester: str | None,
 ) -> PlanRow:
-    if state is not None and state.reasons and state.health is Health.UNAVAILABLE:
+    if state is None or state.health is Health.CHECKING:
+        return PlanRow(blocked.tool_id, Disposition.WAIT, "", requested_by=requester)
+    if state.reasons and state.health is Health.UNAVAILABLE:
         reason = _first_clause(state)
     elif blocked.needs is not None:
         reason = _needs_reason(blocked.needs)
     else:
-        reason = blocked.reason
+        reason = "not available on this platform"
     return PlanRow(
         blocked.tool_id,
         Disposition.BLOCKED,
         reason,
         requested_by=requester,
-        health=state.health if state is not None else None,
-        ownership=state.ownership if state is not None else None,
+        health=state.health,
+        ownership=state.ownership,
     )
 
 
@@ -846,7 +848,7 @@ def build_plan(
         _blocked_row(item, state_of(item.tool_id), requester=res.requested_by.get(item.tool_id))
         for item in res.blocked
     )
-    blocked = {
+    unsatisfied = {
         row.tool_id
         for row in rows
         if row.disposition is Disposition.BLOCKED and not _settled(state_of(row.tool_id))
@@ -861,9 +863,26 @@ def build_plan(
     for index, row in enumerate(rows):
         if row.disposition not in runnable:
             continue
-        dependency = next((dep for dep in by_id[row.tool_id].requires if dep in blocked), None)
+        dependency = next((dep for dep in by_id[row.tool_id].requires if dep in unsatisfied), None)
         if dependency is not None:
             rows[index] = _needs_row(row, dependency)
             if not _settled(state_of(row.tool_id)):
-                blocked.add(row.tool_id)
+                unsatisfied.add(row.tool_id)
+    for index in range(len(rows) - 1, -1, -1):
+        row = rows[index]
+        if row.disposition not in runnable or row.requested_by is None:
+            continue
+        requiring_rows = [
+            candidate for candidate in rows if row.tool_id in by_id[candidate.tool_id].requires
+        ]
+        if requiring_rows and all(
+            candidate.disposition is Disposition.BLOCKED
+            or candidate.reason.startswith("not needed while ")
+            for candidate in requiring_rows
+        ):
+            rows[index] = replace(
+                row,
+                disposition=Disposition.SKIP,
+                reason=f"not needed while {row.requested_by} is blocked",
+            )
     return rows
