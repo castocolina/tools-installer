@@ -46,8 +46,9 @@ declares no dependency on `pnpm`.
 
 The in-view notice states that unavailable dependencies are reported when the
 installer runs; the availability VERDICT stays with `resolve_dependencies` +
-`render_dependency_notice` on the post-TUI path, because a screen with no
-`Platform` must not make a judgement it cannot make correctly.
+the BLOCKED rows `build_plan` makes from `Resolution.blocked`, shown on review
+by `render_plan`, because a screen with no `Platform` must not make a
+judgement it cannot make correctly.
 
 `Tool.requires` is a hard dependency resolved by
 `installer/deps.py::resolve_dependencies`. `Tool.recommends` is a soft one that
@@ -99,17 +100,15 @@ the real companion set once those tools exist.
 
 `installer/deps.py::resolve_dependencies` decides install ORDER and drops a
 branch whose dependency is unavailable on this platform — a pre-flight
-judgement made from the registry before anything runs.
-`installer/session.py::run_installs` answers the different question of a
-dependency that was available and then FAILED while installing, which is
-knowable only mid-run. The two share no code and must not be merged: the
-resolver is pure and terminal-free, while the failure set exists only for the
-duration of one `run_installs` call. A skipped dependent is reported as
-`dependency-failed` with the blocking ids on `InstallOutcome.blocked_by`, is
-never handed to the install engine, and is always listed in the summary.
-`run_installs` is a single forward pass that relies on the resolver's
-deps-first order and deliberately does not sort, so `requires` plus
-`resolve_dependencies` remains the sole ordering mechanism.
+judgement made from the registry before anything runs. `build_plan` records
+each reached tool, including BLOCKED rows for unavailable dependencies, while
+`execute_plan` handles a dependency that was available and then FAILED while
+installing, which is knowable only mid-run. It carries a per-run failure set;
+a skipped dependent is reported as `dependency-failed` with the blocking ids
+on `InstallOutcome.blocked_by`, is never handed to the install engine, and is
+always listed in the summary. `execute_plan` is a single forward pass that
+relies on the resolver's deps-first order and deliberately does not sort, so
+`requires` plus `resolve_dependencies` remains the sole ordering mechanism.
 
 `installer/shellrc.py`'s `apply_block`/`strip_block` applies only to files this
 installer owns — `~/.myshellrc`, and the rc files it wires a `source` line into
@@ -652,12 +651,11 @@ adopted the plural field as a production dispatcher in
 ## Phase 13: live in-TUI install execution and persisted wizard settings
 
 `installer/execute_screen.py` is an IO adapter, not a second decision
-layer. `resolve_dependencies`, `audit`, `run_installs`, `install_tool`,
-`configure_path` and `run_doctor` remain the sole owners of install
-control flow; the screen formats their output and streams it. The
-abandoned `feat/install-experience` branch split that responsibility
-across three modules with no owning seam, and this phase's audit rated
-that split a real defect.
+layer. `build_plan`, `execute_plan`, `install_tool`, `configure_path` and
+`run_doctor` remain the sole owners of install control flow; the screen
+formats their output and streams it. The abandoned `feat/install-experience`
+branch split that responsibility across three modules with no owning seam,
+and this phase's audit rated that split a real defect.
 
 The execute screen is a `ModalScreen` and not a registered view.
 `AppScreen` requires a `VIEWS` row; a row would give the screen a number
@@ -669,9 +667,10 @@ protects. A pushed non-navigable screen is the established shape here
 `installer/run.py::StreamingRunner` is the only `Runner` in this project
 that reads a child's output incrementally. It is installed through the
 same single `Runner` seam every executor already calls. Attribution is
-structural: `attributed_install` sets the tool through `run_installs`'
-existing `Install` parameter, so there is no optional argument whose
-absence can drop it. The checksum-mismatch seam is `push_screen_wait`
+structural: `attributed_install` was deleted in Phase 20 when the per-row
+`on_row_started` hook took over `StreamingRunner.set_tool` before commands
+run, so attribution remains structural and no optional argument can drop it.
+The checksum-mismatch seam is `push_screen_wait`
 (`ask_from_worker` wraps `call_from_thread` + `push_screen_wait`). That
 is a deliberate, documented exception to rule 2 rather than a violation
 of it: rule 2 governs main-thread callers, and a thread worker has no
@@ -701,9 +700,9 @@ the `guard_state` parameter already carries.
 ## Phase 14: update dispatch and the login-shell handoff
 
 Selecting an outdated, already-installed tool routes to
-`UpdateService.run` rather than the install ladder. The split is made
-beside the `resolve_dependencies` call in `ExecuteScreen.on_mount` and
-never inside the resolver: `deps.py` still treats "installed" as
+`UpdateService.run` rather than the install ladder. `build_plan` makes
+that install/update split from `ToolState` health and `update_refusal`, never
+inside `resolve_dependencies`: `deps.py` still treats "installed" as
 satisfied, because it has no access to version state or manager
 attribution and this phase deliberately left that contract unchanged.
 All update mutation goes through the update service's own entry point,
@@ -741,9 +740,9 @@ The confirmation is bound at a composition point through
 protocol. Widening `Install` would have forced every existing fake
 install — twenty-nine of them, plus `attributed_install` — to grow a
 keyword they do not use. The adapter returns the original `Install`,
-so those sites stay valid; `run_wizard` and `ExecuteScreen` each wrap
-at the call into `run_installs`. Unattended (`--yes`) means no
-callback on both entry points, which the dispatcher treats as skip.
+so those sites stay valid; `execute_plan` binds confirmation at its one call
+into the install ladder. Unattended (`--yes`) means no callback on both
+entry points, which the dispatcher treats as skip.
 
 ## Phase 15.2: forcing child output and the silence indicator
 
