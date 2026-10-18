@@ -39,13 +39,7 @@ from installer.render import (
     outcome_row_text,
     plan_head,
     plan_row_text,
-    render_failure_details,
-    render_handoff,
-    render_post_install_handoff,
-    render_postinstall_warnings,
-    render_run_summary,
-    render_skipped,
-    render_verification,
+    render_run_report,
     running_row_text,
     summary_head,
 )
@@ -898,18 +892,9 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self.status.set(f"{prefix}{still} enter or esc returns to the catalog.", severity)
         self.query_one("#execute-keys", Static).update(_KEYS_FINISHED)
         log = self.query_one("#execute-log", RichLog)
-        installs = [outcome.install for outcome in message.outcomes if outcome.install is not None]
-
-        def render_report(console: Console) -> None:
-            render_run_summary(message.outcomes, console)
-            render_failure_details(installs, console)
-            render_skipped(installs, console)
-            render_handoff(installs, console)
-            render_post_install_handoff(installs, console)
-            render_postinstall_warnings(installs, console)
-            render_verification(installs, console)
-
-        log.write(self._render_captured(render_report))
+        log.write(
+            self._render_captured(lambda console: render_run_report(message.outcomes, console))
+        )
         not_attempted = [o.row.tool_id for o in message.outcomes if o.result == "not_attempted"]
         if not_attempted:
             log.write("Not attempted: " + ", ".join(not_attempted))

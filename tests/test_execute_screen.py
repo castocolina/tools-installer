@@ -4676,6 +4676,33 @@ async def test_successful_update_is_named_in_summary_and_outcome_row(tmp_path: P
     assert "✓ rg  updated" in _log_text(screen)
 
 
+async def test_successful_outdated_update_line_carries_outcome_extras(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _PlanUpdateService(
+        outcomes={
+            "rg": UpdateOutcome(
+                "rg",
+                "updated",
+                "brew",
+                replayed_globals=("claude",),
+                cleanup_warnings=("old binary left behind",),
+                postinstall_warning="hook warned",
+                detail="pnpm globals replay failed: boom",
+            )
+        }
+    )
+    inputs = _inputs(tools=[rg], present=("rg",), version_refresh=refresh, updates=updates)
+
+    screen, _ = await _run_execute(inputs, ["rg"])
+
+    assert (
+        "rg updated — replayed claude; old binary left behind; hook warned; "
+        "pnpm globals replay failed: boom"
+    ) in _log_text(screen)
+
+
 async def test_successful_update_without_a_new_version_still_reports_updated(
     tmp_path: Path,
 ) -> None:
