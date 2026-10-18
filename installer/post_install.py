@@ -16,9 +16,10 @@ terminal is displayed, never launched from the installer's worker thread.
 
 A tool the installer detects as already present is a SKIP on the review and
 does not reach this table. Pressing `r` marks it REINSTALL and sends it through
-the install ladder, so a successful reinstall dispatches actions once more. No
-path re-applies post-install actions on their own (D-06); sensitive actions
-still ask.
+the install ladder, so a successful reinstall dispatches actions once more. A
+tool whose installer refuses to run over an existing install is not re-run;
+the reinstall dispatches its actions directly. No path re-applies post-install
+actions on their own (D-06); sensitive actions still ask.
 """
 
 import shutil

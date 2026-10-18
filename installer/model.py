@@ -41,7 +41,17 @@ METHOD_KINDS = (
 # Later phases extend a kind's keys by editing its entry (Phases 22 and 24).
 METHOD_PARAMS: dict[str, frozenset[str]] = {
     "script": frozenset(
-        {"url", "shell", "bin_dir", "env", "detect_path", "version_file", "args", "smoke_argv"}
+        {
+            "url",
+            "shell",
+            "bin_dir",
+            "env",
+            "detect_path",
+            "version_file",
+            "args",
+            "smoke_argv",
+            "refuses_existing",
+        }
     ),
     "node": frozenset(
         {"npm_pkg", "co_install", "allow_build", "min_node", "smoke", "versions", "smoke_argv"}
@@ -782,6 +792,11 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
             if unknown:
                 key = sorted(unknown)[0]
                 raise ValueError(f"tool '{row['id']}': method '{kind}' has unknown key '{key}'")
+            if "refuses_existing" in params and type(params["refuses_existing"]) is not bool:
+                raise ValueError(
+                    f"tool '{row['id']}': method '{kind}' key 'refuses_existing' "
+                    "must be true or false"
+                )
             if kind in ("app", "tarball"):
                 url = params.get("url")
                 pinned = isinstance(url, str) and "{ver}" in url

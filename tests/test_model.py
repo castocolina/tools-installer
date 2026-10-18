@@ -715,6 +715,25 @@ smoke_argv = ["--appimage-version"]
     assert tools[0].methods[0].params["smoke_argv"] == ["--appimage-version"]
 
 
+def test_refuses_existing_must_be_a_bool(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "script"
+url = "https://example.test/i.sh"
+shell = "sh"
+refuses_existing = "yes"
+""",
+    )
+    with pytest.raises(ValueError, match=r"tool 'demo'.*refuses_existing.*true or false"):
+        load_tools(manifest)
+
+
 @pytest.mark.parametrize(
     "smoke_argv_toml",
     [
