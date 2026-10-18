@@ -40,13 +40,18 @@ MismatchChoice = Literal["retry", "skip", "fallback"]
 OnMismatch = Callable[[str], MismatchChoice]
 
 _PRIORITY_RANK = {Priority.P0: 0, Priority.P1: 1, Priority.P2: 2, Priority.P3: 3}
-# Statuses meaning this tool is not on the machine after this run.
+# Statuses meaning this tool is not on the machine after an install/repair row.
 # DEPENDENCY_FAILED is a member of its own set on purpose: that membership,
 # and nothing else, is what carries a failure down a multi-link requires chain.
 # MANUAL_REQUIRED belongs here too: the tool only got as far as reviewed
 # handoff instructions (host_setup / skill_pack), not an actual install, so a
 # dependent naming it in `requires` must be blocked the same as any other
 # not-actually-installed status.
+# A row that starts from an installed tool loses it only when a reinstall ran and failed.
+_PRESENT_TOOL_LOST: frozenset[InstallStatus] = frozenset(
+    {InstallStatus.FAILED, InstallStatus.CHECKSUM_MISMATCH}
+)
+
 _UNRESOLVED: frozenset[InstallStatus] = frozenset(
     {
         InstallStatus.FAILED,
@@ -476,14 +481,12 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
                 if ctx.on_row_started is not None:
                     ctx.on_row_started(row)
                 tool = ctx.catalog[row.tool_id]
-                if row.disposition in {
+                blockers = tuple(dep for dep in dict.fromkeys(tool.requires) if dep in unresolved)
+                if blockers or row.disposition in {
                     Disposition.INSTALL,
                     Disposition.REPAIR,
                     Disposition.REINSTALL,
                 }:
-                    blockers = tuple(
-                        dep for dep in dict.fromkeys(tool.requires) if dep in unresolved
-                    )
                     if blockers:
                         result = InstallOutcome(
                             tool.id, InstallStatus.DEPENDENCY_FAILED, blocked_by=blockers
@@ -514,7 +517,12 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
                                     checksum_policy="continue",
                                     tools=ctx.catalog,
                                 )
-                    if result.status in _UNRESOLVED:
+                    unresolved_statuses = (
+                        _UNRESOLVED
+                        if row.disposition in {Disposition.INSTALL, Disposition.REPAIR}
+                        else _PRESENT_TOOL_LOST
+                    )
+                    if result.status in unresolved_statuses:
                         unresolved.add(tool.id)
                     mapped = _INSTALL_RESULT[result.status]
                     detail = (

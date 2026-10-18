@@ -352,6 +352,88 @@ def test_update_latch_refusal_is_blocked():
     updates.end()
 
 
+@pytest.mark.parametrize("disposition", [Disposition.UPDATE, Disposition.RECONFIGURE])
+def test_a_failed_prerequisite_stops_a_present_dependents_update_or_reconfigure(
+    disposition: Disposition,
+):
+    from installer.ownership import ManagerOwnership
+
+    dependency = _tool("dep")
+    middle = _tool("mid", requires=("dep",))
+    leaf = _tool("leaf", requires=("mid",))
+    ownership = ManagerOwnership(
+        tool_id="mid",
+        owner="brew",
+        method=None,
+        package="mid",
+        current_version="1",
+        confidence="direct",
+        shadowed=False,
+        candidates=(),
+        active_candidate=None,
+        active_path=None,
+        unknown_reason=None,
+    )
+    updates = ScriptedUpdates({"mid": UpdateOutcome("mid", "updated", "brew")})
+    recorder = RunRecorder({"dep": InstallOutcome("dep", "failed")})
+    middle_row = (
+        PlanRow("mid", disposition, "update", ownership=ownership)
+        if disposition is Disposition.UPDATE
+        else _reconfigure_row(
+            "mid", ConfigStep("enable gsd-core in user scope", "plugin_enable", "claude", _ENABLE)
+        )
+    )
+    outcomes = execute_plan(
+        [
+            PlanRow("dep", Disposition.INSTALL, "missing"),
+            middle_row,
+            PlanRow("leaf", Disposition.INSTALL, "missing"),
+        ],
+        _run_context(
+            recorder,
+            catalog={"dep": dependency, "mid": middle, "leaf": leaf},
+            updates=updates,
+        ),
+    )
+
+    assert [outcome.result for outcome in outcomes] == ["failed", "dependency_failed", "done"]
+    assert outcomes[1].install is not None
+    assert outcomes[1].install.blocked_by == ("dep",)
+    assert updates.targets == []
+    assert recorder.argv == []
+    assert recorder.installs == [("dep", False), ("leaf", False)]
+
+
+@pytest.mark.parametrize(
+    "status, expected",
+    [
+        (InstallStatus.MANUAL_REQUIRED, "done"),
+        (InstallStatus.NO_METHOD, "done"),
+        (InstallStatus.FAILED, "dependency_failed"),
+        (InstallStatus.CHECKSUM_MISMATCH, "dependency_failed"),
+    ],
+)
+def test_a_reinstall_that_changed_nothing_leaves_the_tool_resolved(
+    status: InstallStatus, expected: str
+):
+    recorder = RunRecorder({"dep": InstallOutcome("dep", status)})
+    outcomes = execute_plan(
+        [
+            PlanRow("dep", Disposition.REINSTALL, "reinstall"),
+            PlanRow("user", Disposition.INSTALL, "missing"),
+        ],
+        _run_context(
+            recorder,
+            catalog={"dep": _tool("dep"), "user": _tool("user", requires=("dep",))},
+        ),
+    )
+
+    assert outcomes[1].result == expected
+    if expected == "dependency_failed":
+        assert outcomes[1].install is not None
+        assert outcomes[1].install.blocked_by == ("dep",)
+
+
 def test_update_failure_does_not_block_a_dependent():
     from installer.ownership import ManagerOwnership
 
