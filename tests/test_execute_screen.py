@@ -13,6 +13,7 @@ from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any, ClassVar
+from weakref import WeakKeyDictionary
 
 import pytest
 from textual import work
@@ -323,7 +324,13 @@ def _host(inputs: ExecuteInputs, tools: list[Tool] | None = None) -> UnifiedApp:
     )
 
 
+_TEST_LOG_SNAPSHOTS: WeakKeyDictionary[ExecuteScreen, str] = WeakKeyDictionary()
+
+
 def _log_text(screen: ExecuteScreen) -> str:
+    captured = _TEST_LOG_SNAPSHOTS.get(screen)
+    if captured is not None:
+        return captured
     log = screen.query_one("#execute-log")
     lines = getattr(log, "lines", ())
     parts: list[str] = []
@@ -1522,6 +1529,7 @@ async def _run_execute(
         assert isinstance(screen, ExecuteScreen)
         await pilot.press("enter")
         await _settle_execute(screen, pilot)
+        _TEST_LOG_SNAPSHOTS[screen] = _log_text(screen)
         updates = inputs.updates
         recorded = updates if isinstance(updates, _RecordingUpdateService) else None
         return screen, recorded
@@ -3233,3 +3241,642 @@ async def test_a_crash_outside_execute_plan_fills_every_row_as_not_attempted(
     assert isinstance(value, list)
     assert [outcome.result for outcome in value] == ["not_attempted", "not_attempted"]
     assert [outcome.detail for outcome in value] == ["RuntimeError: boom", "RuntimeError: boom"]
+
+
+class _PlanUpdateService(_RecordingUpdateService):
+    """Script update outcomes while retaining UpdateService's real latch."""
+
+    def __init__(
+        self,
+        *,
+        outcomes: Mapping[str, UpdateOutcome] | None = None,
+        errors: Mapping[str, Exception] | None = None,
+        before_run: Callable[[UpdateTarget], None] | None = None,
+    ) -> None:
+        super().__init__()
+        self.outcomes = dict(outcomes or {})
+        self.errors = dict(errors or {})
+        self.before_run = before_run
+
+    def run(self, target: UpdateTarget) -> UpdateOutcome:
+        self.recorded.append(target)
+        if self.before_run is not None:
+            self.before_run(target)
+        if error := self.errors.get(target.tool.id):
+            raise error
+        if outcome := self.outcomes.get(target.tool.id):
+            return outcome
+        return UpdateOutcome(
+            tool_id=target.tool.id,
+            status="updated",
+            owner=target.ownership.owner,
+        )
+
+
+def _outcomes_by_id(screen: ExecuteScreen) -> dict[str, RowOutcome]:
+    assert screen.outcomes is not None
+    return {outcome.row.tool_id: outcome for outcome in screen.outcomes}
+
+
+async def test_failed_update_row_marks_the_run_failed(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _PlanUpdateService(
+        outcomes={"rg": UpdateOutcome("rg", "failed", "brew", detail="upgrade failed")}
+    )
+    inputs = _inputs(tools=[rg], present=("rg",), version_refresh=refresh, updates=updates)
+
+    screen, _ = await _run_execute(inputs, ["rg"])
+
+    assert _outcomes_by_id(screen)["rg"].result == "failed"
+    assert "✖ rg" in _log_text(screen)
+    assert screen.status.text == "Failed. Still selected: 1. enter or esc returns to the catalog."
+    assert screen.status.severity == "error"
+
+
+async def test_raised_update_row_is_crashed_and_marks_the_run_failed(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _PlanUpdateService(errors={"rg": OSError("permission denied")})
+    inputs = _inputs(tools=[rg, fd], present=("rg",), version_refresh=refresh, updates=updates)
+
+    screen, _ = await _run_execute(inputs, ["rg", "fd"])
+
+    outcomes = _outcomes_by_id(screen)
+    assert outcomes["rg"].result == "crashed"
+    assert outcomes["rg"].detail == "OSError: permission denied"
+    assert outcomes["fd"].result == "not_attempted"
+    assert screen.status.text.startswith("Failed.")
+    assert updates.in_flight is None
+
+
+async def test_completed_update_survives_a_run_level_crash(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _PlanUpdateService()
+
+    def crash_path_wiring() -> str:
+        raise RuntimeError("PATH hook crashed")
+
+    inputs = _inputs(
+        tools=[rg],
+        present=("rg",),
+        version_refresh=refresh,
+        updates=updates,
+        wire_path=crash_path_wiring,
+    )
+
+    screen, _ = await _run_execute(inputs, ["rg"])
+
+    assert _outcomes_by_id(screen)["rg"].result == "done"
+    assert screen.status.text.startswith("Failed.")
+    assert "RuntimeError: PATH hook crashed" in _log_text(screen)
+
+
+async def test_update_outcome_survives_state_invalidation_without_followup_refresh(
+    tmp_path: Path,
+) -> None:
+    class _RefreshWouldFail(_RecordingRefreshService):
+        def refresh(self, tools: Sequence[Tool]) -> None:
+            self.asked.extend(tool.id for tool in tools)
+            raise OSError("version refresh exploded")
+
+    rg = _tool("rg")
+    refresh = _RefreshWouldFail(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+
+    class _InvalidatingUpdateService(_PlanUpdateService):
+        def run(self, target: UpdateTarget) -> UpdateOutcome:
+            outcome = super().run(target)
+            refresh.invalidate(reason="updated rg")
+            return outcome
+
+    updates = _InvalidatingUpdateService()
+    inputs = _inputs(tools=[rg], present=("rg",), version_refresh=refresh, updates=updates)
+
+    screen, _ = await _run_execute(inputs, ["rg"])
+
+    assert _outcomes_by_id(screen)["rg"].result == "done"
+    assert refresh.asked == []
+    assert "Summary — 1 updated" in _log_text(screen)
+
+
+async def test_cancel_mid_update_keeps_completed_rows_and_marks_the_rest_not_attempted(
+    tmp_path: Path,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    rg = _tool("rg")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    _seed_refresh(refresh, fd, outdated=True)
+
+    def block_first(_target: UpdateTarget) -> None:
+        started.set()
+        assert release.wait(timeout=5)
+
+    updates = _PlanUpdateService(before_run=block_first)
+    inputs = _inputs(
+        tools=[rg, fd],
+        present=("rg", "fd"),
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        await pilot.press("c")
+        await pilot.pause()
+        release.set()
+        await _settle_execute(screen, pilot)
+
+    outcomes = _outcomes_by_id(screen)
+    assert [target.tool.id for target in updates.recorded] == ["rg"]
+    assert outcomes["rg"].result == "done"
+    assert outcomes["fd"].result == "not_attempted"
+    assert "Still selected: 1." in screen.status.text
+
+
+async def test_install_crash_marks_a_later_update_not_attempted(tmp_path: Path) -> None:
+    first = _tool("a-first")
+    later = _tool("b-update")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, later, outdated=True)
+    updates = _PlanUpdateService()
+
+    def install_failure(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        if tool.id == "a-first":
+            raise OSError("installer failed")
+        return InstallOutcome(tool.id, "installed")
+
+    inputs = _inputs(
+        tools=[first, later],
+        install=install_failure,
+        version_refresh=refresh,
+        updates=updates,
+    )
+
+    screen, _ = await _run_execute(inputs, ["a-first", "b-update"])
+
+    outcomes = _outcomes_by_id(screen)
+    assert outcomes["a-first"].result == "crashed"
+    assert outcomes["b-update"].result == "not_attempted"
+    assert updates.recorded == []
+
+
+async def test_in_flight_update_latch_is_blocked_not_failed(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _PlanUpdateService()
+    assert updates.begin("other")
+    inputs = _inputs(tools=[rg], present=("rg",), version_refresh=refresh, updates=updates)
+
+    screen, _ = await _run_execute(inputs, ["rg"])
+
+    assert updates.recorded == []
+    assert _outcomes_by_id(screen)["rg"].result == "blocked"
+    assert "update already in flight for other" in _log_text(screen)
+    assert "Summary — 1 blocked" in _log_text(screen)
+    assert screen.status.text == (
+        "Nothing ran. Still selected: 1. enter or esc returns to the catalog."
+    )
+    assert screen.status.severity == "ok"
+    updates.end()
+
+
+async def test_latch_refusal_keeps_the_update_holder_and_reports_a_blocked_row(
+    tmp_path: Path,
+) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _PlanUpdateService()
+    assert updates.begin("other")
+    inputs = _inputs(tools=[rg], present=("rg",), version_refresh=refresh, updates=updates)
+
+    screen, _ = await _run_execute(inputs, ["rg"])
+
+    assert updates.in_flight == "other"
+    assert _outcomes_by_id(screen)["rg"].result == "blocked"
+    assert "update already in flight for other" in _log_text(screen)
+    updates.end()
+
+
+async def test_blocked_update_reason_reaches_finished_row_and_log(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _PlanUpdateService(
+        outcomes={
+            "rg": UpdateOutcome(
+                "rg", "unknown-owner", "unknown", detail="the brew inventory could not be read"
+            )
+        }
+    )
+    inputs = _inputs(tools=[rg], present=("rg",), version_refresh=refresh, updates=updates)
+    app = _host(inputs, [rg])
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+
+        assert _outcomes_by_id(screen)["rg"].result == "blocked"
+        assert "blocked — the brew inventory could not be read" in _plan_prompts(screen)[0]
+        assert "blocked — the brew inventory could not be read" in _log_text(screen)
+        assert screen.status.severity == "ok"
+
+
+async def test_blocked_update_reason_appears_only_when_the_row_finishes(tmp_path: Path) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+
+    def block(_target: UpdateTarget) -> None:
+        started.set()
+        assert release.wait(timeout=5)
+
+    updates = _PlanUpdateService(
+        outcomes={"rg": UpdateOutcome("rg", "unsupported", "brew", detail="inventory unreadable")},
+        before_run=block,
+    )
+    inputs = _inputs(tools=[rg], present=("rg",), version_refresh=refresh, updates=updates)
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        await pilot.pause()
+        assert "inventory unreadable" not in _log_text(screen)
+        assert _plan_prompts(screen)[0].startswith("> rg")
+        release.set()
+        await _settle_execute(screen, pilot)
+        _TEST_LOG_SNAPSHOTS[screen] = _log_text(screen)
+
+    assert "blocked — inventory unreadable" in _log_text(screen)
+
+
+async def test_blocked_update_without_detail_uses_the_plan_reason(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _PlanUpdateService(outcomes={"rg": UpdateOutcome("rg", "unsupported", "brew")})
+    inputs = _inputs(tools=[rg], present=("rg",), version_refresh=refresh, updates=updates)
+
+    screen, _ = await _run_execute(inputs, ["rg"])
+
+    assert "blocked — 14.1.0 -> 14.1.1" in _log_text(screen)
+    assert "no manager claimed this tool" not in _log_text(screen)
+
+
+async def test_blocked_update_does_not_trigger_a_version_refresh(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _PlanUpdateService(
+        outcomes={"rg": UpdateOutcome("rg", "unsupported", "brew", detail="refused")}
+    )
+    inputs = _inputs(tools=[rg], present=("rg",), version_refresh=refresh, updates=updates)
+
+    screen, _ = await _run_execute(inputs, ["rg"])
+
+    assert refresh.asked == []
+    assert _outcomes_by_id(screen)["rg"].result == "blocked"
+
+
+async def test_outdated_row_without_version_status_still_dispatches_update(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = frozen_service(tmp_path)
+    state = plan_state(rg, platform=_PLATFORM, health=Health.OUTDATED, owner="brew")
+    refresh.publish([replace(state, version=None)])
+    updates = _PlanUpdateService()
+    inputs = _inputs(tools=[rg], present=("rg",), version_refresh=refresh, updates=updates)
+
+    screen, _ = await _run_execute(inputs, ["rg"])
+
+    assert [target.tool.id for target in updates.recorded] == ["rg"]
+    assert _outcomes_by_id(screen)["rg"].row.disposition is Disposition.UPDATE
+    assert "Summary — 1 updated" in _log_text(screen)
+
+
+async def test_update_target_uses_the_plan_captured_owner(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = frozen_service(tmp_path)
+    state = plan_state(rg, platform=_PLATFORM, health=Health.OUTDATED, owner="brew")
+    ownership = replace(state.ownership, method=None, package=None)
+    refresh.publish([replace(state, ownership=ownership, version=None)])
+    updates = _PlanUpdateService()
+    inputs = _inputs(tools=[rg], present=("rg",), version_refresh=refresh, updates=updates)
+
+    screen, _ = await _run_execute(inputs, ["rg"])
+
+    assert _outcomes_by_id(screen)["rg"].result == "done"
+    assert len(updates.recorded) == 1
+    assert updates.recorded[0].ownership == ownership
+    assert updates.recorded[0].ownership.owner == "brew"
+
+
+async def test_successful_update_is_named_in_summary_and_outcome_row(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    inputs = _inputs(
+        tools=[rg],
+        present=("rg",),
+        version_refresh=refresh,
+        updates=_PlanUpdateService(),
+    )
+
+    screen, _ = await _run_execute(inputs, ["rg"])
+
+    assert "Summary — 1 updated" in _log_text(screen)
+    assert "✓ rg  updated" in _log_text(screen)
+
+
+async def test_successful_update_without_a_new_version_still_reports_updated(
+    tmp_path: Path,
+) -> None:
+    rg = _tool("rg")
+    refresh = frozen_service(tmp_path)
+    state = plan_state(rg, platform=_PLATFORM, health=Health.OUTDATED, owner="brew")
+    refresh.publish([replace(state, version=None)])
+    inputs = _inputs(
+        tools=[rg],
+        present=("rg",),
+        version_refresh=refresh,
+        updates=_PlanUpdateService(),
+    )
+
+    screen, _ = await _run_execute(inputs, ["rg"])
+
+    assert _outcomes_by_id(screen)["rg"].result == "done"
+    assert "✓ rg  updated" in _log_text(screen)
+    assert "now " not in _log_text(screen)
+
+
+async def test_failed_update_does_not_stop_a_later_install_row(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    fd = _tool("fd")
+    captured: list[str] = []
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _PlanUpdateService(
+        outcomes={"rg": UpdateOutcome("rg", "failed", "brew", detail="upgrade failed")}
+    )
+    inputs = _inputs(
+        tools=[rg, fd],
+        install=_install_with_output(captured),
+        present=("rg",),
+        version_refresh=refresh,
+        updates=updates,
+    )
+
+    screen, _ = await _run_execute(inputs, ["rg", "fd"])
+
+    outcomes = _outcomes_by_id(screen)
+    assert outcomes["rg"].result == "failed"
+    assert outcomes["fd"].result == "done"
+    assert captured == ["fd"]
+
+
+async def test_update_dispatch_does_not_open_a_confirmation_prompt(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    updates = _PlanUpdateService()
+    inputs = _inputs(tools=[rg], present=("rg",), version_refresh=refresh, updates=updates)
+    app = _host(inputs, [rg])
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert app.screen is screen
+
+    assert [target.tool.id for target in updates.recorded] == ["rg"]
+
+
+async def test_update_marker_establishes_the_silence_indicator(tmp_path: Path) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+
+    def block(_target: UpdateTarget) -> None:
+        started.set()
+        assert release.wait(timeout=5)
+
+    updates = _PlanUpdateService(before_run=block)
+    inputs = _inputs(tools=[rg], present=("rg",), version_refresh=refresh, updates=updates)
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        assert "-- updating --" in _log_text(screen)
+        await pilot.pause(SILENCE_SECONDS + 0.25)
+        assert "still running; waiting for output" in _log_text(screen)
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_stale_finished_update_row_does_not_clear_the_next_rows_indicator(
+    tmp_path: Path,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    rg = _tool("rg")
+    fd = _tool("fd")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+    _seed_refresh(refresh, fd, outdated=True)
+
+    def block_second(target: UpdateTarget) -> None:
+        if target.tool.id == "fd":
+            started.set()
+            assert release.wait(timeout=5)
+
+    updates = _PlanUpdateService(before_run=block_second)
+    inputs = _inputs(
+        tools=[rg, fd],
+        present=("rg", "fd"),
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        screen.post_message(RowFinished(RowOutcome(PlanRow("rg", Disposition.UPDATE, ""), "done")))
+        await pilot.pause()
+        await pilot.pause(SILENCE_SECONDS + 0.25)
+        assert "-- still running; waiting for output --" in _log_text(screen)
+        assert "fd" in _log_text(screen).splitlines()[-1]
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_receipt_drift_is_reviewed_as_repair_and_not_update(tmp_path: Path) -> None:
+    mmdc = _tool("mmdc")
+    refresh = frozen_service(tmp_path)
+    state = plan_state(
+        mmdc,
+        platform=_PLATFORM,
+        health=Health.BROKEN,
+        owner="installer",
+        reasons=("changed since install",),
+        version=_outdated_status("mmdc", outdated=True),
+    )
+    refresh.publish([state])
+    calls: list[tuple[str, bool]] = []
+    updates = _PlanUpdateService()
+    inputs = _inputs(
+        tools=[mmdc],
+        install=_repair_install(calls),
+        present=("mmdc",),
+        version_refresh=refresh,
+        updates=updates,
+    )
+    app = _host(inputs, [mmdc])
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["mmdc"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert (
+            "will repair — changed since install; the file is replaced" in _plan_prompts(screen)[0]
+        )
+        assert "will update" not in _head_text(screen)
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+
+    assert ("mmdc", True) in calls
+    assert updates.recorded == []
+    assert _outcomes_by_id(screen)["mmdc"].row.disposition is Disposition.REPAIR
+
+
+async def test_plan_head_counts_install_update_and_skip_rows(tmp_path: Path) -> None:
+    install_tool = _tool("install-me")
+    update_tool = _tool("update-me")
+    current_tool = _tool("current")
+    refresh = frozen_service(tmp_path)
+    refresh.publish(
+        [
+            plan_state(install_tool, health=Health.MISSING),
+            plan_state(update_tool, health=Health.OUTDATED, owner="brew"),
+            plan_state(current_tool, health=Health.OK, owner="brew"),
+        ]
+    )
+    inputs = _inputs(
+        tools=[install_tool, update_tool, current_tool],
+        version_refresh=refresh,
+        updates=_PlanUpdateService(),
+    )
+    app = _host(inputs, list(inputs.catalog))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["install-me", "update-me", "current"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert _head_text(screen) == "Install plan — 1 will install, 1 will update, 1 skipped"
+        prompts = _plan_prompts(screen)
+        assert any("install-me" in prompt and "will install" in prompt for prompt in prompts)
+        assert any("update-me" in prompt and "will update" in prompt for prompt in prompts)
+        assert any("current" in prompt and "skipped" in prompt for prompt in prompts)
+
+
+async def test_update_row_transitions_from_review_to_running_to_finished(tmp_path: Path) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    rg = _tool("rg")
+    refresh = _RecordingRefreshService(tmp_path / "versions.json")
+    _seed_refresh(refresh, rg, outdated=True)
+
+    def block(_target: UpdateTarget) -> None:
+        started.set()
+        assert release.wait(timeout=5)
+
+    inputs = _inputs(
+        tools=[rg],
+        present=("rg",),
+        version_refresh=refresh,
+        updates=_PlanUpdateService(before_run=block),
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert "will update" in _plan_prompts(screen)[0]
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        assert _plan_prompts(screen)[0].startswith("> rg")
+        release.set()
+        await _settle_execute(screen, pilot)
+        _TEST_LOG_SNAPSHOTS[screen] = _log_text(screen)
+
+    assert "✓ rg  updated" in _log_text(screen)
+    assert _outcomes_by_id(screen)["rg"].result == "done"
