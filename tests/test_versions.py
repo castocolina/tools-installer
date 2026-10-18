@@ -120,13 +120,11 @@ def test_production_paths_select_the_real_release_resolver() -> None:
     import installer.app as app_module
     import installer.engine as engine_module
     import installer.execute_screen as execute_screen_module
-    import installer.session as session_module
     import installer.update as update_module
 
     for module, name in (
         (app_module, "run_wizard"),
         (execute_screen_module, "ExecuteInputs"),
-        (session_module, "run_installs"),
         (engine_module, "install_tool"),
         (update_module, "UpdateService"),
     ):

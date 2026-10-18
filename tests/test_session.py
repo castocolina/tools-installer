@@ -33,17 +33,12 @@ from installer.session import (
     Result,
     RowOutcome,
     RunContext,
-    Summary,
     execute_plan,
     exit_code,
-    fold_run,
     order_for_install,
     ran_anything,
     retained,
-    run_installs,
-    summarize,
     summary_counts,
-    with_sensitive_confirm,
 )
 from installer.skill_lifecycle import LifecycleOutcome, LifecycleStatus
 from installer.update import UpdateOutcome
@@ -118,6 +113,63 @@ def test_execute_plan_returns_one_outcome_per_row_in_plan_order():
     assert recorder.installs == [("fd", False)]
     assert outcomes[0].install is not None
     assert outcomes[0].install.status.value == "installed"
+
+
+def test_execute_plan_rows_and_context_remain_positional():
+    params = inspect.signature(execute_plan).parameters
+    positional = [
+        name
+        for name, value in params.items()
+        if value.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    ]
+    assert positional == ["rows", "ctx"]
+
+
+def test_execute_plan_passes_run_context_dependencies_to_install():
+    tool = _tool("rg")
+    catalog = {"rg": tool}
+    platform = _platform()
+
+    def runner(_command: list[str]) -> None:
+        return None
+
+    def resolve_tag(_repo: str) -> str:
+        return "1.0.0"
+
+    seen: list[tuple[Tool, Platform, Runner, TagResolver, Mapping[str, Tool] | None]] = []
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        assert checksum_policy == "fail"
+        assert confirm_sensitive_action is None
+        seen.append((tool, platform, runner, resolve_tag, tools))
+        return InstallOutcome(tool.id, "installed")
+
+    context = RunContext(
+        catalog=catalog,
+        platform=platform,
+        runner=runner,
+        resolve_tag=resolve_tag,
+        install=install,
+    )
+    outcomes = execute_plan([PlanRow("rg", Disposition.INSTALL, "")], context)
+
+    assert outcomes[0].result == "done"
+    assert len(seen) == 1
+    actual_tool, actual_platform, actual_runner, actual_resolve_tag, actual_catalog = seen[0]
+    assert actual_tool is tool
+    assert actual_platform is platform
+    assert actual_runner is runner
+    assert actual_resolve_tag is resolve_tag
+    assert actual_catalog is catalog
 
 
 def test_execute_plan_refuses_a_plan_with_a_wait_row():
@@ -332,40 +384,42 @@ def test_update_failure_does_not_block_a_dependent():
     assert exit_code(outcomes) == 1
 
 
-def test_install_failure_blocks_dependents_down_a_chain():
+def test_install_failure_blocks_dependents_but_not_unrelated_rows():
     dependency_pairs = (("a", ""), ("b", "a"), ("c", "b"))
     tools = {
         tool_id: _tool(tool_id, requires=(requires,) if requires else ())
         for tool_id, requires in dependency_pairs
     }
+    tools["rg"] = _tool("rg")
     recorder = RunRecorder({"a": InstallOutcome("a", "failed")})
     outcomes = execute_plan(
-        [PlanRow(tool_id, Disposition.INSTALL, "") for tool_id in ("a", "b", "c")],
+        [PlanRow(tool_id, Disposition.INSTALL, "") for tool_id in ("a", "b", "c", "rg")],
         _run_context(recorder, catalog=tools),
     )
     assert [outcome.result for outcome in outcomes] == [
         "failed",
         "dependency_failed",
         "dependency_failed",
+        "done",
     ]
     assert outcomes[1].install is not None and outcomes[1].install.blocked_by == ("a",)
-    assert recorder.installs == [("a", False)]
+    assert recorder.installs == [("a", False), ("rg", False)]
 
 
 @pytest.mark.parametrize(
     "choice, calls, policies",
     [
-        ("retry", 2, ["fail", "fail"]),
+        ("retry", 3, ["fail", "fail", "fail"]),
         ("skip", 1, ["fail"]),
-        ("fallback", 2, ["fail", "continue"]),
+        ("fallback", 3, ["fail", "continue", "fail"]),
     ],
 )
-def test_mismatch_retry_skip_and_fallback_match_run_installs(
+def test_execute_plan_mismatch_retry_skip_and_fallback(
     choice: MismatchChoice, calls: int, policies: list[str]
 ):
     from installer.enums import InstallStatus
 
-    seen: list[ChecksumPolicy] = []
+    seen: list[tuple[ChecksumPolicy, Mapping[str, Tool] | None]] = []
 
     def install(
         tool: Tool,
@@ -378,15 +432,19 @@ def test_mismatch_retry_skip_and_fallback_match_run_installs(
         confirm_sensitive_action: ConfirmSensitiveAction | None = None,
         repair: bool = False,
     ) -> InstallOutcome:
-        seen.append(checksum_policy)
+        seen.append((checksum_policy, tools))
         status = InstallStatus.CHECKSUM_MISMATCH if len(seen) == 1 else InstallStatus.INSTALLED
         return InstallOutcome(tool.id, status)
 
     tools = {"rg": _tool("rg")}
+    catalog = {**tools, "user": _tool("user", requires=("rg",))}
     outcomes = execute_plan(
-        [PlanRow("rg", Disposition.INSTALL, "")],
+        [
+            PlanRow("rg", Disposition.INSTALL, ""),
+            PlanRow("user", Disposition.INSTALL, ""),
+        ],
         RunContext(
-            catalog=tools,
+            catalog=catalog,
             platform=_platform(),
             runner=lambda _cmd: None,
             resolve_tag=lambda _repo: "1",
@@ -395,8 +453,27 @@ def test_mismatch_retry_skip_and_fallback_match_run_installs(
         ),
     )
     assert len(seen) == calls
-    assert seen == policies
-    assert outcomes[0].result == ("mismatch" if choice == "skip" else "done")
+    assert [policy for policy, _mapping in seen] == policies
+    assert all(mapping is catalog for _policy, mapping in seen)
+    assert [outcome.result for outcome in outcomes] == (
+        ["mismatch", "dependency_failed"] if choice == "skip" else ["done", "done"]
+    )
+
+
+def test_execute_plan_does_not_prompt_for_a_clean_install():
+    asked: list[str] = []
+
+    def on_mismatch(tool_id: str) -> MismatchChoice:
+        asked.append(tool_id)
+        return "skip"
+
+    recorder = RunRecorder()
+    outcomes = execute_plan(
+        [PlanRow("rg", Disposition.INSTALL, "")],
+        _run_context(recorder, catalog={"rg": _tool("rg")}, on_mismatch=on_mismatch),
+    )
+    assert outcomes[0].result == "done"
+    assert asked == []
 
 
 def test_a_crashing_row_is_crashed_and_the_rest_not_attempted():
@@ -425,6 +502,18 @@ def test_should_continue_false_marks_the_rest_not_attempted():
         _run_context(recorder, catalog=tools, should_continue=lambda: next(checks)),
     )
     assert [outcome.result for outcome in outcomes] == ["done", "not_attempted", "not_attempted"]
+
+
+def test_should_continue_is_checked_before_dependency_blocking():
+    checks = iter([True, False])
+    tools = {"dep": _tool("dep"), "user": _tool("user", requires=("dep",))}
+    recorder = RunRecorder({"dep": InstallOutcome("dep", "failed")})
+    outcomes = execute_plan(
+        [PlanRow("dep", Disposition.INSTALL, ""), PlanRow("user", Disposition.INSTALL, "")],
+        _run_context(recorder, catalog=tools, should_continue=lambda: next(checks)),
+    )
+    assert [outcome.result for outcome in outcomes] == ["failed", "not_attempted"]
+    assert recorder.installs == [("dep", False)]
 
 
 def test_on_row_started_and_on_outcome_fire_in_plan_order():
@@ -635,17 +724,65 @@ def test_result_words_cover_every_non_done_result_the_engine_can_produce():
     }
 
 
-def test_manual_and_no_method_statuses_still_block_dependents():
-    from installer.enums import InstallStatus
+@pytest.mark.parametrize(
+    "status",
+    [
+        InstallStatus.FAILED,
+        InstallStatus.NO_METHOD,
+        InstallStatus.CHECKSUM_MISMATCH,
+        InstallStatus.DEPENDENCY_FAILED,
+        InstallStatus.MANUAL_REQUIRED,
+    ],
+)
+def test_every_unresolved_install_status_blocks_dependents(status: InstallStatus):
+    tools = {"dep": _tool("dep"), "user": _tool("user", requires=("dep",))}
+    recorder = RunRecorder({"dep": InstallOutcome("dep", status)})
+    outcomes = execute_plan(
+        [PlanRow("dep", Disposition.INSTALL, ""), PlanRow("user", Disposition.INSTALL, "")],
+        _run_context(recorder, catalog=tools),
+    )
+    assert outcomes[1].result == "dependency_failed"
+    assert outcomes[1].install is not None and outcomes[1].install.blocked_by == ("dep",)
 
-    for status in (InstallStatus.MANUAL_REQUIRED, InstallStatus.NO_METHOD):
-        tools = {"dep": _tool("dep"), "user": _tool("user", requires=("dep",))}
-        recorder = RunRecorder({"dep": InstallOutcome("dep", status)})
-        outcomes = execute_plan(
-            [PlanRow("dep", Disposition.INSTALL, ""), PlanRow("user", Disposition.INSTALL, "")],
-            _run_context(recorder, catalog=tools),
-        )
-        assert outcomes[1].result == "dependency_failed"
+
+@pytest.mark.parametrize("status", [InstallStatus.INSTALLED, InstallStatus.ALREADY_INSTALLED])
+def test_successful_install_statuses_do_not_block_dependents(status: InstallStatus):
+    tools = {"dep": _tool("dep"), "user": _tool("user", requires=("dep",))}
+    recorder = RunRecorder({"dep": InstallOutcome("dep", status)})
+    outcomes = execute_plan(
+        [PlanRow("dep", Disposition.INSTALL, ""), PlanRow("user", Disposition.INSTALL, "")],
+        _run_context(recorder, catalog=tools),
+    )
+    assert [outcome.result for outcome in outcomes] == [
+        "skipped" if status is InstallStatus.ALREADY_INSTALLED else "done",
+        "done",
+    ]
+    assert recorder.installs == [("dep", False), ("user", False)]
+
+
+def test_execute_plan_reports_only_failed_unique_dependencies():
+    tools = {
+        "dep": _tool("dep"),
+        "user": _tool("user", requires=("dep", "missing", "dep")),
+    }
+    recorder = RunRecorder({"dep": InstallOutcome("dep", "failed")})
+    outcomes = execute_plan(
+        [PlanRow("dep", Disposition.INSTALL, ""), PlanRow("user", Disposition.INSTALL, "")],
+        _run_context(recorder, catalog=tools),
+    )
+    assert outcomes[1].install is not None
+    assert outcomes[1].install.blocked_by == ("dep",)
+
+
+def test_execute_plan_does_not_reorder_rows_to_satisfy_dependencies():
+    tools = {"user": _tool("user", requires=("dep",)), "dep": _tool("dep")}
+    recorder = RunRecorder({"dep": InstallOutcome("dep", "failed")})
+    outcomes = execute_plan(
+        [PlanRow("user", Disposition.INSTALL, ""), PlanRow("dep", Disposition.INSTALL, "")],
+        _run_context(recorder, catalog=tools),
+    )
+    assert [outcome.result for outcome in outcomes] == ["done", "failed"]
+    assert recorder.installs == [("user", False), ("dep", False)]
 
 
 def test_order_for_install_sorts_by_priority_then_keeps_catalog_order():
@@ -656,532 +793,6 @@ def test_order_for_install_sorts_by_priority_then_keeps_catalog_order():
 def test_tool_rejects_unknown_priority():
     with pytest.raises(ValueError, match="unknown priority"):
         _tool("x", "P99")
-
-
-def test_run_installs_calls_install_per_tool_with_injected_deps():
-    tools = [_tool("rg"), _tool("jq")]
-    platform = _platform()
-    seen: list[tuple[str, str]] = []
-
-    def fake_install(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-    ) -> InstallOutcome:
-        seen.append((tool.id, platform.os))
-        return InstallOutcome(tool.id, "installed", method_kind="brew")
-
-    def runner(cmd: list[str]) -> None:
-        return None
-
-    def resolve_tag(repo: str) -> str:
-        return "1.0.0"
-
-    outcomes = run_installs(tools, platform, runner, resolve_tag, fake_install)
-    assert seen == [("rg", "fedora"), ("jq", "fedora")]
-    assert [o.tool_id for o in outcomes] == ["rg", "jq"]
-
-
-def test_summarize_buckets_by_status():
-    outcomes = [
-        InstallOutcome("rg", "installed"),
-        InstallOutcome("jq", "already-installed"),
-        InstallOutcome("fd", "failed"),
-        InstallOutcome("bat", "no-method"),
-        InstallOutcome("uv", "installed"),
-    ]
-    assert summarize(outcomes) == Summary(
-        installed=("rg", "uv"),
-        already=("jq",),
-        failed=("fd",),
-        no_method=("bat",),
-    )
-
-
-def test_summarize_empty_is_all_empty():
-    assert summarize([]) == Summary(installed=(), already=(), failed=(), no_method=())
-
-
-def test_summarize_buckets_manual_required() -> None:
-    outcomes = [
-        InstallOutcome(
-            "pi",
-            "manual-required",
-            method_kind="host_setup",
-            handoff=("run these commands",),
-        ),
-        InstallOutcome("rg", "installed"),
-    ]
-    summary = summarize(outcomes)
-    assert summary.manual_required == ("pi",)
-    assert summary.installed == ("rg",)
-
-
-def _mismatch_then_install() -> tuple[list[tuple[str, str]], Install]:
-    """An Install fake that mismatches on the first call per tool, then installs."""
-    seen: list[tuple[str, str]] = []
-
-    def install(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-    ) -> InstallOutcome:
-        seen.append((tool.id, checksum_policy))
-        if len([s for s in seen if s[0] == tool.id]) == 1 and checksum_policy == "fail":
-            return InstallOutcome(tool.id, "checksum-mismatch", method_kind="github_release")
-        return InstallOutcome(tool.id, "installed", method_kind="github_release")
-
-    return seen, install
-
-
-def test_on_mismatch_retry_reinstalls_with_default_policy() -> None:
-    seen, install = _mismatch_then_install()
-
-    def on_mismatch(tool_id: str) -> MismatchChoice:
-        return "retry"
-
-    outcomes = run_installs(
-        [_tool("rg")], _platform(), lambda cmd: None, lambda repo: "1.0.0", install, on_mismatch
-    )
-    assert seen == [("rg", "fail"), ("rg", "fail")]
-    assert outcomes[0].status == "installed"
-
-
-def test_on_mismatch_fallback_reinstalls_with_continue_policy() -> None:
-    seen, install = _mismatch_then_install()
-
-    def on_mismatch(tool_id: str) -> MismatchChoice:
-        return "fallback"
-
-    outcomes = run_installs(
-        [_tool("rg")], _platform(), lambda cmd: None, lambda repo: "1.0.0", install, on_mismatch
-    )
-    assert seen == [("rg", "fail"), ("rg", "continue")]
-    assert outcomes[0].status == "installed"
-
-
-def test_on_mismatch_skip_keeps_the_mismatch_outcome() -> None:
-    seen, install = _mismatch_then_install()
-
-    def on_mismatch(tool_id: str) -> MismatchChoice:
-        return "skip"
-
-    outcomes = run_installs(
-        [_tool("rg")], _platform(), lambda cmd: None, lambda repo: "1.0.0", install, on_mismatch
-    )
-    assert seen == [("rg", "fail")]
-    assert outcomes[0].status == "checksum-mismatch"
-
-
-def test_without_on_mismatch_the_outcome_stands() -> None:
-    seen, install = _mismatch_then_install()
-    outcomes = run_installs(
-        [_tool("rg")], _platform(), lambda cmd: None, lambda repo: "1.0.0", install
-    )
-    assert seen == [("rg", "fail")]
-    assert outcomes[0].status == "checksum-mismatch"
-
-
-def test_on_mismatch_is_not_consulted_for_clean_installs() -> None:
-    asked: list[str] = []
-
-    def install(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-    ) -> InstallOutcome:
-        return InstallOutcome(tool.id, "installed", method_kind="brew")
-
-    def on_mismatch(tool_id: str) -> MismatchChoice:
-        asked.append(tool_id)
-        return "skip"
-
-    run_installs(
-        [_tool("rg")], _platform(), lambda cmd: None, lambda repo: "1.0.0", install, on_mismatch
-    )
-    assert asked == []
-
-
-def test_summarize_buckets_checksum_mismatch() -> None:
-    outcomes = [
-        InstallOutcome("rg", "installed"),
-        InstallOutcome("fd", "checksum-mismatch"),
-    ]
-    summary = summarize(outcomes)
-    assert summary.installed == ("rg",)
-    assert summary.mismatched == ("fd",)
-
-
-def test_dependent_is_skipped_when_its_dependency_failed() -> None:
-    called: list[str] = []
-
-    def fake_install(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-    ) -> InstallOutcome:
-        called.append(tool.id)
-        return InstallOutcome(tool.id, "failed")
-
-    outcomes = run_installs(
-        [_tool("sdkman"), _tool("java", requires=("sdkman",))],
-        _platform(),
-        lambda cmd: None,
-        lambda repo: "1.0.0",
-        fake_install,
-    )
-    assert [(o.tool_id, str(o.status)) for o in outcomes] == [
-        ("sdkman", "failed"),
-        ("java", "dependency-failed"),
-    ]
-    assert outcomes[1].blocked_by == ("sdkman",)
-    assert called == ["sdkman"]
-
-
-def test_summarize_buckets_dependency_failed() -> None:
-    outcomes = [
-        InstallOutcome("sdkman", "failed"),
-        InstallOutcome("java", "dependency-failed", blocked_by=("sdkman",)),
-    ]
-    summary = summarize(outcomes)
-    assert summary.failed == ("sdkman",)
-    assert summary.dependency_failed == ("java",)
-
-
-def _failing_install(*failed_ids: str, status: str = "failed") -> tuple[list[str], Install]:
-    calls: list[str] = []
-
-    def install(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-    ) -> InstallOutcome:
-        calls.append(tool.id)
-        if tool.id in failed_ids:
-            return InstallOutcome(tool.id, status)
-        return InstallOutcome(tool.id, "installed", method_kind="brew")
-
-    return calls, install
-
-
-def test_dependency_failure_propagates_down_a_chain() -> None:
-    calls, install = _failing_install("a")
-    outcomes = run_installs(
-        [_tool("a"), _tool("b", requires=("a",)), _tool("c", requires=("b",))],
-        _platform(),
-        lambda cmd: None,
-        lambda repo: "1.0.0",
-        install,
-    )
-    assert [o.tool_id for o in outcomes] == ["a", "b", "c"]
-    assert outcomes[0].status == "failed"
-    assert outcomes[1].status == "dependency-failed"
-    assert outcomes[2].status == "dependency-failed"
-    assert outcomes[1].blocked_by == ("a",)
-    assert outcomes[2].blocked_by == ("b",)
-    assert calls == ["a"]
-
-
-@pytest.mark.parametrize("status", ["failed", "no-method", "checksum-mismatch", "manual-required"])
-def test_every_unresolved_status_blocks_a_dependent(status: str) -> None:
-    calls, install = _failing_install("dep", status=status)
-    outcomes = run_installs(
-        [_tool("dep"), _tool("user", requires=("dep",))],
-        _platform(),
-        lambda cmd: None,
-        lambda repo: "1.0.0",
-        install,
-    )
-    assert calls == ["dep"]
-    assert outcomes[1].status == "dependency-failed"
-    assert outcomes[1].blocked_by == ("dep",)
-
-
-@pytest.mark.parametrize("status", ["installed", "already-installed"])
-def test_successful_statuses_never_block_a_dependent(status: str) -> None:
-    calls: list[str] = []
-
-    def install(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-    ) -> InstallOutcome:
-        calls.append(tool.id)
-        return InstallOutcome(tool.id, status, method_kind="brew")
-
-    outcomes = run_installs(
-        [_tool("dep"), _tool("user", requires=("dep",))],
-        _platform(),
-        lambda cmd: None,
-        lambda repo: "1.0.0",
-        install,
-    )
-    assert calls == ["dep", "user"]
-    assert outcomes[0].status == status
-    assert outcomes[1].status == status
-    assert outcomes[1].blocked_by == ()
-
-
-def test_an_unrelated_tool_still_installs_after_a_failure() -> None:
-    calls, install = _failing_install("a")
-    outcomes = run_installs(
-        [_tool("a"), _tool("b", requires=("a",)), _tool("rg")],
-        _platform(),
-        lambda cmd: None,
-        lambda repo: "1.0.0",
-        install,
-    )
-    assert calls == ["a", "rg"]
-    assert outcomes[2].status == "installed"
-    assert outcomes[2].blocked_by == ()
-
-
-def test_only_the_matching_requires_ids_are_reported_as_blockers() -> None:
-    calls, install = _failing_install("a")
-    outcomes = run_installs(
-        [_tool("a"), _tool("user", requires=("a", "uv"))],
-        _platform(),
-        lambda cmd: None,
-        lambda repo: "1.0.0",
-        install,
-    )
-    assert calls == ["a"]
-    assert outcomes[1].blocked_by == ("a",)
-
-    calls_dup, install_dup = _failing_install("a")
-    outcomes_dup = run_installs(
-        [_tool("a"), _tool("user", requires=("a", "a"))],
-        _platform(),
-        lambda cmd: None,
-        lambda repo: "1.0.0",
-        install_dup,
-    )
-    assert calls_dup == ["a"]
-    assert outcomes_dup[1].blocked_by == ("a",)
-
-
-def test_a_retried_mismatch_does_not_block_its_dependents() -> None:
-    seen, install = _mismatch_then_install()
-
-    def on_mismatch(tool_id: str) -> MismatchChoice:
-        return "retry"
-
-    outcomes = run_installs(
-        [_tool("dep"), _tool("user", requires=("dep",))],
-        _platform(),
-        lambda cmd: None,
-        lambda repo: "1.0.0",
-        install,
-        on_mismatch,
-    )
-    assert [entry[0] for entry in seen] == ["dep", "dep", "user", "user"]
-    assert outcomes[0].status == "installed"
-    assert outcomes[1].status == "installed"
-    assert outcomes[1].blocked_by == ()
-
-
-def test_a_dependent_listed_before_its_dependency_is_still_attempted() -> None:
-    calls, install = _failing_install("a")
-    outcomes = run_installs(
-        [_tool("b", requires=("a",)), _tool("a")],
-        _platform(),
-        lambda cmd: None,
-        lambda repo: "1.0.0",
-        install,
-    )
-    assert calls == ["b", "a"]
-    assert outcomes[0].status == "installed"
-    assert outcomes[1].status == "failed"
-    assert outcomes[0].blocked_by == ()
-
-
-def test_run_installs_threads_catalog_into_every_install_call() -> None:
-    """catalog reaches install(...)'s `tools` keyword at all three call sites:
-    the initial attempt, the mismatch-retry, and the mismatch-fallback."""
-    seen: list[Mapping[str, Tool] | None] = []
-    call_counts: dict[str, int] = {}
-
-    def install(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-    ) -> InstallOutcome:
-        seen.append(tools)
-        call_counts[tool.id] = call_counts.get(tool.id, 0) + 1
-        if call_counts[tool.id] == 1:
-            return InstallOutcome(tool.id, "checksum-mismatch", method_kind="github_release")
-        return InstallOutcome(tool.id, "installed", method_kind="github_release")
-
-    catalog = {"rg": _tool("rg")}
-    choices: list[MismatchChoice] = ["retry", "fallback"]
-
-    def on_mismatch(tool_id: str) -> MismatchChoice:
-        return choices.pop(0)
-
-    outcomes = run_installs(
-        [_tool("retry-me"), _tool("fallback-me")],
-        _platform(),
-        lambda cmd: None,
-        lambda repo: "1.0.0",
-        install,
-        on_mismatch,
-        catalog=catalog,
-    )
-    assert all(mapping is catalog for mapping in seen)
-    assert len(seen) == 4  # initial + retry for retry-me, initial + fallback for fallback-me
-    assert outcomes[0].status == "installed"
-    assert outcomes[1].status == "installed"
-
-
-def test_run_installs_catalog_defaults_to_none_for_untouched_callers() -> None:
-    seen: list[Mapping[str, Tool] | None] = []
-
-    def install(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-    ) -> InstallOutcome:
-        seen.append(tools)
-        return InstallOutcome(tool.id, "installed", method_kind="brew")
-
-    run_installs([_tool("rg")], _platform(), lambda cmd: None, lambda repo: "1.0.0", install)
-    assert seen == [None]
-
-
-def test_run_installs_preexisting_parameters_stay_positional() -> None:
-    params = inspect.signature(run_installs).parameters
-    positional = [
-        name
-        for name, value in params.items()
-        if value.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-    ]
-    assert positional == [
-        "tools",
-        "platform",
-        "runner",
-        "resolve_tag",
-        "install",
-        "on_mismatch",
-        "catalog",
-    ]
-    assert params["should_continue"].kind is inspect.Parameter.KEYWORD_ONLY
-
-
-def test_run_installs_should_continue_stops_between_tools() -> None:
-    called: list[str] = []
-
-    def fake_install(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-    ) -> InstallOutcome:
-        called.append(tool.id)
-        return InstallOutcome(tool.id, "installed", method_kind="brew")
-
-    remaining = [True, True, False]
-
-    def should_continue() -> bool:
-        return remaining.pop(0)
-
-    tools = [_tool("rg"), _tool("jq"), _tool("fd")]
-    outcomes = run_installs(
-        tools,
-        _platform(),
-        lambda cmd: None,
-        lambda repo: "1.0.0",
-        fake_install,
-        should_continue=should_continue,
-    )
-    assert [o.tool_id for o in outcomes] == ["rg", "jq"]
-    assert called == ["rg", "jq"]
-    not_attempted = [tool.id for tool in tools if tool.id not in {o.tool_id for o in outcomes}]
-    assert not_attempted == ["fd"]
-
-
-def test_run_installs_should_continue_is_checked_before_dependency_blocked() -> None:
-    called: list[str] = []
-
-    def fake_install(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-    ) -> InstallOutcome:
-        called.append(tool.id)
-        return InstallOutcome(tool.id, "failed")
-
-    remaining = [True, False]
-
-    def should_continue() -> bool:
-        return remaining.pop(0)
-
-    outcomes = run_installs(
-        [_tool("sdkman"), _tool("java", requires=("sdkman",))],
-        _platform(),
-        lambda cmd: None,
-        lambda repo: "1.0.0",
-        fake_install,
-        should_continue=should_continue,
-    )
-    assert [o.tool_id for o in outcomes] == ["sdkman"]
-    assert outcomes[0].status == "failed"
-    assert called == ["sdkman"]
-    assert all(o.status != "dependency-failed" for o in outcomes)
-
-
-def test_summarize_over_truncated_outcomes_still_buckets() -> None:
-    summary = summarize(
-        [
-            InstallOutcome("rg", "installed"),
-            InstallOutcome("jq", "failed"),
-        ]
-    )
-    assert summary.installed == ("rg",)
-    assert summary.failed == ("jq",)
-    assert summary.already == ()
-    assert summary.no_method == ()
-    assert summary.mismatched == ()
-    assert summary.dependency_failed == ()
-    assert summary.manual_required == ()
 
 
 def _login_shell_tool() -> Tool:
@@ -1217,12 +828,22 @@ def test_with_sensitive_confirm_reaches_post_install_gate(
     monkeypatch.setattr(engine, "is_installed", fake_not_installed)
     tool = _login_shell_tool()
     platform = _mutable_platform()
-    yes = with_sensitive_confirm(lambda _id, _action: True)
-    no = with_sensitive_confirm(lambda _id, _action: False)
-    yes_outcomes = run_installs([tool], platform, lambda cmd: None, lambda repo: "1.0.0", yes)
-    no_outcomes = run_installs([tool], platform, lambda cmd: None, lambda repo: "1.0.0", no)
-    assert yes_outcomes[0].post_install_handoff
-    assert no_outcomes[0].post_install_handoff == ()
+
+    def run(confirm: ConfirmSensitiveAction) -> InstallOutcome | None:
+        context = RunContext(
+            catalog={tool.id: tool},
+            platform=platform,
+            runner=lambda _cmd: None,
+            resolve_tag=lambda _repo: "1.0.0",
+            install=engine.install_tool,
+            confirm_sensitive=confirm,
+        )
+        return execute_plan([PlanRow(tool.id, Disposition.INSTALL, "")], context)[0].install
+
+    yes_outcome = run(lambda _id, _action: True)
+    no_outcome = run(lambda _id, _action: False)
+    assert yes_outcome is not None and yes_outcome.post_install_handoff
+    assert no_outcome is not None and no_outcome.post_install_handoff == ()
 
 
 def test_with_sensitive_confirm_forwards_bound_confirmation_and_unchanged_kwargs() -> None:
@@ -1245,15 +866,15 @@ def test_with_sensitive_confirm_forwards_bound_confirmation_and_unchanged_kwargs
         return True
 
     catalog = {"rg": _tool("rg")}
-    bound = with_sensitive_confirm(confirm, recording_install)
-    run_installs(
-        [_tool("rg")],
-        _platform(),
-        lambda cmd: None,
-        lambda repo: "1.0.0",
-        bound,
+    context = RunContext(
         catalog=catalog,
+        platform=_platform(),
+        runner=lambda _cmd: None,
+        resolve_tag=lambda _repo: "1.0.0",
+        install=recording_install,
+        confirm_sensitive=confirm,
     )
+    execute_plan([PlanRow("rg", Disposition.INSTALL, "")], context)
     assert seen == [("fail", catalog, confirm)]
 
 
@@ -1273,15 +894,16 @@ def test_with_sensitive_confirm_none_is_callable_and_produces_no_instructions(
         return False
 
     monkeypatch.setattr(engine, "is_installed", fake_not_installed)
-    bound = with_sensitive_confirm(None)
-    outcomes = run_installs(
-        [_login_shell_tool()],
-        _mutable_platform(),
-        lambda cmd: None,
-        lambda repo: "1.0.0",
-        bound,
+    tool = _login_shell_tool()
+    context = RunContext(
+        catalog={tool.id: tool},
+        platform=_mutable_platform(),
+        runner=lambda _cmd: None,
+        resolve_tag=lambda _repo: "1.0.0",
+        install=engine.install_tool,
     )
-    assert outcomes[0].post_install_handoff == ()
+    outcome = execute_plan([PlanRow(tool.id, Disposition.INSTALL, "")], context)[0].install
+    assert outcome is not None and outcome.post_install_handoff == ()
 
 
 def test_install_protocol_parameters_are_unchanged() -> None:
@@ -1295,61 +917,6 @@ def test_install_protocol_parameters_are_unchanged() -> None:
         "checksum_policy",
         "tools",
     ]
-
-
-@pytest.mark.parametrize(
-    ("kwargs", "expected"),
-    [
-        ({"failed": ("rg",)}, True),
-        ({"mismatched": ("rg",)}, True),
-        ({"dependency_failed": ("rg",)}, True),
-        ({"not_attempted": ("rg",)}, True),
-        ({"update_failed": ("rg",)}, True),
-        ({"crash_error": "boom"}, True),
-        ({"no_method": ("rg",)}, False),
-        ({"manual_required": ("rg",)}, False),
-        ({}, False),
-    ],
-)
-def test_summary_has_failure(kwargs: dict[str, object], expected: bool) -> None:
-    summary = replace(Summary(installed=(), already=(), failed=(), no_method=()), **kwargs)  # pyright: ignore[reportArgumentType]
-    assert summary.has_failure is expected
-
-
-def test_fold_run_records_not_attempted_update_failures_and_crash() -> None:
-
-    summary = Summary(installed=("a",), already=(), failed=(), no_method=())
-    folded = fold_run(
-        summary,
-        not_attempted=["b"],
-        update_outcomes=[
-            UpdateOutcome("u1", "failed", "brew"),
-            UpdateOutcome("u2", "updated", "brew"),
-            UpdateOutcome("u3", "unknown-owner", "unknown"),
-        ],
-        update_errors=[("u4", "boom")],
-        error="crash",
-    )
-    assert folded.not_attempted == ("b",)
-    assert folded.update_failed == ("u1", "u4")
-    assert folded.crash_error == "crash"
-    assert folded.installed == ("a",)
-    assert folded.failed == ()
-    assert folded.has_failure is True
-
-
-def test_fold_run_drops_duplicate_update_failure_ids() -> None:
-
-    summary = Summary(installed=(), already=(), failed=(), no_method=())
-    folded = fold_run(
-        summary,
-        not_attempted=[],
-        update_outcomes=[UpdateOutcome("u1", "failed", "brew")],
-        update_errors=[("u1", "boom")],
-        error=None,
-    )
-    assert folded.update_failed == ("u1",)
-    assert folded.has_failure is True
 
 
 # ---------------------------------------------------------------------------
