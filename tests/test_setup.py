@@ -1542,7 +1542,7 @@ def test_headless_main_skips_path_wiring_and_sync_when_nothing_ran(
     assert side_effects == ["configure", "verify", "sync"]
 
 
-def test_headless_main_prints_aborted_when_the_run_is_declined(
+def test_a_declined_headless_run_prints_one_line(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     buffer = io.StringIO()
