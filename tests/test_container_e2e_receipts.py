@@ -144,6 +144,7 @@ def _summary_harness(*names: str) -> str:
         "ACC_RUNS=0; ACC_SUMMARIES=0; ACC_NOT_ATTEMPTED=0; ACC_CRASHED=0\n"
         "ACC_INSTALLED=0; ACC_UPDATED=0; ACC_SKIPPED=0; ACC_FAILED=0\n"
         "ACC_DEP_FAILED=0; ACC_MISMATCHED=0; ACC_BLOCKED=0; ACC_MANUAL=0\n"
+        "ACC_POST_RUN_ERRORS=0\n"
     )
     return "\n".join(parts)
 
@@ -256,6 +257,27 @@ def test_accumulate_counts_not_attempted_and_crashed(tmp_path: Path) -> None:
             "✖ mmdc  dependency failed — pi",
             "○ pi  manual — see the setup steps in the log",
             0,
+        ),
+        (
+            "Summary — 5 installed, 1 manual, 1 dependency failed",
+            1,
+            "✖ mmdc  dependency failed — pi",
+            (
+                "○ pi  manual — see the setup steps in the log\n"
+                "PATH wiring could not be completed: [Errno 30] Read-only file system: "
+                "'/home/tester/.bashrc'"
+            ),
+            1,
+        ),
+        (
+            "Summary — 5 installed, 1 manual, 1 dependency failed",
+            1,
+            "✖ mmdc  dependency failed — pi",
+            (
+                "○ pi  manual — see the setup steps in the log\n"
+                "PATH audit could not be completed: audit failed"
+            ),
+            1,
         ),
         (
             "Summary — 5 installed, 1 manual, 1 dependency failed",
@@ -378,6 +400,17 @@ def test_a_two_space_report_line_is_not_joined_to_a_row(tmp_path: Path) -> None:
         "accumulate_summaries $TRANSCRIPT; install_step_ok 1",
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_the_gate_reads_the_post_run_lines_setup_prints() -> None:
+    setup = (ROOT / "setup.py").read_text(encoding="utf-8")
+    accumulate = _function("accumulate_summaries")
+    for prefix in (
+        "PATH wiring could not be completed: ",
+        "PATH audit could not be completed: ",
+    ):
+        assert prefix in setup
+        assert prefix in accumulate
 
 
 def test_every_install_step_uses_the_one_gate() -> None:

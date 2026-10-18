@@ -385,6 +385,10 @@ accumulate_summaries() {
   # outcome continuations (4+ spaces) join; two-space report lines end a row.
   local line dep_row="" continuation
   while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "PATH wiring could not be completed: "* \
+      || "$line" == "PATH audit could not be completed: "* ]]; then
+      ACC_POST_RUN_ERRORS=$((ACC_POST_RUN_ERRORS + 1))
+    fi
     if [[ "$line" == *" dependency failed — "* ]]; then
       if [[ -n "$dep_row" ]]; then
         printf '%s\n' "$dep_row" >>"$ACC_DEP_LINES_FILE"
@@ -428,6 +432,7 @@ install_step_ok() {
   [[ "$ACC_RUNS" -gt 0 && "$ACC_SUMMARIES" -eq "$ACC_RUNS" ]] || return 1
   [[ "$ACC_FAILED" -eq 0 && "$ACC_MISMATCHED" -eq 0 \
     && "$ACC_NOT_ATTEMPTED" -eq 0 && "$ACC_CRASHED" -eq 0 ]] || return 1
+  [[ "$ACC_POST_RUN_ERRORS" -eq 0 ]] || return 1
   { [[ "$ACC_DEP_FAILED" -eq 0 ]] || dependency_failures_explained; } || return 1
   [[ "$setup_exit" -eq 0 ]] && return 0
   [[ "$setup_exit" -eq 1 && "$ACC_DEP_FAILED" -gt 0 ]]
@@ -460,6 +465,7 @@ cmd_pass1() {
   ACC_SUMMARIES=0
   ACC_NOT_ATTEMPTED=0
   ACC_CRASHED=0
+  ACC_POST_RUN_ERRORS=0
   local setup_status=0
 
   if [[ -n "$categories" ]]; then
@@ -499,9 +505,9 @@ cmd_pass1() {
     accumulate_summaries "$tmp"
   fi
 
-  printf 'PASS1_COUNTS installed=%s updated=%s skipped=%s failed=%s dependency_failed=%s mismatched=%s blocked=%s manual=%s not_attempted=%s crashed=%s summaries=%s runs=%s setup_exit=%s\n' \
+  printf 'PASS1_COUNTS installed=%s updated=%s skipped=%s failed=%s dependency_failed=%s mismatched=%s blocked=%s manual=%s not_attempted=%s crashed=%s post_run_errors=%s summaries=%s runs=%s setup_exit=%s\n' \
     "$ACC_INSTALLED" "$ACC_UPDATED" "$ACC_SKIPPED" "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" "$ACC_BLOCKED" "$ACC_MANUAL" \
-    "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" "$ACC_SUMMARIES" "$ACC_RUNS" "$setup_status"
+    "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" "$ACC_POST_RUN_ERRORS" "$ACC_SUMMARIES" "$ACC_RUNS" "$setup_status"
 
   if install_step_ok "$setup_status"; then
     if [[ "$ACC_DEP_FAILED" -gt 0 ]]; then
@@ -515,9 +521,9 @@ cmd_pass1() {
     assert_receipt_present "$categories" || return 1
     return 0
   fi
-  printf 'TRACER_CLEAN_INSTALL_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s not_attempted=%s crashed=%s summaries=%s runs=%s setup_exit=%s\n' \
+  printf 'TRACER_CLEAN_INSTALL_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s not_attempted=%s crashed=%s post_run_errors=%s summaries=%s runs=%s setup_exit=%s\n' \
     "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" \
-    "$ACC_SUMMARIES" "$ACC_RUNS" "$setup_status"
+    "$ACC_POST_RUN_ERRORS" "$ACC_SUMMARIES" "$ACC_RUNS" "$setup_status"
   rm -f "$tmp" "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
   return 1
 }
@@ -548,7 +554,7 @@ cmd_pass2() {
   # Step 1: rerun — a second full install over already-installed state.
   ACC_INSTALLED=0; ACC_UPDATED=0; ACC_SKIPPED=0; ACC_FAILED=0; ACC_DEP_FAILED=0
   ACC_MISMATCHED=0; ACC_BLOCKED=0; ACC_MANUAL=0
-  ACC_RUNS=0; ACC_SUMMARIES=0; ACC_NOT_ATTEMPTED=0; ACC_CRASHED=0
+  ACC_RUNS=0; ACC_SUMMARIES=0; ACC_NOT_ATTEMPTED=0; ACC_CRASHED=0; ACC_POST_RUN_ERRORS=0
   ACC_DEP_LINES_FILE="$(mktemp)"
   ACC_MANUAL_NAMES_FILE="$(mktemp)"
   run_pass2_step "--all --yes" "$log"
@@ -557,9 +563,9 @@ cmd_pass2() {
     die "pass2 step 1 (rerun) crashed: setup.py exit $PASS2_STEP_STATUS"
   fi
   if ! install_step_ok "$PASS2_STEP_STATUS"; then
-    printf 'TRACER_RERUN_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s not_attempted=%s crashed=%s summaries=%s runs=%s setup_exit=%s\n' \
+    printf 'TRACER_RERUN_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s not_attempted=%s crashed=%s post_run_errors=%s summaries=%s runs=%s setup_exit=%s\n' \
       "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" \
-      "$ACC_SUMMARIES" "$ACC_RUNS" "$PASS2_STEP_STATUS" >> "$log"
+      "$ACC_POST_RUN_ERRORS" "$ACC_SUMMARIES" "$ACC_RUNS" "$PASS2_STEP_STATUS" >> "$log"
     rm -f "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
     return 1
   fi
@@ -588,7 +594,7 @@ cmd_pass2() {
   # Step 3: reinstall — catches state the uninstall sweep left stray.
   ACC_INSTALLED=0; ACC_UPDATED=0; ACC_SKIPPED=0; ACC_FAILED=0; ACC_DEP_FAILED=0
   ACC_MISMATCHED=0; ACC_BLOCKED=0; ACC_MANUAL=0
-  ACC_RUNS=0; ACC_SUMMARIES=0; ACC_NOT_ATTEMPTED=0; ACC_CRASHED=0
+  ACC_RUNS=0; ACC_SUMMARIES=0; ACC_NOT_ATTEMPTED=0; ACC_CRASHED=0; ACC_POST_RUN_ERRORS=0
   ACC_DEP_LINES_FILE="$(mktemp)"
   ACC_MANUAL_NAMES_FILE="$(mktemp)"
   run_pass2_step "--all --yes" "$log"
@@ -597,9 +603,9 @@ cmd_pass2() {
     die "pass2 step 3 (reinstall) crashed: setup.py exit $PASS2_STEP_STATUS"
   fi
   if ! install_step_ok "$PASS2_STEP_STATUS"; then
-    printf 'TRACER_REINSTALL_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s not_attempted=%s crashed=%s summaries=%s runs=%s setup_exit=%s\n' \
+    printf 'TRACER_REINSTALL_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s not_attempted=%s crashed=%s post_run_errors=%s summaries=%s runs=%s setup_exit=%s\n' \
       "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" \
-      "$ACC_SUMMARIES" "$ACC_RUNS" "$PASS2_STEP_STATUS" >> "$log"
+      "$ACC_POST_RUN_ERRORS" "$ACC_SUMMARIES" "$ACC_RUNS" "$PASS2_STEP_STATUS" >> "$log"
     rm -f "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
     return 1
   fi
