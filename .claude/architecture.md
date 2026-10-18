@@ -1112,3 +1112,39 @@ host, claude and opencode.
 The catalog fits an 80x20 terminal. The legend and the detail bar stack
 under the table instead of painting over each other, the legend is three
 lines of at most 78 cells, and the detail is a fixed three rows.
+
+## Phase 20: one install plan, one engine, one vocabulary
+
+`build_plan` is pure: it reads published `state_of` values and never probes
+or fetches. Its order comes from `Resolution.closure`, which retains the
+resolver's deps-first order including present tools; every reached id gets a
+`PlanRow` with one disposition and reason. The plan records the first
+requester of a dragged dependency, while `render_plan` groups that row under
+its requester without changing execution order.
+
+`execute_plan` is the one engine for the TUI and headless paths. It returns
+one `RowOutcome` per row, including skipped and blocked rows. `exit_code`,
+`retained` and `ran_anything` are pure views of those outcomes, so reporting,
+selection retention and post-run effects cannot invent separate result rules.
+
+`WORDS` and `RESULT_WORDS` are the shared vocabulary for review, finished
+rows, summaries and headless output; `render.py` owns no competing words.
+The finished report starts with `Summary — `, the stable line the container
+e2e parser reads. Current installer-owned rows are skipped with the
+`(r: reinstall)` hint; only the review's `r` key opts into reinstall.
+
+Zero sudo is structural for repair and update: a native or OS-package owner
+that would require elevation is BLOCKED and never escalated. The shared
+`update_refusal` predicate informs both the plan and the update engine, so
+the review cannot promise an update that the engine refuses.
+
+When state is pending, `_await_state` joins the service's single flight with
+the whole catalog; it never starts a parallel refresh or times out. A wait
+token fails closed after cancellation. Phase 21's refresh owner replaces
+this helper's body, not the review or execution contract.
+
+Phase 20 deleted the obsolete `Summary`/`summarize`, `run_installs`,
+`audit.py`, `reapply_post_install`, and the screen's classification and
+progress lists. Each duplicated decision path had no remaining production
+caller; deleting it follows rule 5 rather than preserving an orphan beside
+the plan and engine that replaced it.

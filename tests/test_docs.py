@@ -185,6 +185,32 @@ _PHASE_18_AUTHORING = (
 )
 
 
+_PHASE_20_REQUIRED = (
+    "build_plan",
+    "PlanRow",
+    "execute_plan",
+    "RowOutcome",
+    "WORDS",
+    "exit_code",
+    "retained",
+    "ran_anything",
+    "Resolution.closure",
+    "_await_state",
+    "single flight",
+    "Summary — ",
+    "never escalated",
+    "update_refusal",
+    "(r: reinstall)",
+)
+
+
+def test_architecture_records_phase_20_mechanisms() -> None:
+    """Keep the Phase 20 plan, engine and vocabulary doctrine load-bearing."""
+    text = ARCHITECTURE.read_text(encoding="utf-8")
+    for phrase in _PHASE_20_REQUIRED:
+        assert phrase in text, f"missing load-bearing phrase: {phrase}"
+
+
 _PHASE_19_REQUIRED = (
     "ToolState",
     "state_of",
