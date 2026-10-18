@@ -16,6 +16,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
+from rich.cells import cell_len
 from rich.console import Console
 from rich.text import Text
 from textual import work
@@ -88,6 +89,9 @@ _KEYS_FINISHED = "enter / esc return to catalog"
 _KEYS_WAITING = "waiting for the state check · esc cancels the wait"
 _KEYS_RETRY = "enter retries · esc closes"
 _STATUS_WAITING = "Waiting for the state check; nothing starts until it finishes. esc cancels."
+_WAIT_CANCELLED = "Wait cancelled; nothing started. enter waits again · esc closes."
+_STATE_CHECK_FAILED = "State check failed: {error}. enter retries · esc closes."
+_STATE_CHECK_ERROR_BUDGET = 78 - cell_len(_STATE_CHECK_FAILED.format(error=""))
 _CANCEL_AVAILABLE = "Press c to stop after the current tool; nothing further will start."
 _CANCEL_ARMED = "The current tool will finish and nothing further will start."
 _CANCEL_IDLE = "No install is running."
@@ -383,6 +387,7 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self._rows: list[PlanRow] = []
         self._reinstall: set[str] = set()
         self._start_requested = False
+        self._cancelled_wait = False
         self._wait_token = 0
         self._waiting = False
         self._waiting_prompt: str | None = None
@@ -472,7 +477,12 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
             return
         # D-14 "after Enter": a tool published since mount is read now, so
         # a row that went stale while the review was open is rebuilt first.
-        self._replan()
+        # A refresh cancelled with esc may still publish to the service; don't
+        # consume that publication on the next Enter before its new token settles.
+        if self._cancelled_wait:
+            self._cancelled_wait = False
+        else:
+            self._replan()
         if not self._rows:
             return
         if any(row.disposition is Disposition.WAIT for row in self._rows):
@@ -505,9 +515,9 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self._waiting = False
         if message.error is not None:
             self._start_requested = False
-            self.status.set(
-                f"State check failed: {message.error}. enter retries · esc closes.", "error"
-            )
+            detail = Text(message.error)
+            detail.truncate(_STATE_CHECK_ERROR_BUDGET, overflow="ellipsis")
+            self.status.set(_STATE_CHECK_FAILED.format(error=detail.plain), "error")
             self.query_one("#execute-keys", Static).update(_KEYS_RETRY)
             return
         self._replan()
@@ -519,9 +529,9 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
             return
         ids = ", ".join(row.tool_id for row in self._rows if row.disposition is Disposition.WAIT)
         self._start_requested = False
-        self.status.set(
-            f"State check failed: no state for {ids}. enter retries · esc closes.", "error"
-        )
+        detail = Text(f"no state for {ids}")
+        detail.truncate(_STATE_CHECK_ERROR_BUDGET, overflow="ellipsis")
+        self.status.set(_STATE_CHECK_FAILED.format(error=detail.plain), "error")
         self.query_one("#execute-keys", Static).update(_KEYS_RETRY)
 
     def _begin_run(self) -> None:
@@ -855,6 +865,14 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
     def action_close(self) -> None:
         if self.finished:
             self.dismiss(self.outcomes)
+            return
+        if self._start_requested:
+            self._wait_token += 1
+            self._waiting = False
+            self._start_requested = False
+            self._cancelled_wait = True
+            self.status.set(_WAIT_CANCELLED, "warn")
+            self.query_one("#execute-keys", Static).update(self._idle_keys())
             return
         if not self.started:
             self.dismiss(None)
