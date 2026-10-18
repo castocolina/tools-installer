@@ -1,0 +1,22 @@
+# Phase 20 — consolidated review findings (round 1)
+
+Sources: `20-REVIEW.md` (gsd-code-reviewer deep: CR/WR/IN), `20-REVIEW-opencode-plan-review.md`
+(opencode router-env/my-plan-review: OC), `20-REVIEW-ponytail.md` (ponytail-review: P), and the
+orchestrator's `make e2e` run and tmux TUI check (E2E, TUI). Base..head: `9e35fb9..f9d98fe`.
+
+| Id | Severity | Finding | Raised by |
+|----|----------|---------|-----------|
+| J1 | Critical | Skill packs never settle: headless `run_wizard` calls `refresh()` but not `refresh_skills()`, so `--all --yes` refuses the whole run ("State check failed: no state for ponytail, …", `Summary — 89 not attempted`, exit 1); the TUI review wait has the same gap for a pack selected before its host check finishes | E2E-01, CR-01, P-01, OC-02 |
+| J2 | Critical | The e2e gate passes runs that did nothing: `not attempted` / `crashed` counts and the setup exit code are not gated (pass 1 and pass 2); the parser needs GNU sed (`\b`, `t;`); long dependency-failed rows fold at 100 cells, which the grep cannot read | CR-02, OC-05, WR-07, IN-07 |
+| J3 | Critical | Successful-update extras dropped in the 20-10 rewrite: failed pnpm-globals replay, cleanup warnings, postinstall warnings and the update detail never reach the user; the pinning test was deleted and not ported | CR-03 |
+| J4 | Critical | Dependency blocking is wrong: a present dependency BLOCKED for its own reasons blocks every selected dependent ("needs X" though X is installed); a dragged dependency of a blocked requester is still planned and installed; a still-checking dependency with no install method makes its dependent BLOCKED instead of WAIT, so enter runs at once on stale state (R7) | CR-04, WR-04, P-02 |
+| J5 | Critical | The state wait: a non-OSError refresh failure never posts a settle message (screen waits forever, enter inert); a late `StateSettled` repaints the review over a running or finished run; the state-check error text can span several lines | CR-05, WR-01, IN-05 |
+| J6 | Warning | Failure reasons lost: failed reconfigure / refused update rows read `failed — no method succeeded`; `RowOutcome.detail` is ignored by `outcome_detail_text` | WR-02, P-03, OC-08 |
+| J7 | Warning | Headless uses a second presence predicate for the engine's already-installed check (plain PATH vs the refresh service's state): a pnpm shim on PATH with `~/.local/share/pnpm` gone is "skipped — became present before it ran" headless but reinstalled in the TUI | WR-05, P-04 |
+| J8 | Warning | Declining `Run this plan?` prints `Cancelled; nothing was changed.` after the pre-confirmation refresh already adopted/retired receipts and saved the version cache. Decision L-20-10: defer the writes behind consent (TypeSafe defer_writes p=0.97) | WR-06, OC-03 |
+| J9 | Warning | Run-level errors: headless PATH wiring / verification failures bypass the outcome exit rule; a successful retry keeps an earlier run error (session still exits 1); a raising `terminal_sync` reconfigure step becomes `crashed` and halts the batch; a handoff-only `manual` row counts as `ran_anything` and triggers PATH wiring, verification and terminal sync; the app invalidates the epoch after a run where nothing ran | OC-04, OC-07, P-05, WR-03, OC-06, IN-04 |
+| J10 | Warning | Marks and words: a skipped OK row shows the same green `✓` as a done row; competing outcome words outside `WORDS`/`RESULT_WORDS`; the running keys line is unpinned; decline wording and drift-note promises; the review opens with no highlighted row, so `r` is a silent no-op until up/down | WR-08, IN-02, IN-01, IN-08, TUI-01 |
+| J11 | Warning | Behaviour lost with `reapply_post_install`: an installed oh-my-zsh can no longer show the reviewed `chsh` handoff | WR-09 |
+| J12 | Info | Dead code from the deleted flow: `Install` / `with_sensitive_confirm` wrappers, `selection.Choice` / `categories` / `tools_in`, questionary `tag-*` styles, `run_wizard(platform=…)`, `Resolution.order` / `dragged_in` / `warnings` and the second topological sort, the runnable-disposition set copied three times and the post-run renderers twice, `_row` duplication and an unreachable branch, `fold_reason` on narrow widths | P-06..P-10, IN-03, IN-06 |
+
+Deferred, not a Phase 20 gap: OC-01 (native dnf/apt/pacman executors run `sudo`, present since June 2026) is LIFE-02 in the update/removal phase. IN-09 confirms the three plan-gate miscalibrations recorded in RUN-LEDGER.
