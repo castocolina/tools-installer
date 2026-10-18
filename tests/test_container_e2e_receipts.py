@@ -1,8 +1,8 @@
-"""Host-side proof of the container e2e's receipt checks (plan 19-19, STATE-03).
+"""The container e2e's host-side checks for receipts and summary behavior.
 
 The script sources the container detector at load time, so these tests never
 source it and never start a container. They read the committed text and run
-the extracted functions in bash with `exec_tester` pinned to a scratch HOME.
+the extracted functions in bash with fixture transcripts and a scratch HOME.
 """
 
 import re
@@ -127,6 +127,45 @@ def _harness(*names: str) -> str:
     return "\n".join(parts)
 
 
+def _summary_harness(*names: str) -> str:
+    """Extract summary helpers and initialize isolated accumulator state."""
+    text = _script_text()
+    match = re.search(r"^SUMMARY_RE='([^']+)'$", text, re.MULTILINE)
+    assert match is not None, "SUMMARY_RE is not assigned in the script"
+    parts = [f"SUMMARY_RE={shlex.quote(match.group(1))}"]
+    wanted = list(names)
+    if "accumulate_summaries" in wanted and "parse_summary_line" not in wanted:
+        wanted.insert(0, "parse_summary_line")
+    parts.extend(_function(name, text) for name in wanted)
+    parts.append(
+        'ACC_DEP_LINES_FILE="$SCRATCH/dependency-lines"\n'
+        'ACC_MANUAL_NAMES_FILE="$SCRATCH/manual-names"\n'
+        ': > "$ACC_DEP_LINES_FILE"\n: > "$ACC_MANUAL_NAMES_FILE"\n'
+        "ACC_RUNS=0; ACC_SUMMARIES=0; ACC_NOT_ATTEMPTED=0; ACC_CRASHED=0\n"
+        "ACC_INSTALLED=0; ACC_UPDATED=0; ACC_SKIPPED=0; ACC_FAILED=0\n"
+        "ACC_DEP_FAILED=0; ACC_MISMATCHED=0; ACC_BLOCKED=0; ACC_MANUAL=0\n"
+    )
+    return "\n".join(parts)
+
+
+def _summary_run(
+    script: str, scratch: Path, transcript: str, command: str
+) -> subprocess.CompletedProcess[str]:
+    fixture = scratch / "transcript.txt"
+    fixture.parent.mkdir(parents=True, exist_ok=True)
+    fixture.write_text(transcript, encoding="utf-8")
+    state = (
+        'status=$?; printf "ACC_NOT_ATTEMPTED=%s ACC_CRASHED=%s ACC_INSTALLED=%s '
+        'ACC_RUNS=%s ACC_SUMMARIES=%s\\n" "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" '
+        '"$ACC_INSTALLED" "$ACC_RUNS" "$ACC_SUMMARIES"; exit "$status"'
+    )
+    invocation = command.replace("$TRANSCRIPT", '"$SCRATCH/transcript.txt"')
+    if invocation == "accumulate_summaries":
+        invocation += ' "$SCRATCH/transcript.txt"'
+    invocation += "; result=$?; (( result == 0 ))"
+    return _run(script + f"\n{invocation}\n{state}\n", scratch)
+
+
 def _run(script: str, scratch: Path) -> subprocess.CompletedProcess[str]:
     env = {
         "PATH": "/usr/bin:/bin",
@@ -174,6 +213,86 @@ def test_assert_receipt_functions_in_bash(tmp_path: Path) -> None:
     assert leftover.returncode != 0
     assert "TRACER_RECEIPT_REMOVAL_INCOMPLETE" in leftover.stdout
     assert f"binary=$HOME/.local/bin/{PROBE_TOOL}" in leftover.stdout
+
+
+def test_accumulate_counts_not_attempted_and_crashed(tmp_path: Path) -> None:
+    harness = _summary_harness("accumulate_summaries")
+    first = _summary_run(
+        harness,
+        tmp_path / "one",
+        "State check failed: no state for ponytail\nSummary — 89 not attempted\n",
+        "accumulate_summaries",
+    )
+    assert first.returncode == 0, first.stderr
+    assert "ACC_NOT_ATTEMPTED=89" in first.stdout
+    assert "ACC_RUNS=1" in first.stdout
+    assert "ACC_SUMMARIES=1" in first.stdout
+
+    second = _summary_run(
+        harness,
+        tmp_path / "two",
+        "Summary — 4 installed, 1 crashed, 3 not attempted\n",
+        "accumulate_summaries",
+    )
+    assert second.returncode == 0, second.stderr
+    assert "ACC_CRASHED=1" in second.stdout
+    assert "ACC_INSTALLED=4" in second.stdout
+
+
+@pytest.mark.parametrize(
+    ("transcript", "setup_exit", "dependency_row", "manual_row", "expected"),
+    [
+        ("Summary — 3 installed, 2 skipped", 0, "", "", 0),
+        ("Summary — 89 not attempted", 1, "", "", 1),
+        ("Summary — 4 installed, 1 crashed, 3 not attempted", 1, "", "", 1),
+        ("Traceback: failed", 1, "", "", 1),
+        ("Summary — 3 installed", 2, "", "", 1),
+        ("Summary — 3 installed", 1, "", "", 1),
+        (
+            "Summary — 5 installed, 1 manual, 1 dependency failed",
+            1,
+            "✖ mmdc  dependency failed — pi",
+            "○ pi  manual — see the setup steps in the log",
+            0,
+        ),
+        (
+            "Summary — 5 installed, 1 manual, 1 dependency failed",
+            1,
+            "✖ mmdc  dependency failed — pi",
+            "",
+            1,
+        ),
+    ],
+)
+def test_install_step_gate(
+    tmp_path: Path,
+    transcript: str,
+    setup_exit: int,
+    dependency_row: str,
+    manual_row: str,
+    expected: int,
+) -> None:
+    harness = _summary_harness(
+        "parse_summary_line",
+        "accumulate_summaries",
+        "dependency_failures_explained",
+        "install_step_ok",
+    )
+    content = "\n".join(line for line in (transcript, dependency_row, manual_row) if line)
+    result = _summary_run(
+        harness,
+        tmp_path,
+        content,
+        f"accumulate_summaries $TRANSCRIPT; install_step_ok {setup_exit}",
+    )
+    assert result.returncode == expected, result.stdout + result.stderr
+
+
+def test_every_install_step_uses_the_one_gate() -> None:
+    text = _script_text()
+    assert _function("install_step_ok", text)
+    assert _function("cmd_pass1", text).count("install_step_ok ") == 1
+    assert _function("cmd_pass2", text).count("install_step_ok ") == 2
 
 
 def test_receipt_checks_are_wired_into_the_passes() -> None:

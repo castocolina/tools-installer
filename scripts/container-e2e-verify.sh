@@ -365,10 +365,12 @@ install_github_token() {
 accumulate_summaries() {
   local file="$1"
   local summary_line
+  ACC_RUNS=$((ACC_RUNS + 1))
   summary_line="$(grep -m1 '^Summary — ' "$file" || true)"
   if [[ -n "$summary_line" ]] \
     && printf '%s' "$summary_line" | grep -Eq "$SUMMARY_RE" \
     && parse_summary_line "$summary_line"; then
+    ACC_SUMMARIES=$((ACC_SUMMARIES + 1))
     ACC_INSTALLED=$((ACC_INSTALLED + PARSE_INSTALLED))
     ACC_UPDATED=$((ACC_UPDATED + PARSE_UPDATED))
     ACC_SKIPPED=$((ACC_SKIPPED + PARSE_SKIPPED))
@@ -377,6 +379,8 @@ accumulate_summaries() {
     ACC_MISMATCHED=$((ACC_MISMATCHED + PARSE_MISMATCHED))
     ACC_BLOCKED=$((ACC_BLOCKED + PARSE_BLOCKED))
     ACC_MANUAL=$((ACC_MANUAL + PARSE_MANUAL))
+    ACC_NOT_ATTEMPTED=$((ACC_NOT_ATTEMPTED + PARSE_NOT_ATTEMPTED))
+    ACC_CRASHED=$((ACC_CRASHED + PARSE_CRASHED))
   fi
   # Keep dependency-failed outcome rows in ACC_DEP_LINES_FILE for the
   # explanation check, since a chunked (--categories) run overwrites $file.
@@ -405,6 +409,16 @@ dependency_failures_explained() {
   return 0
 }
 
+install_step_ok() {
+  local setup_exit="$1"
+  [[ "$ACC_RUNS" -gt 0 && "$ACC_SUMMARIES" -eq "$ACC_RUNS" ]] || return 1
+  [[ "$ACC_FAILED" -eq 0 && "$ACC_MISMATCHED" -eq 0 \
+    && "$ACC_NOT_ATTEMPTED" -eq 0 && "$ACC_CRASHED" -eq 0 ]] || return 1
+  { [[ "$ACC_DEP_FAILED" -eq 0 ]] || dependency_failures_explained; } || return 1
+  [[ "$setup_exit" -eq 0 ]] && return 0
+  [[ "$setup_exit" -eq 1 && "$ACC_DEP_FAILED" -gt 0 ]]
+}
+
 cmd_pass1() {
   container_running || die "container $CONTAINER_NAME is not running"
   local categories=""
@@ -428,6 +442,10 @@ cmd_pass1() {
   ACC_MISMATCHED=0
   ACC_BLOCKED=0
   ACC_MANUAL=0
+  ACC_RUNS=0
+  ACC_SUMMARIES=0
+  ACC_NOT_ATTEMPTED=0
+  ACC_CRASHED=0
   local setup_status=0
 
   if [[ -n "$categories" ]]; then
@@ -467,15 +485,11 @@ cmd_pass1() {
     accumulate_summaries "$tmp"
   fi
 
-  printf 'PASS1_COUNTS installed=%s updated=%s skipped=%s failed=%s dependency_failed=%s mismatched=%s blocked=%s manual=%s setup_exit=%s\n' \
-    "$ACC_INSTALLED" "$ACC_UPDATED" "$ACC_SKIPPED" "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" "$ACC_BLOCKED" "$ACC_MANUAL" "$setup_status"
+  printf 'PASS1_COUNTS installed=%s updated=%s skipped=%s failed=%s dependency_failed=%s mismatched=%s blocked=%s manual=%s not_attempted=%s crashed=%s summaries=%s runs=%s setup_exit=%s\n' \
+    "$ACC_INSTALLED" "$ACC_UPDATED" "$ACC_SKIPPED" "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" "$ACC_BLOCKED" "$ACC_MANUAL" \
+    "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" "$ACC_SUMMARIES" "$ACC_RUNS" "$setup_status"
 
-  local dep_failures_ok=0
-  if [[ "$ACC_DEP_FAILED" -eq 0 ]] || dependency_failures_explained; then
-    dep_failures_ok=1
-  fi
-
-  if [[ "$ACC_FAILED" -eq 0 && "$dep_failures_ok" -eq 1 && "$ACC_MISMATCHED" -eq 0 ]]; then
+  if install_step_ok "$setup_status"; then
     if [[ "$ACC_DEP_FAILED" -gt 0 ]]; then
       printf 'TRACER_CLEAN_INSTALL_OK (dependency_failed=%s fully explained by manual handoffs — see outcome rows above) installed=%s updated=%s skipped=%s failed=%s blocked=%s manual=%s\n' \
         "$ACC_DEP_FAILED" "$ACC_INSTALLED" "$ACC_UPDATED" "$ACC_SKIPPED" "$ACC_FAILED" "$ACC_BLOCKED" "$ACC_MANUAL"
@@ -487,8 +501,9 @@ cmd_pass1() {
     assert_receipt_present "$categories" || return 1
     return 0
   fi
-  printf 'TRACER_CLEAN_INSTALL_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s\n' \
-    "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED"
+  printf 'TRACER_CLEAN_INSTALL_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s not_attempted=%s crashed=%s summaries=%s runs=%s setup_exit=%s\n' \
+    "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" \
+    "$ACC_SUMMARIES" "$ACC_RUNS" "$setup_status"
   rm -f "$tmp" "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
   return 1
 }
@@ -519,6 +534,7 @@ cmd_pass2() {
   # Step 1: rerun — a second full install over already-installed state.
   ACC_INSTALLED=0; ACC_UPDATED=0; ACC_SKIPPED=0; ACC_FAILED=0; ACC_DEP_FAILED=0
   ACC_MISMATCHED=0; ACC_BLOCKED=0; ACC_MANUAL=0
+  ACC_RUNS=0; ACC_SUMMARIES=0; ACC_NOT_ATTEMPTED=0; ACC_CRASHED=0
   ACC_DEP_LINES_FILE="$(mktemp)"
   ACC_MANUAL_NAMES_FILE="$(mktemp)"
   run_pass2_step "--all --yes" "$log"
@@ -526,14 +542,14 @@ cmd_pass2() {
     rm -f "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
     die "pass2 step 1 (rerun) crashed: setup.py exit $PASS2_STEP_STATUS"
   fi
-  local dep_ok=0
-  { [[ "$ACC_DEP_FAILED" -eq 0 ]] || dependency_failures_explained; } && dep_ok=1
-  rm -f "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
-  if [[ "$ACC_FAILED" -ne 0 || "$dep_ok" -ne 1 || "$ACC_MISMATCHED" -ne 0 ]]; then
-    printf 'TRACER_RERUN_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s\n' \
-      "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" >> "$log"
+  if ! install_step_ok "$PASS2_STEP_STATUS"; then
+    printf 'TRACER_RERUN_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s not_attempted=%s crashed=%s summaries=%s runs=%s setup_exit=%s\n' \
+      "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" \
+      "$ACC_SUMMARIES" "$ACC_RUNS" "$PASS2_STEP_STATUS" >> "$log"
+    rm -f "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
     return 1
   fi
+  rm -f "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
   printf 'TRACER_RERUN_OK installed=%s updated=%s skipped=%s failed=%s dependency_failed=%s blocked=%s manual=%s\n' \
     "$ACC_INSTALLED" "$ACC_UPDATED" "$ACC_SKIPPED" "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_BLOCKED" "$ACC_MANUAL" >> "$log"
 
@@ -558,6 +574,7 @@ cmd_pass2() {
   # Step 3: reinstall — catches state the uninstall sweep left stray.
   ACC_INSTALLED=0; ACC_UPDATED=0; ACC_SKIPPED=0; ACC_FAILED=0; ACC_DEP_FAILED=0
   ACC_MISMATCHED=0; ACC_BLOCKED=0; ACC_MANUAL=0
+  ACC_RUNS=0; ACC_SUMMARIES=0; ACC_NOT_ATTEMPTED=0; ACC_CRASHED=0
   ACC_DEP_LINES_FILE="$(mktemp)"
   ACC_MANUAL_NAMES_FILE="$(mktemp)"
   run_pass2_step "--all --yes" "$log"
@@ -565,14 +582,14 @@ cmd_pass2() {
     rm -f "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
     die "pass2 step 3 (reinstall) crashed: setup.py exit $PASS2_STEP_STATUS"
   fi
-  dep_ok=0
-  { [[ "$ACC_DEP_FAILED" -eq 0 ]] || dependency_failures_explained; } && dep_ok=1
-  rm -f "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
-  if [[ "$ACC_FAILED" -ne 0 || "$dep_ok" -ne 1 || "$ACC_MISMATCHED" -ne 0 ]]; then
-    printf 'TRACER_REINSTALL_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s\n' \
-      "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" >> "$log"
+  if ! install_step_ok "$PASS2_STEP_STATUS"; then
+    printf 'TRACER_REINSTALL_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s not_attempted=%s crashed=%s summaries=%s runs=%s setup_exit=%s\n' \
+      "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" \
+      "$ACC_SUMMARIES" "$ACC_RUNS" "$PASS2_STEP_STATUS" >> "$log"
+    rm -f "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
     return 1
   fi
+  rm -f "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
   printf 'TRACER_REINSTALL_OK installed=%s updated=%s skipped=%s failed=%s dependency_failed=%s blocked=%s manual=%s\n' \
     "$ACC_INSTALLED" "$ACC_UPDATED" "$ACC_SKIPPED" "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_BLOCKED" "$ACC_MANUAL" >> "$log"
 
