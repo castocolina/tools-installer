@@ -9,7 +9,7 @@ from typing import Any, TypeVar, cast
 import pytest
 from textual.app import App
 from textual.pilot import Pilot
-from textual.widgets import DataTable, Label, ListItem, ListView, Static
+from textual.widgets import DataTable, Label, ListItem, ListView, OptionList, Static
 
 from installer import daemon
 from installer.app import UninstallDecision
@@ -85,6 +85,7 @@ from tests.state_doubles import (
     Presence,
     frozen_service,
     pass_state,
+    plan_state,
     presence_service,
 )
 
@@ -7352,6 +7353,94 @@ async def _settle_execute_screen(app: UnifiedApp, pilot: Pilot[list[str] | None]
             break
         await pilot.pause()
     await pilot.pause()
+
+
+async def test_a_on_an_all_current_tier_starts_nothing_and_summarizes_n_skipped() -> None:
+    tools = [_tool("rg"), _tool("fd"), _tool("bat")]
+    execute = _execute_inputs(tools, present={tool.id for tool in tools})
+    installs: list[str] = []
+    path_wires: list[str] = []
+    syncs: list[str] = []
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        **kwargs: Any,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, kwargs
+        installs.append(tool.id)
+        return InstallOutcome(tool.id, "installed")
+
+    execute = replace(execute, install=install, wire_path=lambda: path_wires.append("wire") or "")
+    app = UnifiedApp(
+        tools,
+        {"search": "find things"},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: ({}, None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=_uninstall_inputs(),
+        policies=_policy_inputs(),
+        execute=execute,
+        terminal_sync=lambda: syncs.append("sync") or None,
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("a", "enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
+        assert "Summary — 3 skipped" in str(app.screen.query_one("#execute-head", Static).render())
+        assert installs == []
+        assert path_wires == []
+        assert syncs == []
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.catalog.selected == set()
+
+
+async def test_a_and_enter_use_the_same_plan_order_as_the_headless_route() -> None:
+    from installer.render import display_order
+    from installer.session import build_plan
+    from installer.version_status import Health
+
+    tools = [_tool("rg"), _tool("fd")]
+    unavailable = replace(
+        tools[1], methods=(Method(kind="brew", params={"formula": "fd"}, os=("linux",)),)
+    )
+    tools[1] = unavailable
+    service = presence_service(
+        tools,
+        present={"rg"},
+        states=[plan_state(unavailable, health=Health.UNAVAILABLE, present=False)],
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+    )
+    execute = replace(
+        _execute_inputs(tools, present={"rg"}, version_refresh=service), platform=service.platform
+    )
+    app = UnifiedApp(
+        tools,
+        {"search": "find things"},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: ({}, None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=_uninstall_inputs(),
+        policies=_policy_inputs(),
+        execute=execute,
+        version_refresh=service,
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("a", "enter")
+        assert isinstance(app.screen, ExecuteScreen)
+        screen = app.screen
+        plan = build_plan(["rg"], tools, service.state_of, service.platform, reinstall=frozenset())
+        expected = [row.tool_id for row in display_order(plan)]
+        options = screen.query_one("#plan-rows", OptionList)
+        actual = [options.get_option_at_index(i).id for i in range(options.option_count)]
+        assert actual == expected
+        assert "fd" not in actual
 
 
 async def test_accepting_the_catalog_with_execute_pushes_the_screen_and_keeps_running() -> None:

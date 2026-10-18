@@ -26,6 +26,7 @@ from textual.timer import Timer
 from textual.widgets import Label, ListItem, ListView, OptionList, Static
 
 import installer.execute_screen
+from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus, Severity
@@ -3902,6 +3903,34 @@ async def test_a_publication_that_leaves_a_row_unsettled_does_not_start(tmp_path
             assert captured == []
         finally:
             service.release.set()
+
+
+async def test_mixed_run_keeps_only_the_failing_blocked_and_manual_rows_selected() -> None:
+    tools = [_tool(name) for name in ("done", "skipped", "failed", "blocked", "manual", "pending")]
+    inputs = _inputs(tools=tools)
+    app = _host(inputs, tools)
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.catalog.selected.update(tool.id for tool in tools)
+        app.on_catalog_screen_decided(CatalogScreen.Decided([tool.id for tool in tools]))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        outcomes = [
+            RowOutcome(PlanRow("done", Disposition.INSTALL, ""), "done"),
+            RowOutcome(PlanRow("skipped", Disposition.SKIP, "already current"), "skipped"),
+            RowOutcome(PlanRow("failed", Disposition.INSTALL, ""), "failed"),
+            RowOutcome(PlanRow("blocked", Disposition.BLOCKED, "needs dependency"), "blocked"),
+            RowOutcome(PlanRow("manual", Disposition.INSTALL, ""), "manual"),
+            RowOutcome(PlanRow("pending", Disposition.INSTALL, ""), "not_attempted"),
+        ]
+        screen.on_install_run_finished(InstallRunFinished(outcomes, None, "", ""))
+        await pilot.pause()
+        assert screen.status.text == (
+            "Failed. Still selected: 4. enter or esc returns to the catalog."
+        )
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.catalog.selected == {"failed", "blocked", "manual", "pending"}
 
 
 async def test_failed_row_is_red_still_selected_and_the_status_reads_failed() -> None:
