@@ -446,7 +446,8 @@ async def test_section_titles_do_not_inflate_the_sel_column():
     # 15.4-01/D-01: widened from 120 -- the new Owner column (_COLUMNS) takes
     # real estate from the same row, which used to leave exactly zero margin
     # for the wide description at 120 columns.
-    async with app.run_test(size=(130, 30)):
+    async with app.run_test(size=(130, 30)) as pilot:
+        await pilot.pause()  # a slow runner can export before the first table paint
         assert _WIDE_DESC in _screen_text(app)
 
 
