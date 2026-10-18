@@ -238,11 +238,11 @@ Gap closure from 20-REVIEW-CONSOLIDATED.md (GW = gap execution wave):
 - [ ] 20-22-PLAN.md — J4: dependency blocking reads the dependency's own disposition; pruned drag-ins; pending deps wait (GW1)
 - [ ] 20-23-PLAN.md — J8 / L-20-10: the pre-confirmation refresh writes nothing headless; TUI consent boundary documented; drift note (GW2)
 - [ ] 20-24-PLAN.md — J7, J9: one presence predicate and run-level errors on the outcome exit rule; handoff-only rows ran nothing (GW2)
-- [ ] 20-25-PLAN.md — J3, J6: one end-of-run report with update notes; failed rows keep their reason (GW3)
-- [ ] 20-26-PLAN.md — J11 (L-20-11): `r` on an installed oh-my-zsh shows the reviewed chsh handoff; fresh install pinned on both routes (GW2)
-- [ ] 20-27-PLAN.md — J10: dim unchanged finished marks, one statement per fact, cursor on row 1, running keys pinned (GW4)
-- [ ] 20-28-PLAN.md — J12: dead install wrapper, resolver outputs, `run_wizard(platform)`, unused styles (GW5)
-- [ ] 20-29-PLAN.md — J12: one runnable set, `_row` maker, dead selection helpers, fold-width floor (GW6)
+- [ ] 20-25-PLAN.md — J3, J6: one end-of-run report with update notes; failed rows keep their reason (GW4)
+- [ ] 20-26-PLAN.md — J11 (L-20-11): `r` on an installed oh-my-zsh shows the reviewed chsh handoff; fresh install pinned on both routes (GW3)
+- [ ] 20-27-PLAN.md — J10: dim unchanged finished marks, one statement per fact, cursor on row 1, running keys pinned (GW5)
+- [ ] 20-28-PLAN.md — J12: dead install wrapper, resolver outputs, `run_wizard(platform)`, unused styles (GW6)
+- [ ] 20-29-PLAN.md — J12: one runnable set, `_row` maker, dead selection helpers, fold-width floor (GW7)
 
 **UI hint**: yes
 
