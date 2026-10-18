@@ -21,7 +21,6 @@ from installer.policy import Policy, daemon_policy
 from installer.post_install import ConfirmSensitiveAction
 from installer.render import display_order
 from installer.run import CommandError, Runner
-from installer.selection import Choice
 from installer.session import (
     MismatchChoice,
     SensitiveInstall,
@@ -66,24 +65,14 @@ _BATCH_QUESTION = "Run this plan?"
 class FakePrompter:
     def __init__(
         self,
-        categories: list[str],
-        tools: list[str],
         confirm: bool,
         *,
         sensitive_confirm: bool | None = None,
     ) -> None:
-        self._categories = categories
-        self._tools = tools
         self._confirm = confirm
         self._sensitive_confirm = confirm if sensitive_confirm is None else sensitive_confirm
         self.confirmed = 0
         self.questions: list[str] = []
-
-    def select_categories(self, choices: list[Choice]) -> list[str]:
-        return self._categories
-
-    def select_tools(self, choices: list[Choice]) -> list[str]:
-        return self._tools
 
     def confirm(self, message: str) -> bool:
         self.confirmed += 1
@@ -124,7 +113,7 @@ def test_all_yes_prints_the_plan_installs_the_missing_tool_and_returns_outcomes(
     tools = [_tool("rg", "search"), _tool("fd", "search")]
     refresh = presence_service(tools, present={"fd"})
     installed, install = _recording_install()
-    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    prompter = FakePrompter(confirm=True)
     console, buf = _console()
 
     outcomes = run_wizard(
@@ -155,7 +144,7 @@ def test_without_yes_the_plan_is_printed_then_confirmed():
     tools = [_tool("rg", "search")]
     refresh = presence_service(tools)
     installed, install = _recording_install()
-    declined = FakePrompter(categories=[], tools=[], confirm=False)
+    declined = FakePrompter(confirm=False)
     console, buf = _console()
 
     outcomes = run_wizard(
@@ -177,7 +166,7 @@ def test_without_yes_the_plan_is_printed_then_confirmed():
     assert outcomes is None
     assert installed == []
 
-    accepted = FakePrompter(categories=[], tools=[], confirm=True)
+    accepted = FakePrompter(confirm=True)
     accepted_outcomes = run_wizard(
         tools,
         _platform(),
@@ -198,7 +187,7 @@ def test_without_yes_the_plan_is_printed_then_confirmed():
 def test_all_yes_on_an_all_current_host_runs_nothing_and_exits_zero_shaped():
     tools = [_tool("rg", "search"), _tool("fd", "search")]
     installed, install = _recording_install()
-    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    prompter = FakePrompter(confirm=True)
     console, buf = _console()
 
     outcomes = run_wizard(
@@ -229,7 +218,7 @@ def test_all_current_without_yes_prints_the_plan_and_summary_without_asking():
 
     tools = [_tool("rg", "search"), _tool("fd", "search")]
     installed, install = _recording_install()
-    prompter = MustNotConfirm(categories=[], tools=[], confirm=True)
+    prompter = MustNotConfirm(confirm=True)
     console, buf = _console()
 
     outcomes = run_wizard(
@@ -275,7 +264,7 @@ def test_headless_uses_the_same_plan_order_as_the_tui():
     run_wizard(
         tools,
         _platform(),
-        FakePrompter(categories=[], tools=[], confirm=True),
+        FakePrompter(confirm=True),
         console,
         Options(all=False, categories=("user",), yes=True),
         runner=_runner,
@@ -309,7 +298,7 @@ def test_headless_reports_a_state_check_failure_and_runs_nothing(
     failed = run_wizard(
         tools,
         _platform(),
-        FakePrompter(categories=[], tools=[], confirm=True),
+        FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
         runner=_runner,
@@ -332,7 +321,7 @@ def test_headless_reports_a_state_check_failure_and_runs_nothing(
     unsettled = run_wizard(
         tools,
         _platform(),
-        FakePrompter(categories=[], tools=[], confirm=True),
+        FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
         runner=_runner,
@@ -366,7 +355,7 @@ def test_headless_reports_refresh_errors_without_messages(
         outcomes = run_wizard(
             tools,
             _platform(),
-            FakePrompter(categories=[], tools=[], confirm=True),
+            FakePrompter(confirm=True),
             console,
             Options(all=True, categories=(), yes=True),
             runner=_runner,
@@ -400,7 +389,7 @@ def test_all_yes_updates_an_outdated_brew_tool_and_exits_zero() -> None:
     outcomes = run_wizard(
         tools,
         _platform(),
-        FakePrompter(categories=[], tools=[], confirm=True),
+        FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
         runner=_runner,
@@ -436,7 +425,7 @@ def test_an_injected_failing_row_exits_one() -> None:
     outcomes = run_wizard(
         tools,
         _platform(),
-        FakePrompter(categories=[], tools=[], confirm=True),
+        FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
         runner=_runner,
@@ -467,7 +456,7 @@ def test_a_blocked_row_plus_a_done_row_exits_zero() -> None:
     outcomes = run_wizard(
         tools,
         _platform(),
-        FakePrompter(categories=[], tools=[], confirm=True),
+        FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
         runner=_runner,
@@ -490,7 +479,7 @@ def test_a_blocked_row_plus_a_done_row_exits_zero() -> None:
 def test_all_flag_installs_every_tool_without_prompting():
     tools = _catalog()
     installed, install = _recording_install()
-    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    prompter = FakePrompter(confirm=True)
     console, _buf = _console()
     outcomes = run_wizard(
         tools,
@@ -524,7 +513,7 @@ def test_failed_install_surfaces_in_summary_without_crashing():
         return InstallOutcome(tool.id, "failed")
 
     tools = [_tool("rg", "search")]
-    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    prompter = FakePrompter(confirm=True)
     console, _buf = _console()
     outcomes = run_wizard(
         tools,
@@ -565,7 +554,7 @@ def test_run_wizard_reports_a_skipped_dependent_with_its_reason() -> None:
     outcomes = run_wizard(
         tools,
         _platform(),
-        FakePrompter(categories=[], tools=[], confirm=True),
+        FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
         runner=_runner,
@@ -586,7 +575,7 @@ def test_run_wizard_reports_a_skipped_dependent_with_its_reason() -> None:
 def test_categories_flag_filters_tools():
     tools = _catalog()
     installed, install = _recording_install()
-    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    prompter = FakePrompter(confirm=True)
     console, _buf = _console()
     outcomes = run_wizard(
         tools,
@@ -607,7 +596,7 @@ def test_categories_flag_filters_tools():
 def test_declining_confirmation_installs_nothing():
     tools = _catalog()
     installed, install = _recording_install()
-    prompter = FakePrompter(categories=[], tools=[], confirm=False)
+    prompter = FakePrompter(confirm=False)
     console, _buf = _console()
     outcomes = run_wizard(
         tools,
@@ -1623,7 +1612,7 @@ def test_wizard_consults_on_mismatch_when_interactive():
     outcomes = run_wizard(
         tools,
         _platform(),
-        FakePrompter(categories=[], tools=[], confirm=True),
+        FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=False),
         runner=_runner,
@@ -1652,7 +1641,7 @@ def test_wizard_suppresses_on_mismatch_under_yes():
     outcomes = run_wizard(
         tools,
         _platform(),
-        FakePrompter(categories=[], tools=[], confirm=True),
+        FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
         runner=_runner,
@@ -2402,7 +2391,7 @@ def test_run_wizard_installs_dependencies_before_dependents() -> None:
     outcomes = run_wizard(
         catalog,
         Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
-        FakePrompter(categories=[], tools=[], confirm=True),
+        FakePrompter(confirm=True),
         console,
         Options(all=False, categories=("c",), yes=True),
         runner=_runner,
@@ -3545,7 +3534,7 @@ def test_run_wizard_surfaces_a_postinstall_warning_on_the_real_path() -> None:
     outcomes = run_wizard(
         tools,
         _platform(),
-        FakePrompter(categories=[], tools=[], confirm=True),
+        FakePrompter(confirm=True),
         console,
         Options(all=True, categories=(), yes=True),
         runner=_runner,
@@ -3580,7 +3569,7 @@ def test_run_wizard_passes_the_full_catalog_as_tools_by_id_into_execute_plan() -
     run_wizard(
         catalog_tools,
         _platform(),
-        FakePrompter(categories=[], tools=[], confirm=True),
+        FakePrompter(confirm=True),
         _console()[0],
         Options(all=True, categories=(), yes=True),
         runner=_runner,
@@ -3624,7 +3613,7 @@ def test_run_wizard_prints_login_shell_instructions_when_sensitive_confirmed(
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
     _not_present(monkeypatch, tmp_path)
-    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    prompter = FakePrompter(confirm=True)
     tools = [_login_shell_tool()]
     console, buf = _console()
     outcomes = run_wizard(
@@ -3663,7 +3652,7 @@ def test_run_wizard_skips_login_shell_instructions_when_sensitive_refused(
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
     _not_present(monkeypatch, tmp_path)
-    prompter = FakePrompter(categories=[], tools=[], confirm=True, sensitive_confirm=False)
+    prompter = FakePrompter(confirm=True, sensitive_confirm=False)
     tools = [_login_shell_tool()]
     console, buf = _console()
     outcomes = run_wizard(
@@ -3691,7 +3680,7 @@ def test_run_wizard_sensitive_unattended_never_asks_and_prints_no_instructions(
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
     _not_present(monkeypatch, tmp_path)
-    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    prompter = FakePrompter(confirm=True)
     tools = [_login_shell_tool()]
     console, buf = _console()
     outcomes = run_wizard(
@@ -3716,7 +3705,7 @@ def test_run_wizard_never_asks_sensitive_question_without_login_shell_action(
     tmp_path: Path,
 ) -> None:
     _not_present(monkeypatch, tmp_path)
-    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    prompter = FakePrompter(confirm=True)
     tools = [_tool("rg", "search")]
     console, buf = _console()
     outcomes = run_wizard(

@@ -75,7 +75,6 @@ from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.resolve import unavailable_reason
 from installer.run import OutputRunner, Runner, run_captured, run_query
-from installer.selection import Choice
 from installer.session import exit_code, ran_anything
 from installer.settings import (
     SettingsStore,
@@ -154,7 +153,6 @@ _STYLE = questionary.Style(
         ("tag-dim", "fg:#858585"),
     ]
 )
-_CHECKBOX_KEYS = "(↑/↓ move, <space> toggle, <a> all, <i> invert, <enter> confirm)"
 
 
 def _has_controlling_tty() -> bool:
@@ -290,49 +288,6 @@ def _darwin_select_based_asyncio() -> Iterator[None]:
         yield
     finally:
         selectors.DefaultSelector = original
-
-
-def _tag_class(tag: str) -> str:
-    if tag == "installed":
-        return "tag-installed"
-    if tag == "missing":
-        return "tag-missing"
-    return "tag-dim"
-
-
-def _title(choice: Choice) -> list[tuple[str, str]]:
-    segments = [("class:text", choice.label)]
-    if choice.tag:
-        segments.append((f"class:{_tag_class(choice.tag)}", f"  ({choice.tag})"))
-    return segments
-
-
-def _ask_checkbox(message: str, choices: list[Choice]) -> list[str]:
-    # See _questionary_tty_io()'s docstring for why questionary prompts get a
-    # dedicated /dev/tty Input/Output pair instead of _stdin_on_tty()'s fd 0
-    # redirect. Every ask_* helper needs this, not just the Textual .run()
-    # call sites: _run_uninstall opens the uninstall TUI and then calls
-    # _ask_confirm in the same run, and _run_guard does the same.
-    with _questionary_tty_io() as io_pair, _darwin_select_based_asyncio():
-        kwargs = {"input": io_pair[0], "output": io_pair[1]} if io_pair else {}
-        answer = questionary.checkbox(
-            message,
-            choices=[
-                questionary.Choice(
-                    title=_title(c),
-                    value=c.id,
-                    checked=c.checked,
-                    description=c.description or None,
-                )
-                for c in choices
-            ],
-            instruction=_CHECKBOX_KEYS,
-            style=_STYLE,
-            **kwargs,
-        ).ask()
-    if answer is None:  # questionary returns None on Ctrl+C / Ctrl+D at the prompt
-        raise KeyboardInterrupt
-    return list(answer)
 
 
 def _ask_confirm(message: str) -> bool:
@@ -1540,7 +1495,7 @@ def main(argv: list[str]) -> int:
         return 2
     tools = load_tools(_REGISTRY)
     platform = detect()
-    prompter = CallbackPrompter(ask_checkbox=_ask_checkbox, ask_confirm=_ask_confirm)
+    prompter = CallbackPrompter(ask_confirm=_ask_confirm)
     # --all/--categories is the headless install route (it never opens the
     # wizard); the plain-TTY route shows the warning in the TUI instead.
     store, needs_choice = _settings_store(
