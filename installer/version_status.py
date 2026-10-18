@@ -972,13 +972,15 @@ class VersionRefreshService:
             self._pending_writes = []
             self._writes_held = False
         for write in pending:
-            write()
+            try:
+                write()
+            except OSError as exc:
+                self._warning = f"version cache not saved: {exc}"
 
     def _write_or_queue(self, write: Callable[[], None]) -> None:
-        with self._lock:
-            if self._writes_held:
-                self._pending_writes.append(write)
-                return
+        if self._writes_held:
+            self._pending_writes.append(write)
+            return
         write()
 
     @property
@@ -1070,19 +1072,24 @@ class VersionRefreshService:
                 if self._epoch != started_epoch:
                     return dict(self._skills)
                 merged = {**self._skills, **fresh}
-                try:
-                    save_version_cache(
-                        self._cache_path,
-                        load_version_cache(self._cache_path),
-                        skills={tool_id: dict(status.hosts) for tool_id, status in merged.items()},
-                    )
-                except OSError as exc:
-                    # Best effort, as in the pass's commit: a failed write never strands
-                    # the packs in CHECKING (WR2-03).
-                    self._warning = f"version cache not saved: {exc}"
-                    self._skills_unsaved = True
-                else:
-                    self._skills_unsaved = False
+
+                def save_skills() -> None:
+                    try:
+                        save_version_cache(
+                            self._cache_path,
+                            load_version_cache(self._cache_path),
+                            skills={
+                                tool_id: dict(status.hosts) for tool_id, status in merged.items()
+                            },
+                        )
+                    except OSError as exc:
+                        # A failed write never strands the packs in CHECKING (WR2-03).
+                        self._warning = f"version cache not saved: {exc}"
+                        self._skills_unsaved = True
+                    else:
+                        self._skills_unsaved = False
+
+                self._write_or_queue(save_skills)
                 self._skills = merged
                 self._skills_probed = True
                 rebuilt = {
@@ -1120,8 +1127,12 @@ class VersionRefreshService:
             self._skills = {
                 tool_id: replace(entry, stale=True) for tool_id, entry in self._skills.items()
             }
-            tools = load_version_cache(self._cache_path)
-            save_version_cache(self._cache_path, tools, managers={})
+
+            def clear_manager_snapshot() -> None:
+                tools = load_version_cache(self._cache_path)
+                save_version_cache(self._cache_path, tools, managers={})
+
+            self._write_or_queue(clear_manager_snapshot)
             return self._epoch
 
     def _scan_packs(self, packs: Sequence[Tool]) -> _PackScan:
@@ -1311,8 +1322,16 @@ class VersionRefreshService:
         receipt = receipts.read(tool.id)
         if receipt is None:
             return None, (), (RECEIPT_UNREADABLE_NOTE,)
-        if receipts.all_gone(receipt) and receipts.retire(tool.id, receipt):
-            return None, (), ()
+        if receipts.all_gone(receipt):
+            if self._writes_held:
+
+                def retire_receipt() -> None:
+                    receipts.retire(tool.id, receipt)
+
+                self._pending_writes.append(retire_receipt)
+                return None, (), ()
+            if receipts.retire(tool.id, receipt):
+                return None, (), ()
         if receipts.broken_drift(receipt):
             return receipt, (CHANGED_SINCE_INSTALL,), ()
         if receipts.drifted(receipt):
@@ -1365,7 +1384,11 @@ class VersionRefreshService:
             if receipt is not None and self._writes_held:
 
                 def commit_adoption() -> None:
-                    receipts.commit_adoption(receipt)
+                    try:
+                        receipts.commit_adoption(receipt)
+                    except OSError:
+                        # Adoption is best effort; failure leaves no receipt.
+                        return
 
                 self._pending_writes.append(commit_adoption)
             return receipt
@@ -1742,12 +1765,16 @@ class VersionRefreshService:
                 if self._skills_unsaved
                 else None
             )
-            try:
-                merged = load_version_cache(self._cache_path)
-                merged.update({k: v for k, v in produced.items() if k in fresh})
-                save_version_cache(self._cache_path, merged, managers=managers, skills=skills)
-            except OSError as exc:
-                self._warning = f"version cache not saved: {exc}"
-            else:
-                self._skills_unsaved = False
-                self._warning = None
+
+            def save_pass() -> None:
+                try:
+                    merged = load_version_cache(self._cache_path)
+                    merged.update({k: v for k, v in produced.items() if k in fresh})
+                    save_version_cache(self._cache_path, merged, managers=managers, skills=skills)
+                except OSError as exc:
+                    self._warning = f"version cache not saved: {exc}"
+                else:
+                    self._skills_unsaved = False
+                    self._warning = None
+
+            self._write_or_queue(save_pass)

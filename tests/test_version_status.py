@@ -4096,6 +4096,43 @@ def _adoption_service(
     return _receipt_service(tmp_path, bin_dir, resolve_tag=_offline([])), placed
 
 
+def test_a_declined_headless_plan_retires_nothing_and_saves_no_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+
+    from rich.console import Console
+
+    from tests.state_doubles import ScriptedUpdates
+
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    service, _raw = _adoption_service(tmp_path, bin_dir, {"yq_linux_amd64": "0" * 64})
+    placed = _place_yq_with_receipt(bin_dir)
+    placed.unlink()
+    cache_path = tmp_path / "versions.json"
+    save_version_cache(cache_path, load_version_cache(cache_path))
+    before = cache_path.read_bytes()
+    output = io.StringIO()
+
+    class DecliningPrompter:
+        def confirm(self, message: str) -> bool:
+            assert message == "Run this plan?"
+            return False
+
+    result = run_wizard(
+        [_yq(), _rg_archive()],
+        _LINUX,
+        DecliningPrompter(),
+        Console(file=output, width=100, no_color=True),
+        Options(all=True, categories=(), yes=False),
+        refresh=service,
+        updates=ScriptedUpdates({}),
+    )
+    assert result is None
+    assert receipts.receipt_exists("yq")
+    assert cache_path.read_bytes() == before
+
+
 def test_a_declined_headless_plan_adopts_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -4796,13 +4833,14 @@ def _pack_service(
     *,
     harnesses: frozenset[str] = frozenset(),
     which: Callable[[str], str | None] | None = None,
+    cache_path: Path | None = None,
 ) -> VersionRefreshService:
     def on_path(cmd: str) -> str | None:
         return f"/usr/bin/{cmd}" if cmd in harnesses else None
 
     return VersionRefreshService(
         platform=_LINUX,
-        cache_path=home.parent / f"{home.name}-versions.json",
+        cache_path=cache_path or home.parent / f"{home.name}-versions.json",
         resolve_tag=lambda _repo: "1.0.0",
         probe_output=lambda _argv: "1.0.0",
         now=lambda: _STATE_NOW,
@@ -5111,6 +5149,24 @@ def test_project_pack_scan_reads_only_the_skill_home(tmp_path: Path) -> None:
     assert leftover.reasons[0] == _LEFTOVER
 
 
+def test_held_cache_saves_wait_for_commit(tmp_path: Path) -> None:
+    from installer.version_cache import load_skill_statuses
+
+    home = tmp_path / "skill-home"
+    home.mkdir()
+    pack = _skill_pack("held-pack", (SkillStatusProbe("codex", "install-state", "codex-plugin"),))
+    cache_path = tmp_path / "versions.json"
+    service = _pack_service(home, probe=lambda _argv: "present", cache_path=cache_path)
+    service.hold_writes()
+    service.refresh([_yq(), pack])
+    service.refresh_skills([pack])
+    service.invalidate(reason="test")
+    assert not cache_path.exists()
+    service.commit_writes()
+    assert cache_path.exists()
+    assert load_skill_statuses(cache_path)[pack.id] == {"codex": "unknown"}
+
+
 def test_seeded_skill_cache_has_hosts_only(tmp_path: Path) -> None:
     home = tmp_path / "home"
     project = home / "repo"
@@ -5368,6 +5424,53 @@ def test_nul_receipt_path_never_aborts_refresh(
 
 
 # --- 19-29 Task 2: retire an all-gone receipt; an unreadable dir is unproven --
+
+
+def test_held_adoption_write_failure_does_not_abort_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    service, _placed = _adoption_service(tmp_path, bin_dir, {"yq_linux_amd64": _YQ_SHA})
+    service.hold_writes()
+    state = _settled(service, _yq())
+    assert state.receipt is not None
+
+    def fail(_receipt: Receipt) -> bool:
+        raise OSError("read-only receipts directory")
+
+    monkeypatch.setattr(receipts, "commit_adoption", fail)
+    service.commit_writes()
+    assert not receipts.receipt_exists("yq")
+
+
+def test_held_invalidate_write_failure_sets_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _receipt_service(tmp_path, tmp_path / "managed")
+    service.hold_writes()
+    service.invalidate(reason="test")
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(version_status, "save_version_cache", fail)
+    service.commit_writes()
+    assert service.warning == "version cache not saved: disk full"
+
+
+def test_a_held_pass_retires_a_gone_receipt_only_on_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    placed = _place_yq_with_receipt(bin_dir)
+    placed.unlink()
+    service = _receipt_service(tmp_path, bin_dir)
+    service.hold_writes()
+    state = _settled(service, _yq())
+    assert state.receipt is None
+    assert receipts.receipt_exists("yq")
+    service.commit_writes()
+    assert not receipts.receipt_exists("yq")
 
 
 def test_receipt_with_every_artifact_gone_is_retired(

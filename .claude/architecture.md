@@ -1114,6 +1114,14 @@ lines of at most 78 cells, and the detail is a fixed three rows.
 
 ## Phase 20: one install plan, one engine, one vocabulary
 
+The consent boundary for bookkeeping writes differs by route (L-20-10). The
+headless route holds refresh cache saves, receipt adoption and retirement until
+the user consents, then commits them before execution; a decline or failed
+state check leaves those bookkeeping writes uncommitted. The TUI launches the
+catalog without holding writes: launching the catalog is not consent to mutate,
+but Enter is consent for the selected mutations, and its decline copy claims
+only that nothing started or ran. Commit preserves each write's own race checks.
+
 `build_plan` is pure: it reads published `state_of` values and never probes
 or fetches. Its order comes from `Resolution.closure`, which retains the
 resolver's deps-first order including present tools; every reached id gets a
