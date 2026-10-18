@@ -431,13 +431,7 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
             return
         if self.started:
             return
-        highlighted_id = None
-        if options.highlighted is not None:
-            highlighted_id = options.get_option_at_index(options.highlighted).id
         self._paint_review()
-        if highlighted_id is not None:
-            options = self.query_one("#plan-rows", OptionList)
-            options.highlighted = options.get_option_index(highlighted_id)
         if self._start_requested:
             self.query_one("#execute-keys", Static).update(_KEYS_WAITING)
 
@@ -465,6 +459,9 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         head = self.query_one("#execute-head", Static)
         options = self.query_one("#plan-rows", OptionList)
         keys = self.query_one("#execute-keys", Static)
+        highlighted_id = None
+        if options.highlighted is not None:
+            highlighted_id = options.get_option_at_index(options.highlighted).id
         options.clear_options()
         if not self._rows:
             head.update("Nothing selected.")
@@ -479,6 +476,10 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
                     id=row.tool_id,
                 )
             )
+        highlighted_index = (
+            options.get_option_index(highlighted_id) if highlighted_id is not None else None
+        )
+        options.highlighted = highlighted_index if highlighted_index is not None else 0
         head.update(plan_head(self._rows))
         keys.update(self._idle_keys())
 
@@ -512,8 +513,6 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self._reinstall ^= {tool_id}
         self.status.clear()
         self._replan()
-        options = self.query_one("#plan-rows", OptionList)
-        options.highlighted = options.get_option_index(tool_id)
 
     def action_start(self) -> None:
         if self.finished:

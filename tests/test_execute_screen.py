@@ -3080,6 +3080,90 @@ async def test_enter_runs_the_plan_and_finishes_with_the_summary_head() -> None:
     assert all(isinstance(outcome, RowOutcome) for outcome in value)
 
 
+async def test_the_review_opens_with_the_first_row_highlighted_so_r_works_at_once() -> None:
+    rg = _tool("rg")
+    inputs = _inputs(tools=[rg], states=[plan_state(rg, health=Health.OK)])
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        options = screen.query_one("#plan-rows", OptionList)
+        assert options.highlighted is not None
+        assert options.get_option_at_index(options.highlighted).id == "rg"
+        await pilot.press("r")
+        assert _plan_prompts(screen) == [
+            "✓ rg  will be reinstalled — reinstall requested; r again to undo"
+        ]
+
+
+async def test_a_published_state_keeps_the_cursor_on_the_same_tool(tmp_path: Path) -> None:
+    rg, fd = _tool("rg"), _tool("fd")
+    service = held_service(
+        tmp_path / "state",
+        [plan_state(rg, health=Health.OK), plan_state(fd, health=Health.MISSING)],
+    )
+    inputs = _inputs(tools=[rg, fd], version_refresh=service)
+    app = _host(inputs, [rg, fd])
+    async with app.run_test(size=(80, 20)) as pilot:
+        try:
+            app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ExecuteScreen)
+            options = screen.query_one("#plan-rows", OptionList)
+            options.highlighted = options.get_option_index("rg")
+            await _wait_for_refresh_calls(service, pilot)
+            service.release.set()
+            for _ in range(400):
+                await pilot.pause()
+                if _plan_prompts(screen)[1].startswith("○ fd"):
+                    break
+            highlighted = options.highlighted
+            assert options.get_option_at_index(highlighted).id == "rg"
+            assert _plan_prompts(screen) == [
+                "✓ rg  skipped — already current (r: reinstall)",
+                "○ fd  will install — not installed",
+            ]
+        finally:
+            service.release.set()
+
+
+async def test_the_running_keys_line_is_the_contract_copy() -> None:
+    rg = _tool("rg")
+    started, release = threading.Event(), threading.Event()
+
+    def install(
+        tool: Tool, platform: Platform, runner: Runner, resolve_tag: TagResolver, **kwargs: Any
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, kwargs
+        started.set()
+        assert release.wait(timeout=5)
+        return InstallOutcome(tool.id, "installed")
+
+    inputs = _inputs(tools=[rg], install=install)
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        try:
+            app.push_screen(ExecuteScreen(["rg"], inputs))
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ExecuteScreen)
+            await pilot.press("enter")
+            for _ in range(400):
+                if started.is_set():
+                    break
+                await pilot.pause()
+            assert started.is_set()
+            assert _keys_text(screen) == (
+                "c stop after this tool · ctrl+c aborts and can leave a tool half-installed"
+            )
+        finally:
+            release.set()
+        await _settle_execute(screen, pilot)
+
+
 async def test_r_toggles_an_installer_owned_current_row_both_ways() -> None:
     rg = _tool("rg")
     inputs = _inputs(tools=[rg], states=[plan_state(rg, health=Health.OK)])
