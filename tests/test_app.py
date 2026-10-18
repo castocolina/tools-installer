@@ -19,12 +19,21 @@ from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.policy import Policy, daemon_policy
 from installer.post_install import ConfirmSensitiveAction
+from installer.render import display_order
 from installer.run import CommandError, Runner
 from installer.selection import Choice
-from installer.session import Install, MismatchChoice, SensitiveInstall, Summary
+from installer.session import (
+    MismatchChoice,
+    SensitiveInstall,
+    build_plan,
+    exit_code,
+)
 from installer.tweaks import TweakBundle
 from installer.uninstall import SweepResult
+from installer.update import UpdateOutcome
+from installer.version_status import Health
 from installer.versions import TagResolver
+from tests.state_doubles import ScriptedUpdates, plan_state, presence_service
 
 
 def _tool(tool_id: str, category: str, *, requires: tuple[str, ...] = ()) -> Tool:
@@ -51,7 +60,7 @@ def _console() -> tuple[Console, io.StringIO]:
     return Console(file=buf, width=100, no_color=True), buf
 
 
-_BATCH_QUESTION = "Install the selected tools?"
+_BATCH_QUESTION = "Run this plan?"
 
 
 class FakePrompter:
@@ -103,10 +112,6 @@ def _recording_install() -> tuple[list[str], SensitiveInstall]:
     return installed, install
 
 
-def _never_installed(tool: Tool) -> bool:
-    return False
-
-
 def _runner(cmd: list[str]) -> None:
     return None
 
@@ -115,12 +120,15 @@ def _resolve_tag(repo: str) -> str:
     return "1.0.0"
 
 
-def test_all_flag_installs_every_tool_without_prompting():
+def test_all_yes_prints_the_plan_installs_the_missing_tool_and_returns_outcomes():
+    tools = [_tool("rg", "search"), _tool("fd", "search")]
+    refresh = presence_service(tools, present={"fd"})
     installed, install = _recording_install()
     prompter = FakePrompter(categories=[], tools=[], confirm=True)
-    console, _buf = _console()
-    summary = run_wizard(
-        _catalog(),
+    console, buf = _console()
+
+    outcomes = run_wizard(
+        tools,
         _platform(),
         prompter,
         console,
@@ -128,10 +136,377 @@ def test_all_flag_installs_every_tool_without_prompting():
         runner=_runner,
         resolve_tag=_resolve_tag,
         install=install,
-        installed=_never_installed,
+        refresh=refresh,
+        updates=ScriptedUpdates({}),
+    )
+
+    output = buf.getvalue()
+    assert "Install plan — 1 will install, 1 skipped" in output
+    assert "○ rg" in output and "will install — not installed" in output
+    assert "✓ fd" in output and "skipped — already current" in output
+    assert "(r: reinstall)" not in output
+    assert "Summary — 1 installed, 1 skipped" in output
+    assert installed == ["rg"]
+    assert isinstance(outcomes, list) and len(outcomes) == 2
+    assert prompter.confirmed == 0
+
+
+def test_without_yes_the_plan_is_printed_then_confirmed():
+    tools = [_tool("rg", "search")]
+    refresh = presence_service(tools)
+    installed, install = _recording_install()
+    declined = FakePrompter(categories=[], tools=[], confirm=False)
+    console, buf = _console()
+
+    outcomes = run_wizard(
+        tools,
+        _platform(),
+        declined,
+        console,
+        Options(all=True, categories=(), yes=False),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        refresh=refresh,
+        updates=ScriptedUpdates({}),
+    )
+
+    assert "Install plan — 1 will install" in buf.getvalue()
+    assert declined.questions == ["Run this plan?"]
+    assert "Cancelled; nothing was changed." in buf.getvalue()
+    assert outcomes is None
+    assert installed == []
+
+    accepted = FakePrompter(categories=[], tools=[], confirm=True)
+    accepted_outcomes = run_wizard(
+        tools,
+        _platform(),
+        accepted,
+        _console()[0],
+        Options(all=True, categories=(), yes=False),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
+    )
+    assert accepted.questions == ["Run this plan?"]
+    assert installed == ["rg"]
+    assert isinstance(accepted_outcomes, list)
+
+
+def test_all_yes_on_an_all_current_host_runs_nothing_and_exits_zero_shaped():
+    tools = [_tool("rg", "search"), _tool("fd", "search")]
+    installed, install = _recording_install()
+    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    console, buf = _console()
+
+    outcomes = run_wizard(
+        tools,
+        _platform(),
+        prompter,
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        refresh=presence_service(tools, present={"rg", "fd"}),
+        updates=ScriptedUpdates({}),
+    )
+
+    assert "Summary — 2 skipped" in buf.getvalue()
+    assert installed == []
+    assert isinstance(outcomes, list) and len(outcomes) == 2
+    assert all(outcome.result == "skipped" for outcome in outcomes)
+    assert exit_code(outcomes) == 0
+    assert prompter.confirmed == 0
+
+
+def test_all_current_without_yes_prints_the_plan_and_summary_without_asking():
+    class MustNotConfirm(FakePrompter):
+        def confirm(self, message: str) -> bool:
+            raise AssertionError("confirm must not be called")
+
+    tools = [_tool("rg", "search"), _tool("fd", "search")]
+    installed, install = _recording_install()
+    prompter = MustNotConfirm(categories=[], tools=[], confirm=True)
+    console, buf = _console()
+
+    outcomes = run_wizard(
+        tools,
+        _platform(),
+        prompter,
+        console,
+        Options(all=True, categories=(), yes=False),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        refresh=presence_service(tools, present={"rg", "fd"}),
+        updates=ScriptedUpdates({}),
+    )
+
+    assert "Install plan — 2 skipped" in buf.getvalue()
+    assert "Summary — 2 skipped" in buf.getvalue()
+    assert installed == []
+    assert isinstance(outcomes, list)
+    assert all(outcome.result == "skipped" for outcome in outcomes)
+
+
+def test_headless_uses_the_same_plan_order_as_the_tui():
+    node = _tool("node", "system")
+    mmdc = Tool(
+        id="mmdc",
+        name="mmdc",
+        category="user",
+        cmd="mmdc",
+        methods=(Method(kind="brew", params={"formula": "mmdc"}),),
+        requires=("node",),
+    )
+    tools = [mmdc, node]
+    refresh = presence_service(tools)
+    expected = [
+        row.tool_id
+        for row in display_order(
+            build_plan(["mmdc"], tools, refresh.state_of, refresh.platform, reinstall=frozenset())
+        )
+    ]
+    console, buf = _console()
+
+    run_wizard(
+        tools,
+        _platform(),
+        FakePrompter(categories=[], tools=[], confirm=True),
+        console,
+        Options(all=False, categories=("user",), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=_recording_install()[1],
+        refresh=refresh,
+        updates=ScriptedUpdates({}),
+    )
+
+    plan_output = buf.getvalue().split("Summary —", 1)[0]
+    output_rows = [
+        line.split()[1]
+        for line in plan_output.splitlines()
+        if len(line.split()) > 1 and line.split()[1] in expected
+    ]
+    assert output_rows == expected
+
+
+def test_headless_reports_a_state_check_failure_and_runs_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools = [_tool("rg", "search")]
+    installed, install = _recording_install()
+    refresh = presence_service(tools, platform=_platform())
+
+    def fail_refresh(_tools: list[Tool]) -> None:
+        raise OSError("probe failed")
+
+    monkeypatch.setattr(refresh, "refresh", fail_refresh)
+    console, buf = _console()
+    failed = run_wizard(
+        tools,
+        _platform(),
+        FakePrompter(categories=[], tools=[], confirm=True),
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        refresh=refresh,
+        updates=ScriptedUpdates({}),
+    )
+    assert "State check failed: probe failed" in buf.getvalue()
+    assert isinstance(failed, list)
+    assert [(outcome.result, outcome.detail) for outcome in failed] == [
+        ("not_attempted", "probe failed")
+    ]
+    assert exit_code(failed) == 1
+    assert installed == []
+
+    empty_service = presence_service([], platform=_platform())
+    refresh_without_state = presence_service(tools, service=empty_service)
+    console, buf = _console()
+    unsettled = run_wizard(
+        tools,
+        _platform(),
+        FakePrompter(categories=[], tools=[], confirm=True),
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        refresh=refresh_without_state,
+        updates=ScriptedUpdates({}),
+    )
+    assert "State check failed: no state for rg" in buf.getvalue()
+    assert isinstance(unsettled, list)
+    assert [(outcome.result, outcome.detail) for outcome in unsettled] == [
+        ("not_attempted", "no state for rg")
+    ]
+    assert exit_code(unsettled) == 1
+    assert installed == []
+
+
+def test_headless_reports_refresh_errors_without_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools = [_tool("rg", "search")]
+    installed, install = _recording_install()
+    refresh = presence_service(tools, platform=_platform())
+
+    def fail_refresh(_tools: list[Tool]) -> None:
+        raise OSError()
+
+    monkeypatch.setattr(refresh, "refresh", fail_refresh)
+    console, buf = _console()
+    try:
+        outcomes = run_wizard(
+            tools,
+            _platform(),
+            FakePrompter(categories=[], tools=[], confirm=True),
+            console,
+            Options(all=True, categories=(), yes=True),
+            runner=_runner,
+            resolve_tag=_resolve_tag,
+            install=install,
+            refresh=refresh,
+            updates=ScriptedUpdates({}),
+        )
+    except IndexError as exc:
+        pytest.fail(f"empty refresh error should produce outcomes, raised {exc!r}")
+
+    assert "State check failed: OSError" in buf.getvalue()
+    assert isinstance(outcomes, list)
+    assert [outcome.result for outcome in outcomes] == ["not_attempted"]
+    assert exit_code(outcomes) == 1
+    assert installed == []
+
+
+def test_all_yes_updates_an_outdated_brew_tool_and_exits_zero() -> None:
+    tool = _tool("jq", "data")
+    tools = [tool]
+    refresh = presence_service(
+        tools,
+        states=[plan_state(tool, health=Health.OUTDATED, owner="brew", method=tool.methods[0])],
+        platform=_platform(),
+    )
+    updates = ScriptedUpdates({"jq": UpdateOutcome("jq", "updated", "brew")})
+    installed, install = _recording_install()
+    console, buf = _console()
+
+    outcomes = run_wizard(
+        tools,
+        _platform(),
+        FakePrompter(categories=[], tools=[], confirm=True),
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        refresh=refresh,
+        updates=updates,
+    )
+
+    assert "Summary — 1 updated" in buf.getvalue()
+    assert isinstance(outcomes, list) and [outcome.result for outcome in outcomes] == ["done"]
+    assert exit_code(outcomes) == 0
+    assert installed == []
+    assert [target.tool.id for target in updates.targets] == ["jq"]
+
+
+def test_an_injected_failing_row_exits_one() -> None:
+    tools = [_tool("rg", "search")]
+
+    def fail_install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        return InstallOutcome(tool.id, "failed")
+
+    console, buf = _console()
+    outcomes = run_wizard(
+        tools,
+        _platform(),
+        FakePrompter(categories=[], tools=[], confirm=True),
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=fail_install,
+        refresh=presence_service(tools, platform=_platform()),
+        updates=ScriptedUpdates({}),
+    )
+
+    assert isinstance(outcomes, list)
+    assert exit_code(outcomes) == 1
+    assert "Summary — 1 failed" in buf.getvalue()
+
+
+def test_a_blocked_row_plus_a_done_row_exits_zero() -> None:
+    rg = _tool("rg", "search")
+    apt_tool = Tool(
+        id="apt-upgrade",
+        name="apt-upgrade",
+        category="pkg-mgr",
+        cmd="apt-upgrade",
+        methods=(Method(kind="apt", params={"package": "x"}),),
+    )
+    tools = [rg, apt_tool]
+    installed, install = _recording_install()
+    console, buf = _console()
+
+    outcomes = run_wizard(
+        tools,
+        _platform(),
+        FakePrompter(categories=[], tools=[], confirm=True),
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        refresh=presence_service(tools, platform=_platform()),
+        updates=ScriptedUpdates({}),
+    )
+
+    assert isinstance(outcomes, list)
+    assert {outcome.row.tool_id: outcome.result for outcome in outcomes} == {
+        "rg": "done",
+        "apt-upgrade": "blocked",
+    }
+    assert exit_code(outcomes) == 0
+    assert installed == ["rg"]
+    assert "Summary — 1 installed, 1 blocked" in buf.getvalue()
+
+
+def test_all_flag_installs_every_tool_without_prompting():
+    tools = _catalog()
+    installed, install = _recording_install()
+    prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    console, _buf = _console()
+    outcomes = run_wizard(
+        tools,
+        _platform(),
+        prompter,
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
     )
     assert installed == ["rg", "fd", "jq"]
-    assert summary == Summary(installed=("rg", "fd", "jq"), already=(), failed=(), no_method=())
+    assert isinstance(outcomes, list)
+    assert [outcome.result for outcome in outcomes] == ["done", "done", "done"]
     assert prompter.confirmed == 0
 
 
@@ -148,10 +523,11 @@ def test_failed_install_surfaces_in_summary_without_crashing():
     ) -> InstallOutcome:
         return InstallOutcome(tool.id, "failed")
 
+    tools = [_tool("rg", "search")]
     prompter = FakePrompter(categories=[], tools=[], confirm=True)
     console, _buf = _console()
-    summary = run_wizard(
-        [_tool("rg", "search")],
+    outcomes = run_wizard(
+        tools,
         _platform(),
         prompter,
         console,
@@ -159,11 +535,11 @@ def test_failed_install_surfaces_in_summary_without_crashing():
         runner=_runner,
         resolve_tag=_resolve_tag,
         install=install,
-        installed=_never_installed,
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
     )
-    assert summary is not None
-    assert summary.failed == ("rg",)
-    assert summary.installed == ()
+    assert isinstance(outcomes, list)
+    assert [(outcome.row.tool_id, outcome.result) for outcome in outcomes] == [("rg", "failed")]
 
 
 def test_run_wizard_reports_a_skipped_dependent_with_its_reason() -> None:
@@ -184,9 +560,10 @@ def test_run_wizard_reports_a_skipped_dependent_with_its_reason() -> None:
             return InstallOutcome(tool.id, "failed")
         return InstallOutcome(tool.id, "installed", method_kind="brew")
 
+    tools = [_tool("sdkman", "pkg-mgr"), _tool("java", "dev", requires=("sdkman",))]
     console, buf = _console()
-    summary = run_wizard(
-        [_tool("sdkman", "pkg-mgr"), _tool("java", "dev", requires=("sdkman",))],
+    outcomes = run_wizard(
+        tools,
         _platform(),
         FakePrompter(categories=[], tools=[], confirm=True),
         console,
@@ -194,20 +571,25 @@ def test_run_wizard_reports_a_skipped_dependent_with_its_reason() -> None:
         runner=_runner,
         resolve_tag=_resolve_tag,
         install=install,
-        installed=_never_installed,
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
     )
-    assert summary is not None
-    assert summary.dependency_failed == ("java",)
+    assert isinstance(outcomes, list)
+    assert [(outcome.row.tool_id, outcome.result) for outcome in outcomes] == [
+        ("sdkman", "failed"),
+        ("java", "dependency_failed"),
+    ]
     assert "java skipped — dependency failed: sdkman" in buf.getvalue()
     assert called == ["sdkman"]
 
 
 def test_categories_flag_filters_tools():
+    tools = _catalog()
     installed, install = _recording_install()
     prompter = FakePrompter(categories=[], tools=[], confirm=True)
     console, _buf = _console()
-    run_wizard(
-        _catalog(),
+    outcomes = run_wizard(
+        tools,
         _platform(),
         prompter,
         console,
@@ -215,50 +597,33 @@ def test_categories_flag_filters_tools():
         runner=_runner,
         resolve_tag=_resolve_tag,
         install=install,
-        installed=_never_installed,
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
     )
     assert installed == ["jq"]
-
-
-def test_interactive_path_selects_then_installs():
-    installed, install = _recording_install()
-    prompter = FakePrompter(categories=["search"], tools=["fd"], confirm=True)
-    console, _buf = _console()
-    summary = run_wizard(
-        _catalog(),
-        _platform(),
-        prompter,
-        console,
-        Options(all=False, categories=(), yes=False),
-        runner=_runner,
-        resolve_tag=_resolve_tag,
-        install=install,
-        installed=_never_installed,
-    )
-    assert installed == ["fd"]
-    assert summary is not None
-    assert summary.installed == ("fd",)
-    assert prompter.confirmed == 1
+    assert isinstance(outcomes, list)
 
 
 def test_declining_confirmation_installs_nothing():
+    tools = _catalog()
     installed, install = _recording_install()
-    prompter = FakePrompter(categories=["search"], tools=["fd"], confirm=False)
+    prompter = FakePrompter(categories=[], tools=[], confirm=False)
     console, _buf = _console()
-    summary = run_wizard(
-        _catalog(),
+    outcomes = run_wizard(
+        tools,
         _platform(),
         prompter,
         console,
-        Options(all=False, categories=(), yes=False),
+        Options(all=True, categories=(), yes=False),
         runner=_runner,
         resolve_tag=_resolve_tag,
         install=install,
-        installed=_never_installed,
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
     )
     assert installed == []
-    assert summary is None  # None signals an aborted run, distinct from an empty Summary
-    assert prompter.confirmed == 1
+    assert outcomes is None
+    assert prompter.questions == ["Run this plan?"]
 
 
 def test_configure_path_writes_myshellrc_and_wires_all_rcs(tmp_path: Path):
@@ -1253,9 +1618,10 @@ def test_wizard_consults_on_mismatch_when_interactive():
         asked.append(tool_id)
         return "skip"
 
+    tools = [_tool("rg", "search")]
     console, _buf = _console()
-    summary = run_wizard(
-        [_tool("rg", "search")],
+    outcomes = run_wizard(
+        tools,
         _platform(),
         FakePrompter(categories=[], tools=[], confirm=True),
         console,
@@ -1263,13 +1629,14 @@ def test_wizard_consults_on_mismatch_when_interactive():
         runner=_runner,
         resolve_tag=_resolve_tag,
         install=install,
-        installed=_never_installed,
         on_mismatch=on_mismatch,
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
     )
     assert asked == ["rg"]
     assert attempts == ["fail"]  # one install call, default policy
-    assert summary is not None
-    assert summary.mismatched == ("rg",)
+    assert isinstance(outcomes, list)
+    assert [(outcome.row.tool_id, outcome.result) for outcome in outcomes] == [("rg", "mismatch")]
 
 
 def test_wizard_suppresses_on_mismatch_under_yes():
@@ -1280,9 +1647,10 @@ def test_wizard_suppresses_on_mismatch_under_yes():
         asked.append(tool_id)
         return "retry"
 
+    tools = [_tool("rg", "search")]
     console, _buf = _console()
-    summary = run_wizard(
-        [_tool("rg", "search")],
+    outcomes = run_wizard(
+        tools,
         _platform(),
         FakePrompter(categories=[], tools=[], confirm=True),
         console,
@@ -1290,129 +1658,14 @@ def test_wizard_suppresses_on_mismatch_under_yes():
         runner=_runner,
         resolve_tag=_resolve_tag,
         install=install,
-        installed=_never_installed,
         on_mismatch=on_mismatch,
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
     )
     assert asked == []  # unattended: never prompt, hard-fail stands
-    assert summary is not None
-    assert summary.mismatched == ("rg",)
+    assert isinstance(outcomes, list)
+    assert [(outcome.row.tool_id, outcome.result) for outcome in outcomes] == [("rg", "mismatch")]
     assert attempts == ["fail"]
-
-
-def test_run_wizard_threads_category_blurbs_into_choices() -> None:
-    seen: list[list[Choice]] = []
-
-    class RecordingPrompter:
-        def select_categories(self, choices: list[Choice]) -> list[str]:
-            seen.append(choices)
-            return []
-
-        def select_tools(self, choices: list[Choice]) -> list[str]:
-            return []
-
-        def confirm(self, message: str) -> bool:
-            return True
-
-    console, _buf = _console()
-    run_wizard(
-        [_tool("rg", "search")],
-        _platform(),
-        RecordingPrompter(),
-        console,
-        Options(all=False, categories=(), yes=True),
-        runner=_runner,
-        resolve_tag=_resolve_tag,
-        install=_recording_install()[1],
-        installed=_never_installed,
-        category_blurbs={"search": "Find files and code at speed"},
-    )
-    assert seen[0][0].description == "Find files and code at speed — rg"
-
-
-def test_catalog_seam_replaces_two_step_selection():
-    installed_ids, install = _recording_install()
-    prompter = FakePrompter(categories=["IGNORED"], tools=["IGNORED"], confirm=True)
-    console, _buf = _console()
-    summary = run_wizard(
-        _catalog(),
-        _platform(),
-        prompter,
-        console,
-        Options(all=False, categories=(), yes=False),
-        runner=_runner,
-        resolve_tag=_resolve_tag,
-        install=install,
-        installed=_never_installed,
-        select_catalog=lambda tools: ["jq"],
-    )
-    assert installed_ids == ["jq"]
-    assert summary is not None
-    assert prompter.confirmed == 1  # the confirm step still runs
-
-
-def test_catalog_seam_abort_returns_none_without_confirm():
-    installed_ids, install = _recording_install()
-    prompter = FakePrompter(categories=[], tools=[], confirm=True)
-    console, _buf = _console()
-    summary = run_wizard(
-        _catalog(),
-        _platform(),
-        prompter,
-        console,
-        Options(all=False, categories=(), yes=False),
-        runner=_runner,
-        resolve_tag=_resolve_tag,
-        install=install,
-        installed=_never_installed,
-        select_catalog=lambda tools: None,
-    )
-    assert summary is None
-    assert installed_ids == []
-    assert prompter.confirmed == 0
-
-
-def test_all_flag_bypasses_catalog_seam():
-    def boom(tools: list[Tool]) -> list[str] | None:
-        raise AssertionError("select_catalog must not be called under --all")
-
-    installed_ids, install = _recording_install()
-    prompter = FakePrompter(categories=[], tools=[], confirm=True)
-    console, _buf = _console()
-    run_wizard(
-        _catalog(),
-        _platform(),
-        prompter,
-        console,
-        Options(all=True, categories=(), yes=True),
-        runner=_runner,
-        resolve_tag=_resolve_tag,
-        install=install,
-        installed=_never_installed,
-        select_catalog=boom,
-    )
-    assert installed_ids == ["rg", "fd", "jq"]
-
-
-def test_categories_flag_bypasses_catalog_seam():
-    def boom(tools: list[Tool]) -> list[str] | None:
-        raise AssertionError("select_catalog must not be called under --categories")
-
-    installed_ids, install = _recording_install()
-    prompter = FakePrompter(categories=[], tools=[], confirm=True)
-    console, _buf = _console()
-    run_wizard(
-        _catalog(),
-        _platform(),
-        prompter,
-        console,
-        Options(all=False, categories=("data",), yes=True),
-        runner=_runner,
-        resolve_tag=_resolve_tag,
-        install=install,
-        installed=_never_installed,
-        select_catalog=boom,
-    )
-    assert installed_ids == ["jq"]
 
 
 def test_run_guard_install_writes_shims_and_aliases_and_returns_true(tmp_path: Path):
@@ -2146,20 +2399,20 @@ def test_run_wizard_installs_dependencies_before_dependents() -> None:
         return InstallOutcome(tool.id, "installed", method_kind="node")
 
     console, _buf = _console()
-    summary = run_wizard(
+    outcomes = run_wizard(
         catalog,
         Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
         FakePrompter(categories=[], tools=[], confirm=True),
         console,
-        Options(all=False, categories=(), yes=True),
+        Options(all=False, categories=("c",), yes=True),
         runner=_runner,
         resolve_tag=_resolve_tag,
         install=record_install,
-        installed=_never_installed,
-        select_catalog=lambda tools: ["mmdc"],
+        refresh=presence_service(catalog),
+        updates=ScriptedUpdates({}),
     )
     assert installed_order == ["pnpm", "mmdc"]
-    assert summary is not None
+    assert isinstance(outcomes, list)
 
 
 def test_perform_uninstall_ban_lever_removes_shims_and_aliases(tmp_path: Path) -> None:
@@ -3287,9 +3540,10 @@ def test_run_wizard_surfaces_a_postinstall_warning_on_the_real_path() -> None:
             postinstall_warning="codegraph MCP registration failed: exit 1",
         )
 
+    tools = [_tool("codegraph", "dev")]
     console, buf = _console()
-    summary = run_wizard(
-        [_tool("codegraph", "dev")],
+    outcomes = run_wizard(
+        tools,
         _platform(),
         FakePrompter(categories=[], tools=[], confirm=True),
         console,
@@ -3297,37 +3551,32 @@ def test_run_wizard_surfaces_a_postinstall_warning_on_the_real_path() -> None:
         runner=_runner,
         resolve_tag=_resolve_tag,
         install=install,
-        installed=_never_installed,
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
     )
-    assert summary is not None
+    assert isinstance(outcomes, list)
     out = buf.getvalue()
     assert "codegraph" in out
     assert "codegraph MCP registration failed: exit 1" in out
 
 
-def test_run_wizard_passes_the_full_catalog_as_tools_by_id_into_run_installs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import installer.app as app_module
-
+def test_run_wizard_passes_the_full_catalog_as_tools_by_id_into_execute_plan() -> None:
     seen: dict[str, object] = {}
 
-    def fake_run_installs(
-        ordered: list[Tool],
+    def install(
+        tool: Tool,
         platform: Platform,
         runner: Runner,
         resolve_tag: TagResolver,
-        install: Install,
         *,
-        on_mismatch: object = None,
-        catalog: Mapping[str, Tool] | None = None,
-    ) -> list[InstallOutcome]:
-        seen["catalog"] = catalog
-        return [InstallOutcome(tool.id, "installed", method_kind="brew") for tool in ordered]
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        seen["catalog"] = tools
+        return InstallOutcome(tool.id, "installed", method_kind="brew")
 
-    monkeypatch.setattr(app_module, "run_installs", fake_run_installs)
     catalog_tools = _catalog()
-    _installed, install = _recording_install()
     run_wizard(
         catalog_tools,
         _platform(),
@@ -3337,9 +3586,10 @@ def test_run_wizard_passes_the_full_catalog_as_tools_by_id_into_run_installs(
         runner=_runner,
         resolve_tag=_resolve_tag,
         install=install,
-        installed=_never_installed,
+        refresh=presence_service(catalog_tools),
+        updates=ScriptedUpdates({}),
     )
-    assert seen["catalog"] == {t.id: t for t in catalog_tools}
+    assert seen["catalog"] == {tool.id: tool for tool in catalog_tools}
 
 
 def _login_shell_tool() -> Tool:
@@ -3375,20 +3625,22 @@ def test_run_wizard_prints_login_shell_instructions_when_sensitive_confirmed(
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
     _not_present(monkeypatch, tmp_path)
     prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    tools = [_login_shell_tool()]
     console, buf = _console()
-    summary = run_wizard(
-        [_login_shell_tool()],
+    outcomes = run_wizard(
+        tools,
         _platform(),
         prompter,
         console,
         Options(all=True, categories=(), yes=False),
         runner=_runner,
         resolve_tag=_resolve_tag,
-        installed=_never_installed,
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
     )
     out = buf.getvalue()
-    assert summary is not None
-    assert summary.installed == ("oh-my-zsh",)
+    assert isinstance(outcomes, list)
+    assert outcomes[0].result == "done"
     assert "chsh -s" in out
     sensitive = [q for q in prompter.questions if q != _BATCH_QUESTION]
     assert len(sensitive) == 1
@@ -3412,19 +3664,21 @@ def test_run_wizard_skips_login_shell_instructions_when_sensitive_refused(
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
     _not_present(monkeypatch, tmp_path)
     prompter = FakePrompter(categories=[], tools=[], confirm=True, sensitive_confirm=False)
+    tools = [_login_shell_tool()]
     console, buf = _console()
-    summary = run_wizard(
-        [_login_shell_tool()],
+    outcomes = run_wizard(
+        tools,
         _platform(),
         prompter,
         console,
         Options(all=True, categories=(), yes=False),
         runner=_runner,
         resolve_tag=_resolve_tag,
-        installed=_never_installed,
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
     )
-    assert summary is not None
-    assert summary.installed == ("oh-my-zsh",)
+    assert isinstance(outcomes, list)
+    assert outcomes[0].result == "done"
     assert "chsh -s" not in buf.getvalue()
 
 
@@ -3438,19 +3692,21 @@ def test_run_wizard_sensitive_unattended_never_asks_and_prints_no_instructions(
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
     _not_present(monkeypatch, tmp_path)
     prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    tools = [_login_shell_tool()]
     console, buf = _console()
-    summary = run_wizard(
-        [_login_shell_tool()],
+    outcomes = run_wizard(
+        tools,
         _platform(),
         prompter,
         console,
         Options(all=True, categories=(), yes=True),
         runner=_runner,
         resolve_tag=_resolve_tag,
-        installed=_never_installed,
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
     )
-    assert summary is not None
-    assert summary.installed == ("oh-my-zsh",)
+    assert isinstance(outcomes, list)
+    assert outcomes[0].result == "done"
     assert prompter.questions == []
     assert "chsh -s" not in buf.getvalue()
 
@@ -3461,19 +3717,21 @@ def test_run_wizard_never_asks_sensitive_question_without_login_shell_action(
 ) -> None:
     _not_present(monkeypatch, tmp_path)
     prompter = FakePrompter(categories=[], tools=[], confirm=True)
+    tools = [_tool("rg", "search")]
     console, buf = _console()
-    summary = run_wizard(
-        [_tool("rg", "search")],
+    outcomes = run_wizard(
+        tools,
         _platform(),
         prompter,
         console,
         Options(all=True, categories=(), yes=False),
         runner=_runner,
         resolve_tag=_resolve_tag,
-        installed=_never_installed,
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
     )
-    assert summary is not None
-    assert summary.installed == ("rg",)
+    assert isinstance(outcomes, list)
+    assert outcomes[0].result == "done"
     assert prompter.questions == [_BATCH_QUESTION]
     assert "chsh -s" not in buf.getvalue()
 

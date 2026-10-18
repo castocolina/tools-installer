@@ -29,7 +29,7 @@ from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
 from installer.policy import Policy
 from installer.resolve import UnavailableReason
-from installer.session import Disposition, PlanRow, Result, RowOutcome, Summary
+from installer.session import Disposition, PlanRow, Result, RowOutcome
 from installer.settings import Settings, SettingsStore, load_settings, save_settings
 from installer.shellrc import ShellrcConsolidation, ShellrcRefusal, write_myshellrc
 from installer.terminal_shell import TerminalShellResult
@@ -48,6 +48,7 @@ from installer.wizard_app import (
 )
 from tests.state_doubles import (
     FrozenStateService,
+    ScriptedUpdates,
     empty_inventory,
     empty_outdated,
     pass_state,
@@ -80,6 +81,11 @@ def _outcomes(**results: Result) -> dict[str, RowOutcome]:
         tool_id: RowOutcome(PlanRow(tool_id, Disposition.INSTALL, ""), result)
         for tool_id, result in results.items()
     }
+
+
+def _headless_outcomes(**results: Result) -> list[RowOutcome]:
+    """A headless run's ordered outcomes, adapted from concise per-tool results."""
+    return list(_outcomes(**results).values())
 
 
 class _FakeStdin:
@@ -1394,10 +1400,18 @@ def test_build_app_wires_the_shared_terminal_closure_into_uninstall_inputs(
     assert inputs.terminal_sync is seen[0]["terminal_sync"]
 
 
-def _stub_install_run(monkeypatch: pytest.MonkeyPatch, summary: Summary) -> list[str]:
-    """Drive setup.main through a full (stubbed) install run and record whether
-    the troubleshooting pointer was rendered."""
-    rendered: list[str] = []
+def _headless_main_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+    buffer: io.StringIO,
+    outcome_batches: Sequence[list[RowOutcome] | None],
+) -> tuple[
+    list[dict[str, object]],
+    list[tuple[VersionRefreshService, UpdateService, NodeInstallPolicy]],
+    list[str],
+]:
+    run_calls: list[dict[str, object]] = []
+    built_services: list[tuple[VersionRefreshService, UpdateService, NodeInstallPolicy]] = []
+    side_effects: list[str] = []
 
     def fake_load_tools(_registry: object) -> list[Tool]:
         return []
@@ -1405,45 +1419,123 @@ def _stub_install_run(monkeypatch: pytest.MonkeyPatch, summary: Summary) -> list
     def fake_load_categories(_registry: object) -> dict[str, str]:
         return {}
 
-    def fake_run_wizard(*_args: object, **_kwargs: object) -> Summary:
-        return summary
+    def fake_build_services(
+        tools: list[Tool], platform: Platform
+    ) -> tuple[VersionRefreshService, UpdateService, NodeInstallPolicy]:
+        refresh = presence_service(tools, platform=platform)
+        updates = ScriptedUpdates({})
+        policy = pnpm_globals.node_install_policy(tools)
+        built_services.append((refresh, updates, policy))
+        return refresh, updates, policy
 
-    def noop(*_args: object, **_kwargs: object) -> None:
-        return None
+    def fake_run_wizard(*_args: object, **kwargs: object) -> list[RowOutcome] | None:
+        run_calls.append(kwargs)
+        return outcome_batches[len(run_calls) - 1]
 
-    def fake_render_troubleshooting(_console: object) -> None:
-        rendered.append("shown")
+    def configure(*_args: object, **_kwargs: object) -> None:
+        side_effects.append("configure")
 
-    console = Console(file=io.StringIO(), width=100, no_color=True)
+    def verify(*_args: object, **_kwargs: object) -> None:
+        side_effects.append("verify")
+
+    def sync(_console: Console, _platform: Platform) -> None:
+        side_effects.append("sync")
+
+    def render_help(console: Console) -> None:
+        console.print("Troubleshooting help")
+
     monkeypatch.setattr(setup, "load_tools", fake_load_tools)
     monkeypatch.setattr(setup, "detect", _platform)
     monkeypatch.setattr(setup, "load_categories", fake_load_categories)
+    monkeypatch.setattr(setup, "_build_services", fake_build_services)
     monkeypatch.setattr(setup, "run_wizard", fake_run_wizard)
+    monkeypatch.setattr(setup, "configure_path", configure)
+    monkeypatch.setattr(setup, "_verify_and_clean", verify)
+    monkeypatch.setattr(setup, "_sync_terminals_and_report", sync)
+    monkeypatch.setattr(setup, "render_troubleshooting", render_help)
     monkeypatch.setattr(
         "installer.settings.default_settings_path", lambda: Path("/no/such/settings.json")
     )
-    monkeypatch.setattr(
-        setup, "default_settings_path", lambda: Path("/no/such/settings.json"), raising=False
-    )
-    monkeypatch.setattr(setup, "configure_path", noop)
-    monkeypatch.setattr(setup, "_verify_and_clean", noop)
-    monkeypatch.setattr(setup, "render_troubleshooting", fake_render_troubleshooting)
+    monkeypatch.setattr(setup, "default_settings_path", lambda: Path("/no/such/settings.json"))
     monkeypatch.setattr(setup.sys, "stdin", _FakeStdin())
-    monkeypatch.setattr(setup, "Console", lambda: console)
+    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
+    return run_calls, built_services, side_effects
+
+
+def test_headless_main_builds_services_once_and_exits_on_outcomes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    buffer = io.StringIO()
+    done_and_blocked = [
+        RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done"),
+        RowOutcome(PlanRow("apt-upgrade", Disposition.BLOCKED, ""), "blocked"),
+    ]
+    failed = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "failed")]
+    run_calls, built_services, side_effects = _headless_main_fixture(
+        monkeypatch, buffer, [done_and_blocked, failed]
+    )
+
+    assert setup.main(["--all", "--yes"]) == 0
+    assert setup.main(["--all", "--yes"]) == 1
+    assert len(built_services) == len(run_calls) == 2
+    for kwargs, (refresh, updates, _policy) in zip(run_calls, built_services, strict=True):
+        assert kwargs["refresh"] is refresh
+        assert kwargs["updates"] is updates
+        assert callable(kwargs["terminal_sync"])
+    assert side_effects == ["configure", "verify", "sync"] * 2
+    assert "Troubleshooting help" in buffer.getvalue()
+
+
+def test_headless_main_skips_path_wiring_and_sync_when_nothing_ran(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    buffer = io.StringIO()
+    skipped = [RowOutcome(PlanRow("rg", Disposition.SKIP, "already current"), "skipped")]
+    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+    _run_calls, _built_services, side_effects = _headless_main_fixture(
+        monkeypatch, buffer, [skipped, done]
+    )
+
+    assert setup.main(["--all", "--yes"]) == 0
+    assert side_effects == []
+    assert setup.main(["--all", "--yes"]) == 0
+    assert side_effects == ["configure", "verify", "sync"]
+
+
+def test_headless_main_prints_aborted_when_the_run_is_declined(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    buffer = io.StringIO()
+    _run_calls, _built_services, side_effects = _headless_main_fixture(monkeypatch, buffer, [None])
+
+    assert setup.main(["--all"]) == 0
+    assert "Aborted." in buffer.getvalue()
+    assert side_effects == []
+
+
+def _stub_install_run(monkeypatch: pytest.MonkeyPatch, outcomes: list[RowOutcome]) -> list[str]:
+    """Drive setup.main through a full (stubbed) install run and record whether
+    the troubleshooting pointer was rendered."""
+    rendered: list[str] = []
+    _headless_main_fixture(monkeypatch, io.StringIO(), [outcomes])
+
+    def record_troubleshooting(_console: Console) -> None:
+        rendered.append("shown")
+
+    monkeypatch.setattr(setup, "render_troubleshooting", record_troubleshooting)
     return rendered
 
 
 def test_a_dependency_failed_run_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
     # A blocked dependent is a run that wanted to install something, could have,
     # and did not — a wrapper checking $? must not read that as a clean install.
-    summary = Summary(
-        installed=(),
-        already=(),
-        failed=(),
-        no_method=("mmdc",),
-        dependency_failed=("a", "b", "c"),
+    outcomes = _headless_outcomes(
+        mmdc="blocked",
+        a="dependency_failed",
+        b="dependency_failed",
+        c="dependency_failed",
     )
-    rendered = _stub_install_run(monkeypatch, summary)
+    rendered = _stub_install_run(monkeypatch, outcomes)
     assert setup.main(["--all"]) == 1
     assert rendered == ["shown"]
 
@@ -1451,8 +1543,11 @@ def test_a_dependency_failed_run_exits_nonzero(monkeypatch: pytest.MonkeyPatch) 
 def test_a_no_method_only_run_still_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
     # Unchanged, and deliberately so: a tool with no method on this platform was
     # never installable here, which is not a failure.
-    summary = Summary(installed=("fd",), already=(), failed=(), no_method=("apt-upgrade",))
-    rendered = _stub_install_run(monkeypatch, summary)
+    outcomes = [
+        RowOutcome(PlanRow("fd", Disposition.INSTALL, ""), "done"),
+        RowOutcome(PlanRow("apt-upgrade", Disposition.BLOCKED, ""), "blocked"),
+    ]
+    rendered = _stub_install_run(monkeypatch, outcomes)
     assert setup.main(["--all"]) == 0
     assert rendered == []
 
@@ -1672,7 +1767,7 @@ def test_build_services_binds_the_update_service_to_the_refresh_service(
 
 
 def _noninteractive_all_fixture(
-    monkeypatch: pytest.MonkeyPatch, buffer: io.StringIO, summary: Summary
+    monkeypatch: pytest.MonkeyPatch, buffer: io.StringIO, outcomes: list[RowOutcome]
 ) -> None:
     def fake_load_tools(_registry: object) -> list[Tool]:
         return []
@@ -1680,8 +1775,17 @@ def _noninteractive_all_fixture(
     def fake_load_categories(_registry: object) -> dict[str, str]:
         return {}
 
-    def fake_run_wizard(*_args: object, **_kwargs: object) -> Summary:
-        return summary
+    def fake_build_services(
+        tools: list[Tool], platform: Platform
+    ) -> tuple[VersionRefreshService, UpdateService, NodeInstallPolicy]:
+        return (
+            presence_service(tools, platform=platform),
+            ScriptedUpdates({}),
+            pnpm_globals.node_install_policy(tools),
+        )
+
+    def fake_run_wizard(*_args: object, **_kwargs: object) -> list[RowOutcome]:
+        return outcomes
 
     def noop(*_args: object, **_kwargs: object) -> None:
         return None
@@ -1689,6 +1793,7 @@ def _noninteractive_all_fixture(
     monkeypatch.setattr(setup, "load_tools", fake_load_tools)
     monkeypatch.setattr(setup, "detect", _platform)
     monkeypatch.setattr(setup, "load_categories", fake_load_categories)
+    monkeypatch.setattr(setup, "_build_services", fake_build_services)
     monkeypatch.setattr(setup, "run_wizard", fake_run_wizard)
     monkeypatch.setattr(
         "installer.settings.default_settings_path", lambda: Path("/no/such/settings.json")
@@ -1706,11 +1811,11 @@ def test_the_noninteractive_all_route_calls_the_terminal_synchronizer_after_run_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test 1: the --all/category route invokes the shared synchronizer
-    after run_wizard returns a summary and reports a nonfatal warning to the
+    after run_wizard returns outcomes and reports a nonfatal warning to the
     console."""
     buffer = io.StringIO()
-    summary = Summary(installed=("fd",), already=(), failed=(), no_method=())
-    _noninteractive_all_fixture(monkeypatch, buffer, summary)
+    outcomes = _headless_outcomes(fd="done")
+    _noninteractive_all_fixture(monkeypatch, buffer, outcomes)
     calls: list[dict[str, object]] = []
 
     def sync(**kwargs: object) -> TerminalShellResult:
@@ -1764,8 +1869,8 @@ def test_the_noninteractive_all_route_survives_a_raising_terminal_synchronizer(
     """Test 3 (install half): a synchronizer OSError never flips an
     already-determined exit code, and produces an explicit console warning."""
     buffer = io.StringIO()
-    summary = Summary(installed=("fd",), already=(), failed=(), no_method=())
-    _noninteractive_all_fixture(monkeypatch, buffer, summary)
+    outcomes = _headless_outcomes(fd="done")
+    _noninteractive_all_fixture(monkeypatch, buffer, outcomes)
 
     def boom(**_kwargs: object) -> TerminalShellResult:
         raise OSError("EACCES: ~/.config/kitty/kitty.conf")
@@ -2230,9 +2335,7 @@ def test_headless_all_never_constructs_unified_app(monkeypatch: pytest.MonkeyPat
     def boom(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("headless --all must not construct UnifiedApp")
 
-    rendered = _stub_install_run(
-        monkeypatch, Summary(installed=("fd",), already=(), failed=(), no_method=())
-    )
+    rendered = _stub_install_run(monkeypatch, _headless_outcomes(fd="done"))
     monkeypatch.setattr(setup, "_build_app", boom)
     assert setup.main(["--all", "--yes"]) == 0
     assert rendered == []
@@ -2535,7 +2638,7 @@ def test_all_yes_and_no_tty_never_prompt_for_link_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     seen = _capture_app(monkeypatch)
-    _stub_install_run(monkeypatch, Summary(installed=("fd",), already=(), failed=(), no_method=()))
+    _stub_install_run(monkeypatch, _headless_outcomes(fd="done"))
     assert setup.main(["--all", "--yes"]) == 0
     assert all(kwargs.get("prompt_link_mode") is not True for kwargs in seen)
 
@@ -3540,17 +3643,11 @@ def test_all_skipped_run_exits_0(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
 def test_headless_run_exits_1_on_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _sandbox(monkeypatch, tmp_path)
-
-    def fake_run_wizard(*_args: object, **_kwargs: object) -> Summary:
-        return Summary(installed=(), already=(), failed=("rg",), no_method=())
-
-    def noop(*_args: object, **_kwargs: object) -> None:
-        return None
-
-    monkeypatch.setattr(setup, "run_wizard", fake_run_wizard)
-    monkeypatch.setattr(setup, "configure_path", noop)
-    monkeypatch.setattr(setup, "_verify_and_clean", noop)
-    monkeypatch.setattr(setup, "_sync_terminals_and_report", noop)
+    _headless_main_fixture(
+        monkeypatch,
+        io.StringIO(),
+        [[RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "failed")]],
+    )
     assert setup.main(["--all", "--yes"]) == 1
 
 
@@ -3560,8 +3657,8 @@ def test_all_yes_with_a_damaged_settings_json_warns_before_acting(
     """WR-05: the headless --all route prints the D-11 settings warning to
     stderr before it wires anything, and never rewrites the damaged file."""
     buffer = io.StringIO()
-    summary = Summary(installed=("fd",), already=(), failed=(), no_method=())
-    _noninteractive_all_fixture(monkeypatch, buffer, summary)
+    outcomes = _headless_outcomes(fd="done")
+    _noninteractive_all_fixture(monkeypatch, buffer, outcomes)
     path = tmp_path / "settings.json"
     path.write_bytes(b'{"link_mode": ')
     monkeypatch.setattr("installer.settings.default_settings_path", lambda: path)

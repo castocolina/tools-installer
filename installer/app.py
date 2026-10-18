@@ -1,4 +1,4 @@
-"""The interactive wizard flow: select -> audit -> confirm -> install -> summarize."""
+"""Headless wizard planning and install lifecycle flows."""
 
 import contextlib
 import dataclasses
@@ -12,9 +12,7 @@ from rich.console import Console
 
 from installer import shellrc
 from installer.atomic import atomic_write_text
-from installer.audit import audit
 from installer.cli import Options
-from installer.deps import resolve_dependencies
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport, audit_path, scan_bin_links
 from installer.engine import install_tool
@@ -43,9 +41,7 @@ from installer.rcclean import (
     strip_lines,
 )
 from installer.render import (
-    render_audit,
     render_competing_mechanisms,
-    render_dependency_notice,
     render_disk_pressure,
     render_doctor,
     render_failure_details,
@@ -53,26 +49,25 @@ from installer.render import (
     render_guard_status,
     render_handoff,
     render_node_globals,
+    render_plan,
     render_post_install_handoff,
     render_postinstall_warnings,
     render_rc_duplicates,
     render_remove_yourself,
+    render_run_summary,
     render_skipped,
-    render_summary,
     render_uninstall,
     render_verification,
 )
-from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner, run_command
-from installer.selection import category_choices, select_tools, tool_choices
 from installer.session import (
+    Disposition,
     OnMismatch,
+    RowOutcome,
+    RunContext,
     SensitiveInstall,
-    Summary,
-    order_for_install,
-    run_installs,
-    summarize,
-    with_sensitive_confirm,
+    build_plan,
+    execute_plan,
 )
 from installer.shellrc import (
     collect_bin_dirs,
@@ -81,7 +76,6 @@ from installer.shellrc import (
     write_managed_path,
     write_myshellrc,
 )
-from installer.status import is_installed
 from installer.systemd_daemon import CompetingUnit
 from installer.tweaks import TweakBundle
 from installer.uninstall import (
@@ -93,38 +87,16 @@ from installer.uninstall import (
     sweep_policies,
     sweep_tweaks,
 )
+from installer.update import UpdateService
+from installer.version_status import VersionRefreshService
 from installer.versions import TagResolver, resolve_github_tag
 
-# Catalog selection seam: given the full catalog (platform applicability is
-# resolved at install time), return the chosen ids (the Textual screen in
-# production), or None when the user aborted.
-SelectCatalog = Callable[[list[Tool]], list[str] | None]
 
-
-def _choose_tools(
-    tools: list[Tool],
-    prompter: Prompter,
-    options: Options,
-    installed: Callable[[Tool], bool],
-    category_blurbs: dict[str, str] | None = None,
-    select_catalog: SelectCatalog | None = None,
-) -> list[Tool] | None:
-    """The tools to install, or None when the user aborted the selection screen."""
+def _choose_tools(tools: list[Tool], options: Options) -> list[Tool]:
+    """Apply the headless selection flags to the catalog."""
     if options.all:
         return tools
-    if options.categories:  # flags always win over the interactive seam
-        return [tool for tool in tools if tool.category in options.categories]
-    if select_catalog is not None:
-        chosen_ids = select_catalog(tools)
-        if chosen_ids is None:
-            return None
-        return select_tools(tools, chosen_ids)
-    chosen_categories = prompter.select_categories(category_choices(tools, category_blurbs))
-    wanted = set(chosen_categories)
-    in_categories = [tool for tool in tools if tool.category in wanted]
-    statuses = audit(in_categories, installed)
-    chosen_ids = prompter.select_tools(tool_choices(statuses))
-    return select_tools(in_categories, chosen_ids)
+    return [tool for tool in tools if tool.category in options.categories]
 
 
 def run_wizard(
@@ -133,40 +105,47 @@ def run_wizard(
     prompter: Prompter,
     console: Console,
     options: Options,
+    *,
+    refresh: VersionRefreshService,
+    updates: UpdateService,
+    terminal_sync: Callable[[], str | None] | None = None,
     runner: Runner = run_command,
     resolve_tag: TagResolver = resolve_github_tag,
     install: SensitiveInstall = install_tool,
-    installed: Callable[[Tool], bool] = is_installed,
     on_mismatch: OnMismatch | None = None,
-    category_blurbs: dict[str, str] | None = None,
-    select_catalog: SelectCatalog | None = None,
-) -> Summary | None:
-    """Drive the full wizard. Returns the install summary, or None if the user declined.
+) -> list[RowOutcome] | None:
+    """Print and execute a fresh plan, or return None when confirmation is declined."""
+    selected = _choose_tools(tools, options)
+    try:
+        refresh.refresh(tools)
+    except (OSError, CommandError, ValueError) as exc:
+        lines = str(exc).splitlines()
+        detail = lines[0] if lines and lines[0] else type(exc).__name__
+    else:
+        detail = ""
 
-    None (aborted) is distinct from an empty Summary (ran, but nothing to install).
-    --yes implies unattended: the mismatch prompt is suppressed and a checksum
-    mismatch hard-fails that tool.
-    category_blurbs feeds the category menu's hover descriptions.
-    select_catalog, when given, replaces the whole two-step category->tool
-    selection (including its intermediate audit) with the single catalog
-    screen; its None return (user aborted) aborts the wizard.
-    """
-    selected = _choose_tools(tools, prompter, options, installed, category_blurbs, select_catalog)
-    if selected is None:
-        return None
-    resolution = resolve_dependencies(
-        order_for_install(selected),
+    rows = build_plan(
+        [tool.id for tool in selected],
         tools,
-        available=lambda tool: bool(resolve_methods(tool, platform)),
-        is_installed=installed,
+        refresh.state_of,
+        refresh.platform,
+        reinstall=frozenset(),
     )
-    render_dependency_notice(resolution.dragged_in, resolution.warnings, console)
-    ordered = list(resolution.order)
-    statuses = audit(ordered, installed)
-    render_audit(statuses, console)
-    if not options.yes and not prompter.confirm("Install the selected tools?"):
+    waiting = [row.tool_id for row in rows if row.disposition is Disposition.WAIT]
+    if detail or waiting:
+        detail = detail or f"no state for {', '.join(waiting)}"
+        console.print(f"State check failed: {detail}")
+        outcomes = [RowOutcome(row, "not_attempted", detail=detail) for row in rows]
+        render_run_summary(outcomes, console)
+        return outcomes
+
+    render_plan(rows, console)
+    has_runnable_row = any(
+        row.disposition not in {Disposition.SKIP, Disposition.BLOCKED} for row in rows
+    )
+    if not options.yes and has_runnable_row and not prompter.confirm("Run this plan?"):
+        console.print("Cancelled; nothing was changed.")
         return None
-    tools_by_id = {t.id: t for t in tools}
 
     def confirm_sensitive(tool_id: str, _action: str) -> bool:
         return prompter.confirm(
@@ -174,27 +153,27 @@ def run_wizard(
             "which you run in your own terminal after the installer exits?"
         )
 
-    outcomes = run_installs(
-        ordered,
-        platform,
-        runner,
-        resolve_tag,
-        with_sensitive_confirm(None if options.yes else confirm_sensitive, install),
+    context = RunContext(
+        catalog={tool.id: tool for tool in tools},
+        platform=refresh.platform,
+        runner=runner,
+        resolve_tag=resolve_tag,
+        install=install,
+        updates=updates,
+        terminal_sync=terminal_sync,
         on_mismatch=None if options.yes else on_mismatch,
-        catalog=tools_by_id,
+        confirm_sensitive=None if options.yes else confirm_sensitive,
     )
-    summary = summarize(outcomes)
-    render_summary(summary, console)
-    # Summary only counts failures; this is where the actual exception lives.
-    render_failure_details(outcomes, console)
-    # Summary gives the counts; this gives the reasons, so a skipped dependent is never a bare id.
-    render_skipped(outcomes, console)
-    # Summary only names manual-required tools; this is where their actual setup steps live.
-    render_handoff(outcomes, console)
-    render_post_install_handoff(outcomes, console)
-    render_postinstall_warnings(outcomes, console)
-    render_verification(outcomes, console)
-    return summary
+    outcomes = execute_plan(rows, context)
+    render_run_summary(outcomes, console)
+    installs = [outcome.install for outcome in outcomes if outcome.install is not None]
+    render_failure_details(installs, console)
+    render_skipped(installs, console)
+    render_handoff(installs, console)
+    render_post_install_handoff(installs, console)
+    render_postinstall_warnings(installs, console)
+    render_verification(installs, console)
+    return outcomes
 
 
 def configure_path(

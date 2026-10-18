@@ -76,7 +76,7 @@ from installer.render import render_troubleshooting
 from installer.resolve import unavailable_reason
 from installer.run import OutputRunner, Runner, run_captured, run_query
 from installer.selection import Choice
-from installer.session import exit_code
+from installer.session import exit_code, ran_anything
 from installer.settings import (
     SettingsStore,
     default_settings_path,
@@ -1555,39 +1555,38 @@ def main(argv: list[str]) -> int:
             settings=store,
             prompt_link_mode=needs_choice,
         )
-    summary = run_wizard(
+    refresh, updates, _ = _build_services(tools, platform)
+    outcomes = run_wizard(
         tools,
         platform,
         prompter,
         console,
         options,
+        refresh=refresh,
+        updates=updates,
+        terminal_sync=lambda: _sync_terminals(platform),
         on_mismatch=_ask_mismatch,
-        category_blurbs=load_categories(_REGISTRY),
     )
-    if summary is None:
+    if outcomes is None:
         console.print("Aborted.")
         return 0
-    configure_path(
-        tools,
-        console,
-        platform=platform,
-        default_bin_dir=_DEFAULT_BIN_DIR,
-        myshellrc_path=_MYSHELLRC,
-        shellrc_path=_SHELLRC,
-        rc_paths=rc_paths_for_mode(store.link_mode, _SHELL),
-        link_mode=store.link_mode,
-    )
-    _verify_and_clean(console, tools, platform, assume_yes=options.yes)
-    # D-01/15.6-06 Task 2: the same shared synchronizer every other lifecycle
-    # route calls, after the unattended run's own summary is final.
-    _sync_terminals_and_report(console, platform)
-    # has_failure covers failed/mismatched/dependency_failed/not_attempted/
-    # update_failed/crash_error (D-08); no_method stays excluded — a tool
-    # that has no method here was never installable, which is not an error.
-    if summary.has_failure:
+    if ran_anything(outcomes):
+        configure_path(
+            tools,
+            console,
+            platform=platform,
+            default_bin_dir=_DEFAULT_BIN_DIR,
+            myshellrc_path=_MYSHELLRC,
+            shellrc_path=_SHELLRC,
+            rc_paths=rc_paths_for_mode(store.link_mode, _SHELL),
+            link_mode=store.link_mode,
+        )
+        _verify_and_clean(console, tools, platform, assume_yes=options.yes)
+        _sync_terminals_and_report(console, platform)
+    code = exit_code(outcomes)
+    if code:
         render_troubleshooting(console)
-        return 1
-    return 0
+    return code
 
 
 if __name__ == "__main__":
