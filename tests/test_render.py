@@ -865,6 +865,55 @@ def _done(tool_id: str, disposition: Disposition, *, health: Health = Health.OK)
     return RowOutcome(PlanRow(tool_id, disposition, "needed", health=health), "done")
 
 
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        (
+            RowOutcome(
+                PlanRow("group", Disposition.RECONFIGURE, "configure"),
+                "failed",
+                detail="install the group: pnpm is not on PATH",
+            ),
+            "install the group: pnpm is not on PATH",
+        ),
+        (
+            RowOutcome(
+                PlanRow("pnpm", Disposition.UPDATE, "upgrade"),
+                "failed",
+                update=UpdateOutcome(
+                    "pnpm",
+                    "failed",
+                    "brew",
+                    detail="pnpm snapshot refused: globals unreadable",
+                ),
+                detail="pnpm snapshot refused: globals unreadable",
+            ),
+            "pnpm snapshot refused: globals unreadable",
+        ),
+        (
+            RowOutcome(
+                PlanRow("rg", Disposition.INSTALL, "missing"),
+                "failed",
+                install=InstallOutcome(
+                    "rg", "failed", errors=(RuntimeError("download failed\\nline two"),)
+                ),
+                detail="fallback detail",
+            ),
+            "download failed",
+        ),
+    ],
+)
+def test_failed_row_prefers_outcome_detail_when_install_errors_are_empty(
+    outcome: RowOutcome, expected: str
+) -> None:
+    console, buf = _console()
+
+    render_run_summary([outcome], console)
+
+    assert f"failed — {expected}" in buf.getvalue()
+    assert "no method succeeded" not in buf.getvalue()
+
+
 def test_render_run_summary_first_line_is_the_summary_head() -> None:
     outcomes = [
         _done("fd", Disposition.INSTALL),
