@@ -44,20 +44,15 @@ from installer.render import (
     render_competing_mechanisms,
     render_disk_pressure,
     render_doctor,
-    render_failure_details,
     render_guard,
     render_guard_status,
-    render_handoff,
     render_node_globals,
     render_plan,
-    render_post_install_handoff,
-    render_postinstall_warnings,
     render_rc_duplicates,
     render_remove_yourself,
+    render_run_report,
     render_run_summary,
-    render_skipped,
     render_uninstall,
-    render_verification,
 )
 from installer.run import CommandError, Runner, run_command
 from installer.session import (
@@ -173,14 +168,7 @@ def run_wizard(
         confirm_sensitive=None if options.yes else confirm_sensitive,
     )
     outcomes = execute_plan(rows, context)
-    render_run_summary(outcomes, console)
-    installs = [outcome.install for outcome in outcomes if outcome.install is not None]
-    render_failure_details(installs, console)
-    render_skipped(installs, console)
-    render_handoff(installs, console)
-    render_post_install_handoff(installs, console)
-    render_postinstall_warnings(installs, console)
-    render_verification(installs, console)
+    render_run_report(outcomes, console)
     return outcomes
 
 

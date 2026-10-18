@@ -24,12 +24,14 @@ from installer.render import (
     render_run_summary,
     render_skipped,
     render_uninstall,
+    render_update_notes,
     render_verification,
     running_row_text,
     summary_head,
 )
 from installer.run import CommandError
 from installer.session import WORDS, Disposition, PlanRow, Result, RowOutcome
+from installer.update import UpdateOutcome
 from installer.version_status import Health
 
 
@@ -1037,6 +1039,62 @@ def test_running_row_text_shows_the_in_flight_mark() -> None:
     row = PlanRow("tool", Disposition.UPDATE, "new version", health=Health.OUTDATED)
     text = running_row_text(row, 4, 78)
     assert text.plain.startswith("> tool  will update")
+
+
+def test_render_update_notes_prints_every_successful_update_extra() -> None:
+    outcome = RowOutcome(
+        PlanRow("pnpm", Disposition.UPDATE, "new version", health=Health.OUTDATED),
+        "done",
+        update=UpdateOutcome(
+            "pnpm",
+            "updated",
+            "brew",
+            replayed_globals=("claude", "opencode"),
+            cleanup_warnings=("left leftover",),
+            postinstall_warning="hook warned",
+            detail="pnpm globals replay failed: boom",
+        ),
+    )
+    console, buf = _console()
+
+    render_update_notes([outcome], console)
+
+    assert buf.getvalue().strip() == (
+        "pnpm updated — replayed claude, opencode; left leftover; hook warned; "
+        "pnpm globals replay failed: boom"
+    )
+
+
+def test_render_update_notes_is_silent_without_extras() -> None:
+    successful = RowOutcome(
+        PlanRow("rg", Disposition.UPDATE, "new version"),
+        "done",
+        update=UpdateOutcome("rg", "updated", "brew"),
+    )
+    failed = RowOutcome(
+        PlanRow("jq", Disposition.UPDATE, "new version"),
+        "failed",
+        update=UpdateOutcome("jq", "failed", "brew", detail="failure"),
+    )
+    console, buf = _console()
+
+    render_update_notes([successful, failed], console)
+
+    assert buf.getvalue() == ""
+
+
+def test_render_update_notes_prints_child_output_literally() -> None:
+    outcome = RowOutcome(
+        PlanRow("rg", Disposition.UPDATE, "new version"),
+        "done",
+        update=UpdateOutcome("rg", "updated", "brew", detail="[red]x[/] \x1b[31m"),
+    )
+    console, buf = _console()
+
+    render_update_notes([outcome], console)
+
+    assert "[red]x[/]" in buf.getvalue()
+    assert "\x1b" not in buf.getvalue()
 
 
 def test_render_run_summary_mixed_run_counts_every_category() -> None:

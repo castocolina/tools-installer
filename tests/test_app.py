@@ -481,6 +481,40 @@ def test_headless_reports_refresh_errors_without_messages(
     assert installed == []
 
 
+def test_headless_report_carries_a_successful_updates_extras() -> None:
+    tool = _tool("jq", "data")
+    tools = [tool]
+    refresh = presence_service(
+        tools,
+        states=[plan_state(tool, health=Health.OUTDATED, owner="brew", method=tool.methods[0])],
+        platform=_platform(),
+    )
+    console, buf = _console()
+
+    outcomes = run_wizard(
+        tools,
+        _platform(),
+        FakePrompter(confirm=True),
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=_recording_install()[1],
+        refresh=refresh,
+        updates=ScriptedUpdates(
+            {
+                "jq": UpdateOutcome(
+                    "jq", "updated", "brew", detail="pnpm globals replay failed: boom"
+                )
+            }
+        ),
+    )
+
+    assert "Summary — 1 updated" in buf.getvalue()
+    assert "jq updated — pnpm globals replay failed: boom" in buf.getvalue()
+    assert isinstance(outcomes, list)
+
+
 def test_all_yes_updates_an_outdated_brew_tool_and_exits_zero() -> None:
     tool = _tool("jq", "data")
     tools = [tool]

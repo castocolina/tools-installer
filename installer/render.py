@@ -247,6 +247,42 @@ def render_plan(
         )
 
 
+def render_update_notes(outcomes: Sequence[RowOutcome], console: Console) -> None:
+    """Print successful update details that supplement the outcome row."""
+    for outcome in outcomes:
+        if outcome.result != "done" or outcome.row.disposition is not Disposition.UPDATE:
+            continue
+        update = outcome.update
+        if update is None:
+            continue
+        notes = (
+            [f"replayed {', '.join(update.replayed_globals)}"] if update.replayed_globals else []
+        )
+        notes.extend(update.cleanup_warnings)
+        if update.postinstall_warning:
+            notes.append(update.postinstall_warning)
+        if update.detail:
+            notes.append(update.detail)
+        if notes:
+            line = sanitize_log_line(
+                f"{outcome.row.tool_id} {WORDS[Disposition.UPDATE].done} — {'; '.join(notes)}"
+            )
+            console.print(line, markup=False, highlight=False, soft_wrap=True)
+
+
+def render_run_report(outcomes: Sequence[RowOutcome], console: Console) -> None:
+    """Print the summary followed by every outcome report in one fixed order."""
+    render_run_summary(outcomes, console)
+    installs = [outcome.install for outcome in outcomes if outcome.install is not None]
+    render_failure_details(installs, console)
+    render_skipped(installs, console)
+    render_handoff(installs, console)
+    render_post_install_handoff(installs, console)
+    render_postinstall_warnings(installs, console)
+    render_update_notes(outcomes, console)
+    render_verification(installs, console)
+
+
 def render_failure_details(outcomes: list[InstallOutcome], console: Console) -> None:
     """Print the last ladder-method error for each failed tool.
 
