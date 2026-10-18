@@ -89,7 +89,7 @@ _PHASE_14_REQUIRED = (
     "set_login_shell",
     "Platform.immutable",
     "4159",
-    "with_sensitive_confirm",
+    "binds the sensitive-action confirmation",
 )
 
 
@@ -106,9 +106,8 @@ def test_architecture_records_phase_14_mechanisms() -> None:
     one action has no execution seam. Platform.immutable / 4159: the
     login-shell action is hard-blocked on atomic hosts because
     ublue-os/bazzite#4159 was closed with no root-cause analysis.
-    with_sensitive_confirm: confirmation is bound at a composition
-    point so the shared Install protocol — and its twenty-nine fakes —
-    stay unchanged.
+    binds the sensitive-action confirmation inside execute_plan's one
+    _with_force wrapper, while SensitiveInstall carries the live seam.
     """
     text = ARCHITECTURE.read_text(encoding="utf-8")
     for phrase in _PHASE_14_REQUIRED:

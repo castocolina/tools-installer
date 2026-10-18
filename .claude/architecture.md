@@ -735,14 +735,11 @@ doctrine (`installer/host_setup.py`: reviewed console handoffs, never
 launched from a worker thread). `App.suspend()` as an in-process
 alternative was considered and deferred, not overlooked.
 
-The confirmation is bound at a composition point through
-`with_sensitive_confirm` rather than by widening the shared `Install`
-protocol. Widening `Install` would have forced every existing fake
-install — twenty-nine of them, plus `attributed_install` — to grow a
-keyword they do not use. The adapter returns the original `Install`,
-so those sites stay valid; `execute_plan` binds confirmation at its one call
-into the install ladder. Unattended (`--yes`) means no callback on both
-entry points, which the dispatcher treats as skip.
+`execute_plan` binds the sensitive-action confirmation inside its one
+install wrapper, `_with_force`, which also adds `repair=True` for repair and
+reinstall rows. `SensitiveInstall` carries the confirmation keyword at the
+live install seam. Unattended (`--yes`) means no callback on both entry
+points, which the dispatcher treats as skip.
 
 ## Phase 15.2: forcing child output and the silence indicator
 

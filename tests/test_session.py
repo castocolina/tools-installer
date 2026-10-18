@@ -26,13 +26,13 @@ from installer.run import CommandError, Runner
 from installer.session import (
     RESULT_WORDS,
     Disposition,
-    Install,
     MismatchChoice,
     OnMismatch,
     PlanRow,
     Result,
     RowOutcome,
     RunContext,
+    SensitiveInstall,
     execute_plan,
     exit_code,
     order_for_install,
@@ -808,7 +808,7 @@ def _mutable_platform() -> Platform:
     return Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
 
 
-def test_with_sensitive_confirm_reaches_post_install_gate(
+def test_execute_plan_confirmation_reaches_the_post_install_gate(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -844,7 +844,7 @@ def test_with_sensitive_confirm_reaches_post_install_gate(
     assert no_outcome is not None and no_outcome.post_install_handoff == ()
 
 
-def test_with_sensitive_confirm_forwards_bound_confirmation_and_unchanged_kwargs() -> None:
+def test_execute_plan_forwards_the_confirmation_and_unchanged_kwargs() -> None:
     seen: list[tuple[ChecksumPolicy, Mapping[str, Tool] | None, ConfirmSensitiveAction | None]] = []
 
     def recording_install(
@@ -876,7 +876,7 @@ def test_with_sensitive_confirm_forwards_bound_confirmation_and_unchanged_kwargs
     assert seen == [("fail", catalog, confirm)]
 
 
-def test_with_sensitive_confirm_none_is_callable_and_produces_no_instructions(
+def test_execute_plan_without_a_confirmation_produces_no_instructions(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -904,8 +904,8 @@ def test_with_sensitive_confirm_none_is_callable_and_produces_no_instructions(
     assert outcome is not None and outcome.post_install_handoff == ()
 
 
-def test_install_protocol_parameters_are_unchanged() -> None:
-    params = list(inspect.signature(Install.__call__).parameters)
+def test_sensitive_install_protocol_parameters_are_unchanged() -> None:
+    params = list(inspect.signature(SensitiveInstall.__call__).parameters)
     assert params == [
         "self",
         "tool",
@@ -914,6 +914,7 @@ def test_install_protocol_parameters_are_unchanged() -> None:
         "resolve_tag",
         "checksum_policy",
         "tools",
+        "confirm_sensitive_action",
     ]
 
 

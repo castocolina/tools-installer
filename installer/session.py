@@ -14,7 +14,7 @@ from typing import Literal, Protocol, get_args
 
 from installer import executors
 from installer.deps import Blocked, resolve_dependencies
-from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
+from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus, Priority
 from installer.model import ConfigStep, ConfigStepKind, Tool
 from installer.ownership import (
@@ -58,21 +58,6 @@ _UNRESOLVED: frozenset[InstallStatus] = frozenset(
 )
 
 
-class Install(Protocol):
-    """Matches engine.install_tool, including the keyword-only checksum policy."""
-
-    def __call__(
-        self,
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = ...,
-        tools: Mapping[str, Tool] | None = ...,
-    ) -> InstallOutcome: ...
-
-
 class SensitiveInstall(Protocol):
     """An install callable that also accepts a sensitive-action confirmation."""
 
@@ -87,41 +72,6 @@ class SensitiveInstall(Protocol):
         tools: Mapping[str, Tool] | None = ...,
         confirm_sensitive_action: ConfirmSensitiveAction | None = ...,
     ) -> InstallOutcome: ...
-
-
-def with_sensitive_confirm(
-    confirm: ConfirmSensitiveAction | None,
-    install: SensitiveInstall = install_tool,
-) -> Install:
-    """Bind a confirmation onto an install without widening ``Install``.
-
-    Adding ``confirm_sensitive_action`` to the shared ``Install`` protocol
-    would force a mechanical edit into every fake install in the suite and
-    into every install call site. Binding at a composition point instead
-    leaves that protocol byte-identical. Callers: ``run_wizard`` (plan
-    14-04) and the in-TUI execute path (plan 14-05).
-    """
-
-    def bound(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-    ) -> InstallOutcome:
-        return install(
-            tool,
-            platform,
-            runner,
-            resolve_tag,
-            checksum_policy=checksum_policy,
-            tools=tools,
-            confirm_sensitive_action=confirm,
-        )
-
-    return bound
 
 
 def order_for_install(tools: list[Tool]) -> list[Tool]:
@@ -304,7 +254,9 @@ def summary_counts(outcomes: Sequence[RowOutcome]) -> str:
 
 
 def _with_force(
-    install: Callable[..., InstallOutcome], force_ids: frozenset[str]
+    install: Callable[..., InstallOutcome],
+    force_ids: frozenset[str],
+    confirm: ConfirmSensitiveAction | None,
 ) -> SensitiveInstall:
     """Pass repair=True only for repair and reinstall plan rows.
 
@@ -325,7 +277,7 @@ def _with_force(
         kwargs: dict[str, object] = {
             "checksum_policy": checksum_policy,
             "tools": tools,
-            "confirm_sensitive_action": confirm_sensitive_action,
+            "confirm_sensitive_action": confirm,
         }
         if tool.id in force_ids:
             kwargs["repair"] = True
@@ -496,7 +448,7 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
         for row in rows
         if row.disposition in {Disposition.REPAIR, Disposition.REINSTALL}
     )
-    install = with_sensitive_confirm(ctx.confirm_sensitive, _with_force(ctx.install, force_ids))
+    install = _with_force(ctx.install, force_ids, ctx.confirm_sensitive)
     unresolved: set[str] = set()
     halted = False
     outcomes: list[RowOutcome] = []
