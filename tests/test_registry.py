@@ -824,11 +824,10 @@ def test_mmdc_skips_on_linux_arm64_when_puppeteer_is_unavailable() -> None:
         available=lambda tool: bool(resolve_methods(tool, platform)),
         is_installed=lambda _tool: False,
     )
-    ids = [tool.id for tool in result.order]
+    ids = [tool.id for tool in result.closure]
     assert "mmdc" not in ids
     assert "puppeteer" not in ids
-    assert result.warnings
-    assert any("unavailable" in warning for warning in result.warnings)
+    assert {row.tool_id for row in result.blocked} >= {"puppeteer", "mmdc"}
 
 
 def test_selecting_mmdc_drags_in_pnpm_and_puppeteer_on_linux_amd64() -> None:
@@ -841,10 +840,10 @@ def test_selecting_mmdc_drags_in_pnpm_and_puppeteer_on_linux_amd64() -> None:
         available=lambda tool: bool(resolve_methods(tool, platform)),
         is_installed=lambda _tool: False,
     )
-    ids = [tool.id for tool in result.order]
+    ids = [tool.id for tool in result.closure]
     assert ids.index("pnpm") < ids.index("puppeteer") < ids.index("mmdc")
-    assert "puppeteer" in result.dragged_in
-    assert "pnpm" in result.dragged_in
+    assert result.requested_by["puppeteer"] == "mmdc"
+    assert result.requested_by["pnpm"] == "mmdc"
 
 
 def test_graphify_uses_the_uv_tool_executor_and_requires_uv() -> None:
@@ -873,9 +872,9 @@ def test_selecting_graphify_drags_in_uv() -> None:
         available=lambda tool: bool(resolve_methods(tool, platform)),
         is_installed=lambda _tool: False,
     )
-    ids = [tool.id for tool in result.order]
+    ids = [tool.id for tool in result.closure]
     assert ids.index("uv") < ids.index("graphify")
-    assert "uv" in result.dragged_in
+    assert result.requested_by["uv"] == "graphify"
 
 
 def test_graphify_entry_records_the_legitimacy_gate_evidence() -> None:
@@ -1289,11 +1288,11 @@ def test_selecting_oh_my_zsh_drags_in_zsh_and_git_in_deps_first_order() -> None:
         available=lambda tool: bool(resolve_methods(tool, platform)),
         is_installed=lambda _tool: False,
     )
-    ids = [tool.id for tool in result.order]
+    ids = [tool.id for tool in result.closure]
     assert ids.index("zsh") < ids.index("oh-my-zsh")
     assert ids.index("git") < ids.index("oh-my-zsh")
-    assert "zsh" in result.dragged_in
-    assert "git" in result.dragged_in
+    assert result.requested_by["zsh"] == "oh-my-zsh"
+    assert result.requested_by["git"] == "oh-my-zsh"
 
 
 def test_bazzite_zsh_and_podman_both_resolve_brew_only_no_new_entry() -> None:
@@ -1420,8 +1419,8 @@ def test_fresh_bazzite_without_brew_has_no_method_for_zsh_or_podman_yet() -> Non
         available=lambda tool: bool(resolve_methods(tool, platform)),
         is_installed=lambda _tool: False,
     )
-    assert result.order == ()
-    assert any("zsh" in warning and "not available" in warning for warning in result.warnings)
+    assert result.closure == ()
+    assert any(item.tool_id == "zsh" and item.needs is None for item in result.blocked)
 
 
 def test_hexyl_linux_uses_gnu_and_strips() -> None:

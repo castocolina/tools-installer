@@ -627,8 +627,8 @@ async def test_selection_made_in_one_tier_view_resolves_against_the_whole_catalo
         available=lambda _tool: True,
         is_installed=lambda _tool: False,
     )
-    assert result.dragged_in == ("pnpm",)
-    assert [tool.id for tool in result.order] == ["pnpm", "agent"]
+    assert result.requested_by["pnpm"] == "agent"
+    assert [tool.id for tool in result.closure] == ["pnpm", "agent"]
 
 
 async def test_marking_claude_in_the_user_view_offers_its_recommends_and_r_stages_them() -> None:

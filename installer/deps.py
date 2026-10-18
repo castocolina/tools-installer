@@ -11,7 +11,7 @@ and terminal-free.
 
 from collections import deque
 from collections.abc import Callable, Container, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from installer.model import Tool
 
@@ -22,27 +22,19 @@ class DependencyCycleError(ValueError):
 
 @dataclass(frozen=True)
 class Blocked:
-    """A tool dropped from the plan. `needs` is None when the tool itself is
-    unavailable and not installed, else the first blocking dependency id."""
+    """A blocked tool and its first unsatisfied dependency, if any."""
 
     tool_id: str
     needs: str | None
-    reason: str
 
 
 @dataclass(frozen=True)
 class Resolution:
-    """order: deps-first install order. dragged_in: ids auto-added (not selected).
-    warnings: human-readable notices (drag-ins, and skipped unavailable deps).
-    closure: deps-first order of every non-blocked tool in the closure, present
-    tools included (the plan's row order); `order` is its subset needing action."""
+    """Dependency closure, unavailable rows, and each dragged tool's requester."""
 
-    order: tuple[Tool, ...]
-    dragged_in: tuple[str, ...]
-    warnings: tuple[str, ...]
-    closure: tuple[Tool, ...] = ()
-    blocked: tuple[Blocked, ...] = ()
-    requested_by: Mapping[str, str] = field(default_factory=dict[str, str])
+    closure: tuple[Tool, ...]
+    blocked: tuple[Blocked, ...]
+    requested_by: Mapping[str, str]
 
 
 def resolve_dependencies(
@@ -59,18 +51,16 @@ def resolve_dependencies(
     priority) and independents keep that order — a dependency is only ever moved
     earlier than a tool that needs it.
 
-    Already-installed tools are satisfied as-is: they are excluded from the
-    returned order (nothing to do) and are not counted in dragged_in.
+    Returns the full deps-first closure, including installed tools, plus blocked
+    rows and the first selected requester for every dragged dependency.
     """
     by_id = {t.id: t for t in catalog}
     selected_ids = {t.id for t in selected}
 
     # 1. Transitive closure over requires, preserving first-seen order.
-    #    We walk every dep; already-installed ones are included so we can check
-    #    their availability status, but they are filtered from the final order.
+    #    We walk every dependency, including installed tools, for the full plan.
     wanted: list[Tool] = []
     seen: set[str] = set()
-    warnings: list[str] = []
     requested_by: dict[str, str] = {}
 
     def collect(tool: Tool, root: Tool) -> None:
@@ -81,7 +71,6 @@ def resolve_dependencies(
         for dep_id in tool.requires:
             dep = by_id.get(dep_id)
             if dep is None:
-                warnings.append(f"{tool.id} requires unknown tool '{dep_id}' — ignored")
                 continue
             if dep.id not in selected_ids:
                 requested_by.setdefault(dep.id, root.id)
@@ -129,21 +118,10 @@ def resolve_dependencies(
     for tool in wanted:
         # Runs once per `wanted` entry, so each blocked tool yields exactly one row.
         if is_blocked(tool):
-            if not available(tool) and not is_installed(tool):
-                text = f"{tool.id} is not available on this platform — skipped"
-            else:
-                text = f"{tool.id} skipped — a dependency is unavailable"
-            warnings.append(text)
-            blocked_rows.append(Blocked(tool.id, blocked_needs.get(tool.id), text))
+            blocked_rows.append(Blocked(tool.id, blocked_needs.get(tool.id)))
 
-    # Tools that need no installation action: already installed AND not blocked.
-    # These satisfy dependency edges but are excluded from the output order.
-    satisfied_by_install = {t.id for t in wanted if is_installed(t) and t.id not in blocked}
-
-    runnable = [t for t in wanted if t.id not in blocked and t.id not in satisfied_by_install]
-
-    # 3. Deps-first topological sort, cycle-detecting. `order` sorts `runnable`;
-    #    `closure` sorts every non-blocked tool, present tools included (Phase 20).
+    # 3. One deps-first topological sort over every non-blocked tool, including
+    #    installed tools. It detects every cycle in the reachable closure.
     def topo(members: list[Tool]) -> list[Tool]:
         ordered: list[Tool] = []
         placed: set[str] = set()
@@ -167,14 +145,8 @@ def resolve_dependencies(
             _place(tool)
         return ordered
 
-    ordered = topo(runnable)
     closure = topo([t for t in wanted if t.id not in blocked])
-
-    dragged_in = tuple(t.id for t in ordered if t.id not in selected_ids)
     return Resolution(
-        order=tuple(ordered),
-        dragged_in=dragged_in,
-        warnings=tuple(warnings),
         closure=tuple(closure),
         blocked=tuple(blocked_rows),
         requested_by=requested_by,

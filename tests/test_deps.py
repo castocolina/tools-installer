@@ -48,48 +48,47 @@ def test_no_requires_returns_selection_unchanged() -> None:
     a, b = _tool("a"), _tool("b")
     result = _resolve([a, b], [a, b])
     assert isinstance(result, Resolution)
-    assert [t.id for t in result.order] == ["a", "b"]
-    assert result.dragged_in == ()
-    assert result.warnings == ()
+    assert [t.id for t in result.closure] == ["a", "b"]
+    assert dict(result.requested_by) == {}
+    assert result.blocked == ()
 
 
-def test_missing_dependency_is_dragged_in() -> None:
+def test_missing_dependency_is_recorded_in_closure_and_requester() -> None:
     pnpm = _tool("pnpm")
     mmdc = _tool("mmdc", "pnpm")
     result = _resolve([mmdc], [mmdc, pnpm])
-    assert "pnpm" in result.dragged_in
-    assert [t.id for t in result.order] == ["pnpm", "mmdc"]
+    assert result.requested_by["pnpm"] == "mmdc"
+    assert [t.id for t in result.closure] == ["pnpm", "mmdc"]
 
 
-def test_already_installed_dependency_is_not_dragged_in() -> None:
+def test_already_installed_dependency_is_in_closure() -> None:
     pnpm = _tool("pnpm")
     mmdc = _tool("mmdc", "pnpm")
     result = _resolve([mmdc], [mmdc, pnpm], installed_ids=["pnpm"])
-    assert result.dragged_in == ()
-    assert [t.id for t in result.order] == ["mmdc"]
+    assert result.requested_by["pnpm"] == "mmdc"
+    assert [t.id for t in result.closure] == ["pnpm", "mmdc"]
 
 
-def test_explicitly_selected_installed_tool_is_excluded_from_order() -> None:
-    """Excluding a selected, already-installed tool is deliberate.
+def test_explicitly_selected_installed_tool_is_in_closure() -> None:
+    """Installed tools remain in the closure for plan-level disposition.
 
     The outdated-vs-current decision lives one layer up in
-    installer/execute_screen.py: the resolver has no version or ownership
-    state and must not invent a judgement it cannot make correctly.
+    installer/session.py: the resolver has no version or ownership state.
     """
     rg = _tool("rg")
     result = _resolve([rg], [rg], installed_ids=["rg"])
-    assert [t.id for t in result.order] == []
-    assert result.dragged_in == ()
-    assert result.warnings == ()
+    assert [t.id for t in result.closure] == ["rg"]
+    assert dict(result.requested_by) == {}
+    assert result.blocked == ()
 
 
-def test_selection_of_only_installed_tools_yields_empty_order() -> None:
+def test_selection_of_only_installed_tools_yields_closure() -> None:
     rg = _tool("rg")
     fd = _tool("fd")
     result = _resolve([rg, fd], [rg, fd], installed_ids=["rg", "fd"])
-    assert result.order == ()
-    assert result.dragged_in == ()
-    assert result.warnings == ()
+    assert [t.id for t in result.closure] == ["rg", "fd"]
+    assert dict(result.requested_by) == {}
+    assert result.blocked == ()
 
 
 def test_resolver_source_names_neither_version_status_nor_ownership() -> None:
@@ -100,12 +99,12 @@ def test_resolver_source_names_neither_version_status_nor_ownership() -> None:
     assert "ManagerOwnership" not in uncommented
 
 
-def test_transitive_chain_orders_deepest_first() -> None:
+def test_transitive_chain_closure_is_deps_first() -> None:
     a = _tool("a", "b")
     b = _tool("b", "c")
     c = _tool("c")
     result = _resolve([a], [a, b, c])
-    assert [t.id for t in result.order] == ["c", "b", "a"]
+    assert [t.id for t in result.closure] == ["c", "b", "a"]
 
 
 def test_diamond_installs_shared_dep_once_before_dependents() -> None:
@@ -113,7 +112,7 @@ def test_diamond_installs_shared_dep_once_before_dependents() -> None:
     b = _tool("b", "d")
     c = _tool("c", "d")
     a = _tool("a", "b", "c")
-    order = [t.id for t in _resolve([a], [a, b, c, d]).order]
+    order = [t.id for t in _resolve([a], [a, b, c, d]).closure]
     assert order.index("d") < order.index("b") < order.index("a")
     assert order.index("d") < order.index("c") < order.index("a")
     assert order.count("d") == 1
@@ -126,27 +125,29 @@ def test_cycle_raises_config_error_not_hang() -> None:
         _resolve([a], [a, b])
 
 
-def test_unavailable_dependency_skips_dependent_with_warning() -> None:
+def test_unavailable_dependency_is_blocked_with_needs() -> None:
     dep = _tool("dep")
     user = _tool("user", "dep")
     result = _resolve([user], [user, dep], available_ids=["user"])
-    assert [t.id for t in result.order] == []
-    assert any("not available" in w for w in result.warnings)
+    assert result.closure == ()
+    assert [(item.tool_id, item.needs) for item in result.blocked] == [
+        ("user", "dep"),
+        ("dep", None),
+    ]
 
 
 def test_unavailable_but_installed_dependency_is_fine() -> None:
     dep = _tool("dep")
     user = _tool("user", "dep")
     result = _resolve([user], [user, dep], available_ids=["user"], installed_ids=["dep"])
-    assert [t.id for t in result.order] == ["user"]
-    assert result.warnings == ()
+    assert [t.id for t in result.closure] == ["dep", "user"]
+    assert result.blocked == ()
 
 
-def test_unknown_required_id_warns_and_continues() -> None:
+def test_unknown_required_id_is_ignored_in_closure() -> None:
     user = _tool("user", "ghost")
     result = _resolve([user], [user])
-    assert [t.id for t in result.order] == ["user"]
-    assert any("unknown tool 'ghost'" in w for w in result.warnings)
+    assert [t.id for t in result.closure] == ["user"]
 
 
 def test_integrity_flags_unknown_requires_id() -> None:
@@ -162,13 +163,13 @@ def test_integrity_clean_catalog_has_no_errors() -> None:
     assert requires_integrity_errors([a, b]) == []
 
 
-def test_resolver_drags_in_dependency_across_a_tier_boundary() -> None:
+def test_resolver_records_cross_tier_dependency_requester() -> None:
     pnpm = _tool("pnpm", tier="system")
     mmdc = _tool("mmdc", "pnpm", tier="ai")
     result = _resolve([mmdc], [mmdc, pnpm])
-    assert "pnpm" in result.dragged_in
-    assert [t.id for t in result.order] == ["pnpm", "mmdc"]
-    assert result.warnings == ()
+    assert result.requested_by["pnpm"] == "mmdc"
+    assert [t.id for t in result.closure] == ["pnpm", "mmdc"]
+    assert result.blocked == ()
 
 
 def test_real_registry_cross_tier_and_same_tier_requires_edges_resolve_unchanged() -> None:
@@ -182,9 +183,9 @@ def test_real_registry_cross_tier_and_same_tier_requires_edges_resolve_unchanged
     assert mmdc.tier == "user" and pnpm.tier == "system"
     assert java.tier == sdkman.tier == "system"
     mmdc_result = _resolve([mmdc], catalog)
-    assert "pnpm" in mmdc_result.dragged_in
+    assert mmdc_result.requested_by["pnpm"] == "mmdc"
     java_result = _resolve([java], catalog)
-    assert "sdkman" in java_result.dragged_in
+    assert java_result.requested_by["sdkman"] == "java"
 
 
 def test_missing_requires_names_unstaged_uninstalled_dependencies() -> None:
@@ -247,17 +248,17 @@ def test_missing_requires_matches_the_real_registry_cross_tier_edge() -> None:
     assert mmdc.tier != pnpm.tier
 
 
-def test_resolve_dependencies_does_not_drag_in_recommends() -> None:
+def test_resolve_dependencies_does_not_resolve_recommends() -> None:
     jq = _tool("jq")
     agent = _tool("agent", recommends=("jq",))
     result = _resolve([agent], [agent, jq])
-    assert result.dragged_in == ()
-    assert "jq" not in [tool.id for tool in result.order]
+    assert dict(result.requested_by) == {}
+    assert "jq" not in [tool.id for tool in result.closure]
 
     pnpm = _tool("pnpm")
     agent_with_req = _tool("agent", "pnpm", recommends=("jq",))
     result = _resolve([agent_with_req], [agent_with_req, pnpm, jq])
-    assert result.dragged_in == ("pnpm",)
+    assert dict(result.requested_by) == {"pnpm": "agent"}
 
 
 def test_closure_keeps_present_tools_deps_first() -> None:
@@ -265,8 +266,7 @@ def test_closure_keeps_present_tools_deps_first() -> None:
     mmdc = _tool("mmdc", "node")
     result = _resolve([mmdc], [mmdc, node], installed_ids=["node"])
     assert [t.id for t in result.closure] == ["node", "mmdc"]
-    assert [t.id for t in result.order] == ["mmdc"]
-    assert result.dragged_in == ()
+    assert result.requested_by["node"] == "mmdc"
 
 
 def test_closure_excludes_blocked_tools_and_keeps_selected_order() -> None:
@@ -275,7 +275,6 @@ def test_closure_excludes_blocked_tools_and_keeps_selected_order() -> None:
     c = _tool("c", "z")
     result = _resolve([b, a, c], [a, b, c, z], available_ids=["a", "b", "c"])
     assert [t.id for t in result.closure] == ["b", "a"]
-    assert [t.id for t in result.order] == ["b", "a"]
 
 
 def test_closure_raises_on_a_cycle() -> None:
@@ -291,7 +290,6 @@ def test_requested_by_names_the_first_selected_requester() -> None:
     y = _tool("y", "dep")
     result = _resolve([x, y], [x, y, dep])
     assert dict(result.requested_by) == {"dep": "x"}
-    assert result.dragged_in == ("dep",)
 
 
 def test_requested_by_follows_a_chain_to_the_selected_root() -> None:
@@ -309,18 +307,14 @@ def test_requested_by_never_lists_a_selected_tool() -> None:
     assert dict(result.requested_by) == {}
 
 
-def test_blocked_carries_needs_and_the_warning_text() -> None:
+def test_blocked_carries_only_tool_id_and_needs() -> None:
     z = _tool("z")
     c = _tool("c", "z")
     result = _resolve([c], [c, z], available_ids=["c"])
-    assert [(b.tool_id, b.needs, b.reason) for b in result.blocked] == [
-        ("c", "z", "c skipped — a dependency is unavailable"),
-        ("z", None, "z is not available on this platform — skipped"),
+    assert [(blocked.tool_id, blocked.needs) for blocked in result.blocked] == [
+        ("c", "z"),
+        ("z", None),
     ]
-    assert result.warnings == (
-        "c skipped — a dependency is unavailable",
-        "z is not available on this platform — skipped",
-    )
 
 
 def test_blocked_needs_is_the_first_blocking_dependency() -> None:
