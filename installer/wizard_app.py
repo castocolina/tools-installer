@@ -61,7 +61,7 @@ from installer.rcclean import PathWriterLine, group_writer_lines
 from installer.render import guidance_text
 from installer.resolve import UnavailableReason
 from installer.run import CommandError
-from installer.session import Summary, fold_run
+from installer.session import Disposition, PlanRow, RowOutcome, ran_anything, retained
 from installer.shellrc import PathGuardOutcome, guard_path_writers, path_export_guard
 from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit
 from installer.terminal_shell import terminal_sync_warning
@@ -2520,9 +2520,12 @@ class UnifiedApp(App[list[str] | None]):
         self._set_link_mode = policies.set_link_mode
         self._read_link_mode = policies.link_mode
         self._link_mode_prompted = False
-        # The exit code answers "did everything this session asked for succeed",
-        # not "did the last thing succeed" — merge each run field-wise in order.
-        self.install_summary: Summary | None = None
+        # The exit code answers "did everything this session asked for succeed":
+        # the latest outcome per tool id wins, so a cancel followed by a retry
+        # never leaks an earlier not_attempted. None until the first run finishes.
+        self.outcomes: dict[str, RowOutcome] | None = None
+        # A crash or a PATH/verify failure that no row outcome carries (L-20-08).
+        self.run_errors: list[str] = []
         # WR-06: set by InstallRunStarted (ExecuteScreen.action_start),
         # cleared by on_install_run_finished. A hard abort inside the window
         # exits before the finish message can arrive, so the flag is the only
@@ -2553,17 +2556,6 @@ class UnifiedApp(App[list[str] | None]):
         # the execute screen is still on top when the failure happens, so
         # there is no catalog status line to write to yet.
         self._invalidate_warning: str | None = None
-        # WR-07 (15.6-REVIEW.md): set by on_install_run_finished whenever a
-        # run in this ExecuteScreen session actually installed something
-        # (Summary.installed non-empty -- real disk/config mutation, unlike
-        # `already`/`failed`/`no_method`/etc., which are no-ops or failures),
-        # consumed and reset by _install_closed. Gates the terminal
-        # re-synchronization on a real state change: merely opening and
-        # dismissing the Execute screen with nothing selected/changed
-        # otherwise rewrote kitty.conf, created a brand-new wezterm.lua
-        # (CR-03), and wrote konsolerc for a session where the user selected
-        # and changed nothing.
-        self._install_state_changed: bool = False
         # D-04: no tier keeps a presence copy. Each tier renders from the one
         # tool state (`state_of`); a mutation invalidates its epoch, rows read
         # `…`, and the next refresh pass repaints every tier in one swap. So an
@@ -2895,8 +2887,12 @@ class UnifiedApp(App[list[str] | None]):
             return
         self.push_screen(ExecuteScreen(message.result, self._execute), self._install_closed)
 
-    def _install_closed(self, _result: None) -> None:
-        self._staged.clear()
+    def _install_closed(self, result: list[RowOutcome] | None) -> None:
+        # Only the rows that still need the user stay selected (D-10, L-20-07).
+        # intersection_update, never a rebind: the tier browsers hold this set.
+        # None (closed before a run) leaves the selection untouched.
+        if result is not None:
+            self._staged.intersection_update(retained(result))
         # ExecuteScreen is modal: _navigable() returns False while it is on
         # top, so current_view still names the catalog tier the run was
         # launched from, and _catalogs has an entry for every tier including
@@ -2920,8 +2916,8 @@ class UnifiedApp(App[list[str] | None]):
         # WR-03: not run_live -- terminal_sync_warning IS this seam's live
         # guard, and routing through both produced the one message whose
         # casing had already drifted from the other four call sites.
-        if self._install_state_changed:
-            self._install_state_changed = False
+        # D-11: the gate is "a row actually ran", so an update counts too.
+        if result is not None and ran_anything(result):
             sync_warning = terminal_sync_warning(self._terminal_sync)
             if sync_warning:
                 warnings.append(sync_warning)
@@ -3003,79 +2999,33 @@ class UnifiedApp(App[list[str] | None]):
                 self._version_refresh.invalidate(reason="install run finished")
             except Exception as exc:  # noqa: BLE001 -- post-mutation side effect, reported below
                 self._invalidate_warning = f"version cache invalidation failed: {exc}"
-        incoming = fold_run(
-            message.summary,
-            not_attempted=message.not_attempted,
-            update_outcomes=message.update_outcomes,
-            update_errors=message.update_errors,
-            error=message.error,
-        )
-        # WR-07: `installed` is the one Summary bucket that means a real
-        # mutation happened (a tool actually installed) -- `already` is a
-        # confirmed-no-op, and `failed`/`no_method`/`mismatched`/
-        # `dependency_failed`/`manual_required` are all failures, never a
-        # state change. `|=` because a session can run ExecuteScreen more
-        # than once before closing it; any one of those runs installing
-        # something is enough.
-        self._install_state_changed = self._install_state_changed or bool(incoming.installed)
-        self._merge_summary(incoming)
+        for outcome in message.outcomes:
+            self._record(outcome)
+        for error in (message.run_error, message.path_error, message.verify_error):
+            if error:
+                self.run_errors.append(error)
 
     def on_tool_updated(self, message: ToolUpdated) -> None:
         """opencode H3: a failed DIRECT update (a `u` press on the catalog)
-        never reaches an ExecuteScreen, so nothing else would ever fold it
-        into the session summary and the process would exit 0 after a failed
-        update. The failure reaches install_summary here instead -- with the
-        same shape an ExecuteScreen run would have produced, so
-        _session_exit_code needs no second rule. Non-failed outcomes (and
-        unknown-owner/unsupported refusals, which are skips) are not
-        failures and change nothing."""
+        never reaches an ExecuteScreen, so nothing else would record it and
+        the process would exit 0 after a failed update. The failure is folded
+        here as a plan-shaped outcome, so _session_exit_code needs no second
+        rule. Non-failed outcomes (and unknown-owner/unsupported refusals,
+        which are skips) are not failures and change nothing."""
         failed = message.error is not None or (
             message.outcome is not None and message.outcome.status == "failed"
         )
         if not failed:
             return
-        self._merge_summary(
-            Summary(
-                installed=(),
-                already=(),
-                failed=(),
-                no_method=(),
-                update_failed=(message.tool_id,),
-            )
-        )
+        detail = message.error or (message.outcome.detail if message.outcome is not None else "")
+        row = PlanRow(message.tool_id, Disposition.UPDATE, "")
+        self._record(RowOutcome(row, "failed", detail=detail))
 
-    def _merge_summary(self, incoming: Summary) -> None:
-        """The one field-wise session fold (D-08)."""
-        existing = self.install_summary
-        if existing is None:
-            self.install_summary = incoming
-            return
-        # Exit code answers "did everything this session asked for succeed",
-        # not "did the last thing succeed" — do not simplify this back to an
-        # assignment. ponytail #6: a later run that actually handled a tool
-        # (installed, or confirmed already present) clears it from an earlier
-        # run's not_attempted, so cancel-then-retry does not leak a stale
-        # failure into the exit code (Phase 20 replaces the fold with plan
-        # outcomes).
-        covered = set(incoming.installed) | set(incoming.already)
-        self.install_summary = Summary(
-            installed=existing.installed + incoming.installed,
-            already=existing.already + incoming.already,
-            failed=existing.failed + incoming.failed,
-            no_method=existing.no_method + incoming.no_method,
-            mismatched=existing.mismatched + incoming.mismatched,
-            dependency_failed=existing.dependency_failed + incoming.dependency_failed,
-            manual_required=existing.manual_required + incoming.manual_required,
-            not_attempted=tuple(
-                dict.fromkeys(
-                    tool_id
-                    for tool_id in existing.not_attempted + incoming.not_attempted
-                    if tool_id not in covered
-                )
-            ),
-            update_failed=existing.update_failed + incoming.update_failed,
-            crash_error=existing.crash_error or incoming.crash_error,
-        )
+    def _record(self, outcome: RowOutcome) -> None:
+        """Latest outcome per tool id wins (cancel-then-retry, D-09)."""
+        if self.outcomes is None:
+            self.outcomes = {}
+        self.outcomes[outcome.row.tool_id] = outcome
 
     def on_ownership_refreshed(self, message: OwnershipRefreshed) -> None:
         """The completion signal for an asynchronous ownership refresh that

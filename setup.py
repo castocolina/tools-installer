@@ -76,6 +76,7 @@ from installer.render import render_troubleshooting
 from installer.resolve import unavailable_reason
 from installer.run import OutputRunner, Runner, run_captured, run_query
 from installer.selection import Choice
+from installer.session import exit_code
 from installer.settings import (
     SettingsStore,
     default_settings_path,
@@ -1309,8 +1310,7 @@ def _run_interactive_wizard(
         console.print(message)
     if not completed:
         console.print("The background cleanup apply had not finished.")
-    summary = app.install_summary
-    if summary is None:
+    if app.outcomes is None:
         console.print("Aborted.")
         # WR-06: a hard abort while a run was in flight interrupted a real
         # run; that is a failure, not a clean abort.
@@ -1345,14 +1345,13 @@ def _settings_store(
 
 
 def _session_exit_code(app: UnifiedApp) -> int:
-    """The one exit rule for every TUI route (SAFE-05): a run that reported a
-    failure on its Summary exits 1, and a run interrupted by a hard abort
-    mid-flight (WR-06) exits 1 too; everything else exits 0."""
-    if app.run_in_flight:
+    """The one exit rule for every TUI route (SAFE-05): a failed row, a PATH or
+    verify error, or a run interrupted by a hard abort mid-flight (WR-06) exits
+    1; everything else exits 0. A route that never ran a plan has no outcomes."""
+    if app.run_in_flight or app.run_errors:
         return 1
-    summary = app.install_summary
-    if summary is not None and summary.has_failure:
-        return 1
+    if app.outcomes is not None:
+        return exit_code(app.outcomes.values())
     return 0
 
 

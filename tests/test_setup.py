@@ -29,7 +29,7 @@ from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
 from installer.policy import Policy
 from installer.resolve import UnavailableReason
-from installer.session import Summary
+from installer.session import Disposition, PlanRow, Result, RowOutcome, Summary
 from installer.settings import Settings, SettingsStore, load_settings, save_settings
 from installer.shellrc import ShellrcConsolidation, ShellrcRefusal, write_myshellrc
 from installer.terminal_shell import TerminalShellResult
@@ -65,11 +65,21 @@ _darwin_select_based_asyncio = (
 
 
 class _DummyApp:
-    install_summary: Summary | None = None
+    outcomes: dict[str, RowOutcome] | None = None
+    run_errors: tuple[str, ...] = ()
     run_in_flight = False
+    run_errors: tuple[str, ...] = ()
 
     def run(self) -> None:
         return None
+
+
+def _outcomes(**results: Result) -> dict[str, RowOutcome]:
+    """A finished run's outcome map: one RowOutcome per tool id, as the app folds it."""
+    return {
+        tool_id: RowOutcome(PlanRow(tool_id, Disposition.INSTALL, ""), result)
+        for tool_id, result in results.items()
+    }
 
 
 class _FakeStdin:
@@ -430,7 +440,7 @@ def test_main_fix_interactive_without_link_mode_opens_doctor(
 
 
 def _capture_app(
-    monkeypatch: pytest.MonkeyPatch, install_summary: Summary | None = None
+    monkeypatch: pytest.MonkeyPatch, outcomes: dict[str, RowOutcome] | None = None
 ) -> list[dict[str, object]]:
     """Stand in for UnifiedApp so _build_app runs for real without a terminal.
 
@@ -440,22 +450,23 @@ def _capture_app(
     seen: list[dict[str, object]] = []
     # opencode H3: a direct-update failure folds on the app itself (never
     # through an ExecuteScreen), so the stand-in must install the real
-    # handler, captured before the patch below replaces the class attribute.
+    # handlers, captured before the patch below replaces the class.
     real_on_tool_updated = cast(
         "Callable[[object, ToolUpdated], None]", setup.UnifiedApp.on_tool_updated
     )
-    real_merge_summary = cast(
-        "Callable[[object, Summary], None]",
-        setup.UnifiedApp._merge_summary,  # pyright: ignore[reportPrivateUsage]
+    real_record = cast(
+        "Callable[[object, RowOutcome], None]",
+        setup.UnifiedApp._record,  # pyright: ignore[reportPrivateUsage]
     )
 
     class _App:
-        install_summary: Summary | None = None
+        outcomes: dict[str, RowOutcome] | None = None
         run_in_flight = False
+        run_errors: tuple[str, ...] = ()
 
         def __init__(self, *_args: object, **kwargs: object) -> None:
-            if install_summary is not None:
-                self.install_summary = install_summary
+            if outcomes is not None:
+                self.outcomes = dict(outcomes)
             seen.append(dict(kwargs))
 
         def run(self) -> None:
@@ -464,8 +475,8 @@ def _capture_app(
         def on_tool_updated(self, message: ToolUpdated) -> None:
             real_on_tool_updated(self, message)
 
-        def _merge_summary(self, incoming: Summary) -> None:
-            real_merge_summary(self, incoming)
+        def _record(self, outcome: RowOutcome) -> None:
+            real_record(self, outcome)
 
     monkeypatch.setattr(setup, "UnifiedApp", _App)
     return seen
@@ -1982,14 +1993,14 @@ def test_tui_routes_exit_1_when_the_session_failed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, argv: list[str]
 ) -> None:
     """SAFE-05: every non-setup TUI route reports a failed session in its exit
-    code through the one rule, Summary.has_failure."""
+    code through the one rule, _session_exit_code."""
     for summary, expected in (
-        (Summary(installed=(), already=(), failed=("rg",), no_method=()), 1),
-        (Summary(installed=("rg",), already=(), failed=(), no_method=()), 0),
+        (_outcomes(rg="failed"), 1),
+        (_outcomes(rg="done"), 0),
         (None, 0),
     ):
         _hermetic_route(monkeypatch, tmp_path)
-        _capture_app(monkeypatch, install_summary=summary)
+        _capture_app(monkeypatch, outcomes=summary)
         assert setup.main(argv) == expected
 
 
@@ -2313,9 +2324,10 @@ def test_interactive_none_summary_prints_aborted_and_returns_zero(
 
 class _SummaryApp:
     run_in_flight = False
+    run_errors: tuple[str, ...] = ()
 
-    def __init__(self, summary: Summary | None) -> None:
-        self.install_summary = summary
+    def __init__(self, outcomes: dict[str, RowOutcome] | None) -> None:
+        self.outcomes = outcomes
 
     def run(self) -> None:
         return None
@@ -2352,7 +2364,7 @@ def test_interactive_failed_summary_renders_troubleshooting_and_returns_one(
     rendered = _wire_interactive_summary(
         monkeypatch,
         tmp_path,
-        _SummaryApp(Summary(installed=(), already=(), failed=("rg",), no_method=())),
+        _SummaryApp(_outcomes(rg="failed")),
     )
     assert setup.main([]) == 1
     assert rendered == ["shown"]
@@ -2364,7 +2376,7 @@ def test_interactive_clean_summary_returns_zero(
     rendered = _wire_interactive_summary(
         monkeypatch,
         tmp_path,
-        _SummaryApp(Summary(installed=("rg",), already=(), failed=(), no_method=())),
+        _SummaryApp(_outcomes(rg="done")),
     )
     assert setup.main([]) == 0
     assert rendered == []
@@ -2387,7 +2399,7 @@ def test_interactive_path_cleans_rc_duplicates_without_re_running_doctor(
         return []
 
     def fake_build(*_args: object, **_kwargs: object) -> _SummaryApp:
-        return _SummaryApp(Summary(installed=("rg",), already=(), failed=(), no_method=()))
+        return _SummaryApp(_outcomes(rg="done"))
 
     _sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(setup, "clean_rc_duplicates", fake_clean)
@@ -2600,8 +2612,9 @@ def test_interactive_wizard_prints_warnings_before_the_abort_return(
     collector = DaemonDefaultWarnings()
 
     class _Aborting:
-        install_summary = None
+        outcomes = None
         run_in_flight = False
+        run_errors: tuple[str, ...] = ()
 
         def run(self) -> None:
             collector.append("another timer is still running")
@@ -2627,7 +2640,6 @@ def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_w
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from installer.policy import DaemonDefaultWarnings
-    from installer.session import Summary
 
     buffer = io.StringIO()
     _sandbox(monkeypatch, tmp_path)
@@ -2645,7 +2657,8 @@ def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_w
 
     class _Done:
         run_in_flight = False
-        install_summary = Summary(installed=("rg",), already=(), failed=(), no_method=())
+        run_errors: tuple[str, ...] = ()
+        outcomes = _outcomes(rg="done")
 
         def run(self) -> None:
             collector.append("taken over")
@@ -2667,7 +2680,8 @@ def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_w
 
     class _Quiet:
         run_in_flight = False
-        install_summary = Summary(installed=("rg",), already=(), failed=(), no_method=())
+        run_errors: tuple[str, ...] = ()
+        outcomes = _outcomes(rg="done")
 
         def run(self) -> None:
             return None
@@ -2692,8 +2706,9 @@ def test_interactive_wizard_labels_a_timed_out_background_apply(
     collector = DaemonDefaultWarnings()
 
     class _Aborting:
-        install_summary = None
+        outcomes = None
         run_in_flight = False
+        run_errors: tuple[str, ...] = ()
 
         def run(self) -> None:
             collector.append("partial")
@@ -3432,22 +3447,21 @@ def test_interactive_wizard_exits_1_when_the_session_has_a_failure(
     _capture_app(monkeypatch)
     app = setup.UnifiedApp
     assert app is not None
-    monkeypatch.setattr(
-        app,
-        "install_summary",
-        Summary(installed=(), already=(), failed=(), no_method=(), crash_error="boom"),
-    )
+    # A run that finished with every row done, but whose crash text escaped
+    # execute_plan: no row carries it, so only run_errors can fail the session.
+    monkeypatch.setattr(app, "outcomes", _outcomes(rg="done"))
+    monkeypatch.setattr(app, "run_errors", ["RuntimeError: boom"])
     assert setup.main([]) == 1
 
 
 def test_ctrl_c_mid_run_exits_1(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """WR-06: a hard abort (ctrl+c) while a run is in flight leaves
-    install_summary None, so the abort must not read as a clean exit 0."""
+    outcomes None, so the abort must not read as a clean exit 0."""
     _sandbox(monkeypatch, tmp_path)
     _capture_app(monkeypatch)
     app = setup.UnifiedApp
     assert app is not None
-    monkeypatch.setattr(app, "install_summary", None)
+    monkeypatch.setattr(app, "outcomes", None)
     monkeypatch.setattr(app, "run_in_flight", True)
     assert setup.main([]) == 1
 
@@ -3461,9 +3475,7 @@ def test_doctor_route_interrupted_mid_run_exits_1(
     _capture_app(monkeypatch)
     app = setup.UnifiedApp
     assert app is not None
-    monkeypatch.setattr(
-        app, "install_summary", Summary(installed=(), already=(), failed=(), no_method=())
-    )
+    monkeypatch.setattr(app, "outcomes", _outcomes())
     monkeypatch.setattr(app, "run_in_flight", True)
     assert setup.main(["--doctor"]) == 1
 
@@ -3475,9 +3487,7 @@ def test_interactive_wizard_exits_0_when_the_session_is_clean(
     _capture_app(monkeypatch)
     app = setup.UnifiedApp
     assert app is not None
-    monkeypatch.setattr(
-        app, "install_summary", Summary(installed=("rg",), already=(), failed=(), no_method=())
-    )
+    monkeypatch.setattr(app, "outcomes", _outcomes(rg="done"))
     assert setup.main([]) == 0
 
 
@@ -3502,7 +3512,7 @@ def test_failed_direct_catalog_update_exits_1(
     )
     # The other tests in this file set the class attribute; the fold result
     # reaches _build_app's own instance the same way.
-    monkeypatch.setattr(app_class, "install_summary", probe.install_summary)
+    monkeypatch.setattr(app_class, "outcomes", probe.outcomes)
     assert setup.main([]) == 1
 
 
@@ -3513,8 +3523,8 @@ def test_failed_update_exits_1(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     assert app is not None
     monkeypatch.setattr(
         app,
-        "install_summary",
-        Summary(installed=(), already=(), failed=(), no_method=(), update_failed=("rg",)),
+        "outcomes",
+        _outcomes(rg="failed"),
     )
     assert setup.main([]) == 1
 
@@ -3524,9 +3534,7 @@ def test_all_skipped_run_exits_0(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     _capture_app(monkeypatch)
     app = setup.UnifiedApp
     assert app is not None
-    monkeypatch.setattr(
-        app, "install_summary", Summary(installed=(), already=("rg",), failed=(), no_method=())
-    )
+    monkeypatch.setattr(app, "outcomes", _outcomes(rg="skipped"))
     assert setup.main([]) == 0
 
 
@@ -3930,3 +3938,31 @@ def test_update_service_reads_the_live_platform_through_the_service(
     updates.run(target)
     assert [platform.has_brew for platform in seen] == [False, True]
     assert seen[1] == service.platform
+
+
+# -- plan 20-10 Task 2: the one exit rule reads outcomes and run errors --
+
+
+@pytest.mark.parametrize(
+    ("results", "run_errors", "in_flight", "expected"),
+    [
+        ({"rg": "done"}, (), False, 0),
+        ({"rg": "blocked"}, (), False, 0),
+        ({"rg": "not_attempted"}, (), False, 1),
+        ({}, ("PATH wiring failed",), False, 1),
+        ({"rg": "done"}, (), True, 1),
+        (None, (), False, 0),
+        (None, (), True, 1),
+    ],
+)
+def test_session_exit_code_is_one_iff_an_outcome_failed_or_a_run_error_exists(
+    results: dict[str, Result] | None,
+    run_errors: tuple[str, ...],
+    in_flight: bool,
+    expected: int,
+) -> None:
+    app = _DummyApp()
+    app.outcomes = None if results is None else _outcomes(**results)
+    app.run_errors = run_errors
+    app.run_in_flight = in_flight
+    assert setup._session_exit_code(cast(Any, app)) == expected  # pyright: ignore[reportPrivateUsage]

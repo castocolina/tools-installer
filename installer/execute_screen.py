@@ -1,10 +1,10 @@
-"""Thin IO adapter over unchanged pure core.
+"""The install-plan screen: an IO adapter over `build_plan` and `execute_plan`.
 
-`resolve_dependencies`, `audit`, `run_installs`, `install_tool`,
-`configure_path` and `run_doctor` remain the sole owners of install decision
-logic. This is deliberate: audit finding C records three modules independently
-deciding control flow in the abandoned `feat/install-experience` branch. That
-branch is a design reference only, never a code source (D-04).
+`build_plan` (installer/session.py) decides every row's disposition from the
+published state, and `execute_plan` runs the settled rows and returns one
+outcome per row. This module owns only the widgets, the worker thread and the
+messages between them. The worker never touches a widget: it posts messages
+and the event loop paints them.
 """
 
 from __future__ import annotations
@@ -12,10 +12,9 @@ from __future__ import annotations
 import io
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from functools import partial
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar
 
 from rich.console import Console
 from rich.text import Text
@@ -25,70 +24,75 @@ from textual.binding import Binding, BindingType
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.timer import Timer
-from textual.widgets import Label, ListItem, ListView, RichLog, Static
+from textual.widgets import Label, ListItem, ListView, OptionList, RichLog, Static
+from textual.widgets.option_list import Option
 
-from installer.audit import audit
-from installer.deps import resolve_dependencies
-from installer.engine import ChecksumPolicy, InstallOutcome, install_tool, reapply_post_install
-from installer.enums import InstallStatus, Severity
+from installer.engine import install_tool
+from installer.enums import Severity
 from installer.model import Tool
 from installer.platform import Platform
-from installer.post_install import ConfirmSensitiveAction
 from installer.render import (
-    render_audit,
-    render_dependency_notice,
+    display_order,
+    id_width,
+    outcome_row_text,
+    plan_head,
+    plan_row_text,
     render_failure_details,
     render_handoff,
     render_post_install_handoff,
     render_postinstall_warnings,
+    render_run_summary,
     render_skipped,
-    render_summary,
     render_verification,
+    running_row_text,
+    summary_head,
 )
-from installer.resolve import resolve_methods
-from installer.run import Runner, StreamingRunner
+from installer.run import StreamingRunner
 from installer.sanitize import sanitize_log_line
-from installer.selection import select_tools
 from installer.session import (
-    Install,
+    Disposition,
     MismatchChoice,
+    PlanRow,
+    RowOutcome,
+    RunContext,
     SensitiveInstall,
-    Summary,
-    fold_run,
-    order_for_install,
-    run_installs,
-    summarize,
-    with_sensitive_confirm,
+    build_plan,
+    execute_plan,
+    exit_code,
+    ran_anything,
+    retained,
 )
 from installer.ui_common import SEVERITY_STYLE, StatusLine, run_live
-from installer.update import UpdateOutcome, UpdateService, UpdateTarget
-from installer.version_status import Health, VersionRefreshService
+from installer.update import UpdateService
+from installer.version_status import VersionRefreshService
 from installer.versions import TagResolver, resolve_github_tag
 
 _MISMATCH_CHOICES: frozenset[str] = frozenset({"retry", "skip", "fallback"})
 _SENSITIVE_CHOICES: frozenset[str] = frozenset({"yes", "no"})
 _DISMISSAL_SKIP = "{tool_id}: checksum-mismatch prompt dismissed; the tool was therefore skipped."
 _DISMISSAL_SENSITIVE = "{tool_id}: sensitive-action prompt dismissed; the answer was therefore no."
-_EXECUTE_KEYS = (
-    "enter start · esc does not leave or stop during a run · "
-    "c stops between tools, in-flight finishes · "
-    "ctrl+c aborts the app and may leave a tool half-installed"
+# The rows the worker runs; SKIP and BLOCKED rows never reach an engine.
+_RUNNABLE: frozenset[Disposition] = frozenset(
+    {
+        Disposition.INSTALL,
+        Disposition.UPDATE,
+        Disposition.REPAIR,
+        Disposition.RECONFIGURE,
+        Disposition.REINSTALL,
+    }
 )
+# UI-SPEC Interaction contract: one keys line per screen state.
+_KEYS_EMPTY = "esc close"
+_KEYS_RUNNING = "c stop after this tool · ctrl+c aborts and can leave a tool half-installed"
+_KEYS_FINISHED = "enter / esc return to catalog"
+_KEYS_WAITING = "waiting for the state check · esc cancels the wait"
+_STATUS_WAITING = "Waiting for the state check; nothing starts until it finishes. esc cancels."
 _CANCEL_AVAILABLE = "Press c to stop after the current tool; nothing further will start."
 _CANCEL_ARMED = "The current tool will finish and nothing further will start."
 _CANCEL_IDLE = "No install is running."
 SILENCE_SECONDS = 2.0
 _WAITING_OUTPUT = "-- still running; waiting for output --"
 _UPDATE_STARTED = "-- updating --"
-_NO_MANAGER_CLAIMED = "no manager claimed this tool"
-_DONE_STATUSES = frozenset({InstallStatus.INSTALLED, InstallStatus.ALREADY_INSTALLED})
-ProgressState = Literal["pending", "done", "not-done", "skipped"]
-_PROGRESS_GLYPH: dict[ProgressState, tuple[str, str, str]] = {
-    "pending": ("○", "dim", "pending"),
-    "done": ("●", SEVERITY_STYLE[Severity.OK], "done"),
-    "not-done": ("✖", SEVERITY_STYLE[Severity.ERROR], "not done"),
-    "skipped": ("○", "dim", "not attempted"),
-}
 
 
 class ChecksumMismatchScreen(ModalScreen[str | None]):
@@ -197,85 +201,6 @@ def ask_from_worker(app: App[object], screen: ModalScreen[str | None]) -> str | 
     return app.call_from_thread(coro_fn)
 
 
-def attributed_install(
-    streaming: StreamingRunner,
-    install: Install = install_tool,
-    on_outcome: Callable[[InstallOutcome], None] | None = None,
-) -> Install:
-    """Return an Install that attributes every call to `streaming` first.
-
-    Attribution is driven by the tool `run_installs` is about to install,
-    through the existing Install seam, so there is no optional parameter whose
-    absence can silently drop it (D-05.2 / audit finding B). `on_outcome`,
-    when given, is invoked with each returned InstallOutcome so a screen can
-    update a running status list without the worker touching widgets.
-    """
-
-    def wrapped(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-    ) -> InstallOutcome:
-        streaming.set_tool(tool.id)
-        outcome = install(
-            tool,
-            platform,
-            runner,
-            resolve_tag,
-            checksum_policy=checksum_policy,
-            tools=tools,
-        )
-        if on_outcome is not None:
-            on_outcome(outcome)
-        return outcome
-
-    return wrapped
-
-
-def _with_repair(
-    install: Callable[..., InstallOutcome],
-    repair_ids: frozenset[str],
-) -> SensitiveInstall:
-    """Pass repair=True only for ids the user selected while they read broken."""
-
-    def repaired(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
-    ) -> InstallOutcome:
-        if tool.id not in repair_ids:
-            return install(
-                tool,
-                platform,
-                runner,
-                resolve_tag,
-                checksum_policy=checksum_policy,
-                tools=tools,
-                confirm_sensitive_action=confirm_sensitive_action,
-            )
-        return install(
-            tool,
-            platform,
-            runner,
-            resolve_tag,
-            checksum_policy=checksum_policy,
-            tools=tools,
-            confirm_sensitive_action=confirm_sensitive_action,
-            repair=True,
-        )
-
-    return repaired
-
-
 class InstallLogLine(Message):
     """One attributed line of child-process output, posted from the worker thread.
 
@@ -305,24 +230,6 @@ class InstallLogLine(Message):
         super().__init__()
 
 
-class InstallToolFinished(Message):
-    """One tool's install() returned; posted from the worker thread."""
-
-    def __init__(self, tool_id: str, status: InstallStatus) -> None:
-        self.tool_id = tool_id
-        self.status = status
-        super().__init__()
-
-
-class UpdateToolFinished(Message):
-    """One tool's update() returned; posted from the worker thread."""
-
-    def __init__(self, tool_id: str, state: ProgressState) -> None:
-        self.tool_id = tool_id
-        self.state: ProgressState = state
-        super().__init__()
-
-
 class PromptOpen(Message):
     """The worker is blocked on (or has just left) a question modal."""
 
@@ -332,59 +239,60 @@ class PromptOpen(Message):
         super().__init__()
 
 
-def _partial_run(
-    ordered: Sequence[Tool], collected: Mapping[str, InstallOutcome]
-) -> tuple[list[InstallOutcome], Summary, list[str]]:
-    """Rebuild a stopped install phase from its per-tool accumulator (D-07).
+class RowStarted(Message):
+    """The worker is about to run this row; posted from the worker thread."""
 
-    The outcomes the worker already collected, their summary, and the ids it
-    never reached — the same three values a completed run computes, so both
-    stop paths report identically.
-    """
-    outcomes = list(collected.values())
-    return (
-        outcomes,
-        summarize(outcomes),
-        [tool.id for tool in ordered if tool.id not in collected],
-    )
+    def __init__(self, tool_id: str) -> None:
+        self.tool_id = tool_id
+        super().__init__()
+
+
+class RowFinished(Message):
+    """One row's outcome is final; posted from the worker thread."""
+
+    def __init__(self, outcome: RowOutcome) -> None:
+        self.outcome = outcome
+        super().__init__()
 
 
 class InstallRunFinished(Message):
-    """The install worker finished; `error` is None on a fully successful batch.
+    """The worker finished; `outcomes` holds exactly one outcome per plan row.
 
-    Same hand-off as InstallLogLine, for the same reason: the worker must not
-    touch widgets. `summary` is never None — a torn batch still carries
-    summarize([]) so handlers can read buckets without an AttributeError.
+    `run_error` is a crash that escaped `execute_plan`. `path_error` and
+    `verify_error` are the PATH wiring and verify failures. Each of the three
+    makes the run failed (L-20-08), and UnifiedApp keeps them beside the row
+    outcomes for the exit code.
     """
 
     def __init__(
         self,
-        summary: Summary,
-        outcomes: list[InstallOutcome],
-        not_attempted: list[str],
+        outcomes: list[RowOutcome],
+        run_error: str | None,
         path_text: str,
         verify_text: str,
-        error: str | None,
         path_error: str | None = None,
         verify_error: str | None = None,
-        update_outcomes: list[UpdateOutcome] | None = None,
-        update_errors: list[tuple[str, str]] | None = None,
-        update_skips: list[str] | None = None,
-        update_versions: dict[str, str | None] | None = None,
     ) -> None:
-        self.summary = summary
         self.outcomes = outcomes
-        self.not_attempted = not_attempted
+        self.run_error = run_error
         self.path_text = path_text
         self.verify_text = verify_text
-        self.error = error
         self.path_error = path_error
         self.verify_error = verify_error
-        self.update_outcomes = update_outcomes if update_outcomes is not None else []
-        self.update_errors = update_errors if update_errors is not None else []
-        self.update_skips = update_skips if update_skips is not None else []
-        self.update_versions = update_versions if update_versions is not None else {}
         super().__init__()
+
+
+def _complete(
+    rows: Sequence[PlanRow], collected: Sequence[RowOutcome], run_error: str | None
+) -> list[RowOutcome]:
+    """One outcome per plan row: a row the run never reached is not_attempted (D-10)."""
+    done = {outcome.row.tool_id for outcome in collected}
+    missing = [
+        RowOutcome(row, "not_attempted", detail=run_error or "")
+        for row in rows
+        if row.tool_id not in done
+    ]
+    return [*collected, *missing]
 
 
 class InstallRunStarted(Message):
@@ -419,25 +327,17 @@ class ExecuteInputs:
     terminal_sync: Callable[[], str | None] | None = None
 
 
-class ExecuteScreen(ModalScreen[None]):
-    """Pushed, non-navigable install run. ModalScreen, not AppScreen.
+class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
+    """Pushed, non-navigable install run over one `build_plan`. ModalScreen, not
+    AppScreen: a pushed screen with no view name keeps the [catalog] /
+    [catalog, view] stack invariant UnifiedApp._navigable protects.
 
-    AppScreen.__init__ requires a view name in VIEW_BY_NAME, so a subclass
-    would force a seventh VIEWS row and a number-key destination the user
-    could jump to mid-install, breaking the [catalog] / [catalog, <view>]
-    stack invariant UnifiedApp._navigable protects. ModalScreen is this
-    codebase's established shape for a pushed, non-navigable screen
-    (ConfirmUninstall, NavScreen, TimePickerScreen) and makes _navigable()
-    return False while it is on top, so the App's priority number keys and q
-    are inert during a run with no new guard. D-01 requires push_screen /
-    pop_screen rather than an overlay; this satisfies it.
+    The screen dismisses with the run's outcomes, or None when it closes before
+    a run starts; UnifiedApp keeps the retained selection from them.
 
-    ctrl+c is NOT the weak cancel. UnifiedApp.action_hard_abort is unguarded
-    and always calls exit(None); during a live run that tears the app down on
-    top of a running Popen, so the in-flight child is orphaned mid-install.
-    The mid-run status line and the execute-keys hint disclose that cost.
-    The weak cancel is `c`: it stops new tools being queued and lets the
-    in-flight one finish.
+    ctrl+c is NOT the weak cancel. UnifiedApp.action_hard_abort tears the app
+    down on top of a running child, which can orphan a half-installed tool. The
+    weak cancel is `c`: it lets the in-flight tool finish and queues nothing new.
     """
 
     if TYPE_CHECKING:
@@ -453,28 +353,29 @@ class ExecuteScreen(ModalScreen[None]):
         background: $surface;
         layout: vertical;
     }
-    ExecuteScreen #execute-head { height: auto; padding: 1 2; }
-    ExecuteScreen #execute-progress { height: auto; padding: 0 2; }
-    ExecuteScreen #execute-log { height: 1fr; padding: 0 1; }
-    ExecuteScreen #execute-keys { height: auto; padding: 0 1; }
+    ExecuteScreen #execute-head { height: auto; max-height: 3; padding: 0 1; }
+    ExecuteScreen #plan-rows { height: 1fr; }
+    ExecuteScreen #execute-log { display: none; height: 1fr; padding: 0 1; }
+    ExecuteScreen #execute-keys { height: 1; padding: 0 1; }
+    ExecuteScreen.-running #plan-rows, ExecuteScreen.-finished #plan-rows {
+        height: auto;
+        max-height: 8;
+    }
+    ExecuteScreen.-running #execute-log, ExecuteScreen.-finished #execute-log {
+        display: block;
+    }
     """
 
     def __init__(self, ids: list[str], inputs: ExecuteInputs) -> None:
         super().__init__()
         self._ids = list(ids)
         self._inputs = inputs
-        self._ordered: list[Tool] = []
-        self._to_update: list[Tool] = []
-        self._current: list[Tool] = []
-        self._refused: list[tuple[Tool, str]] = []
-        self._repair: list[Tool] = []
-        self._repair_ids: frozenset[str] = frozenset()
-        self._reapply: list[Tool] = []
-        self._by_id: dict[str, Tool] = {}
-        self._last_tool_id: str | None = None
-        self._progress: dict[str, ProgressState] = {}
+        self._rows: list[PlanRow] = []
+        self._reinstall: set[str] = set()
+        self._start_requested = False
         self._waiting_prompt: str | None = None
         self._in_flight: str | None = None
+        self._last_tool_id: str | None = None
         self._last_output_at: float | None = None
         self._silence_noted = False
         self._silence_generation = 0
@@ -483,12 +384,11 @@ class ExecuteScreen(ModalScreen[None]):
         self.status = StatusLine()
         self.started = False
         self.finished = False
-        self.summary: Summary | None = None
-        self.not_attempted: list[str] = []
+        self.outcomes: list[RowOutcome] | None = None
 
     def compose(self) -> ComposeResult:
         yield Static(id="execute-head")
-        yield Static(id="execute-progress")
+        yield OptionList(id="plan-rows")
         yield RichLog(
             id="execute-log",
             markup=False,
@@ -496,38 +396,10 @@ class ExecuteScreen(ModalScreen[None]):
             auto_scroll=True,
         )
         yield self.status
-        yield Static(_EXECUTE_KEYS, id="execute-keys")
+        yield Static(_KEYS_EMPTY, id="execute-keys")
 
     def on_mount(self) -> None:
-        selected = select_tools(self._inputs.catalog, self._ids)
-        platform = self._platform()
-        self._classify_selection(selected)
-
-        def installed_for_order(tool: Tool) -> bool:
-            return self._inputs.version_refresh.is_present(tool) and tool.id not in self._repair_ids
-
-        resolved = resolve_dependencies(
-            order_for_install(selected),
-            self._inputs.catalog,
-            available=lambda tool: bool(resolve_methods(tool, platform)),
-            is_installed=installed_for_order,
-        )
-        self._ordered = list(resolved.order)
-        self._by_id = {tool.id: tool for tool in self._inputs.catalog}
-        self._progress = {tool.id: "pending" for tool in (*self._ordered, *self._to_update)}
-        self._refresh_progress()
-
-        def render_head(console: Console) -> None:
-            render_dependency_notice(resolved.dragged_in, resolved.warnings, console)
-            render_audit(audit(self._ordered, installed_for_order), console)
-            for tool, reason in self._refused:
-                if not reason:
-                    continue
-                # A reason is data, never Rich markup.
-                console.print(f"{tool.id} is broken: {reason}", markup=False, highlight=False)
-            console.print(self._preflight_prompt())
-
-        self.query_one("#execute-head", Static).update(self._render_captured(render_head))
+        self._replan()
         if self._inputs.unattended:
             self.action_start()
 
@@ -535,68 +407,74 @@ class ExecuteScreen(ModalScreen[None]):
         """The live platform: the service's own (D-14)."""
         return self._inputs.version_refresh.platform
 
-    def _classify_selection(self, selected: list[Tool]) -> None:
-        refresh = self._inputs.version_refresh
-        repair: list[Tool] = []
-        current: list[Tool] = []
-        refused: list[tuple[Tool, str]] = []
-        for tool in selected:
-            if not refresh.is_present(tool):
-                continue
-            state = refresh.state_of(tool.id)
-            if state is None:
-                continue
-            # Repair is the pnpm-shim case only, never receipt drift (Pitfall 10).
-            if state.ownership.broken:
-                repair.append(tool)
-            # Receipt drift: the update gate would refuse it, so the
-            # preview never promises it (IN2-03).
-            elif state.health is Health.BROKEN:
-                reason = state.reasons[0] if state.reasons else ""
-                refused.append((tool, reason))
-            elif state.version is not None and state.version.outdated is False:
-                current.append(tool)
-        repair_ids = {tool.id for tool in repair}
-        self._repair = repair
-        self._repair_ids = frozenset(repair_ids)
-        self._current = current
-        self._refused = refused
-        skip = repair_ids | {tool.id for tool, _reason in refused}
-        self._to_update = [tool for tool in self._update_targets(selected) if tool.id not in skip]
-        eligible = {tool.id for tool in (*current, *self._to_update, *repair)}
-        self._reapply = [
-            tool
-            for tool in selected
-            if tool.id in eligible
-            and tool.id not in repair_ids
-            and tool.post_install
-            and self._inputs.version_refresh.is_present(tool)
-        ]
+    def _replan(self) -> None:
+        """Rebuild the rows from the latest published state, then repaint the review."""
+        self._rows = build_plan(
+            self._ids,
+            self._inputs.catalog,
+            self._inputs.version_refresh.state_of,
+            self._platform(),
+            reinstall=frozenset(self._reinstall),
+        )
+        self._paint_review()
 
-    def _update_targets(self, selected: list[Tool]) -> list[Tool]:
-        refresh = self._inputs.version_refresh
-        updates = self._inputs.updates
-        if updates is None:
-            return []
-        targets: list[Tool] = []
-        for tool in selected:
-            if not refresh.is_present(tool):
-                continue
-            state = refresh.state_of(tool.id)
-            if state is not None and state.version is not None and state.version.outdated is False:
-                continue
-            targets.append(tool)
-        return targets
+    def _fold_width(self) -> int:
+        """Plan-row budget: the list's width less its padding, 78 before layout."""
+        width = self.query_one("#plan-rows", OptionList).size.width
+        return width - 2 if width > 2 else 78
+
+    def _paint_review(self) -> None:
+        head = self.query_one("#execute-head", Static)
+        options = self.query_one("#plan-rows", OptionList)
+        keys = self.query_one("#execute-keys", Static)
+        options.clear_options()
+        if not self._rows:
+            head.update("Nothing selected.")
+            keys.update(_KEYS_EMPTY)
+            return
+        width = self._fold_width()
+        idw = id_width(self._rows)
+        for row in display_order(self._rows):
+            options.add_option(Option(plan_row_text(row, idw, width, hint=True), id=row.tool_id))
+        head.update(plan_head(self._rows))
+        keys.update(self._idle_keys())
+
+    def _idle_keys(self) -> str:
+        runnable = any(row.disposition in _RUNNABLE for row in self._rows)
+        parts = ["enter start" if runnable else "enter continue"]
+        if any(row.can_reinstall for row in self._rows):
+            parts.append("r reinstall")
+        parts.extend(("up/down move", "esc cancel"))
+        return " · ".join(parts)
+
+    def _row_for(self, tool_id: str) -> PlanRow | None:
+        return next((row for row in self._rows if row.tool_id == tool_id), None)
 
     def action_start(self) -> None:
         if self.finished:
-            self.dismiss()
+            self.dismiss(self.outcomes)
             return
         if self.started:
             return
+        # D-14 "after Enter": a tool published since mount is read now, so
+        # a row that went stale while the review was open is rebuilt first.
+        self._replan()
+        if not self._rows:
+            return
+        if any(row.disposition is Disposition.WAIT for row in self._rows):
+            self._start_requested = True
+            self.status.set(_STATUS_WAITING, "warn")
+            self.query_one("#execute-keys", Static).update(_KEYS_WAITING)
+            return
+        self._begin_run()
+
+    def _begin_run(self) -> None:
         self.started = True
+        self.add_class("-running")
         self.post_message(InstallRunStarted())
+        self.query_one("#plan-rows", OptionList).can_focus = False
         self.status.set(_CANCEL_AVAILABLE, "ok")
+        self.query_one("#execute-keys", Static).update(_KEYS_RUNNING)
         self._last_output_at = self._inputs.now()
         self._arm_silence_timer(SILENCE_SECONDS)
         self._execute_worker()
@@ -616,28 +494,22 @@ class ExecuteScreen(ModalScreen[None]):
 
     @work(thread=True, exclusive=True, group="install-execute", exit_on_error=False)
     def _execute_worker(self) -> None:
-        """Run confirm -> install -> wire -> verify off the event loop.
+        """Run the settled plan off the event loop and always report back.
 
-        A worker exception must not take the whole app down (exit_on_error=
-        False, same reason as _apply_daemon_default_worker). The body is
-        wrapped in try/finally so InstallRunFinished is posted on every path
-        — a screen stuck on "Installing..." forever is the worst failure mode.
+        A crash that escapes `execute_plan` is caught here, and every row it
+        never reached is completed as not_attempted (D-10), so the finished
+        message always carries one outcome per row. PATH wiring and verify run
+        only when a row actually ran (L-20-08). The body is wrapped in
+        try/finally so InstallRunFinished is posted on every path: a screen
+        stuck on a running plan forever is the worst failure mode.
         """
-        summary = summarize([])
-        outcomes: list[InstallOutcome] = []
-        not_attempted = [tool.id for tool in self._ordered]
-        collected: dict[str, InstallOutcome] = {}
-        result: list[InstallOutcome] | None = None
+        rows = list(self._rows)
+        collected: list[RowOutcome] = []
+        run_error: str | None = None
         path_text = ""
         verify_text = ""
-        error: str | None = None
         path_error: str | None = None
         verify_error: str | None = None
-        update_outcomes: list[UpdateOutcome] = []
-        update_errors: list[tuple[str, str]] = []
-        update_skips: list[str] = []
-        update_versions: dict[str, str | None] = {}
-        update_attempted: set[str] = set()
         try:
 
             def emit(tool_id: str, line: str) -> None:
@@ -645,163 +517,65 @@ class ExecuteScreen(ModalScreen[None]):
 
             runner = StreamingRunner(emit, unbuffer=True)
 
-            def on_outcome(outcome: InstallOutcome) -> None:
-                # Keyed by id: a checksum retry calls the install (and so
-                # this callback) twice for one tool; the last outcome wins.
-                collected[outcome.tool_id] = outcome
-                self.post_message(InstallToolFinished(outcome.tool_id, outcome.status))
+            def announce_row(row: PlanRow) -> None:
+                # The only set_tool site. It runs before every command a row
+                # issues (install, UPDATE and RECONFIGURE steps alike), so the
+                # streamed lines are attributed to the row that printed them.
+                runner.set_tool(row.tool_id)
+                self.post_message(RowStarted(row.tool_id))
+                if row.disposition is Disposition.UPDATE:
+                    self.post_message(InstallLogLine(row.tool_id, _UPDATE_STARTED))
 
-            on_mismatch = None if self._inputs.unattended else self._ask_mismatch
-            on_confirm = None if self._inputs.unattended else self._ask_sensitive_action
-            result, message = run_live(
-                lambda: run_installs(
-                    self._ordered,
-                    self._platform(),
-                    runner,
-                    self._inputs.resolve_tag,
-                    attributed_install(
-                        runner,
-                        with_sensitive_confirm(
-                            on_confirm,
-                            _with_repair(self._inputs.install, self._repair_ids),
-                        ),
-                        on_outcome,
-                    ),
-                    on_mismatch=on_mismatch,
-                    catalog=self._by_id,
+            def record(outcome: RowOutcome) -> None:
+                collected.append(outcome)
+                self.post_message(RowFinished(outcome))
+
+            attended = not self._inputs.unattended
+            outcomes = execute_plan(
+                rows,
+                RunContext(
+                    catalog={tool.id: tool for tool in self._inputs.catalog},
+                    platform=self._platform(),
+                    runner=runner,
+                    resolve_tag=self._inputs.resolve_tag,
+                    install=self._inputs.install,
+                    updates=self._inputs.updates,
+                    terminal_sync=self._inputs.terminal_sync,
+                    on_mismatch=self._ask_mismatch if attended else None,
+                    confirm_sensitive=self._ask_sensitive_action if attended else None,
                     should_continue=self._should_continue,
-                )
+                    on_row_started=announce_row,
+                    on_outcome=record,
+                ),
             )
-            if result is None:
-                error = message
-                outcomes, summary, not_attempted = _partial_run(self._ordered, collected)
-            else:
-                outcomes = result
-                summary = summarize(outcomes)
-                seen = {outcome.tool_id for outcome in outcomes}
-                not_attempted = [tool.id for tool in self._ordered if tool.id not in seen]
-                self._run_updates(
-                    update_outcomes, update_errors, update_skips, update_versions, update_attempted
-                )
-                reapplied: list[InstallOutcome] = []
-                for tool in self._reapply:
-                    if not self._should_continue():
-                        break
-                    applied, _fail = run_live(
-                        partial(reapply_post_install, tool, self._platform(), on_confirm)
-                    )
-                    if applied is not None:
-                        reapplied.append(applied)
-                outcomes = [*outcomes, *reapplied]
+            collected = list(outcomes)
+            if ran_anything(collected):
                 path_result, path_fail = run_live(self._inputs.wire_path)
                 if path_result is None:
-                    path_error = path_fail
-                    if error is None:
-                        error = path_fail
+                    path_error = path_fail or "PATH wiring did not complete"
                 else:
                     path_text = path_result
                 verify_result, verify_fail = run_live(self._inputs.verify)
                 if verify_result is None:
-                    verify_error = verify_fail
-                    if error is None:
-                        error = verify_fail
+                    verify_error = verify_fail or "PATH audit did not complete"
                 else:
                     verify_text = verify_result
         except Exception as exc:  # noqa: BLE001 -- the run must report, not die
-            # D-07: a crash mid-run keeps the rows that finished, marks the
-            # rest not attempted, and reaches the exit code as a crash.
-            # IN-07: append the crash text, never replace an earlier PATH
-            # wiring/verify error with it -- both texts must reach the log.
-            if result is None:
-                outcomes, summary, not_attempted = _partial_run(self._ordered, collected)
-            error = f"{error}; run stopped: {exc}" if error else f"run stopped: {exc}"
+            # D-07: a crash keeps the rows that finished; the rest are completed
+            # as not_attempted in the finally block, so none is dropped.
+            first = (str(exc).splitlines() or [""])[0]
+            run_error = f"{type(exc).__name__}: {first}"
         finally:
-            # Updates that never ran (a crash or a cancel mid-update phase)
-            # count as not attempted, so both handlers' fold_run reports them;
-            # a tool that produced an outcome, an error or a skip did run.
-            not_attempted.extend(
-                tool.id for tool in self._to_update if tool.id not in update_attempted
-            )
             self.post_message(
                 InstallRunFinished(
-                    summary,
-                    outcomes,
-                    not_attempted,
+                    _complete(rows, collected, run_error),
+                    run_error,
                     path_text,
                     verify_text,
-                    error,
                     path_error,
                     verify_error,
-                    update_outcomes,
-                    update_errors,
-                    update_skips,
-                    update_versions,
                 )
             )
-
-    def _run_updates(
-        self,
-        outcomes: list[UpdateOutcome],
-        errors: list[tuple[str, str]],
-        skips: list[str],
-        versions: dict[str, str | None],
-        attempted: set[str],
-    ) -> None:
-        """Write into caller-owned accumulators, not fresh collections.
-
-        Completed updates stay visible to the worker's finally block even
-        when a later step raises, and `attempted` records every _to_update
-        id that produced an outcome, an error or a skip, so the worker can
-        report the rest as not attempted (D-07/D-08).
-        """
-        refresh = self._inputs.version_refresh
-        updates = self._inputs.updates
-        if updates is None:
-            return
-        for tool in self._to_update:
-            if not self._should_continue():
-                return
-            attempted.add(tool.id)
-            known = refresh.state_of(tool.id)
-            if known is None:
-                _refreshed, refresh_fail = run_live(partial(refresh.refresh, [tool]))
-                if refresh_fail is not None:
-                    errors.append((tool.id, refresh_fail))
-                    continue
-                known = refresh.state_of(tool.id)
-            ownership = known.ownership if known is not None else None
-            if ownership is None:
-                skip = f"cannot update {tool.id}: ownership could not be resolved"
-                skips.append(skip)
-                continue
-            if not updates.begin(tool.id):
-                in_flight = updates.in_flight or "another tool"
-                skip = f"update already in flight for {in_flight}"
-                skips.append(skip)
-                continue
-            try:
-                target = UpdateTarget(tool=tool, ownership=ownership)
-                # A silent update run through run_captured (setup.py) never
-                # streams a line, so without this the live log gets nothing
-                # at all between begin and UpdateToolFinished -- no in-flight
-                # tool, no starting timestamp, and therefore no possible
-                # silence indicator however long the update takes.
-                self.post_message(InstallLogLine(tool.id, _UPDATE_STARTED))
-                result, fail = run_live(partial(updates.run, target))
-                if result is None:
-                    errors.append((tool.id, fail or "update did not complete"))
-                    state: ProgressState = "not-done"
-                else:
-                    outcomes.append(result)
-                    state = "done" if result.status == "updated" else "not-done"
-                    if result.status == "updated":
-                        _refreshed, probe_fail = run_live(partial(refresh.refresh, [tool]))
-                        after = refresh.state_of(tool.id) if probe_fail is None else None
-                        if after is not None and after.version is not None:
-                            versions[tool.id] = after.version.installed
-                self.post_message(UpdateToolFinished(tool.id, state))
-            finally:
-                updates.end()
 
     def _should_continue(self) -> bool:
         return not self.cancel_event.is_set()
@@ -814,7 +588,7 @@ class ExecuteScreen(ModalScreen[None]):
         that because install_tool calls runner.method_started(method.kind)
         before every method (installer/engine.py:137-138), which emits
         "-- trying {method} --" through this same path before the child is
-        ever launched; updates satisfy it because _run_updates posts
+        ever launched; updates satisfy it because the row callback posts
         _UPDATE_STARTED before updates.run. A caller that streams nothing at
         all never establishes an in-flight tool and therefore never shows an
         indicator -- the deliberate D-08 consequence that the screen refuses
@@ -935,24 +709,105 @@ class ExecuteScreen(ModalScreen[None]):
         if not message.transient:
             self._note_output(message.tool_id)
 
-    def on_install_tool_finished(self, message: InstallToolFinished) -> None:
-        # Defensive, not a fix for an observed failure: today's worker posts
-        # terminal messages strictly in sequence (on_outcome fires as each
-        # install returns). But a terminal message for some OTHER tool must
-        # never clear the ACTUAL in-flight tool's silence window -- that
-        # failure mode is invisible in exactly the way this phase exists to
-        # prevent. When _in_flight is None there is nothing to clear, so
-        # skipping is correct rather than merely harmless.
-        if message.tool_id == self._in_flight:
-            self._clear_in_flight()
-        self._progress[message.tool_id] = "done" if message.status in _DONE_STATUSES else "not-done"
-        self._refresh_progress()
+    def on_row_started(self, message: RowStarted) -> None:
+        row = self._row_for(message.tool_id)
+        if row is None:
+            return
+        options = self.query_one("#plan-rows", OptionList)
+        prompt = running_row_text(row, id_width(self._rows), self._fold_width())
+        options.replace_option_prompt(row.tool_id, prompt)
+        options.highlighted = options.get_option_index(row.tool_id)
 
-    def on_update_tool_finished(self, message: UpdateToolFinished) -> None:
-        if message.tool_id == self._in_flight:
+    def on_row_finished(self, message: RowFinished) -> None:
+        outcome = message.outcome
+        # A terminal message for some OTHER tool must never clear the actual
+        # in-flight tool's silence window; only the matching id clears it.
+        if outcome.row.tool_id == self._in_flight:
             self._clear_in_flight()
-        self._progress[message.tool_id] = message.state
-        self._refresh_progress()
+        options = self.query_one("#plan-rows", OptionList)
+        idw = id_width(self._rows)
+        options.replace_option_prompt(
+            outcome.row.tool_id, outcome_row_text(outcome, idw, self._fold_width())
+        )
+
+    def on_install_run_finished(self, message: InstallRunFinished) -> None:
+        self.finished = True
+        self.remove_class("-running")
+        self.add_class("-finished")
+        if self._silence_timer is not None:
+            self._silence_timer.stop()
+            self._silence_timer = None
+        self._clear_in_flight()
+        self.outcomes = list(message.outcomes)
+        options = self.query_one("#plan-rows", OptionList)
+        idw = id_width(self._rows)
+        width = self._fold_width()
+        for outcome in message.outcomes:
+            options.replace_option_prompt(
+                outcome.row.tool_id, outcome_row_text(outcome, idw, width)
+            )
+        failed = (
+            exit_code(message.outcomes) != 0
+            or message.run_error is not None
+            or message.path_error is not None
+            or message.verify_error is not None
+        )
+        severity = Severity.ERROR if failed else Severity.OK
+        head = Text(summary_head(message.outcomes), style=SEVERITY_STYLE[severity])
+        self.query_one("#execute-head", Static).update(head)
+        if failed:
+            prefix = "Failed."
+        elif ran_anything(message.outcomes):
+            prefix = "Done."
+        else:
+            prefix = "Nothing ran."
+        kept = retained(message.outcomes) & set(self._ids)
+        still = f" Still selected: {len(kept)}." if kept else ""
+        self.status.set(f"{prefix}{still} enter or esc returns to the catalog.", severity)
+        self.query_one("#execute-keys", Static).update(_KEYS_FINISHED)
+        log = self.query_one("#execute-log", RichLog)
+        installs = [outcome.install for outcome in message.outcomes if outcome.install is not None]
+
+        def render_report(console: Console) -> None:
+            render_run_summary(message.outcomes, console)
+            render_failure_details(installs, console)
+            render_skipped(installs, console)
+            render_handoff(installs, console)
+            render_post_install_handoff(installs, console)
+            render_postinstall_warnings(installs, console)
+            render_verification(installs, console)
+
+        log.write(self._render_captured(render_report))
+        not_attempted = [o.row.tool_id for o in message.outcomes if o.result == "not_attempted"]
+        if not_attempted:
+            log.write("Not attempted: " + ", ".join(not_attempted))
+        if message.path_text:
+            log.write("PATH wiring")
+            log.write(message.path_text)
+        elif message.path_error:
+            log.write(f"PATH wiring could not be completed: {message.path_error}")
+        if message.verify_text:
+            log.write("PATH audit")
+            log.write(message.verify_text)
+        elif message.verify_error:
+            log.write(f"PATH audit could not be completed: {message.verify_error}")
+        if message.run_error:
+            log.write(message.run_error)
+        # Do not event.stop(): this message must keep bubbling to UnifiedApp,
+        # which records the outcomes for the process exit code.
+
+    def action_close(self) -> None:
+        if self.finished:
+            self.dismiss(self.outcomes)
+            return
+        if not self.started:
+            self.dismiss(None)
+            return
+        self.status.set(
+            "Installation is still running. Press c to stop after the current tool. "
+            "ctrl+c aborts the whole app and can leave the current tool half-installed.",
+            "warn",
+        )
 
     def on_prompt_open(self, message: PromptOpen) -> None:
         if message.waiting:
@@ -970,195 +825,9 @@ class ExecuteScreen(ModalScreen[None]):
         if self.started and not self.finished and not self.cancel_event.is_set():
             self.status.set(_CANCEL_AVAILABLE, "ok")
 
-    def on_install_run_finished(self, message: InstallRunFinished) -> None:
-        self.finished = True
-        if self._silence_timer is not None:
-            self._silence_timer.stop()
-            self._silence_timer = None
-        self._clear_in_flight()
-        self.not_attempted = list(message.not_attempted)
-        reapply_ids = {tool.id for tool in self._reapply}
-        for outcome in message.outcomes:
-            if outcome.tool_id in reapply_ids:
-                continue
-            self._progress[outcome.tool_id] = (
-                "done" if outcome.status in _DONE_STATUSES else "not-done"
-            )
-        for tool_id in message.not_attempted:
-            self._progress[tool_id] = "skipped"
-        # opencode M3: reconcile rows from the accumulated update outcomes
-        # BEFORE sweeping unreached rows -- an `updated` outcome stays done
-        # even when a later version refresh crashed before UpdateToolFinished
-        # could be posted.
-        updated = {o.tool_id for o in message.update_outcomes if o.status == "updated"}
-        for tool_id in updated:
-            self._progress[tool_id] = "done"
-        for tool in self._to_update:
-            if tool.id in updated:
-                continue
-            if self._progress.get(tool.id) == "pending":
-                self._progress[tool.id] = "skipped"
-                if tool.id not in self.not_attempted:
-                    self.not_attempted.append(tool.id)
-        folded = fold_run(
-            message.summary,
-            # WR-01: fold the SAME list UnifiedApp folds -- the worker's
-            # message, never this screen's own pending-row sweep. `skip` is
-            # not a failure, and the two fold sites must not disagree.
-            not_attempted=message.not_attempted,
-            update_outcomes=message.update_outcomes,
-            update_errors=message.update_errors,
-            error=message.error,
-        )
-        self.summary = folded
-        self._refresh_progress()
-        log = self.query_one("#execute-log", RichLog)
-
-        def render_report(console: Console) -> None:
-            render_summary(message.summary, console)
-            render_failure_details(message.outcomes, console)
-            render_skipped(message.outcomes, console)
-            render_handoff(message.outcomes, console)
-            render_post_install_handoff(message.outcomes, console)
-            render_postinstall_warnings(message.outcomes, console)
-            render_verification(message.outcomes, console)
-            self._render_updates(
-                message.update_outcomes,
-                message.update_errors,
-                message.update_skips,
-                message.update_versions,
-                console,
-            )
-
-        log.write(self._render_captured(render_report))
-        if self.not_attempted:
-            log.write("Not attempted: " + ", ".join(self.not_attempted))
-        if message.path_text:
-            log.write("PATH wiring")
-            log.write(message.path_text)
-        elif message.path_error:
-            log.write(f"PATH wiring could not be completed: {message.path_error}")
-        if message.verify_text:
-            log.write("PATH audit")
-            log.write(message.verify_text)
-        elif message.verify_error:
-            log.write(f"PATH audit could not be completed: {message.verify_error}")
-        # IN-07: with the append fix, `error` differs from path_error exactly
-        # when a crash followed the wiring failure, so both texts get logged;
-        # without a crash, error IS the path/verify text and the dedicated
-        # line above already printed it -- writing it again would duplicate.
-        if message.error and message.error not in (message.path_error, message.verify_error):
-            log.write(message.error)
-        if folded.has_failure:
-            self.status.set("Failed. enter or esc returns to the catalog.", "error")
-        else:
-            self.status.set("Done. enter or esc returns to the catalog.", "ok")
-        self.query_one("#execute-keys", Static).update("enter / esc return to catalog")
-        # Do not event.stop(): this message must keep bubbling to UnifiedApp,
-        # which records the summary for the process exit code. A future stop()
-        # added for tidiness would silently break that exit code.
-
-    def action_close(self) -> None:
-        if not self.started or self.finished:
-            self.dismiss()
-            return
-        self.status.set(
-            "Installation is still running. Press c to stop after the current tool. "
-            "ctrl+c aborts the whole app and can leave the current tool half-installed.",
-            "warn",
-        )
-
-    def _render_updates(
-        self,
-        outcomes: list[UpdateOutcome],
-        errors: list[tuple[str, str]],
-        skips: list[str],
-        versions: dict[str, str | None],
-        console: Console,
-    ) -> None:
-        lines: list[str] = []
-        for outcome in outcomes:
-            if outcome.status == "updated":
-                lines.append(self._updated_line(outcome, versions.get(outcome.tool_id)))
-            elif outcome.status == "unknown-owner":
-                reason = outcome.detail or _NO_MANAGER_CLAIMED
-                lines.append(f"cannot update {outcome.tool_id}: {reason}")
-            elif outcome.detail:
-                lines.append(outcome.detail)
-        for _tool_id, fail in errors:
-            lines.append(fail)
-        lines.extend(skips)
-        if not lines:
-            return
-        console.print("Updates")
-        for line in lines:
-            console.print(line)
-
-    def _updated_line(self, outcome: UpdateOutcome, installed: str | None) -> str:
-        version = f" now {installed}" if installed else ""
-        line = f"updated {outcome.tool_id}{version}"
-        if outcome.replayed_globals:
-            line += f" — replayed {', '.join(outcome.replayed_globals)}"
-        if outcome.cleanup_warnings:
-            line += f" — {'; '.join(outcome.cleanup_warnings)}"
-        if outcome.postinstall_warning:
-            line += f" — {outcome.postinstall_warning}"
-        if outcome.detail:
-            line += f" — {outcome.detail}"
-        return line
-
-    def _preflight_prompt(self) -> str:
-        install_n = len(self._ordered)
-        update_n = len(self._to_update)
-        hint = "enter start · esc cancel"
-        current_ids = [tool.id for tool in self._current]
-        if install_n == 0 and update_n == 0 and current_ids:
-            joined = ", ".join(current_ids)
-            return f"{joined} already current — nothing to do. {hint}"
-        if install_n == 0 and update_n == 0:
-            return "Nothing to do. esc cancel"
-        current_clause = ""
-        if current_ids:
-            current_clause = f" Already current: {', '.join(current_ids)}."
-        if install_n and update_n:
-            return f"Install {install_n} tools, update {update_n}?{current_clause} {hint}"
-        if update_n:
-            return f"Update {update_n} tools?{current_clause} {hint}"
-        return f"Install {install_n} tools?{current_clause} {hint}"
-
-    def _refresh_progress(self) -> None:
-        rows = Text()
-        first = True
-        for tool in self._ordered:
-            if not first:
-                rows.append("\n")
-            first = False
-            state = self._progress.get(tool.id, "pending")
-            glyph, style, label = _PROGRESS_GLYPH[state]
-            rows.append(f"{glyph} {tool.id} [{label}]", style=style)
-        for tool in self._to_update:
-            if not first:
-                rows.append("\n")
-            first = False
-            state = self._progress.get(tool.id, "pending")
-            glyph, style, label = _PROGRESS_GLYPH[state]
-            rows.append(f"{glyph} {tool.id} update [{label}]", style=style)
-        for tool, _reason in self._refused:
-            if not first:
-                rows.append("\n")
-            first = False
-            glyph, style, label = _PROGRESS_GLYPH["not-done"]
-            rows.append(f"{glyph} {tool.id} update [{label}]", style=style)
-        for tool in self._current:
-            if not first:
-                rows.append("\n")
-            first = False
-            rows.append(f"✓ {tool.id} [already current]", style=SEVERITY_STYLE[Severity.OK])
-        self.query_one("#execute-progress", Static).update(rows)
-
     def _render_captured(self, render: Callable[[Console], None]) -> str:
         buffer = io.StringIO()
-        render(Console(file=buffer, width=80, no_color=True))
+        render(Console(file=buffer, width=self._fold_width() + 2, no_color=True))
         # Defense-in-depth: render() prints outcome.errors, which carries
         # untrusted child-process output (CommandError.detail). run.py
         # already sanitizes its own tail; this catches any other producer

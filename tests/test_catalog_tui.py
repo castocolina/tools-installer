@@ -3777,7 +3777,7 @@ async def test_a_failed_direct_update_folds_into_the_session_summary(
 ) -> None:
     """opencode H3 (app half): a failed direct `u` update never reaches an
     ExecuteScreen summary, so the app itself must fold it into
-    install_summary -- the session then has_failure, and the process exits 1
+    outcomes -- the session then has a failed row, and the process exits 1
     even when the user quits without ever running an install."""
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew", package="rg")
@@ -3811,10 +3811,9 @@ async def test_a_failed_direct_update_folds_into_the_session_summary(
         )
         await pilot.press("u")
         await _wait_until(pilot, lambda: "brew exploded" in app.catalog.status_text)
-        summary = app.install_summary
-        assert summary is not None
-        assert "rg" in summary.update_failed
-        assert summary.has_failure is True
+        outcomes = app.outcomes
+        assert outcomes is not None
+        assert outcomes["rg"].result == "failed"
 
 
 # -- 19-13 Task 1: one Health cell per row from the published tool state (D-15)

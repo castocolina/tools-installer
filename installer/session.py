@@ -89,23 +89,6 @@ class SensitiveInstall(Protocol):
     ) -> InstallOutcome: ...
 
 
-class RepairSensitiveInstall(Protocol):
-    """Sensitive installer which additionally accepts the repair force flag."""
-
-    def __call__(
-        self,
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = ...,
-        tools: Mapping[str, Tool] | None = ...,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = ...,
-        repair: bool = ...,
-    ) -> InstallOutcome: ...
-
-
 def with_sensitive_confirm(
     confirm: ConfirmSensitiveAction | None,
     install: SensitiveInstall = install_tool,
@@ -114,7 +97,7 @@ def with_sensitive_confirm(
 
     Adding ``confirm_sensitive_action`` to the shared ``Install`` protocol
     would force a mechanical edit into every fake install in the suite and
-    into ``attributed_install``. Binding at a composition point instead
+    into every install call site. Binding at a composition point instead
     leaves that protocol byte-identical. Callers: ``run_wizard`` (plan
     14-04) and the in-TUI execute path (plan 14-05).
     """
@@ -391,7 +374,7 @@ class RunContext:
     platform: Platform
     runner: Runner
     resolve_tag: TagResolver
-    install: RepairSensitiveInstall
+    install: SensitiveInstall
     updates: UpdateService | None = None
     terminal_sync: Callable[[], str | None] | None = None
     on_mismatch: OnMismatch | None = None
@@ -425,7 +408,7 @@ _KEEP = _FAILURE | {"blocked", "manual"}
 _RAN = frozenset({"done", "failed", "mismatch", "crashed", "manual"})
 
 
-def exit_code(outcomes: Sequence[RowOutcome]) -> int:
+def exit_code(outcomes: Iterable[RowOutcome]) -> int:
     return int(any(outcome.result in _FAILURE for outcome in outcomes))
 
 
@@ -463,9 +446,13 @@ def summary_counts(outcomes: Sequence[RowOutcome]) -> str:
 
 
 def _with_force(
-    install: RepairSensitiveInstall, force_ids: frozenset[str]
-) -> RepairSensitiveInstall:
-    """Pass repair=True only for repair and reinstall plan rows."""
+    install: Callable[..., InstallOutcome], force_ids: frozenset[str]
+) -> SensitiveInstall:
+    """Pass repair=True only for repair and reinstall plan rows.
+
+    Every other row calls `install` without the keyword at all, so an install
+    seam that never learned about repair (every plain fake) keeps working.
+    """
 
     def forced(
         tool: Tool,
@@ -476,29 +463,15 @@ def _with_force(
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
         confirm_sensitive_action: ConfirmSensitiveAction | None = None,
-        repair: bool = False,
     ) -> InstallOutcome:
-        if tool.id in force_ids or repair:
-            return install(
-                tool,
-                platform,
-                runner,
-                resolve_tag,
-                checksum_policy=checksum_policy,
-                tools=tools,
-                confirm_sensitive_action=confirm_sensitive_action,
-                repair=True,
-            )
-        return install(
-            tool,
-            platform,
-            runner,
-            resolve_tag,
-            checksum_policy=checksum_policy,
-            tools=tools,
-            confirm_sensitive_action=confirm_sensitive_action,
-            repair=False,
-        )
+        kwargs: dict[str, object] = {
+            "checksum_policy": checksum_policy,
+            "tools": tools,
+            "confirm_sensitive_action": confirm_sensitive_action,
+        }
+        if tool.id in force_ids:
+            kwargs["repair"] = True
+        return install(tool, platform, runner, resolve_tag, **kwargs)
 
     return forced
 

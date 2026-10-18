@@ -57,7 +57,7 @@ from installer.policy import (
 from installer.post_install import ConfirmSensitiveAction
 from installer.rcclean import PathWriterLine
 from installer.run import CommandError, Runner
-from installer.session import SensitiveInstall, Summary
+from installer.session import Disposition, PlanRow, Result, RowOutcome, SensitiveInstall
 from installer.shellrc import PathGuardOutcome, ShellrcRefusal
 from installer.systemd_daemon import CompetingUnit, TimerStateCache
 from installer.ui_common import BASE_VIEW
@@ -3213,12 +3213,10 @@ def test_run_in_flight_flag_lifecycle() -> None:
     assert app.run_in_flight is True
     app.on_install_run_finished(
         InstallRunFinished(
-            Summary(installed=(), already=(), failed=(), no_method=()),
             [],
-            [],
-            "",
-            "",
             None,
+            "",
+            "",
         )
     )
     assert app.run_in_flight is False
@@ -3259,7 +3257,7 @@ async def test_ctrl_c_while_a_run_is_in_flight_leaves_the_flag_set() -> None:
         assert app.run_in_flight is True
         await pilot.press("ctrl+c")
         assert not app.is_running
-        assert app.install_summary is None
+        assert app.outcomes is None
         assert app.run_in_flight is True
         release.set()
 
@@ -5672,19 +5670,24 @@ async def test_install_closed_refreshes_the_ver_cell_without_navigating_away(
         presence[installed_tool.id] = True
         probed[installed_tool.id] = "1.3.0"
 
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.3.0", probe_output=probe_output)
+    service = _macos_service(
+        tmp_path,
+        resolve_tag=lambda repo: "v1.3.0",
+        probe_output=probe_output,
+        present=lambda t: presence[t.id],
+    )
     execute = _execute_inputs(
         [tool],
         present=lambda t: presence[t.id],
         install=_tracking_install(on_install),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle_versions(app, pilot)
         before = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver").plain
-        assert "1.2.0" in before
-        assert "->" in before
+        assert before == ""
         app.catalog.selected.add("codegraph")
         await pilot.press("enter")
         assert isinstance(app.screen, ExecuteScreen)
@@ -5711,6 +5714,7 @@ async def test_install_closed_refreshes_the_non_base_tier_it_ran_from(
         present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -5744,6 +5748,7 @@ async def test_install_closed_refreshes_even_when_the_run_never_started(
         present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -5790,6 +5795,7 @@ async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreada
         present=lambda t: presence[t.id],
         install=_tracking_install(on_install),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app(
         [tool_a, tool_b],
@@ -5833,6 +5839,7 @@ async def test_returning_from_another_view_rereads_presence_through_the_pass(
         present=lambda t: presence[t.id],
         install=_tracking_install(lambda installed_tool: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -5860,6 +5867,7 @@ async def test_returning_to_the_base_tier_re_resolves_ownership_an_install_dropp
         present=lambda t: True,
         install=_tracking_install(lambda installed_tool: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([system_tool, user_tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -5916,6 +5924,7 @@ async def test_install_closed_marks_a_detect_path_tool_that_answers_no_version(
         present=lambda t: presence[t.id],
         install=_tracking_install(on_install),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -5970,6 +5979,7 @@ async def test_install_closed_refresh_requeries_the_manager_inventory_after_a_ru
         present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -6014,6 +6024,7 @@ async def test_install_close_survives_a_presence_predicate_that_fails_after_the_
         present=_presence,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -6048,6 +6059,7 @@ async def test_install_closed_degrades_when_the_active_view_is_not_a_catalog_tie
         present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(100, 30)) as pilot:
@@ -6091,6 +6103,7 @@ async def test_a_failed_post_run_cache_invalidation_is_reported_not_swallowed(
         present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -6106,7 +6119,7 @@ async def test_a_failed_post_run_cache_invalidation_is_reported_not_swallowed(
         # follows the invalidate call in the same handler still ran, so the
         # run is still recorded...
         assert app.is_running is True
-        assert app.install_summary is not None
+        assert app.outcomes is not None
         # ...but the user is told, rather than left with a silently stale
         # snapshot. The cause travels with the message, not just the symptom.
         assert "version cache invalidation failed" in app.catalog.status_text
@@ -6146,13 +6159,18 @@ async def test_install_closed_then_navigating_to_uninstall_shows_the_post_instal
             )
         ]
 
+    service = _macos_service(
+        tmp_path,
+        resolve_tag=lambda repo: "v1.0.0",
+        present=lambda t: presence[t.id],
+    )
     execute = _execute_inputs(
         [tool],
         present=lambda t: presence[t.id],
         install=_tracking_install(on_install),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
     app = _version_app(
         [tool],
         service,
@@ -6198,6 +6216,7 @@ async def test_install_closed_keeps_cross_tier_ids_in_every_installed_map(
         present=lambda t: presence[t.id],
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([pnpm, mmdc], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -6208,6 +6227,9 @@ async def test_install_closed_keeps_cross_tier_ids_in_every_installed_map(
         user.selected.add("mmdc")
         await pilot.press("enter")
         assert isinstance(app.screen, ExecuteScreen)
+        # Enter opens the review; a second Enter runs the plan (D-14).
+        await pilot.press("enter")
+        await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
         await _settle_versions(app, pilot, user)
         # Behavioural first: marking mmdc on the user view runs the real
@@ -6247,6 +6269,7 @@ def _sweep_app(
         present=_predicate,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     return _version_app(tools, service, execute=execute), tools, calls
 
@@ -6321,7 +6344,7 @@ async def test_install_closed_calls_the_terminal_synchronizer_once_per_tier(
         _gh_tool("user-tool", tier="user"),
         _gh_tool("ai-tool", tier="ai"),
     ]
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0", present=lambda _t: False)
 
     # WR-07: `installed` gates BOTH resolve_dependencies' own selection-time
     # is_installed check (ExecuteScreen.on_mount). It
@@ -6337,6 +6360,7 @@ async def test_install_closed_calls_the_terminal_synchronizer_once_per_tier(
         present=_installed,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app(
         tools,
@@ -6376,7 +6400,7 @@ async def test_install_closed_reports_a_terminal_sync_oserror_without_losing_the
     UpdateService.run's own non-fatal terminal-follow-up contract
     (installer/update.py:471-480)."""
     tool = _gh_tool("codegraph", tier="system")
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0", present=lambda _t: False)
 
     def _boom() -> str | None:
         raise OSError("EACCES: ~/.config/kitty/kitty.conf")
@@ -6390,6 +6414,7 @@ async def test_install_closed_reports_a_terminal_sync_oserror_without_losing_the
         present=lambda _t: False,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([tool], service, execute=execute, terminal_sync=_boom)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -6402,7 +6427,7 @@ async def test_install_closed_reports_a_terminal_sync_oserror_without_losing_the
         await pilot.press("escape")
         await _settle_versions(app, pilot)
         assert app.is_running is True
-        assert app.install_summary is not None
+        assert app.outcomes is not None
         assert "terminal shell synchronization" in app.catalog.status_text.lower()
         assert "EACCES" in app.catalog.status_text
 
@@ -6425,6 +6450,7 @@ async def test_install_closed_delivers_a_terminal_sync_warning_to_the_visible_do
         present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([tool], service, execute=execute, terminal_sync=_warns)
     async with app.run_test(size=(100, 30)) as pilot:
@@ -6439,8 +6465,8 @@ async def test_install_closed_delivers_a_terminal_sync_warning_to_the_visible_do
         # on_install_run_finished would otherwise have set, so the gate this
         # fix added does not mask what this test is actually about (T-15.6-13's
         # delivery-to-visible-screen contract).
-        app._install_state_changed = True  # pyright: ignore[reportPrivateUsage]
-        app._install_closed(None)  # pyright: ignore[reportPrivateUsage]
+        done = RowOutcome(PlanRow("codegraph", Disposition.INSTALL, ""), "done")
+        app._install_closed([done])  # pyright: ignore[reportPrivateUsage]
         await pilot.pause()
         assert app.is_running is True
         assert "wezterm configuration is user-owned" in doctor_screen.status.text
@@ -6459,6 +6485,7 @@ async def test_install_closed_with_no_terminal_sync_wired_is_unaffected(
         present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([tool], service, execute=execute)
     assert app._terminal_sync is None  # pyright: ignore[reportPrivateUsage]
@@ -6500,6 +6527,7 @@ async def test_install_closed_skips_the_terminal_synchronizer_when_nothing_was_i
         present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([tool], service, execute=execute, terminal_sync=_terminal_sync)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -6512,8 +6540,8 @@ async def test_install_closed_skips_the_terminal_synchronizer_when_nothing_was_i
         await pilot.press("escape")
         await _settle_versions(app, pilot)
         assert app.is_running is True
-        assert app.install_summary is not None
-        assert app.install_summary.installed == ()
+        assert app.outcomes is not None
+        assert all(o.result == "skipped" for o in app.outcomes.values())
         assert calls == []
 
 
@@ -6534,6 +6562,7 @@ async def test_install_closed_flushes_a_previously_queued_warning_even_with_no_n
         present=lambda _t: False,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
     app = _version_app([tool], service, execute=execute, terminal_sync=lambda: None)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -7275,6 +7304,7 @@ def _execute_inputs(
     present: Presence = (),
     install: SensitiveInstall | None = None,
     platform: Platform | None = None,
+    version_refresh: VersionRefreshService | None = None,
 ) -> ExecuteInputs:
     """A run over `catalog` (rg and fd by default) whose presence is `present`.
 
@@ -7306,7 +7336,11 @@ def _execute_inputs(
         platform=host,
         wire_path=lambda: "",
         verify=lambda: "",
-        version_refresh=presence_service(tools, present=present, platform=host),
+        version_refresh=(
+            version_refresh
+            if version_refresh is not None
+            else presence_service(tools, present=present, platform=host)
+        ),
         install=install if install is not None else _ok_install,
     )
 
@@ -7412,10 +7446,9 @@ async def test_a_cancelled_run_then_a_successful_rerun_is_not_a_failure() -> Non
         await pilot.press("c")  # soft cancel: stop after the current tool
         release.set()
         await _settle_execute_screen(app, pilot)
-        first = app.install_summary
+        first = app.outcomes
         assert first is not None
-        assert first.not_attempted == ("fd",)
-        assert first.has_failure is True
+        assert first["fd"].result == "not_attempted"
         await pilot.press("escape")
         await pilot.pause()
         assert isinstance(app.screen, CatalogScreen)
@@ -7425,15 +7458,18 @@ async def test_a_cancelled_run_then_a_successful_rerun_is_not_a_failure() -> Non
         assert isinstance(app.screen, ExecuteScreen)
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
-        merged = app.install_summary
+        merged = app.outcomes
         assert merged is not None
-        assert merged.not_attempted == ()
-        assert merged.installed == ("rg", "fd")
-        assert merged.has_failure is False
+        assert {tool_id: o.result for tool_id, o in merged.items()} == {
+            "rg": "done",
+            "fd": "done",
+        }
 
 
-async def test_two_runs_accumulate_failures_into_install_summary() -> None:
-    outcomes: list[str] = ["failed", "installed"]
+async def test_two_runs_keep_the_latest_outcome_per_tool() -> None:
+    """A retained tool that fails once and then succeeds on the retry reads done:
+    the app keeps the latest outcome per tool id, never the first run's failure."""
+    outcomes: dict[str, list[str]] = {"rg": ["failed", "installed"], "fd": ["installed"]}
 
     def sequenced(
         tool: Tool,
@@ -7446,7 +7482,7 @@ async def test_two_runs_accumulate_failures_into_install_summary() -> None:
         confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
-        return InstallOutcome(tool.id, outcomes.pop(0))
+        return InstallOutcome(tool.id, outcomes[tool.id].pop(0))
 
     app = _app(execute=_execute_inputs(install=sequenced))
     async with app.run_test(size=(100, 30)) as pilot:
@@ -7455,9 +7491,9 @@ async def test_two_runs_accumulate_failures_into_install_summary() -> None:
         assert isinstance(app.screen, ExecuteScreen)
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
-        first = app.install_summary
+        first = app.outcomes
         assert first is not None
-        assert first.failed == ("rg",)
+        assert first["rg"].result == "failed"
         await pilot.press("escape")
         await pilot.pause()
         assert isinstance(app.screen, CatalogScreen)
@@ -7466,11 +7502,11 @@ async def test_two_runs_accumulate_failures_into_install_summary() -> None:
         assert isinstance(app.screen, ExecuteScreen)
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
-        merged = app.install_summary
+        merged = app.outcomes
         assert merged is not None
-        assert merged.failed == ("rg",)
-        assert merged.installed == ("fd",)
-        assert isinstance(merged, Summary)
+        assert merged["rg"].result == "done"
+        assert merged["fd"].result == "done"
+        assert all(isinstance(o, RowOutcome) for o in merged.values())
 
 
 # -- 15.4-04/Task 3: the completion signal -- an Uninstall screen entered
@@ -7756,13 +7792,18 @@ async def test_uninstall_screen_cell_reflects_post_run_ownership_map(tmp_path: P
             owner_label_hint=owner_label_hint,
         )
 
+    service = _macos_service(
+        tmp_path,
+        resolve_tag=lambda repo: "v1.0.0",
+        present=lambda t: presence[t.id],
+    )
     execute = _execute_inputs(
         [tool],
         present=lambda t: presence[t.id],
         install=_tracking_install(on_install),
         platform=_install_closed_platform(),
+        version_refresh=service,
     )
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
     app = _version_app(
         [tool],
         service,
@@ -8013,3 +8054,80 @@ async def test_doctor_apply_surfaces_a_consolidation_refusal_instead_of_reportin
         body = str(screen.query_one("#doctor-body", Static).render())
         assert "PATH wired." not in body
         assert reason in body
+
+
+# -- plan 20-10 Task 2: the app keeps the retained selection and gates the sync on a ran row --
+
+
+def _outcome_for(tool_id: str, result: Result) -> RowOutcome:
+    return RowOutcome(PlanRow(tool_id, Disposition.INSTALL, ""), result)
+
+
+async def test_install_closed_keeps_exactly_the_retained_rows_selected() -> None:
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        staged = app._staged  # pyright: ignore[reportPrivateUsage]
+        staged.update({"a", "b", "c", "d"})
+        app._install_closed(  # pyright: ignore[reportPrivateUsage]
+            [
+                _outcome_for("a", "done"),
+                _outcome_for("b", "failed"),
+                _outcome_for("c", "skipped"),
+                _outcome_for("d", "blocked"),
+            ]
+        )
+        await pilot.pause()
+        assert app._staged == {"b", "d"}  # pyright: ignore[reportPrivateUsage]
+        assert app._staged is staged  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_install_closed_never_adds_a_dragged_in_dependency() -> None:
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        app._staged.add("mmdc")  # pyright: ignore[reportPrivateUsage]
+        app._install_closed(  # pyright: ignore[reportPrivateUsage]
+            [_outcome_for("node", "failed"), _outcome_for("mmdc", "dependency_failed")]
+        )
+        await pilot.pause()
+        assert app._staged == {"mmdc"}  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_escape_before_start_leaves_the_selection_untouched() -> None:
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        app._staged.update({"rg", "fd"})  # pyright: ignore[reportPrivateUsage]
+        app._install_closed(None)  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        assert app._staged == {"rg", "fd"}  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_terminal_sync_runs_only_when_a_row_ran() -> None:
+    calls: list[str] = []
+
+    def sync() -> str | None:
+        calls.append("sync")
+        return None
+
+    app = _app(terminal_sync=sync)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app._install_closed([_outcome_for("rg", "skipped")])  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        assert calls == []
+        app._install_closed([_outcome_for("rg", "done")])  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+        assert calls == ["sync"]
+
+
+async def test_cancel_then_retry_leaves_the_latest_outcome_and_exits_clean() -> None:
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.on_install_run_finished(
+            InstallRunFinished([_outcome_for("rg", "not_attempted")], None, "", "")
+        )
+        await pilot.pause()
+        app.on_install_run_finished(InstallRunFinished([_outcome_for("rg", "done")], None, "", ""))
+        await pilot.pause()
+        outcomes = app.outcomes
+        assert outcomes is not None
+        assert outcomes["rg"].result == "done"
+        assert app.run_errors == []
