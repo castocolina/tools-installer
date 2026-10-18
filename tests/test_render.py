@@ -14,6 +14,7 @@ from installer.executors import ExecutorError
 from installer.model import Method, Tool
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.render import (
+    outcome_row_text,
     render_audit,
     render_dependency_notice,
     render_failure_details,
@@ -24,13 +25,15 @@ from installer.render import (
     render_post_install_handoff,
     render_postinstall_warnings,
     render_remove_yourself,
+    render_run_summary,
     render_skipped,
     render_summary,
     render_uninstall,
     render_verification,
+    summary_head,
 )
 from installer.run import CommandError
-from installer.session import WORDS, Disposition, PlanRow, Summary
+from installer.session import WORDS, Disposition, PlanRow, RowOutcome, Summary
 from installer.version_status import Health
 
 
@@ -959,3 +962,70 @@ def test_render_plan_sanitizes_step_text() -> None:
     render_plan([row], console)
     assert "\x1b" not in buf.getvalue()
     assert "sync [2J terminals" in buf.getvalue()
+
+
+def _done(tool_id: str, disposition: Disposition, *, health: Health = Health.OK) -> RowOutcome:
+    return RowOutcome(PlanRow(tool_id, disposition, "needed", health=health), "done")
+
+
+def test_render_run_summary_first_line_is_the_summary_head() -> None:
+    outcomes = [
+        _done("fd", Disposition.INSTALL),
+        _done("jq", Disposition.UPDATE),
+        RowOutcome(PlanRow("rg", Disposition.SKIP, "already current", health=Health.OK), "skipped"),
+        RowOutcome(
+            PlanRow("x", Disposition.INSTALL, "not installed", health=Health.MISSING), "failed"
+        ),
+    ]
+    console, buf = _console()
+    render_run_summary(outcomes, console)
+    assert buf.getvalue().splitlines()[0] == "Summary — 1 installed, 1 updated, 1 skipped, 1 failed"
+    empty, empty_buf = _console()
+    render_run_summary([], empty)
+    assert empty_buf.getvalue().splitlines()[0] == "Summary — nothing selected"
+
+
+def test_summary_head_is_the_same_line_the_renderer_prints() -> None:
+    outcomes = [_done("fd", Disposition.INSTALL)]
+    assert summary_head(outcomes) == "Summary — 1 installed"
+    console, buf = _console()
+    render_run_summary(outcomes, console)
+    assert buf.getvalue().splitlines()[0] == summary_head(outcomes)
+
+
+def test_done_outcome_row_shows_the_done_word_and_a_green_check() -> None:
+    outcomes = [_done("fd", Disposition.INSTALL)]
+    console, buf = _console()
+    render_run_summary(outcomes, console)
+    row = buf.getvalue().splitlines()[1]
+    assert row == "✓ fd  installed"
+    colored = io.StringIO()
+    render_run_summary(outcomes, Console(file=colored, width=80, force_terminal=True))
+    value = colored.getvalue()
+    assert "\x1b[32m✓\x1b[0m" in value
+    assert "\x1b[32minstalled\x1b[0m" in value
+
+
+def test_done_outcome_row_uses_the_disposition_done_word_in_green() -> None:
+    outcome = _done("jq", Disposition.UPDATE)
+    text = outcome_row_text(outcome, 4, 78)
+    assert text.plain.splitlines()[0] == "✓ jq    updated"
+    colored = io.StringIO()
+    Console(file=colored, width=80, force_terminal=True).print(text, markup=False)
+    assert "\x1b[32mupdated\x1b[0m" in colored.getvalue()
+
+
+def test_render_run_summary_rows_follow_display_order() -> None:
+    requester = PlanRow("mmdc", Disposition.INSTALL, "not installed", health=Health.MISSING)
+    dragged = PlanRow(
+        "node", Disposition.INSTALL, "needed by mmdc", requested_by="mmdc", health=Health.OK
+    )
+    outcomes = [
+        RowOutcome(dragged, "done"),
+        RowOutcome(requester, "done"),
+    ]
+    console, buf = _console()
+    render_run_summary(outcomes, console)
+    rows = buf.getvalue().splitlines()[1:]
+    # The dragged row's 2-cell indent counts into the id budget, so idw is 6.
+    assert rows == ["✓ mmdc    installed", "✓   node  installed"]

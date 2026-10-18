@@ -27,7 +27,16 @@ from installer.guidance import (
 from installer.links import TROUBLESHOOTING_URL
 from installer.pnpm_globals import NodeGlobalsReport
 from installer.sanitize import sanitize_log_line
-from installer.session import WORDS, Disposition, PlanRow, Summary, review_counts
+from installer.session import (
+    RESULT_WORDS,
+    WORDS,
+    Disposition,
+    PlanRow,
+    RowOutcome,
+    Summary,
+    review_counts,
+    summary_counts,
+)
 from installer.systemd_daemon import CompetingUnit
 from installer.ui_common import SEVERITY_STYLE
 from installer.version_status import HEALTH_MARKS, Health
@@ -165,6 +174,120 @@ def plan_head(rows: Sequence[PlanRow]) -> str:
         else ""
     )
     return f"Install plan — {counts}{suffix}"
+
+
+# The finished marks that replace a health glyph, per UI-SPEC "Marks": the mark
+# states a fact about the run, so a skipped or blocked row keeps its plan-time
+# health glyph and never turns green.
+_DONE_MARK: tuple[str, str] = ("✓", "green")
+_FAILURE_MARK: tuple[str, str] = ("✖", "red")
+_RUNNING_MARK: tuple[str, str] = (">", "bold")
+_FAILURE_RESULTS: frozenset[str] = frozenset({"failed", "mismatch", "crashed"})
+
+
+def outcome_mark(outcome: RowOutcome) -> tuple[str, str]:
+    """Return the finished row's (glyph, style) for its result."""
+    if outcome.result == "done":
+        return _DONE_MARK
+    if outcome.result in _FAILURE_RESULTS:
+        return _FAILURE_MARK
+    return HEALTH_MARKS[outcome.row.health or Health.CHECKING]
+
+
+def outcome_word(outcome: RowOutcome) -> tuple[str, str]:
+    """Return the finished row's (word, style), read only from the vocabulary."""
+    if outcome.result == "done":
+        words = WORDS[outcome.row.disposition]
+        return (words.done or "", words.done_style)
+    return RESULT_WORDS[outcome.result]
+
+
+def outcome_detail_text(outcome: RowOutcome) -> str:
+    """Return the UI-SPEC text after the finished word, or empty."""
+    if outcome.result in {"done", "mismatch", "not_attempted"}:
+        return ""
+    if outcome.result == "failed":
+        errors = outcome.install.errors if outcome.install is not None else ()
+        if not errors and outcome.update is not None:
+            errors = outcome.update.errors
+        error = str(errors[-1]).splitlines()[0] if errors else "no method succeeded"
+        return sanitize_log_line(error)
+    if outcome.result == "dependency_failed":
+        blockers = outcome.install.blocked_by if outcome.install is not None else ()
+        return ", ".join(blockers) or "an earlier failure"
+    if outcome.result == "crashed":
+        return outcome.detail
+    if outcome.result == "manual":
+        return "see the setup steps in the log"
+    if outcome.result == "skipped":
+        return outcome.detail or outcome.row.reason.removesuffix(" (r: reinstall)")
+    if outcome.result == "blocked":
+        return outcome.detail or outcome.row.reason
+    return ""
+
+
+def outcome_row_text(outcome: RowOutcome, idw: int, width: int) -> Text:
+    """Build one finished plan row: mark, id, word and the UI-SPEC text after it."""
+    glyph, glyph_style = outcome_mark(outcome)
+    row = outcome.row
+    dragged = row.requested_by is not None
+    indent = 2 if dragged else 0
+    text = Text()
+    text.append(glyph, style=glyph_style)
+    text.append(" ")
+    if dragged:
+        text.append("  ")
+    text.append(row.tool_id.ljust(max(0, idw - indent)), style="bold")
+    text.append("  ")
+    word, word_style = outcome_word(outcome)
+    text.append(word, style=word_style)
+    column = cell_len(glyph) + 1 + idw + 2
+    detail = outcome_detail_text(outcome)
+    if detail:
+        fold_reason(text, " — " + sanitize_log_line(detail), column, width)
+    return text
+
+
+def running_row_text(row: PlanRow, idw: int, width: int) -> Text:
+    """Build the in-flight row: the `>` mark, the id and the review word."""
+    dragged = row.requested_by is not None
+    indent = 2 if dragged else 0
+    text = Text()
+    text.append(_RUNNING_MARK[0], style=_RUNNING_MARK[1])
+    text.append(" ")
+    if dragged:
+        text.append("  ")
+    text.append(row.tool_id.ljust(max(0, idw - indent)), style="bold")
+    text.append("  ")
+    words = WORDS[row.disposition]
+    text.append(words.review, style=words.style)
+    return text
+
+
+def summary_head(outcomes: Sequence[RowOutcome]) -> str:
+    """Return the one stable finished line: `Summary — {counts}`."""
+    return f"Summary — {summary_counts(outcomes)}"
+
+
+def render_run_summary(
+    outcomes: Sequence[RowOutcome], console: Console, *, width: int | None = None
+) -> None:
+    """Print the summary head and one outcome row per outcome in display order."""
+    budget = min(console.width, 100) if width is None else width
+    console.print(
+        summary_head(outcomes), style="bold", markup=False, highlight=False, soft_wrap=True
+    )
+    rows = [outcome.row for outcome in outcomes]
+    idw = id_width(rows)
+    by_id = {outcome.row.tool_id: outcome for outcome in outcomes}
+    for row in display_order(rows):
+        outcome = by_id[row.tool_id]
+        console.print(
+            outcome_row_text(outcome, idw, budget),
+            markup=False,
+            highlight=False,
+            soft_wrap=True,
+        )
 
 
 def render_plan(
