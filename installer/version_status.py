@@ -1685,7 +1685,7 @@ class VersionRefreshService:
                 if (
                     present
                     and ownership.owner == "installer"
-                    and (receipt is None or broken)
+                    and receipt is None
                     and not removable.removable
                 ):
                     # No receipt, adoption or layout proves it (review C2-M2).

@@ -4375,6 +4375,28 @@ def test_manager_owned_tool_has_no_unproven_note(
     assert _UNPROVEN not in state.reasons
 
 
+def test_a_broken_receipt_tool_carries_no_unproven_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    placed = _place_yq_with_receipt(bin_dir)
+    placed.write_bytes(_YQ_BYTES + b"changed")
+    state = _settled(_receipt_service(tmp_path, bin_dir), _yq())
+    assert state.health is Health.BROKEN
+    assert state.removable.removable == ()
+    assert _UNPROVEN not in state.reasons
+
+
+def test_an_unreceipted_installer_tool_keeps_the_unproven_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    (bin_dir / "yq").write_bytes(_YQ_BYTES)
+    state = _settled(_receipt_service(tmp_path, bin_dir), _yq())
+    assert state.receipt is None
+    assert _UNPROVEN in state.reasons
+
+
 def test_adopted_tool_has_no_unproven_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     bin_dir = _scratch_home(tmp_path, monkeypatch)
     service, _placed = _adoption_service(tmp_path, bin_dir, {"yq_linux_amd64": _YQ_SHA})
