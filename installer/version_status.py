@@ -614,8 +614,8 @@ SKILL_SEEDED_NOTE = "host status from the previous run, re-checking"
 # 19-UI-SPEC locked copy (D-09, SPEC R4). CHANGED_SINCE_INSTALL lives in receipts.
 RECEIPT_UNREADABLE_NOTE = "install receipt unreadable — treated as unproven"
 ADOPTED_NOTE = "adopted: the file matches the release checksum"
-# SPEC-locked text; this phase adds no `r` binding (Phase 20 does).
-UNPROVEN_NOTE = "not proven: reinstall with r to adopt"
+# Phase 20 binds `r` on the review screen (D-14, L-20-06).
+UNPROVEN_NOTE = "not proven: select it, then press r on the review to reinstall and adopt"
 # D-16, L-19-10: a drifted terminal -> (the row it lands on, its label). Konsole
 # has no catalog row; the zsh row carries it.
 _TERMINAL_ROWS: dict[str, tuple[str, str]] = {

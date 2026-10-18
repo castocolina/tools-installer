@@ -4209,7 +4209,7 @@ def test_archive_and_non_raw_methods_are_never_digest_adopted(
 
 # -- 19-14 Task 3: an installer-owned tool with no proof says how to get one. --
 
-_UNPROVEN = "not proven: reinstall with r to adopt"
+_UNPROVEN = "not proven: select it, then press r on the review to reinstall and adopt"
 
 
 def test_unproven_installer_tool_gets_the_reinstall_note(
