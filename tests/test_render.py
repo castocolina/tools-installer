@@ -14,6 +14,7 @@ from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.render import (
     outcome_mark,
     outcome_row_text,
+    render_done_notes,
     render_failure_details,
     render_guard,
     render_guard_status,
@@ -25,7 +26,6 @@ from installer.render import (
     render_run_report,
     render_run_summary,
     render_uninstall,
-    render_update_notes,
     render_verification,
     running_row_text,
     summary_head,
@@ -1118,7 +1118,39 @@ def test_running_row_text_shows_the_in_flight_mark() -> None:
     assert text.plain.startswith("> tool  will update")
 
 
-def test_render_update_notes_prints_every_successful_update_extra() -> None:
+@pytest.mark.parametrize(
+    "result, detail, expected_line",
+    [
+        (
+            "done",
+            "Terminal shell synchronization warning: wezterm: unsupported configuration shape",
+            "kitty reconfigured — Terminal shell synchronization warning: "
+            "wezterm: unsupported configuration shape",
+        ),
+        ("failed", "point WezTerm at zsh: permission denied", None),
+    ],
+)
+def test_the_run_report_states_a_reconfigurations_detail_once(
+    result: Result, detail: str, expected_line: str | None
+) -> None:
+    outcome = RowOutcome(
+        PlanRow("kitty", Disposition.RECONFIGURE, "configuration drift"),
+        result,
+        detail=detail,
+    )
+    console, buf = _console()
+
+    render_run_report([outcome], console)
+
+    output = buf.getvalue()
+    assert output.count(detail) == 1
+    if expected_line is not None:
+        assert expected_line in output
+    else:
+        assert not any(line.startswith("kitty reconfigured — ") for line in output.splitlines())
+
+
+def test_render_done_notes_prints_every_successful_update_extra() -> None:
     outcome = RowOutcome(
         PlanRow("pnpm", Disposition.UPDATE, "new version", health=Health.OUTDATED),
         "done",
@@ -1134,7 +1166,7 @@ def test_render_update_notes_prints_every_successful_update_extra() -> None:
     )
     console, buf = _console()
 
-    render_update_notes([outcome], console)
+    render_done_notes([outcome], console)
 
     assert buf.getvalue().strip() == (
         "pnpm updated — replayed claude, opencode; left leftover; hook warned; "
@@ -1142,7 +1174,7 @@ def test_render_update_notes_prints_every_successful_update_extra() -> None:
     )
 
 
-def test_render_update_notes_is_silent_without_extras() -> None:
+def test_render_done_notes_is_silent_without_extras() -> None:
     successful = RowOutcome(
         PlanRow("rg", Disposition.UPDATE, "new version"),
         "done",
@@ -1155,12 +1187,12 @@ def test_render_update_notes_is_silent_without_extras() -> None:
     )
     console, buf = _console()
 
-    render_update_notes([successful, failed], console)
+    render_done_notes([successful, failed], console)
 
     assert buf.getvalue() == ""
 
 
-def test_render_update_notes_prints_child_output_literally() -> None:
+def test_render_done_notes_prints_child_output_literally() -> None:
     outcome = RowOutcome(
         PlanRow("rg", Disposition.UPDATE, "new version"),
         "done",
@@ -1168,7 +1200,7 @@ def test_render_update_notes_prints_child_output_literally() -> None:
     )
     console, buf = _console()
 
-    render_update_notes([outcome], console)
+    render_done_notes([outcome], console)
 
     assert "[red]x[/]" in buf.getvalue()
     assert "\x1b" not in buf.getvalue()

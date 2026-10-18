@@ -556,6 +556,24 @@ def test_execute_plan_does_not_prompt_for_a_clean_install():
     assert asked == []
 
 
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (RuntimeError("boom\nsecond line"), "RuntimeError: boom"),
+        (RuntimeError(), "RuntimeError failed"),
+        (RuntimeError("\nx"), "RuntimeError failed"),
+    ],
+)
+def test_a_crash_detail_is_the_type_and_the_first_line(error: Exception, expected: str):
+    recorder = RunRecorder({"a": error})
+    outcomes = execute_plan(
+        [PlanRow("a", Disposition.INSTALL, "missing")],
+        _run_context(recorder, catalog={"a": _tool("a")}),
+    )
+    assert outcomes[0].result == "crashed"
+    assert outcomes[0].detail == expected
+
+
 def test_a_crashing_row_is_crashed_and_the_rest_not_attempted():
     recorder = RunRecorder({"a": RuntimeError("boom")})
     tools = {tool_id: _tool(tool_id) for tool_id in ("a", "b", "c")}

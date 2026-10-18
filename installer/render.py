@@ -254,25 +254,32 @@ def render_plan(
         )
 
 
-def render_update_notes(outcomes: Sequence[RowOutcome], console: Console) -> None:
-    """Print successful update details that supplement the outcome row."""
+def render_done_notes(outcomes: Sequence[RowOutcome], console: Console) -> None:
+    """Print what a successful update or reconfiguration reported beside its row."""
     for outcome in outcomes:
-        if outcome.result != "done" or outcome.row.disposition is not Disposition.UPDATE:
+        if outcome.result != "done":
             continue
-        update = outcome.update
-        if update is None:
+        if outcome.row.disposition is Disposition.RECONFIGURE:
+            notes = [outcome.detail] if outcome.detail else []
+        elif outcome.row.disposition is Disposition.UPDATE:
+            update = outcome.update
+            if update is None:
+                continue
+            notes = (
+                [f"replayed {', '.join(update.replayed_globals)}"]
+                if update.replayed_globals
+                else []
+            )
+            notes.extend(update.cleanup_warnings)
+            if update.postinstall_warning:
+                notes.append(update.postinstall_warning)
+            if update.detail:
+                notes.append(update.detail)
+        else:
             continue
-        notes = (
-            [f"replayed {', '.join(update.replayed_globals)}"] if update.replayed_globals else []
-        )
-        notes.extend(update.cleanup_warnings)
-        if update.postinstall_warning:
-            notes.append(update.postinstall_warning)
-        if update.detail:
-            notes.append(update.detail)
         if notes:
             line = sanitize_log_line(
-                f"{outcome.row.tool_id} {WORDS[Disposition.UPDATE].done} — {'; '.join(notes)}"
+                f"{outcome.row.tool_id} {WORDS[outcome.row.disposition].done} — {'; '.join(notes)}"
             )
             console.print(line, markup=False, highlight=False, soft_wrap=True)
 
@@ -285,7 +292,7 @@ def render_run_report(outcomes: Sequence[RowOutcome], console: Console) -> None:
     render_handoff(installs, console)
     render_post_install_handoff(installs, console)
     render_postinstall_warnings(installs, console)
-    render_update_notes(outcomes, console)
+    render_done_notes(outcomes, console)
     render_verification(installs, console)
 
 

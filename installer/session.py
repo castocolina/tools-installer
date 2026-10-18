@@ -564,11 +564,13 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
                     outcome = _run_reconfigure(row, tool, ctx)
             except Exception as exc:
                 halted = True
-                outcome = RowOutcome(
-                    row,
-                    "crashed",
-                    detail=f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}",
+                first_line = str(exc).splitlines()
+                detail = (
+                    f"{type(exc).__name__}: {_first_line(exc)}"
+                    if first_line and first_line[0]
+                    else _first_line(exc)
                 )
+                outcome = RowOutcome(row, "crashed", detail=detail)
         outcomes.append(outcome)
         if ctx.on_outcome is not None:
             ctx.on_outcome(outcome)
